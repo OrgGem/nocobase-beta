@@ -1,0 +1,13 @@
+{
+  "Elasticsearch": "Elasticsearch",
+  "Elasticsearch Nodes": "Elasticsearch Nodes",
+  "Comma-separated list of Elasticsearch node URLs": "Comma-separated list of Elasticsearch node URLs",
+  "Optional. For Basic authentication.": "Optional. For Basic authentication.",
+  "API Key": "API Key",
+  "API Key description": "Optional. Paste the 'encoded' value from Elasticsearch's Create API Key response, or use the 'id:api_key' format (it will be auto-encoded).",
+  "Verify TLS Certificate": "Verify TLS Certificate",
+  "Uncheck for self-signed certificates": "Uncheck for self-signed certificates",
+  "Index Pattern": "Index Pattern",
+  "Filter indices by pattern (e.g. logs-*, my-data-*)": "Filter indices by pattern (e.g. logs-*, my-data-*)",
+  "Connection successful": "Connection successful"
+}

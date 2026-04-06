@@ -1,0 +1,13 @@
+{
+  "Elasticsearch": "Elasticsearch",
+  "Elasticsearch Nodes": "Elasticsearch 节点",
+  "Comma-separated list of Elasticsearch node URLs": "以逗号分隔的 Elasticsearch 节点 URL 列表",
+  "Optional. For Basic authentication.": "可选。用于 Basic 身份验证。",
+  "API Key": "API 密钥",
+  "API Key description": "可选。粘贴 Elasticsearch 创建 API 密钥响应中的 'encoded' 值，或使用 'id:api_key' 格式（将自动编码为 Base64）。",
+  "Verify TLS Certificate": "验证 TLS 证书",
+  "Uncheck for self-signed certificates": "自签名证书请取消勾选",
+  "Index Pattern": "索引模式",
+  "Filter indices by pattern (e.g. logs-*, my-data-*)": "按模式过滤索引（例如 logs-*，my-data-*）",
+  "Connection successful": "连接成功"
+}
