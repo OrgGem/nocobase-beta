@@ -44,3 +44,7 @@ git-repos.json
 CLAUDE.md
 AGENTS.md
 openspec/
+
+# Plugin build artifacts
+*.tgz
+.agent/
