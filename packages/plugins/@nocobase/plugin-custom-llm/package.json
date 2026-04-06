@@ -1,0 +1,36 @@
+{
+  "name": "plugin-custom-llm",
+  "displayName": "AI LLM: Custom (OpenAI Compatible)",
+  "displayName.zh-CN": "AI LLM：自定义（OpenAI 兼容）",
+  "description": "OpenAI-compatible LLM provider with auto response format detection for external LLM services.",
+  "version": "1.2.3",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "src"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "dependencies": {
+    "@langchain/openai": "^1.0.0",
+    "@langchain/core": "^1.0.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x"
+  },
+  "keywords": [
+    "AI"
+  ],
+  "license": "Apache-2.0"
+}

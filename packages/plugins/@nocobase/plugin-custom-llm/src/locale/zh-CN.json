@@ -1,0 +1,16 @@
+{
+  "Base URL": "基础 URL",
+  "API Key": "API 密钥",
+  "Model": "模型",
+  "Options": "选项",
+  "Temperature": "温度",
+  "Max completion tokens": "最大完成令牌数",
+  "Top P": "Top P",
+  "Frequency penalty": "频率惩罚",
+  "Presence penalty": "存在惩罚",
+  "Response format": "响应格式",
+  "Text": "文本",
+  "JSON": "JSON",
+  "Timeout (ms)": "超时 (毫秒)",
+  "Max retries": "最大重试次数"
+}
