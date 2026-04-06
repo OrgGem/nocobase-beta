@@ -1,0 +1,11 @@
+{
+  "Preview": "预览",
+  "Open in new window": "在新窗口中打开",
+  "Download": "下载",
+  "Close": "关闭",
+  "Loading preview...": "正在加载预览...",
+  "Failed to load file preview": "无法加载文件预览",
+  "Failed to download file": "无法下载文件",
+  "This file type cannot be previewed. Click Download to save the file.": "此文件类型不支持预览。请点击下载以保存文件。",
+  "This file type cannot be previewed. ": "此文件类型不支持预览。"
+}

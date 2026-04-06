@@ -1,0 +1,29 @@
+{
+  "name": "plugin-file-preview-auth",
+  "displayName": "Authenticated File Previewer",
+  "displayName.vi-VN": "Xem trước file có xác thực",
+  "displayName.zh-CN": "认证文件预览",
+  "description": "Preview PDF, image, and text files with Bearer token authentication via blob URLs.",
+  "description.vi-VN": "Xem trước file PDF, hình ảnh và văn bản với xác thực Bearer token qua blob URL.",
+  "description.zh-CN": "通过 Bearer 令牌认证和 Blob URL 预览 PDF、图片和文本文件。",
+  "version": "1.1.1",
+  "main": "dist/server/index.js",
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x"
+  },
+  "devDependencies": {
+    "docx-preview": "^0.3.3"
+  },
+  "keywords": [
+    "File manager",
+    "File preview",
+    "Authentication"
+  ],
+  "license": "Apache-2.0"
+}
