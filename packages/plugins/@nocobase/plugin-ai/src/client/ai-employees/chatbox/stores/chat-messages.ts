@@ -23,6 +23,7 @@ type ChatMessagesState = {
   editorRef?: Record<string, EditorRef>;
   currentEditorRefUid?: string;
   webSearching?: WebSearching;
+  knowledgeBaseSearching?: { status: string };
   flowContext?: any;
 };
 
@@ -53,6 +54,8 @@ export interface ChatMessagesActions {
 
   setWebSearching: (webSearching: WebSearching) => void;
 
+  setKnowledgeBaseSearching: (knowledgeBaseSearching: { status: string } | undefined) => void;
+
   setFlowContext: (ctx: any) => void;
 }
 
@@ -67,6 +70,7 @@ const store = create<ChatMessagesState & ChatMessagesActions>((set, get) => ({
   editorRef: {},
   currentEditorRefUid: null,
   webSearching: null,
+  knowledgeBaseSearching: null,
   flowContext: null,
 
   setMessages: (messages) => {
@@ -161,6 +165,10 @@ const store = create<ChatMessagesState & ChatMessagesActions>((set, get) => ({
 
   setWebSearching(webSearching) {
     set({ webSearching });
+  },
+
+  setKnowledgeBaseSearching(knowledgeBaseSearching) {
+    set({ knowledgeBaseSearching });
   },
 
   setFlowContext(flowContext) {

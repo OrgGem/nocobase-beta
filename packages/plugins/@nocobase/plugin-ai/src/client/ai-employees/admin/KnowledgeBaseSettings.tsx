@@ -29,6 +29,7 @@ export const KnowledgeBaseSettings: React.FC = () => {
           knowledgeBasePrompt: {
             type: 'string',
             title: '{{t("Knowledge Base Prompt")}}',
+            description: '{{t("Knowledge Base Prompt description")}}',
             required: true,
             'x-decorator': 'FormItem',
             'x-component': 'Input.TextArea',
@@ -36,6 +37,8 @@ export const KnowledgeBaseSettings: React.FC = () => {
               autoSize: {
                 minRows: 5,
               },
+              placeholder:
+                'Use the following knowledge base data to answer the question:\n\n{knowledgeBaseData}',
             },
             'x-reactions': [
               {
@@ -60,6 +63,7 @@ export const KnowledgeBaseSettings: React.FC = () => {
                 'x-component-props': {
                   mode: 'multiple',
                   manual: false,
+                  showSearch: true,
                   fieldNames: {
                     label: 'name',
                     value: 'id',
@@ -89,6 +93,7 @@ export const KnowledgeBaseSettings: React.FC = () => {
               topK: {
                 type: 'number',
                 title: '{{t("Top K")}}',
+                description: '{{t("Top K description")}}',
                 required: true,
                 'x-decorator': 'FormItem',
                 'x-component': 'InputNumber',
@@ -110,6 +115,7 @@ export const KnowledgeBaseSettings: React.FC = () => {
               score: {
                 type: 'number',
                 title: '{{t("Score")}}',
+                description: '{{t("Score description")}}',
                 required: true,
                 'x-decorator': 'FormItem',
                 'x-component': 'InputNumber',

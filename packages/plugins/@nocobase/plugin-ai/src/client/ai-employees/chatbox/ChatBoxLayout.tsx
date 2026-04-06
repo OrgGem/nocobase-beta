@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useMobileLayout } from '@nocobase/client';
 import { ChatBoxWrapper } from './ChatBox';
 import { Helmet } from 'react-helmet';
@@ -19,6 +19,10 @@ import { useChatToolsStore } from './stores/chat-tools';
 // [AI_DEBUG]
 import { DebugPanel } from './DebugPanel';
 
+const useIsEmbedMode = () => {
+  return useMemo(() => window.location.pathname.includes('/embed'), []);
+};
+
 export const ChatBoxLayout: React.FC<{
   children: React.ReactNode;
 }> = (props) => {
@@ -28,36 +32,39 @@ export const ChatBoxLayout: React.FC<{
   // [AI_DEBUG]
   const showDebugPanel = useChatBoxStore.use.showDebugPanel();
   const { isMobileLayout } = useMobileLayout();
+  const isEmbedMode = useIsEmbedMode();
 
   useChatBoxEffect();
+
+  const chatBoxWidth = isEmbedMode ? '100vw' : 'min(450px, 100vw)';
 
   return (
     <>
       {props.children}
       <ChatButton />
-      {open && !expanded && !isMobileLayout ? (
+      {open && !expanded && !isMobileLayout && !isEmbedMode ? (
         <Helmet>
           <style type="text/css">
             {`
 html {
-  padding-left: 450px;
+  padding-left: min(450px, 100vw);
 }
 html body {
   position: relative;
   overflow: hidden;
-  transform: translateX(-450px);
+  transform: translateX(min(-450px, -100vw));
 }
 .ant-dropdown-placement-topLeft {
-  transform: translateX(450px) !important;
+  transform: translateX(min(450px, 100vw)) !important;
 }
 .ant-dropdown-placement-bottomLeft {
-  transform: translateX(450px) !important;
+  transform: translateX(min(450px, 100vw)) !important;
 }
 .ant-dropdown-menu-submenu-placement-rightTop {
-  transform: translateX(450px) !important;
+  transform: translateX(min(450px, 100vw)) !important;
 }
 .ant-dropdown-menu-submenu-placement-rightBottom {
-  transform: translateX(450px) !important;
+  transform: translateX(min(450px, 100vw)) !important;
 }
 `}
           </style>

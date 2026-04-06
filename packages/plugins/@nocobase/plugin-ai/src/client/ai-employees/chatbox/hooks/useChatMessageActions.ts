@@ -44,6 +44,7 @@ export const useChatMessageActions = () => {
   const setAttachments = useChatMessagesStore.use.setAttachments();
   const setContextItems = useChatMessagesStore.use.setContextItems();
   const setWebSearching = useChatMessagesStore.use.setWebSearching();
+  const setKnowledgeBaseSearching = useChatMessagesStore.use.setKnowledgeBaseSearching();
 
   const currentConversation = useChatConversationsStore.use.currentConversation();
   const currentWebSearch = useChatConversationsStore.use.webSearch();
@@ -144,6 +145,7 @@ export const useChatMessageActions = () => {
         if (done || error) {
           setResponseLoading(false);
           setWebSearching(null);
+          setKnowledgeBaseSearching(null);
           break;
         }
 
@@ -254,6 +256,9 @@ export const useChatMessageActions = () => {
                   loading: false,
                 };
               });
+            }
+            if (data.type === 'knowledge_base' && data.body) {
+              setKnowledgeBaseSearching(data.body.status === 'done' ? null : data.body);
             }
             if (data.type === 'web_search' && data.body?.length) {
               // [AI_DEBUG] stream_search

@@ -8,11 +8,10 @@
  */
 
 import React from 'react';
-import { LoadingOutlined } from '@ant-design/icons';
+import { LoadingOutlined, SearchOutlined, BookOutlined } from '@ant-design/icons';
 import { useT } from '../../locale';
-import { Space, Spin, Tag } from 'antd';
+import { Space, Spin } from 'antd';
 import { useChatMessagesStore } from './stores/chat-messages';
-import { SearchOutlined } from '@ant-design/icons';
 import { useToken } from '@nocobase/client';
 import { Typography } from 'antd';
 const { Paragraph } = Typography;
@@ -20,7 +19,19 @@ const { Paragraph } = Typography;
 export const AIThinking: React.FC<{ nickname: string }> = ({ nickname }) => {
   const t = useT();
   const webSearching = useChatMessagesStore.use.webSearching();
+  const knowledgeBaseSearching = useChatMessagesStore.use.knowledgeBaseSearching();
   const { token } = useToken();
+
+  const getStatusText = () => {
+    if (knowledgeBaseSearching) {
+      return t('AI is searching knowledge base', { nickname });
+    }
+    if (webSearching) {
+      return t('AI is searching', { nickname });
+    }
+    return t('AI is thinking', { nickname });
+  };
+
   return (
     <Space direction="vertical">
       <Space
@@ -31,8 +42,15 @@ export const AIThinking: React.FC<{ nickname: string }> = ({ nickname }) => {
         }}
       >
         <Spin indicator={<LoadingOutlined spin />} />
-        {webSearching ? t('AI is searching', { nickname }) : t('AI is thinking', { nickname })}
+        {getStatusText()}
       </Space>
+      {knowledgeBaseSearching && (
+        <Paragraph>
+          <blockquote>
+            <BookOutlined /> {t('Retrieving relevant documents...')}
+          </blockquote>
+        </Paragraph>
+      )}
       {webSearching?.query && (
         <Paragraph>
           <blockquote>

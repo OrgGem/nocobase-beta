@@ -18,12 +18,18 @@
 
 import { useFieldSchema } from '@formily/react';
 import {
-  AdminProvider,
+  ACLRolesCheckProvider,
+  CurrentAppInfoProvider,
   CurrentPageUidContext,
+  CurrentPageUidProvider,
   CurrentRouteProvider,
+  CurrentTabUidProvider,
+  IsSubPageClosedByPageMenuProvider,
   KeepAlive,
   LayoutContent,
+  RemoteCollectionManagerProvider,
   RemoteSchemaComponent,
+  RemoteSchemaTemplateManagerProvider,
   useCurrentPageUid,
   useCurrentUserContext,
 } from '@nocobase/client';
@@ -44,6 +50,30 @@ export const EmbedAdminLayout = () => {
   );
 };
 
+/**
+ * Lightweight AdminProvider for embed mode.
+ * Skips RoutesRequestProvider (fetches full desktop routes tree),
+ * NavigateToDefaultPage, and LegacyRouteCompat which are unnecessary
+ * for embedded single-page rendering.
+ */
+const EmbedAdminProvider = (props: { children: React.ReactNode }) => {
+  return (
+    <CurrentPageUidProvider>
+      <CurrentTabUidProvider>
+        <IsSubPageClosedByPageMenuProvider>
+          <ACLRolesCheckProvider>
+            <RemoteCollectionManagerProvider>
+              <CurrentAppInfoProvider>
+                <RemoteSchemaTemplateManagerProvider>{props.children}</RemoteSchemaTemplateManagerProvider>
+              </CurrentAppInfoProvider>
+            </RemoteCollectionManagerProvider>
+          </ACLRolesCheckProvider>
+        </IsSubPageClosedByPageMenuProvider>
+      </CurrentTabUidProvider>
+    </CurrentPageUidProvider>
+  );
+};
+
 export const EmbedLayout = () => {
   const result = useCurrentUserContext();
   const noUser = result.loading === false && !result.data?.data?.id;
@@ -51,9 +81,9 @@ export const EmbedLayout = () => {
     return <NotAuthorized />;
   }
   return (
-    <AdminProvider>
+    <EmbedAdminProvider>
       <EmbedAdminLayout />
-    </AdminProvider>
+    </EmbedAdminProvider>
   );
 };
 
@@ -74,7 +104,14 @@ export function EmbedPage() {
 }
 
 export function NotAuthorized() {
-  return <Result status="403" title="403" subTitle="Sorry, you are not authorized to access this page." />;
+  const { t } = useEmbedTranslation();
+  return (
+    <Result
+      status="403"
+      title="403"
+      subTitle={t('Authorization expired or invalid. Please request a new embed link.')}
+    />
+  );
 }
 
 export function useEmbedTranslation() {
