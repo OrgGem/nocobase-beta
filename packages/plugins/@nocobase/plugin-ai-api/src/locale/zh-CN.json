@@ -1,0 +1,10 @@
+{
+  "AI API Gateway": "AI API 网关",
+  "Configuration": "配置",
+  "Default AI Employee": "默认 AI 员工",
+  "Enabled LLM Services": "已启用 LLM 服务",
+  "Rate Limit": "速率限制",
+  "Save Configuration": "保存配置",
+  "Configuration saved": "配置已保存",
+  "Failed to save configuration": "保存配置失败"
+}

@@ -1,0 +1,14 @@
+{
+  "name": "plugin-ai-api",
+  "version": "1.0.2",
+  "main": "dist/server/index.js",
+  "dependencies": {},
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-acl": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/plugin-api-keys": "2.x"
+  }
+}
