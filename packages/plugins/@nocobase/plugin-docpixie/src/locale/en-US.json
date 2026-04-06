@@ -1,0 +1,21 @@
+{
+  "DocPixie Document AI": "DocPixie Document AI",
+  "Adaptive RAG agent for document analysis": "Adaptive RAG agent for document analysis",
+  "LLM Service (Text)": "LLM Service (Text)",
+  "LLM Service (Vision)": "LLM Service (Vision)",
+  "Analysis Strategy": "Analysis Strategy",
+  "OCR Provider": "OCR Provider",
+  "OCR API Endpoint": "OCR API Endpoint",
+  "OCR API Key": "OCR API Key",
+  "Max Pages Per Task": "Max Pages Per Task",
+  "Max Tasks Per Plan": "Max Tasks Per Plan",
+  "Vision": "Vision",
+  "OCR Only": "OCR Only",
+  "Hybrid": "Hybrid",
+  "External API": "External API",
+  "None (Vision Only)": "None (Vision Only)",
+  "Document processed successfully": "Document processed successfully",
+  "Query completed": "Query completed",
+  "No documents found": "No documents found",
+  "LLM service not configured": "LLM service not configured"
+}

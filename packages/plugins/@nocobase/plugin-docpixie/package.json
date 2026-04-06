@@ -1,0 +1,40 @@
+{
+  "name": "plugin-docpixie",
+  "displayName": "DocPixie Document AI",
+  "displayName.vi-VN": "DocPixie AI Phân Tích Tài Liệu",
+  "displayName.zh-CN": "DocPixie 文档AI",
+  "description": "Adaptive RAG agent for document analysis — OCR + LLM Vision + structured extraction.",
+  "description.vi-VN": "Agent RAG thích ứng cho phân tích tài liệu — OCR + LLM Vision + trích xuất cấu trúc.",
+  "version": "1.0.3",
+  "license": "Apache-2.0",
+  "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "README.md"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/test": "2.x",
+    "@langchain/core": "^1.0.0"
+  },
+  "keywords": [
+    "AI",
+    "document-ai",
+    "adaptive-rag",
+    "docpixie",
+    "ocr"
+  ]
+}

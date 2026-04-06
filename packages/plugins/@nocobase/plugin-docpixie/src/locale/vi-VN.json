@@ -1,0 +1,21 @@
+{
+  "DocPixie Document AI": "DocPixie AI Phân Tích Tài Liệu",
+  "Adaptive RAG agent for document analysis": "Agent RAG thích ứng cho phân tích tài liệu",
+  "LLM Service (Text)": "Dịch vụ LLM (Văn bản)",
+  "LLM Service (Vision)": "Dịch vụ LLM (Hình ảnh)",
+  "Analysis Strategy": "Chiến lược phân tích",
+  "OCR Provider": "Nhà cung cấp OCR",
+  "OCR API Endpoint": "Địa chỉ API OCR",
+  "OCR API Key": "Khóa API OCR",
+  "Max Pages Per Task": "Số trang tối đa mỗi tác vụ",
+  "Max Tasks Per Plan": "Số tác vụ tối đa mỗi kế hoạch",
+  "Vision": "Hình ảnh",
+  "OCR Only": "Chỉ OCR",
+  "Hybrid": "Kết hợp",
+  "External API": "API bên ngoài",
+  "None (Vision Only)": "Không (chỉ Vision)",
+  "Document processed successfully": "Tài liệu đã được xử lý thành công",
+  "Query completed": "Truy vấn hoàn thành",
+  "No documents found": "Không tìm thấy tài liệu",
+  "LLM service not configured": "Dịch vụ LLM chưa được cấu hình"
+}
