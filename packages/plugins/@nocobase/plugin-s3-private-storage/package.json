@@ -1,0 +1,40 @@
+{
+  "name": "plugin-s3-private-storage",
+  "version": "1.0.3",
+  "displayName": "S3 Private Storage",
+  "displayName.zh-CN": "S3 私有存储",
+  "description": "Extends file-manager to stream files from private S3 buckets via server proxy with ACL support.",
+  "description.zh-CN": "扩展文件管理器，通过服务器代理从私有 S3 存储桶流式传输文件，支持 ACL。",
+  "license": "AGPL-3.0",
+  "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "src"
+  ],
+  "keywords": [
+    "nocobase",
+    "nocobase-plugin",
+    "s3",
+    "private-storage",
+    "file-manager"
+  ],
+  "devDependencies": {
+    "@aws-sdk/client-s3": "3.750.0",
+    "@aws-sdk/lib-storage": "3.750.0",
+    "@formily/antd-v5": "1.x",
+    "@formily/react": "2.x",
+    "antd": "5.x",
+    "react": "^18.2.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/utils": "2.x"
+  }
+}
