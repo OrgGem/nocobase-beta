@@ -1,0 +1,475 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { Plugin } from '@nocobase/server';
+import { resolve } from 'path';
+import PluginAIServer from '@nocobase/plugin-ai';
+import type { VectorStoreProvider } from '@nocobase/plugin-ai/server';
+import { KnowledgeBaseFeatureImpl } from './features/knowledge-base-impl';
+import { VectorDatabaseFeatureImpl } from './features/vector-database-impl';
+import { VectorDatabaseProviderImpl } from './features/vector-database-provider-impl';
+import { VectorStoreProviderImpl } from './features/vector-store-provider-impl';
+import { pgVectorProviderInfo } from './providers/pgvector';
+import {
+  externalHttpRagStrategy,
+  EXTERNAL_RAG_KB_TYPE,
+  EXTERNAL_HTTP_RAG_PROVIDER,
+  type RagSearchStrategy,
+  type RagSearchResult,
+} from './providers/external-rag';
+import { VectorizationPipeline } from './pipeline/vectorization';
+import { DocPixieExtractor } from './services/docpixie-extractor';
+import aiKnowledgeBase from './resources/ai-knowledge-base';
+import aiKnowledgeBaseDocuments from './resources/ai-knowledge-base-documents';
+import aiVectorStores from './resources/ai-vector-stores';
+import aiVectorDatabases from './resources/ai-vector-databases';
+import { addDocumentAction } from './actions/add-document';
+import requestContext from './request-context';
+
+export class PluginKnowledgeBaseServer extends Plugin {
+  vectorizationPipeline: VectorizationPipeline;
+  docpixieExtractor: DocPixieExtractor;
+
+  /**
+   * The VectorStore provider registry exposed publicly so that other plugins can
+   * register additional vector store backends (e.g., a custom embedding plugin).
+   *
+   * Usage from another plugin:
+   *   const kb = this.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+   *   kb.registerVectorStoreProvider(myProvider);
+   */
+  vectorStoreProvider: VectorStoreProviderImpl;
+
+  /**
+   * Registry for external / custom RAG search strategies.
+   *
+   * A strategy is invoked for Knowledge Bases of type 'EXTERNAL_RAG' whose
+   * options.ragProvider matches the registered name.
+   *
+   * Usage from another plugin:
+   *   kb.registerRagSearchStrategy('my-rag', async (query, kbRecord, opts) => {
+   *     // call your custom RAG backend and return results
+   *     return [{ content: '...', score: 0.9 }];
+   *   });
+   */
+  private ragSearchStrategies = new Map<string, RagSearchStrategy>();
+
+  private _aiPlugin: PluginAIServer;
+
+  get aiPlugin(): PluginAIServer {
+    if (!this._aiPlugin) {
+      this._aiPlugin = this.pm.get(PluginAIServer) as PluginAIServer;
+    }
+    return this._aiPlugin;
+  }
+
+  // ── Public extension API ────────────────────────────────────────────────────
+
+  /**
+   * Register a custom VectorStoreProvider so it can be selected as a provider
+   * when creating Vector Stores in the admin UI.
+   *
+   * Example (from another plugin's load()):
+   *   const kb = this.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+   *   kb.registerVectorStoreProvider({
+   *     providerName: 'my-vector-store',
+   *     async createVectorStoreService(props) { ... },
+   *   });
+   */
+  registerVectorStoreProvider(provider: VectorStoreProvider): void {
+    if (!this.vectorStoreProvider) {
+      throw new Error('registerVectorStoreProvider() must be called after plugin-knowledge-base has loaded');
+    }
+    this.vectorStoreProvider.register(provider);
+  }
+
+  /**
+   * Register a RAG search strategy for Knowledge Bases of type 'EXTERNAL_RAG'.
+   *
+   * The strategy name must match the value stored in kb.options.ragProvider.
+   * The built-in 'external-http' strategy is always pre-registered and handles
+   * generic HTTP-based RAG services.
+   *
+   * Example:
+   *   kb.registerRagSearchStrategy('pinecone', async (query, kbRecord, opts) => {
+   *     const { ragApiKey, ragNamespace } = kbRecord.options;
+   *     const results = await pineconeQuery(ragApiKey, ragNamespace, query, opts.topK);
+   *     return results.map(r => ({ content: r.text, score: r.score }));
+   *   });
+   */
+  registerRagSearchStrategy(name: string, strategy: RagSearchStrategy): void {
+    this.ragSearchStrategies.set(name, strategy);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async afterAdd() {}
+
+  async beforeLoad() {}
+
+  async load() {
+    // 1. Create feature implementations
+    const vdbProvider = new VectorDatabaseProviderImpl();
+    vdbProvider.register(pgVectorProviderInfo);
+
+    this.vectorStoreProvider = new VectorStoreProviderImpl(this, this.aiPlugin);
+    const vectorStoreProvider = this.vectorStoreProvider;
+
+    // Register built-in external-http RAG strategy
+    this.ragSearchStrategies.set(EXTERNAL_HTTP_RAG_PROVIDER, externalHttpRagStrategy);
+    const vectorDatabase = new VectorDatabaseFeatureImpl(this);
+    const knowledgeBase = new KnowledgeBaseFeatureImpl(this);
+
+    // 2. Register features with plugin-ai
+    this.aiPlugin.features.enableFeatures({
+      vectorDatabase,
+      vectorDatabaseProvider: vdbProvider,
+      vectorStoreProvider,
+      knowledgeBase,
+    });
+
+    // 3. Initialize vectorization pipeline (with optional DocPixie extractor)
+    this.docpixieExtractor = new DocPixieExtractor(this.db, () => this.getDocpixiePlugin());
+    this.vectorizationPipeline = new VectorizationPipeline(this, this.docpixieExtractor);
+
+    // 4. Define resources
+    this.defineResources();
+
+    // 5. Middleware: propagate current userId + roles via AsyncLocalStorage
+    this.app.resourceManager.use(async (ctx, next) => {
+      const userId = ctx.auth?.user?.id ?? ctx.state?.currentUser?.id;
+      if (userId) {
+        // Get user roles from context
+        const userRoles: string[] = ctx.state?.currentUser?.roles?.map((r: any) => r.name || r) ?? [];
+        // Fallback: check ctx.state.currentRole
+        if (userRoles.length === 0 && ctx.state?.currentRole) {
+          userRoles.push(ctx.state.currentRole);
+        }
+        return requestContext.run({ userId, userRoles }, () => next());
+      }
+      await next();
+    });
+
+    // 6. Set ACL permissions
+    this.setPermissions();
+    // 7. Set file storage for KB uploads (before file-manager's createMiddleware).
+    //    file-manager's createMiddleware reads `collection.options.storage` to determine
+    //    which storage backend to use. We set it here per-request from the `storageRule`
+    //    query param, then restore the previous value to limit global-state pollution.
+    //    Note: this is not fully race-safe (collection is a global singleton); a complete
+    //    fix would require file-manager to read storage from request-scoped ctx.state.
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        const { resourceName, actionName } = ctx.action;
+        if (resourceName === 'aiFiles' && actionName === 'create') {
+          const storageName = ctx.action.params?.storageRule;
+          if (storageName) {
+            const collection = ctx.db.getCollection('aiFiles');
+            if (collection) {
+              const prevStorage = collection.options.storage;
+              collection.options.storage = storageName;
+              try {
+                await next();
+              } finally {
+                collection.options.storage = prevStorage;
+              }
+              return;
+            }
+          }
+        }
+        await next();
+      },
+      { before: 'createMiddleware' },
+    );
+
+    // 8. Register work context strategy for per-chat KB selection
+    this.registerKnowledgeBaseWorkContext(vectorStoreProvider, knowledgeBase);
+  }
+
+  /** Returns the plugin-docpixie instance if it is loaded and has an active service, else null */
+  private getDocpixiePlugin(): any | null {
+    try {
+      const p = this.pm.get('@nocobase/plugin-docpixie') as any;
+      return p?.service ? p : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private defineResources() {
+    this.app.resourceManager.define(aiKnowledgeBase);
+    this.app.resourceManager.define(aiKnowledgeBaseDocuments);
+    this.app.resourceManager.define(aiVectorStores);
+    this.app.resourceManager.define(aiVectorDatabases);
+
+    // Register addDocument action for workflow integration
+    this.app.resourceManager.registerActionHandler('aiKnowledgeBase:addDocument', addDocumentAction);
+  }
+
+  /**
+   * Register a work context resolve strategy so that when users select
+   * Knowledge Bases via the AddContext button in AI chat, the background
+   * strategy performs a RAG search and injects results into the system prompt.
+   */
+  private registerKnowledgeBaseWorkContext(
+    vectorStoreProvider: VectorStoreProviderImpl,
+    knowledgeBaseFeature: KnowledgeBaseFeatureImpl,
+  ) {
+    const plugin = this;
+    this.aiPlugin.workContextHandler.registerStrategy('knowledge-base', {
+      resolve: async (_ctx, contextItem) => {
+        return `[Knowledge Base: ${contextItem.title || contextItem.uid}]`;
+      },
+      background: async (ctx, aiMessages, workContextItems) => {
+        // 1. Collect unique KB IDs from work context items
+        const kbIds = [...new Set(workContextItems.map((item) => item.uid).filter(Boolean))];
+        if (!kbIds.length) return '';
+
+        // 2. Filter KBs by user's access level (prevent bypass)
+        const userId = ctx.auth?.user?.id;
+        const roles = ctx.state?.currentRoles ?? [];
+        const isAdmin = roles.includes('root') || roles.includes('admin');
+
+        let filteredIds = kbIds;
+        if (!isAdmin) {
+          const kbRepo = plugin.db.getRepository('aiKnowledgeBases');
+          const accessibleKBs = await kbRepo.find({
+            filter: {
+              id: { $in: kbIds },
+              enabled: true,
+              $or: [
+                { accessLevel: 'PUBLIC' },
+                ...(userId ? [{ accessLevel: 'BASIC', ownerId: userId }] : []),
+                ...(roles.length ? [{ accessLevel: 'SHARED', 'allowedRoles.$anyOf': roles }] : []),
+              ],
+            },
+            fields: ['id'],
+          });
+          filteredIds = accessibleKBs.map((kb: any) => kb.id || kb.get('id'));
+          if (!filteredIds.length) return '';
+        }
+
+        // 3. Extract the last user message content as the search query
+        const lastUserMsg = [...aiMessages].reverse().find((m) => m.role === 'user');
+
+        // Handle multiple content structures from plugin-ai:
+        // 1. content is a string directly: "hello"
+        // 2. content is { content: "hello" }
+        // 3. content is { content: { content: "hello" } }
+        let queryString = '';
+        if (lastUserMsg) {
+          const c: any = lastUserMsg.content;
+          if (typeof c === 'string') {
+            queryString = c;
+          } else if (c && typeof c === 'object') {
+            if (typeof c.content === 'string') {
+              queryString = c.content;
+            } else if (c.content && typeof c.content === 'object' && typeof c.content.content === 'string') {
+              queryString = c.content.content;
+            } else if (typeof c.text === 'string') {
+              queryString = c.text;
+            }
+          }
+        }
+
+        plugin.app.logger.info(
+          `[KB WorkContext] lastUserMsg content type: ${typeof lastUserMsg?.content}, queryString length: ${
+            queryString.length
+          }, queryString: "${queryString.substring(0, 100)}"`,
+        );
+
+        if (!queryString) return '';
+
+        // 4a. Separate EXTERNAL_RAG KBs from standard (vector-store-backed) KBs
+        const kbRepo = plugin.db.getRepository('aiKnowledgeBases');
+        const allKbRecords = await kbRepo.find({
+          filter: { id: { $in: filteredIds }, enabled: true },
+          fields: ['id', 'name', 'type', 'options'],
+        });
+        const externalRagIds = new Set<string>();
+        const externalRagKbs: any[] = [];
+        for (const rec of allKbRecords) {
+          const kbData = rec.toJSON ? rec.toJSON() : rec;
+          if (kbData.type === EXTERNAL_RAG_KB_TYPE) {
+            externalRagIds.add(String(kbData.id));
+            externalRagKbs.push(kbData);
+          }
+        }
+        const standardIds = filteredIds.filter((id) => !externalRagIds.has(String(id)));
+
+        // 4b. Get KB groups for standard (vector-store-backed) IDs
+        let knowledgeBaseGroup: any[] = [];
+        if (standardIds.length > 0) {
+          try {
+            knowledgeBaseGroup = await knowledgeBaseFeature.getKnowledgeBaseGroup(standardIds);
+          } catch (err) {
+            plugin.app.logger.error('[KB WorkContext] Failed to get KB group:', err);
+          }
+        }
+
+        plugin.app.logger.info(
+          `[KB WorkContext] Found ${knowledgeBaseGroup.length} local KB groups, ${
+            externalRagKbs.length
+          } external RAG KBs: ${JSON.stringify(
+            knowledgeBaseGroup.map((g: any) => ({
+              type: g.knowledgeBaseType,
+              provider: g.vectorStoreConfig?.vectorStoreProvider,
+              configId: g.vectorStoreConfig?.vectorStoreConfigId,
+              kbCount: g.knowledgeBaseList?.length,
+            })),
+          )}`,
+        );
+
+        // 5. Search for relevant documents via vector store (standard KBs)
+        const allDocs: { content: string; score: number }[] = [];
+        const topK = 5;
+        const score = '0.3';
+
+        for (const entry of knowledgeBaseGroup) {
+          const { vectorStoreConfig, knowledgeBaseType, knowledgeBaseList } = entry;
+          if (!knowledgeBaseList?.length) continue;
+
+          try {
+            if (knowledgeBaseType === 'LOCAL') {
+              // LOCAL: single search across multiple KBs sharing same vector store
+              const firstKB = knowledgeBaseList[0];
+              const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
+                vectorStoreConfig.vectorStoreProvider,
+                firstKB.vectorStoreProps,
+              );
+              const knowledgeBaseOuterIds = knowledgeBaseList.map((x: any) => x.knowledgeBaseOuterId);
+              const result = await vectorStoreService.search(queryString, {
+                topK,
+                score,
+                filter: { knowledgeBaseOuterId: { in: knowledgeBaseOuterIds } },
+              });
+              plugin.app.logger.info(
+                `[KB WorkContext] LOCAL search: ${result.length} results, scores: ${result
+                  .map((r: any) => r.score?.toFixed(3))
+                  .join(', ')}`,
+              );
+              allDocs.push(...result);
+            } else {
+              // READONLY / EXTERNAL: per-KB search with individual vectorStoreProps
+              for (const kb of knowledgeBaseList) {
+                const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
+                  vectorStoreConfig.vectorStoreProvider,
+                  kb.vectorStoreProps,
+                );
+                const result = await vectorStoreService.search(queryString, { topK, score });
+                plugin.app.logger.info(
+                  `[KB WorkContext] ${knowledgeBaseType} search (${kb.name}): ${result.length} results, scores: ${result
+                    .map((r: any) => r.score?.toFixed(3))
+                    .join(', ')}`,
+                );
+                allDocs.push(...result);
+              }
+            }
+          } catch (err) {
+            plugin.app.logger.error(`[KB WorkContext] Vector search failed for type=${knowledgeBaseType}:`, err);
+          }
+        }
+
+        // 5b. Search external RAG KBs via registered strategies
+        for (const kb of externalRagKbs) {
+          const providerName: string = kb.options?.ragProvider ?? EXTERNAL_HTTP_RAG_PROVIDER;
+          const strategy = plugin.ragSearchStrategies.get(providerName);
+          if (!strategy) {
+            plugin.app.logger.warn(
+              `[KB WorkContext] No RAG strategy registered for provider "${providerName}" (KB: ${kb.name ?? kb.id})`,
+            );
+            continue;
+          }
+          try {
+            const results: RagSearchResult[] = await strategy(queryString, kb, {
+              topK,
+              scoreThreshold: parseFloat(score),
+            });
+            plugin.app.logger.info(
+              `[KB WorkContext] EXTERNAL_RAG (${kb.name}, provider=${providerName}): ${results.length} results`,
+            );
+            allDocs.push(...results);
+          } catch (err) {
+            plugin.app.logger.error(
+              `[KB WorkContext] External RAG search failed (${kb.name}, provider=${providerName}):`,
+              err,
+            );
+          }
+        }
+
+        if (!allDocs.length) return '';
+
+        // 6. Stage 2 — DocPixie deep retrieval
+        //    If any result chunks have a docpixieDocumentId, fetch full page texts from
+        //    DocPixie for those documents and prepend as richer context.
+        let deepContext = '';
+        const docpixiePlugin = plugin.getDocpixiePlugin();
+        if (docpixiePlugin?.service?.isReady()) {
+          const docpixieIds: number[] = [
+            ...new Set(
+              allDocs
+                .map((d: any) => d.metadata?.docpixieDocumentId as number | undefined)
+                .filter((id): id is number => typeof id === 'number'),
+            ),
+          ].slice(0, 3); // cap at 3 docs to limit token budget
+
+          if (docpixieIds.length > 0) {
+            try {
+              // Reuse the existing docpixieExtractor instance created during load() —
+              // avoids creating a new object + require() on every RAG call.
+              deepContext = await plugin.docpixieExtractor.buildDeepContext(docpixieIds);
+              plugin.app.logger.info(
+                `[KB WorkContext] Stage 2 DocPixie deep retrieval: ${docpixieIds.length} doc(s), context length=${deepContext.length}`,
+              );
+            } catch (err) {
+              plugin.app.logger.warn('[KB WorkContext] Stage 2 DocPixie retrieval failed:', err);
+            }
+          }
+        }
+
+        // 7. Format search results as background context
+        //    Deep context (full DocPixie pages) comes first, chunk summaries second.
+        const chunkData = allDocs.map((doc: any) => doc.content).join('\n');
+        const kbData = deepContext ? `${deepContext}\n\n<kb_chunks>\n${chunkData}\n</kb_chunks>` : chunkData;
+        return `<knowledgeBase>From knowledge base:\n${kbData}\nanswer user's question using this information.</knowledgeBase>`;
+      },
+    });
+  }
+
+  private setPermissions() {
+    // Admin snippet for managing knowledge base, vector stores, and vector databases
+    this.app.acl.registerSnippet({
+      name: `pm.${this.name}.knowledge-base`,
+      actions: ['aiKnowledgeBase:*', 'aiKnowledgeBaseDoc:*', 'aiVectorStore:*', 'aiVectorDatabase:*'],
+    });
+
+    // Allow logged-in users to list/get knowledge bases (needed by AI Employee KB selector)
+    this.app.acl.allow('aiKnowledgeBase', 'list', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'get', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'addDocument', 'loggedIn');
+
+    // Allow logged-in users to manage their own documents.
+    // Per-request authorization inside the resource handlers enforces actual ownership;
+    // these allow() calls only open the ACL gate so requests reach the handler.
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'list', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'create', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'destroy', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'reprocess', 'loggedIn');
+  }
+
+  async install() {}
+
+  async afterEnable() {}
+
+  async afterDisable() {}
+
+  async remove() {}
+}
+
+export default PluginKnowledgeBaseServer;

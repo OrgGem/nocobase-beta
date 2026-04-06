@@ -1,0 +1,108 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import PluginKnowledgeBaseServer from '../plugin';
+
+/**
+ * API action: aiKnowledgeBase:addDocument
+ *
+ * Allows workflows to add documents to a knowledge base.
+ * Accepts a file URL or text content, creates a document record,
+ * and triggers the vectorization pipeline asynchronously.
+ *
+ * POST /api/aiKnowledgeBase:addDocument
+ * Body: {
+ *   knowledgeBaseId: string,
+ *   fileUrl?: string,
+ *   textContent?: string,
+ *   filename?: string
+ * }
+ *
+ * Note: userId is ALWAYS derived from the authenticated session (ctx.auth.user.id).
+ * Any client-provided userId in the request body is ignored to prevent spoofing.
+ */
+export async function addDocumentAction(ctx: any, next: any) {
+  const { knowledgeBaseId, fileUrl, textContent, filename } = ctx.action.params.values ?? {};
+
+  if (!knowledgeBaseId) {
+    ctx.throw(400, 'knowledgeBaseId is required');
+  }
+
+  if (!fileUrl && !textContent) {
+    ctx.throw(400, 'fileUrl or textContent is required');
+  }
+
+  // Always derive userId from the authenticated session — never trust client-provided userId
+  const userId = ctx.auth?.user?.id;
+  if (!userId) {
+    ctx.throw(401, 'Authentication required');
+    return;
+  }
+
+  // Validate knowledge base exists
+  const knowledgeBase = await ctx.db.getRepository('aiKnowledgeBases').findOne({
+    filter: { id: knowledgeBaseId },
+    appends: ['vectorStore', 'vectorStore.vectorDatabase'],
+  });
+
+  if (!knowledgeBase) {
+    ctx.throw(404, `Knowledge base "${knowledgeBaseId}" not found`);
+  }
+
+  // EXTERNAL_RAG KBs are managed by external services — documents cannot be added locally
+  const kbData = knowledgeBase.toJSON ? knowledgeBase.toJSON() : knowledgeBase;
+  if (kbData.type === 'EXTERNAL_RAG') {
+    ctx.throw(
+      400,
+      'Cannot add documents to an external RAG knowledge base. Documents are managed by the external service.',
+    );
+  }
+
+  const docRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
+
+  // Create document record
+  const docValues: any = {
+    knowledgeBaseId,
+    uploadedById: userId,
+    status: 'pending',
+    filename: filename || (fileUrl ? fileUrl.split('/').pop() : 'pasted-text'),
+  };
+
+  if (textContent) {
+    docValues.textContent = textContent;
+    docValues.filename = filename || 'pasted-text';
+  }
+
+  if (fileUrl) {
+    docValues.fileUrl = fileUrl;
+  }
+
+  const doc = await docRepo.create({ values: docValues });
+
+  // Trigger vectorization via class-reference plugin lookup (avoids fragile string matching)
+  try {
+    const plugin = ctx.app.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+    if (plugin?.vectorizationPipeline) {
+      // Don't await — let it run in the background
+      plugin.vectorizationPipeline.processDocument(doc.id).catch((err: any) => {
+        ctx.app.logger.error(`[addDocument] Vectorization failed for doc ${doc.id}:`, err);
+      });
+    }
+  } catch (err: any) {
+    ctx.app.logger.error('[addDocument] Failed to trigger vectorization:', err);
+  }
+
+  ctx.body = {
+    success: true,
+    documentId: doc.id,
+    message: 'Document added and vectorization triggered',
+  };
+
+  await next();
+}
