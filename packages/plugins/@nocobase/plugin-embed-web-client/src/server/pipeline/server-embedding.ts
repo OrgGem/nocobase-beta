@@ -168,9 +168,15 @@ export class ServerEmbeddingPipeline {
         values: { status: 'success', chunkCount: embedded.length, error: null },
       });
     } catch (err: any) {
+      const currentDoc = await docRepo.findOne({ filter: { id: documentId } });
+      const currentRetryCount = currentDoc?.retryCount ?? 0;
       await docRepo.update({
         filter: { id: documentId },
-        values: { status: 'failed', error: err.message ?? 'Server embedding failed' },
+        values: {
+          status: 'failed',
+          error: err.message ?? 'Server embedding failed',
+          retryCount: currentRetryCount + 1,
+        },
       });
       throw err;
     }

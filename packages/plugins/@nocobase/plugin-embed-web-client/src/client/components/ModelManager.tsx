@@ -8,7 +8,8 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { useAPIClient, useTranslation } from '@nocobase/client';
+import { useAPIClient } from '@nocobase/client';
+import { useTranslation } from 'react-i18next';
 import {
   Card,
   Button,
@@ -235,7 +236,8 @@ export const ModelManager: React.FC = () => {
     setLoading(true);
     try {
       const res = await api.request({ url: 'embedWebClient:listModels' });
-      setModels(res?.data?.data ?? []);
+      const data = res?.data?.data;
+      setModels(Array.isArray(data) ? data : []);
     } catch {
       message.error(t('Failed to load models'));
     } finally {

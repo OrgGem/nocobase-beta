@@ -9,9 +9,9 @@
 
 import { Plugin, lazy } from '@nocobase/client';
 
-const PluginSettings = lazy(() => import('./components/PluginSettings'), 'PluginSettings');
-const ModelManager = lazy(() => import('./components/ModelManager'), 'ModelManager');
-const WebClientDocumentUploader = lazy(
+const { PluginSettings } = lazy(() => import('./components/PluginSettings'), 'PluginSettings');
+const { ModelManager } = lazy(() => import('./components/ModelManager'), 'ModelManager');
+const { WebClientDocumentUploader } = lazy(
   () => import('./components/WebClientDocumentUploader'),
   'WebClientDocumentUploader',
 );

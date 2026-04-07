@@ -1,0 +1,26 @@
+{
+  "name": "plugin-block-cross-join",
+  "displayName": "Block: Cross Join",
+  "displayName.zh-CN": "区块：跨数据源联合查询",
+  "description": "Create a block that joins and displays data from multiple collections across different datasources in a single unified table.",
+  "description.zh-CN": "创建一个区块，可以跨不同数据源联合查询多个表的数据，并在单一表格中展示。",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "./dist/server/index.js",
+  "devDependencies": {
+    "@ant-design/icons": "5.x",
+    "@formily/react": "2.x",
+    "@formily/shared": "2.x",
+    "antd": "5.x",
+    "react": "^18.2.0",
+    "react-i18next": "^11.15.1"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/data-source-manager": "2.x"
+  },
+  "keywords": [
+    "Blocks"
+  ]
+}

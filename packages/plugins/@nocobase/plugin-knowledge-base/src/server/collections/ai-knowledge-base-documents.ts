@@ -60,6 +60,11 @@ export default defineCollection({
       name: 'uploadedById',
     },
     {
+      type: 'integer',
+      name: 'retryCount',
+      defaultValue: 0,
+    },
+    {
       type: 'json',
       name: 'meta',
     },

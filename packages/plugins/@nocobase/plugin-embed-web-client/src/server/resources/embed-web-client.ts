@@ -49,11 +49,18 @@ export async function getConfig(ctx: Context, next: Next) {
         chunkOverlap: DEFAULT_CHUNK_OVERLAP,
         batchSize: DEFAULT_BATCH_SIZE,
         preferWebGPU: true,
+        modelSource: 'server',
       },
     });
   }
 
-  ctx.body = config;
+  // Never expose S3 secret to the browser — mask it
+  const safeConfig = config?.toJSON ? config.toJSON() : { ...(config ?? {}) };
+  if (safeConfig.s3SecretAccessKey) {
+    safeConfig.s3SecretAccessKey = '***';
+  }
+
+  ctx.body = safeConfig;
   await next();
 }
 
@@ -71,6 +78,11 @@ export async function updateConfig(ctx: Context, next: Next) {
     values.dimensions = validateDimensions(values.dimensions);
   }
 
+  // If admin sends '***' for the secret, preserve the existing value
+  if (values.s3SecretAccessKey === '***') {
+    delete values.s3SecretAccessKey;
+  }
+
   let config = await repo.findOne({ filter: {}, sort: ['id'] });
 
   if (!config) {
@@ -84,7 +96,13 @@ export async function updateConfig(ctx: Context, next: Next) {
     config = await repo.findOne({ filter: { id: config.id } });
   }
 
-  ctx.body = config;
+  // Mask secret before returning
+  const safeConfig = config?.toJSON ? config.toJSON() : { ...(config ?? {}) };
+  if (safeConfig.s3SecretAccessKey) {
+    safeConfig.s3SecretAccessKey = '***';
+  }
+
+  ctx.body = safeConfig;
   await next();
 }
 
@@ -189,12 +207,15 @@ export async function storeVectors(ctx: Context, next: Next) {
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
   const expectedDimensions = validateDimensions(pluginConfig?.dimensions ?? DEFAULT_DIMENSIONS);
 
-  const firstEmbedding = chunks[0]?.embedding;
-  if (!Array.isArray(firstEmbedding)) {
-    ctx.throw(400, 'Each chunk must have an embedding array');
-  }
-  if (firstEmbedding.length !== expectedDimensions) {
-    ctx.throw(400, `Vector dimension mismatch: expected ${expectedDimensions}, got ${firstEmbedding.length}`);
+  // Validate ALL chunks' embeddings before starting any DB transaction to prevent partial inserts
+  for (let i = 0; i < chunks.length; i++) {
+    const embedding = chunks[i]?.embedding;
+    if (!Array.isArray(embedding)) {
+      ctx.throw(400, `Chunk ${i} is missing an embedding array`);
+    }
+    if (embedding.length !== expectedDimensions) {
+      ctx.throw(400, `Chunk ${i} dimension mismatch: expected ${expectedDimensions}, got ${embedding.length}`);
+    }
   }
 
   // 7. Mark document as processing
@@ -243,11 +264,7 @@ export async function storeVectors(ctx: Context, next: Next) {
 
         for (let j = 0; j < batch.length; j++) {
           const { text, embedding, metadata = {} } = batch[j];
-
-          if (!Array.isArray(embedding) || embedding.length !== expectedDimensions) {
-            throw new Error(`Chunk ${i + j} has wrong embedding dimension: ${embedding?.length}`);
-          }
-
+          // Dimensions were already validated above — no partial-insert risk here
           const embeddingStr = `[${embedding.join(',')}]`;
           const chunkMeta = {
             ...metadata,

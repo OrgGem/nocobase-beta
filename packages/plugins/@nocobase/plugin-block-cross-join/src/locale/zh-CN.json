@@ -1,0 +1,23 @@
+{
+  "Cross Join": "跨源联合",
+  "Cross Join Block": "跨源联合区块",
+  "Configure cross join": "配置跨源联合",
+  "Primary Source": "主数据源",
+  "Joins": "联合配置",
+  "Columns": "列配置",
+  "Datasource": "数据源",
+  "Collection": "数据表",
+  "Join Type": "联合类型",
+  "Left Join": "左联合",
+  "Inner Join": "内联合",
+  "Left Field": "左字段",
+  "Right Field": "右字段",
+  "Add Join": "添加联合",
+  "Field": "字段",
+  "Alias": "别名",
+  "Source": "来源",
+  "Edit mapping": "编辑映射",
+  "Expand JSON keys": "展开JSON键",
+  "No data": "暂无数据",
+  "Loading...": "加载中..."
+}

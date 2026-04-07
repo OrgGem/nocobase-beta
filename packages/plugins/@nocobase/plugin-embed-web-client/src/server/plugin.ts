@@ -52,8 +52,8 @@ export class PluginEmbedWebClientServer extends Plugin {
       context: { plugin: this },
     });
 
-    // Serve bundled/uploaded model files at GET /embed-web-client/models/**
-    this.app.use(createModelServerMiddleware(), { before: 'resourcer' });
+    // Serve bundled/uploaded/S3 model files at GET /embed-web-client/models/**
+    this.app.use(createModelServerMiddleware(this.db), { before: 'resourcer' });
 
     // Server-side embedding pipeline (used when embedMode = 'server')
     this.serverEmbeddingPipeline = new ServerEmbeddingPipeline(this.db);

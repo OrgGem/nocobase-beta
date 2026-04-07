@@ -35,6 +35,7 @@ import requestContext from './request-context';
 export class PluginKnowledgeBaseServer extends Plugin {
   vectorizationPipeline: VectorizationPipeline;
   docpixieExtractor: DocPixieExtractor;
+  private retryTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * The VectorStore provider registry exposed publicly so that other plugins can
@@ -190,6 +191,64 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // 8. Register work context strategy for per-chat KB selection
     this.registerKnowledgeBaseWorkContext(vectorStoreProvider, knowledgeBase);
+
+    // 9. Start background retry job for failed documents (every 5 minutes)
+    this.startRetryJob();
+  }
+
+  async disable() {
+    if (this.retryTimer) {
+      clearInterval(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  private startRetryJob() {
+    const RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    const MAX_RETRY_COUNT = 3;
+
+    this.retryTimer = setInterval(async () => {
+      try {
+        const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
+        const failedDocs = await docRepo.find({
+          filter: {
+            status: 'failed',
+            retryCount: { $lt: MAX_RETRY_COUNT },
+          },
+          appends: ['knowledgeBase'],
+          limit: 10,
+        });
+
+        for (const doc of failedDocs) {
+          if (!doc.knowledgeBase) continue;
+          const kbType = doc.knowledgeBase.type;
+
+          try {
+            if (kbType === 'WEB_CLIENT_EMBED' && doc.knowledgeBase.embedMode === 'server') {
+              // Retry via embed-web-client server pipeline
+              const embedPlugin = this.pm.get('@nocobase/plugin-embed-web-client') as any;
+              if (embedPlugin?.serverEmbeddingPipeline) {
+                await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
+                embedPlugin.serverEmbeddingPipeline.processDocument(doc.id).catch((err: any) => {
+                  this.app.logger.warn(`[KBRetry] Server embedding retry failed for doc ${doc.id}: ${err.message}`);
+                });
+              }
+            } else if (kbType !== 'WEB_CLIENT_EMBED') {
+              // Retry via vectorization pipeline (LOCAL and other types)
+              await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
+              this.vectorizationPipeline.processDocument(doc.id).catch((err: any) => {
+                this.app.logger.warn(`[KBRetry] Vectorization retry failed for doc ${doc.id}: ${err.message}`);
+              });
+            }
+            // WEB_CLIENT_EMBED with client mode: skip auto-retry (needs browser)
+          } catch (err: any) {
+            this.app.logger.warn(`[KBRetry] Failed to trigger retry for doc ${doc.id}: ${err.message}`);
+          }
+        }
+      } catch (err: any) {
+        this.app.logger.warn(`[KBRetry] Retry job error: ${err.message}`);
+      }
+    }, RETRY_INTERVAL_MS);
   }
 
   /** Returns the plugin-docpixie instance if it is loaded and has an active service, else null */

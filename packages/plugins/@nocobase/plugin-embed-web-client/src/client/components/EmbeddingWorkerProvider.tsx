@@ -23,6 +23,10 @@ export interface EmbeddingConfig {
   chunkOverlap: number;
   batchSize: number;
   preferWebGPU: boolean;
+  /** Where the browser fetches model files: 'server' | 'cdn' | 'huggingface' */
+  modelSource?: 'server' | 'cdn' | 'huggingface';
+  /** Full CDN URL to the model folder — used when modelSource = 'cdn' */
+  cdnBaseUrl?: string;
 }
 
 interface ProcessOptions {
@@ -79,13 +83,17 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
   }, []);
 
   // Lazy initialization — only creates the worker and loads the model when first needed
-  const ensureReady = useCallback(async () => {
-    // If worker already exists, wait for it to become ready
+  const ensureReady = useCallback(async (): Promise<void> => {
+    // If worker already exists, always return a consistent Promise<void>
     if (workerRef.current) {
       if (state === 'ready' || state === 'processing') return;
       if (readyPromiseRef.current) return readyPromiseRef.current;
+      // Worker exists but no ready-promise — treat as ready (model may have loaded synchronously)
       return;
     }
+
+    // Guard against concurrent calls: if a ready-promise already exists, return it
+    if (readyPromiseRef.current) return readyPromiseRef.current;
 
     // Create the ready promise
     readyPromiseRef.current = new Promise<void>((resolve) => {
@@ -166,15 +174,17 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
     };
 
     // Kick off model loading.
-    // serverOrigin tells the worker to fetch model files from the local NocoBase
-    // server instead of HuggingFace — required for offline deployments.
+    // Pass modelSource + cdnBaseUrl so the worker can route requests
+    // to the NocoBase server, a CDN, or HuggingFace Hub accordingly.
     setState('loading_model');
     send({
       type: 'init',
       modelId: cfg.modelId,
       dtype: cfg.dtype,
       preferWebGPU: cfg.preferWebGPU,
+      modelSource: cfg.modelSource ?? 'server',
       serverOrigin: window.location.origin,
+      cdnBaseUrl: cfg.cdnBaseUrl,
     });
 
     return readyPromiseRef.current;

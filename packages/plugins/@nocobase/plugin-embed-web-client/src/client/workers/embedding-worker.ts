@@ -21,10 +21,28 @@
 
 import { RecursiveCharacterTextSplitter } from './text-splitter';
 
+// Typed self for DedicatedWorkerGlobalScope
+declare const self: DedicatedWorkerGlobalScope;
+
 // ── Message Types ────────────────────────────────────────────────────────────
 
 export type WorkerMessage =
-  | { type: 'init'; modelId: string; dtype: string; preferWebGPU: boolean; serverOrigin: string }
+  | {
+      type: 'init';
+      modelId: string;
+      dtype: string;
+      preferWebGPU: boolean;
+      /** Where to fetch model files from: 'server' | 'cdn' | 'huggingface' */
+      modelSource: 'server' | 'cdn' | 'huggingface';
+      /** Origin of the NocoBase server — used when modelSource = 'server' */
+      serverOrigin: string;
+      /**
+       * Full CDN URL pointing to the model folder.
+       * e.g. https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
+       * Used when modelSource = 'cdn'.
+       */
+      cdnBaseUrl?: string;
+    }
   | { type: 'load_model'; modelId: string; dtype: string; serverOrigin?: string }
   | {
       type: 'process';
@@ -56,46 +74,112 @@ let pipe: any = null; // HuggingFace feature-extraction pipeline
 let modelId = 'Xenova/all-MiniLM-L6-v2';
 let currentServerOrigin = ''; // Stored from init, reused by load_model
 
+// Maximum time to wait for model pipeline initialisation (10 minutes for very large models)
+const MODEL_LOAD_TIMEOUT_MS = 10 * 60 * 1000;
+
 function send(msg: WorkerResponse) {
-  (self as any).postMessage(msg);
+  self.postMessage(msg);
 }
 
 // ── Model Loading ─────────────────────────────────────────────────────────────
 
-async function loadModel(id: string, dtype: string, preferWebGPU: boolean, serverOrigin: string) {
+/**
+ * Parse a CDN URL like:
+ *   https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
+ * into the env settings that @huggingface/transformers expects.
+ *
+ * Strategy: the model ID is the last two path segments (org/model).
+ * Everything before them (including trailing slash) becomes the remotePathTemplate
+ * with the two segments replaced by {model}.
+ *
+ * If the URL does not match, returns null (caller falls back to HuggingFace).
+ */
+function parseCdnUrl(cdnUrl: string, modelId: string): { remoteHost: string; remotePathTemplate: string } | null {
+  try {
+    const url = new URL(cdnUrl.trim().replace(/\/+$/, ''));
+    const origin = url.origin; // e.g. https://cdn.jsdelivr.net
+    const fullPath = url.pathname; // e.g. /npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
+
+    // Remove model ID from the end of the path to get the prefix
+    const escapedModelId = modelId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const modelIdRe = new RegExp(`/?${escapedModelId}/?$`);
+    const prefix = fullPath.replace(modelIdRe, '');
+
+    // Reconstruct: the template path uses {model} where the model ID was
+    const remotePathTemplate = `${prefix}/{model}/`;
+
+    return { remoteHost: `${origin}/`, remotePathTemplate };
+  } catch {
+    return null;
+  }
+}
+
+async function loadModel(
+  id: string,
+  dtype: string,
+  preferWebGPU: boolean,
+  modelSource: 'server' | 'cdn' | 'huggingface',
+  serverOrigin: string,
+  cdnBaseUrl?: string,
+) {
   modelId = id;
   currentServerOrigin = serverOrigin;
 
   // Dynamically import @huggingface/transformers — not bundled into main thread
   const { pipeline, env } = await import('@huggingface/transformers');
 
-  // Route ALL model file requests through the NocoBase server's local model cache.
-  // The server middleware at GET /embed-web-client/models/** serves files from:
-  //   storage/plugin-embed-web-client/models/**
-  //
-  // This makes the browser fully offline-capable once the admin has downloaded the
-  // model files via the plugin settings page.
-  // Route all model file requests through the NocoBase server's local model cache.
-  // Template ignores {revision} — we only serve "main" and the files are stored flat.
-  env.remoteHost = `${serverOrigin}/`;
-  env.remotePathTemplate = 'embed-web-client/models/{model}/';
-  env.allowRemoteModels = true; // "remote" = our own server, no HuggingFace needed
-  env.allowLocalModels = false; // browser has no filesystem access
+  if (modelSource === 'server') {
+    // Route ALL model file requests through the NocoBase server's local model cache.
+    // The server middleware at GET /embed-web-client/models/** serves files from:
+    //   storage/plugin-embed-web-client/models/** (or S3).
+    // Template ignores {revision} — we only serve "main" and the files are stored flat.
+    env.remoteHost = `${serverOrigin}/`;
+    env.remotePathTemplate = 'embed-web-client/models/{model}/';
+    env.allowRemoteModels = true; // "remote" = our own server, no HuggingFace needed
+    env.allowLocalModels = false;
+  } else if (modelSource === 'cdn' && cdnBaseUrl) {
+    // Fetch model files from admin-configured CDN.
+    // e.g. cdnBaseUrl = "https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2"
+    const parsed = parseCdnUrl(cdnBaseUrl, id);
+    if (parsed) {
+      env.remoteHost = parsed.remoteHost;
+      env.remotePathTemplate = parsed.remotePathTemplate;
+      env.allowRemoteModels = true;
+      env.allowLocalModels = false;
+    } else {
+      // Could not parse CDN URL — fall back to HuggingFace Hub
+      env.allowRemoteModels = true;
+      env.allowLocalModels = false;
+    }
+  } else {
+    // 'huggingface' or fallback: use HuggingFace Hub defaults (no env override needed)
+    env.allowRemoteModels = true;
+    env.allowLocalModels = false;
+  }
 
   // Attempt WebGPU if requested, fall back to WASM automatically
   const device = preferWebGPU ? 'webgpu' : 'wasm';
 
-  pipe = await pipeline('feature-extraction', id, {
-    dtype,
-    device,
-    progress_callback: (progressInfo: any) => {
-      // progressInfo: { status, name, file, progress, loaded, total }
-      if (progressInfo.status === 'downloading' || progressInfo.status === 'progress') {
-        const pct = progressInfo.progress ?? 0;
-        send({ type: 'model_loading', progress: Math.round(pct), message: progressInfo.file });
-      }
-    },
-  });
+  // Wrap pipeline() in a timeout so a stalled HuggingFace fetch doesn't hang forever
+  pipe = await Promise.race([
+    pipeline('feature-extraction', id, {
+      dtype,
+      device,
+      progress_callback: (progressInfo: any) => {
+        // progressInfo: { status, name, file, progress, loaded, total }
+        if (progressInfo.status === 'downloading' || progressInfo.status === 'progress') {
+          const pct = progressInfo.progress ?? 0;
+          send({ type: 'model_loading', progress: Math.round(pct), message: progressInfo.file });
+        }
+      },
+    }),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error(`Model load timed out after ${MODEL_LOAD_TIMEOUT_MS / 60000} minutes`)),
+        MODEL_LOAD_TIMEOUT_MS,
+      ),
+    ),
+  ]);
 
   send({ type: 'model_ready' });
 }
@@ -175,13 +259,13 @@ async function embedQuery(text: string, requestId: string) {
 
 // ── Message Dispatcher ────────────────────────────────────────────────────────
 
-(self as any).onmessage = async (event: MessageEvent<WorkerMessage>) => {
+self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   const msg = event.data;
 
   switch (msg.type) {
     case 'init':
       try {
-        await loadModel(msg.modelId, msg.dtype, msg.preferWebGPU, msg.serverOrigin);
+        await loadModel(msg.modelId, msg.dtype, msg.preferWebGPU, msg.modelSource, msg.serverOrigin, msg.cdnBaseUrl);
       } catch (err: any) {
         send({ type: 'error', error: err?.message ?? 'Failed to load model' });
       }

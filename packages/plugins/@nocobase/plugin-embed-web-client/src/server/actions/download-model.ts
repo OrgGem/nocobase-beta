@@ -11,8 +11,10 @@
  * Server-side model file downloader.
  *
  * Called by the admin "Download Model" button in plugin settings.
- * Fetches model files from HuggingFace Hub and saves them to:
- *   storage/plugin-embed-web-client/models/{model}/resolve/{revision}/{file}
+ * Fetches model files from HuggingFace Hub and saves them to either:
+ *   - Local disk:  storage/plugin-embed-web-client/models/{model}/resolve/{revision}/{file}
+ *   - S3 bucket:   {keyPrefix}/models/{model}/resolve/{revision}/{file}
+ *     (when storageMode = 's3' in plugin config)
  *
  * After a successful download the worker can fetch files from the local
  * model-server middleware instead of the internet.
@@ -26,25 +28,43 @@
  */
 
 import { resolve, dirname } from 'path';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import type { Context, Next } from '@nocobase/actions';
 import { DTYPE_ONNX, REQUIRED_BASE_FILES, DEFAULT_MODEL_ID, DEFAULT_DTYPE } from '../../shared/constants';
 import { safeJoin } from '../../shared/utils';
+import { createS3StorageFromConfig, modelFileMimeType } from '../utils/s3-storage';
+import { VALID_MODEL_ID_RE } from './model-manager';
 
 // Downloads go to storage/ so they survive plugin upgrades without overwriting bundled files
 const MODELS_ROOT = resolve(process.cwd(), 'storage/plugin-embed-web-client/models');
 const HF_BASE = 'https://huggingface.co';
 
-async function downloadFile(url: string, destPath: string): Promise<void> {
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'NocoBase-plugin-embed-web-client/1.0' },
-  });
+// Maximum time (ms) to wait for a single file download from HuggingFace
+const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url}: HTTP ${response.status} ${response.statusText}`);
+async function downloadToBuffer(url: string): Promise<Buffer> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'NocoBase-plugin-embed-web-client/1.0' },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timer);
   }
+}
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+function writeLocalFile(destPath: string, buffer: Buffer): void {
   const dir = dirname(destPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -65,9 +85,12 @@ export async function downloadModel(ctx: Context, next: Next) {
     ctx.throw(400, 'modelId is required');
   }
 
-  // Basic validation — modelId should look like "Org/model-name"
-  if (!/^[\w.-]+\/[\w.-]+$/.test(modelId)) {
-    ctx.throw(400, 'Invalid modelId format. Expected "Org/ModelName".');
+  // Strict validation — modelId must be "Org/ModelName" (ASCII only, max 128 chars each segment)
+  if (!VALID_MODEL_ID_RE.test(modelId)) {
+    ctx.throw(
+      400,
+      'Invalid modelId format. Expected "Org/ModelName" using only letters, digits, hyphens, underscores, or dots (max 128 chars each).',
+    );
   }
 
   const onnxFile = DTYPE_ONNX[dtype];
@@ -75,22 +98,47 @@ export async function downloadModel(ctx: Context, next: Next) {
     ctx.throw(400, `Unsupported dtype: ${dtype}. Supported: ${Object.keys(DTYPE_ONNX).join(', ')}`);
   }
 
+  // Load plugin config to determine storage mode
+  const configRepo = ctx.db.getRepository('embedWebClientConfig');
+  const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
+  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+
   const files = [...REQUIRED_BASE_FILES, onnxFile];
-  const results: { file: string; status: 'ok' | 'failed'; error?: string }[] = [];
-  const destBase = safeJoin(MODELS_ROOT, modelId, 'resolve', revision);
+  const results: { file: string; status: 'ok' | 'skipped' | 'failed'; error?: string }[] = [];
 
   for (const file of files) {
     const url = `${HF_BASE}/${modelId}/resolve/${revision}/${file}`;
-    const destPath = safeJoin(destBase, ...file.split('/'));
+    const s3Key = s3?.buildKey(modelId, file, revision);
 
     try {
-      if (existsSync(destPath)) {
-        results.push({ file, status: 'ok' }); // already cached
-        continue;
+      if (s3) {
+        // ── S3 mode ──────────────────────────────────────────────────────────
+        // Check if already in S3
+        if (await s3.fileExists(s3Key!)) {
+          results.push({ file, status: 'skipped' });
+          continue;
+        }
+
+        ctx.app.logger.info(`[downloadModel] Fetching ${url} → S3:${s3Key}`);
+        const buffer = await downloadToBuffer(url);
+        await s3.uploadFile(s3Key!, buffer, modelFileMimeType(file));
+        results.push({ file, status: 'ok' });
+      } else {
+        // ── Local disk mode ───────────────────────────────────────────────────
+        const destPath = safeJoin(MODELS_ROOT, modelId, 'resolve', revision, ...file.split('/'));
+
+        if (existsSync(destPath)) {
+          results.push({ file, status: 'skipped' });
+          continue;
+        }
+
+        ctx.app.logger.info(`[downloadModel] Fetching ${url} → ${destPath}`);
+        const buffer = await downloadToBuffer(url);
+        writeLocalFile(destPath, buffer);
+        results.push({ file, status: 'ok' });
       }
-      await downloadFile(url, destPath);
-      results.push({ file, status: 'ok' });
     } catch (err: any) {
+      ctx.app.logger.error(`[downloadModel] Failed to download ${file}: ${err.message}`);
       results.push({ file, status: 'failed', error: err.message });
     }
   }
@@ -101,6 +149,7 @@ export async function downloadModel(ctx: Context, next: Next) {
     modelId,
     dtype,
     revision,
+    storageMode: s3 ? 's3' : 'local',
     results,
     success: failed.length === 0,
     error: failed.length > 0 ? `Failed to download: ${failed.map((r) => r.file).join(', ')}` : undefined,
@@ -112,7 +161,7 @@ export async function downloadModel(ctx: Context, next: Next) {
 /**
  * GET /embedWebClient:getModelStatus
  *
- * Checks whether the configured model is available on disk.
+ * Checks whether the configured model is available (disk or S3).
  * Returns { downloaded: boolean, files: string[] }
  */
 export async function getModelStatus(ctx: Context, next: Next) {
@@ -126,16 +175,33 @@ export async function getModelStatus(ctx: Context, next: Next) {
   const onnxFile = DTYPE_ONNX[dtype] ?? DTYPE_ONNX.q8;
   const requiredFiles = [...REQUIRED_BASE_FILES, onnxFile];
 
+  const s3 = createS3StorageFromConfig(config ?? {});
+
   // Check bundled models first, then storage override
   const BUNDLED_ROOT = resolve(__dirname, '../../public/models');
   const checkBase = (root: string) => safeJoin(root, modelId, 'resolve', revision);
 
-  const fileStatuses = requiredFiles.map((file) => {
-    const bundledPath = safeJoin(checkBase(BUNDLED_ROOT), ...file.split('/'));
-    const storagePath = safeJoin(checkBase(MODELS_ROOT), ...file.split('/'));
-    const present = existsSync(bundledPath) || existsSync(storagePath);
-    return { file, present, bundled: existsSync(bundledPath) };
-  });
+  const fileStatuses = await Promise.all(
+    requiredFiles.map(async (file) => {
+      const bundledPath = safeJoin(checkBase(BUNDLED_ROOT), ...file.split('/'));
+      const storagePath = safeJoin(checkBase(MODELS_ROOT), ...file.split('/'));
+      const onDisk = existsSync(bundledPath) || existsSync(storagePath);
+
+      let inS3 = false;
+      if (s3 && !onDisk) {
+        const key = s3.buildKey(modelId, file, revision);
+        inS3 = await s3.fileExists(key).catch(() => false);
+      }
+
+      return {
+        file,
+        present: onDisk || inS3,
+        bundled: existsSync(bundledPath),
+        onDisk,
+        inS3,
+      };
+    }),
+  );
 
   const downloaded = fileStatuses.every((f) => f.present);
   const bundled = fileStatuses.every((f) => f.bundled);
@@ -146,6 +212,7 @@ export async function getModelStatus(ctx: Context, next: Next) {
     revision,
     downloaded,
     bundled,
+    storageMode: s3 ? 's3' : 'local',
     files: fileStatuses,
   };
 

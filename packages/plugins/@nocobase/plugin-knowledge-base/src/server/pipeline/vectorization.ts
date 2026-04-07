@@ -217,11 +217,14 @@ export class VectorizationPipeline {
 
       return { success: true, chunkCount: chunks.length };
     } catch (error: any) {
+      const currentDoc = await docRepo.findOne({ filter: { id: documentId } });
+      const currentRetryCount = currentDoc?.retryCount ?? 0;
       await docRepo.update({
         filter: { id: documentId },
         values: {
           status: 'failed',
           error: error.message ?? String(error),
+          retryCount: currentRetryCount + 1,
         },
       });
 

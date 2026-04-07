@@ -258,7 +258,7 @@ export default {
       // Reset status to pending
       await repo.update({
         filterByTk,
-        values: { status: 'pending', error: null, chunkCount: 0 },
+        values: { status: 'pending', error: null, chunkCount: 0, retryCount: 0 },
       });
 
       // Trigger re-vectorization via class-reference plugin lookup

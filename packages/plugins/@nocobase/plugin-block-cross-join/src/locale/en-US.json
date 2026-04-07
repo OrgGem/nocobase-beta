@@ -1,0 +1,23 @@
+{
+  "Cross Join": "Cross Join",
+  "Cross Join Block": "Cross Join Block",
+  "Configure cross join": "Configure cross join",
+  "Primary Source": "Primary Source",
+  "Joins": "Joins",
+  "Columns": "Columns",
+  "Datasource": "Datasource",
+  "Collection": "Collection",
+  "Join Type": "Join Type",
+  "Left Join": "Left Join",
+  "Inner Join": "Inner Join",
+  "Left Field": "Left Field",
+  "Right Field": "Right Field",
+  "Add Join": "Add Join",
+  "Field": "Field",
+  "Alias": "Alias",
+  "Source": "Source",
+  "Edit mapping": "Edit mapping",
+  "Expand JSON keys": "Expand JSON keys",
+  "No data": "No data",
+  "Loading...": "Loading..."
+}

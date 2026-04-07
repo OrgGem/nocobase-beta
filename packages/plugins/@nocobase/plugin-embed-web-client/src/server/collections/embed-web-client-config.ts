@@ -64,6 +64,58 @@ export default defineCollection({
       name: 'preferWebGPU',
       defaultValue: true,
     },
+    // ── Model source / CDN settings ─────────────────────────────────────────
+    {
+      // Where the browser should fetch model files from:
+      //   'server'      — served by this NocoBase server (local disk or S3, default)
+      //   'cdn'         — fetched from cdnBaseUrl configured below (no server needed)
+      //   'huggingface' — fetched directly from HuggingFace Hub (requires internet)
+      type: 'string',
+      name: 'modelSource',
+      defaultValue: 'server',
+    },
+    {
+      // Full CDN URL pointing to the model folder.
+      // Example: https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
+      // The URL must end at the model folder (the directory that contains config.json, model.onnx, etc.)
+      type: 'string',
+      name: 'cdnBaseUrl',
+    },
+    // ── S3 / object-storage settings ────────────────────────────────────────
+    {
+      // 'local' = store model files on the NocoBase server disk (default)
+      // 's3'    = store model files in an S3-compatible bucket
+      type: 'string',
+      name: 'storageMode',
+      defaultValue: 'local',
+    },
+    {
+      type: 'string',
+      name: 's3Bucket',
+    },
+    {
+      type: 'string',
+      name: 's3Region',
+    },
+    {
+      // Optional custom endpoint for MinIO / Cloudflare R2 / etc.
+      type: 'string',
+      name: 's3Endpoint',
+    },
+    {
+      type: 'string',
+      name: 's3AccessKeyId',
+    },
+    {
+      // Stored encrypted at rest by the DB; never returned to the browser.
+      type: 'password',
+      name: 's3SecretAccessKey',
+    },
+    {
+      // Key prefix inside the bucket (default: "embed-web-client")
+      type: 'string',
+      name: 's3KeyPrefix',
+    },
     {
       type: 'date',
       name: 'createdAt',
