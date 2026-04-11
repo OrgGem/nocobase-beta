@@ -1,0 +1,408 @@
+# ==============================================================================
+# NocoBase Production Stack
+# ==============================================================================
+#
+#   Client -> nginx (embedded config, no file mounts - Portainer compatible)
+#             -> app-1:13000 (Node.js/Koa, WORKER_MODE=! : HTTP + WebSocket)
+#
+#   Background:
+#             worker-1, worker-2 (WORKER_MODE=* : all background jobs)
+#
+#   Data:
+#             postgres 16 (tuned)
+#             redis 7 (cache + pub/sub + job queue)
+#
+#   Boot order:
+#     1. postgres + redis start and become healthy
+#     2. app-1 starts with --quickstart (runs migrations/install/upgrade)
+#     3. app-1 becomes healthy (API responding on :13000)
+#     4. nginx, worker-1, worker-2 start
+#
+# ==============================================================================
+
+x-nocobase-env: &nocobase-env
+  APP_ENV: production
+  APP_KEY: ${APP_KEY:?Set APP_KEY in .env}
+  ENCRYPTION_FIELD_KEY: ${ENCRYPTION_FIELD_KEY:?Set ENCRYPTION_FIELD_KEY in .env}
+  DB_DIALECT: postgres
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: ${DB_DATABASE:-nocobase}
+  DB_USER: ${DB_USER:-nocobase}
+  DB_PASSWORD: ${DB_PASSWORD:-nocobase}
+  DB_LOGGING: "off"
+  # Redis
+  CACHE_DEFAULT_STORE: redis
+  CACHE_REDIS_URL: ${CACHE_REDIS_URL:-redis://redis:6379/0}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/1}
+  # Logging
+  LOGGER_LEVEL: warn
+  LOGGER_TRANSPORT: console,dailyRotateFile
+  # Timezone
+  TZ: ${TZ:-UTC}
+  # Custom plugins
+  APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
+
+x-nocobase-base: &nocobase-base
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.0.32-full}
+  restart: unless-stopped
+  networks:
+    - nocobase
+  volumes:
+    - app-storage:/app/nocobase/storage
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  init: true
+
+# Worker nodes: inline entrypoint — waits for app-1, starts without --quickstart
+# All $$ are shell variables escaped from Docker Compose interpolation
+x-nocobase-worker: &nocobase-worker
+  <<: *nocobase-base
+  entrypoint: ["/bin/sh", "-c"]
+  command:
+    - |
+      echo "COMMIT_HASH: $$(cat /app/commit_hash.txt 2>/dev/null || echo unknown)"
+      export NOCOBASE_RUNNING_IN_DOCKER=true
+      if [ -f /opt/libreoffice24.8.zip ] && [ ! -d /opt/libreoffice24.8 ]; then
+        unzip -q /opt/libreoffice24.8.zip -d /opt/
+      fi
+      if [ -f /opt/instantclient_19_25.zip ] && [ ! -d /opt/instantclient_19_25 ]; then
+        unzip -q /opt/instantclient_19_25.zip -d /opt/
+        echo "/opt/instantclient_19_25" > /etc/ld.so.conf.d/oracle-instantclient.conf
+        ldconfig
+      fi
+      [ ! -d /app/nocobase ] && mkdir /app/nocobase
+      if [ ! -f /app/nocobase/package.json ]; then
+        echo "copying..."
+        tar -zxf /app/nocobase.tar.gz --absolute-names -C /app/nocobase
+        touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
+      fi
+      cd /app/nocobase && yarn nocobase postinstall
+      cd /app/nocobase && yarn nocobase db:auth
+      cd /app/nocobase && yarn nocobase create-nginx-conf
+      cd /app/nocobase && yarn nocobase generate-instance-id
+      rm -rf /etc/nginx/sites-enabled/nocobase.conf
+      ln -s /app/nocobase/storage/nocobase.conf /etc/nginx/sites-enabled/nocobase.conf
+      nginx
+      if [ -d /app/nocobase/storage/scripts ]; then
+        for f in /app/nocobase/storage/scripts/*.sh; do
+          [ -e "$$f" ] || continue
+          echo "Running $$f"
+          sh "$$f"
+        done
+      fi
+      PRIMARY_URL="$${PRIMARY_CHECK_URL:-http://app-1:13000/api/app:getInfo}"
+      MAX_WAIT=300
+      WAITED=0
+      while [ $$WAITED -lt $$MAX_WAIT ]; do
+        if wget -q --spider "$$PRIMARY_URL" 2>/dev/null; then
+          echo "Primary ready after $${WAITED}s, starting worker..."
+          break
+        fi
+        echo "Waiting for primary... ($${WAITED}s/$${MAX_WAIT}s)"
+        sleep 5
+        WAITED=$$(($$WAITED + 5))
+      done
+      [ $$WAITED -ge $$MAX_WAIT ] && echo "WARNING: Primary not ready after $${MAX_WAIT}s, starting anyway..."
+      exec yarn --cwd /app/nocobase start
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+    app-1:
+      condition: service_healthy
+
+networks:
+  nocobase:
+    driver: bridge
+
+volumes:
+  app-storage:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  nginx-cache:
+    driver: local
+
+services:
+  # ============================================================================
+  # NGINX — inline config (Portainer compatible, no file mounts)
+  # Proxies directly to app-1:13000 (bypasses internal NocoBase nginx)
+  # Static asset cache via proxy_cache (volume: nginx-cache)
+  # All nginx $variables use $$ to escape Docker Compose interpolation
+  # ============================================================================
+  nginx:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - nginx-cache:/var/cache/nginx/static
+    networks:
+      - nocobase
+    depends_on:
+      app-1:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cat > /etc/nginx/nginx.conf << 'NGINXEOF'
+        worker_processes auto;
+        worker_rlimit_nofile 65535;
+
+        events {
+            worker_connections 4096;
+            multi_accept on;
+        }
+
+        http {
+            sendfile on;
+            tcp_nopush on;
+            tcp_nodelay on;
+            keepalive_timeout 65;
+            types_hash_max_size 2048;
+            client_max_body_size 0;
+            server_tokens off;
+
+            include /etc/nginx/mime.types;
+            default_type application/octet-stream;
+
+            gzip on;
+            gzip_vary on;
+            gzip_proxied any;
+            gzip_comp_level 4;
+            gzip_min_length 256;
+            gzip_types text/plain text/css application/json application/javascript
+                       text/xml application/xml application/xml+rss text/javascript
+                       image/svg+xml;
+
+            log_format main '$$remote_addr [$$time_local] "$$request" $$status $$body_bytes_sent '
+                            'rt=$$request_time urt=$$upstream_response_time cache=$$upstream_cache_status';
+            access_log /var/log/nginx/access.log main;
+            error_log /var/log/nginx/error.log warn;
+
+            proxy_cache_path /var/cache/nginx/static
+                levels=1:2
+                keys_zone=static:10m
+                max_size=500m
+                inactive=30d
+                use_temp_path=off;
+
+            upstream nocobase {
+                server app-1:13000 max_fails=3 fail_timeout=30s;
+                keepalive 32;
+            }
+
+            limit_req_zone $$binary_remote_addr zone=api_limit:10m rate=30r/s;
+            limit_req_zone $$binary_remote_addr zone=general_limit:10m rate=100r/s;
+
+            server {
+                listen 80;
+                http2 on;
+                server_name _;
+
+                proxy_cache_key "$$scheme$$host$$uri";
+
+                location /nginx-health {
+                    access_log off;
+                    return 200 "ok\n";
+                }
+
+                location /api/ {
+                    limit_req zone=api_limit burst=50 nodelay;
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_connect_timeout 600;
+                    proxy_send_timeout 600;
+                    proxy_read_timeout 600;
+                    proxy_cache off;
+                }
+
+                location /ws {
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection "Upgrade";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_read_timeout 86400;
+                    proxy_send_timeout 86400;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
+                location ~* ^/static/.+\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_cache static;
+                    proxy_cache_valid 200 365d;
+                    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+                    proxy_cache_lock on;
+                    proxy_cache_lock_timeout 5s;
+                    proxy_ignore_headers Cache-Control Expires Set-Cookie;
+                    add_header X-Cache-Status $$upstream_cache_status;
+                    add_header Cache-Control "public, max-age=31536000, immutable";
+                }
+
+                location ~* \.(woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_cache static;
+                    proxy_cache_valid 200 7d;
+                    proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+                    proxy_cache_lock on;
+                    add_header X-Cache-Status $$upstream_cache_status;
+                    add_header Cache-Control "public, max-age=604800";
+                }
+
+                location / {
+                    limit_req zone=general_limit burst=200 nodelay;
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_cache static;
+                    proxy_cache_valid 200 1m;
+                    proxy_cache_use_stale error timeout updating;
+                    proxy_cache_lock on;
+                    add_header X-Cache-Status $$upstream_cache_status;
+                    add_header Cache-Control "no-cache";
+                }
+            }
+        }
+        NGINXEOF
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/nginx-health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================================
+  # PRIMARY App - Runs migrations/install/upgrade via --quickstart
+  # This is the ONLY node that touches the migrations table
+  # ============================================================================
+  app-1:
+    <<: *nocobase-base
+    environment:
+      <<: *nocobase-env
+      WORKER_MODE: "!"
+      APP_PORT: 13000
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:13000/api/app:getInfo"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  # ============================================================================
+  # Workers - Wait for app-1, then start WITHOUT --quickstart
+  # ============================================================================
+  worker-1:
+    <<: *nocobase-worker
+    environment:
+      <<: *nocobase-env
+      WORKER_MODE: "*"
+      APP_PORT: 13000
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  worker-2:
+    <<: *nocobase-worker
+    environment:
+      <<: *nocobase-env
+      WORKER_MODE: "*"
+      APP_PORT: 13000
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
+  # ============================================================================
+  # Redis 7
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --save 900 1
+      --save 300 10
+      --slowlog-log-slower-than 10000
+      --slowlog-max-len 128
+    volumes:
+      - redis-data:/data
+    networks:
+      - nocobase
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ============================================================================
+  # PostgreSQL 16
+  # ============================================================================
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=16MB
+      -c maintenance_work_mem=128MB
+      -c random_page_cost=1.1
+      -c checkpoint_completion_target=0.9
+      -c log_min_duration_statement=1000
+    environment:
+      POSTGRES_USER: ${DB_USER:-nocobase}
+      POSTGRES_DB: ${DB_DATABASE:-nocobase}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-nocobase}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - nocobase
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-nocobase}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
