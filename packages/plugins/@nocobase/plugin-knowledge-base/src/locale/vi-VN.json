@@ -42,5 +42,10 @@
   "Vector store created successfully": "Tạo kho vector thành công",
   "Vector database created successfully": "Tạo cơ sở dữ liệu vector thành công",
   "Select Knowledge Base": "Chọn cơ sở tri thức",
-  "No knowledge bases available": "Không có cơ sở tri thức nào"
+  "No knowledge bases available": "Không có cơ sở tri thức nào",
+  "Embedding Provider": "Nhà cung cấp Embedding",
+  "LLM Service (Remote API)": "Dịch vụ LLM (API từ xa)",
+  "Local Embed (ONNX)": "Embed cục bộ (ONNX)",
+  "Local Embed Model": "Mô hình embed cục bộ",
+  "Quantization (dtype)": "Lượng tử hóa (dtype)"
 }

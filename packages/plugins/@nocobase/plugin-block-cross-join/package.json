@@ -7,6 +7,13 @@
   "version": "0.1.0",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts"
+  ],
   "devDependencies": {
     "@ant-design/icons": "5.x",
     "@formily/react": "2.x",

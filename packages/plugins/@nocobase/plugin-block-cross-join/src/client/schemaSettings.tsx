@@ -26,7 +26,9 @@ export const crossJoinBlockSchemaSettings = new SchemaSettings({
       useComponentProps() {
         return {
           title: 'Edit Mapping',
-          // TODO: implement full edit flow using useDesignable + CrossJoinConfigurator
+          onSubmit: async () => {
+            // TODO: implement full edit flow using useDesignable + CrossJoinConfigurator
+          },
         };
       },
     },

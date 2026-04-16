@@ -32,6 +32,13 @@ export const ProviderSettingsForm: React.FC = () => {
             'x-component': 'Checkbox',
             'x-content': tval('Disable streaming description', { ns: namespace }),
           },
+          enableReasoning: {
+            title: tval('Enable reasoning', { ns: namespace }),
+            type: 'boolean',
+            'x-decorator': 'FormItem',
+            'x-component': 'Checkbox',
+            'x-content': tval('Enable reasoning description', { ns: namespace }),
+          },
           streamKeepAlive: {
             title: tval('Stream keepalive', { ns: namespace }),
             type: 'boolean',
@@ -107,6 +114,8 @@ export const ProviderSettingsForm: React.FC = () => {
                   reasoningKey: 'reasoning_content',
                   responseMapping: {
                     content: 'message.response',
+                    tool_calls: 'message.tool_calls',
+                    finish_reason: 'finish_reason',
                   },
                 },
                 null,

@@ -17,7 +17,7 @@ import type {
 import type { VectorStoreProp } from '@nocobase/plugin-ai/server';
 import type PluginKnowledgeBaseServer from '../plugin';
 import type PluginAIServer from '@nocobase/plugin-ai';
-import { SimpleHTTPEmbeddings } from '../pipeline/simple-embeddings';
+import { createEmbeddingsForVectorStore } from '../pipeline/embedding-factory';
 import { getCurrentUserId, getCurrentUserRoles } from '../request-context';
 
 export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
@@ -72,7 +72,7 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
     }
 
     // Create embedding model
-    const embeddings = await this.createEmbeddings(vectorStoreConfig.llmService, vectorStoreConfig.embeddingModel);
+    const embeddings = await createEmbeddingsForVectorStore(this.plugin, vectorStoreConfig);
 
     // Create vector store via provider
     const vdbProviderFeature = this.aiPlugin.features.vectorDatabaseProvider;
@@ -128,27 +128,6 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
     return new DefaultVectorStoreService(vectorStore, { accessLevel, ownerId, allowedRoles });
   }
 
-  private async createEmbeddings(llmServiceName: string, embeddingModel: string) {
-    // Look up the LLM service
-    const llmServiceRecord = await this.plugin.db.getRepository('llmServices').findOne({
-      filter: { name: llmServiceName },
-    });
-
-    if (!llmServiceRecord) {
-      throw new Error(`LLM service "${llmServiceName}" not found`);
-    }
-
-    const llmService = llmServiceRecord.toJSON();
-
-    // Use SimpleHTTPEmbeddings directly to avoid encoding_format issues
-    // with providers like Nvidia on OpenRouter
-    const serviceOpts = this.plugin.app.environment.renderJsonTemplate(llmService.options || {});
-    return new SimpleHTTPEmbeddings({
-      baseURL: serviceOpts.baseURL || serviceOpts.baseUrl || '',
-      apiKey: serviceOpts.apiKey || '',
-      model: embeddingModel,
-    });
-  }
 }
 
 type AccessContext = {

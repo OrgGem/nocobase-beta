@@ -11,7 +11,7 @@ import { resolve as resolvePath, sep, join } from 'path';
 import { unlink, access, readFile } from 'fs/promises';
 import type PluginKnowledgeBaseServer from '../plugin';
 import { DocumentTextSplitter, type TextSplitterOptions } from './text-splitter';
-import { SimpleHTTPEmbeddings } from './simple-embeddings';
+import { createEmbeddingsForVectorStore } from './embedding-factory';
 import type { DocPixieExtractor } from '../services/docpixie-extractor';
 
 export type VectorizationResult = {
@@ -49,11 +49,30 @@ export class VectorizationPipeline {
     });
 
     try {
-      // 1. Load the document record with knowledge base info
-      const docRecord = await docRepo.findOne({
+      // Brief delay to ensure FK writes (knowledgeBaseId, fileId) from the create
+      // handler are fully committed before we query with appends.
+      // Without this, appended relations (file, knowledgeBase) can return null
+      // when the vectorization trigger fires immediately after repo.update().
+      await new Promise((r) => setTimeout(r, 500));
+      // 1. Load the document record with knowledge base info (with retry for FK propagation)
+      let docRecord = await docRepo.findOne({
         filter: { id: documentId },
         appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
       });
+
+      // Retry once if relations are missing — covers edge cases where the
+      // DB connection pool returns a stale read (common with replicas or
+      // heavy concurrent writes).
+      if (docRecord && (!docRecord.get('knowledgeBaseId') || !docRecord.knowledgeBase)) {
+        this.plugin.app.logger.warn(
+          `[Vectorization] FK not yet visible for doc ${documentId}, retrying after 1s...`,
+        );
+        await new Promise((r) => setTimeout(r, 1000));
+        docRecord = await docRepo.findOne({
+          filter: { id: documentId },
+          appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
+        });
+      }
 
       if (!docRecord) {
         throw new Error(`Document "${documentId}" not found`);
@@ -166,25 +185,8 @@ export class VectorizationPipeline {
       const vectorStore = knowledgeBase.vectorStore;
       const vectorDatabase = vectorStore.vectorDatabase;
 
-      // Create embedding model
-      const llmServiceRecord = await this.plugin.db.getRepository('llmServices').findOne({
-        filter: { name: vectorStore.llmService },
-      });
-
-      if (!llmServiceRecord) {
-        throw new Error(`LLM service "${vectorStore.llmService}" not found`);
-      }
-
-      const llmService = llmServiceRecord.toJSON();
-
-      // Use SimpleHTTPEmbeddings directly to avoid encoding_format issues
-      // with providers like Nvidia on OpenRouter
-      const serviceOpts = this.plugin.app.environment.renderJsonTemplate(llmService.options || {});
-      const embeddings = new SimpleHTTPEmbeddings({
-        baseURL: serviceOpts.baseURL || serviceOpts.baseUrl || '',
-        apiKey: serviceOpts.apiKey || '',
-        model: vectorStore.embeddingModel,
-      });
+      // Create embedding model (LLM service or local ONNX based on vector store config)
+      const embeddings = await createEmbeddingsForVectorStore(this.plugin, vectorStore);
 
       // Create vector store instance
       const vdbProvider = this.plugin.aiPlugin.features.vectorDatabaseProvider;
@@ -194,8 +196,12 @@ export class VectorizationPipeline {
         vectorDatabase.connectParams,
       );
 
-      // Add documents to vector store
-      await (vectorStoreInstance as any).addDocuments(chunks);
+      // Add documents to vector store (with retry for transient failures)
+      await this.retryAsync(
+        () => (vectorStoreInstance as any).addDocuments(chunks),
+        3,
+        `addDocuments(${chunks.length} chunks)`,
+      );
 
       // 5. Update status to success — persist docpixieDocumentId in meta for future reference
       await docRepo.update({
@@ -234,6 +240,40 @@ export class VectorizationPipeline {
         error: error.message ?? String(error),
       };
     }
+  }
+
+  // ── Retry helper ─────────────────────────────────────────────────────────
+
+  /**
+   * Retry an async operation with exponential backoff.
+   * Handles transient network errors, rate limits (429), and server errors (5xx)
+   * that are common with embedding APIs and vector database connections.
+   */
+  private async retryAsync<T>(fn: () => Promise<T>, maxRetries: number, label: string): Promise<T> {
+    let lastError: Error | undefined;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.response?.status ?? err?.status;
+        const isRetryable =
+          !status || // network error (no HTTP status)
+          status === 429 || // rate limited
+          status >= 500; // server error
+
+        if (!isRetryable || attempt === maxRetries) {
+          throw err;
+        }
+
+        const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+        this.plugin.app.logger.warn(
+          `[Vectorization] ${label} attempt ${attempt}/${maxRetries} failed (${err.message}), retrying in ${delayMs}ms...`,
+        );
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+    throw lastError!;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

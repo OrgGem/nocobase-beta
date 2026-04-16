@@ -18,7 +18,7 @@ const { Text } = Typography;
 
 type Settings = {
   id?: number;
-  mode: 'default' | 'internal' | 'external';
+  mode: 'default' | 'internal' | 'external' | 'smart-fallback';
   activeProviderId?: number | null;
   fallbackToDefault: boolean;
   imagePassThrough: boolean;
@@ -39,7 +39,7 @@ export const GlobalSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [providers, setProviders] = useState<Provider[]>([]);
-  const [mode, setMode] = useState<'default' | 'internal' | 'external'>('default');
+  const [mode, setMode] = useState<'default' | 'internal' | 'external' | 'smart-fallback'>('default');
 
   useEffect(() => {
     // eslint-disable-next-line promise/catch-or-return
@@ -80,6 +80,7 @@ export const GlobalSettings: React.FC = () => {
     default: t('mode_default_desc'),
     internal: t('mode_internal_desc'),
     external: t('mode_external_desc'),
+    'smart-fallback': t('mode_smart_fallback_desc'),
   };
 
   return (
@@ -117,14 +118,23 @@ export const GlobalSettings: React.FC = () => {
                 </Text>
               </Space>
             </Radio>
+            <Radio value="smart-fallback">
+              <Space direction="vertical" size={0}>
+                <Text strong>{t('Smart Fallback (Internal → External → Default)')}</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {t('mode_smart_fallback_desc')}
+                </Text>
+              </Space>
+            </Radio>
           </Radio.Group>
         </Form.Item>
 
-        {mode === 'external' && (
+        {(mode === 'external' || mode === 'smart-fallback' || mode === 'internal') && (
           <Form.Item
             name="activeProviderId"
-            label={t('Active Provider')}
-            rules={[{ required: true, message: t('Please select a provider') }]}
+            label={mode === 'internal' ? t('Fallback External Provider') : t('Active Provider')}
+            rules={mode === 'internal' ? [] : [{ required: true, message: t('Please select a provider') }]}
+            help={mode === 'internal' ? <Text type="secondary">{t('fallback_provider_desc')}</Text> : undefined}
           >
             <Select
               placeholder={t('Please select a provider')}

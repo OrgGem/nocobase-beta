@@ -11,7 +11,7 @@ import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import { getConfig, updateConfig, storeVectors } from './resources/embed-web-client';
 import { downloadModel, getModelStatus } from './actions/download-model';
-import { listModels, uploadModelFile, deleteModel, getModelFiles } from './actions/model-manager';
+import { listModels, uploadModelFile, deleteModel, getModelFiles, createModelDirectory } from './actions/model-manager';
 import { createModelServerMiddleware } from './middleware/model-server';
 import { ServerEmbeddingPipeline } from './pipeline/server-embedding';
 
@@ -95,6 +95,7 @@ export class PluginEmbedWebClientServer extends Plugin {
         getModelFiles,
         downloadModel,
         getModelStatus,
+        createModelDirectory,
       },
     });
 
@@ -114,6 +115,7 @@ export class PluginEmbedWebClientServer extends Plugin {
         'embedWebClient:deleteModel',
         'embedWebClient:getModelFiles',
         'embedWebClient:downloadModel',
+        'embedWebClient:createModelDirectory',
       ],
     });
   }

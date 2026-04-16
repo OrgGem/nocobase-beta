@@ -1,0 +1,27 @@
+import { CollectionOptions } from '@nocobase/database';
+
+export default {
+  name: 'doc_understanding_endpoints',
+  title: 'Document Endpoints',
+  fields: [
+    { type: 'string', name: 'name', unique: true, length: 100 },
+    { type: 'string', name: 'subpath', length: 500 },
+    { type: 'string', name: 'method', length: 10 },
+    { type: 'text', name: 'description' },
+    { type: 'json', name: 'requestBodySchema' },
+    { type: 'json', name: 'responseSchema' },
+    { type: 'string', name: 'fileInputMode', length: 20 },
+    { type: 'integer', name: 'maxFiles', defaultValue: 1 },
+    { type: 'string', name: 'executionMode', length: 20 },
+    { type: 'string', name: 'pollResultSubpath', length: 500 },
+    { type: 'string', name: 'pollTaskIdField', length: 100, defaultValue: 'task_id' },
+    { type: 'string', name: 'pollResultField', length: 100 },
+    { type: 'integer', name: 'pollInterval' },
+    { type: 'integer', name: 'pollTimeout' },
+    { type: 'string', name: 'pollStatusField', length: 100 },
+    { type: 'string', name: 'pollCompletedValue', length: 100, defaultValue: 'completed' },
+    { type: 'json', name: 'customHeaders' },
+    { type: 'boolean', name: 'enabled', defaultValue: true },
+    { type: 'sort', name: 'sortOrder' },
+  ],
+} as CollectionOptions;

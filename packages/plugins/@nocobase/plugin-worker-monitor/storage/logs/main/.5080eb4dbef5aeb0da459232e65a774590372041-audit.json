@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 14
+    },
+    "auditLog": "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\@nocobase\\plugin-worker-monitor\\storage\\logs\\main\\.5080eb4dbef5aeb0da459232e65a774590372041-audit.json",
+    "files": [
+        {
+            "date": 1775901746193,
+            "name": "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\@nocobase\\plugin-worker-monitor\\storage\\logs\\main\\system_2026-04-11.log",
+            "hash": "f8e9ca6c69e573a7d7032472fac5e493a4de29536b45ba80c94b2cf2877e760e"
+        }
+    ],
+    "hashType": "sha256"
+}

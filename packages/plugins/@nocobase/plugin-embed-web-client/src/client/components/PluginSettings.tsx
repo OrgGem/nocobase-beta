@@ -84,6 +84,7 @@ export const PluginSettings: React.FC = () => {
   const [downloading, setDownloading] = useState(false);
   const [storageMode, setStorageMode] = useState<'local' | 's3'>('local');
   const [modelSource, setModelSource] = useState<'server' | 'cdn' | 'huggingface'>('server');
+  const [installedModels, setInstalledModels] = useState<any[]>([]);
 
   // Check WebGPU availability
   useEffect(() => {
@@ -95,7 +96,15 @@ export const PluginSettings: React.FC = () => {
       const res = await api.request({ url: 'embedWebClient:getModelStatus' });
       setModelStatus(res?.data?.data ?? null);
     } catch {
-      // non-fatal — status panel just won't show
+      // non-fatal
+    }
+    try {
+      const resModels = await api.request({ url: 'embedWebClient:listModels' });
+      let arr = resModels?.data?.data ?? resModels?.data;
+      if (arr && !Array.isArray(arr) && Array.isArray(arr.data)) arr = arr.data;
+      setInstalledModels(Array.isArray(arr) ? arr : []);
+    } catch {
+      // non-fatal
     }
   }, [api]);
 
@@ -108,8 +117,11 @@ export const PluginSettings: React.FC = () => {
         // Normalize modelId to array for tags Select
         if (data.modelId && !Array.isArray(data.modelId)) {
           data.modelId = [data.modelId];
+        } else if (!data.modelId) {
+          data.modelId = [];
         }
         setConfigData(data);
+        form.setFieldsValue(data);
         setStorageMode(data.storageMode ?? 'local');
         setModelSource(data.modelSource ?? 'server');
       })
@@ -121,17 +133,29 @@ export const PluginSettings: React.FC = () => {
 
   const handleSave = async () => {
     const values = await form.validateFields();
-    // Normalize modelId from tags array back to string
-    if (Array.isArray(values.modelId)) {
-      values.modelId = values.modelId[0] ?? '';
+    // Normalize modelId from tags array back to string for the API
+    const submitValues = { ...values };
+    if (Array.isArray(submitValues.modelId)) {
+      submitValues.modelId = submitValues.modelId[0] ?? '';
     }
     setSaving(true);
     try {
-      await api.request({
+      const res = await api.request({
         url: 'embedWebClient:updateConfig',
         method: 'post',
-        data: { values },
+        data: { values: submitValues },
       });
+      // Sync local state with the server response so the form doesn't "reset"
+      const saved = res?.data?.data ?? res?.data ?? {};
+      if (saved.modelId && !Array.isArray(saved.modelId)) {
+        saved.modelId = [saved.modelId];
+      } else if (!saved.modelId) {
+        saved.modelId = [];
+      }
+      setConfigData(saved);
+      form.setFieldsValue(saved);
+      setStorageMode(saved.storageMode ?? 'local');
+      setModelSource(saved.modelSource ?? 'server');
       message.success(t('Settings saved'));
       // Refresh model status — model may have changed
       await fetchModelStatus();
@@ -179,7 +203,7 @@ export const PluginSettings: React.FC = () => {
     setTestResult(null);
     try {
       // Dynamically import and run in-browser for a quick test
-      const { pipeline } = await import('@huggingface/transformers' as any);
+      const { pipeline, env } = await import('@huggingface/transformers' as any);
       const t0 = Date.now();
       let device = 'wasm';
       if (values.preferWebGPU && (navigator as any).gpu) {
@@ -190,11 +214,68 @@ export const PluginSettings: React.FC = () => {
           // WebGPU not available on this platform, fall back to wasm
         }
       }
-      const modelId = Array.isArray(values.modelId) ? values.modelId[0] : values.modelId;
-      const pipe = await pipeline('feature-extraction', modelId, {
+
+      const currentModelSource = values.modelSource ?? 'server';
+      if (currentModelSource === 'server') {
+        const origin = window.location.origin;
+        env.remoteHost = `${origin}/`;
+        env.remotePathTemplate = 'embed-web-client/models/{model}/';
+        env.allowRemoteModels = true;
+        env.allowLocalModels = false;
+      } else if (currentModelSource === 'cdn' && values.cdnBaseUrl) {
+        try {
+          const url = new URL(values.cdnBaseUrl.trim().replace(/\/?$/, '/'));
+          env.remoteHost = url.origin + '/';
+          env.remotePathTemplate = url.pathname.replace(/^\/+/, '');
+          env.allowRemoteModels = true;
+          env.allowLocalModels = false;
+        } catch {
+          env.allowRemoteModels = true;
+          env.allowLocalModels = false;
+        }
+      } else {
+        // huggingface default
+        env.remoteHost = 'https://huggingface.co/';
+        env.remotePathTemplate = '{model}/resolve/{revision}/';
+        env.allowRemoteModels = true;
+        env.allowLocalModels = false;
+      }
+
+      const testModelId = Array.isArray(values.modelId) ? values.modelId[0] : values.modelId;
+      if (!testModelId) {
+        message.warning(t('Select a model first'));
+        return;
+      }
+
+      // Validate model is available on server before attempting to load
+      if (currentModelSource === 'server') {
+        try {
+          const checkRes = await fetch(
+            `${window.location.origin}/embed-web-client/models/${testModelId}/config.json`,
+            { method: 'HEAD' },
+          );
+          if (!checkRes.ok) {
+            message.error(
+              t('Model files not found on server. Please download the model first via "Download Model to Server".'),
+            );
+            return;
+          }
+        } catch {
+          message.error(t('Cannot reach model server. Check that the server is running.'));
+          return;
+        }
+      }
+
+      const pipeOptions: any = {
         dtype: values.dtype,
         device,
-      });
+        // Bypass transformers.js cache to ensure fresh model files are loaded
+        cache_dir: false,
+      };
+      if (currentModelSource === 'cdn' && values.cdnModelFileName) {
+        pipeOptions.model_file_name = values.cdnModelFileName.replace(/\.onnx$/, '');
+      }
+      const pipe = await pipeline('feature-extraction', testModelId, pipeOptions);
       const output = await pipe(['Hello world, this is a test sentence.'], {
         pooling: 'mean',
         normalize: true,
@@ -310,7 +391,15 @@ export const PluginSettings: React.FC = () => {
             extra={t('Must be an ONNX-compatible feature-extraction model from HuggingFace Hub')}
           >
             <Select
-              options={MODEL_PRESETS}
+              options={[
+                ...MODEL_PRESETS,
+                ...installedModels
+                  .filter((m) => !MODEL_PRESETS.some((p) => p.value === m.modelId))
+                  .map((m) => ({
+                    label: `${m.modelId} (${m.source}${m.dimensions ? `, ${m.dimensions}-dim` : ''})`,
+                    value: m.modelId,
+                  })),
+              ]}
               showSearch
               allowClear={false}
               mode="tags"
@@ -440,6 +529,17 @@ export const PluginSettings: React.FC = () => {
                         }
                       >
                         <Input placeholder="https://cdn.jsdelivr.net/npm/@scope/pkg@version/dist/Org/ModelName" />
+                      </Form.Item>
+                      <Form.Item
+                        name="cdnModelFileName"
+                        label={t('Custom Model File Name')}
+                        extra={
+                          <span>
+                            {t("Leave empty for default. Enter 'model' to force fetching 'model.onnx' (instead of model_quantized.onnx) from the CDN.")}
+                          </span>
+                        }
+                      >
+                        <Input placeholder="model" />
                       </Form.Item>
                       <Alert
                         type="warning"

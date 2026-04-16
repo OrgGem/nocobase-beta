@@ -27,6 +27,8 @@ export interface EmbeddingConfig {
   modelSource?: 'server' | 'cdn' | 'huggingface';
   /** Full CDN URL to the model folder — used when modelSource = 'cdn' */
   cdnBaseUrl?: string;
+  /** Custom model file name to override default (e.g., 'model' instead of 'model_quantized') */
+  cdnModelFileName?: string;
 }
 
 interface ProcessOptions {
@@ -185,6 +187,7 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
       modelSource: cfg.modelSource ?? 'server',
       serverOrigin: window.location.origin,
       cdnBaseUrl: cfg.cdnBaseUrl,
+      cdnModelFileName: cfg.cdnModelFileName,
     });
 
     return readyPromiseRef.current;

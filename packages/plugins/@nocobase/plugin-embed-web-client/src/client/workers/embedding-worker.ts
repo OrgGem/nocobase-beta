@@ -42,6 +42,8 @@ export type WorkerMessage =
        * Used when modelSource = 'cdn'.
        */
       cdnBaseUrl?: string;
+      /** Custom model file name to override default */
+      cdnModelFileName?: string;
     }
   | { type: 'load_model'; modelId: string; dtype: string; serverOrigin?: string }
   | {
@@ -83,36 +85,6 @@ function send(msg: WorkerResponse) {
 
 // ── Model Loading ─────────────────────────────────────────────────────────────
 
-/**
- * Parse a CDN URL like:
- *   https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
- * into the env settings that @huggingface/transformers expects.
- *
- * Strategy: the model ID is the last two path segments (org/model).
- * Everything before them (including trailing slash) becomes the remotePathTemplate
- * with the two segments replaced by {model}.
- *
- * If the URL does not match, returns null (caller falls back to HuggingFace).
- */
-function parseCdnUrl(cdnUrl: string, modelId: string): { remoteHost: string; remotePathTemplate: string } | null {
-  try {
-    const url = new URL(cdnUrl.trim().replace(/\/+$/, ''));
-    const origin = url.origin; // e.g. https://cdn.jsdelivr.net
-    const fullPath = url.pathname; // e.g. /npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
-
-    // Remove model ID from the end of the path to get the prefix
-    const escapedModelId = modelId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const modelIdRe = new RegExp(`/?${escapedModelId}/?$`);
-    const prefix = fullPath.replace(modelIdRe, '');
-
-    // Reconstruct: the template path uses {model} where the model ID was
-    const remotePathTemplate = `${prefix}/{model}/`;
-
-    return { remoteHost: `${origin}/`, remotePathTemplate };
-  } catch {
-    return null;
-  }
-}
 
 async function loadModel(
   id: string,
@@ -121,6 +93,7 @@ async function loadModel(
   modelSource: 'server' | 'cdn' | 'huggingface',
   serverOrigin: string,
   cdnBaseUrl?: string,
+  cdnModelFileName?: string,
 ) {
   modelId = id;
   currentServerOrigin = serverOrigin;
@@ -140,14 +113,14 @@ async function loadModel(
   } else if (modelSource === 'cdn' && cdnBaseUrl) {
     // Fetch model files from admin-configured CDN.
     // e.g. cdnBaseUrl = "https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2"
-    const parsed = parseCdnUrl(cdnBaseUrl, id);
-    if (parsed) {
-      env.remoteHost = parsed.remoteHost;
-      env.remotePathTemplate = parsed.remotePathTemplate;
+    try {
+      const url = new URL(cdnBaseUrl.trim().replace(/\/?$/, '/'));
+      env.remoteHost = url.origin + '/';
+      env.remotePathTemplate = url.pathname.replace(/^\/+/, '');
       env.allowRemoteModels = true;
       env.allowLocalModels = false;
-    } else {
-      // Could not parse CDN URL — fall back to HuggingFace Hub
+    } catch {
+      // Invalid URL — fall back to HuggingFace Hub
       env.allowRemoteModels = true;
       env.allowLocalModels = false;
     }
@@ -160,19 +133,25 @@ async function loadModel(
   // Attempt WebGPU if requested, fall back to WASM automatically
   const device = preferWebGPU ? 'webgpu' : 'wasm';
 
+  const pipeOptions: any = {
+    dtype,
+    device,
+    progress_callback: (progressInfo: any) => {
+      // progressInfo: { status, name, file, progress, loaded, total }
+      if (progressInfo.status === 'downloading' || progressInfo.status === 'progress') {
+        const pct = progressInfo.progress ?? 0;
+        send({ type: 'model_loading', progress: Math.round(pct), message: progressInfo.file });
+      }
+    },
+  };
+
+  if (modelSource === 'cdn' && cdnModelFileName) {
+    pipeOptions.model_file_name = cdnModelFileName.replace(/\.onnx$/, '');
+  }
+
   // Wrap pipeline() in a timeout so a stalled HuggingFace fetch doesn't hang forever
   pipe = await Promise.race([
-    pipeline('feature-extraction', id, {
-      dtype,
-      device,
-      progress_callback: (progressInfo: any) => {
-        // progressInfo: { status, name, file, progress, loaded, total }
-        if (progressInfo.status === 'downloading' || progressInfo.status === 'progress') {
-          const pct = progressInfo.progress ?? 0;
-          send({ type: 'model_loading', progress: Math.round(pct), message: progressInfo.file });
-        }
-      },
-    }),
+    pipeline('feature-extraction', id, pipeOptions),
     new Promise<never>((_resolve, reject) =>
       setTimeout(
         () => reject(new Error(`Model load timed out after ${MODEL_LOAD_TIMEOUT_MS / 60000} minutes`)),
@@ -265,7 +244,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   switch (msg.type) {
     case 'init':
       try {
-        await loadModel(msg.modelId, msg.dtype, msg.preferWebGPU, msg.modelSource, msg.serverOrigin, msg.cdnBaseUrl);
+        await loadModel(msg.modelId, msg.dtype, msg.preferWebGPU, msg.modelSource, msg.serverOrigin, msg.cdnBaseUrl, msg.cdnModelFileName);
       } catch (err: any) {
         send({ type: 'error', error: err?.message ?? 'Failed to load model' });
       }

@@ -123,7 +123,10 @@ const UploadModelModal: React.FC<UploadModelModalProps> = ({ open, onClose, onDo
       formData.append('modelId', vals.modelId);
       formData.append('filePath', filePath);
       try {
-        await api.axios.post('/api/embedWebClient:uploadModelFile', formData, {
+        await api.request({
+          url: 'embedWebClient:uploadModelFile',
+          method: 'post',
+          data: formData,
           headers: { 'Content-Type': 'multipart/form-data' },
         });
         message.success(`${filePath} ${t('uploaded')}`);
@@ -236,8 +239,9 @@ export const ModelManager: React.FC = () => {
     setLoading(true);
     try {
       const res = await api.request({ url: 'embedWebClient:listModels' });
-      const data = res?.data?.data;
-      setModels(Array.isArray(data) ? data : []);
+      let arr = res?.data?.data ?? res?.data;
+      if (arr && !Array.isArray(arr) && Array.isArray(arr.data)) arr = arr.data;
+      setModels(Array.isArray(arr) ? arr : []);
     } catch {
       message.error(t('Failed to load models'));
     } finally {
@@ -347,7 +351,20 @@ export const ModelManager: React.FC = () => {
       <UploadModelModal
         open={uploadModalOpen}
         onClose={() => setUploadModalOpen(false)}
-        onDone={() => {
+        onDone={async () => {
+          // Explicitly create the directory if it doesn't exist so it shows up in the list
+          const vals = (document.querySelector('input#modelId') as HTMLInputElement)?.value;
+          if (vals) {
+            try {
+              await api.request({
+                url: 'embedWebClient:createModelDirectory',
+                method: 'post',
+                data: { modelId: vals },
+              });
+            } catch {
+              /* ignore */
+            }
+          }
           setUploadModalOpen(false);
           fetchModels();
         }}

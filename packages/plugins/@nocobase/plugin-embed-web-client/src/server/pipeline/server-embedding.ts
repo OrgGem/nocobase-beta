@@ -19,7 +19,8 @@
  *   storage/plugin-embed-web-client/models/{modelId}/  (user-uploaded)
  */
 
-import { resolve, join, existsSync } from 'path';
+import { resolve, join } from 'path';
+import { existsSync } from 'fs';
 import type { Database } from '@nocobase/database';
 import { BUNDLED_MODELS_ROOT, STORAGE_MODELS_ROOT } from '../actions/model-manager';
 import {

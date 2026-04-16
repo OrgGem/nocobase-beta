@@ -47,12 +47,16 @@
   "Provider saved": "Provider saved",
   "Provider deleted": "Provider deleted",
   "mode_default_desc": "Use the built-in attachment processing from plugin-ai (default behavior).",
-  "mode_internal_desc": "Parse documents using built-in loaders (PDF, DOCX, PPT, TXT) or custom parsers registered by other plugins.",
+  "mode_internal_desc": "Parse documents using built-in loaders (PDF, DOCX, PPT, TXT) or custom parsers. If parsing fails or returns empty text, automatically falls back to External OCR (if configured), then to Default.",
   "mode_external_desc": "Send files to a configured external OCR/parse API and use the returned text as attachment content.",
   "Index with DocPixie (when available)": "Index with DocPixie (when available)",
   "docpixie_mode_desc": "When plugin-docpixie is active, automatically index attached documents and instruct the AI to use the docpixie:query tool instead of reading raw file content. Applies before the processing mode above.",
   "Save": "Save",
   "URL Field Path": "URL Field Path",
   "Included File Extensions": "Included File Extensions",
-  "includedExtnames_desc": "Only process files with these extensions. Leave empty to process all non-image file types."
+  "includedExtnames_desc": "Only process files with these extensions. Leave empty to process all non-image file types.",
+  "Smart Fallback (Internal → External → Default)": "Smart Fallback (Internal → External → Default)",
+  "Fallback External Provider": "Fallback External Provider",
+  "fallback_provider_desc": "Optional. If internal parsing fails, this external provider will be tried before falling back to default.",
+  "mode_smart_fallback_desc": "Attempt internal parsing first. If no text is found or an error occurs, fallback to External OCR. If external OCR fails, fallback to Default."
 }

@@ -39,6 +39,22 @@ export default defineCollection({
       name: 'embeddingModel',
     },
     {
+      // 'llmService' (default, remote API) or 'localEmbed' (ONNX via plugin-embed-web-client)
+      type: 'string',
+      name: 'embeddingProvider',
+      defaultValue: 'llmService',
+    },
+    {
+      // HuggingFace model ID for local ONNX embedding (e.g. "Xenova/all-MiniLM-L6-v2")
+      type: 'string',
+      name: 'localEmbedModelId',
+    },
+    {
+      // ONNX quantization dtype for local embedding (e.g. "q4", "q8", "fp16", "fp32")
+      type: 'string',
+      name: 'localEmbedDtype',
+    },
+    {
       type: 'json',
       name: 'options',
     },

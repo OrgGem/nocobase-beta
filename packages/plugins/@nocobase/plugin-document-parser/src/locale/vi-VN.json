@@ -49,10 +49,14 @@
   "Index with DocPixie (when available)": "Lập chỉ mục qua DocPixie (nếu có)",
   "docpixie_mode_desc": "Khi plugin-docpixie đang hoạt động, tự động lập chỉ mục tài liệu đính kèm và hướng dẫn AI dùng công cụ docpixie:query thay vì đọc nội dung thô. Được áp dụng trước chế độ xử lý bên trên.",
   "mode_default_desc": "Dùng chức năng xử lý tệp đính kèm mặc định của plugin-ai.",
-  "mode_internal_desc": "Phân tích tài liệu dùng trình đọc tích hợp (PDF, DOCX, PPT, TXT) hoặc các parser tùy chỉnh từ plugin khác.",
+  "mode_internal_desc": "Phân tích tài liệu dùng trình đọc tích hợp (PDF, DOCX, PPT, TXT). Nếu lỗi hoặc trống, tự động chuyển sang OCR bên ngoài (nếu đã cấu hình), rồi về mặc định.",
   "mode_external_desc": "Gửi tệp đến API OCR/parse bên ngoài đã cấu hình và dùng văn bản trả về làm nội dung đính kèm.",
   "Save": "Lưu",
   "URL Field Path": "Đường dẫn trường URL",
   "Included File Extensions": "Phần mở rộng tệp được xử lý",
-  "includedExtnames_desc": "Chỉ xử lý các tệp có phần mở rộng này. Để trống để xử lý tất cả loại tệp không phải ảnh."
+  "includedExtnames_desc": "Chỉ xử lý các tệp có phần mở rộng này. Để trống để xử lý tất cả loại tệp không phải ảnh.",
+  "Smart Fallback (Internal → External → Default)": "Dự phòng thông minh (Nội bộ → Bên ngoài → Mặc định)",
+  "Fallback External Provider": "Nhà cung cấp OCR dự phòng",
+  "fallback_provider_desc": "Tùy chọn. Nếu phân tích nội bộ lỗi, sẽ thử nhà cung cấp này trước khi chuyển về mặc định.",
+  "mode_smart_fallback_desc": "Thử phân tích bằng trình đọc nội bộ trước. Nếu file rỗng text hoặc không thể đọc, tự động chuyển sang OCR bên ngoài. Nếu OCR bên ngoài cũng lỗi, sẽ chuyển về mặc định."
 }

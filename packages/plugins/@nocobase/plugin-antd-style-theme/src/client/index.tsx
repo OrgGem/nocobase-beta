@@ -98,8 +98,12 @@ export class PluginAntdStyleThemeClient extends Plugin {
     this.app.addComponents({ IconPicker: IconPicker as any });
 
     // Override core Input with IME-safe version to fix Vietnamese/CJK composition
-    const { IMESafeInput } = await import('./components/IMESafeInput');
-    this.app.addComponents({ Input: IMESafeInput as any });
+    // 1. Schema/Formily path: override the Input component
+    // const { IMESafeInput } = await import('./components/IMESafeInput');
+    // this.app.addComponents({ Input: IMESafeInput as any });
+
+    // const { IMESafeInputFieldModel } = await import('./models/IMESafeInputFieldModel');
+    // this.flowEngine.registerModels({ InputFieldModel: IMESafeInputFieldModel as any });
 
     this.app.use(CustomThemeProvider);
     this.app.pluginSettingsManager.add(NAMESPACE, {

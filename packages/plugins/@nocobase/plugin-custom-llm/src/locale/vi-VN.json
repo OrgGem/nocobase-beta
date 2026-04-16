@@ -16,6 +16,8 @@
   "Max retries": "Số lần thử lại tối đa",
   "Disable streaming": "Tắt streaming",
   "Disable streaming description": "Sử dụng chế độ non-streaming. Bật tính năng này cho các model có giai đoạn \"thinking\" dài trước khi trả lời, gây ra stream rỗng và xử lý bị ngắt sớm.",
+  "Enable reasoning": "Bật reasoning",
+  "Enable reasoning description": "Hỗ trợ reasoning_content cho các model như DeepSeek-R1. Khi bật, reasoning content được bảo toàn trong các vòng gọi tool. Cần thiết cho các model trả về reasoning trong phản hồi.",
   "Stream keepalive": "Giữ kết nối stream",
   "Stream keepalive description": "Giữ stream hoạt động khi model đang thinking. Gửi nội dung giữ kết nối khi không có dữ liệu trong khoảng thời gian đã cấu hình. Chỉ hoạt động khi streaming được bật.",
   "Keepalive interval (ms)": "Khoảng thời gian keepalive (ms)",
@@ -25,5 +27,5 @@
   "Request config (JSON)": "Cấu hình request (JSON)",
   "Request config description": "Cấu hình bổ sung cho request LLM. Các key hỗ trợ: extraHeaders (HTTP headers tùy chỉnh), extraBody (thêm trường vào request body), modelKwargs (tham số model LangChain).",
   "Response config (JSON)": "Cấu hình response (JSON)",
-  "Response config description": "Cấu hình parse response. contentPath: 'auto' hoặc dot-path. reasoningKey: key reasoning. responseMapping: { content: 'dot.path' } — mapping response không chuẩn OpenAI (ví dụ: 'message.response')."
+  "Response config description": "Cấu hình parse response. contentPath: 'auto' hoặc dot-path. reasoningKey: key reasoning. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — mapping response không chuẩn OpenAI. tool_calls/finish_reason tự động phát hiện nếu không chỉ định."
 }

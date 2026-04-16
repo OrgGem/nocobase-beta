@@ -25,7 +25,7 @@ export type ParsedAttachmentResult = {
 export type DefaultParserFn = () => Promise<ParsedAttachmentResult>;
 
 type Settings = {
-  mode: 'default' | 'internal' | 'external';
+  mode: 'default' | 'internal' | 'external' | 'smart-fallback';
   activeProviderId?: number | string | null;
   fallbackToDefault: boolean;
   imagePassThrough: boolean;
@@ -137,6 +137,9 @@ export class ParseRouter {
       case 'external':
         return this.routeExternal(ctx, attachment, settings, defaultParser);
 
+      case 'smart-fallback':
+        return this.routeSmartFallback(ctx, attachment, settings, defaultParser);
+
       default:
         return defaultParser();
     }
@@ -212,19 +215,53 @@ export class ParseRouter {
     try {
       const result = await this.internalRegistry.parse(attachment, ctx);
 
-      if (!result.handled) {
-        // No handler claimed this file type; fall through
-        return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
+      if (result.handled && result.text && result.text.trim().length > 0) {
+        return textToContentBlock(result.text, attachment);
       }
 
-      return textToContentBlock(result.text, attachment);
+      // Not handled or empty text — try external OCR if a provider is configured
+      ctx.log?.info?.(
+        `[DocumentParser] internal parse returned empty or unhandled for "${attachment.filename}" — attempting external OCR fallback`,
+      );
+      return this.fallbackToExternalThenDefault(ctx, attachment, settings, defaultParser);
     } catch (err) {
-      ctx.log?.warn?.(`[DocumentParser] internal parse failed for "${attachment.filename}": ${err}`);
-      if (settings.fallbackToDefault) {
-        return defaultParser();
-      }
-      throw err;
+      ctx.log?.warn?.(`[DocumentParser] internal parse failed for "${attachment.filename}": ${err} — attempting external OCR fallback`);
+      return this.fallbackToExternalThenDefault(ctx, attachment, settings, defaultParser);
     }
+  }
+
+  /**
+   * Try external OCR as an intermediate fallback before falling back to default.
+   * If no external provider is configured or external fails, fall back to default.
+   */
+  private async fallbackToExternalThenDefault(
+    ctx: Context,
+    attachment: AttachmentLike,
+    settings: Settings,
+    defaultParser: DefaultParserFn,
+  ): Promise<ParsedAttachmentResult> {
+    if (settings.activeProviderId) {
+      try {
+        return await this.routeExternal(ctx, attachment, { ...settings, fallbackToDefault: false }, defaultParser);
+      } catch (err) {
+        ctx.log?.warn?.(
+          `[DocumentParser] external OCR fallback also failed for "${attachment.filename}": ${err} — falling back to default`,
+        );
+      }
+    }
+    return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
+  }
+
+  // ── Smart Fallback routing ───────────────────────────────────────────────
+
+  private async routeSmartFallback(
+    ctx: Context,
+    attachment: AttachmentLike,
+    settings: Settings,
+    defaultParser: DefaultParserFn,
+  ): Promise<ParsedAttachmentResult> {
+    // Smart fallback reuses the same Internal → External → Default chain
+    return this.routeInternal(ctx, attachment, settings, defaultParser);
   }
 
   // ── External routing ──────────────────────────────────────────────────────
@@ -240,7 +277,7 @@ export class ParseRouter {
       return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
     }
 
-    const providerRecord = await this.getProvidersRepo().findById(settings.activeProviderId);
+    const providerRecord = await this.getProvidersRepo().findOne({ filterByTk: settings.activeProviderId });
     if (!providerRecord || !providerRecord.get('enabled')) {
       ctx.log?.warn?.(`[DocumentParser] External provider ${settings.activeProviderId} not found or disabled`);
       return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);

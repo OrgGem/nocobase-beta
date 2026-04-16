@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import { Modal, Button, Spin, Alert, Space, message } from 'antd';
 import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype } from '@nocobase/client';
+// @ts-ignore
 import { filePreviewTypes } from '@nocobase/plugin-file-manager/client';
 import { useT } from './locale';
 
@@ -340,6 +341,7 @@ function AuthDocxInlinePreviewer({ file }: any) {
         const blob = await fetchFileAsBlob(url, token);
         if (cancelled) return;
         // Dynamic import for code-splitting (bundled, no CDN needed)
+        // @ts-ignore
         const docxPreview = await import('docx-preview');
         if (cancelled || !containerRef.current) return;
         containerRef.current.innerHTML = '';
@@ -417,6 +419,7 @@ function AuthXlsxInlinePreviewer({ file }: any) {
         const blob = await fetchFileAsBlob(url, token);
         if (cancelled) return;
         // Dynamic import for code-splitting (bundled, no CDN needed)
+        // @ts-ignore
         const XLSX = await import('xlsx');
         if (cancelled) return;
         const arrayBuffer = await blob.arrayBuffer();

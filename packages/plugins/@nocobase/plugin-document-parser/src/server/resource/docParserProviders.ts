@@ -21,7 +21,7 @@ export async function testConnection(ctx: Context, next: Next) {
   const { filterByTk } = ctx.action.params;
 
   const repo = ctx.db.getRepository('docParserProviders');
-  const record = await repo.findById(filterByTk);
+  const record = await repo.findOne({ filterByTk });
 
   if (!record) {
     ctx.throw(404, 'Provider not found');
@@ -33,6 +33,8 @@ export async function testConnection(ctx: Context, next: Next) {
     authType: record.get('authType'),
     apiKey: record.get('apiKey'),
     authConfig: record.get('authConfig') ?? {},
+    requestFormat: record.get('requestFormat'),
+    requestConfig: record.get('requestConfig') ?? {},
     timeout: Math.min(record.get('timeout') ?? 10000, 15000), // cap at 15s for test
   });
 

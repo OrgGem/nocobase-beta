@@ -1,0 +1,30 @@
+{
+  "name": "plugin-ai-chat-file-preview",
+  "displayName": "AI Chat File Preview",
+  "displayName.vi-VN": "Xem trước file trong Chat AI",
+  "displayName.zh-CN": "AI聊天文件预览",
+  "description": "Preview uploaded file attachments directly in AI Employee chat with in-browser caching.",
+  "description.vi-VN": "Xem trước file đính kèm đã tải lên trực tiếp trong chat AI Employee với bộ nhớ đệm trình duyệt.",
+  "description.zh-CN": "在AI员工聊天中直接预览上传的文件附件，支持浏览器缓存。",
+  "version": "1.0.11",
+  "main": "dist/server/index.js",
+  "dependencies": {
+    "xlsx": "^0.18.5",
+    "docx-preview": "^0.3.3"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/plugin-file-manager": "2.x"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "AI",
+    "Chat",
+    "File preview",
+    "Cache"
+  ],
+  "license": "Apache-2.0"
+}

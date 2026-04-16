@@ -1,0 +1,27 @@
+{
+  "name": "plugin-worker-monitor",
+  "displayName": "Worker Monitor",
+  "displayName.zh-CN": "Worker 监控",
+  "description": "Monitor cluster nodes, async tasks, workflow executions, event queues, locks, caches, and Redis metrics",
+  "version": "1.0.21",
+  "license": "Apache-2.0",
+  "main": "./dist/server/index.js",
+  "keywords": ["Monitoring", "DevOps"],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": ["2.x"],
+    "editionLevel": 0
+  }
+}

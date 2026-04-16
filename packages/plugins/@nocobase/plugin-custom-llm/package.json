@@ -3,7 +3,7 @@
   "displayName": "AI LLM: Custom (OpenAI Compatible)",
   "displayName.zh-CN": "AI LLM：自定义（OpenAI 兼容）",
   "description": "OpenAI-compatible LLM provider with auto response format detection for external LLM services.",
-  "version": "1.2.3",
+  "version": "1.4.0",
   "main": "dist/server/index.js",
   "files": [
     "dist",

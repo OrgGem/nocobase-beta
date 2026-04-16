@@ -55,6 +55,7 @@ export class SimpleHTTPEmbeddings {
               Authorization: `Bearer ${this.apiKey}`,
               'Content-Type': 'application/json',
             },
+            timeout: 60000,
           },
         );
 
@@ -78,22 +79,44 @@ export class SimpleHTTPEmbeddings {
   }
 
   async embedQuery(text: string): Promise<number[]> {
-    const res = await axios.post(
-      `${this.baseURL}/embeddings`,
-      { model: this.modelName, input: text },
-      {
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-      },
-    );
-    const embedding = res.data?.data?.[0]?.embedding;
-    if (!embedding) {
-      throw new Error(
-        `Embedding API returned no data: ${JSON.stringify(res.data?.error || res.data).substring(0, 200)}`,
-      );
+    const maxRetries = 3;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const res = await axios.post(
+          `${this.baseURL}/embeddings`,
+          { model: this.modelName, input: text },
+          {
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              'Content-Type': 'application/json',
+            },
+            timeout: 30000,
+          },
+        );
+        const embedding = res.data?.data?.[0]?.embedding;
+        if (!embedding) {
+          throw new Error(
+            `Embedding API returned no data: ${JSON.stringify(res.data?.error || res.data).substring(0, 200)}`,
+          );
+        }
+        return embedding;
+      } catch (err: any) {
+        const status = err?.response?.status;
+        const isRetryable =
+          !status || // network error
+          status === 429 || // rate limited
+          status >= 500; // server error
+
+        if (!isRetryable || attempt === maxRetries) {
+          throw err;
+        }
+
+        // Exponential backoff: 1s, 2s, 4s
+        const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
     }
-    return embedding;
+    throw new Error('Unreachable');
   }
 }

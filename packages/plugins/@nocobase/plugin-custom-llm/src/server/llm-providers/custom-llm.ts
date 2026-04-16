@@ -36,6 +36,139 @@ function getChatOpenAI() {
   return _ChatOpenAI;
 }
 
+/**
+ * Lazy-load ChatOpenAICompletions — the lower-level class used as the base
+ * for ReasoningChatOpenAI so we can support reasoning_content round-trips
+ * required by models like DeepSeek-R1.
+ */
+let _ChatOpenAICompletions: any = null;
+function getChatOpenAICompletions() {
+  if (!_ChatOpenAICompletions) {
+    const mod = requireFromApp('@langchain/openai');
+    _ChatOpenAICompletions = mod.ChatOpenAICompletions;
+  }
+  return _ChatOpenAICompletions;
+}
+
+/**
+ * Sanitize a tool call ID by stripping the `__thought__<base64>` suffix
+ * that Gemini models append during streaming. The suffix is excessively
+ * long and causes errors when langgraph reads messages back from history.
+ */
+function sanitizeToolCallId(id: string | undefined): string | undefined {
+  if (!id || typeof id !== 'string') return id;
+  const idx = id.indexOf('__thought__');
+  return idx !== -1 ? id.substring(0, idx) : id;
+}
+
+/**
+ * Build tool_calls key for reasoning content map lookup.
+ */
+function getToolCallsKey(toolCalls: Array<{ id?: string; name?: string; function?: { name?: string } }> = []): string {
+  return toolCalls
+    .map((tc) => {
+      const id = tc?.id ?? '';
+      const name = tc?.name ?? tc?.function?.name ?? '';
+      return `${id}:${name}`;
+    })
+    .join('|');
+}
+
+/**
+ * Collect reasoning_content from history messages keyed by their tool_calls.
+ * This is needed because some APIs (DeepSeek) require reasoning_content to
+ * be present in assistant messages that precede tool results.
+ */
+function collectReasoningMap(messages: any[]): Map<string, string> {
+  const reasoningMap = new Map<string, string>();
+  for (const message of messages ?? []) {
+    if (message?.getType?.() !== 'ai' && message?._getType?.() !== 'ai') continue;
+    if (!message?.tool_calls?.length) continue;
+    const reasoningContent = message?.additional_kwargs?.reasoning_content;
+    if (typeof reasoningContent !== 'string' || !reasoningContent) continue;
+    const key = getToolCallsKey(message.tool_calls);
+    if (key) reasoningMap.set(key, reasoningContent);
+  }
+  return reasoningMap;
+}
+
+/**
+ * Patch request messages to restore reasoning_content on assistant messages
+ * that have tool_calls — needed for APIs that require it on round-trip.
+ */
+function patchRequestMessagesReasoning(request: any, reasoningMap?: Map<string, string>): void {
+  if (!reasoningMap?.size || !Array.isArray(request?.messages)) return;
+  const lastMsg = request.messages.at(-1);
+  if (lastMsg?.role !== 'tool') return;
+  for (const msg of request.messages) {
+    if (msg?.role !== 'assistant') continue;
+    if (!Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) continue;
+    if (msg.reasoning_content) continue;
+    const key = getToolCallsKey(msg.tool_calls);
+    const rc = key ? reasoningMap.get(key) : undefined;
+    if (rc) msg.reasoning_content = rc;
+  }
+}
+
+const REASONING_MAP_KEY = '__nb_reasoning_map';
+
+/**
+ * Create a ReasoningChatOpenAI class that extends ChatOpenAICompletions.
+ * This patches reasoning_content into the request messages before sending
+ * to the API, which is required for models like DeepSeek-R1 that need
+ * reasoning_content present in assistant messages during tool call cycles.
+ */
+function createReasoningChatClass() {
+  const ChatOpenAICompletions = getChatOpenAICompletions();
+  if (!ChatOpenAICompletions) {
+    // Fallback — completions class not available, use plain ChatOpenAI
+    return getChatOpenAI();
+  }
+
+  return class ReasoningChatOpenAI extends ChatOpenAICompletions {
+    async _generate(messages: any[], options: any, runManager?: any) {
+      const reasoningMap = collectReasoningMap(messages);
+      return super._generate(messages, { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap }, runManager);
+    }
+
+    async *_streamResponseChunks(messages: any[], options: any, runManager?: any) {
+      const reasoningMap =
+        options?.[REASONING_MAP_KEY] instanceof Map
+          ? (options[REASONING_MAP_KEY] as Map<string, string>)
+          : collectReasoningMap(messages);
+      yield* super._streamResponseChunks(messages, { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap }, runManager);
+    }
+
+    _convertCompletionsDeltaToBaseMessageChunk(delta: any, rawResponse: any, defaultRole?: any) {
+      const messageChunk = super._convertCompletionsDeltaToBaseMessageChunk(delta, rawResponse, defaultRole);
+      if (delta?.reasoning_content) {
+        messageChunk.additional_kwargs = {
+          ...(messageChunk.additional_kwargs || {}),
+          reasoning_content: delta.reasoning_content,
+        };
+      }
+      return messageChunk;
+    }
+
+    _convertCompletionsMessageToBaseMessage(message: any, rawResponse: any) {
+      const langChainMessage = super._convertCompletionsMessageToBaseMessage(message, rawResponse);
+      if (message?.reasoning_content) {
+        langChainMessage.additional_kwargs = {
+          ...(langChainMessage.additional_kwargs || {}),
+          reasoning_content: message.reasoning_content,
+        };
+      }
+      return langChainMessage;
+    }
+
+    async completionWithRetry(request: any, requestOptions?: any): Promise<any> {
+      const reasoningMap = requestOptions?.[REASONING_MAP_KEY] as Map<string, string> | undefined;
+      patchRequestMessagesReasoning(request, reasoningMap);
+      return super.completionWithRetry(request, requestOptions) as any;
+    }
+  };
+}
+
 let _ChatGenerationChunk: any = null;
 function getChatGenerationChunk() {
   if (!_ChatGenerationChunk) {
@@ -155,17 +288,35 @@ function getByPath(obj: any, dotPath: string): any {
  *
  * responseMapping config example:
  * {
- *   "content": "message.response"    // dot-path to the content field
- *   "role": "message.role"           // optional, dot-path to role (default: "assistant")
- *   "id": "id"                       // optional, dot-path to response id
+ *   "content": "message.response"       // dot-path to the content field
+ *   "role": "message.role"              // optional, dot-path to role (default: "assistant")
+ *   "id": "id"                          // optional, dot-path to response id
+ *   "tool_calls": "message.tool_calls"  // optional, dot-path to tool_calls array
+ *   "finish_reason": "finish_reason"    // optional, dot-path to finish_reason
  * }
  */
-function createMappingFetch(responseMapping: Record<string, string>) {
+function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?: number) {
   const contentPath = responseMapping.content;
   if (!contentPath) return undefined; // No mapping needed
 
+  // Resolve path for tool_calls — if not set, try the standard OpenAI paths as fallback
+  const toolCallsPath = responseMapping.tool_calls;
+  const finishReasonPath = responseMapping.finish_reason;
+
   return async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const response = await fetch(url, init);
+    // Apply timeout via AbortController if configured (Issue #7)
+    let response: Response;
+    if (timeoutMs && timeoutMs > 0) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        response = await fetch(url, { ...init, signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+    } else {
+      response = await fetch(url, init);
+    }
 
     // Only intercept successful JSON responses
     if (!response.ok) return response;
@@ -206,8 +357,27 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                   try {
                     const parsed = JSON.parse(data);
                     const mappedContent = getByPath(parsed, contentPath);
-                    if (mappedContent !== undefined) {
-                      // Map to OpenAI streaming format
+
+                    // Extract tool_calls from the response (Issue #1)
+                    // Try custom path first, then fall back to standard OpenAI chunk paths
+                    const mappedToolCalls = toolCallsPath
+                      ? getByPath(parsed, toolCallsPath)
+                      : getByPath(parsed, 'choices.0.delta.tool_calls') ?? getByPath(parsed, 'delta.tool_calls');
+
+                    const mappedFinishReason = finishReasonPath
+                      ? getByPath(parsed, finishReasonPath)
+                      : getByPath(parsed, 'choices.0.finish_reason') ?? getByPath(parsed, 'finish_reason');
+
+                    if (mappedContent !== undefined || mappedToolCalls) {
+                      // Build the delta — include both content and tool_calls
+                      const delta: Record<string, any> = { role: 'assistant' };
+                      if (mappedContent !== undefined) {
+                        delta.content = String(mappedContent);
+                      }
+                      if (mappedToolCalls) {
+                        delta.tool_calls = mappedToolCalls;
+                      }
+
                       const mapped = {
                         id: getByPath(parsed, responseMapping.id || 'id') || 'chatcmpl-custom',
                         object: 'chat.completion.chunk',
@@ -216,8 +386,8 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                         choices: [
                           {
                             index: 0,
-                            delta: { content: String(mappedContent), role: 'assistant' },
-                            finish_reason: null,
+                            delta,
+                            finish_reason: mappedFinishReason ?? null,
                           },
                         ],
                       };
@@ -255,7 +425,29 @@ function createMappingFetch(responseMapping: Record<string, string>) {
       const body = await response.json();
       const mappedContent = getByPath(body, contentPath);
 
-      if (mappedContent !== undefined) {
+      // Extract tool_calls for non-streaming (Issue #1)
+      const mappedToolCalls = toolCallsPath
+        ? getByPath(body, toolCallsPath)
+        : getByPath(body, 'choices.0.message.tool_calls') ?? getByPath(body, 'message.tool_calls');
+
+      const mappedFinishReason = finishReasonPath
+        ? getByPath(body, finishReasonPath)
+        : getByPath(body, 'choices.0.finish_reason') ?? getByPath(body, 'finish_reason');
+
+      if (mappedContent !== undefined || mappedToolCalls) {
+        const message: Record<string, any> = {
+          role: getByPath(body, responseMapping.role || '') || 'assistant',
+        };
+        if (mappedContent !== undefined) {
+          message.content = String(mappedContent);
+        } else {
+          // When only tool_calls, content should be null (OpenAI convention)
+          message.content = null;
+        }
+        if (mappedToolCalls) {
+          message.tool_calls = mappedToolCalls;
+        }
+
         const mapped = {
           id: getByPath(body, responseMapping.id || 'id') || 'chatcmpl-custom',
           object: 'chat.completion',
@@ -264,14 +456,11 @@ function createMappingFetch(responseMapping: Record<string, string>) {
           choices: [
             {
               index: 0,
-              message: {
-                role: getByPath(body, responseMapping.role || '') || 'assistant',
-                content: String(mappedContent),
-              },
-              finish_reason: 'stop',
+              message,
+              finish_reason: mappedFinishReason ?? (mappedToolCalls ? 'tool_calls' : 'stop'),
             },
           ],
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          usage: body.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         };
 
         return new Response(JSON.stringify(mapped), {
@@ -537,6 +726,92 @@ function fixEmptyToolProperties(model: any) {
   return model;
 }
 
+/**
+ * Sanitize tool_calls on an AIMessage (mutates in place).
+ */
+function sanitizeAIMessageToolCalls(msg: any): void {
+  if (!msg) return;
+  if (msg.tool_calls) {
+    for (const tc of msg.tool_calls) {
+      tc.id = sanitizeToolCallId(tc.id);
+    }
+  }
+  if (msg.tool_call_chunks) {
+    for (const tc of msg.tool_call_chunks) {
+      tc.id = sanitizeToolCallId(tc.id);
+    }
+  }
+}
+
+/**
+ * Patch a runnable (model or bound model) so that `invoke` and `stream`
+ * sanitize tool call IDs on every AIMessage output.
+ * Also patches `bindTools` and `bind` so that derived runnables inherit
+ * the sanitization — this is critical because langgraph calls
+ * `model.bindTools(tools)` and then uses the BOUND model.
+ */
+function patchRunnableForSanitization(runnable: any): any {
+  if (!runnable || runnable.__toolCallSanitized) return runnable;
+  runnable.__toolCallSanitized = true;
+
+  // Patch invoke — covers non-streaming and internal streaming-via-invoke
+  const origInvoke = runnable.invoke?.bind(runnable);
+  if (origInvoke) {
+    runnable.invoke = async function (...args: any[]) {
+      const result = await origInvoke(...args);
+      sanitizeAIMessageToolCalls(result);
+      return result;
+    };
+  }
+
+  // Patch stream — covers streaming path
+  const origStream = runnable.stream?.bind(runnable);
+  if (origStream) {
+    runnable.stream = async function (...args: any[]) {
+      const iter = await origStream(...args);
+      // Wrap the async iterable to sanitize each chunk
+      const origIterator = iter[Symbol.asyncIterator]?.bind(iter);
+      if (origIterator) {
+        iter[Symbol.asyncIterator] = function () {
+          const it = origIterator();
+          return {
+            async next() {
+              const { value, done } = await it.next();
+              if (!done && value) {
+                sanitizeAIMessageToolCalls(value);
+              }
+              return { value, done };
+            },
+            return: it.return?.bind(it),
+            throw: it.throw?.bind(it),
+          };
+        };
+      }
+      return iter;
+    };
+  }
+
+  // Patch bindTools — the result is a RunnableBinding used by langgraph
+  const origBindTools = runnable.bindTools?.bind(runnable);
+  if (origBindTools) {
+    runnable.bindTools = function (...args: any[]) {
+      const bound = origBindTools(...args);
+      return patchRunnableForSanitization(bound);
+    };
+  }
+
+  // Patch bind — bindTools internally calls bind(), some runnables use it directly
+  const origBind = runnable.bind?.bind(runnable);
+  if (origBind) {
+    runnable.bind = function (...args: any[]) {
+      const bound = origBind(...args);
+      return patchRunnableForSanitization(bound);
+    };
+  }
+
+  return runnable;
+}
+
 export class CustomLLMProvider extends LLMProvider {
   get baseURL() {
     return null;
@@ -551,8 +826,10 @@ export class CustomLLMProvider extends LLMProvider {
   }
 
   createModel() {
-    const { apiKey, disableStream, timeout, streamKeepAlive, keepAliveIntervalMs, keepAliveContent } =
-      this.serviceOptions || {};
+    const {
+      apiKey, disableStream, timeout, streamKeepAlive,
+      keepAliveIntervalMs, keepAliveContent, enableReasoning,
+    } = this.serviceOptions || {};
     // baseURL comes from core's options.baseURL field
     const baseURL = this.serviceOptions?.baseURL;
     const { responseFormat } = this.modelOptions || {};
@@ -572,7 +849,10 @@ export class CustomLLMProvider extends LLMProvider {
       Object.assign(modelKwargs, reqConfig.extraBody);
     }
 
-    const ChatOpenAI = getChatOpenAI();
+    // Issue #4: Use ReasoningChatOpenAI when enableReasoning is set.
+    // This ensures reasoning_content is preserved and patched back into
+    // assistant messages during tool call round-trips (required by DeepSeek-R1, etc.)
+    const ChatClass = enableReasoning ? createReasoningChatClass() : getChatOpenAI();
     const config: Record<string, any> = {
       apiKey,
       ...this.modelOptions,
@@ -590,9 +870,10 @@ export class CustomLLMProvider extends LLMProvider {
     }
 
     // Apply custom timeout (in milliseconds) for slow-responding models
-    if (timeout && Number(timeout) > 0) {
-      config.timeout = Number(timeout);
-      config.configuration.timeout = Number(timeout);
+    const timeoutMs = timeout && Number(timeout) > 0 ? Number(timeout) : 0;
+    if (timeoutMs) {
+      config.timeout = timeoutMs;
+      config.configuration.timeout = timeoutMs;
     }
 
     // Apply extra headers
@@ -600,23 +881,29 @@ export class CustomLLMProvider extends LLMProvider {
       config.configuration.defaultHeaders = reqConfig.extraHeaders;
     }
 
-    // Apply response mapping via custom fetch
+    // Apply response mapping via custom fetch — pass timeout for fetch-level protection (Issue #7)
     if (resConfig.responseMapping) {
-      config.configuration.fetch = createMappingFetch(resConfig.responseMapping);
+      config.configuration.fetch = createMappingFetch(resConfig.responseMapping, timeoutMs || 120_000);
     }
 
-    let model = new ChatOpenAI(config);
+    let model = new ChatClass(config);
 
     // Fix empty tool properties for strict providers (Gemini, etc.)
     model = fixEmptyToolProperties(model);
 
     // Wrap with keepalive proxy if enabled (and streaming is not disabled)
     if (streamKeepAlive && !disableStream) {
-      return wrapWithStreamKeepAlive(model, {
+      model = wrapWithStreamKeepAlive(model, {
         intervalMs: Number(keepAliveIntervalMs) || 5000,
         keepAliveContent: keepAliveContent || '...',
       });
     }
+
+    // Sanitize Gemini's __thought__<base64> suffixes in tool call IDs.
+    // Patches invoke/stream/bindTools/bind at the public API level so that
+    // ALL code paths (including langgraph's internal model calls via
+    // RunnableBinding after bindTools) return clean IDs.
+    model = patchRunnableForSanitization(model);
 
     return model;
   }
@@ -646,7 +933,9 @@ export class CustomLLMProvider extends LLMProvider {
     };
 
     if (toolCalls) {
-      content.tool_calls = toolCalls;
+      content.tool_calls = Array.isArray(toolCalls)
+        ? toolCalls.map((tc: any) => ({ ...tc, id: sanitizeToolCallId(tc.id) }))
+        : toolCalls;
     }
 
     if (Array.isArray(content.content)) {
@@ -655,9 +944,9 @@ export class CustomLLMProvider extends LLMProvider {
     }
 
     if (typeof content.content === 'string') {
-      // Strip keepalive markers from saved messages (backward compat for pre-Phase3 records)
-      const escapedPrefix = KEEPALIVE_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      content.content = content.content.replace(new RegExp(escapedPrefix + '.*?(?=' + escapedPrefix + '|$)', 'g'), '');
+      // Issue #2: Strip keepalive markers safely — use simple replaceAll instead of
+      // greedy regex that could accidentally eat real content between two markers.
+      content.content = content.content.replaceAll(KEEPALIVE_PREFIX, '');
       content.content = stripToolCallTags(content.content);
     }
 
@@ -817,7 +1106,14 @@ export class CustomLLMProvider extends LLMProvider {
     if (ctx.state._docPixieActive !== undefined) return ctx.state._docPixieActive as boolean;
 
     try {
-      const employeeUsername = ctx.action?.params?.values?.aiEmployee;
+      // Issue #6: Try multiple sources for the AI employee username.
+      // The field may be placed differently depending on whether the request
+      // comes from sendMessages action, workflow invoke, or direct API call.
+      const employeeUsername =
+        ctx.action?.params?.values?.aiEmployee ??
+        ctx.action?.params?.aiEmployee ??
+        ctx.state?.currentAiEmployee;
+
       if (!employeeUsername) {
         ctx.state._docPixieActive = false;
         return false;

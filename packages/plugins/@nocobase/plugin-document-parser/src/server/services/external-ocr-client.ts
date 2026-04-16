@@ -221,24 +221,55 @@ export async function callExternalOcr(
  * to check reachability and auth. Used by the "Test Connection" button.
  */
 export async function testOcrProviderConnection(
-  providerConfig: Pick<OcrProviderConfig, 'apiEndpoint' | 'authType' | 'apiKey' | 'authConfig' | 'timeout'>,
+  providerConfig: Pick<OcrProviderConfig, 'apiEndpoint' | 'authType' | 'apiKey' | 'authConfig' | 'timeout' | 'requestFormat' | 'requestConfig'>,
 ): Promise<{ ok: boolean; status?: number; message?: string }> {
   try {
     const authHeaders = buildAuthHeaders(providerConfig as OcrProviderConfig);
-    const response = await axios.get(providerConfig.apiEndpoint, {
-      headers: authHeaders,
+    
+    // Build a dummy request based on the request format to prevent generic routing 404s
+    let body: any = null;
+    let headers: Record<string, string> = { ...authHeaders };
+
+    if (providerConfig.requestFormat === 'multipart') {
+      const form = new FormData();
+      const fileFieldName = providerConfig.requestConfig?.fileFieldName || 'file';
+      form.append(fileFieldName, Buffer.from('dummy'), {
+        filename: 'dummy.txt',
+        contentType: 'text/plain',
+      });
+      body = form;
+      Object.assign(headers, form.getHeaders());
+    } else if (providerConfig.requestFormat === 'json-base64') {
+      const jsonBody: Record<string, any> = { ...(providerConfig.requestConfig?.extraBody ?? {}) };
+      setByPath(jsonBody, providerConfig.requestConfig?.base64FieldPath || 'file', Buffer.from('dummy').toString('base64'));
+      body = jsonBody;
+      headers['Content-Type'] = 'application/json';
+    } else if (providerConfig.requestFormat === 'url') {
+      const jsonBody: Record<string, any> = { ...(providerConfig.requestConfig?.extraBody ?? {}) };
+      setByPath(jsonBody, providerConfig.requestConfig?.urlFieldPath || 'url', 'https://example.com/dummy.txt');
+      body = jsonBody;
+      headers['Content-Type'] = 'application/json';
+    }
+
+    const response = await axios.post(providerConfig.apiEndpoint, body, {
+      headers,
       timeout: providerConfig.timeout ?? 10000,
-      // Don't throw on 4xx/5xx so we can return the status to the UI
       validateStatus: () => true,
     });
-    const ok = response.status >= 200 && response.status < 400;
+    const { status } = response;
+    // Auth-related failures are the only reliable signal here
+    const ok = status !== 401 && status !== 403 && status !== 404 && status < 500;
     let message: string | undefined;
-    if (!ok && response.status < 500) {
-      message = `Auth/config error: HTTP ${response.status}`;
-    } else if (response.status >= 500) {
-      message = `Server error: HTTP ${response.status}`;
+    if (!ok) {
+      if (status === 401 || status === 403) {
+        message = `Auth/config error: HTTP ${status}`;
+      } else if (status === 404) {
+        message = `Endpoint not found: HTTP 404 — check the API URL`;
+      } else if (status >= 500) {
+        message = `Server error: HTTP ${status}`;
+      }
     }
-    return { ok, status: response.status, message };
+    return { ok, status, message };
   } catch (err: any) {
     return { ok: false, message: err?.message ?? String(err) };
   }

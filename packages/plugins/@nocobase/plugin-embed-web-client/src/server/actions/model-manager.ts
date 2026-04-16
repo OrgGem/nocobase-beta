@@ -194,18 +194,21 @@ export async function listModels(ctx: Context, next: Next) {
  */
 export async function uploadModelFile(ctx: Context, next: Next) {
   // Parse multipart via multer with file size enforcement
-  await new Promise<void>((resolve, reject) => {
-    const storage = (multer as any).diskStorage({
-      destination: (_req: any, _file: any, cb: any) => cb(null, require('os').tmpdir()),
-      filename: (_req: any, _file: any, cb: any) =>
-        cb(null, `ewc-upload-${Date.now()}-${Math.random().toString(36).slice(2)}`),
-    });
-    const upload = (multer as any)({
-      storage,
-      limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
-    }).single('file');
-    upload(ctx, null, (err: any) => (err ? reject(err) : resolve()));
+  const storage = (multer as any).diskStorage({
+    destination: (_req: any, _file: any, cb: any) => cb(null, require('os').tmpdir()),
+    filename: (_req: any, _file: any, cb: any) =>
+      cb(null, `ewc-upload-${Date.now()}-${Math.random().toString(36).slice(2)}`),
   });
+  const upload = (multer as any)({
+    storage,
+    limits: { fileSize: MAX_UPLOAD_SIZE_BYTES },
+  }).single('file');
+
+  try {
+    await upload(ctx, async () => {});
+  } catch (err: any) {
+    ctx.throw(400, err instanceof Error ? err.message : String(err));
+  }
 
   const { modelId, filePath } = ctx.request.body as any;
   const uploadedFile = (ctx as any).file;
@@ -392,5 +395,29 @@ export async function getModelFiles(ctx: Context, next: Next) {
     files: merged,
     ready: merged.every((f) => f.present),
   };
+  await next();
+}
+
+/**
+ * POST /embedWebClient:createModelDirectory   (admin only)
+ * Explicitly creates the local directory for a model (or S3 placeholder prefix)
+ * so that it appears in "Installed Models" and is "saved" even if empty.
+ */
+export async function createModelDirectory(ctx: Context, next: Next) {
+  const { modelId } = ctx.request.body as any;
+  if (!modelId || !VALID_MODEL_ID_RE.test(modelId)) {
+    ctx.throw(400, 'Valid modelId is required');
+  }
+
+  const configRepo = ctx.db.getRepository('embedWebClientConfig');
+  const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
+  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+
+  if (!s3) {
+    const destPath = safeJoin(join(STORAGE_MODELS_ROOT, modelId), 'placeholder');
+    mkdirSync(dirname(destPath), { recursive: true });
+  }
+
+  ctx.body = { success: true, modelId };
   await next();
 }

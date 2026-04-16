@@ -1,0 +1,7 @@
+{
+  "Worker Monitor": "Giám sát Worker",
+  "Async Tasks": "Tác vụ bất đồng bộ",
+  "Workflow Executions": "Thực thi Workflow",
+  "Redis Monitor": "Giám sát Redis",
+  "ACL Cache": "Bộ nhớ đệm ACL"
+}

@@ -125,7 +125,7 @@ export async function downloadModel(ctx: Context, next: Next) {
         results.push({ file, status: 'ok' });
       } else {
         // ── Local disk mode ───────────────────────────────────────────────────
-        const destPath = safeJoin(MODELS_ROOT, modelId, 'resolve', revision, ...file.split('/'));
+        const destPath = safeJoin(MODELS_ROOT, modelId, ...file.split('/'));
 
         if (existsSync(destPath)) {
           results.push({ file, status: 'skipped' });
@@ -179,7 +179,7 @@ export async function getModelStatus(ctx: Context, next: Next) {
 
   // Check bundled models first, then storage override
   const BUNDLED_ROOT = resolve(__dirname, '../../public/models');
-  const checkBase = (root: string) => safeJoin(root, modelId, 'resolve', revision);
+  const checkBase = (root: string) => safeJoin(root, modelId);
 
   const fileStatuses = await Promise.all(
     requiredFiles.map(async (file) => {
