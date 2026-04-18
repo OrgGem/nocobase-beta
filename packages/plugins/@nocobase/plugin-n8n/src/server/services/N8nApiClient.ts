@@ -39,6 +39,10 @@ export class N8nApiClient {
     }
   }
 
+  private safeId(id: string | number): string {
+    return encodeURIComponent(String(id));
+  }
+
   // Workflows
   async listWorkflows(cursor?: string, limit = 250) {
     const params = new URLSearchParams({ limit: String(limit) });
@@ -49,24 +53,26 @@ export class N8nApiClient {
   async listAllWorkflows() {
     const all: any[] = [];
     let cursor: string | undefined;
+    let pages = 0;
     do {
       const res = await this.listWorkflows(cursor);
       all.push(...(res.data || []));
       cursor = res.nextCursor;
-    } while (cursor);
+      pages++;
+    } while (cursor && pages < 20);
     return all;
   }
 
   async getWorkflow(id: string) {
-    return this.request(`/api/v1/workflows/${id}`);
+    return this.request(`/api/v1/workflows/${this.safeId(id)}`);
   }
 
   async activateWorkflow(id: string) {
-    return this.request(`/api/v1/workflows/${id}/activate`, { method: 'POST' });
+    return this.request(`/api/v1/workflows/${this.safeId(id)}/activate`, { method: 'POST' });
   }
 
   async deactivateWorkflow(id: string) {
-    return this.request(`/api/v1/workflows/${id}/deactivate`, { method: 'POST' });
+    return this.request(`/api/v1/workflows/${this.safeId(id)}/deactivate`, { method: 'POST' });
   }
 
   async createWorkflow(data: any) {
@@ -74,11 +80,11 @@ export class N8nApiClient {
   }
 
   async updateWorkflow(id: string, data: any) {
-    return this.request(`/api/v1/workflows/${id}`, { method: 'PATCH', body: data });
+    return this.request(`/api/v1/workflows/${this.safeId(id)}`, { method: 'PATCH', body: data });
   }
 
   async deleteWorkflow(id: string) {
-    return this.request(`/api/v1/workflows/${id}`, { method: 'DELETE' });
+    return this.request(`/api/v1/workflows/${this.safeId(id)}`, { method: 'DELETE' });
   }
 
   // Executions
@@ -92,19 +98,19 @@ export class N8nApiClient {
   }
 
   async getExecution(id: string) {
-    return this.request(`/api/v1/executions/${id}`);
+    return this.request(`/api/v1/executions/${this.safeId(id)}`);
   }
 
   async retryExecution(id: string) {
-    return this.request(`/api/v1/executions/${id}/retry`, { method: 'POST' });
+    return this.request(`/api/v1/executions/${this.safeId(id)}/retry`, { method: 'POST' });
   }
 
   async stopExecution(id: string) {
-    return this.request(`/api/v1/executions/${id}/stop`, { method: 'POST' });
+    return this.request(`/api/v1/executions/${this.safeId(id)}/stop`, { method: 'POST' });
   }
 
   async deleteExecution(id: string) {
-    return this.request(`/api/v1/executions/${id}`, { method: 'DELETE' });
+    return this.request(`/api/v1/executions/${this.safeId(id)}`, { method: 'DELETE' });
   }
 
   // Variables
@@ -117,11 +123,11 @@ export class N8nApiClient {
   }
 
   async updateVariable(id: string, data: { key?: string; value?: string }) {
-    return this.request(`/api/v1/variables/${id}`, { method: 'PATCH', body: data });
+    return this.request(`/api/v1/variables/${this.safeId(id)}`, { method: 'PATCH', body: data });
   }
 
   async deleteVariable(id: string) {
-    return this.request(`/api/v1/variables/${id}`, { method: 'DELETE' });
+    return this.request(`/api/v1/variables/${this.safeId(id)}`, { method: 'DELETE' });
   }
 
   // Credentials
@@ -138,11 +144,11 @@ export class N8nApiClient {
   }
 
   async updateCredential(id: string, data: any) {
-    return this.request(`/api/v1/credentials/${id}`, { method: 'PATCH', body: data });
+    return this.request(`/api/v1/credentials/${this.safeId(id)}`, { method: 'PATCH', body: data });
   }
 
   async deleteCredential(id: string) {
-    return this.request(`/api/v1/credentials/${id}`, { method: 'DELETE' });
+    return this.request(`/api/v1/credentials/${this.safeId(id)}`, { method: 'DELETE' });
   }
 
   // Monitoring
@@ -199,7 +205,7 @@ export class N8nApiClient {
   }
 
   async triggerWebhook(path: string, data?: any) {
-    const webhookUrl = path.startsWith('http') ? path : `${this.baseUrl}/webhook/${path}`;
+    const webhookUrl = path.startsWith('http') ? path : `${this.baseUrl}/webhook/${encodeURIComponent(path)}`;
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

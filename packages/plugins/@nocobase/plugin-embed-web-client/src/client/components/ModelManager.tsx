@@ -258,7 +258,7 @@ export const ModelManager: React.FC = () => {
       await api.request({
         url: 'embedWebClient:deleteModel',
         method: 'post',
-        data: { values: { modelId } },
+        data: { modelId },
       });
       message.success(t('Model deleted'));
       fetchModels();

@@ -1,0 +1,31 @@
+{
+  "name": "plugin-data-cloner",
+  "version": "1.0.0",
+  "displayName": "Data Cloner",
+  "description": "Gradually clone data from one MSSQL datasource to another",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts"
+  ],
+  "license": "Apache-2.0",
+  "keywords": [
+    "Clone",
+    "Data Source"
+  ],
+  "dependencies": {},
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
+}

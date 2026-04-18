@@ -97,5 +97,6 @@
   "Cooldown (minutes)": "Cooldown (minutes)",
   "Notify Channel": "Notify Channel",
   "Log": "Log",
-  "Webhook URL": "Webhook URL"
+  "Webhook URL": "Webhook URL",
+  "Credential Data must be valid JSON": "Credential Data must be valid JSON"
 }

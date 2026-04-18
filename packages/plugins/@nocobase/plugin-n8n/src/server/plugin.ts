@@ -1,11 +1,11 @@
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import { N8nApiClient } from './services/N8nApiClient';
-import { workflows } from './actions/workflows';
-import { executions } from './actions/executions';
-import { variables } from './actions/variables';
-import { credentials } from './actions/credentials';
-import { monitoring } from './actions/monitoring';
+import { createWorkflowActions } from './actions/workflows';
+import { createExecutionActions } from './actions/executions';
+import { createVariableActions } from './actions/variables';
+import { createCredentialActions } from './actions/credentials';
+import { createMonitoringActions } from './actions/monitoring';
 import { createN8nTools } from './tools/n8n-tools';
 
 export interface MetricsSnapshot {
@@ -33,17 +33,29 @@ export class PluginN8nServer extends Plugin {
 
   async getApiClient(instanceId?: number | string): Promise<N8nApiClient> {
     const repo = this.db.getRepository('n8nInstances');
-    const instance = instanceId
-      ? await repo.findOne({ filter: { id: Number(instanceId) } })
-      : await repo.findOne({ filter: { isDefault: true, enabled: true } });
+    let instance;
 
-    if (!instance) {
-      // Fallback to any enabled instance
-      const any = await repo.findOne({ filter: { enabled: true } });
-      if (!any) throw new Error('No n8n instance configured');
-      return new N8nApiClient(any.get('baseUrl'), any.get('apiKey'));
+    if (instanceId) {
+      instance = await repo.findOne({ filter: { id: Number(instanceId) } });
     }
-    return new N8nApiClient(instance.get('baseUrl'), instance.get('apiKey'));
+    if (!instance) {
+      instance = await repo.findOne({ filter: { isDefault: true, enabled: true } });
+    }
+    if (!instance) {
+      instance = await repo.findOne({ filter: { enabled: true } });
+    }
+    if (!instance) {
+      throw new Error('No n8n instance configured. Please add an n8n instance first.');
+    }
+
+    const baseUrl = instance.get('baseUrl') as string;
+    const apiKey = instance.get('apiKey') as string;
+
+    if (!baseUrl || !apiKey) {
+      throw new Error('n8n instance is missing baseUrl or apiKey.');
+    }
+
+    return new N8nApiClient(baseUrl, apiKey);
   }
 
   async getDefaultInstanceId(): Promise<number | null> {
@@ -55,12 +67,12 @@ export class PluginN8nServer extends Plugin {
   async load() {
     await this.importCollections(resolve(__dirname, 'collections'));
 
-    // Register proxy resources
-    this.app.resourceManager.define({ name: 'n8nWorkflows', actions: workflows });
-    this.app.resourceManager.define({ name: 'n8nExecutions', actions: executions });
-    this.app.resourceManager.define({ name: 'n8nVariables', actions: variables });
-    this.app.resourceManager.define({ name: 'n8nCredentials', actions: credentials });
-    this.app.resourceManager.define({ name: 'n8nMonitoring', actions: monitoring });
+    // Register proxy resources — pass plugin ref via closure
+    this.app.resourceManager.define({ name: 'n8nWorkflows', actions: createWorkflowActions(this) });
+    this.app.resourceManager.define({ name: 'n8nExecutions', actions: createExecutionActions(this) });
+    this.app.resourceManager.define({ name: 'n8nVariables', actions: createVariableActions(this) });
+    this.app.resourceManager.define({ name: 'n8nCredentials', actions: createCredentialActions(this) });
+    this.app.resourceManager.define({ name: 'n8nMonitoring', actions: createMonitoringActions(this) });
 
     // ACL
     this.app.acl.registerSnippet({
@@ -84,12 +96,19 @@ export class PluginN8nServer extends Plugin {
           if (item && typeof item === 'object') {
             delete item.apiKey;
             if (item.dataValues) delete item.dataValues.apiKey;
+            if (item.get && typeof item.get === 'function') {
+              // Sequelize model - override toJSON
+              const orig = item.toJSON ? item.toJSON() : item;
+              delete orig.apiKey;
+            }
           }
         };
         if (Array.isArray(ctx.body)) {
           ctx.body.forEach(strip);
         } else if (ctx.body?.data && Array.isArray(ctx.body.data)) {
           ctx.body.data.forEach(strip);
+        } else if (ctx.body?.rows && Array.isArray(ctx.body.rows)) {
+          ctx.body.rows.forEach(strip);
         } else {
           strip(ctx.body);
         }
@@ -135,9 +154,11 @@ export class PluginN8nServer extends Plugin {
 
         for (const instance of instances) {
           const id = Number(instance.get('id'));
-          const baseUrl = instance.get('internalUrl') || instance.get('baseUrl');
-          const apiKey = instance.get('apiKey');
-          const client = new N8nApiClient(baseUrl as string, apiKey as string);
+          const baseUrl = (instance.get('internalUrl') || instance.get('baseUrl')) as string;
+          const apiKey = instance.get('apiKey') as string;
+          if (!baseUrl || !apiKey) continue;
+
+          const client = new N8nApiClient(baseUrl, apiKey);
 
           try {
             const snapshot = await client.getMetricsSnapshot();
@@ -150,10 +171,17 @@ export class PluginN8nServer extends Plugin {
               history.splice(0, history.length - MAX_METRICS_HISTORY);
             }
 
-            // Evaluate alerts
             await this.evaluateAlerts(id, snapshot);
           } catch (err) {
             this.app.logger.debug(`[plugin-n8n] Metrics fetch failed for instance ${id}: ${err}`);
+          }
+        }
+
+        // Clean up metrics for deleted/disabled instances
+        const activeIds = new Set(instances.map((i) => Number(i.get('id'))));
+        for (const key of this.metricsHistory.keys()) {
+          if (!activeIds.has(key)) {
+            this.metricsHistory.delete(key);
           }
         }
       } catch (err) {
@@ -173,39 +201,25 @@ export class PluginN8nServer extends Plugin {
       const windowMinutes = rule.get('windowMinutes') as number;
       const lastTriggered = rule.get('lastTriggeredAt') as Date | null;
 
-      // Cooldown check
       if (lastTriggered) {
         const elapsed = (Date.now() - new Date(lastTriggered).getTime()) / 60000;
         if (elapsed < windowMinutes) continue;
       }
 
-      // Get metric value from snapshot
       const value = (snapshot as any)[metric];
       if (value === undefined) continue;
 
-      // Evaluate
       let breached = false;
       switch (operator) {
-        case '>':
-          breached = value > threshold;
-          break;
-        case '<':
-          breached = value < threshold;
-          break;
-        case '>=':
-          breached = value >= threshold;
-          break;
-        case '<=':
-          breached = value <= threshold;
-          break;
-        case '==':
-          breached = value === threshold;
-          break;
+        case '>': breached = value > threshold; break;
+        case '<': breached = value < threshold; break;
+        case '>=': breached = value >= threshold; break;
+        case '<=': breached = value <= threshold; break;
+        case '==': breached = value === threshold; break;
       }
 
       if (!breached) continue;
 
-      // Fire alert
       const alertMsg = `[n8n Alert] ${rule.get('name')}: ${metric} ${operator} ${threshold} (current: ${value})`;
       const channel = rule.get('notifyChannel') as string;
 
@@ -216,20 +230,19 @@ export class PluginN8nServer extends Plugin {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ alert: rule.get('name'), metric, value, threshold, operator, instanceId }),
-          }).catch(() => {});
+          }).catch((err) => {
+            this.app.logger.warn(`[plugin-n8n] Alert webhook failed: ${err}`);
+          });
         }
       } else {
         this.app.logger.warn(alertMsg);
       }
 
-      // Update lastTriggeredAt
       await repo.update({ filter: { id: rule.get('id') }, values: { lastTriggeredAt: new Date() } });
     }
   }
 
-  async install() {
-    // No seed data needed
-  }
+  async install() {}
 }
 
 export default PluginN8nServer;

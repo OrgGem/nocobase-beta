@@ -26,6 +26,22 @@ export class PluginBuildGuideBlockServer extends Plugin {
         'aiBuildGuideSpaces:build',
       ],
     });
+
+    // Recover stale "building" status after server restart
+    this.app.on('afterStart', async () => {
+      try {
+        const repo = this.db.getRepository('aiBuildGuideSpaces');
+        await repo.update({
+          filter: { status: 'building' },
+          values: {
+            status: 'error',
+            buildLog: 'Build interrupted by server restart',
+          },
+        });
+      } catch (err) {
+        this.app.logger.warn('[plugin-build-guide-block] Failed to recover stale builds', err);
+      }
+    });
   }
 
   async install(options?: InstallOptions) {

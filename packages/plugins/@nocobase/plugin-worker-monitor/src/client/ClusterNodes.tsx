@@ -267,7 +267,7 @@ export function ClusterNodes() {
           <Table
             dataSource={environments}
             columns={nodeColumns}
-            rowKey="name"
+            rowKey="id"
             size="small"
             pagination={false}
           />

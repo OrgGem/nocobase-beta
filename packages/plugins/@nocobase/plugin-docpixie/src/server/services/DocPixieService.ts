@@ -1698,8 +1698,9 @@ export class DocPixieService {
     const filter: any = { status: 'ready' };
     if (documentIds && documentIds.length > 0) {
       filter.id = { $in: documentIds };
+      return repo.find({ filter });
     }
-    return repo.find({ filter });
+    return repo.find({ filter, limit: 10, sort: ['-createdAt'] });
   }
 
   private async loadQueryDocumentsByScope(options: {
@@ -1711,10 +1712,6 @@ export class DocPixieService {
     const repo = this.db.getRepository('docpixie_documents');
     const filter: any = { status: 'ready' };
 
-    if (documentIds && documentIds.length > 0) {
-      filter.id = { $in: documentIds };
-    }
-
     if (!isAdmin) {
       if (!userId) {
         return [];
@@ -1722,7 +1719,12 @@ export class DocPixieService {
       filter.createdById = userId;
     }
 
-    return repo.find({ filter });
+    if (documentIds && documentIds.length > 0) {
+      filter.id = { $in: documentIds };
+      return repo.find({ filter });
+    }
+
+    return repo.find({ filter, limit: 10, sort: ['-createdAt'] });
   }
 
   private isAdminRole(roleNames?: string[]): boolean {

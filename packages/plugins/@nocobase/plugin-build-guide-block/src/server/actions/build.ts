@@ -44,6 +44,11 @@ export async function build(ctx: Context, next: Next) {
     ctx.throw(404, 'Space not found');
   }
 
+  // Concurrency guard — reject if already building
+  if (space.get('status') === 'building') {
+    ctx.throw(409, 'A build is already in progress for this space');
+  }
+
   // Capture the long-lived Application reference — NOT the per-request ctx
   const app = ctx.app;
   const db = ctx.db;

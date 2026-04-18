@@ -97,5 +97,6 @@
   "Cooldown (minutes)": "冷却时间（分钟）",
   "Notify Channel": "通知渠道",
   "Log": "日志",
-  "Webhook URL": "Webhook URL"
+  "Webhook URL": "Webhook URL",
+  "Credential Data must be valid JSON": "凭证数据必须是有效的 JSON"
 }

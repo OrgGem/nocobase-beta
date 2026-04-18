@@ -143,7 +143,7 @@ export const PluginSettings: React.FC = () => {
       const res = await api.request({
         url: 'embedWebClient:updateConfig',
         method: 'post',
-        data: { values: submitValues },
+        data: submitValues,
       });
       // Sync local state with the server response so the form doesn't "reset"
       const saved = res?.data?.data ?? res?.data ?? {};
@@ -181,7 +181,7 @@ export const PluginSettings: React.FC = () => {
       const res = await api.request({
         url: 'embedWebClient:downloadModel',
         method: 'post',
-        data: { values: { modelId, dtype } },
+        data: { modelId, dtype },
       });
       const result = res?.data?.data;
       if (result?.success) {

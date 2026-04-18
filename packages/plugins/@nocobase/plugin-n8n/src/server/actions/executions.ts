@@ -1,43 +1,48 @@
-export const executions = {
-  list: async (ctx, next) => {
-    const { instanceId, filter } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    const params: any = {};
-    if (filter?.status) params.status = filter.status;
-    if (filter?.workflowId) params.workflowId = filter.workflowId;
-    if (filter?.limit) params.limit = filter.limit;
-    if (filter?.cursor) params.cursor = filter.cursor;
-    const result = await client.listExecutions(params);
-    ctx.body = result;
-    await next();
-  },
+import type { Context, Next } from '@nocobase/actions';
+import type { PluginN8nServer } from '../plugin';
 
-  get: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.getExecution(filterByTk);
-    await next();
-  },
+export function createExecutionActions(plugin: PluginN8nServer) {
+  return {
+    list: async (ctx: Context, next: Next) => {
+      const { instanceId, filter } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      const params: any = {};
+      if (filter?.status) params.status = filter.status;
+      if (filter?.workflowId) params.workflowId = filter.workflowId;
+      if (filter?.limit) params.limit = filter.limit;
+      if (filter?.cursor) params.cursor = filter.cursor;
+      const result = await client.listExecutions(params);
+      ctx.body = result;
+      await next();
+    },
 
-  retry: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.retryExecution(filterByTk);
-    await next();
-  },
+    get: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.getExecution(filterByTk);
+      await next();
+    },
 
-  stop: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.stopExecution(filterByTk);
-    await next();
-  },
+    retry: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.retryExecution(filterByTk);
+      await next();
+    },
 
-  destroy: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    await client.deleteExecution(filterByTk);
-    ctx.body = { success: true };
-    await next();
-  },
-};
+    stop: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.stopExecution(filterByTk);
+      await next();
+    },
+
+    destroy: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      await client.deleteExecution(filterByTk);
+      ctx.body = { success: true };
+      await next();
+    },
+  };
+}

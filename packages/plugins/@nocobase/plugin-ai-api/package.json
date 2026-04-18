@@ -1,6 +1,6 @@
 {
   "name": "plugin-ai-api",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "main": "dist/server/index.js",
   "dependencies": {},
   "peerDependencies": {

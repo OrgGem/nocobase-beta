@@ -18,27 +18,41 @@ export const VariableManager: React.FC = () => {
   const variables = data?.data || data || [];
 
   const handleSave = async () => {
-    const values = await form.validateFields();
-    if (editingId) {
-      await api.request({
-        url: 'n8nVariables:update',
-        params: { instanceId, filterByTk: editingId },
-        data: { values },
-      });
-    } else {
-      await api.request({ url: 'n8nVariables:create', params: { instanceId }, data: { values } });
+    try {
+      const values = await form.validateFields();
+      if (editingId) {
+        await api.request({
+          url: `n8nVariables:update`,
+          method: 'post',
+          params: { instanceId, filterByTk: editingId },
+          data: values,
+        });
+      } else {
+        await api.request({
+          url: `n8nVariables:create`,
+          method: 'post',
+          params: { instanceId },
+          data: values,
+        });
+      }
+      message.success(t('Saved'));
+      setModalOpen(false);
+      setEditingId(null);
+      form.resetFields();
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
     }
-    message.success(t('Saved'));
-    setModalOpen(false);
-    setEditingId(null);
-    form.resetFields();
-    refresh();
   };
 
   const handleDelete = async (id: string) => {
-    await api.request({ url: 'n8nVariables:destroy', params: { instanceId, filterByTk: id } });
-    message.success(t('Deleted'));
-    refresh();
+    try {
+      await api.request({ url: 'n8nVariables:destroy', params: { instanceId, filterByTk: id } });
+      message.success(t('Deleted'));
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
+    }
   };
 
   const columns = [

@@ -1,0 +1,9 @@
+{
+  "Plugin Settings": "插件设置",
+  "Select plugin": "选择插件",
+  "Please select a plugin": "请选择要显示的插件",
+  "Click the gear icon in the upper right corner to configure": "点击右上角齿轮图标进行配置",
+  "Plugin not found or not authorized": "插件未找到或无权限",
+  "This plugin has no embeddable settings page": "该插件没有可嵌入的设置页面",
+  "Edit embed settings": "编辑嵌入设置"
+}

@@ -37,13 +37,16 @@ export class RedisNodeRegistry {
     // Even in Docker, hostnames might be identical if not set, but NocoBase uses random container hashes.
     // We'll use hostname + process.env.APP_PORT to be safe for local dev too.
     const port = process.env.APP_PORT || 'unknown';
-    const nodeId = `${os.hostname()}_${port}_${process.pid}`;
+    const mode = process.env.WORKER_MODE || 'main';
+    const appName = process.env.APP_NAME || this.app.name || 'main';
+    const nodeId = `${appName}_${mode}_${os.hostname()}_${port}_${process.pid}`;
     const key = `${this.keyPrefix}${nodeId}`;
 
     const metadata = {
-      name: os.hostname(),
+      id: nodeId,
+      name: `${appName} (${os.hostname()})`,
       appVersion: process.env.NOCOBASE_VERSION || process.version,
-      workerMode: process.env.WORKER_MODE || 'main',
+      workerMode: mode,
       pid: process.pid,
       url: null,
       available: true,

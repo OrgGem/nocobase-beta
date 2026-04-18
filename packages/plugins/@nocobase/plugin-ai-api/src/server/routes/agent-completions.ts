@@ -79,7 +79,8 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
 
   // ─── Load config and validate AI Employee ─────────────────────────────────
   const config = await ctx.db.getRepository('aiApiConfig').findOne();
-  if (!config?.defaultAiEmployee) {
+  const defaultAiEmployee = config ? (config.get('defaultAiEmployee') || config.defaultAiEmployee) : null;
+  if (!defaultAiEmployee) {
     ctx.status = 400;
     ctx.body = toOpenAIError(
       400,
@@ -110,7 +111,7 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
     return;
   }
 
-  const employeeUsername = config.defaultAiEmployee;
+  const employeeUsername = defaultAiEmployee;
 
   // ─── Check role is allowed to use this employee ────────────────────────────
   if (!checkEmployeeAccess(ctx, employeeUsername)) {

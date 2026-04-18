@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Table, Select, Button, Badge, Drawer, Space, message, Popconfirm, DatePicker } from 'antd';
+import { Table, Select, Button, Badge, Drawer, Space, message, Popconfirm } from 'antd';
 import { ReloadOutlined, EyeOutlined, RedoOutlined, StopOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useN8nRequest } from '../hooks/useN8nRequest';
@@ -34,21 +34,33 @@ export const ExecutionList: React.FC = () => {
   const workflows = workflowsData?.data || workflowsData || [];
 
   const handleRetry = async (id: string) => {
-    await api.request({ url: 'n8nExecutions:retry', params: { instanceId, filterByTk: id } });
-    message.success(t('Retry initiated'));
-    refresh();
+    try {
+      await api.request({ url: 'n8nExecutions:retry', params: { instanceId, filterByTk: id } });
+      message.success(t('Retry initiated'));
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
+    }
   };
 
   const handleStop = async (id: string) => {
-    await api.request({ url: 'n8nExecutions:stop', params: { instanceId, filterByTk: id } });
-    message.success(t('Execution stopped'));
-    refresh();
+    try {
+      await api.request({ url: 'n8nExecutions:stop', params: { instanceId, filterByTk: id } });
+      message.success(t('Execution stopped'));
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
+    }
   };
 
   const handleViewDetail = async (id: string) => {
-    const res = await api.request({ url: 'n8nExecutions:get', params: { instanceId, filterByTk: id } });
-    setDetail(res?.data);
-    setDetailOpen(true);
+    try {
+      const res = await api.request({ url: 'n8nExecutions:get', params: { instanceId, filterByTk: id } });
+      setDetail(res?.data);
+      setDetailOpen(true);
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
+    }
   };
 
   const columns = [

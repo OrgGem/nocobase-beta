@@ -6,7 +6,7 @@
   "description": "Monitor and manage n8n workflows, executions, variables, credentials and performance metrics",
   "description.vi-VN": "Giám sát và quản lý workflow, execution, biến, credential và hiệu suất n8n",
   "description.zh-CN": "监控和管理 n8n 工作流、执行、变量、凭证和性能指标",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
   "files": [
@@ -40,7 +40,9 @@
     "@nocobase/utils": "2.x"
   },
   "nocobase": {
-    "supportedVersions": ["2.x"],
+    "supportedVersions": [
+      "2.x"
+    ],
     "editionLevel": 0
   }
 }

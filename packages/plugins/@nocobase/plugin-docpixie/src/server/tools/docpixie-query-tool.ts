@@ -73,9 +73,15 @@ export function createDocPixieQueryTool(service: DocPixieService) {
           strategy: args?.strategy,
         });
 
+        // Tinh gọn kết quả để tránh làm quá tải context window của AI Employee
+        const safeContent = {
+          answer: result.answer,
+          sources: result.sourcePages?.map(p => `Doc: ${p.documentName}, Page: ${p.pageNumber}`)
+        };
+
         return {
           status: 'success',
-          content: JSON.stringify(result),
+          content: JSON.stringify(safeContent),
         };
       } catch (error: any) {
         ctx.log?.error?.(error, {

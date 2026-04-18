@@ -63,6 +63,7 @@ export const clusterActions = {
     if (nodes && nodes.length > 0) {
       for (const env of nodes) {
         environments.push({
+          id: env.id || env.name,
           name: env.name,
           url: env.url,
           available: env.available,

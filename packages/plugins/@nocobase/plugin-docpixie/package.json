@@ -5,7 +5,7 @@
   "displayName.zh-CN": "DocPixie 文档AI",
   "description": "Adaptive RAG agent for document analysis — OCR + LLM Vision + structured extraction.",
   "description.vi-VN": "Agent RAG thích ứng cho phân tích tài liệu — OCR + LLM Vision + trích xuất cấu trúc.",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
   "files": [

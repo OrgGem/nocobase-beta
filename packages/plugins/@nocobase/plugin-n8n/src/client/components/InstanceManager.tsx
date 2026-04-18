@@ -20,23 +20,35 @@ export const InstanceManager: React.FC = () => {
   const instances = data?.data || [];
 
   const handleSave = async () => {
-    const values = await form.validateFields();
-    if (editingId) {
-      await api.resource('n8nInstances').update({ filterByTk: editingId, values });
-    } else {
-      await api.resource('n8nInstances').create({ values });
+    try {
+      const values = await form.validateFields();
+      // Don't send empty apiKey on edit (keep existing)
+      if (editingId && !values.apiKey) {
+        delete values.apiKey;
+      }
+      if (editingId) {
+        await api.resource('n8nInstances').update({ filterByTk: editingId, values });
+      } else {
+        await api.resource('n8nInstances').create({ values });
+      }
+      message.success(t('Saved'));
+      setModalOpen(false);
+      setEditingId(null);
+      form.resetFields();
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
     }
-    message.success(t('Saved'));
-    setModalOpen(false);
-    setEditingId(null);
-    form.resetFields();
-    refresh();
   };
 
   const handleDelete = async (id: number) => {
-    await api.resource('n8nInstances').destroy({ filterByTk: id });
-    message.success(t('Deleted'));
-    refresh();
+    try {
+      await api.resource('n8nInstances').destroy({ filterByTk: id });
+      message.success(t('Deleted'));
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
+    }
   };
 
   const handleEdit = (record: any) => {

@@ -23,5 +23,6 @@
   "Build": "Build",
   "Build started": "Build started",
   "Build failed": "Build failed",
-  "Are you sure you want to delete this space?": "Are you sure you want to delete this space?"
+  "Are you sure you want to delete this space?": "Are you sure you want to delete this space?",
+  "Build completed": "Build completed"
 }

@@ -33,7 +33,9 @@ export class PluginWorkerMonitorServer extends Plugin {
         const id = model.get('id');
         const redis = (this.app as any).redisConnectionManager?.getConnection();
         if (id && redis) {
-          redis.sendCommand(['SET', `worker-monitor:exec-node:${id}`, os.hostname(), 'EX', '86400']).catch(() => {});
+          const appName = process.env.APP_NAME || (this.app as any).name || 'main';
+          const nodeName = appName === os.hostname() ? appName : `${appName} (${os.hostname()})`;
+          redis.sendCommand(['SET', `worker-monitor:exec-node:${id}`, nodeName, 'EX', '86400']).catch(() => {});
         }
       }
     });

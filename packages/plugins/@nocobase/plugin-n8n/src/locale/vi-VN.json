@@ -97,5 +97,6 @@
   "Cooldown (minutes)": "Thời gian chờ (phút)",
   "Notify Channel": "Kênh thông báo",
   "Log": "Nhật ký",
-  "Webhook URL": "URL Webhook"
+  "Webhook URL": "URL Webhook",
+  "Credential Data must be valid JSON": "Dữ liệu xác thực phải là JSON hợp lệ"
 }

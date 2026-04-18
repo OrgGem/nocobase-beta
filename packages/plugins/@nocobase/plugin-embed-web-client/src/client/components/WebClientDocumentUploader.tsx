@@ -115,7 +115,7 @@ const WebClientDocumentUploaderInner: React.FC<WebClientDocumentUploaderProps> =
           await api.request({
             url: 'embedWebClient:storeVectors',
             method: 'post',
-            data: { values: { documentId, chunks } },
+            data: { documentId, chunks },
           });
 
           updateEntry(entry.uid, { stage: 'done', progress: 100, chunkCount: chunks.length });

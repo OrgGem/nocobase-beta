@@ -22,28 +22,51 @@ export const CredentialManager: React.FC = () => {
   const credTypes = typesData?.data || typesData || [];
 
   const handleSave = async () => {
-    const values = await form.validateFields();
-    const payload = { name: values.name, type: values.type, data: values.credentialData || {} };
-    if (editingId) {
-      await api.request({
-        url: 'n8nCredentials:update',
-        params: { instanceId, filterByTk: editingId },
-        data: { values: payload },
-      });
-    } else {
-      await api.request({ url: 'n8nCredentials:create', params: { instanceId }, data: { values: payload } });
+    try {
+      const values = await form.validateFields();
+      let credData = {};
+      if (values.credentialData) {
+        try {
+          credData = JSON.parse(values.credentialData);
+        } catch {
+          message.error(t('Credential Data must be valid JSON'));
+          return;
+        }
+      }
+      const payload = { name: values.name, type: values.type, data: credData };
+      if (editingId) {
+        await api.request({
+          url: 'n8nCredentials:update',
+          method: 'post',
+          params: { instanceId, filterByTk: editingId },
+          data: payload,
+        });
+      } else {
+        await api.request({
+          url: 'n8nCredentials:create',
+          method: 'post',
+          params: { instanceId },
+          data: payload,
+        });
+      }
+      message.success(t('Saved'));
+      setModalOpen(false);
+      setEditingId(null);
+      form.resetFields();
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
     }
-    message.success(t('Saved'));
-    setModalOpen(false);
-    setEditingId(null);
-    form.resetFields();
-    refresh();
   };
 
   const handleDelete = async (id: string) => {
-    await api.request({ url: 'n8nCredentials:destroy', params: { instanceId, filterByTk: id } });
-    message.success(t('Deleted'));
-    refresh();
+    try {
+      await api.request({ url: 'n8nCredentials:destroy', params: { instanceId, filterByTk: id } });
+      message.success(t('Deleted'));
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed'));
+    }
   };
 
   const columns = [

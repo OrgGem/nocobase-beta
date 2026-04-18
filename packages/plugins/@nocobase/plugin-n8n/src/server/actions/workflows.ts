@@ -1,56 +1,61 @@
-export const workflows = {
-  list: async (ctx, next) => {
-    const { instanceId, filter } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    let data = await client.listAllWorkflows();
-    if (filter?.search) {
-      const q = filter.search.toLowerCase();
-      data = data.filter((w) => w.name?.toLowerCase().includes(q));
-    }
-    ctx.body = { data };
-    await next();
-  },
+import type { Context, Next } from '@nocobase/actions';
+import type { PluginN8nServer } from '../plugin';
 
-  get: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.getWorkflow(filterByTk);
-    await next();
-  },
+export function createWorkflowActions(plugin: PluginN8nServer) {
+  return {
+    list: async (ctx: Context, next: Next) => {
+      const { instanceId, filter } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      let data = await client.listAllWorkflows();
+      if (filter?.search) {
+        const q = filter.search.toLowerCase();
+        data = data.filter((w: any) => w.name?.toLowerCase().includes(q));
+      }
+      ctx.body = { data };
+      await next();
+    },
 
-  activate: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.activateWorkflow(filterByTk);
-    await next();
-  },
+    get: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.getWorkflow(filterByTk);
+      await next();
+    },
 
-  deactivate: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.deactivateWorkflow(filterByTk);
-    await next();
-  },
+    activate: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.activateWorkflow(filterByTk);
+      await next();
+    },
 
-  create: async (ctx, next) => {
-    const { instanceId, values } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.createWorkflow(values);
-    await next();
-  },
+    deactivate: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.deactivateWorkflow(filterByTk);
+      await next();
+    },
 
-  update: async (ctx, next) => {
-    const { instanceId, filterByTk, values } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    ctx.body = await client.updateWorkflow(filterByTk, values);
-    await next();
-  },
+    create: async (ctx: Context, next: Next) => {
+      const { instanceId, values } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.createWorkflow(values);
+      await next();
+    },
 
-  destroy: async (ctx, next) => {
-    const { instanceId, filterByTk } = ctx.action.params;
-    const client = await ctx.app.pm.get('plugin-n8n').getApiClient(instanceId);
-    await client.deleteWorkflow(filterByTk);
-    ctx.body = { success: true };
-    await next();
-  },
-};
+    update: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk, values } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      ctx.body = await client.updateWorkflow(filterByTk, values);
+      await next();
+    },
+
+    destroy: async (ctx: Context, next: Next) => {
+      const { instanceId, filterByTk } = ctx.action.params;
+      const client = await plugin.getApiClient(instanceId);
+      await client.deleteWorkflow(filterByTk);
+      ctx.body = { success: true };
+      await next();
+    },
+  };
+}

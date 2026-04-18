@@ -1,12 +1,12 @@
 {
-  "name": "@nocobase/plugin-embed-web-client",
+  "name": "plugin-embed-web-client",
   "displayName": "Web Client Embedding",
   "displayName.vi-VN": "Nhúng vector phía trình duyệt",
   "displayName.zh-CN": "浏览器端向量嵌入",
   "description": "Browser-side document chunking and embedding for Knowledge Base using ONNX models via @huggingface/transformers. Computes embedding vectors locally — zero API cost.",
   "description.vi-VN": "Phân đoạn và nhúng tài liệu phía trình duyệt cho Cơ sở tri thức sử dụng mô hình ONNX.",
   "description.zh-CN": "使用 ONNX 模型在浏览器端对知识库文档进行分块和向量嵌入，零 API 成本。",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
   "files": [

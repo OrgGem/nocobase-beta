@@ -249,18 +249,25 @@ function getRawBody(ctx: Context): Promise<string> {
 async function resolveMode(ctx: Context): Promise<'llm' | 'agent'> {
   const headerMode = ctx.get('X-AI-Mode')?.toLowerCase();
   if (headerMode === 'agent' || headerMode === 'llm') {
+    ctx.app.logger?.info(`[ai-api] Mode resolved from header: ${headerMode}`);
     return headerMode;
   }
 
   try {
     const config = await ctx.db.getRepository('aiApiConfig').findOne();
-    if (config?.mode === 'agent' || config?.mode === 'llm') {
-      return config.mode;
+    if (config) {
+      const dbMode = config.get('mode') || config.mode;
+      if (dbMode === 'agent' || dbMode === 'llm') {
+        ctx.app.logger?.info(`[ai-api] Mode resolved from DB config: ${dbMode}`);
+        return dbMode as 'llm' | 'agent';
+      }
     }
-  } catch {
+  } catch (err) {
+    ctx.app.logger?.error('[ai-api] Failed to get mode from config:', err);
     // Ignore config errors — default to llm
   }
 
+  ctx.app.logger?.info(`[ai-api] Mode fallback to default: llm`);
   return 'llm';
 }
 
