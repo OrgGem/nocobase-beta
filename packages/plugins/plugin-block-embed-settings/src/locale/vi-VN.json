@@ -1,9 +1,17 @@
 {
   "Plugin Settings": "Cài đặt Plugin",
+  "Embed Settings Block": "Khối nhúng cài đặt",
   "Select plugin": "Chọn plugin",
   "Please select a plugin": "Vui lòng chọn plugin để hiển thị",
   "Click the gear icon in the upper right corner to configure": "Nhấn biểu tượng bánh răng ở góc trên bên phải để cấu hình",
   "Plugin not found or not authorized": "Không tìm thấy plugin hoặc không có quyền",
   "This plugin has no embeddable settings page": "Plugin này không có trang cài đặt có thể nhúng",
-  "Edit embed settings": "Chỉnh sửa cài đặt nhúng"
+  "Edit embed settings": "Chỉnh sửa cài đặt nhúng",
+  "Allowed plugins for embedding": "Plugin được phép nhúng",
+  "Plugin name": "Tên plugin",
+  "Display title": "Tiêu đề hiển thị",
+  "Enabled": "Bật",
+  "Actions": "Thao tác",
+  "Confirm remove?": "Xác nhận xóa?",
+  "No plugins registered yet": "Chưa có plugin nào được đăng ký"
 }

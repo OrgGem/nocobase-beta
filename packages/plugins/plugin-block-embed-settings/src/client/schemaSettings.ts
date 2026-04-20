@@ -1,5 +1,5 @@
 import { useFieldSchema } from '@formily/react';
-import { SchemaSettings, useApp, useDesignable } from '@nocobase/client';
+import { SchemaSettings, useAPIClient, useApp, useDesignable, useRequest } from '@nocobase/client';
 import { Outlet } from 'react-router-dom';
 import { useT } from './locale';
 
@@ -10,7 +10,6 @@ function collectEmbeddablePlugins(app: any): { value: string; label: string }[] 
   for (const [key, setting] of Object.entries(settings)) {
     if (!app.pluginSettingsManager.has(key)) continue;
     if (!setting.Component || setting.Component === Outlet) continue;
-    // Skip route-param patterns like ":name"
     if (key.includes(':')) continue;
 
     const label = typeof setting.title === 'string' ? setting.title : key;
@@ -31,9 +30,10 @@ export const embedSettingsBlockSettings = new SchemaSettings({
         const { dn } = useDesignable();
         const t = useT();
         const app = useApp();
+        const api = useAPIClient();
         const currentPluginName = fieldSchema?.['x-component-props']?.pluginName || '';
 
-        const pluginOptions = collectEmbeddablePlugins(app);
+        const allPlugins = collectEmbeddablePlugins(app);
 
         return {
           title: t('Edit embed settings'),
@@ -48,8 +48,20 @@ export const embedSettingsBlockSettings = new SchemaSettings({
                 'x-component-props': {
                   showSearch: true,
                   optionFilterProp: 'label',
-                  options: pluginOptions,
                   placeholder: t('Select plugin'),
+                },
+                'x-reactions': (field: any) => {
+                  if (field.dataSource && field.dataSource.length > 0) return;
+                  field.loading = true;
+                  api.resource('embedAllowedPlugins').list({
+                    filter: { enabled: true },
+                    pageSize: 200,
+                  }).then(({ data }: any) => {
+                    const allowedRecords = data?.data || [];
+                    const allowedKeys = new Set(allowedRecords.map((r: any) => r.pluginName));
+                    field.dataSource = allowedKeys.size > 0 ? allPlugins.filter(p => allowedKeys.has(p.value)) : [];
+                    field.loading = false;
+                  });
                 },
                 default: currentPluginName,
                 required: true,

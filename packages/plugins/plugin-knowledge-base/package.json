@@ -1,0 +1,42 @@
+{
+  "name": "plugin-knowledge-base",
+  "displayName": "AI Knowledge Base",
+  "displayName.vi-VN": "Cơ sở tri thức AI",
+  "displayName.zh-CN": "AI 知识库",
+  "description": "Provides Knowledge Base management, Vector Store, Vector Database (PGVector), and RAG retrieval capabilities for AI Employees.",
+  "description.vi-VN": "Cung cấp quản lý Cơ sở tri thức, Vector Store, Vector Database (PGVector), và khả năng truy xuất RAG cho nhân viên AI.",
+  "description.zh-CN": "为 AI 员工提供知识库管理、向量存储、向量数据库 (PGVector) 和 RAG 检索功能。",
+  "version": "1.2.2",
+  "license": "Apache-2.0",
+  "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "README.md"
+  ],
+  "dependencies": {
+    "pg": "^8.13.0",
+    "@langchain/community": "^1.1.0",
+    "@langchain/core": "^1.1.24",
+    "@langchain/textsplitters": "^0.1.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/plugin-file-manager": "2.x"
+  },
+  "devDependencies": {
+    "@nocobase/test": "2.x"
+  },
+  "keywords": [
+    "AI",
+    "knowledge-base",
+    "RAG",
+    "vector-store"
+  ]
+}

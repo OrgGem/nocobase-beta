@@ -1,32 +1,41 @@
 import { Plugin } from '@nocobase/client';
 import { EmbedSettingsBlockProvider } from './EmbedSettingsBlockProvider';
 import { embedSettingsBlockSettings } from './schemaSettings';
+import { EmbedSettingsManager } from './EmbedSettingsManager';
 import { NAMESPACE } from './locale';
+import { useEmbedSettingsPlugins } from './EmbedSettingsBlockInitializer';
+import { EmbedSettingsBlockModel } from './models/EmbedSettingsBlockModel';
 
 export class PluginBlockEmbedSettingsClient extends Plugin {
   async load() {
     this.app.schemaSettingsManager.add(embedSettingsBlockSettings);
     this.app.use(EmbedSettingsBlockProvider);
 
+    // Register FlowEngine model
+    this.flowEngine.registerModels({
+      EmbedSettingsBlockModel,
+    });
+
+    // Register settings page
+    this.app.pluginSettingsManager.add(NAMESPACE, {
+      title: this.t('Embed Settings Block'),
+      icon: 'BlockOutlined',
+      Component: EmbedSettingsManager,
+      aclSnippet: `pm.${NAMESPACE}`,
+    });
+
     const title = `{{t("Plugin Settings", { ns: ["${NAMESPACE}", "client"], nsMode: "fallback" })}}`;
 
-    const blockInitializers = this.app.schemaInitializerManager.get('page:addBlock');
-    blockInitializers?.add('otherBlocks.embedSettings', {
+    const commonSettings = {
       title,
-      Component: 'EmbedSettingsBlockInitializer',
-    });
+      type: 'subMenu',
+      icon: 'SettingOutlined',
+      useChildren: useEmbedSettingsPlugins,
+    };
 
-    const popupCommon = this.app.schemaInitializerManager.get('popup:common:addBlock');
-    popupCommon?.add('otherBlocks.embedSettings', {
-      title,
-      Component: 'EmbedSettingsBlockInitializer',
-    });
-
-    const popupAddNew = this.app.schemaInitializerManager.get('popup:addNew:addBlock');
-    popupAddNew?.add('otherBlocks.embedSettings', {
-      title,
-      Component: 'EmbedSettingsBlockInitializer',
-    });
+    this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.embedSettings', commonSettings);
+    this.app.schemaInitializerManager.addItem('popup:common:addBlock', 'otherBlocks.embedSettings', commonSettings);
+    this.app.schemaInitializerManager.addItem('popup:addNew:addBlock', 'otherBlocks.embedSettings', commonSettings);
   }
 }
 

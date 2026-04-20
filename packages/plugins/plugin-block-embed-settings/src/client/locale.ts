@@ -1,7 +1,6 @@
 import { useApp } from '@nocobase/client';
-import pkg from './../../package.json';
 
-export const NAMESPACE = pkg.name;
+export const NAMESPACE = 'plugin-block-embed-settings';
 
 export function useT() {
   const app = useApp();

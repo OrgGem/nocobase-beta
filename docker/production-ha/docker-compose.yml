@@ -318,6 +318,7 @@ services:
       <<: *nocobase-env
       WORKER_MODE: '!'
       APP_PORT: 13000
+      SKILL_HUB_SANDBOX: "false"
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:13000/api/app:getInfo']
       interval: 15s
@@ -334,6 +335,7 @@ services:
       <<: *nocobase-env
       WORKER_MODE: '*'
       APP_PORT: 13000
+      SKILL_HUB_SANDBOX: "false"
     deploy:
       resources:
         limits:
@@ -345,10 +347,26 @@ services:
       <<: *nocobase-env
       WORKER_MODE: '*'
       APP_PORT: 13000
+      SKILL_HUB_SANDBOX: "false"
     deploy:
       resources:
         limits:
           memory: 1536M
+
+  # ============================================================================
+  # Dedicated Sandbox Worker
+  # ============================================================================
+  worker-sandbox:
+    <<: *nocobase-worker
+    environment:
+      <<: *nocobase-env
+      WORKER_MODE: '*'
+      APP_PORT: 13000
+      SKILL_HUB_SANDBOX: "true"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
 
   # ============================================================================
   # Redis 7

@@ -1,9 +1,17 @@
 {
   "Plugin Settings": "Plugin Settings",
+  "Embed Settings Block": "Embed Settings Block",
   "Select plugin": "Select plugin",
   "Please select a plugin": "Please select a plugin to display",
   "Click the gear icon in the upper right corner to configure": "Click the gear icon in the upper right corner to configure",
   "Plugin not found or not authorized": "Plugin not found or not authorized",
   "This plugin has no embeddable settings page": "This plugin has no embeddable settings page",
-  "Edit embed settings": "Edit embed settings"
+  "Edit embed settings": "Edit embed settings",
+  "Allowed plugins for embedding": "Allowed plugins for embedding",
+  "Plugin name": "Plugin name",
+  "Display title": "Display title",
+  "Enabled": "Enabled",
+  "Actions": "Actions",
+  "Confirm remove?": "Confirm remove?",
+  "No plugins registered yet": "No plugins registered yet"
 }

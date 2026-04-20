@@ -46,11 +46,11 @@ function isRenderableComponent(comp: any): boolean {
   return true;
 }
 
-export const EmbedSettingsBlock = () => {
+export const EmbedSettingsBlock = ({ pluginName: pluginNameProp }: { pluginName?: string } = {}) => {
   const fieldSchema = useFieldSchema();
   const app = useApp();
   const t = useT();
-  const pluginName = fieldSchema?.['x-component-props']?.pluginName;
+  const pluginName = pluginNameProp || fieldSchema?.['x-component-props']?.pluginName;
 
   if (!pluginName) {
     return (

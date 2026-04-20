@@ -1,0 +1,48 @@
+{
+  "name": "plugin-n8n",
+  "displayName": "n8n Integration",
+  "displayName.vi-VN": "Tích hợp n8n",
+  "displayName.zh-CN": "n8n 集成",
+  "description": "Monitor and manage n8n workflows, executions, variables, credentials and performance metrics",
+  "description.vi-VN": "Giám sát và quản lý workflow, execution, biến, credential và hiệu suất n8n",
+  "description.zh-CN": "监控和管理 n8n 工作流、执行、变量、凭证和性能指标",
+  "version": "1.1.4",
+  "license": "Apache-2.0",
+  "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "README.md"
+  ],
+  "keywords": [
+    "Workflow",
+    "Automation",
+    "Integration"
+  ],
+  "devDependencies": {
+    "@formily/react": "2.x",
+    "@formily/shared": "2.x",
+    "ahooks": "^3.7.2",
+    "antd": "5.x",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/resourcer": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/utils": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
+}

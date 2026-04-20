@@ -1,3 +1,2 @@
-import { name } from '../../package.json';
 export { default } from './plugin';
-export const namespace = name;
+export const namespace = 'plugin-block-embed-settings';

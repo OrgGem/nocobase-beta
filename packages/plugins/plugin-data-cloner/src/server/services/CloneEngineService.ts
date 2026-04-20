@@ -150,7 +150,7 @@ export class CloneEngineService {
         if (dialect === 'mssql') {
           await targetDb.sequelize.query(`SET IDENTITY_INSERT ${targetQuotedTable} ON`).catch(() => null);
         }
-        await targetDb.sequelize.getQueryInterface().bulkInsert(table_name, rows);
+        await targetDb.sequelize.getQueryInterface().bulkInsert(table_name, rows as any[]);
         if (dialect === 'mssql') {
           await targetDb.sequelize.query(`SET IDENTITY_INSERT ${targetQuotedTable} OFF`).catch(() => null);
         }
