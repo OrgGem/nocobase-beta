@@ -199,6 +199,35 @@ export class FormValueRuntime {
     this.txWriteCounts.clear();
   }
 
+  resetAfterFormReset() {
+    if (this.disposed) return;
+
+    this.explicitSet.clear();
+    this.lastDefaultValueByPathKey.clear();
+    this.lastWriteMetaByPathKey.clear();
+    this.txWriteCounts.clear();
+    this.lastObservedChangedPaths = null;
+    this.lastObservedSource = null;
+    this.lastObservedToken += 1;
+
+    for (const binding of this.observableBindings.values()) {
+      binding.dispose();
+    }
+    this.observableBindings.clear();
+
+    const snapshot = this.getFormValuesSnapshot();
+    for (const key of Object.keys(this.valuesMirror)) {
+      delete (this.valuesMirror as Record<string, any>)[key];
+    }
+    if (snapshot && typeof snapshot === 'object') {
+      _.merge(this.valuesMirror, snapshot);
+    }
+
+    this.writeSeq += 1;
+    this.bumpChangeTick();
+    this.ruleEngine.rescheduleAllRules();
+  }
+
   isSuppressed() {
     return this.suppressFormCallbackDepth > 0;
   }
@@ -505,8 +534,17 @@ export class FormValueRuntime {
         }
         this.suppressFormCallbackDepth++;
         try {
-          form.setFieldsValue?.(patchToApply);
-          _.merge(this.valuesMirror, patchToApply);
+          for (const [pathKey, rawValue] of patchEntries) {
+            const value = isObservable(rawValue) ? toJS(rawValue) : rawValue;
+            if (typeof form.setFieldValue === 'function') {
+              form.setFieldValue(pathKey, value);
+            } else if (typeof (form as any).setFields === 'function') {
+              (form as any).setFields([{ name: pathKey, value }]);
+            } else {
+              form.setFieldsValue?.({ [pathKey]: value });
+            }
+            _.set(this.valuesMirror, [pathKey], value);
+          }
           this.bumpChangeTick();
         } finally {
           this.suppressFormCallbackDepth--;
