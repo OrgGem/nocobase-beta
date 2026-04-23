@@ -5,6 +5,77 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/),
 并且本项目遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [v2.0.41](https://github.com/nocobase/nocobase/compare/v2.0.40...v2.0.41) - 2026-04-22
+
+### 🎉 新特性
+
+- **[认证：OIDC]** 支持自定义字段映射 by @chenzhizdt
+
+- **[钉钉]** 钉钉：支持通知、钉钉内自动登录、用户同步。 by @chenzhizdt
+
+### 🚀 优化
+
+- **[ai]** AI 员工和知识库增加支持的可上传文件类型（.xlsx, .xls, .csv, .md, .json） ([#9172](https://github.com/nocobase/nocobase/pull/9172)) by @cgyrock
+
+- **[undefined]** 新增阿拉伯语指南及导航翻译 ([#9141](https://github.com/nocobase/nocobase/pull/9141)) by @saraTabbane
+
+### 🐛 修复
+
+- **[data-source-manager]** 修复外部数据源重新同步时百分比字段被重置为数值 ([#9178](https://github.com/nocobase/nocobase/pull/9178)) by @jiannx
+
+- **[client]**
+  - 修复添加记录后新增表单默认值配置不生效的问题。 ([#9185](https://github.com/nocobase/nocobase/pull/9185)) by @gchust
+
+  - 修复添加标签页按钮过于贴近右侧边缘的问题 ([#9177](https://github.com/nocobase/nocobase/pull/9177)) by @zhangzhonghe
+
+- **[部门]** 修复重复同步部门时无法更新部门排序的问题 ([#9173](https://github.com/nocobase/nocobase/pull/9173)) by @2013xile
+
+- **[数据源：主数据库]** 修复连接数据库视图时集合名称与数据库视图名称不一致导致的字段同步失败问题 ([#9155](https://github.com/nocobase/nocobase/pull/9155)) by @2013xile
+
+- **[工作流：JavaScript 节点]** 修复 `node:vm` 模式下执行脚本的安全问题 ([#9084](https://github.com/nocobase/nocobase/pull/9084)) by @mytharcher
+
+- **[AI: 知识库]** 修复删除知识库文档时未同步向量库问题 by @cgyrock
+
+- **[企业微信]** 修复企业微信同步部门时未同步部门排序的问题 by @2013xile
+
+## [v2.0.40](https://github.com/nocobase/nocobase/compare/v2.0.39...v2.0.40) - 2026-04-20
+
+### 🐛 修复
+
+- **[client]** 修复字段赋值修改子表格里的值后出现数据污染的问题。 ([#9163](https://github.com/nocobase/nocobase/pull/9163)) by @gchust
+
+- **[data-source-manager]** 修复数据库同步后 sequence 字段可能被改成 string 的问题 ([#9143](https://github.com/nocobase/nocobase/pull/9143)) by @2013xile
+
+- **[文件管理器]** 当预览 URL 缺失时返回 null ([#9104](https://github.com/nocobase/nocobase/pull/9104)) by @gaston98765
+
+- **[工作流：JavaScript 节点]** 修复 `node:vm` 模式下执行脚本的安全问题 ([#9084](https://github.com/nocobase/nocobase/pull/9084)) by @mytharcher
+
+- **[部门]**
+  - 修复部门管理中的部门列表未按 `sort` 字段顺序显示的问题 ([#9150](https://github.com/nocobase/nocobase/pull/9150)) by @2013xile
+
+  - 修复保存用户部门后主部门未同步或同步错误的问题 ([#9156](https://github.com/nocobase/nocobase/pull/9156)) by @2013xile
+
+## [v2.0.39](https://github.com/nocobase/nocobase/compare/v2.0.38...v2.0.39) - 2026-04-18
+
+### 🚀 优化
+
+- **[部门]** 在界面中显示部门表的 `parentId` 外键字段 ([#9130](https://github.com/nocobase/nocobase/pull/9130)) by @2013xile
+
+### 🐛 修复
+
+- **[data-source-manager]** 修复文件表字段同步时误删 `preview` 字段的问题 ([#9129](https://github.com/nocobase/nocobase/pull/9129)) by @2013xile
+
+- **[client]**
+  - 修复字段值配置里关系字段组件不正确的问题。 ([#9063](https://github.com/nocobase/nocobase/pull/9063)) by @gchust
+
+  - 修复页面配置模式下标签页高度和宽度异常的问题 ([#9144](https://github.com/nocobase/nocobase/pull/9144)) by @zhangzhonghe
+
+- **[database]** 修复递归树预加载和分组排序初始化中的 SQL 注入风险 ([#9133](https://github.com/nocobase/nocobase/pull/9133)) by @2013xile
+
+- **[数据可视化]** 修复图表区块在聚合查询中排序未使用度量和维度别名的问题 ([#9131](https://github.com/nocobase/nocobase/pull/9131)) by @2013xile
+
+- **[数据表: SQL]** 修复 SQL 数据表更新时缺少 SQL 校验的问题 ([#9134](https://github.com/nocobase/nocobase/pull/9134)) by @2013xile
+
 ## [v2.0.38](https://github.com/nocobase/nocobase/compare/v2.0.37...v2.0.38) - 2026-04-16
 
 ### 🎉 新特性
