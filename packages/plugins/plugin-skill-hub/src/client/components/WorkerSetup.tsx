@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Form, Input, Button, Alert, Progress, Tag, Typography, Space, Divider, message } from 'antd';
+import { Card, Form, Input, Button, Alert, Progress, Tag, Typography, Space, Divider, message, Select } from 'antd';
 import { CloudServerOutlined, SafetyOutlined, ReloadOutlined, DatabaseOutlined, ClearOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useT } from '../locale';
@@ -36,6 +36,9 @@ export const WorkerSetup: React.FC = () => {
   const [progress, setProgress] = useState<{ percent: number; log: string } | null>(null);
 
   const [clearing, setClearing] = useState(false);
+  const [addingPkg, setAddingPkg] = useState(false);
+  const [customPkgLang, setCustomPkgLang] = useState<'python' | 'node'>('python');
+  const [customPkgName, setCustomPkgName] = useState('');
 
   const loadConfig = useCallback(async () => {
     setLoading(true);
@@ -55,6 +58,10 @@ export const WorkerSetup: React.FC = () => {
         });
         if (cfg.initStatus === 'running') {
           setInitRunning(true);
+          setProgress({ percent: cfg.initProgressPercent || 0, log: cfg.initProgressLog || t('Processing...') });
+        } else {
+          setInitRunning(false);
+          setProgress(null);
         }
       }
     } catch {
@@ -131,38 +138,50 @@ export const WorkerSetup: React.FC = () => {
         method: 'post',
       });
       message.info(t('Init environment task dispatched'));
-
-      // Poll for status updates
-      const pollInterval = setInterval(async () => {
-        try {
-          const { data } = await api.request({ url: 'skillWorkerConfigs:get' });
-          const cfg = data?.data;
-          if (cfg) {
-            setConfig(cfg);
-            if (cfg.initStatus === 'succeeded') {
-              setProgress({ percent: 100, log: t('Environment initialized successfully') });
-              setInitRunning(false);
-              clearInterval(pollInterval);
-              message.success(t('Environment initialized successfully'));
-            } else if (cfg.initStatus === 'failed') {
-              setProgress({ percent: 0, log: t('Environment initialization failed') });
-              setInitRunning(false);
-              clearInterval(pollInterval);
-              message.error(t('Environment initialization failed'));
-            }
-          }
-        } catch { /* ignore */ }
-      }, 3000);
-
-      // Safety timeout: stop polling after 10 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setInitRunning(false);
-      }, 600000);
+      await loadConfig();
     } catch (err: any) {
       message.error(err?.message || t('Failed to init environment'));
       setInitRunning(false);
       setProgress(null);
+    }
+  };
+
+  const handleAddPackage = async () => {
+    if (!customPkgName.trim()) return;
+    setAddingPkg(true);
+    try {
+      const currentConfig = config || {};
+      const currentCustom = currentConfig.customPackages || { python: [], node: [] };
+      const currentLangList = currentCustom[customPkgLang] || [];
+      
+      if (!currentLangList.includes(customPkgName.trim())) {
+        currentLangList.push(customPkgName.trim());
+        const newCustom = { ...currentCustom, [customPkgLang]: currentLangList };
+        
+        if (config?.id) {
+          await api.request({
+            url: `skillWorkerConfigs:update`,
+            method: 'post',
+            params: { filterByTk: config.id },
+            data: { customPackages: newCustom },
+          });
+        } else {
+          await api.request({
+            url: 'skillWorkerConfigs:create',
+            method: 'post',
+            data: { customPackages: newCustom },
+          });
+        }
+      }
+      
+      message.success(t('Package added. Triggering installation across workers...'));
+      setCustomPkgName('');
+      
+      await handleInitEnv();
+    } catch {
+      message.error(t('Failed to add custom package'));
+    } finally {
+      setAddingPkg(false);
     }
   };
 
@@ -388,6 +407,32 @@ export const WorkerSetup: React.FC = () => {
             message={t('No whitelist configured. Click "Init Environment" to install packages and generate the whitelist.')}
           />
         )}
+
+        <Divider style={{ margin: '16px 0' }} />
+        <Text strong style={{ display: 'block', marginBottom: 8 }}>{t('Add Custom Library')}</Text>
+        <Space>
+          <Select 
+            value={customPkgLang} 
+            onChange={setCustomPkgLang} 
+            options={[{ label: 'Python (pip)', value: 'python' }, { label: 'Node.js (npm)', value: 'node' }]}
+            style={{ width: 150 }} 
+          />
+          <Input 
+            placeholder={t('Package name (e.g. axios)')} 
+            value={customPkgName}
+            onChange={(e) => setCustomPkgName(e.target.value)}
+            onPressEnter={handleAddPackage}
+            style={{ width: 250 }}
+          />
+          <Button 
+            type="primary" 
+            onClick={handleAddPackage} 
+            loading={addingPkg || initRunning}
+            disabled={!customPkgName.trim()}
+          >
+            {t('Add & Install')}
+          </Button>
+        </Space>
       </Card>
     </div>
   );

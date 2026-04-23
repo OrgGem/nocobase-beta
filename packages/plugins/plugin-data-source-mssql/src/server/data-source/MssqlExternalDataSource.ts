@@ -44,13 +44,11 @@ const resolveMssqlDriverPath = () => {
       const basePath = fs.existsSync(candidate) ? candidate : undefined;
       if (basePath) {
         if (candidate.endsWith('tedious') && fs.existsSync(path.join(candidate, 'package.json'))) {
-          console.log(`[MSSQL] Found bundled tedious at ${candidate}`);
           return require.resolve(candidate);
         }
 
         try {
           const resolved = require.resolve(MSSQL_DRIVER_NAME, { paths: [basePath] });
-          console.log(`[MSSQL] Resolved tedious via ${candidate} at ${resolved}`);
           return resolved;
         } catch (e) {
           // ignore
@@ -64,7 +62,6 @@ const resolveMssqlDriverPath = () => {
   // Fallback to standard node resolution
   try {
     const resolved = require.resolve(MSSQL_DRIVER_NAME);
-    console.log(`[MSSQL] Resolved tedious via standard node resolution at ${resolved}`);
     return resolved;
   } catch (error) {
     console.error(`[MSSQL] Failed to resolve tedious driver. Error: ${error.message}`);
@@ -216,8 +213,8 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
      * The search value is escaped via sequelize.escape() to prevent SQL injection.
      */
     const buildContains = (fieldName: string, tableName: string, value: string, negate = false) => {
-      // Wrap in double-quotes for exact FTS word/phrase match; escape any embedded double-quotes
-      const ftsValue = '"' + value.replace(/"/g, '""') + '"';
+      // Use prefix search (*) for intuitive search feel; wrap in double-quotes and escape internal quotes
+      const ftsValue = '"' + value.trim().replace(/"/g, '""') + '*"';
       const escapedFts = db.sequelize.escape(ftsValue);
       const expr = `CONTAINS([${fieldName}], ${escapedFts})`;
       return literal(negate ? `NOT (${expr})` : expr);
@@ -229,6 +226,9 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
         const tableName: string = ctx.model?.tableName ?? '';
         const fieldName: string = ctx.fieldName ?? '';
         if (typeof value === 'string' && introspector.hasFTSIndex(tableName, fieldName)) {
+          if (!value.trim()) {
+            return { [Op.like]: `%${escapeLike(value)}%` }; // Fallback to LIKE for empty string because CONTAINS fails on "*"
+          }
           return buildContains(fieldName, tableName, value);
         }
         // Fallback: standard LIKE
@@ -243,6 +243,9 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
         const tableName: string = ctx.model?.tableName ?? '';
         const fieldName: string = ctx.fieldName ?? '';
         if (typeof value === 'string' && introspector.hasFTSIndex(tableName, fieldName)) {
+          if (!value.trim()) {
+            return { [Op.notLike]: `%${escapeLike(value)}%` };
+          }
           return buildContains(fieldName, tableName, value, true);
         }
         if (Array.isArray(value)) {
@@ -422,7 +425,7 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
         collectionOptions.simplePaginate = true;
 
         this.collectionManager.defineCollection(collectionOptions);
-        this.logger?.info?.(`[MSSQL] Loaded table ${tableName} as collection`);
+        this.logger?.debug?.(`[MSSQL] Loaded table ${tableName} as collection`);
       } catch (error) {
         this.logger?.error?.(`[MSSQL] Failed to load table ${tableName}:`, error);
         throw error;

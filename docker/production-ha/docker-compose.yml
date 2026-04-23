@@ -138,6 +138,9 @@ volumes:
     driver: local
   nginx-cache:
     driver: local
+  minio-data:
+    driver: local
+
 
 services:
   # ============================================================================
@@ -398,7 +401,10 @@ services:
   # PostgreSQL 16
   # ============================================================================
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: custom-postgres-pgvector:16-alpine
     restart: unless-stopped
     command: >
       postgres
@@ -428,3 +434,22 @@ services:
       resources:
         limits:
           memory: 2G
+
+  # ============================================================================
+  # MinIO - S3 Compatible Object Storage
+  # ============================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password123}
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console UI
+    volumes:
+      - minio-data:/data
+    networks:
+      - nocobase

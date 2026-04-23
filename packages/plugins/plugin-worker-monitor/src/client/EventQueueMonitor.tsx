@@ -7,14 +7,8 @@ import {
   UnorderedListOutlined,
   ApiOutlined,
 } from '@ant-design/icons';
-import { useAPIClient, useApp } from '@nocobase/client';
-
-const namespace = 'worker-monitor';
-
-function useT() {
-  const app = useApp();
-  return (key: string) => app.i18n.t(key, { ns: namespace });
-}
+import { useAPIClient } from '@nocobase/client';
+import { useT } from './utils';
 
 export function EventQueueMonitor() {
   const t = useT();

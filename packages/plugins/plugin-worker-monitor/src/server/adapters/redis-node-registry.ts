@@ -1,4 +1,5 @@
 import os from 'os';
+import { scanKeys } from '../utils/redis';
 
 export class RedisNodeRegistry {
   private timer: NodeJS.Timeout | null = null;
@@ -42,6 +43,9 @@ export class RedisNodeRegistry {
     const nodeId = `${appName}_${mode}_${os.hostname()}_${port}_${process.pid}`;
     const key = `${this.keyPrefix}${nodeId}`;
 
+    // Collect process-level metrics so any node can read another node's full info from Redis
+    const mem = process.memoryUsage();
+
     const metadata = {
       id: nodeId,
       name: `${appName} (${os.hostname()})`,
@@ -52,6 +56,34 @@ export class RedisNodeRegistry {
       available: true,
       lastHeartbeatAt: Date.now(),
       status: 'online', // Implicitly online since it just reported
+      // Full node details (replicated from the `current` action shape)
+      // so that any node can serve the "current" endpoint for the APP node
+      nodeDetails: {
+        node: {
+          hostname: os.hostname(),
+          pid: process.pid,
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          uptime: process.uptime(),
+          workerMode: mode,
+          appPort: port,
+          clusterMode: process.env.CLUSTER_MODE || '',
+        },
+        memory: {
+          rss: mem.rss,
+          heapUsed: mem.heapUsed,
+          heapTotal: mem.heapTotal,
+          external: mem.external,
+          arrayBuffers: mem.arrayBuffers || 0,
+        },
+        os: {
+          totalMemory: os.totalmem(),
+          freeMemory: os.freemem(),
+          cpuCount: os.cpus().length,
+          loadAvg: os.loadavg(),
+        },
+      },
     };
 
     try {
@@ -72,8 +104,8 @@ export class RedisNodeRegistry {
     if (!redis) return [];
 
     try {
-      const rawKeys = await redis.sendCommand(['KEYS', `${this.keyPrefix}*`]);
-      if (!Array.isArray(rawKeys) || rawKeys.length === 0) return [];
+      const rawKeys = await scanKeys(redis, `${this.keyPrefix}*`);
+      if (rawKeys.length === 0) return [];
 
       const values = await redis.sendCommand(['MGET', ...rawKeys]);
       

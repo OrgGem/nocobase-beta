@@ -8,33 +8,10 @@ import {
   ClusterOutlined,
   CloudServerOutlined,
 } from '@ant-design/icons';
-import { useAPIClient, useApp } from '@nocobase/client';
+import { useAPIClient } from '@nocobase/client';
+import { useT, formatBytes, formatUptime } from './utils';
 
-const namespace = 'worker-monitor';
 
-function useT() {
-  const app = useApp();
-  return (key: string) => app.i18n.t(key, { ns: namespace });
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-}
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const parts: string[] = [];
-  if (d > 0) parts.push(`${d}d`);
-  if (h > 0) parts.push(`${h}h`);
-  parts.push(`${m}m`);
-  return parts.join(' ');
-}
 
 const statusColors: Record<string, string> = {
   ok: 'green',
@@ -273,9 +250,25 @@ export function ClusterNodes() {
           />
         </Card>
 
-        {/* Current node details */}
+        {/* Current node details (always APP node) */}
         {currentNode && (
-          <Card title={t('Current Node Details')} size="small">
+          <Card
+            title={
+              <Space>
+                {t('Current Node Details')}
+                <Tag color="green">APP</Tag>
+              </Space>
+            }
+            size="small"
+          >
+            {currentNode._fallback && (
+              <Alert
+                type="warning"
+                message={t('APP node not found in cluster registry. Showing data from the responding worker node.')}
+                showIcon
+                style={{ marginBottom: 12 }}
+              />
+            )}
             <Descriptions size="small" column={3}>
               <Descriptions.Item label={t('Hostname')}>{currentNode.node.hostname}</Descriptions.Item>
               <Descriptions.Item label="PID">{currentNode.node.pid}</Descriptions.Item>

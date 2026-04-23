@@ -5,15 +5,9 @@ import {
   DatabaseOutlined,
   DeleteOutlined,
 } from '@ant-design/icons';
-import { useAPIClient, useApp } from '@nocobase/client';
+import { useAPIClient } from '@nocobase/client';
 import { AclCacheManager } from './AclCacheManager';
-
-const namespace = 'worker-monitor';
-
-function useT() {
-  const app = useApp();
-  return (key: string) => app.i18n.t(key, { ns: namespace });
-}
+import { useT } from './utils';
 
 export function CacheMonitor() {
   const t = useT();

@@ -205,9 +205,20 @@ export class PluginS3PrivateStorageServer extends Plugin {
     // Check role-based permission via parent collection reverse lookup
     if (!isRoot) {
       const fileCollectionName = record.constructor?.collection?.name || 'attachments';
-      const hasAccess = await this.checkParentCollectionAccess(filterByTk, fileCollectionName, currentRoles);
+      
+      // Allow access if the current user is the creator of the attachment
+      const currentUserId = ctx.state.currentUser?.id;
+      const createdById = record.get('createdById');
+      const isCreator = currentUserId && createdById && String(currentUserId) === String(createdById);
+      
+      let hasAccess = isCreator;
 
       if (!hasAccess) {
+        hasAccess = await this.checkParentCollectionAccess(filterByTk, fileCollectionName, currentRoles);
+      }
+
+      if (!hasAccess) {
+        ctx.logger.warn(`[s3-private-storage] ACL Denied: User ${currentUserId} attempted to access attachment ${filterByTk} (creator: ${createdById}) without permission.`);
         ctx.throw(403, 'No permission to access this attachment');
         return;
       }
@@ -229,8 +240,14 @@ export class PluginS3PrivateStorageServer extends Plugin {
       ctx.set('Cache-Control', 'private, max-age=3600');
       ctx.body = stream;
     } catch (error) {
-      ctx.logger.error('[s3-private-storage] Stream error:', error);
-      ctx.throw(500, 'Failed to stream file');
+      ctx.logger.error(`[s3-private-storage] S3 Stream error for file ${filterByTk}:`, error);
+      if (error && (error.name === 'AccessDenied' || error.statusCode === 403)) {
+         ctx.throw(403, 'S3 Access Denied: The file name or path may be incorrect on S3.');
+      } else if (error && (error.name === 'NoSuchKey' || error.statusCode === 404)) {
+         ctx.throw(404, 'File not found on S3');
+      } else {
+         ctx.throw(500, 'Failed to stream file');
+      }
     }
   }
 }

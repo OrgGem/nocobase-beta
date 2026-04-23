@@ -1,6 +1,6 @@
 export function createSkillExecuteTool(plugin: any) {
   return {
-    scope: 'GENERAL',
+    scope: 'CUSTOM',
     execution: 'backend',
     defaultPermission: 'ASK',
 
@@ -10,7 +10,7 @@ export function createSkillExecuteTool(plugin: any) {
     },
 
     definition: {
-      name: 'skill_hub.execute',
+      name: 'skill_hub_execute',
       description: `Execute a predefined skill in isolated sandbox environment on worker server.
 Use action "list" to see available skills and their input schemas.
 Use action "execute" with skillName and input to run a skill.

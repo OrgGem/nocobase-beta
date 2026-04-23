@@ -1,0 +1,40 @@
+{
+  "name": "plugin-sub-agent",
+  "displayName": "Sub Agents",
+  "displayName.zh-CN": "子代理",
+  "displayName.vi-VN": "Sub Agent",
+  "description": "Multi-Agent framework allowing NocoBase AI Employees to spawn and delegate tasks to specialized sub-agents with specific skills.",
+  "version": "2.0.40",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "AI",
+    "Agent",
+    "Sub-Agent",
+    "LangGraph"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "zod": "^3.23.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/plugin-ai": "2.x"
+  }
+}

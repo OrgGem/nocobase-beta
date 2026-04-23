@@ -8,6 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/client';
+// @ts-ignore
 import { PluginFileManagerClient } from '@nocobase/plugin-file-manager/client';
 import { NAMESPACE } from '../constants';
 
@@ -117,7 +118,8 @@ const s3PrivateStorageType = {
 
 export class PluginS3PrivateStorageClient extends Plugin {
   async load() {
-    const fileManagerPlugin = this.app.pm.get(PluginFileManagerClient) as PluginFileManagerClient;
+    // @ts-ignore
+    const fileManagerPlugin = this.app.pm.get(PluginFileManagerClient) as any;
     if (fileManagerPlugin) {
       fileManagerPlugin.registerStorageType('s3-private', s3PrivateStorageType);
     }

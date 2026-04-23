@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card,
-  Table,
   Button,
   Space,
   Modal,
@@ -13,6 +12,9 @@ import {
   message,
   Popconfirm,
   Tag,
+  List,
+  Typography,
+  Tooltip,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
@@ -93,72 +95,7 @@ export const SkillManager: React.FC = () => {
     if (saved) fetchSkills();
   };
 
-  const columns = [
-    {
-      title: t('Name'),
-      dataIndex: 'name',
-      key: 'name',
-      width: 180,
-    },
-    {
-      title: t('Title'),
-      dataIndex: 'title',
-      key: 'title',
-      width: 200,
-    },
-    {
-      title: t('Description'),
-      dataIndex: 'description',
-      key: 'description',
-      width: 250,
-      ellipsis: true,
-    },
-    {
-      title: t('Language'),
-      dataIndex: 'language',
-      key: 'language',
-      width: 100,
-      render: (lang: string) => (
-        <Tag color={lang === 'python' ? 'blue' : 'green'}>{lang}</Tag>
-      ),
-    },
-    {
-      title: t('Timeout'),
-      dataIndex: 'timeoutSeconds',
-      key: 'timeoutSeconds',
-      width: 100,
-      render: (v: number) => `${v}s`,
-    },
-    {
-      title: t('Enabled'),
-      dataIndex: 'enabled',
-      key: 'enabled',
-      width: 100,
-      render: (enabled: boolean, record: any) => (
-        <Switch checked={enabled} onChange={() => handleToggleEnabled(record)} size="small" />
-      ),
-    },
-    {
-      title: t('Actions'),
-      key: 'actions',
-      width: 200,
-      render: (_: any, record: any) => (
-        <Space size="small">
-          <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleTest(record)}>
-            {t('Test')}
-          </Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-            {t('Edit')}
-          </Button>
-          <Popconfirm title={t('Delete this skill?')} onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              {t('Delete')}
-            </Button>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
+  // Table columns definition removed in favor of List rendering
 
   return (
     <Card
@@ -169,14 +106,51 @@ export const SkillManager: React.FC = () => {
         </Button>
       }
     >
-      <Table
+      <List
+        grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 3, xl: 4, xxl: 4 }}
         dataSource={skills}
-        columns={columns}
-        rowKey="id"
         loading={loading}
-        pagination={false}
-        size="middle"
-        scroll={{ x: 'max-content' }}
+        renderItem={(skill) => (
+          <List.Item>
+            <Card
+              size="small"
+              title={<Typography.Text ellipsis title={skill.title}>{skill.title}</Typography.Text>}
+              extra={<Tag color={skill.language === 'python' ? 'blue' : 'green'}>{skill.language}</Tag>}
+              actions={[
+                <Tooltip title={t('Test')}>
+                  <PlayCircleOutlined key="test" onClick={() => handleTest(skill)} />
+                </Tooltip>,
+                <Tooltip title={t('Edit')}>
+                  <EditOutlined key="edit" onClick={() => handleEdit(skill)} />
+                </Tooltip>,
+                <Popconfirm title={t('Delete?')} onConfirm={() => handleDelete(skill.id)}>
+                  <Tooltip title={t('Delete')}>
+                    <DeleteOutlined key="delete" style={{ color: 'red' }} />
+                  </Tooltip>
+                </Popconfirm>,
+              ]}
+              style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.05)', borderRadius: 8 }}
+            >
+              <Card.Meta 
+                title={<Typography.Text type="secondary" style={{ fontSize: 13 }}>{skill.name}</Typography.Text>} 
+                description={
+                  <div style={{ height: 60, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', fontSize: 13 }}>
+                    {skill.description || t('No description')}
+                  </div>
+                } 
+              />
+              <div style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Space size={4}>
+                  <Switch checked={skill.enabled} onChange={() => handleToggleEnabled(skill)} size="small" />
+                  <span style={{ fontSize: 12 }}>{skill.enabled ? t('Enabled') : t('Disabled')}</span>
+                </Space>
+                <Tag color="purple" style={{ margin: 0, fontSize: 11 }}>
+                  {skill.storageType ? skill.storageType.toUpperCase() : 'DB'}
+                </Tag>
+              </div>
+            </Card>
+          </List.Item>
+        )}
       />
 
       {editorVisible && (

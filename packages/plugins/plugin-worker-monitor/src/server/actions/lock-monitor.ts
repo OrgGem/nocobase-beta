@@ -1,4 +1,8 @@
 import { Context } from '@nocobase/actions';
+import { scanKeys } from '../utils/redis';
+
+// Must match the prefix used by RedisLockAdapter
+const REDIS_LOCK_PREFIX = 'nocobase:lock:';
 
 function getRedis(ctx: Context) {
   return ctx.app.redisConnectionManager?.getConnection();
@@ -35,12 +39,12 @@ export const lockActions = {
         // Ignore
       }
     } else {
-      // For Redis adapter, scan for lock keys
+      // For Redis adapter, scan for lock keys (using correct prefix)
       try {
         const redis = getRedis(ctx);
         if (redis) {
-          const keys = (await redis.sendCommand(['KEYS', 'lock:*'])) as string[];
-          activeLocks = keys?.length || 0;
+          const keys = await scanKeys(redis, `${REDIS_LOCK_PREFIX}*`);
+          activeLocks = keys.length;
         }
       } catch {
         // Ignore
@@ -83,14 +87,20 @@ export const lockActions = {
         // Ignore
       }
     } else {
-      // Redis adapter: scan lock keys and get TTL
+      // Redis adapter: scan lock keys using correct prefix and get TTL
       try {
         const redis = getRedis(ctx);
         if (redis) {
-          const keys = (await redis.sendCommand(['KEYS', 'lock:*'])) as string[];
-          for (const key of keys || []) {
+          const keys = await scanKeys(redis, `${REDIS_LOCK_PREFIX}*`);
+          for (const key of keys) {
             const ttl = (await redis.sendCommand(['PTTL', key])) as number;
-            locks.push({ key, locked: true, ttl: ttl > 0 ? ttl : null, adapter: 'redis' });
+            locks.push({
+              key,
+              displayKey: key.replace(REDIS_LOCK_PREFIX, ''),
+              locked: true,
+              ttl: ttl > 0 ? ttl : null,
+              adapter: 'redis',
+            });
           }
         }
       } catch {
@@ -105,6 +115,7 @@ export const lockActions = {
   /**
    * POST /workerMonitorLock:release
    * Force release a stuck lock (admin emergency action)
+   * Uses compare-and-swap via DEL for Redis locks with the correct key prefix.
    */
   async release(ctx: Context, next: () => Promise<void>) {
     const { key } = ctx.action.params.values || ctx.action.params;
@@ -139,7 +150,12 @@ export const lockActions = {
       try {
         const redis = getRedis(ctx);
         if (redis) {
-          const result = await redis.sendCommand(['DEL', key]);
+          // The key from the UI may be the full Redis key or just the lock name.
+          // Try the exact key first, then try with prefix.
+          let result = await redis.sendCommand(['DEL', key]);
+          if (Number(result) === 0 && !key.startsWith(REDIS_LOCK_PREFIX)) {
+            result = await redis.sendCommand(['DEL', `${REDIS_LOCK_PREFIX}${key}`]);
+          }
           released = Number(result) > 0;
         }
       } catch {

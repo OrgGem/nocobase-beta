@@ -1,5 +1,5 @@
 import { exec as execCb } from 'child_process';
-import { writeFileSync, mkdirSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, cpSync } from 'fs';
 import { promisify } from 'util';
 import Application from '@nocobase/server';
 import { resolve } from 'path';
@@ -15,6 +15,7 @@ export const PREDEFINED_PACKAGES = {
   python: [
     'python-docx', 'openpyxl', 'pandas', 'matplotlib', 'Pillow',
     'reportlab', 'jinja2', 'pyyaml', 'tabulate', 'xlsxwriter',
+    'python-pptx',
   ],
   node: [
     'xlsx', 'docx', 'pdfkit', 'csv-parse', 'archiver',
@@ -41,7 +42,12 @@ export class WorkerEnvManager {
     await this.getOrCreateConfig();
     await this.db.getRepository('skillWorkerConfigs').update({
       filter: {},
-      values: { initStatus: 'running', lastInitAt: new Date() },
+      values: { 
+        initStatus: 'running', 
+        lastInitAt: new Date(),
+        initProgressPercent: 0,
+        initProgressLog: 'Task queued, waiting for worker...'
+      },
       forceUpdate: true,
     });
 
@@ -55,57 +61,106 @@ export class WorkerEnvManager {
         aptMirrorUrl: config.aptMirrorUrl || null,
         aptGpgKeyUrl: config.aptGpgKeyUrl || null,
       },
-      packages: PREDEFINED_PACKAGES,
+      packages: {
+        apt: PREDEFINED_PACKAGES.apt,
+        python: Array.from(new Set([...PREDEFINED_PACKAGES.python, ...(config.customPackages?.python || [])])),
+        node: Array.from(new Set([...PREDEFINED_PACKAGES.node, ...(config.customPackages?.node || [])])),
+      },
     });
 
     return 'Init environment task dispatched to workers';
   }
 
-  /**
-   * Worker-side: execute the environment setup.
-   * Called via EventQueue subscription on the worker process.
-   */
   async executeInit(payload: any): Promise<void> {
     const { registryConfig, packages } = payload;
     const logs: string[] = [];
 
     try {
-      // Step 1: Configure registries
-      await this.configureRegistries(registryConfig, logs);
+      // Step 1: Configure APT registries and disable default repos
+      if (registryConfig.aptMirrorUrl) {
+         logs.push(`Applying APT mirror: ${registryConfig.aptMirrorUrl}`);
+         // Backup current and replace so we don't hang on default repos without internet
+         const gpgCmd = registryConfig.aptGpgKeyUrl ? `curl -fsSL ${registryConfig.aptGpgKeyUrl} | gpg --dearmor -o /etc/apt/trusted.gpg.d/custom.gpg && ` : '';
+         const aptScript = `
+           ${gpgCmd}mkdir -p /etc/apt/sources.list.d.bak && \
+           mv /etc/apt/sources.list /etc/apt/sources.list.d.bak/ 2>/dev/null || true && \
+           mv /etc/apt/sources.list.d/* /etc/apt/sources.list.d.bak/ 2>/dev/null || true && \
+           echo "deb ${registryConfig.aptMirrorUrl} bookworm main" > /etc/apt/sources.list
+         `.trim();
+         await this.runCommand(aptScript, 'Configuring APT registry...', logs, 10, 30000);
+      } else {
+         this.publishProgress(10, 'Skipping APT registry config');
+      }
 
       // Step 2: Install APT packages (python3, pip)
       await this.runCommand(
         `apt-get update -qq && apt-get install -y --no-install-recommends ${packages.apt.join(' ')} && rm -rf /var/lib/apt/lists/*`,
         'Installing system packages...',
         logs, 20,
+        300000
       );
 
-      // Step 3: Install Python packages
+      // Step 3: Configure PyPI registries (Now that Python/pip is installed)
+      if (registryConfig.pypiIndexUrl) {
+         logs.push(`Applying PyPI index: ${registryConfig.pypiIndexUrl}`);
+         let pipConfCmd = `pip3 config set global.index-url ${registryConfig.pypiIndexUrl}`;
+         if (registryConfig.pypiTrustedHost) {
+           pipConfCmd += ` && pip3 config set global.trusted-host ${registryConfig.pypiTrustedHost}`;
+         }
+         await this.runCommand(pipConfCmd, 'Configuring PyPI registry...', logs, 40, 30000);
+      } else {
+         this.publishProgress(40, 'Skipping PyPI registry config');
+      }
+
+      // Step 4: Install Python packages
       await this.runCommand(
         `pip3 install --no-cache-dir --break-system-packages ${packages.python.join(' ')}`,
         'Installing Python packages...',
         logs, 50,
+        300000
       );
 
-      // Step 4: Setup sandbox workspace logic
+      // Step 5: Setup sandbox workspace logic
       mkdirSync(this.sandboxWorkspace, { recursive: true });
       writeFileSync(resolve(this.sandboxWorkspace, 'package.json'), '{}', 'utf8');
 
-      // Step 5: Install Node.js local packages
+      // Step 5b: Copy bundled Python packages (svg_to_pptx etc.)
+      this.copyBundledPythonPackages(logs);
+
+      // Step 6: Configure NPM registries
+      if (registryConfig.npmRegistryUrl) {
+         logs.push(`Applying NPM registry: ${registryConfig.npmRegistryUrl}`);
+         let npmCfgScript = `npm config set registry ${registryConfig.npmRegistryUrl} --location=global`;
+         if (registryConfig.npmAuthToken) {
+           try {
+             const url = new URL(registryConfig.npmRegistryUrl);
+             npmCfgScript += ` && npm config set //${url.host}/:_authToken="${registryConfig.npmAuthToken}" --location=global`;
+           } catch {
+             npmCfgScript += ` && npm config set //registry.npmjs.org/:_authToken="${registryConfig.npmAuthToken}" --location=global`;
+           }
+         }
+         await this.runCommand(npmCfgScript, 'Configuring NPM registry...', logs, 60, 30000);
+      } else {
+         this.publishProgress(60, 'Skipping NPM registry config');
+      }
+
+      // Step 7: Install Node.js local packages
       await this.runCommand(
         `npm install --prefix "${this.sandboxWorkspace}" --silent ${packages.node.join(' ')}`,
         'Installing Node.js packages...',
         logs, 75,
+        300000
       );
 
-      // Step 6: Verify Python
+      // Step 8: Verify Python
       await this.runCommand(
         `python3 -c "import docx, openpyxl, pandas; print('Python packages OK')"\n`,
         'Verifying Python packages...',
         logs, 90,
+        30000
       );
 
-      // Step 7: Verify Node
+      // Step 9: Verify Node
       const nodePath = resolve(this.sandboxWorkspace, 'node_modules').replace(/\\/g, '/');
       const verifyNodeCmd = process.platform === 'win32'
           ? `set NODE_PATH=${nodePath} && node -e "require('xlsx'); require('dayjs'); console.log('Node packages OK')"`
@@ -115,6 +170,7 @@ export class WorkerEnvManager {
         verifyNodeCmd,
         'Verifying Node.js packages...',
         logs, 95,
+        30000
       );
 
       logs.push('[100%] Sandbox workspace ready');
@@ -139,75 +195,19 @@ export class WorkerEnvManager {
     }
   }
 
-  /**
-   * Write registry config files (.npmrc, pip.conf, apt sources) on the worker.
-   */
-  private async configureRegistries(config: any, logs: string[]): Promise<void> {
-    // npm registry
-    if (config.npmRegistryUrl) {
-      let npmrc = `registry=${config.npmRegistryUrl}\n`;
-      if (config.npmAuthToken) {
-        try {
-          const url = new URL(config.npmRegistryUrl);
-          npmrc += `//${url.host}/:_authToken=${config.npmAuthToken}\n`;
-        } catch {
-          npmrc += `//registry.npmjs.org/:_authToken=${config.npmAuthToken}\n`;
-        }
-      }
-      try {
-        writeFileSync('/root/.npmrc', npmrc);
-        logs.push(`Configured npm registry: ${config.npmRegistryUrl}`);
-      } catch (e) {
-        logs.push(`WARN: Could not write .npmrc: ${e instanceof Error ? e.message : e}`);
-      }
-    }
 
-    // PyPI index
-    if (config.pypiIndexUrl) {
-      try {
-        mkdirSync('/root/.config/pip', { recursive: true });
-        let pipConf = `[global]\nindex-url = ${config.pypiIndexUrl}\n`;
-        if (config.pypiTrustedHost) {
-          pipConf += `trusted-host = ${config.pypiTrustedHost}\n`;
-        }
-        writeFileSync('/root/.config/pip/pip.conf', pipConf);
-        logs.push(`Configured PyPI index: ${config.pypiIndexUrl}`);
-      } catch (e) {
-        logs.push(`WARN: Could not write pip.conf: ${e instanceof Error ? e.message : e}`);
-      }
-    }
-
-    // APT mirror
-    if (config.aptMirrorUrl) {
-      try {
-        const sourceLine = `deb ${config.aptMirrorUrl} bookworm main`;
-        mkdirSync('/etc/apt/sources.list.d', { recursive: true });
-        writeFileSync('/etc/apt/sources.list.d/custom-mirror.list', sourceLine + '\n');
-        if (config.aptGpgKeyUrl) {
-          await execAsync(
-            `curl -fsSL ${config.aptGpgKeyUrl} | gpg --dearmor -o /etc/apt/trusted.gpg.d/custom.gpg`,
-            { timeout: 30000 },
-          );
-        }
-        logs.push(`Configured APT mirror: ${config.aptMirrorUrl}`);
-      } catch (e) {
-        logs.push(`WARN: Could not configure APT mirror: ${e instanceof Error ? e.message : e}`);
-      }
-    }
-
-    this.publishProgress(10, 'Registry config applied');
-  }
 
   /**
    * Run a shell command with progress logging.
    */
-  private async runCommand(cmd: string, label: string, logs: string[], percent: number): Promise<void> {
+  private async runCommand(cmd: string, label: string, logs: string[], percent: number, timeoutMs = 300000): Promise<void> {
     this.publishProgress(percent, label);
+    logs.push(`[${percent}%] RUNNING: ${cmd}`);
     logs.push(`[${percent}%] ${label}`);
 
     try {
       const { stdout, stderr } = await execAsync(cmd, {
-        timeout: 300000, // 5 minutes max
+        timeout: timeoutMs,
         maxBuffer: 10 * 1024 * 1024,
       });
       if (stdout) logs.push(stdout.slice(0, 500));
@@ -221,6 +221,47 @@ export class WorkerEnvManager {
 
   private publishProgress(percent: number, log: string) {
     this.app.pubSubManager.publish('skill-hub.init-env.progress', { percent, log }).catch(() => {});
+  }
+
+  /**
+   * Copy bundled Python packages (e.g. svg_to_pptx) to the sandbox workspace
+   * so they are available on PYTHONPATH during skill execution.
+   */
+  private copyBundledPythonPackages(logs: string[]) {
+    const pythonPkgDir = resolve(this.sandboxWorkspace, 'python_packages');
+    mkdirSync(pythonPkgDir, { recursive: true });
+
+    // Resolve scripts directory relative to plugin package root
+    // In dev: __dirname = src/server/services/ → ../../../../scripts/
+    // In dist: __dirname = dist/server/services/ → ../../../../scripts/
+    const candidates = [
+      resolve(__dirname, '../../../scripts'),         // from dist/server/services or src/server/services
+      resolve(__dirname, '../../../../scripts'),      // fallback
+    ];
+
+    let scriptsDir: string | null = null;
+    for (const candidate of candidates) {
+      if (existsSync(resolve(candidate, 'svg_to_pptx', '__init__.py'))) {
+        scriptsDir = candidate;
+        break;
+      }
+    }
+
+    if (!scriptsDir) {
+      logs.push('[WARN] Bundled Python scripts not found, skipping svg_to_pptx install');
+      return;
+    }
+
+    const srcPkg = resolve(scriptsDir, 'svg_to_pptx');
+    const destPkg = resolve(pythonPkgDir, 'svg_to_pptx');
+
+    try {
+      cpSync(srcPkg, destPkg, { recursive: true, force: true });
+      logs.push(`[OK] Copied svg_to_pptx package to ${destPkg}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logs.push(`[WARN] Failed to copy svg_to_pptx: ${msg}`);
+    }
   }
 
   async getOrCreateConfig() {

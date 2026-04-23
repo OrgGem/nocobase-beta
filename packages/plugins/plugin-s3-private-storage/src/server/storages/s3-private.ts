@@ -12,7 +12,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import crypto from 'crypto';
 import path from 'path';
 import { Readable, Transform, TransformCallback } from 'stream';
-import { StorageType } from '@nocobase/plugin-file-manager';
+import { StorageType, cloudFilenameGetter } from '@nocobase/plugin-file-manager';
 import { STORAGE_TYPE_S3_PRIVATE } from '../../constants';
 
 /**
@@ -30,6 +30,11 @@ class CountingStream extends Transform {
 
 export default class S3PrivateStorage extends StorageType {
   static filenameKey = 'key';
+  
+  // @ts-ignore
+  declare storage: any;
+  // @ts-ignore
+  declare getFileKey: any;
 
   static defaults() {
     return {
@@ -72,7 +77,7 @@ export default class S3PrivateStorage extends StorageType {
   make() {
     const s3 = this.getS3Client();
     const { bucket, acl = 'private' } = this.storage.options;
-    const storagePath = (this.storage.path || '').replace(/^\/|\/$/g, '');
+    const keyGetter = cloudFilenameGetter(this.storage);
 
     const once = (fn: Function) => {
       let called = false;
@@ -84,11 +89,24 @@ export default class S3PrivateStorage extends StorageType {
     };
 
     return {
-      _handleFile: (req: any, file: any, cb: Function) => {
+      _handleFile: async (req: any, file: any, cb: Function) => {
         const done = once(cb);
-        const ext = path.extname(file.originalname);
-        const filename = `${crypto.randomUUID()}${ext}`;
-        const key = storagePath ? `${storagePath}/${filename}` : filename;
+        let key: string;
+        try {
+          key = await new Promise<string>((resolve, reject) => {
+            keyGetter(req, file, (err, value) => {
+              if (err) {
+                reject(err);
+                return;
+              }
+              resolve(value);
+            });
+          });
+        } catch (error) {
+          done(error);
+          return;
+        }
+
         const contentType = file.mimetype || 'application/octet-stream';
 
         try {
@@ -156,6 +174,7 @@ export default class S3PrivateStorage extends StorageType {
 
     const deleted = [];
     for (const record of records) {
+      // @ts-ignore
       const key = this.getFileKey(record);
       const deleteCommand = new DeleteObjectCommand({
         Bucket: bucket,
@@ -167,6 +186,7 @@ export default class S3PrivateStorage extends StorageType {
 
     return [
       deleted.length,
+      // @ts-ignore
       records.filter((record) => !deleted.find((item) => item.Key === this.getFileKey(record))),
     ] as [number, any[]];
   }
@@ -180,12 +200,14 @@ export default class S3PrivateStorage extends StorageType {
 
     const command = new GetObjectCommand({
       Bucket: this.storage.options.bucket,
+      // @ts-ignore
       Key: this.getFileKey(file),
     });
 
     const response = await s3.send(command);
 
     if (!response.Body) {
+      // @ts-ignore
       throw new Error(`Failed to get file stream for: ${this.getFileKey(file)}`);
     }
 

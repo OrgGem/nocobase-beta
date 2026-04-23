@@ -1,23 +1,7 @@
 import { useFieldSchema } from '@formily/react';
-import { SchemaSettings, useAPIClient, useApp, useDesignable, useRequest } from '@nocobase/client';
-import { Outlet } from 'react-router-dom';
+import { SchemaSettings, useDesignable } from '@nocobase/client';
 import { useT } from './locale';
-
-function collectEmbeddablePlugins(app: any): { value: string; label: string }[] {
-  const results: { value: string; label: string }[] = [];
-  const settings = (app.pluginSettingsManager as any).settings as Record<string, any>;
-
-  for (const [key, setting] of Object.entries(settings)) {
-    if (!app.pluginSettingsManager.has(key)) continue;
-    if (!setting.Component || setting.Component === Outlet) continue;
-    if (key.includes(':')) continue;
-
-    const label = typeof setting.title === 'string' ? setting.title : key;
-    results.push({ value: key, label });
-  }
-
-  return results.sort((a, b) => a.label.localeCompare(b.label));
-}
+import { EmbedSettingsPluginSelect } from './EmbedSettingsPluginSelect';
 
 export const embedSettingsBlockSettings = new SchemaSettings({
   name: 'blockSettings:embedSettings',
@@ -29,14 +13,12 @@ export const embedSettingsBlockSettings = new SchemaSettings({
         const fieldSchema = useFieldSchema();
         const { dn } = useDesignable();
         const t = useT();
-        const app = useApp();
-        const api = useAPIClient();
-        const currentPluginName = fieldSchema?.['x-component-props']?.pluginName || '';
 
-        const allPlugins = collectEmbeddablePlugins(app);
+        const currentPluginName = fieldSchema?.['x-component-props']?.pluginName || '';
 
         return {
           title: t('Edit embed settings'),
+          components: { EmbedSettingsPluginSelect },
           schema: {
             type: 'object',
             properties: {
@@ -44,24 +26,9 @@ export const embedSettingsBlockSettings = new SchemaSettings({
                 title: t('Select plugin'),
                 type: 'string',
                 'x-decorator': 'FormItem',
-                'x-component': 'Select',
+                'x-component': EmbedSettingsPluginSelect,
                 'x-component-props': {
-                  showSearch: true,
-                  optionFilterProp: 'label',
                   placeholder: t('Select plugin'),
-                },
-                'x-reactions': (field: any) => {
-                  if (field.dataSource && field.dataSource.length > 0) return;
-                  field.loading = true;
-                  api.resource('embedAllowedPlugins').list({
-                    filter: { enabled: true },
-                    pageSize: 200,
-                  }).then(({ data }: any) => {
-                    const allowedRecords = data?.data || [];
-                    const allowedKeys = new Set(allowedRecords.map((r: any) => r.pluginName));
-                    field.dataSource = allowedKeys.size > 0 ? allPlugins.filter(p => allowedKeys.has(p.value)) : [];
-                    field.loading = false;
-                  });
                 },
                 default: currentPluginName,
                 required: true,

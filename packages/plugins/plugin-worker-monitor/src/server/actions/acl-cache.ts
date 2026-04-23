@@ -1,4 +1,5 @@
 import { Context } from '@nocobase/actions';
+import { scanKeys, deleteKeysChunked } from '../utils/redis';
 
 /**
  * In-memory ACL stats counter.
@@ -48,6 +49,11 @@ function recordStat(role: string, hit: boolean) {
 /**
  * Middleware that wraps acl.can() with Redis caching.
  * Install via: app.resourcer.use(aclCacheMiddleware, { tag: 'aclCache', before: 'acl', after: 'setCurrentRole' })
+ *
+ * FIX: Previously monkey-patched ctx.app.acl.can per-request, which is a race condition
+ * because acl is a shared singleton across concurrent requests. Now we use a post-check
+ * approach that reads from cache first and writes after the ACL middleware runs, without
+ * ever replacing the shared acl.can method.
  */
 export function createAclCacheMiddleware(app: any) {
   return async function aclCacheMiddleware(ctx: Context, next: () => Promise<void>) {
@@ -66,6 +72,7 @@ export function createAclCacheMiddleware(app: any) {
 
     const cacheKey = getCacheKey(role, resourceName, actionName);
 
+    // Try reading from cache first
     try {
       const cached = await cache.get(cacheKey);
       if (cached !== undefined && cached !== null) {
@@ -82,28 +89,18 @@ export function createAclCacheMiddleware(app: any) {
 
     recordStat(role, false);
 
-    // Store original acl.can to intercept result
-    const originalCan = ctx.app?.acl?.can?.bind(ctx.app.acl);
-    if (originalCan && ctx.app.acl) {
-      const origMethod = ctx.app.acl.can;
-      ctx.app.acl.can = function (params: any) {
-        const result = origMethod.call(this, params);
-        // Cache the result asynchronously
-        try {
-          const valueToCache = result ? JSON.stringify(result) : '__DENIED__';
-          cache.set(cacheKey, valueToCache, ACL_CACHE_TTL).catch(() => {});
-        } catch {
-          // Ignore cache write errors
-        }
-        return result;
-      };
+    // Let the ACL middleware run normally
+    await next();
 
-      await next();
-
-      // Restore original method
-      ctx.app.acl.can = origMethod;
-    } else {
-      await next();
+    // After ACL ran, cache the permission result for future requests
+    // This is safe because we read ctx.permission AFTER next() completes —
+    // no monkey-patching of shared singletons.
+    try {
+      const result = ctx.permission?.can;
+      const valueToCache = result ? JSON.stringify(result) : '__DENIED__';
+      cache.set(cacheKey, valueToCache, ACL_CACHE_TTL).catch(() => {});
+    } catch {
+      // Ignore cache write errors
     }
   };
 }
@@ -117,13 +114,13 @@ export const aclCacheActions = {
     const hitRate =
       stats.totalChecks > 0 ? Math.round((stats.cacheHits / stats.totalChecks) * 10000) / 100 : 0;
 
-    // Count cached keys in Redis
+    // Count cached keys using SCAN (production-safe)
     let cachedKeys = 0;
     try {
       const redis = (ctx.app as any).redisConnectionManager?.getConnection();
       if (redis) {
-        const keys = await redis.sendCommand(['KEYS', `*${ACL_CACHE_PREFIX}*`]);
-        cachedKeys = Array.isArray(keys) ? keys.length : 0;
+        const keys = await scanKeys(redis, `*${ACL_CACHE_PREFIX}*`);
+        cachedKeys = keys.length;
       }
     } catch {
       // Redis not available
@@ -143,14 +140,13 @@ export const aclCacheActions = {
    * Lists all cached ACL permission keys
    */
   async listKeys(ctx: Context, next: () => Promise<void>) {
-    const cache = ctx.app.cache;
     const keys: { key: string; role: string; resource: string; action: string }[] = [];
 
     try {
       const redis = (ctx.app as any).redisConnectionManager?.getConnection();
       if (redis) {
-        const rawKeys = (await redis.sendCommand(['KEYS', `*${ACL_CACHE_PREFIX}*`])) as string[];
-        for (const key of rawKeys || []) {
+        const rawKeys = await scanKeys(redis, `*${ACL_CACHE_PREFIX}*`);
+        for (const key of rawKeys) {
           const parts = key.replace(ACL_CACHE_PREFIX, '').split(':');
           keys.push({
             key,
@@ -180,10 +176,9 @@ export const aclCacheActions = {
     try {
       const redis = (ctx.app as any).redisConnectionManager?.getConnection();
       if (redis) {
-        const rawKeys = (await redis.sendCommand(['KEYS', `*${ACL_CACHE_PREFIX}*`])) as string[];
-        if (rawKeys && rawKeys.length > 0) {
-          deletedCount = rawKeys.length;
-          await redis.sendCommand(['DEL', ...rawKeys]);
+        const rawKeys = await scanKeys(redis, `*${ACL_CACHE_PREFIX}*`);
+        if (rawKeys.length > 0) {
+          deletedCount = await deleteKeysChunked(redis, rawKeys);
         }
       }
     } catch {
@@ -199,10 +194,9 @@ export const aclCacheActions = {
     try {
       const redis = (ctx.app as any).redisConnectionManager?.getConnection();
       if (redis) {
-        const roleKeys = (await redis.sendCommand(['KEYS', 'roles:*'])) as string[];
-        if (roleKeys && roleKeys.length > 0) {
-          deletedCount += roleKeys.length;
-          await redis.sendCommand(['DEL', ...roleKeys]);
+        const roleKeys = await scanKeys(redis, 'roles:*');
+        if (roleKeys.length > 0) {
+          deletedCount += await deleteKeysChunked(redis, roleKeys);
         }
         // Also clear system settings cache
         try {
@@ -250,10 +244,9 @@ export const aclCacheActions = {
       const redis = (ctx.app as any).redisConnectionManager?.getConnection();
       if (redis) {
         const pattern = `*${ACL_CACHE_PREFIX}${roleName}:*`;
-        const rawKeys = (await redis.sendCommand(['KEYS', pattern])) as string[];
-        if (rawKeys && rawKeys.length > 0) {
-          deletedCount = rawKeys.length;
-          await redis.sendCommand(['DEL', ...rawKeys]);
+        const rawKeys = await scanKeys(redis, pattern);
+        if (rawKeys.length > 0) {
+          deletedCount = await deleteKeysChunked(redis, rawKeys);
         }
       }
     } catch {

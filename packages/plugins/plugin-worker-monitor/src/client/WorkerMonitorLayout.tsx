@@ -1,6 +1,5 @@
 import React from 'react';
 import { Tabs } from 'antd';
-import { useApp } from '@nocobase/client';
 import { TaskManager } from './TaskManager';
 import { WorkflowExecutions } from './WorkflowExecutions';
 import { RedisMonitor } from './RedisMonitor';
@@ -8,13 +7,7 @@ import { ClusterNodes } from './ClusterNodes';
 import { EventQueueMonitor } from './EventQueueMonitor';
 import { LockMonitor } from './LockMonitor';
 import { CacheMonitor } from './CacheMonitor';
-
-const namespace = 'worker-monitor';
-
-function useT() {
-  const app = useApp();
-  return (key: string) => app.i18n.t(key, { ns: namespace });
-}
+import { useT } from './utils';
 
 export function WorkerMonitorLayout() {
   const t = useT();

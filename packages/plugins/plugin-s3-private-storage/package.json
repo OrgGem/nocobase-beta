@@ -1,6 +1,6 @@
 {
   "name": "plugin-s3-private-storage",
-  "version": "1.0.3",
+  "version": "1.0.5",
   "displayName": "S3 Private Storage",
   "displayName.zh-CN": "S3 私有存储",
   "description": "Extends file-manager to stream files from private S3 buckets via server proxy with ACL support.",

@@ -1,6 +1,6 @@
 {
   "name": "plugin-block-embed-settings",
-  "version": "1.1.2",
+  "version": "1.1.5",
   "displayName": "Embed Settings Block",
   "displayName.zh-CN": "嵌入设置区块",
   "description": "Embed any plugin settings page as a block on regular pages",

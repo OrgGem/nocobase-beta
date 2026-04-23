@@ -1,8 +1,6 @@
 import { Context } from '@nocobase/actions';
+import { getRedis } from '../utils/redis';
 
-function getRedis(ctx: Context) {
-  return ctx.app.redisConnectionManager?.getConnection();
-}
 
 export const cacheMonitorActions = {
   /**

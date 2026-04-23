@@ -2,50 +2,92 @@ import { Context } from '@nocobase/actions';
 import { AppSupervisor } from '@nocobase/server';
 import os from 'os';
 import { RedisNodeRegistry } from '../adapters/redis-node-registry';
+import { getRedis } from '../utils/redis';
 
-function getRedis(ctx: Context) {
-  return ctx.app.redisConnectionManager?.getConnection();
-}
 
 export const clusterActions = {
   /**
    * GET /workerMonitorCluster:current
-   * Returns info about the current node/process
+   * Always returns info about the APP node (not workers).
+   * If this request is handled by a worker, we look up the APP node from Redis.
    */
   async current(ctx: Context, next: () => Promise<void>) {
-    const mem = process.memoryUsage();
-    const cpuUsage = process.cpuUsage();
+    const currentMode = process.env.WORKER_MODE || 'main';
+    const isApp = currentMode === 'main' || currentMode === '' || currentMode === 'app';
 
-    ctx.body = {
-      node: {
-        hostname: os.hostname(),
-        pid: process.pid,
-        nodeVersion: process.version,
-        platform: process.platform,
-        arch: process.arch,
-        uptime: process.uptime(),
-        workerMode: process.env.WORKER_MODE || '',
-        appPort: process.env.APP_PORT || '',
-        clusterMode: process.env.CLUSTER_MODE || '',
-      },
-      memory: {
-        rss: mem.rss,
-        heapUsed: mem.heapUsed,
-        heapTotal: mem.heapTotal,
-        external: mem.external,
-        arrayBuffers: mem.arrayBuffers || 0,
-      },
-      cpu: {
-        user: cpuUsage.user,
-        system: cpuUsage.system,
-      },
-      os: {
-        totalMemory: os.totalmem(),
-        freeMemory: os.freemem(),
-        cpuCount: os.cpus().length,
-        loadAvg: os.loadavg(),
-      },
-    };
+    if (isApp) {
+      // This process IS the APP node — return local data directly
+      const mem = process.memoryUsage();
+      ctx.body = {
+        node: {
+          hostname: os.hostname(),
+          pid: process.pid,
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          uptime: process.uptime(),
+          workerMode: currentMode,
+          appPort: process.env.APP_PORT || '',
+          clusterMode: process.env.CLUSTER_MODE || '',
+        },
+        memory: {
+          rss: mem.rss,
+          heapUsed: mem.heapUsed,
+          heapTotal: mem.heapTotal,
+          external: mem.external,
+          arrayBuffers: mem.arrayBuffers || 0,
+        },
+        os: {
+          totalMemory: os.totalmem(),
+          freeMemory: os.freemem(),
+          cpuCount: os.cpus().length,
+          loadAvg: os.loadavg(),
+        },
+      };
+    } else {
+      // This process is a WORKER — find the APP node from Redis heartbeat data
+      const registry = new RedisNodeRegistry(ctx.app);
+      const nodes = await registry.getNodes();
+      const appNode = nodes.find(
+        (n: any) => n.workerMode === 'main' || n.workerMode === '' || n.workerMode === 'app',
+      );
+
+      if (appNode?.nodeDetails) {
+        ctx.body = appNode.nodeDetails;
+      } else {
+        // Fallback: return local data with a flag so the UI knows
+        const mem = process.memoryUsage();
+        ctx.body = {
+          node: {
+            hostname: os.hostname(),
+            pid: process.pid,
+            nodeVersion: process.version,
+            platform: process.platform,
+            arch: process.arch,
+            uptime: process.uptime(),
+            workerMode: currentMode,
+            appPort: process.env.APP_PORT || '',
+            clusterMode: process.env.CLUSTER_MODE || '',
+          },
+          memory: {
+            rss: mem.rss,
+            heapUsed: mem.heapUsed,
+            heapTotal: mem.heapTotal,
+            external: mem.external,
+            arrayBuffers: mem.arrayBuffers || 0,
+          },
+          os: {
+            totalMemory: os.totalmem(),
+            freeMemory: os.freemem(),
+            cpuCount: os.cpus().length,
+            loadAvg: os.loadavg(),
+          },
+          _fallback: true,
+          _note: 'APP node not found in Redis; showing responding worker data',
+        };
+      }
+    }
+
     await next();
   },
 

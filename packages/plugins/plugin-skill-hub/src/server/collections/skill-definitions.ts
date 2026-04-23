@@ -75,6 +75,31 @@ export default {
       defaultValue: false,
     },
     {
+      // Which plugin registered this skill. null = built-in / user-created.
+      // Format: plugin package name, e.g. 'plugin-skill-pptx-advanced'
+      name: 'pluginSource',
+      type: 'string',
+      length: 200,
+      defaultValue: null,
+    },
+    {
+      name: 'storageType',
+      type: 'string',
+      length: 20,
+      defaultValue: 'database', // 'database', 'local', 's3', 'plugin'
+    },
+    {
+      name: 'storageUrl',
+      type: 'string',
+      length: 1000,
+    },
+    {
+      name: 'file',
+      type: 'belongsTo',
+      target: 'attachments',
+      foreignKey: 'fileId',
+    },
+    {
       name: 'createdAt',
       type: 'date',
     },

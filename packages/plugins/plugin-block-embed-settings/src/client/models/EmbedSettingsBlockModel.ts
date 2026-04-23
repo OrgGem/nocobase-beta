@@ -23,18 +23,9 @@ EmbedSettingsBlockModel.registerFlow({
             title: t('Select plugin'),
             type: 'string',
             'x-decorator': 'FormItem',
-            'x-component': 'RemoteSelect',
+            'x-component': 'EmbedSettingsPluginSelect',
             'x-component-props': {
-              showSearch: true,
-              fieldNames: { label: 'title', value: 'pluginName' },
-              service: {
-                resource: 'embedAllowedPlugins',
-                action: 'list',
-                params: {
-                  filter: { enabled: true },
-                  pageSize: 200,
-                },
-              },
+              placeholder: t('Select plugin'),
             },
             required: true,
           },

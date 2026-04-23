@@ -114,8 +114,11 @@ export class SandboxRunner {
             LANG: 'en_US.UTF-8',
             // Node.js
             NODE_PATH: finalNodePath,
-            // Python
-            PYTHONPATH: process.env.PYTHONPATH || '',
+            // Python — include bundled packages (svg_to_pptx etc.)
+            PYTHONPATH: [
+              path.resolve(this.sandboxWorkspace, 'python_packages'),
+              process.env.PYTHONPATH || '',
+            ].filter(Boolean).join(path.delimiter),
             PYTHONIOENCODING: 'utf-8',
             // DO NOT pass: DB credentials, API keys, APP_KEY, etc.
           },

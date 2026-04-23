@@ -3,7 +3,7 @@
   "displayName": "Worker Monitor",
   "displayName.zh-CN": "Worker 监控",
   "description": "Monitor cluster nodes, async tasks, workflow executions, event queues, locks, caches, and Redis metrics",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
   "keywords": ["Monitoring", "DevOps"],

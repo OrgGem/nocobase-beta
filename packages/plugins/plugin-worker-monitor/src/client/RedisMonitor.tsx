@@ -8,6 +8,7 @@ import {
   FieldTimeOutlined,
 } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
+import { formatBytes, formatUptime } from './utils';
 
 const { Text } = Typography;
 
@@ -36,19 +37,7 @@ interface RedisInfo {
   keyspace: Record<string, Record<string, string>>;
 }
 
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
 
 export function RedisMonitor() {
   const api = useAPIClient();

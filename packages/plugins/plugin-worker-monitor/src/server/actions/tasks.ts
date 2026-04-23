@@ -49,9 +49,9 @@ export const tasksActions = {
     // Try to cancel via pub/sub for cross-instance support
     const pluginName = '@nocobase/plugin-async-task-manager';
     try {
-      await ctx.app.pubSubManager.publish(`${pluginName}.task.cancel`, {
+      await ctx.app.pubSubManager.publish(`${pluginName}.task.cancel`, JSON.stringify({
         taskId: filterByTk,
-      });
+      }));
     } catch {
       // Fallback: direct DB update
     }

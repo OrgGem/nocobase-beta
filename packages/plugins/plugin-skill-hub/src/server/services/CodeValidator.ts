@@ -44,6 +44,9 @@ const PYTHON_BUILTINS = [
   'abc', 'contextlib', 'operator', 'time', 'calendar', 'locale', 'struct',
   'hashlib', 'base64', 'binascii', 'codecs', 'unicodedata', 'pprint',
   'warnings', 'traceback', 'logging', 'unittest', 'argparse',
+  'tempfile', 'xml', 'zipfile',
+  // Pre-installed local packages (trusted, bundled with plugin)
+  'svg_to_pptx',
 ];
 
 /**
@@ -52,6 +55,7 @@ const PYTHON_BUILTINS = [
  */
 const PYTHON_IMPORT_NAME_MAP: Record<string, string> = {
   'python-docx': 'docx',
+  'python-pptx': 'pptx',
   'Pillow': 'PIL',
   'pyyaml': 'yaml',
 };

@@ -42,6 +42,11 @@ const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 const TEXT_EXTS = ['txt', 'csv', 'html', 'css', 'js', 'json', 'xml', 'log', 'md', 'yaml', 'yml', 'xaml'];
 const DOCX_EXTS = ['docx'];
 const XLSX_EXTS = ['xlsx', 'xls'];
+const PPTX_MIME_TYPES = [
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-powerpoint',
+];
+const PPTX_EXTS = ['pptx', 'ppt'];
 
 // ─── Utility functions ──────────────────────────────────────────────
 
@@ -96,8 +101,14 @@ const isXlsxFile = (file: any): boolean => {
   return !!ext && XLSX_EXTS.includes(ext);
 };
 
+const isPptxFile = (file: any): boolean => {
+  if (file?.mimetype && PPTX_MIME_TYPES.includes(file.mimetype)) return true;
+  const ext = getFileExt(file);
+  return !!ext && PPTX_EXTS.includes(ext);
+};
+
 const isPreviewableFile = (file: any): boolean => {
-  return isPdfFile(file) || isImageFile(file) || isTextFile(file) || isDocxFile(file) || isXlsxFile(file);
+  return isPdfFile(file) || isImageFile(file) || isTextFile(file) || isDocxFile(file) || isXlsxFile(file) || isPptxFile(file);
 };
 
 const getFileDisplayName = (file: any): string => {
@@ -530,6 +541,65 @@ function AuthXlsxInlinePreviewer({ file }: any) {
   );
 }
 
+function AuthPptxInlinePreviewer({ file }: any) {
+  const apiClient = useAPIClient();
+  const t = useT();
+  const token = apiClient.auth?.token || '';
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [arrayBuffer, setArrayBuffer] = useState<ArrayBuffer | null>(null);
+  const [PptxPreviewer, setPptxPreviewer] = useState<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const url = resolveFileUrl(file);
+    if (!url) {
+      setLoading(false);
+      setError('No file URL');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    (async () => {
+      try {
+        const [blob, module] = await Promise.all([
+          fetchFileAsBlob(url, token),
+          // @ts-ignore
+          import('react-pptx-preview-kit')
+        ]);
+        if (cancelled) return;
+        const buffer = await blob.arrayBuffer();
+        if (cancelled) return;
+        setArrayBuffer(buffer);
+        setPptxPreviewer(() => module.PptxPreview);
+        setLoading(false);
+      } catch (err: any) {
+        if (cancelled) return;
+        setError(err.message || 'Failed to render PPTX');
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [typeof file === 'string' ? file : file?.url, token]);
+
+  return (
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      {loading && <LoadingIndicator message={t('Loading preview...')} />}
+      {error && <ErrorMessage message={t('Failed to load file preview')} />}
+      {!loading && !error && PptxPreviewer && (
+        <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
+           <PptxPreviewer file={arrayBuffer} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── wrapWithAuthModalPreviewer ─────────────────────────────────────
 // Custom wrapper that replaces the original wrapWithModalPreviewer.
 // The key difference: it OVERRIDES the onDownload prop from parent
@@ -586,7 +656,7 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
             <DownloadOutlined onClick={() => authOnDownload(file)} />
           </Space>
         }
-        width="90vw"
+        width="90%"
         centered={true}
       >
         <div
@@ -667,6 +737,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
     if (isTextFile(file)) return AuthTextInlinePreviewer;
     if (isDocxFile(file)) return AuthDocxInlinePreviewer;
     if (isXlsxFile(file)) return AuthXlsxInlinePreviewer;
+    if (isPptxFile(file)) return AuthPptxInlinePreviewer;
     return null;
   }, [file]);
 
@@ -690,7 +761,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
           {t('Close')}
         </Button>,
       ].filter(Boolean)}
-      width={canPreview ? '85vw' : 520}
+      width={canPreview ? '90%' : 520}
       centered={true}
     >
       <div
@@ -818,6 +889,12 @@ export class PluginFilePreviewAuthClient extends Plugin {
     filePreviewTypes.add({
       match: isXlsxFile,
       Previewer: wrapWithAuthModalPreviewer(AuthXlsxInlinePreviewer),
+    });
+
+    // PPTX preview
+    filePreviewTypes.add({
+      match: isPptxFile,
+      Previewer: wrapWithAuthModalPreviewer(AuthPptxInlinePreviewer),
     });
   }
 }

@@ -33,9 +33,10 @@ export class RedisLockAdapter implements ILockAdapter {
   async acquire(key: string, ttl: number): Promise<Releaser> {
     const lockId = uuidv4();
     const realKey = `nocobase:lock:${key}`;
-    let retryCount = 0;
+    const startTime = Date.now();
+    const maxWaitMs = Math.min(ttl, 30000); // Wait at most 30s or the TTL, whichever is smaller
     
-    // Spin-lock pattern: Loop until lock is acquired or maximum retries reached
+    // Spin-lock pattern: Loop until lock is acquired or wall-clock timeout
     while (true) {
       try {
         const result = await this.client.set(realKey, lockId, { NX: true, PX: ttl });
@@ -43,9 +44,9 @@ export class RedisLockAdapter implements ILockAdapter {
       } catch (e) {
         // Ignore redis command throw
       }
-      retryCount++;
-      if (retryCount > 1000) { // Safety limit ~50sec absolute max spin
-        throw new LockAcquireError(`Maximum spin-lock retries reached for key ${key}`);
+
+      if (Date.now() - startTime > maxWaitMs) {
+        throw new LockAcquireError(`Lock acquire timed out after ${maxWaitMs}ms for key ${key}`);
       }
       await new Promise(r => setTimeout(r, 50));
     }

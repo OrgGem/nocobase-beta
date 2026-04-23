@@ -1,0 +1,27 @@
+{
+  "name": "plugin-skill-pptx-advanced",
+  "displayName": "Advanced PPTX Skill",
+  "displayName.vi-VN": "Skill PPTX Nâng Cao",
+  "description": "Advanced SVG-to-PPTX presentation generation skill for Skill Hub",
+  "description.vi-VN": "Skill tạo PPTX nâng cao từ SVG cho Skill Hub",
+  "version": "1.1.0",
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "main": "dist/server/index.js",
+  "nocobase": {
+    "displayName.zh-CN": "高级 PPTX 技能",
+    "description.zh-CN": "为技能中心提供从 SVG 生成 PPTX 演示文稿的高级技能"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "plugin-skill-hub": ">=1.0.0"
+  }
+}

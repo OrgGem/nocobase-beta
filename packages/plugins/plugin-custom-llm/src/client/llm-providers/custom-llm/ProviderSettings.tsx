@@ -58,16 +58,10 @@ export const ProviderSettingsForm: React.FC = () => {
               style: { width: '100%' },
             },
             description: tval('Keepalive interval description', { ns: namespace }),
-          },
-          keepAliveContent: {
-            title: tval('Keepalive content', { ns: namespace }),
-            type: 'string',
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-            'x-component-props': {
-              placeholder: '...',
+            'x-reactions': {
+              dependencies: ['.streamKeepAlive'],
+              fulfill: { state: { visible: '{{$deps[0]}}' } },
             },
-            description: tval('Keepalive content description', { ns: namespace }),
           },
           timeout: {
             title: tval('Timeout (ms)', { ns: namespace }),

@@ -1,12 +1,15 @@
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
-import { createReadStream } from 'fs';
+import { createReadStream, createWriteStream, unlinkSync } from 'fs';
+import * as os from 'os';
 import { SandboxRunner } from './services/SandboxRunner';
 import { FileManager } from './services/FileManager';
 import { SkillManager } from './services/SkillManager';
 import { WorkerEnvManager } from './services/WorkerEnvManager';
 import { SkillExecutionTask } from './tasks/SkillExecutionTask';
 import { createSkillExecuteTool } from './tools/skill-execute';
+import { McpController } from './mcp/McpController';
+import { SkillRepositoryService } from './services/SkillRepositoryService';
 
 /**
  * Simple in-memory rate limiter per user.
@@ -71,10 +74,13 @@ export class PluginSkillHubServer extends Plugin {
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private initEnvDoneCallback: any = null;
   private initEnvProgressCallback: any = null;
+  private mcpController: McpController;
+  private skillRepoService: SkillRepositoryService;
   private rateLimiter = new RateLimiter(
     parseInt(process.env.SKILL_HUB_RATE_LIMIT_MAX || '10', 10),
     parseInt(process.env.SKILL_HUB_RATE_LIMIT_WINDOW_MS || '60000', 10),
   );
+  private skillTemplates = new Map<string, any>();
 
   async load() {
     // 1. Import collections
@@ -88,6 +94,8 @@ export class PluginSkillHubServer extends Plugin {
     this.sandboxRunner = new SandboxRunner(this.fileManager, this.app.logger, storagePath);
     this.skillManager = new SkillManager(this.db);
     this.workerEnvManager = new WorkerEnvManager(this.app, this.db, storagePath);
+    this.skillRepoService = new SkillRepositoryService(storagePath);
+    this.mcpController = new McpController(this);
 
     // 3. Register REST actions
     this.app.resourceManager.define({
@@ -97,6 +105,9 @@ export class PluginSkillHubServer extends Plugin {
         test: this.handleTest.bind(this),
         initEnv: this.handleInitEnv.bind(this),
         clearStorage: this.handleClearStorage.bind(this),
+        mcpListTools: this.mcpController.listTools.bind(this.mcpController),
+        mcpCallTool: this.mcpController.callTool.bind(this.mcpController),
+        listTemplates: this.handleListTemplates.bind(this),
       },
     });
 
@@ -119,6 +130,67 @@ export class PluginSkillHubServer extends Plugin {
       }
     });
 
+    this.db.on('skillDefinitions.afterSave', async (model, options) => {
+      // If a zip file was uploaded, extract it and update the skill record
+      if (model.changed('fileId') && model.get('fileId')) {
+        try {
+          const attachment = await this.db.getRepository('attachments').findOne({
+            filter: { id: model.get('fileId') },
+            transaction: options.transaction,
+          });
+
+          if (attachment) {
+            const fileManager = this.app.pm.get('@nocobase/plugin-file-manager') as any;
+            if (!fileManager) {
+              this.app.logger.warn('[skill-hub] plugin-file-manager not found, cannot extract skill package');
+              return;
+            }
+
+            const streamData = await fileManager.getFileStream(attachment);
+            if (!streamData || !streamData.stream) {
+              this.app.logger.warn(`[skill-hub] Could not get file stream for attachment ${attachment.get('id')}`);
+              return;
+            }
+
+            const tempZipPath = resolve(os.tmpdir(), `skill_${Date.now()}_${model.get('id')}.zip`);
+
+            await new Promise((resolvePipe, rejectPipe) => {
+              const writeStream = createWriteStream(tempZipPath);
+              streamData.stream.pipe(writeStream);
+              writeStream.on('finish', resolvePipe);
+              writeStream.on('error', rejectPipe);
+              streamData.stream.on('error', rejectPipe);
+            });
+
+            if (require('fs').existsSync(tempZipPath)) {
+              const skillName = model.get('name');
+              const { metadata } = await this.skillRepoService.extractSkillPackage(skillName, tempZipPath);
+              const code = this.skillRepoService.getSkillCode(skillName);
+
+              const updateValues: any = { storageType: attachment.get('storageId') ? `storage-${attachment.get('storageId')}` : 'local' };
+              if (code) updateValues.codeTemplate = code;
+              if (metadata.description) updateValues.description = metadata.description;
+              if (metadata.title) updateValues.title = metadata.title;
+              if (metadata.language) updateValues.language = metadata.language;
+              if (metadata.inputSchema) updateValues.inputSchema = metadata.inputSchema;
+              if (metadata.timeoutSeconds) updateValues.timeoutSeconds = metadata.timeoutSeconds;
+
+              await this.db.getRepository('skillDefinitions').update({
+                filter: { id: model.get('id') },
+                values: updateValues,
+                transaction: options.transaction,
+              });
+              
+              unlinkSync(tempZipPath);
+              this.app.logger.info(`[skill-hub] Successfully extracted zip and updated skill: ${skillName}`);
+            }
+          }
+        } catch (err) {
+          this.app.logger.error(`[skill-hub] Failed to unpack skill zip`, { error: err });
+        }
+      }
+    });
+
     // 5. Subscribe PubSub — worker processes skill execution tasks
     this.app.pubSubManager.subscribe('skill-hub.task', async (payload: any) => {
       if (process.env.SKILL_HUB_SANDBOX === 'false') return;
@@ -136,6 +208,10 @@ export class PluginSkillHubServer extends Plugin {
       this.registerAITools();
       this.startCleanupInterval();
       await this.subscribeInitEnvDone();
+      // Ensure any newly added built-in skills are seeded automatically on upgrade/restart
+      await this.skillManager.seedDefaults().catch((e) => {
+        this.app.logger.error(`[skill-hub] Failed to seed default skills: ${e.message}`);
+      });
     });
   }
 
@@ -150,6 +226,7 @@ export class PluginSkillHubServer extends Plugin {
       execution,
       this.sandboxRunner,
       this.fileManager,
+      this.skillRepoService,
       this.app,
     );
     await task.run();
@@ -262,27 +339,55 @@ export class PluginSkillHubServer extends Plugin {
       }
     }
 
-    // Build download URLs for output files
-    const filesWithUrls = (result.files || []).map((f: any) => ({
-      ...f,
-      downloadUrl: `/api/skillHub:download?execId=${execId}&filename=${encodeURIComponent(f.name)}`,
-    }));
+    // Build download URLs for output files (use base64 filename to prevent Markdown link breaks if LLM decodes spaces)
+    const filesWithUrls = (result.files || []).map((f: any) => {
+      const b64name = Buffer.from(f.name).toString('base64url');
+      return {
+        ...f,
+        downloadUrl: `/api/skillHub:download?execId=${execId}&f=${b64name}`,
+      };
+    });
 
     return { ...result, files: filesWithUrls, execId };
   }
 
   private async handleDownload(ctx: any, next: any) {
-    const { execId, filename } = ctx.action.params;
-    if (!execId || !filename) {
+    const { execId, filename, f } = ctx.action.params;
+    let targetFile = filename;
+    if (f) {
+      targetFile = Buffer.from(f, 'base64url').toString('utf8');
+    }
+
+    if (!execId || !targetFile) {
       ctx.throw(400, 'Missing execId or filename');
     }
 
-    const filePath = this.fileManager.getOutputFilePath(execId, filename);
+    const currentUser = ctx.state.currentUser;
+    if (!currentUser) {
+      ctx.throw(401, 'Unauthorized');
+    }
+
+    const execution = await this.db.getRepository('skillExecutions').findOne({
+      filter: { id: execId },
+    });
+
+    if (!execution) {
+      ctx.throw(404, 'Execution not found');
+    }
+
+    const isOwner = execution.triggeredById === currentUser.id;
+    const isAdmin = currentUser.roles?.some((r: any) => r.name === 'root' || r === 'root' || r.name === 'admin');
+
+    if (!isOwner && !isAdmin) {
+      ctx.throw(403, 'Permission denied: you cannot view files from this execution');
+    }
+
+    const filePath = this.fileManager.getOutputFilePath(execId, targetFile);
     if (!filePath) {
       ctx.throw(404, 'File not found');
     }
 
-    ctx.attachment(filename);
+    ctx.attachment(targetFile);
     ctx.body = createReadStream(filePath);
     await next();
   }
@@ -326,8 +431,8 @@ export class PluginSkillHubServer extends Plugin {
   }
 
   /**
-   * Subscribe to init-env done PubSub channel.
-   * When a worker finishes init, auto-update the DB with status + whitelist.
+   * Subscribe to init-env done AND progress PubSub channels.
+   * When a worker finishes init, auto-update the DB with status.
    */
   private async subscribeInitEnvDone() {
     this.initEnvDoneCallback = async (data: any) => {
@@ -349,7 +454,24 @@ export class PluginSkillHubServer extends Plugin {
         this.app.logger.warn('[skill-hub] Failed to update init env status:', err);
       }
     };
+    
+    this.initEnvProgressCallback = async (data: any) => {
+      try {
+        await this.db.getRepository('skillWorkerConfigs').update({
+          filter: {},
+          values: {
+            initProgressPercent: data.percent,
+            initProgressLog: data.log,
+          },
+          forceUpdate: true,
+        });
+      } catch (err) {
+        // ignore progress update errors
+      }
+    };
+
     await this.app.pubSubManager.subscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
+    await this.app.pubSubManager.subscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
   }
 
   private registerAITools() {
@@ -465,6 +587,11 @@ export class PluginSkillHubServer extends Plugin {
         await this.app.pubSubManager.unsubscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
       } catch { /* ignore */ }
     }
+    if (this.initEnvProgressCallback) {
+      try {
+        await this.app.pubSubManager.unsubscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
+      } catch { /* ignore */ }
+    }
 
     // Clear cleanup interval
     if (this.cleanupInterval) {
@@ -501,6 +628,51 @@ export class PluginSkillHubServer extends Plugin {
     ctx.body = { count };
     await next();
   }
+
+  private async handleListTemplates(ctx: any, next: () => Promise<any>) {
+    const templates = Array.from(this.skillTemplates.values());
+    
+    // Dynamic Pull: discover templates from all active plugins in the system
+    try {
+      const allPlugins = this.app.pm.getPlugins();
+      for (const [pluginName, pluginInstance] of allPlugins) {
+        if (typeof (pluginInstance as any).getSkillTemplates === 'function') {
+          const pluginSkills = (pluginInstance as any).getSkillTemplates();
+          if (Array.isArray(pluginSkills)) {
+            for (const s of pluginSkills) {
+              if (!this.skillTemplates.has(s.name)) {
+                const enriched = { ...s, pluginSource: pluginName };
+                this.skillTemplates.set(s.name, enriched);
+                templates.push(enriched);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      this.app.logger.warn(`[skill-hub] Failed to discover some plugin skills: ${e.message}`);
+    }
+
+    ctx.body = { data: templates };
+    await next();
+  }
+
+  // ─── Extension API: other plugins register/unregister skills ───
+
+
+
+  /**
+   * Register a skill template into memory for UI importing.
+   */
+  registerSkillTemplate(pluginName: string, skillDef: any) {
+    this.skillTemplates.set(skillDef.name, {
+      ...skillDef,
+      pluginSource: pluginName,
+    });
+    this.app.logger.info(`[skill-hub] Registered skill template "${skillDef.name}" from plugin "${pluginName}"`);
+  }
+
+
 
   async install() {
     await this.skillManager.seedDefaults();

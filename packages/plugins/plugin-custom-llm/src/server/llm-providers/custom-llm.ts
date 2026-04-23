@@ -13,7 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import axios from 'axios';
 import { Context } from '@nocobase/actions';
-import type { ParsedAttachmentResult } from '@nocobase/plugin-ai';
+
 
 // Keepalive marker — zero-width space prefix to distinguish from real content
 const KEEPALIVE_PREFIX = '\u200B\u200B\u200B';
@@ -136,7 +136,69 @@ function createReasoningChatClass() {
         options?.[REASONING_MAP_KEY] instanceof Map
           ? (options[REASONING_MAP_KEY] as Map<string, string>)
           : collectReasoningMap(messages);
-      yield* super._streamResponseChunks(messages, { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap }, runManager);
+      
+      const stream = super._streamResponseChunks(messages, { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap }, runManager);
+      
+      let thinkingOpened = false;
+      let thinkingClosed = false;
+
+      const ChatGenerationChunk = getChatGenerationChunk();
+      const AIMessageChunk = getAIMessageChunk();
+
+      for await (const chunk of stream) {
+        const rc = chunk.message?.additional_kwargs?.reasoning_content;
+        const text = chunk.message?.content || "";
+        
+        let injectedText = "";
+        
+        if (rc) {
+          if (!thinkingOpened) {
+            injectedText += "<details style=\"margin-bottom: 12px; background: #fdfdfd; padding: 4px 8px; border-radius: 4px; border: 1px solid #f0f0f0;\">\n<summary style=\"cursor: pointer; color: #888; font-size: 0.9em; user-select: none;\">Thinking...</summary>\n\n";
+            thinkingOpened = true;
+          }
+          injectedText += rc;
+        }
+        
+        if (!rc && thinkingOpened && !thinkingClosed && (text && text !== KEEPALIVE_PREFIX || chunk.message?.tool_calls?.length > 0 || chunk.message?.tool_call_chunks?.length > 0)) {
+          injectedText += "\n\n</details>\n\n";
+          thinkingClosed = true;
+        }
+        
+        if (text && text !== KEEPALIVE_PREFIX) {
+          injectedText += text;
+        }
+        
+        if (text === KEEPALIVE_PREFIX && !injectedText) {
+          // Pass keepalive directly without wrapping
+          yield chunk;
+          continue;
+        }
+        
+        if (injectedText || chunk.message?.tool_call_chunks?.length > 0 || chunk.message?.tool_calls?.length > 0 || text === "") {
+          const newMsgOptions: any = { content: injectedText };
+          if (chunk.message.additional_kwargs) newMsgOptions.additional_kwargs = chunk.message.additional_kwargs;
+          if (chunk.message.tool_call_chunks) newMsgOptions.tool_call_chunks = chunk.message.tool_call_chunks;
+          if (chunk.message.tool_calls) newMsgOptions.tool_calls = chunk.message.tool_calls;
+          if (chunk.message.response_metadata) newMsgOptions.response_metadata = chunk.message.response_metadata;
+          if (chunk.message.usage_metadata) newMsgOptions.usage_metadata = chunk.message.usage_metadata;
+          
+          yield new ChatGenerationChunk({
+            message: new AIMessageChunk(newMsgOptions),
+            text: injectedText
+          });
+          continue;
+        }
+        
+        yield chunk;
+      }
+      
+      // Close thinking block if stream abruptly ended
+      if (thinkingOpened && !thinkingClosed) {
+        yield new ChatGenerationChunk({
+          message: new AIMessageChunk({ content: "\n\n</details>\n\n" }),
+          text: "\n\n</details>\n\n"
+        });
+      }
     }
 
     _convertCompletionsDeltaToBaseMessageChunk(delta: any, rawResponse: any, defaultRole?: any) {
@@ -744,13 +806,101 @@ function sanitizeAIMessageToolCalls(msg: any): void {
 }
 
 /**
+ * Estimate token count for a message.
+ * Uses a rough heuristic: CJK chars ~1 token each, Latin ~4 chars/token.
+ */
+function estimateTokens(msg: any): number {
+  let text = '';
+  if (typeof msg.content === 'string') text = msg.content;
+  else if (Array.isArray(msg.content)) {
+    text = msg.content.map((c: any) => c.text || '').join('');
+  }
+  if (!text) return 0;
+  let tokens = 0;
+  for (const char of text) {
+    // CJK Unified Ideographs and related blocks are ~1 token each
+    tokens += char.charCodeAt(0) > 0x2E80 ? 1 : 0.25;
+  }
+  return Math.ceil(tokens);
+}
+
+/**
+ * Truncate messages to fit within a token budget.
+ *
+ * IMPORTANT: Messages are removed in complete "conversation turns" to
+ * preserve the strict AI↔Tool message pairing required by LangChain and
+ * the OpenAI API. A turn is:
+ *   - A single user/system message, OR
+ *   - An AI message with tool_calls + all its corresponding ToolMessages
+ *
+ * The system message (if first) and the most recent messages are preserved.
+ */
+function truncateMessages(messages: any[], maxTokens: number): any[] {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+  let totalTokens = messages.reduce((sum, m) => sum + estimateTokens(m), 0);
+  if (totalTokens <= maxTokens) return messages;
+
+  const result = [...messages];
+  // Preserve system message separately
+  const systemMsg = result.length > 0 && (result[0].getType?.() === 'system' || result[0]._getType?.() === 'system') ? result.shift() : null;
+  if (systemMsg) {
+    totalTokens -= estimateTokens(systemMsg);
+  }
+
+  // Group remaining messages into conversation turns.
+  // A turn is: [user/human] or [ai + tool*] (ai message with its tool responses)
+  const turns: any[][] = [];
+  let i = 0;
+  while (i < result.length) {
+    const msg = result[i];
+    const msgType = msg.getType?.() ?? msg._getType?.() ?? msg.role ?? '';
+
+    if (msgType === 'ai' || msgType === 'assistant') {
+      // Group this AI message with all following tool messages
+      const turn = [msg];
+      i++;
+      while (i < result.length) {
+        const next = result[i];
+        const nextType = next.getType?.() ?? next._getType?.() ?? next.role ?? '';
+        if (nextType === 'tool') {
+          turn.push(next);
+          i++;
+        } else {
+          break;
+        }
+      }
+      turns.push(turn);
+    } else {
+      turns.push([msg]);
+      i++;
+    }
+  }
+
+  // Remove oldest turns until under budget, keeping at least the last turn
+  while (turns.length > 1 && totalTokens > maxTokens) {
+    const removed = turns.shift()!;
+    for (const msg of removed) {
+      totalTokens -= estimateTokens(msg);
+    }
+  }
+
+  // Flatten turns back into a flat message array
+  const truncated = turns.flat();
+  if (systemMsg) {
+    truncated.unshift(systemMsg);
+  }
+  return truncated;
+}
+
+/**
  * Patch a runnable (model or bound model) so that `invoke` and `stream`
  * sanitize tool call IDs on every AIMessage output.
  * Also patches `bindTools` and `bind` so that derived runnables inherit
  * the sanitization — this is critical because langgraph calls
  * `model.bindTools(tools)` and then uses the BOUND model.
  */
-function patchRunnableForSanitization(runnable: any): any {
+function patchRunnableForSanitization(runnable: any, options?: { enableTokenTruncation?: boolean; maxContextTokens?: number; enableToolRetry?: boolean; maxToolRetries?: number }): any {
   if (!runnable || runnable.__toolCallSanitized) return runnable;
   runnable.__toolCallSanitized = true;
 
@@ -758,16 +908,54 @@ function patchRunnableForSanitization(runnable: any): any {
   const origInvoke = runnable.invoke?.bind(runnable);
   if (origInvoke) {
     runnable.invoke = async function (...args: any[]) {
-      const result = await origInvoke(...args);
-      sanitizeAIMessageToolCalls(result);
-      return result;
+      let messages = args[0];
+      if (options?.enableTokenTruncation && options.maxContextTokens) {
+        messages = truncateMessages(messages, options.maxContextTokens);
+        args[0] = messages;
+      }
+      
+      let retries = options?.enableToolRetry ? (options.maxToolRetries || 1) : 0;
+      while (true) {
+        try {
+          const result = await origInvoke(...args);
+          sanitizeAIMessageToolCalls(result);
+          return result;
+        } catch (e: any) {
+          if (retries > 0) {
+            retries--;
+            if (Array.isArray(messages)) {
+              try {
+                const HumanMessage = requireFromApp('@langchain/core/messages').HumanMessage;
+                // Clone to avoid mutating the caller's original message array
+                messages = [...messages, new HumanMessage(`Your previous response was invalid. Please correct it and try again. Error: ${e.message}`)];
+                args[0] = messages;
+                continue;
+              } catch (err) {
+                // Ignore errors if HumanMessage fails to import
+              }
+            }
+          }
+          throw e;
+        }
+      }
     };
   }
 
-  // Patch stream — covers streaming path
+  // Patch stream — covers streaming path.
+  // NOTE: Tool-call retry is NOT applied here because stream() returns an
+  // async iterable — errors from bad tool-call JSON surface during iteration
+  // (downstream in ai-employee.ts), not during stream creation. Retry at this
+  // level would require buffering the entire stream, which defeats the purpose.
+  // Auto tool-call retry is only effective via the invoke() path.
   const origStream = runnable.stream?.bind(runnable);
   if (origStream) {
     runnable.stream = async function (...args: any[]) {
+      let messages = args[0];
+      if (options?.enableTokenTruncation && options.maxContextTokens) {
+        messages = truncateMessages(messages, options.maxContextTokens);
+        args[0] = messages;
+      }
+
       const iter = await origStream(...args);
       // Wrap the async iterable to sanitize each chunk
       const origIterator = iter[Symbol.asyncIterator]?.bind(iter);
@@ -796,7 +984,7 @@ function patchRunnableForSanitization(runnable: any): any {
   if (origBindTools) {
     runnable.bindTools = function (...args: any[]) {
       const bound = origBindTools(...args);
-      return patchRunnableForSanitization(bound);
+      return patchRunnableForSanitization(bound, options);
     };
   }
 
@@ -805,7 +993,7 @@ function patchRunnableForSanitization(runnable: any): any {
   if (origBind) {
     runnable.bind = function (...args: any[]) {
       const bound = origBind(...args);
-      return patchRunnableForSanitization(bound);
+      return patchRunnableForSanitization(bound, options);
     };
   }
 
@@ -828,22 +1016,29 @@ export class CustomLLMProvider extends LLMProvider {
   createModel() {
     const {
       apiKey, disableStream, timeout, streamKeepAlive,
-      keepAliveIntervalMs, keepAliveContent, enableReasoning,
+      keepAliveIntervalMs, enableReasoning,
     } = this.serviceOptions || {};
     // baseURL comes from core's options.baseURL field
     const baseURL = this.serviceOptions?.baseURL;
-    const { responseFormat } = this.modelOptions || {};
+    const { 
+      responseFormat, 
+      jsonSchemaDefinition, 
+      enableTokenTruncation, 
+      maxContextTokens,
+      enableToolRetry,
+      maxToolRetries
+    } = this.modelOptions || {};
     const reqConfig = this.requestConfig;
     const resConfig = this.responseConfig;
 
-    const responseFormatOptions: Record<string, any> = {
-      type: responseFormat ?? 'text',
-    };
-
     const modelKwargs: Record<string, any> = {
-      response_format: responseFormatOptions,
       ...(reqConfig.modelKwargs || {}),
     };
+
+    // NOTE: response_format is NOT set in modelKwargs here.
+    // It is applied lazily in prepareChain() so that withStructuredOutput()
+    // (from AI Employee context) takes priority when both are configured.
+    // See: prepareChain() override below.
 
     if (reqConfig.extraBody && typeof reqConfig.extraBody === 'object') {
       Object.assign(modelKwargs, reqConfig.extraBody);
@@ -853,9 +1048,19 @@ export class CustomLLMProvider extends LLMProvider {
     // This ensures reasoning_content is preserved and patched back into
     // assistant messages during tool call round-trips (required by DeepSeek-R1, etc.)
     const ChatClass = enableReasoning ? createReasoningChatClass() : getChatOpenAI();
+    // Exclude plugin-specific fields from the LangChain config spread.
+    // Fields like maxToolRetries, enableToolRetry, enableVision etc. are not
+    // LangChain constructor params and could cause collisions (e.g. maxRetries).
+    const {
+      responseFormat: _rf, jsonSchemaDefinition: _jsd,
+      enableTokenTruncation: _ett, maxContextTokens: _mct,
+      enableToolRetry: _etr, maxToolRetries: _mtr,
+      enableVision: _ev,
+      ...langchainModelOptions
+    } = this.modelOptions || {};
     const config: Record<string, any> = {
       apiKey,
-      ...this.modelOptions,
+      ...langchainModelOptions,
       modelKwargs,
       configuration: {
         baseURL,
@@ -895,7 +1100,7 @@ export class CustomLLMProvider extends LLMProvider {
     if (streamKeepAlive && !disableStream) {
       model = wrapWithStreamKeepAlive(model, {
         intervalMs: Number(keepAliveIntervalMs) || 5000,
-        keepAliveContent: keepAliveContent || '...',
+        keepAliveContent: '...',
       });
     }
 
@@ -903,9 +1108,60 @@ export class CustomLLMProvider extends LLMProvider {
     // Patches invoke/stream/bindTools/bind at the public API level so that
     // ALL code paths (including langgraph's internal model calls via
     // RunnableBinding after bindTools) return clean IDs.
-    model = patchRunnableForSanitization(model);
+    model = patchRunnableForSanitization(model, {
+      enableTokenTruncation,
+      maxContextTokens,
+      enableToolRetry,
+      maxToolRetries
+    });
 
     return model;
+  }
+
+  /**
+   * Override prepareChain to apply response_format lazily.
+   *
+   * When `context.structuredOutput` is present (set by AI Employee),
+   * the base class's `withStructuredOutput()` takes full priority and
+   * response_format from model settings is NOT applied — avoiding the
+   * double-schema conflict that some providers reject.
+   *
+   * When structuredOutput is NOT present, the user's response_format
+   * (json_object, json_schema) is applied via a bound model kwargs.
+   */
+  prepareChain(context: any) {
+    // Let the base class handle tools + structuredOutput
+    let chain = super.prepareChain(context);
+
+    // Only apply response_format when structuredOutput is NOT active
+    if (!context?.structuredOutput) {
+      const { responseFormat, jsonSchemaDefinition } = this.modelOptions || {};
+
+      if (responseFormat === 'json_schema' && jsonSchemaDefinition) {
+        try {
+          const parsedSchema = JSON.parse(jsonSchemaDefinition);
+          chain = chain.bind({
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: 'custom_response',
+                strict: true,
+                schema: parsedSchema,
+              },
+            },
+          });
+        } catch (e) {
+          console.warn('[CustomLLM] Failed to parse jsonSchemaDefinition', e);
+        }
+      } else if (responseFormat && responseFormat !== 'text') {
+        // json_object mode — don't send { type: 'text' } as it breaks non-OpenAI providers
+        chain = chain.bind({
+          response_format: { type: responseFormat },
+        });
+      }
+    }
+
+    return chain;
   }
 
   parseResponseChunk(chunk: any): string | null {
@@ -963,7 +1219,7 @@ export class CustomLLMProvider extends LLMProvider {
     };
   }
 
-  parseReasoningContent(chunk: any): { status: string; content: string } | null {
+  parseReasoningContent(chunk: any) {
     const resConfig = this.responseConfig;
     const reasoningKey = resConfig.reasoningKey || 'reasoning_content';
 
@@ -973,7 +1229,7 @@ export class CustomLLMProvider extends LLMProvider {
     if (reasoning && typeof reasoning === 'string') {
       return { status: 'streaming', content: reasoning };
     }
-    return null;
+    return null as any;
   }
 
   /**
@@ -1205,13 +1461,30 @@ export class CustomLLMProvider extends LLMProvider {
     }
   }
 
-  async parseAttachment(ctx: Context, attachment: any): Promise<ParsedAttachmentResult> {
+  async parseAttachment(ctx: Context, attachment: any) {
     const mimetype: string = attachment.mimetype || 'application/octet-stream';
     const filename: string = attachment.filename || attachment.name || 'file';
     const fileData = await this.readFileData(ctx, attachment);
     const { base64: data } = fileData;
 
-    const isDocPixieSupported = mimetype === 'application/pdf' || mimetype.startsWith('image/');
+    const { enableVision } = this.modelOptions || {};
+    const isImage = mimetype.startsWith('image/');
+    const isPdf = mimetype === 'application/pdf';
+    const isDocPixieSupported = isPdf || isImage;
+
+    // ── Early exit: images with vision disabled → skip all image processing ──
+    // When enableVision is off, the model cannot process images at all,
+    // so DocPixie OCR is also skipped (no point extracting text for a
+    // model that can't contextualize it). PDFs remain unaffected.
+    if (isImage && !enableVision) {
+      return {
+        placement: 'contentBlocks',
+        content: {
+          type: 'text',
+          text: `<attachment filename="${filename}" type="${mimetype}">[Image: ${filename} — omitted because native Vision is disabled]</attachment>`,
+        },
+      };
+    }
 
     // ── Path A: DocPixie skill active → full ingestion pipeline ──────────────
     // Runs processDocument (extract pages + generate summary + DB index) so the
@@ -1228,7 +1501,7 @@ export class CustomLLMProvider extends LLMProvider {
     }
 
     // ── Path B: DocPixie skill absent → transient extraction (no DB) ─────────
-    if (mimetype === 'application/pdf') {
+    if (isPdf) {
       const extracted = await this.tryDocPixieExtract(fileData, filename);
       if (extracted) {
         return {
@@ -1242,8 +1515,9 @@ export class CustomLLMProvider extends LLMProvider {
       // DocPixie unavailable — fall through to base64 data-URI
     }
 
-    if (mimetype.startsWith('image/')) {
-      // Transient DocPixie extraction (e.g. OCR); fallback to image_url for vision models
+    // ── Path C: Image with vision enabled ────────────────────────────────────
+    if (isImage) {
+      // Try DocPixie OCR first (e.g. scanned documents as images)
       const extracted = await this.tryDocPixieExtract(fileData, filename);
       if (extracted) {
         return {
@@ -1254,7 +1528,7 @@ export class CustomLLMProvider extends LLMProvider {
           },
         };
       }
-      // Final fallback — vision-capable models handle image_url natively
+      // Final fallback — send as image_url for vision-capable models
       return {
         placement: 'contentBlocks',
         content: {

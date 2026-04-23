@@ -7,11 +7,70 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
 import { useChatMessagesStore } from '@nocobase/plugin-ai/client';
-import { PreviewModal, PreviewFile, isPreviewableFile } from './PreviewModal';
-import { SessionBlobCache } from './SessionBlobCache';
+import { Modal, Button } from 'antd';
+
+export interface PreviewFile {
+  id?: string | number;
+  uid?: string;
+  url?: string;
+  filename?: string;
+  name?: string;
+  title?: string;
+  extname?: string;
+  mimetype?: string;
+  size?: number;
+  path?: string;
+  [key: string]: any;
+}
+
+// ─── Inline Fallback Previewer ───────────────────────────────────────────
+// Hand-crafted fallback so if plugin-file-preview-auth is disabled or unavaliable,
+// the AI chat still gets a 90% wide modal rather than doing nothing.
+
+function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
+  const file = list?.[index];
+  
+  if (!file) return null;
+
+  const url = typeof file === 'string' ? file : file?.url;
+  const resolvedUrl = url && (url.startsWith('https://') || url.startsWith('http://')) 
+    ? url 
+    : `${window.location.origin}/${(url || '').replace(/^\//, '')}`;
+
+  return (
+    <Modal
+      open={index != null}
+      title={file?.title || file?.filename || file?.name || 'File Preview (Fallback)'}
+      onCancel={() => onSwitchIndex(null)}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Button onClick={() => window.open(resolvedUrl, '_blank')}>Open Default</Button>
+          <Button onClick={() => onSwitchIndex(null)}>Close</Button>
+        </div>
+      }
+      width="90%"
+      centered
+    >
+      <div
+        style={{
+          width: '100%',
+          height: '70vh',
+          background: 'white',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <iframe
+          src={resolvedUrl}
+          style={{ width: '100%', height: '100%', border: 'none', flex: 1 }}
+        />
+      </div>
+    </Modal>
+  );
+}
 
 // Define a reliable, context-isolated module-level RAM cache independent of the window object
 export const AppRamCache = new Map<string, File | Blob>();
@@ -20,6 +79,8 @@ export const AppRamCache = new Map<string, File | Blob>();
  * Extract displayed filename from a FileListCard DOM element.
  */
 function getDisplayNameFromCard(cardEl: HTMLElement): string {
+  if (cardEl.tagName === 'A') return cardEl.textContent?.trim() || '';
+
   // 1. Try antd generic filename classes
   const nameEl = cardEl.querySelector('[class*="-name"]') as HTMLElement;
   if (nameEl?.textContent) return nameEl.textContent.trim();
@@ -70,19 +131,37 @@ function findFileByDisplayName(displayName: string, messages: any[], pendingAtta
 
     for (const att of attachments) {
       const attName = att.filename || att.name || '';
-      if (attName === displayName || `${att.title || ''}${att.extname || ''}` === displayName) {
+      const attTitleExt = `${att.title || ''}${att.extname || ''}`;
+      if (attName === displayName || attTitleExt === displayName) {
         return attToPreviewFile(att);
+      }
+      
+      // Relaxed match for NocoBase hashed file names
+      if (
+        (attName && displayName.includes(attName.replace(/\.[^/.]+$/, ''))) ||
+        (att.title && displayName.includes(att.title))
+      ) {
+         return attToPreviewFile(att);
       }
     }
   }
 
   // Search pending (not yet sent) attachments
   for (const att of pendingAttachments || []) {
-    const attName = att.filename || att.name || '';
-    if (attName === displayName || `${att.title || ''}${att.extname || ''}` === displayName) {
-      return attToPreviewFile(att);
+      const attName = att.filename || att.name || '';
+      const attTitleExt = `${att.title || ''}${att.extname || ''}`;
+      if (attName === displayName || attTitleExt === displayName) {
+        return attToPreviewFile(att);
+      }
+      
+      // Relaxed match for NocoBase hashed file names (e.g. report.docx-c2ywti.docx)
+      if (
+        (attName && displayName.includes(attName.replace(/\.[^/.]+$/, ''))) ||
+        (att.title && displayName.includes(att.title))
+      ) {
+         return attToPreviewFile(att);
+      }
     }
-  }
 
   return null;
 }
@@ -169,6 +248,39 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Track global drop and input change events to intercept file object selection ONLY for AI chat
   useEffect(() => {
+    // Modify href attributes of native NocoBase file links in chat to use the proxy
+    const rewriteObtrusiveLinks = () => {
+      const links = document.querySelectorAll<HTMLAnchorElement>('.ant-attachment-list-card-name');
+      links.forEach(link => {
+        const href = link.getAttribute('href');
+        if (href && !href.includes('/api/filePreviewAuth:download')) {
+           link.setAttribute('href', `/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`);
+        }
+      });
+      // Also rewrite ai-attachment-link anchors
+      const aiLinks = document.querySelectorAll<HTMLAnchorElement>('a.ai-attachment-link');
+      aiLinks.forEach(link => {
+        const href = link.getAttribute('href');
+        if (href && !href.includes('/api/filePreviewAuth:download') && !href.includes('skillHub:download') && !href.includes('worker-monitor')) {
+           link.setAttribute('href', `/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`);
+        }
+      });
+      
+      // Auto-style raw markdown links for Skill Hub and Worker Monitor as interactive file attachments
+      const rawFileLinks = document.querySelectorAll<HTMLAnchorElement>('.nb-markdown a[href*="skillHub:download"], .nb-markdown a[href*="worker-monitor"]');
+      rawFileLinks.forEach(link => {
+        if (!link.classList.contains('ai-attachment-link')) {
+           link.classList.add('ai-attachment-link');
+        }
+      });
+    };
+
+    // Run periodically to catch newly rendered chat messages
+    const timer = setInterval(rewriteObtrusiveLinks, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     const handleDrop = (e: DragEvent) => {
       const target = e.target as HTMLElement;
       if (!target || !target.closest) return;
@@ -231,16 +343,30 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       const cards: Element[] = [];
       aiContainers.forEach(container => {
         container.querySelectorAll('div[class*="attachment-list-card"]:not([class*="attachment-list-card-"])').forEach(c => cards.push(c));
+        container.querySelectorAll('a').forEach(a => {
+          const href = (a as HTMLAnchorElement).href;
+          if (href && (href.includes('/api/attachments/') || href.includes('/api/files/download/') || href.includes('/api/worker-monitor/') || href.includes('/api/skillHub:download'))) {
+            cards.push(a);
+            if (!a.classList.contains('ai-attachment-link')) {
+              a.classList.add('ai-attachment-link');
+              a.classList.add('attachment-list-card'); // Trick click interceptor
+            }
+          }
+        });
       });
 
       cards.forEach(card => {
         const el = card as HTMLElement;
         const displayName = getDisplayNameFromCard(el);
-        const urlNodes = el.querySelectorAll('a');
         let fallbackUrl = '';
-        urlNodes.forEach((node) => {
-          if (node.href) fallbackUrl = node.href;
-        });
+        if (el.tagName === 'A') {
+          fallbackUrl = (el as HTMLAnchorElement).href;
+        } else {
+          const urlNodes = el.querySelectorAll('a');
+          urlNodes.forEach((node) => {
+            if (node.href) fallbackUrl = node.href;
+          });
+        }
 
         // Resolve real file name from data store
         const file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
@@ -251,7 +377,9 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         const cacheHitName = realName && AppRamCache.has(realName) ? realName 
                            : (displayName && AppRamCache.has(displayName) ? displayName : null);
 
-        if (cacheHitName) {
+        const isAIGenerated = fallbackUrl && (fallbackUrl.includes('/api/attachments/') || fallbackUrl.includes('/api/files/download/') || fallbackUrl.includes('/api/worker-monitor/') || fallbackUrl.includes('/api/skillHub:download'));
+
+        if (file || cacheHitName || isAIGenerated) {
           el.classList.add('is-cached-previewable');
         } else {
           el.classList.remove('is-cached-previewable');
@@ -265,24 +393,24 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const style = document.createElement('style');
     style.innerHTML = `
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) {
+      .ant-attachment-list-card {
         position: relative !important;
         cursor: pointer !important;
       }
       /* Prevent pointer events on inner text and icons so the outer div receives the absolute click */
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) a,
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) [class*="-icon"],
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) span {
+      .ant-attachment-list-card a,
+      .ant-attachment-list-card [class*="-icon"],
+      .ant-attachment-list-card span {
         pointer-events: none !important;
       }
       /* Re-enable pointer events for the delete button specifically */
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) [class*="-remove"],
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) button,
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]) .ant-btn {
+      .ant-attachment-list-card [class*="-remove"],
+      .ant-attachment-list-card button,
+      .ant-attachment-list-card .ant-btn {
         pointer-events: auto !important;
       }
       /* Visual "Preview" badge at the top-left corner using proper SVG */
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]).is-cached-previewable::after {
+      .ant-attachment-list-card.is-cached-previewable::after {
         content: '';
         background-image: url("data:image/svg+xml,%3Csvg viewBox='64 64 896 896' xmlns='http://www.w3.org/2000/svg' fill='rgba(0,0,0,0.65)'%3E%3Cpath d='M942.2 486.2C847.4 286.5 704.1 186 512 186c-192.2 0-335.4 100.5-430.2 300.3a60.3 60.3 0 000 51.5C176.6 737.5 319.9 838 512 838c192.2 0 335.4-100.5 430.2-300.3 7.7-16.2 7.7-35 0-51.5zM512 766c-161.3 0-279.4-81.8-362.7-254C232.6 339.8 350.7 258 512 258c161.3 0 279.4 81.8 362.7 254C791.5 684.2 673.4 766 512 766zm-4-430c-97.2 0-176 78.8-176 176s78.8 176 176 176 176-78.8 176-176-78.8-176-176-176zm0 288c-61.9 0-112-50.1-112-112s50.1-112 112-112 112 50.1 112 112-50.1 112-112 112z'/%3E%3C/svg%3E");
         background-size: contain;
@@ -296,8 +424,45 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         pointer-events: none;
       }
       /* Hide native antd thumbnail icon if we placed an eye so it doesnt look messy */
-      div[class*="attachment-list-card"]:not([class*="attachment-list-card-"]).is-cached-previewable .ant-upload-list-item-thumbnail {
+      .ant-attachment-list-card.is-cached-previewable .ant-upload-list-item-thumbnail {
         opacity: 0.2;
+      }
+      /* Custom aesthetics for raw AI-generated links to match cards */
+      a.ai-attachment-link {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 12px;
+        margin: 4px;
+        border: 1px solid #d9d9d9;
+        border-radius: 8px;
+        background: #fafafa;
+        color: rgba(0, 0, 0, 0.88);
+        text-decoration: none !important;
+        position: relative;
+        cursor: pointer !important;
+        transition: all 0.2s;
+        line-height: 1.5;
+      }
+      a.ai-attachment-link:hover {
+        background: #f0f0f0;
+      }
+      a.ai-attachment-link::before {
+        content: '📄 ';
+        margin-right: 8px;
+        font-size: 14px;
+      }
+      a.ai-attachment-link.is-cached-previewable::after {
+        content: '';
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='64 64 896 896' xmlns='http://www.w3.org/2000/svg' fill='rgba(0,0,0,0.65)'%3E%3Cpath d='M942.2 486.2C847.4 286.5 704.1 186 512 186c-192.2 0-335.4 100.5-430.2 300.3a60.3 60.3 0 000 51.5C176.6 737.5 319.9 838 512 838c192.2 0 335.4-100.5 430.2-300.3 7.7-16.2 7.7-35 0-51.5zM512 766c-161.3 0-279.4-81.8-362.7-254C232.6 339.8 350.7 258 512 258c161.3 0 279.4 81.8 362.7 254C791.5 684.2 673.4 766 512 766zm-4-430c-97.2 0-176 78.8-176 176s78.8 176 176 176 176-78.8 176-176-78.8-176-176-176zm0 288c-61.9 0-112-50.1-112-112s50.1-112 112-112 112 50.1 112 112-50.1 112-112 112z'/%3E%3C/svg%3E");
+        background-size: contain;
+        background-repeat: no-repeat;
+        position: absolute;
+        top: -6px;
+        left: -6px;
+        width: 14px;
+        height: 14px;
+        z-index: 10;
+        pointer-events: none;
       }
     `;
     document.head.appendChild(style);
@@ -312,32 +477,86 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       const el = e.target as Element;
       if (!el || typeof el.closest !== 'function') return;
 
-      // Find closest FileCard element — uses ant-design/x class pattern
-      const cardEl = el.closest('[class*="attachment-list-card"]:not([class*="attachment-list-card-"])') as HTMLElement;
-      if (!cardEl) return;
+      // Find closest Anchor (A), FileCard, or Ant Tag (from chat input attachments)
+      let fallbackUrl = '';
+      let displayName = '';
+      
+      const anchorNode = el.closest('a');
+      const cardEl = el.closest('.ant-attachment-list-card') as HTMLElement;
+      const antTagBtn = el.closest('.ant-tag');
+
+      if (!anchorNode && !cardEl && !antTagBtn) return;
 
       // Skip remove button clicks
-      if (el.closest('[class*="-remove"]') || el.closest('.ant-btn')) return;
+      if (el.closest('[class*="-remove"]') || el.closest('.ant-tag-close-icon') || el.closest('.ant-btn')) return;
 
-      // Ensure we only hijack the click if we VERIFIED the file exists in our cache!
-      // This strictly prevents the 403 API fallback scenario.
-      if (!cardEl.classList.contains('is-cached-previewable')) return;
+      if (cardEl) {
+        displayName = getDisplayNameFromCard(cardEl);
+        if (cardEl.tagName === 'A') {
+          fallbackUrl = (cardEl as HTMLAnchorElement).href;
+        } else {
+          const urlNodes = cardEl.querySelectorAll('a');
+          urlNodes.forEach((node) => {
+            if (node.href) fallbackUrl = node.href;
+          });
+        }
+      } else if (anchorNode) {
+        fallbackUrl = anchorNode.href;
+        displayName = anchorNode.textContent || 'download';
+      } else if (antTagBtn) {
+        displayName = antTagBtn.textContent?.trim() || '';
+      }
 
-      const displayName = getDisplayNameFromCard(cardEl);
-      const urlNodes = cardEl.querySelectorAll('a');
-      let fallbackUrl = '';
-      urlNodes.forEach((node) => {
-        if (node.href) fallbackUrl = node.href;
-      });
+      // Decode original url if it's already a proxied url
+      let originalFallbackUrl = fallbackUrl;
+      if (fallbackUrl && fallbackUrl.includes('/api/filePreviewAuth:download?url=')) {
+         try {
+            const urlObj = new URL(fallbackUrl, window.location.origin);
+            originalFallbackUrl = decodeURIComponent(urlObj.searchParams.get('url') || fallbackUrl);
+         } catch {
+            // ignore
+         }
+      }
 
-      const file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
-                   findFileByUrl(fallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
+      let file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
+                   findFileByUrl(originalFallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
 
-      if (!file) return;
-      if (!isPreviewableFile(file)) return;
+      const isAIGenerated = originalFallbackUrl && (
+         originalFallbackUrl.includes('/api/attachments/') || 
+         originalFallbackUrl.includes('/api/files/download/') || 
+         originalFallbackUrl.includes('/api/worker-monitor/') || 
+         originalFallbackUrl.includes('/api/skillHub:download') ||
+         originalFallbackUrl.includes('/storage/uploads/') ||
+         originalFallbackUrl.includes('amazonaws.com') // Ensure only explicitly known S3 formats are caught if not in messagesRef
+      );
+
+      // If we clicked a completely unrelated anchor tag in the admin panel and it's not a known file, abort immediately
+      if (!file && !isAIGenerated && anchorNode && !cardEl) {
+         return;
+      }
+
+      if (!file && isAIGenerated) {
+        const extname = originalFallbackUrl.match(/\.([a-z0-9]+)(?:[\?#]|$)/i)?.[1];
+        file = {
+          id: originalFallbackUrl,
+          uid: originalFallbackUrl,
+          url: originalFallbackUrl,
+          filename: displayName || 'attachment',
+          name: displayName || 'attachment',
+          extname: extname ? `.${extname}` : undefined,
+          mimetype: '',
+        } as PreviewFile;
+      }
+
+      if (!file && !isAIGenerated) return;
 
       e.preventDefault();
       e.stopPropagation();
+
+      // Convert to secure proxy URL for everything EXCEPT natively secured endpoints that don't belong to the attachments table
+      const shouldUseProxy = originalFallbackUrl && !originalFallbackUrl.includes('skillHub:download') && !originalFallbackUrl.includes('worker-monitor');
+      const secureUrl = shouldUseProxy ? `/api/filePreviewAuth:download?url=${encodeURIComponent(originalFallbackUrl)}` : (originalFallbackUrl || file.url);
+      file = { ...file, url: secureUrl };
 
       setSessionId(currentSessionIdRef.current || '');
       setPreviewFile(file);
@@ -348,37 +567,29 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => document.removeEventListener('click', handler, { capture: true });
   }, []);
 
-  // Cleanup cache when conversations are deleted
-  useEffect(() => {
-    const interceptor = apiClient.axios.interceptors.response.use((response) => {
-      try {
-        const url = response.config?.url || '';
-        if (url.includes('aiConversations:destroy')) {
-          const match = url.match(/filterByTk=([^&]+)/);
-          if (match) {
-            SessionBlobCache.clearSession(decodeURIComponent(match[1])).catch(() => {});
-          }
-        }
-      } catch {
-        // ignore
-      }
-      return response;
-    });
-
-    return () => {
-      apiClient.axios.interceptors.response.eject(interceptor);
-    };
-  }, [apiClient]);
-
   const handleClose = useCallback(() => {
     setPreviewOpen(false);
     setPreviewFile(null);
   }, []);
 
+  const SystemPreviewer = useMemo(() => {
+    if (!previewFile || !previewOpen) return null;
+    const type = attachmentFileTypes.getTypeByFile(previewFile);
+    return type?.Previewer || FallbackModalPreviewer;
+  }, [previewFile, previewOpen]);
+
   return (
     <>
       {children}
-      <PreviewModal open={previewOpen} file={previewFile} sessionId={sessionId} onClose={handleClose} />
+      {SystemPreviewer && previewOpen && previewFile && (
+        <SystemPreviewer
+          index={0}
+          list={[previewFile as any]}
+          onSwitchIndex={(idx: any) => {
+            if (idx === null) handleClose();
+          }}
+        />
+      )}
     </>
   );
 };

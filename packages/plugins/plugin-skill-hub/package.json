@@ -6,11 +6,12 @@
   "description": "Manage and execute Python/Node.js skills in sandbox on worker server for AI Employees",
   "description.zh-CN": "管理并在工作服务器沙箱中执行 Python/Node.js 技能，供 AI 员工使用",
   "description.vi-VN": "Quan ly va thuc thi skill Python/Node.js tren worker server cho AI Employee",
-  "version": "1.0.0",
+  "version": "1.0.17",
   "license": "Apache-2.0",
   "files": [
     "dist",
     "src",
+    "scripts",
     "client.js",
     "server.js",
     "client.d.ts",
@@ -29,6 +30,10 @@
     "@nocobase/database": "2.x",
     "@nocobase/test": "2.x",
     "@nocobase/plugin-ai": "2.x"
+  },
+  "devDependencies": {
+    "adm-zip": "^0.5.10",
+    "xlsx": "^0.18.5"
   },
   "keywords": [
     "AI",

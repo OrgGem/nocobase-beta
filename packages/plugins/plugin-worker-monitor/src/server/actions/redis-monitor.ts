@@ -1,4 +1,5 @@
 import { Context } from '@nocobase/actions';
+import { getRedisOrThrow } from '../utils/redis';
 
 function parseRedisInfo(raw: string): Record<string, Record<string, string>> {
   const sections: Record<string, Record<string, string>> = {};
@@ -21,17 +22,10 @@ function parseRedisInfo(raw: string): Record<string, Record<string, string>> {
   return sections;
 }
 
-function getRedis(ctx: Context) {
-  const conn = ctx.app.redisConnectionManager?.getConnection();
-  if (!conn) {
-    ctx.throw(503, 'Redis is not configured or not connected');
-  }
-  return conn;
-}
 
 export const redisActions = {
   async info(ctx: Context, next: () => Promise<void>) {
-    const redis = getRedis(ctx);
+    const redis = getRedisOrThrow(ctx);
     const raw = await redis.info();
     const parsed = parseRedisInfo(raw);
 
@@ -95,7 +89,7 @@ export const redisActions = {
   },
 
   async clients(ctx: Context, next: () => Promise<void>) {
-    const redis = getRedis(ctx);
+    const redis = getRedisOrThrow(ctx);
     const raw = await redis.sendCommand(['CLIENT', 'LIST']);
 
     const clients = String(raw)
@@ -117,7 +111,7 @@ export const redisActions = {
   },
 
   async pubsub(ctx: Context, next: () => Promise<void>) {
-    const redis = getRedis(ctx);
+    const redis = getRedisOrThrow(ctx);
 
     const channels = (await redis.sendCommand(['PUBSUB', 'CHANNELS'])) as string[];
 
@@ -137,7 +131,7 @@ export const redisActions = {
   },
 
   async slowlog(ctx: Context, next: () => Promise<void>) {
-    const redis = getRedis(ctx);
+    const redis = getRedisOrThrow(ctx);
     const { count = 20 } = ctx.action.params;
 
     const entries = (await redis.sendCommand(['SLOWLOG', 'GET', String(count)])) as any[];

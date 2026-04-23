@@ -95,22 +95,68 @@ const Options: React.FC = () => {
                       enum: [
                         { label: t('Text'), value: 'text' },
                         { label: t('JSON'), value: 'json_object' },
+                        { label: t('JSON Schema (Strict)'), value: 'json_schema' },
                       ],
                       default: 'text',
                     },
-                    timeout: {
-                      title: tval('Timeout (ms)', { ns: namespace }),
-                      type: 'number',
+                    jsonSchemaDefinition: {
+                      title: tval('JSON Schema Definition', { ns: namespace }),
+                      type: 'string',
                       'x-decorator': 'FormItem',
-                      'x-component': 'InputNumber',
-                      default: 60000,
+                      'x-component': 'Input.TextArea',
+                      'x-component-props': {
+                        placeholder: '{\n  "type": "object",\n  "properties": {}\n}',
+                        rows: 6,
+                        style: { fontFamily: 'monospace', fontSize: 12 },
+                      },
+                      'x-reactions': {
+                        dependencies: ['.responseFormat'],
+                        fulfill: { state: { visible: '{{$deps[0] === "json_schema"}}' } },
+                      },
                     },
-                    maxRetries: {
-                      title: tval('Max retries', { ns: namespace }),
+
+                    enableToolRetry: {
+                      title: tval('Auto Tool-call Retry', { ns: namespace }),
+                      type: 'boolean',
+                      'x-decorator': 'FormItem',
+                      'x-component': 'Checkbox',
+                      default: true,
+                    },
+                    maxToolRetries: {
+                      title: tval('Max tool retries', { ns: namespace }),
                       type: 'number',
                       'x-decorator': 'FormItem',
                       'x-component': 'InputNumber',
                       default: 1,
+                      'x-reactions': {
+                        dependencies: ['.enableToolRetry'],
+                        fulfill: { state: { visible: '{{$deps[0]}}' } },
+                      },
+                    },
+                    enableVision: {
+                      title: tval('Enable native Vision', { ns: namespace }),
+                      type: 'boolean',
+                      'x-decorator': 'FormItem',
+                      'x-component': 'Checkbox',
+                      default: false,
+                    },
+                    enableTokenTruncation: {
+                      title: tval('Auto-truncate History', { ns: namespace }),
+                      type: 'boolean',
+                      'x-decorator': 'FormItem',
+                      'x-component': 'Checkbox',
+                      default: false,
+                    },
+                    maxContextTokens: {
+                      title: tval('Max Context Tokens', { ns: namespace }),
+                      type: 'number',
+                      'x-decorator': 'FormItem',
+                      'x-component': 'InputNumber',
+                      default: 8192,
+                      'x-reactions': {
+                        dependencies: ['.enableTokenTruncation'],
+                        fulfill: { state: { visible: '{{$deps[0]}}' } },
+                      },
                     },
                   },
                 }}
