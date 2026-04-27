@@ -1,4 +1,5 @@
 import { Database } from '@nocobase/database';
+import { stringifyJsonText } from '../utils/json-fields';
 
 export class SkillManager {
   constructor(private db: Database) {}
@@ -204,7 +205,13 @@ export class SkillManager {
       try {
         const count = await repo.count({ filter: { name: seed.name } });
         if (count === 0) {
-          await repo.create({ values: seed });
+          await repo.create({
+            values: {
+              ...seed,
+              inputSchema: stringifyJsonText(seed.inputSchema),
+              packages: stringifyJsonText(seed.packages, []),
+            },
+          });
         }
       } catch (err) {
         console.error(`[import-skill] Failed to insert ${seed.name}:`, err);

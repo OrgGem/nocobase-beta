@@ -1,0 +1,35 @@
+{
+  "name": "plugin-comm-core",
+  "displayName": "Communication Core",
+  "displayName.zh-CN": "通信核心",
+  "displayName.vi-VN": "Nền tảng Giao tiếp",
+  "description": "Foundation layer for realtime communication suite — shared database models, event contracts, and WebSocket message routing for chat, presence, and meetings.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "keywords": [
+    "Communication",
+    "Chat",
+    "Realtime",
+    "WebSocket"
+  ],
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x"
+  }
+}

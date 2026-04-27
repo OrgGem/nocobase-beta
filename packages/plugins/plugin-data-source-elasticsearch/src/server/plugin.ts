@@ -40,6 +40,73 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
       only: ['testConnection'],
     });
 
+    /**
+     * Middleware: load Elasticsearch tables into collections during create/update.
+     *
+     * The core framework's loadDataSourceTablesIntoCollections middleware only
+     * handles DatabaseDataSource subclasses (Sequelize-based). Since
+     * ElasticsearchDataSource extends plain DataSource (no Sequelize), we handle
+     * collection loading ourselves with the same pattern.
+     *
+     * This runs BEFORE the core middleware and intercepts Elasticsearch data
+     * source create/update requests.
+     */
+    (this as any).app.resourceManager.use(async (ctx, next) => {
+      const { actionName, resourceName, params } = ctx.action || {};
+
+      if (resourceName === 'dataSources' && (actionName === 'create' || actionName === 'update')) {
+        const { options, type, collections, key } = params?.values || {};
+
+        // Only intercept elasticsearch type data sources
+        const isElasticsearch =
+          type === 'elasticsearch' ||
+          (actionName === 'update' && await this.isElasticsearchDataSource(ctx, params?.filterByTk));
+
+        if (isElasticsearch && options) {
+          try {
+            // Create a temporary data source to introspect
+            const dsName = actionName === 'update' ? params.filterByTk : key;
+            const tempDs = (this as any).app.dataSourceManager.factory.create('elasticsearch', {
+              name: dsName,
+              ...options,
+            });
+            tempDs.setLogger(ctx.logger || this.app.logger);
+
+            if (options.addAllCollections) {
+              // readTables is used to check count limits
+              const allIndices = await tempDs.readTables();
+              const maxCollections = 500; // same as core ALLOW_MAX_COLLECTIONS_COUNT
+              if (allIndices.length > maxCollections) {
+                await tempDs.close();
+                throw new Error(
+                  `The number of collections exceeds the limit of ${maxCollections}. ` +
+                  `Please remove some collections before adding new ones.`,
+                );
+              }
+              // Don't load individually — all indices will be loaded during load()
+            } else if (collections && collections.length > 0) {
+              // Load only selected collections
+              await tempDs.loadTables(ctx, collections);
+            }
+
+            // Clean up temp client
+            await tempDs.close();
+
+            // Remove collections from the payload so the core framework
+            // doesn't try to process them again
+            if (collections) {
+              delete ctx.action.params.values.collections;
+            }
+          } catch (error) {
+            this.app.logger.error('[Elasticsearch] Failed to process collections during create/update:', error);
+            throw error;
+          }
+        }
+      }
+
+      await next();
+    });
+
     // Handle collection destroy for elasticsearch data sources
     (this as any).app.resourcer.use(async (ctx, next) => {
       const { resourceName, actionName, associatedIndex: dataSourceKey } = ctx.action?.params || {};
@@ -87,6 +154,20 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
 
     // Allow test connection for logged-in users
     this.app.acl.allow('external-elasticsearch', 'testConnection', 'loggedIn');
+  }
+
+  /**
+   * Check if an existing data source is of type 'elasticsearch'.
+   */
+  private async isElasticsearchDataSource(ctx: any, filterByTk: string): Promise<boolean> {
+    if (!filterByTk) return false;
+    try {
+      const dataSourcesRepo = ctx.db.getRepository('dataSources');
+      const model = await dataSourcesRepo.findByTargetKey(filterByTk);
+      return model?.get('type') === 'elasticsearch';
+    } catch {
+      return false;
+    }
   }
 }
 

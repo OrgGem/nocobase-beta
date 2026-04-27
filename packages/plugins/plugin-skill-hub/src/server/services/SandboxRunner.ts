@@ -15,6 +15,8 @@ export interface ExecuteOptions {
   signal?: { addEventListener(event: string, listener: () => void): void };
   /** Package whitelist for import validation (from skillWorkerConfigs) */
   packageWhitelist?: string[];
+  /** Optional installed/copied skill package root exposed to the runtime as SKILL_DIR. */
+  skillDir?: string;
 }
 
 export interface ProgressUpdate {
@@ -57,6 +59,7 @@ export class SandboxRunner {
       onProgress,
       signal,
       packageWhitelist,
+      skillDir,
     } = options;
 
     // 1. Validate code against forbidden patterns
@@ -116,10 +119,12 @@ export class SandboxRunner {
             NODE_PATH: finalNodePath,
             // Python — include bundled packages (svg_to_pptx etc.)
             PYTHONPATH: [
+              skillDir ? path.resolve(skillDir, 'scripts') : '',
               path.resolve(this.sandboxWorkspace, 'python_packages'),
               process.env.PYTHONPATH || '',
             ].filter(Boolean).join(path.delimiter),
             PYTHONIOENCODING: 'utf-8',
+            SKILL_DIR: skillDir || '',
             // DO NOT pass: DB credentials, API keys, APP_KEY, etc.
           },
         },

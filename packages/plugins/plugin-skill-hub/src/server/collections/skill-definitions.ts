@@ -26,6 +26,10 @@ export default {
       type: 'text',
     },
     {
+      name: 'instructions',
+      type: 'text',
+    },
+    {
       // 'node' | 'python'
       name: 'language',
       type: 'string',
@@ -39,13 +43,20 @@ export default {
     {
       // JSON Schema for input parameters (used by AI tool)
       name: 'inputSchema',
-      type: 'json',
+      type: 'text',
+    },
+    {
+      // Optional UI schema for human-in-the-loop interaction.
+      // Shape: { type: 'form'|'select'|'confirm', prompt: string,
+      //          options?: {label,value}[], fields?: Record<string, {type,title,required,enum}> }
+      name: 'interactionSchema',
+      type: 'text',
     },
     {
       // Pre-installed packages reference (informational)
       name: 'packages',
-      type: 'json',
-      defaultValue: [],
+      type: 'text',
+      defaultValue: null,
     },
     {
       name: 'timeoutSeconds',

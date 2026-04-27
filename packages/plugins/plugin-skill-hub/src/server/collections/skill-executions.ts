@@ -25,7 +25,7 @@ export default {
     },
     {
       name: 'inputArgs',
-      type: 'json',
+      type: 'text',
     },
     {
       // Final code after template rendering
@@ -43,8 +43,8 @@ export default {
     {
       // [{ name, size, mimeType }]
       name: 'outputFiles',
-      type: 'json',
-      defaultValue: [],
+      type: 'text',
+      defaultValue: null,
     },
     {
       name: 'durationMs',

@@ -3,6 +3,7 @@ import { Card, Form, Input, Button, Alert, Progress, Tag, Typography, Space, Div
 import { CloudServerOutlined, SafetyOutlined, ReloadOutlined, DatabaseOutlined, ClearOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useT } from '../locale';
+import { parseJsonText, stringifyJsonText } from '../utils/jsonFields';
 
 const { Text, Title } = Typography;
 
@@ -44,7 +45,12 @@ export const WorkerSetup: React.FC = () => {
     setLoading(true);
     try {
       const { data } = await api.request({ url: 'skillWorkerConfigs:get' });
-      const cfg = data?.data;
+      const responseData = data?.data?.data || data?.data;
+      const cfg = responseData;
+      if (cfg) {
+        cfg.packageWhitelist = parseJsonText(cfg.packageWhitelist, { python: [], node: [], apt: [] });
+        cfg.customPackages = parseJsonText(cfg.customPackages, { python: [], node: [] });
+      }
       setConfig(cfg);
       if (cfg) {
         form.setFieldsValue({
@@ -121,7 +127,8 @@ export const WorkerSetup: React.FC = () => {
         method: 'POST',
         data: { type },
       });
-      message.success(t(`Cleared ${data?.data?.count || 0} executions`));
+      const responseData = data?.data?.data || data?.data;
+      message.success(t(`Cleared ${responseData?.count || 0} executions`));
     } catch (err: any) {
       message.error(err?.response?.data?.errors?.[0]?.message || t('Failed to clear data'));
     } finally {
@@ -151,7 +158,7 @@ export const WorkerSetup: React.FC = () => {
     setAddingPkg(true);
     try {
       const currentConfig = config || {};
-      const currentCustom = currentConfig.customPackages || { python: [], node: [] };
+      const currentCustom = parseJsonText(currentConfig.customPackages, { python: [], node: [] });
       const currentLangList = currentCustom[customPkgLang] || [];
       
       if (!currentLangList.includes(customPkgName.trim())) {
@@ -163,13 +170,13 @@ export const WorkerSetup: React.FC = () => {
             url: `skillWorkerConfigs:update`,
             method: 'post',
             params: { filterByTk: config.id },
-            data: { customPackages: newCustom },
+            data: { customPackages: stringifyJsonText(newCustom, { python: [], node: [] }) },
           });
         } else {
           await api.request({
             url: 'skillWorkerConfigs:create',
             method: 'post',
-            data: { customPackages: newCustom },
+            data: { customPackages: stringifyJsonText(newCustom, { python: [], node: [] }) },
           });
         }
       }

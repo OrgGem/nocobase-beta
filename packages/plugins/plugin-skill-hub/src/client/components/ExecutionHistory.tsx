@@ -3,6 +3,7 @@ import { Card, Table, Tag, Button, Typography, Space, Tooltip, Popconfirm, messa
 import { ReloadOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPIClient, Upload } from '@nocobase/client';
 import { useT } from '../locale';
+import { parseJsonText } from '../utils/jsonFields';
 
 const STATUS_COLORS: Record<string, string> = {
   pending: 'default',
@@ -34,7 +35,8 @@ export const ExecutionHistory: React.FC = () => {
           appends: ['skill', 'triggeredBy'],
         },
       });
-      setExecutions(data?.data || []);
+      const responseData = data?.data?.data || data?.data || [];
+      setExecutions(responseData);
       setTotal(data?.meta?.count || 0);
     } catch {
       // ignore
@@ -98,6 +100,7 @@ export const ExecutionHistory: React.FC = () => {
       key: 'files',
       width: 250,
       render: (files: any[], record: any) => {
+        files = parseJsonText(files, []);
         if (!files?.length) return '-';
         const formattedFiles = files.map((f, i) => ({
           id: `${record.id}-${f.name}-${i}`,

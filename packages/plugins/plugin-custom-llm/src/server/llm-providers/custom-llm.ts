@@ -14,9 +14,28 @@ import fs from 'node:fs/promises';
 import axios from 'axios';
 import { Context } from '@nocobase/actions';
 
-
 // Keepalive marker — zero-width space prefix to distinguish from real content
 const KEEPALIVE_PREFIX = '\u200B\u200B\u200B';
+const DEFAULT_KEEPALIVE_INTERVAL_MS = 5000;
+const DEFAULT_STREAM_CHUNK_SIZE = 512;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
+
+function cloneDeep<T>(value: T): T {
+  if (value == null || typeof value !== 'object') {
+    return value;
+  }
+
+  const structuredCloneFn = (globalThis as any).structuredClone;
+  if (typeof structuredCloneFn === 'function') {
+    try {
+      return structuredCloneFn(value);
+    } catch {
+      // Fall through to JSON cloning for plain API payloads.
+    }
+  }
+
+  return JSON.parse(JSON.stringify(value));
+}
 
 /**
  * Resolve a module from the main NocoBase app's node_modules.
@@ -249,6 +268,157 @@ function getAIMessageChunk() {
   return _AIMessageChunk;
 }
 
+function createAIMessageChunk(fields: Record<string, any>) {
+  const AIMessageChunk = getAIMessageChunk();
+  return new AIMessageChunk(fields);
+}
+
+function createKeepAliveChunk() {
+  return createAIMessageChunk({
+    content: KEEPALIVE_PREFIX,
+    additional_kwargs: { __keepalive: true },
+  });
+}
+
+function normalizePositiveNumber(value: any, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function hasToolCallDelta(chunk: any): boolean {
+  return Boolean(chunk?.tool_call_chunks?.length || chunk?.tool_calls?.length);
+}
+
+function createSplitMessageChunk(source: any, content: string, index: number, total: number) {
+  const isFirst = index === 0;
+  const isLast = index === total - 1;
+  const fields: Record<string, any> = {
+    content,
+    additional_kwargs: isFirst ? cloneDeep(source?.additional_kwargs || {}) : {},
+    response_metadata: isLast ? cloneDeep(source?.response_metadata || {}) : {},
+  };
+
+  if (isFirst && source?.id) {
+    fields.id = source.id;
+  }
+  if (isFirst && source?.name) {
+    fields.name = source.name;
+  }
+  if (isLast && source?.usage_metadata) {
+    fields.usage_metadata = cloneDeep(source.usage_metadata);
+  }
+  if (isLast && source?.tool_calls?.length) {
+    fields.tool_calls = cloneDeep(source.tool_calls);
+  }
+  if (isLast && source?.invalid_tool_calls?.length) {
+    fields.invalid_tool_calls = cloneDeep(source.invalid_tool_calls);
+  }
+
+  return createAIMessageChunk(fields);
+}
+
+function splitTextChunk(chunk: any, chunkSize: number): any[] {
+  const content = chunk?.content;
+  if (
+    typeof content !== 'string' ||
+    content.length <= chunkSize ||
+    content === KEEPALIVE_PREFIX ||
+    hasToolCallDelta(chunk)
+  ) {
+    return [chunk];
+  }
+
+  const parts: string[] = [];
+  for (let i = 0; i < content.length; i += chunkSize) {
+    parts.push(content.slice(i, i + chunkSize));
+  }
+  return parts.map((part, index) => createSplitMessageChunk(chunk, part, index, parts.length));
+}
+
+function splitStreamChunk(chunk: any, chunkSize: number): any[] {
+  return splitTextChunk(chunk, chunkSize);
+}
+
+async function* streamWithKeepAliveAndChunking(
+  iterable: AsyncIterable<any>,
+  options: { keepAlive: boolean; intervalMs: number; chunkSize: number },
+) {
+  const iterator = iterable?.[Symbol.asyncIterator]?.();
+  if (!iterator) {
+    return;
+  }
+
+  if (!options.keepAlive) {
+    while (true) {
+      const { value: chunk, done: chunkDone } = await iterator.next();
+      if (chunkDone) break;
+      for (const splitChunk of splitStreamChunk(chunk, options.chunkSize)) {
+        yield splitChunk;
+      }
+    }
+    return;
+  }
+
+  let done = false;
+  let toolCallActive = false;
+  let next = iterator.next();
+
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const result = await Promise.race([
+        next.then(
+          (value) => ({ type: 'value' as const, value }),
+          (error) => ({ type: 'error' as const, error }),
+        ),
+        new Promise<{ type: 'timeout' }>((resolve) => {
+          timer = setTimeout(() => resolve({ type: 'timeout' }), options.intervalMs);
+        }),
+      ]);
+
+      if (timer) {
+        clearTimeout(timer);
+      }
+
+      if (result.type === 'timeout') {
+        if (!toolCallActive) {
+          yield createKeepAliveChunk();
+        }
+        continue;
+      }
+
+      if (result.type === 'error') {
+        throw result.error;
+      }
+
+      if (result.value.done) {
+        done = true;
+        break;
+      }
+
+      const chunks = splitStreamChunk(result.value.value, options.chunkSize);
+      for (const chunk of chunks) {
+        if (hasToolCallDelta(chunk)) {
+          toolCallActive = true;
+        } else if (chunk?.content && chunk.content !== KEEPALIVE_PREFIX) {
+          toolCallActive = false;
+        }
+        yield chunk;
+      }
+
+      next = iterator.next();
+    }
+  } finally {
+    if (!done && typeof iterator.return === 'function') {
+      try {
+        await iterator.return();
+      } catch {
+        // Ignore cleanup errors from aborted upstream iterators.
+      }
+    }
+  }
+}
+
 function stripToolCallTags(content: string): string | null {
   if (typeof content !== 'string') {
     return content;
@@ -357,7 +527,25 @@ function getByPath(obj: any, dotPath: string): any {
  *   "finish_reason": "finish_reason"    // optional, dot-path to finish_reason
  * }
  */
-function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?: number) {
+function getHeaderValue(headers: HeadersInit | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) return headers.get(name) || undefined;
+
+  const lowerName = name.toLowerCase();
+  if (Array.isArray(headers)) {
+    const item = headers.find(([key]) => key.toLowerCase() === lowerName);
+    return item?.[1];
+  }
+
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lowerName) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function createMappingFetch(responseMapping: Record<string, string>) {
   const contentPath = responseMapping.content;
   if (!contentPath) return undefined; // No mapping needed
 
@@ -366,19 +554,10 @@ function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?:
   const finishReasonPath = responseMapping.finish_reason;
 
   return async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    // Apply timeout via AbortController if configured (Issue #7)
-    let response: Response;
-    if (timeoutMs && timeoutMs > 0) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        response = await fetch(url, { ...init, signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
-      }
-    } else {
-      response = await fetch(url, init);
-    }
+    // Preserve the OpenAI SDK's AbortSignal. The SDK already applies its
+    // request timeout before headers; replacing the signal here causes
+    // user aborts/timeouts to be ignored and previously imposed a hard 120s cap.
+    const response = await fetch(url, init);
 
     // Only intercept successful JSON responses
     if (!response.ok) return response;
@@ -386,7 +565,8 @@ function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?:
     const contentType = response.headers.get('content-type') || '';
 
     // Handle streaming responses (SSE) — transform each chunk
-    if (contentType.includes('text/event-stream') || init?.headers?.['Accept'] === 'text/event-stream') {
+    const acceptHeader = getHeaderValue(init?.headers, 'accept') || '';
+    if (contentType.includes('text/event-stream') || acceptHeader.includes('text/event-stream')) {
       const reader = response.body?.getReader();
       if (!reader) return response;
 
@@ -401,17 +581,20 @@ function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?:
             while (true) {
               const { done, value } = await reader.read();
               if (done) {
-                controller.close();
-                break;
+                buffer += decoder.decode();
+                if (buffer && !buffer.endsWith('\n')) {
+                  buffer += '\n';
+                }
+              } else {
+                buffer += decoder.decode(value, { stream: true });
               }
 
-              buffer += decoder.decode(value, { stream: true });
               const lines = buffer.split('\n');
               buffer = lines.pop() || '';
 
               for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6).trim();
+                if (line.startsWith('data:')) {
+                  const data = line.slice(line.indexOf(':') + 1).trim();
                   if (data === '[DONE]') {
                     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
                     continue;
@@ -453,7 +636,117 @@ function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?:
                           },
                         ],
                       };
-                      controller.enqueue(encoder.encode(`data: ${JSON.stringify(mapped)}\n\n`));
+                      const enqueueChunked = (baseMapped: any) => {
+                        const CHUNK_SIZE = 128;
+                        const delta = baseMapped.choices[0].delta;
+                        const content = delta.content;
+                        const toolCalls = delta.tool_calls;
+
+                        let hasEmitted = false;
+
+                        // 1. Process and stream content if it exists
+                        if (content !== undefined && content !== null) {
+                          const contentStr = String(content);
+                          if (contentStr.length > CHUNK_SIZE) {
+                            for (let i = 0; i < contentStr.length; i += CHUNK_SIZE) {
+                              const chunkMapped = cloneDeep(baseMapped);
+                              const newDelta = { ...delta };
+                              if (i > 0) delete newDelta.role; // Only send role on first chunk
+                              delete newDelta.tool_calls; // Handled separately
+
+                              newDelta.content = contentStr.slice(i, i + CHUNK_SIZE);
+                              chunkMapped.choices[0].delta = newDelta;
+
+                              // Clear finish_reason for intermediate chunks or if toolCalls will follow
+                              if (i + CHUNK_SIZE < contentStr.length || toolCalls) {
+                                chunkMapped.choices[0].finish_reason = null;
+                              }
+                              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                              hasEmitted = true;
+                            }
+                          } else {
+                            const chunkMapped = cloneDeep(baseMapped);
+                            const newDelta = { ...delta };
+                            delete newDelta.tool_calls;
+                            newDelta.content = contentStr;
+                            chunkMapped.choices[0].delta = newDelta;
+
+                            if (toolCalls) chunkMapped.choices[0].finish_reason = null;
+                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                            hasEmitted = true;
+                          }
+                        }
+
+                        // 2. Process and stream tool_calls if they exist
+                        if (toolCalls && toolCalls.length > 0) {
+                          let needsChunking = false;
+                          for (const tc of toolCalls) {
+                            if (tc.function?.arguments && tc.function.arguments.length > CHUNK_SIZE) {
+                              needsChunking = true;
+                              break;
+                            }
+                          }
+
+                          if (needsChunking) {
+                            const toolCallsCopy = cloneDeep(toolCalls);
+                            let maxLen = 0;
+                            for (const tc of toolCallsCopy) {
+                              if (tc.function?.arguments) {
+                                maxLen = Math.max(maxLen, tc.function.arguments.length);
+                              }
+                            }
+
+                            for (let i = 0; i < maxLen; i += CHUNK_SIZE) {
+                              const chunkMapped = cloneDeep(baseMapped);
+                              const newDelta = (!hasEmitted && i === 0) ? { ...delta } : {};
+                              if (delta.role && i === 0) newDelta.role = delta.role;
+                              if ('content' in newDelta) delete newDelta.content;
+                              newDelta.tool_calls = [];
+                              chunkMapped.choices[0].delta = newDelta;
+
+                              // Only keep finish_reason on the very last chunk
+                              if (i + CHUNK_SIZE < maxLen) {
+                                chunkMapped.choices[0].finish_reason = null;
+                              }
+
+                              for (const tc of toolCallsCopy) {
+                                const args = tc.function?.arguments || '';
+                                if (i < args.length) {
+                                  const chunkTc = cloneDeep(tc);
+                                  if (chunkTc.function) {
+                                    chunkTc.function.arguments = args.slice(i, i + CHUNK_SIZE);
+                                  }
+                                  // Strip metadata on subsequent chunks to conform to OpenAI stream protocol
+                                  if (i > 0) {
+                                    delete chunkTc.id;
+                                    delete chunkTc.type;
+                                    if (chunkTc.function) delete chunkTc.function.name;
+                                  }
+                                  chunkMapped.choices[0].delta.tool_calls.push(chunkTc);
+                                }
+                              }
+                              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                              hasEmitted = true;
+                            }
+                          } else {
+                            const chunkMapped = cloneDeep(baseMapped);
+                            const newDelta = !hasEmitted ? { ...delta } : {};
+                            if (delta.role) newDelta.role = delta.role;
+                            if ('content' in newDelta) delete newDelta.content;
+                            newDelta.tool_calls = toolCalls;
+                            chunkMapped.choices[0].delta = newDelta;
+                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                            hasEmitted = true;
+                          }
+                        }
+
+                        // 3. Fallback if chunk had no content and no tool_calls (e.g., finish_reason only)
+                        if (!hasEmitted) {
+                          controller.enqueue(encoder.encode(`data: ${JSON.stringify(baseMapped)}\n\n`));
+                        }
+                      };
+
+                      enqueueChunked(mapped);
                     } else {
                       // Pass through unmapped — SSE events must be terminated with \n\n
                       controller.enqueue(encoder.encode(line + '\n\n'));
@@ -465,6 +758,11 @@ function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?:
                 } else {
                   controller.enqueue(encoder.encode(line + '\n\n'));
                 }
+              }
+
+              if (done) {
+                controller.close();
+                break;
               }
             }
           } catch (err) {
@@ -537,133 +835,6 @@ function createMappingFetch(responseMapping: Record<string, string>, timeoutMs?:
 
     return response;
   };
-}
-
-/**
- * Wrap a ChatOpenAI model's _stream method to inject keepalive chunks
- * during long idle periods (e.g., model thinking/reasoning phase).
- *
- * This runs the base stream in a background task and uses Promise.race
- * to send keepalive chunks when no real data arrives within the interval.
- */
-function wrapWithStreamKeepAlive(model: any, options: { intervalMs: number; keepAliveContent: string }) {
-  const streamMethodName = typeof model._streamResponseChunks === 'function' ? '_streamResponseChunks' : '_stream';
-  const originalStream = model[streamMethodName].bind(model);
-  const { intervalMs, keepAliveContent } = options;
-
-  model[streamMethodName] = async function* (messages: any[], opts: any, runManager?: any) {
-    const ChatGenerationChunk = getChatGenerationChunk();
-    const AIMessageChunk = getAIMessageChunk();
-
-    const baseIterator = originalStream(messages, opts, runManager);
-
-    // Queue for chunks from the base stream
-    const buffer: any[] = [];
-    let streamDone = false;
-    let streamError: Error | null = null;
-    let notifyReady: (() => void) | null = null;
-    // Track whether tool call chunks are present in the current batch
-    // to avoid injecting keepalive during tool calling sequences
-    let hasToolCallChunks = false;
-    // Phase 6: Track error state to prevent further keepalive after errors
-    let hasErrored = false;
-
-    // Consume the base stream in a background task
-    const consumer = (async () => {
-      try {
-        for await (const chunk of baseIterator) {
-          // Detect tool call activity — keepalive must not be injected
-          // while tool call chunks are streaming in
-          const msg = chunk?.message;
-          if (msg?.tool_call_chunks?.length || msg?.tool_calls?.length) {
-            hasToolCallChunks = true;
-          }
-          buffer.push(chunk);
-          // Wake up the main loop
-          if (notifyReady) {
-            notifyReady();
-            notifyReady = null;
-          }
-        }
-      } catch (err) {
-        streamError = err as Error;
-        hasErrored = true;
-        // Wake up main loop immediately for prompt error propagation
-        if (notifyReady) {
-          notifyReady();
-          notifyReady = null;
-        }
-      } finally {
-        streamDone = true;
-        if (notifyReady) {
-          notifyReady();
-          notifyReady = null;
-        }
-      }
-    })();
-
-    try {
-      while (!streamDone || buffer.length > 0) {
-        // Flush buffered chunks first
-        while (buffer.length > 0) {
-          yield buffer.shift();
-        }
-        // Reset tool call flag after flushing — if tool calling has
-        // completed, keepalive may resume on the next idle interval
-        hasToolCallChunks = false;
-
-        if (streamDone) break;
-
-        // Wait for either: new chunk arrives OR keepalive interval expires
-        const waitForChunk = new Promise<void>((resolve) => {
-          notifyReady = resolve;
-        });
-
-        let timer: ReturnType<typeof setTimeout> | null = null;
-        const result = await Promise.race([
-          waitForChunk.then(() => 'chunk' as const),
-          new Promise<'timeout'>((resolve) => {
-            timer = setTimeout(() => resolve('timeout'), intervalMs);
-          }),
-        ]);
-
-        // Clear the timer to prevent leaks
-        if (timer) clearTimeout(timer);
-
-        if (result === 'timeout' && !streamDone && buffer.length === 0) {
-          // Don't emit keepalive if stream has errored — propagate immediately
-          if (streamError || hasErrored) break;
-          // Don't emit keepalive during active tool call sequences
-          if (hasToolCallChunks) continue;
-          // Send keepalive with KEEPALIVE_PREFIX as content.
-          // Must be truthy so plugin-ai's `if (chunk.content)` check passes
-          // and protocol.content() writes an SSE event to prevent proxy timeouts.
-          // KEEPALIVE_PREFIX is zero-width spaces — invisible in client UI.
-          // parseResponseChunk returns it, protocol.content() emits it.
-          // gathered.content accumulates ZWS but parseResponseMessage strips them.
-          const keepAliveChunk = new ChatGenerationChunk({
-            message: new AIMessageChunk({
-              content: KEEPALIVE_PREFIX,
-              additional_kwargs: { __keepalive: true },
-            }),
-            text: KEEPALIVE_PREFIX,
-          });
-          yield keepAliveChunk;
-        }
-        // If result === 'chunk', flush happens at top of loop
-      }
-
-      // Re-throw any stream error
-      if (streamError) {
-        throw streamError;
-      }
-    } finally {
-      // Ensure the consumer finishes
-      await consumer;
-    }
-  };
-
-  return model;
 }
 
 /**
@@ -900,7 +1071,18 @@ function truncateMessages(messages: any[], maxTokens: number): any[] {
  * the sanitization — this is critical because langgraph calls
  * `model.bindTools(tools)` and then uses the BOUND model.
  */
-function patchRunnableForSanitization(runnable: any, options?: { enableTokenTruncation?: boolean; maxContextTokens?: number; enableToolRetry?: boolean; maxToolRetries?: number }): any {
+function patchRunnableForSanitization(
+  runnable: any,
+  options?: {
+    enableTokenTruncation?: boolean;
+    maxContextTokens?: number;
+    enableToolRetry?: boolean;
+    maxToolRetries?: number;
+    streamKeepAlive?: boolean;
+    keepAliveIntervalMs?: number;
+    streamChunkSize?: number;
+  },
+): any {
   if (!runnable || runnable.__toolCallSanitized) return runnable;
   runnable.__toolCallSanitized = true;
 
@@ -957,25 +1139,20 @@ function patchRunnableForSanitization(runnable: any, options?: { enableTokenTrun
       }
 
       const iter = await origStream(...args);
-      // Wrap the async iterable to sanitize each chunk
-      const origIterator = iter[Symbol.asyncIterator]?.bind(iter);
-      if (origIterator) {
-        iter[Symbol.asyncIterator] = function () {
-          const it = origIterator();
-          return {
-            async next() {
-              const { value, done } = await it.next();
-              if (!done && value) {
-                sanitizeAIMessageToolCalls(value);
-              }
-              return { value, done };
-            },
-            return: it.return?.bind(it),
-            throw: it.throw?.bind(it),
-          };
-        };
-      }
-      return iter;
+      const safeIter = streamWithKeepAliveAndChunking(iter, {
+        keepAlive: options?.streamKeepAlive ?? false,
+        intervalMs: normalizePositiveNumber(options?.keepAliveIntervalMs, DEFAULT_KEEPALIVE_INTERVAL_MS),
+        chunkSize: normalizePositiveNumber(options?.streamChunkSize, DEFAULT_STREAM_CHUNK_SIZE),
+      });
+
+      return (async function* () {
+        for await (const value of safeIter) {
+          if (value) {
+            sanitizeAIMessageToolCalls(value);
+          }
+          yield value;
+        }
+      })();
     };
   }
 
@@ -1074,12 +1251,12 @@ export class CustomLLMProvider extends LLMProvider {
       config.streaming = false;
     }
 
-    // Apply custom timeout (in milliseconds) for slow-responding models
+    // Apply a long request timeout for slow-thinking models. The OpenAI SDK
+    // default is 10 minutes; custom providers can exceed that before headers.
     const timeoutMs = timeout && Number(timeout) > 0 ? Number(timeout) : 0;
-    if (timeoutMs) {
-      config.timeout = timeoutMs;
-      config.configuration.timeout = timeoutMs;
-    }
+    const effectiveTimeoutMs = Math.max(timeoutMs, DEFAULT_REQUEST_TIMEOUT_MS);
+    config.timeout = effectiveTimeoutMs;
+    config.configuration.timeout = effectiveTimeoutMs;
 
     // Apply extra headers
     if (reqConfig.extraHeaders && typeof reqConfig.extraHeaders === 'object') {
@@ -1088,21 +1265,13 @@ export class CustomLLMProvider extends LLMProvider {
 
     // Apply response mapping via custom fetch — pass timeout for fetch-level protection (Issue #7)
     if (resConfig.responseMapping) {
-      config.configuration.fetch = createMappingFetch(resConfig.responseMapping, timeoutMs || 120_000);
+      config.configuration.fetch = createMappingFetch(resConfig.responseMapping);
     }
 
     let model = new ChatClass(config);
 
     // Fix empty tool properties for strict providers (Gemini, etc.)
     model = fixEmptyToolProperties(model);
-
-    // Wrap with keepalive proxy if enabled (and streaming is not disabled)
-    if (streamKeepAlive && !disableStream) {
-      model = wrapWithStreamKeepAlive(model, {
-        intervalMs: Number(keepAliveIntervalMs) || 5000,
-        keepAliveContent: '...',
-      });
-    }
 
     // Sanitize Gemini's __thought__<base64> suffixes in tool call IDs.
     // Patches invoke/stream/bindTools/bind at the public API level so that
@@ -1112,7 +1281,10 @@ export class CustomLLMProvider extends LLMProvider {
       enableTokenTruncation,
       maxContextTokens,
       enableToolRetry,
-      maxToolRetries
+      maxToolRetries,
+      streamKeepAlive: streamKeepAlive !== false,
+      keepAliveIntervalMs: normalizePositiveNumber(keepAliveIntervalMs, DEFAULT_KEEPALIVE_INTERVAL_MS),
+      streamChunkSize: normalizePositiveNumber(this.serviceOptions?.streamChunkSize, DEFAULT_STREAM_CHUNK_SIZE),
     });
 
     return model;

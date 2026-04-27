@@ -1,4 +1,6 @@
 import { Plugin } from '@nocobase/server';
+import { existsSync } from 'fs';
+import { resolve } from 'path';
 import { PPTX_ADVANCED_SKILL } from './skill-definition';
 
 export class PluginSkillPptxAdvancedServer extends Plugin {
@@ -11,7 +13,16 @@ export class PluginSkillPptxAdvancedServer extends Plugin {
 
   // Dynamic discovery pull method for plugin-skill-hub
   getSkillTemplates() {
-    return [PPTX_ADVANCED_SKILL];
+    return [
+      {
+        ...PPTX_ADVANCED_SKILL,
+        skillPackage: {
+          rootDir: this.getSkillPackageRoot(),
+          mountMode: 'reference',
+        },
+        storageUrl: `plugin://${this.name}/${PPTX_ADVANCED_SKILL.name}`,
+      },
+    ];
   }
 
   // Fallback direct push method
@@ -20,9 +31,20 @@ export class PluginSkillPptxAdvancedServer extends Plugin {
       const skillHub = this.app.pm.get('plugin-skill-hub') as any;
       if (!skillHub) return;
       if (skillHub.registerSkillTemplate) {
-        skillHub.registerSkillTemplate(this.name, PPTX_ADVANCED_SKILL);
+        skillHub.registerSkillTemplate(this.name, this.getSkillTemplates()[0]);
       }
     } catch (err) {}
+  }
+
+  private getSkillPackageRoot() {
+    const candidates = [
+      resolve(__dirname, 'skills/pptx-advanced-export'),
+      resolve(__dirname, '../../src/server/skills/pptx-advanced-export'),
+      resolve(__dirname, '../src/server/skills/pptx-advanced-export'),
+    ];
+
+    const found = candidates.find((candidate) => existsSync(resolve(candidate, 'SKILL.md')));
+    return found || candidates[0];
   }
 
   async afterLoad() {

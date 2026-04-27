@@ -1,0 +1,20 @@
+{
+  "Agent Orchestrator": "Điều phối Agent",
+  "Orchestration Rules": "Quy tắc điều phối",
+  "Swarm Tracing": "Truy vết Swarm",
+  "Leader (Orchestrator)": "Leader (Điều phối viên)",
+  "Sub-Agent": "Agent con",
+  "Max Delegation Depth": "Độ sâu ủy quyền tối đa",
+  "Timeout (ms)": "Thời gian chờ (ms)",
+  "Enabled": "Bật",
+  "New Rule": "Quy tắc mới",
+  "Edit Orchestration Rule": "Sửa quy tắc điều phối",
+  "New Orchestration Rule": "Quy tắc điều phối mới",
+  "Rule created": "Đã tạo quy tắc",
+  "Rule updated": "Đã cập nhật quy tắc",
+  "Rule deleted": "Đã xóa quy tắc",
+  "Sub-Agent Conversation": "Hội thoại Agent con",
+  "Task Summary": "Tóm tắt nhiệm vụ",
+  "Parent Session": "Phiên gốc",
+  "No sub-agent executions yet": "Chưa có lượt thực thi agent con nào"
+}

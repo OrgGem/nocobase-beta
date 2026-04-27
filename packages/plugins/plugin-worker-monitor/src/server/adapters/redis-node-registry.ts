@@ -1,5 +1,6 @@
 import os from 'os';
 import { scanKeys } from '../utils/redis';
+import { getLocalNodeId } from '../utils/node';
 
 export class RedisNodeRegistry {
   private timer: NodeJS.Timeout | null = null;
@@ -34,13 +35,11 @@ export class RedisNodeRegistry {
     const redis = this.app.redisConnectionManager?.getConnection();
     if (!redis) return;
 
-    // Unique identifier combining hostname and pid (in case multiple workers share a host)
-    // Even in Docker, hostnames might be identical if not set, but NocoBase uses random container hashes.
-    // We'll use hostname + process.env.APP_PORT to be safe for local dev too.
+    // Unique identifier combining hostname, port, pid, mode, and appName to handle multiple workers on the same host
     const port = process.env.APP_PORT || 'unknown';
     const mode = process.env.WORKER_MODE || 'main';
     const appName = process.env.APP_NAME || this.app.name || 'main';
-    const nodeId = `${appName}_${mode}_${os.hostname()}_${port}_${process.pid}`;
+    const nodeId = getLocalNodeId(this.app);
     const key = `${this.keyPrefix}${nodeId}`;
 
     // Collect process-level metrics so any node can read another node's full info from Redis
@@ -49,10 +48,12 @@ export class RedisNodeRegistry {
     const metadata = {
       id: nodeId,
       name: `${appName} (${os.hostname()})`,
+      hostname: os.hostname(),
       appVersion: process.env.NOCOBASE_VERSION || process.version,
       workerMode: mode,
+      isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
       pid: process.pid,
-      url: null,
+      url: process.env.APP_PUBLIC_URL || null,
       available: true,
       lastHeartbeatAt: Date.now(),
       status: 'online', // Implicitly online since it just reported

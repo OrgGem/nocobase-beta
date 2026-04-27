@@ -1,8 +1,9 @@
 import React, { Component as ReactComponent } from 'react';
 import { useFieldSchema } from '@formily/react';
-import { useApp } from '@nocobase/client';
+import { useApp, SchemaComponentOptions } from '@nocobase/client';
 import { Empty, Result, Button, Typography } from 'antd';
 import { Outlet } from 'react-router-dom';
+import { css } from '@emotion/css';
 import { useT } from './locale';
 
 const { Text } = Typography;
@@ -79,8 +80,20 @@ export const EmbedSettingsBlock = ({ pluginName: pluginNameProp }: { pluginName?
 
   return (
     <EmbedErrorBoundary pluginName={pluginName}>
-      <div style={{ minHeight: 200 }}>
-        <Comp />
+      <div 
+        className={css`
+          min-height: 200px;
+          /* Force override the inline styles (like max-width 800px and padding 16px) 
+             often set by other plugins' settings components */
+          > div {
+            max-width: 100% !important;
+            padding: 0 !important;
+          }
+        `}
+      >
+        <SchemaComponentOptions components={app.components}>
+          <Comp />
+        </SchemaComponentOptions>
       </div>
     </EmbedErrorBoundary>
   );

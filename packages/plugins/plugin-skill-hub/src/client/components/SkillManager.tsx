@@ -16,11 +16,12 @@ import {
   Typography,
   Tooltip,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined, BranchesOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useT } from '../locale';
 import { SkillEditor } from './SkillEditor';
 import { SkillTestPanel } from './SkillTestPanel';
+import { GitSkillImport } from './GitSkillImport';
 
 const { TextArea } = Input;
 
@@ -33,12 +34,14 @@ export const SkillManager: React.FC = () => {
   const [testVisible, setTestVisible] = useState(false);
   const [editingSkill, setEditingSkill] = useState<any>(null);
   const [testingSkill, setTestingSkill] = useState<any>(null);
+  const [gitImportVisible, setGitImportVisible] = useState(false);
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.request({ url: 'skillDefinitions:list', params: { pageSize: 100 } });
-      setSkills(data?.data || []);
+      const responseData = data?.data?.data || data?.data || [];
+      setSkills(responseData);
     } catch {
       message.error(t('Failed to load skills'));
     } finally {
@@ -101,9 +104,14 @@ export const SkillManager: React.FC = () => {
     <Card
       title={t('Skill Definitions')}
       extra={
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-          {t('New Skill')}
-        </Button>
+        <Space>
+          <Button icon={<BranchesOutlined />} onClick={() => setGitImportVisible(true)}>
+            {t('Import from Git')}
+          </Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+            {t('New Skill')}
+          </Button>
+        </Space>
       }
     >
       <List
@@ -160,6 +168,14 @@ export const SkillManager: React.FC = () => {
       {testVisible && testingSkill && (
         <SkillTestPanel skill={testingSkill} onClose={() => setTestVisible(false)} />
       )}
+
+      <GitSkillImport
+        open={gitImportVisible}
+        onClose={(synced) => {
+          setGitImportVisible(false);
+          if (synced) fetchSkills();
+        }}
+      />
     </Card>
   );
 };

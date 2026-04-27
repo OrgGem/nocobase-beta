@@ -6,6 +6,9 @@
   "Loading preview...": "正在加载预览...",
   "Failed to load file preview": "无法加载文件预览",
   "Failed to download file": "无法下载文件",
+  "Ask AI": "询问 AI",
+  "Please help me analyze the file currently open in preview.": "请帮我分析当前正在预览的文件。",
+  "Failed to open AI chat": "无法打开 AI 聊天",
   "This file type cannot be previewed. Click Download to save the file.": "此文件类型不支持预览。请点击下载以保存文件。",
   "This file type cannot be previewed. ": "此文件类型不支持预览。"
 }

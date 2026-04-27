@@ -1,6 +1,6 @@
 {
   "name": "plugin-antd-style-theme",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "main": "dist/server/index.js",
   "displayName": "Antd Style Theme",
   "displayName.zh-CN": "Antd 组件样式主题",

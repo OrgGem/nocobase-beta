@@ -1,0 +1,41 @@
+{
+  "name": "plugin-team-chat",
+  "displayName": "Team Chat",
+  "displayName.zh-CN": "团队聊天",
+  "displayName.vi-VN": "Chat Nhóm",
+  "description": "Full-featured team chat with channels, direct messages, threads, reactions, and realtime message delivery.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "keywords": [
+    "Chat",
+    "Messaging",
+    "Realtime",
+    "Team",
+    "Video",
+    "WebRTC"
+  ],
+  "dependencies": {
+    "livekit-server-sdk": "^2.9.1"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "plugin-comm-core": "*"
+  }
+}

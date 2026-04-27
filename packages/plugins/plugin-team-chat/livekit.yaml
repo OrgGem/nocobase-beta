@@ -1,0 +1,49 @@
+# LiveKit SFU Configuration for NocoBase Communication Suite
+# Deploy alongside NocoBase via docker-compose
+#
+# This config is suitable for development and small production setups.
+# For production HA, see https://docs.livekit.io/deploy/distributed/
+
+port: 7880
+
+rtc:
+  # WebRTC port range for media streams
+  port_range_start: 50000
+  port_range_end: 60000
+  # Set to true when behind NAT/load balancer
+  use_external_ip: true
+  # TCP fallback when UDP is blocked
+  tcp_port: 7881
+
+# API keys — MUST match LIVEKIT_API_KEY/LIVEKIT_API_SECRET in NocoBase env
+keys:
+  devkey: secret1234567890abcdefghijklmnopqrstuv
+
+# TURN server (built-in) — helps with NAT traversal
+turn:
+  enabled: true
+  # External IP — set to your server's public IP in production
+  # domain: turn.yourdomain.com
+  tls_port: 5349
+  udp_port: 3478
+
+# Recording (optional — requires Egress service)
+# egress:
+#   enabled: true
+#   output:
+#     s3:
+#       bucket: your-recordings-bucket
+#       region: ap-southeast-1
+
+logging:
+  level: info
+  # Uncomment for debug:
+  # pion_level: debug
+
+room:
+  # Auto-create rooms when first participant joins
+  auto_create: true
+  # Max participants per room
+  max_participants: 50
+  # Empty room timeout (seconds)
+  empty_timeout: 300

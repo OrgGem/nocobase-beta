@@ -1,7 +1,8 @@
 import { InstallOptions, Plugin } from '@nocobase/server';
-import path from 'path';
+import { resolve } from 'path';
 import { build } from './actions/build';
 import { getHtml } from './actions/getHtml';
+import { getMarkdown } from './actions/getMarkdown';
 
 export class PluginBuildGuideBlockServer extends Plugin {
   afterAdd() {}
@@ -9,12 +10,18 @@ export class PluginBuildGuideBlockServer extends Plugin {
   beforeLoad() {}
 
   async load() {
+    await this.db.import({
+      directory: resolve(__dirname, 'collections'),
+    });
+
     this.app.resourceManager.registerActionHandlers({
       'aiBuildGuideSpaces:build': build,
       'aiBuildGuideSpaces:getHtml': getHtml,
+      'aiBuildGuideSpaces:getMarkdown': getMarkdown,
     });
 
     this.app.acl.allow('aiBuildGuideSpaces', 'getHtml', 'loggedIn');
+    this.app.acl.allow('aiBuildGuideSpaces', 'getMarkdown', 'loggedIn');
     this.app.acl.registerSnippet({
       name: 'pm.ai-build-guide',
       actions: [

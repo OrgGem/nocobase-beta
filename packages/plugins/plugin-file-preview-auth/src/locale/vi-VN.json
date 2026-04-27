@@ -6,6 +6,9 @@
   "Loading preview...": "Đang tải xem trước...",
   "Failed to load file preview": "Không thể tải xem trước file",
   "Failed to download file": "Không thể tải file",
+  "Ask AI": "Hỏi AI",
+  "Please help me analyze the file currently open in preview.": "Hãy giúp tôi phân tích file đang được mở xem trước.",
+  "Failed to open AI chat": "Không thể mở chat AI",
   "This file type cannot be previewed. Click Download to save the file.": "Loại file này không thể xem trước. Nhấn Tải xuống để lưu file.",
   "This file type cannot be previewed. ": "Loại file này không thể xem trước. "
 }

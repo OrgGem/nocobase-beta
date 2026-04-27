@@ -2,6 +2,7 @@ import { BlockModel } from '@nocobase/client';
 import { escapeT } from '@nocobase/flow-engine';
 import React from 'react';
 import { EmbedSettingsBlock } from '../EmbedSettingsBlock';
+import { EmbedSettingsPluginSelect } from '../EmbedSettingsPluginSelect';
 
 export class EmbedSettingsBlockModel extends BlockModel {
   renderComponent() {
@@ -23,7 +24,7 @@ EmbedSettingsBlockModel.registerFlow({
             title: t('Select plugin'),
             type: 'string',
             'x-decorator': 'FormItem',
-            'x-component': 'EmbedSettingsPluginSelect',
+            'x-component': EmbedSettingsPluginSelect,
             'x-component-props': {
               placeholder: t('Select plugin'),
             },

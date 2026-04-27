@@ -14,7 +14,7 @@ import { ICollection, IModel, IRepository } from '@nocobase/data-source-manager'
  * Implements CRUD operations via the Elasticsearch REST API.
  */
 export class ElasticsearchRepository implements IRepository {
-  private collection: ICollection;
+  public collection: ICollection;
   private client: any; // ES Client
   private indexName: string;
 

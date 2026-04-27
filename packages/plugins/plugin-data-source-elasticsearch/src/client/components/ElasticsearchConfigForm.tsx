@@ -148,6 +148,13 @@ export const ElasticsearchConfigForm: React.FC<ElasticsearchConfigFormProps> = (
                 },
                 description: t('Filter indices by pattern (e.g. logs-*, my-data-*)'),
               },
+              addAllCollections: {
+                type: 'boolean',
+                title: t('Load all collections'),
+                'x-decorator': 'FormItem',
+                'x-component': 'Checkbox',
+                default: true,
+              },
               collections: createCollectionsSchema(from, loadCollections),
             },
           },

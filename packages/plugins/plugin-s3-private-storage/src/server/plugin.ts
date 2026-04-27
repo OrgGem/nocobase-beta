@@ -9,6 +9,8 @@
 
 import { Plugin } from '@nocobase/server';
 import PluginFileManagerServer from '@nocobase/plugin-file-manager';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { STORAGE_TYPE_S3_PRIVATE } from '../constants';
 import S3PrivateStorage from './storages/s3-private';
 
@@ -249,6 +251,57 @@ export class PluginS3PrivateStorageServer extends Plugin {
          ctx.throw(500, 'Failed to stream file');
       }
     }
+  }
+
+  /**
+   * Public API: Create an S3Client for a given storage config name.
+   * Used by plugin-external-storage-manager to avoid bundling its own AWS SDK.
+   */
+  async createS3ClientForStorage(configName: string): Promise<{ client: S3Client; bucket: string }> {
+    const storageRepo = this.db.getRepository('storages');
+    const storage = await storageRepo.findOne({ filter: { name: configName } });
+    if (!storage) {
+      throw new Error(`[s3-private] Storage config "${configName}" not found`);
+    }
+
+    const parsed = this.app.environment
+      ? this.app.environment.renderJsonTemplate(storage.toJSON())
+      : storage.toJSON();
+
+    const options = parsed.options || {};
+    const clientConfig: any = {
+      region: options.region,
+      credentials: {
+        accessKeyId: options.accessKeyId,
+        secretAccessKey: options.secretAccessKey,
+      },
+    };
+    if (options.endpoint) {
+      clientConfig.endpoint = options.endpoint;
+      clientConfig.forcePathStyle = true;
+    }
+
+    return {
+      client: new S3Client(clientConfig),
+      bucket: options.bucket,
+    };
+  }
+
+  /**
+   * Public API: Expose SDK classes for external use.
+   * This avoids other plugins needing to bundle their own AWS SDK (~8MB).
+   */
+  getS3SDK() {
+    return {
+      S3Client,
+      ListObjectsV2Command,
+      GetObjectCommand,
+      PutObjectCommand,
+      DeleteObjectCommand,
+      DeleteObjectsCommand,
+      HeadObjectCommand,
+      Upload,
+    };
   }
 }
 

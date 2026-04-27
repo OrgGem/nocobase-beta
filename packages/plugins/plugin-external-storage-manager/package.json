@@ -1,0 +1,43 @@
+{
+  "name": "plugin-external-storage-manager",
+  "version": "1.1.4",
+  "displayName": "External Storage Manager",
+  "displayName.zh-CN": "外部存储管理器",
+  "description": "Unified file browser for external storage backends (S3, SFTP) with virtual directory mapping, per-directory ACL, and streaming data transfer.",
+  "description.zh-CN": "外部存储后端（S3、SFTP）的统一文件浏览器，支持虚拟目录映射、目录级 ACL 和流式数据传输。",
+  "license": "AGPL-3.0",
+  "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "src"
+  ],
+  "keywords": [
+    "nocobase",
+    "nocobase-plugin",
+    "external-storage",
+    "file-browser",
+    "sftp",
+    "s3",
+    "storage-manager"
+  ],
+  "devDependencies": {
+    "@formily/antd-v5": "1.x",
+    "@formily/react": "2.x",
+    "antd": "5.x",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/utils": "2.x",
+    "plugin-s3-private-storage": "1.x",
+    "plugin-sftp-private-storage": "1.x"
+  }
+}

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal, Input, Button, Alert, Typography, Space, Spin } from 'antd';
 import { useAPIClient, Upload } from '@nocobase/client';
 import { useT } from '../locale';
+import { parseJsonText } from '../utils/jsonFields';
 
 const { TextArea } = Input;
 
@@ -13,11 +14,12 @@ interface SkillTestPanelProps {
 export const SkillTestPanel: React.FC<SkillTestPanelProps> = ({ skill, onClose }) => {
   const api = useAPIClient();
   const t = useT();
+  const inputSchema = parseJsonText(skill.inputSchema, null);
   const [input, setInput] = useState(
-    skill.inputSchema?.properties
+    inputSchema?.properties
       ? JSON.stringify(
           Object.fromEntries(
-            Object.keys(skill.inputSchema.properties).map((k) => [k, '']),
+            Object.keys(inputSchema.properties).map((k) => [k, '']),
           ),
           null,
           2,
@@ -48,7 +50,8 @@ export const SkillTestPanel: React.FC<SkillTestPanelProps> = ({ skill, onClose }
         method: 'POST',
         data: { skillId: skill.id, input: parsedInput },
       });
-      setResult(data?.data || data);
+      const responseData = data?.data?.data || data?.data || data;
+      setResult(responseData);
     } catch (err: any) {
       setError(err?.response?.data?.errors?.[0]?.message || err.message || t('Execution failed'));
     } finally {

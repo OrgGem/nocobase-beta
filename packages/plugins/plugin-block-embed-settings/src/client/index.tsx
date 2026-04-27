@@ -1,16 +1,27 @@
 import { Plugin, RemoteSelect } from '@nocobase/client';
 import { EmbedSettingsBlockProvider } from './EmbedSettingsBlockProvider';
+import { EmbedSettingsBlock } from './EmbedSettingsBlock';
 import { embedSettingsBlockSettings } from './schemaSettings';
 import { EmbedSettingsManager } from './EmbedSettingsManager';
 import { NAMESPACE } from './locale';
-import { useEmbedSettingsPlugins } from './EmbedSettingsBlockInitializer';
+import { useEmbedSettingsPlugins, EmbedSettingsBlockInitializer } from './EmbedSettingsBlockInitializer';
 import { EmbedSettingsBlockModel } from './models/EmbedSettingsBlockModel';
 import { EmbedSettingsPluginSelect } from './EmbedSettingsPluginSelect';
 
 export class PluginBlockEmbedSettingsClient extends Plugin {
   async load() {
-    this.app.addComponents({ RemoteSelect, EmbedSettingsPluginSelect });
+    // Register components globally (so string references in schema resolve)
+    this.app.addComponents({
+      EmbedSettingsBlock,
+      EmbedSettingsBlockInitializer,
+      EmbedSettingsPluginSelect,
+      RemoteSelect,
+    });
+
+    // Register schema settings (gear icon)
     this.app.schemaSettingsManager.add(embedSettingsBlockSettings);
+
+    // Register component provider for SchemaComponentOptions
     this.app.use(EmbedSettingsBlockProvider);
 
     // Register FlowEngine model
@@ -35,6 +46,7 @@ export class PluginBlockEmbedSettingsClient extends Plugin {
       useChildren: useEmbedSettingsPlugins,
     };
 
+    // Register in all block initializers
     this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.embedSettings', commonSettings);
     this.app.schemaInitializerManager.addItem('popup:common:addBlock', 'otherBlocks.embedSettings', commonSettings);
     this.app.schemaInitializerManager.addItem('popup:addNew:addBlock', 'otherBlocks.embedSettings', commonSettings);

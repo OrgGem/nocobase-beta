@@ -1,32 +1,17 @@
 import React, { useMemo } from 'react';
 import { Table, Button, Switch, Empty, Space, Popconfirm, Typography } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient, useApp, useRequest } from '@nocobase/client';
-import { Outlet } from 'react-router-dom';
+import { useAPIClient, useApp, useCompile, useRequest } from '@nocobase/client';
 import { useT } from './locale';
+import { collectEmbeddablePlugins, normalizeAllowedRecords } from './EmbedSettingsPluginSelect';
 
 const { Title } = Typography;
-
-function collectAllEmbeddablePlugins(app: any): { value: string; label: string }[] {
-  const results: { value: string; label: string }[] = [];
-  const settings = (app.pluginSettingsManager as any).settings as Record<string, any>;
-
-  for (const [key, setting] of Object.entries(settings)) {
-    if (!app.pluginSettingsManager.has(key)) continue;
-    if (!setting.Component || setting.Component === Outlet) continue;
-    if (key.includes(':')) continue;
-
-    const label = typeof setting.title === 'string' ? setting.title : key;
-    results.push({ value: key, label });
-  }
-
-  return results.sort((a, b) => a.label.localeCompare(b.label));
-}
 
 export const EmbedSettingsManager: React.FC = () => {
   const t = useT();
   const api = useAPIClient();
   const app = useApp();
+  const compile = useCompile();
 
   const { data, loading, refresh } = useRequest<any>({
     resource: 'embedAllowedPlugins',
@@ -34,9 +19,9 @@ export const EmbedSettingsManager: React.FC = () => {
     params: { pageSize: 200 },
   });
 
-  const allPlugins = useMemo(() => collectAllEmbeddablePlugins(app), [app]);
+  const allPlugins = useMemo(() => collectEmbeddablePlugins(app, compile), [app, compile]);
 
-  const allowedRecords: any[] = data?.data || [];
+  const allowedRecords: any[] = normalizeAllowedRecords(data);
   const allowedKeys = new Set(allowedRecords.map((r: any) => r.pluginName));
 
   const availablePlugins = allPlugins.filter((p) => !allowedKeys.has(p.value));

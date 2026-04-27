@@ -4,16 +4,18 @@
   "displayName.vi-VN": "Skill PPTX Nâng Cao",
   "description": "Advanced SVG-to-PPTX presentation generation skill for Skill Hub",
   "description.vi-VN": "Skill tạo PPTX nâng cao từ SVG cho Skill Hub",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "license": "Apache-2.0",
   "files": [
     "dist",
-    "src",
     "client.js",
     "server.js",
     "client.d.ts",
     "server.d.ts"
   ],
+  "scripts": {
+    "prepack": "powershell -Command \"Copy-Item -Path src/server/skills/* -Destination dist/server/skills/ -Recurse -Force\""
+  },
   "main": "dist/server/index.js",
   "nocobase": {
     "displayName.zh-CN": "高级 PPTX 技能",

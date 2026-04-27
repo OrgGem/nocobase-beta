@@ -9,6 +9,28 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
+import { marked } from 'marked';
+
+const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
+  allowedTags: [
+    'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'a', 'img', 'span', 'strong', 'em', 'code', 'pre', 'blockquote', 'br', 'hr',
+  ],
+  allowedAttributes: {
+    a: ['href', 'target'],
+    img: ['src', 'alt', 'width', 'height'],
+    '*': ['style', 'class'],
+  },
+  allowedStyles: {
+    '*': {
+      color: [/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, /^rgb/, /^rgba/],
+      'background-color': [/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, /^rgb/, /^rgba/],
+      'text-align': [/^left$/, /^right$/, /^center$/, /^justify$/],
+      'font-size': [/^\d+(?:px|em|%)$/],
+    },
+  },
+};
 
 async function fetchFileContent(app: any, file: any): Promise<string> {
   const fileManager = app.pm.get('file-manager') as PluginFileManagerServer;
@@ -87,7 +109,8 @@ export async function build(ctx: Context, next: Next) {
         throw new Error('Plugin AI is not available');
       }
 
-      const { llmService, model, systemPrompt } = space.get();
+      const { llmService, model, systemPrompt, outputFormat } = space.get();
+      const format = outputFormat === 'markdown' ? 'markdown' : 'html';
 
       if (!llmService || !model) {
         throw new Error('LLM Service or model is missing in space configuration');
@@ -101,44 +124,34 @@ export async function build(ctx: Context, next: Next) {
         messages.push(new SystemMessage(systemPrompt));
       }
 
-      const instruction = `Please generate an HTML user guide based on the following documents. Output ONLY valid HTML without Markdown blocks.\n\nDocuments:\n${documentsText}`;
+      const instruction =
+        format === 'markdown'
+          ? `Please generate a comprehensive user guide in pure Markdown based on the following documents. Output ONLY Markdown content (no HTML wrappers, no code-fence around the whole document).\n\nDocuments:\n${documentsText}`
+          : `Please generate an HTML user guide based on the following documents. Output ONLY valid HTML without Markdown blocks.\n\nDocuments:\n${documentsText}`;
       messages.push(new HumanMessage(instruction));
 
       const response = await provider.chatModel.invoke(messages);
-      let rawHtml = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+      const rawText =
+        typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
 
-      // Strip markdown code block if present
-      rawHtml = rawHtml.replace(/^```html\s*/, '').replace(/```\s*$/, '');
+      const updateValues: Record<string, unknown> = { status: 'completed' };
 
-      // 2c. Sanitize HTML output
-      const cleanHtml = sanitizeHtml(rawHtml, {
-        allowedTags: [
-          'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-          'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
-          'a', 'img', 'span', 'strong', 'em', 'code', 'pre', 'blockquote', 'br', 'hr'
-        ],
-        allowedAttributes: {
-          'a': ['href', 'target'],
-          'img': ['src', 'alt', 'width', 'height'],
-          '*': ['style', 'class']
-        },
-        allowedStyles: {
-          '*': {
-            'color': [/^\#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, /^rgb/, /^rgba/],
-            'background-color': [/^\#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, /^rgb/, /^rgba/],
-            'text-align': [/^left$/, /^right$/, /^center$/, /^justify$/],
-            'font-size': [/^\d+(?:px|em|%)$/]
-          }
-        }
-      });
+      if (format === 'markdown') {
+        const rawMarkdown = rawText.replace(/^```(?:markdown|md)?\s*/, '').replace(/```\s*$/, '');
+        const renderedHtml = await marked.parse(rawMarkdown, { async: true });
+        const cleanHtml = sanitizeHtml(renderedHtml, SANITIZE_OPTIONS);
+        updateValues.generatedMarkdown = rawMarkdown;
+        updateValues.generatedHtml = cleanHtml;
+      } else {
+        const rawHtml = rawText.replace(/^```html\s*/, '').replace(/```\s*$/, '');
+        const cleanHtml = sanitizeHtml(rawHtml, SANITIZE_OPTIONS);
+        updateValues.generatedHtml = cleanHtml;
+        updateValues.generatedMarkdown = null;
+      }
 
-      // 2d. Save generated HTML
       await bgRepo.update({
         filterByTk,
-        values: {
-          generatedHtml: cleanHtml,
-          status: 'completed',
-        },
+        values: updateValues,
       });
     })();
 

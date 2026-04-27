@@ -29,8 +29,17 @@ export default defineCollection({
       name: 'systemPrompt',
     },
     {
+      type: 'string',
+      name: 'outputFormat',
+      defaultValue: 'html',
+    },
+    {
       type: 'text',
       name: 'generatedHtml',
+    },
+    {
+      type: 'text',
+      name: 'generatedMarkdown',
     },
     {
       type: 'string',

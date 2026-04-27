@@ -315,6 +315,8 @@ export const midnightEnterprise: Omit<ThemeItem, 'id'> = {
 export const vpbank: Omit<ThemeItem, 'id'> = {
   config: {
     name: 'VPBank',
+    // @ts-ignore
+    algorithm: 'compactAlgorithm',
     token: {
       // Brand — VPBank signature green
       colorPrimary: '#00B74F',
@@ -323,33 +325,39 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
       colorError: '#EE1C25',
       colorInfo: '#00B74F',
 
-      // Typography — clean and professional
-      fontSize: 14,
-      fontSizeHeading1: 28,
-      fontSizeHeading2: 22,
-      fontSizeHeading3: 18,
-      fontSizeHeading4: 16,
-      fontSizeHeading5: 14,
+      // Typography — compact and professional
+      fontSize: 13,
+      fontSizeHeading1: 22,
+      fontSizeHeading2: 18,
+      fontSizeHeading3: 15,
+      fontSizeHeading4: 14,
+      fontSizeHeading5: 13,
       colorTextBase: '#2E3A5B',
 
-      // Neutral — clean white with slight warm gray
+      // Neutral — clean white
       colorBgBase: '#FFFFFF',
 
-      // Spacing
+      // Spacing — tighter for data-dense screens
       sizeStep: 4,
       sizeUnit: 4,
-      padding: 16,
-      paddingLG: 24,
+      padding: 12,
+      paddingLG: 16,
+      paddingSM: 8,
+      paddingXS: 4,
+      margin: 12,
+      marginLG: 16,
+      marginSM: 8,
+      marginXS: 4,
 
-      // Style — modern rounded (VPBank uses high radius)
-      borderRadius: 10,
-      borderRadiusLG: 16,
-      borderRadiusSM: 8,
+      // Style — moderate rounded
+      borderRadius: 6,
+      borderRadiusLG: 8,
+      borderRadiusSM: 4,
       wireframe: false,
 
       // Shadows — very soft and subtle
-      boxShadow: '0 1px 4px 0 rgba(46, 58, 91, 0.06), 0 1px 2px -1px rgba(46, 58, 91, 0.04)',
-      boxShadowSecondary: '0 4px 12px -2px rgba(46, 58, 91, 0.08), 0 2px 6px -2px rgba(46, 58, 91, 0.04)',
+      boxShadow: '0 1px 3px 0 rgba(46, 58, 91, 0.06), 0 1px 2px -1px rgba(46, 58, 91, 0.04)',
+      boxShadowSecondary: '0 3px 8px -2px rgba(46, 58, 91, 0.08), 0 2px 4px -2px rgba(46, 58, 91, 0.04)',
 
       // NocoBase custom — header (white/clean like VPBank nav)
       colorBgHeader: '#FFFFFF',
@@ -369,24 +377,30 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
     },
     components: {
       Button: {
-        primaryShadow: '0 2px 6px -1px rgba(0, 183, 79, 0.35)',
+        primaryShadow: '0 1px 4px -1px rgba(0, 183, 79, 0.3)',
         defaultBorderColor: '#D4E5D9',
         defaultBg: '#FFFFFF',
-        borderRadius: 999,
-        controlHeight: 40,
+        borderRadius: 6,
+        controlHeight: 32,
+        controlHeightLG: 36,
+        controlHeightSM: 24,
+        paddingContentHorizontal: 12,
       },
       Input: {
         activeBorderColor: '#00B74F',
         hoverBorderColor: '#34D399',
         addonBg: '#F8FFF9',
         activeShadow: '0 0 0 2px rgba(0, 183, 79, 0.1)',
-        borderRadius: 10,
+        borderRadius: 6,
+        controlHeight: 32,
+        paddingSM: 8,
       },
       Select: {
         optionSelectedBg: '#E6FFED',
         optionActiveBg: '#F0FFF4',
         selectorBg: '#FFFFFF',
-        borderRadius: 10,
+        borderRadius: 6,
+        controlHeight: 32,
       },
       Table: {
         headerBg: '#F8FFF9',
@@ -394,10 +408,15 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
         headerSortActiveBg: '#F0FFF4',
         rowHoverBg: '#FAFFFE',
         borderColor: '#E6EDEA',
+        cellPaddingBlock: 8,
+        cellPaddingInline: 8,
+        cellPaddingBlockSM: 4,
+        cellPaddingInlineSM: 4,
       },
       Card: {
         headerBg: 'transparent',
-        borderRadiusLG: 16,
+        borderRadiusLG: 8,
+        paddingLG: 16,
       },
       Menu: {
         itemBg: 'transparent',
@@ -406,7 +425,10 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
         itemSelectedColor: '#009A44',
         itemColor: '#2E3A5B',
         subMenuItemBg: 'transparent',
-        itemBorderRadius: 10,
+        itemBorderRadius: 6,
+        itemHeight: 36,
+        itemMarginBlock: 2,
+        itemMarginInline: 4,
       },
       Tabs: {
         inkBarColor: '#00B74F',
@@ -418,11 +440,19 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
         headerBg: '#FFFFFF',
         contentBg: '#FFFFFF',
         titleColor: '#2E3A5B',
-        borderRadiusLG: 16,
+        borderRadiusLG: 8,
       },
       Collapse: {
         headerBg: '#F8FFF9',
         contentBg: '#FFFFFF',
+        headerPadding: '8px 12px',
+        contentPadding: '8px 12px',
+      },
+      Form: {
+        itemMarginBottom: 16,
+      },
+      Descriptions: {
+        padding: 8,
       },
     },
   },

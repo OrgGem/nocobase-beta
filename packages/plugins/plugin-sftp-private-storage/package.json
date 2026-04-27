@@ -1,0 +1,41 @@
+{
+  "name": "plugin-sftp-private-storage",
+  "version": "1.0.0",
+  "displayName": "SFTP Private Storage",
+  "displayName.zh-CN": "SFTP 私有存储",
+  "description": "Provides SFTP connection management and file operations for external storage integration.",
+  "description.zh-CN": "提供 SFTP 连接管理和文件操作，用于外部存储集成。",
+  "license": "AGPL-3.0",
+  "main": "./dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "src"
+  ],
+  "keywords": [
+    "nocobase",
+    "nocobase-plugin",
+    "sftp",
+    "private-storage",
+    "file-manager"
+  ],
+  "dependencies": {
+    "ssh2-sftp-client": "^11.0.0"
+  },
+  "devDependencies": {
+    "@formily/antd-v5": "1.x",
+    "@formily/react": "2.x",
+    "antd": "5.x",
+    "react": "^18.2.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/utils": "2.x"
+  }
+}

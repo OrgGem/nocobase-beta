@@ -1,0 +1,20 @@
+{
+  "Agent Orchestrator": "Agent Orchestrator",
+  "Orchestration Rules": "Orchestration Rules",
+  "Swarm Tracing": "Swarm Tracing",
+  "Leader (Orchestrator)": "Leader (Orchestrator)",
+  "Sub-Agent": "Sub-Agent",
+  "Max Delegation Depth": "Max Delegation Depth",
+  "Timeout (ms)": "Timeout (ms)",
+  "Enabled": "Enabled",
+  "New Rule": "New Rule",
+  "Edit Orchestration Rule": "Edit Orchestration Rule",
+  "New Orchestration Rule": "New Orchestration Rule",
+  "Rule created": "Rule created",
+  "Rule updated": "Rule updated",
+  "Rule deleted": "Rule deleted",
+  "Sub-Agent Conversation": "Sub-Agent Conversation",
+  "Task Summary": "Task Summary",
+  "Parent Session": "Parent Session",
+  "No sub-agent executions yet": "No sub-agent executions yet"
+}

@@ -25,10 +25,10 @@ export default {
 
     // Auto-generated whitelist after successful init
     // { python: ['python-docx', ...], node: ['xlsx', ...], apt: ['python3', ...] }
-    { name: 'packageWhitelist', type: 'json', defaultValue: { python: [], node: [], apt: [] } },
+    { name: 'packageWhitelist', type: 'text', defaultValue: null },
 
     // User-provided custom libraries mapping
-    { name: 'customPackages', type: 'json', defaultValue: { python: [], node: [] } },
+    { name: 'customPackages', type: 'text', defaultValue: null },
 
     // Retention policy for execution history and storage
     { name: 'retentionHours', type: 'integer', defaultValue: 24, allowNull: false },

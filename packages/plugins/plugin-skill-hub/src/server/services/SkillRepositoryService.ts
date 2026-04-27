@@ -1,6 +1,13 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'fs';
+import { resolve, relative } from 'path';
 import AdmZip from 'adm-zip';
+import { parseSkillMarkdown } from '../utils/json-fields';
+export interface SkillPackageMetadata {
+  path: string;
+  metadata: Record<string, any>;
+  instructions: string;
+  code: string | null;
+}
 
 export class SkillRepositoryService {
   private baseDir: string;
@@ -29,19 +36,7 @@ export class SkillRepositoryService {
     const zip = new AdmZip(zipFilePath);
     zip.extractAllTo(targetDir, true);
 
-    // Read SKILL.md or package.json
-    let metadata: any = {};
-    const skillMdPath = resolve(targetDir, 'SKILL.md');
-    
-    if (existsSync(skillMdPath)) {
-      const content = readFileSync(skillMdPath, 'utf8');
-      metadata = this.parseFrontmatter(content);
-    }
-    
-    return {
-      path: targetDir,
-      metadata
-    };
+    return this.readSkillPackage(targetDir);
   }
 
   getSkillPath(skillName: string) {
@@ -52,6 +47,62 @@ export class SkillRepositoryService {
     const dir = this.getSkillPath(skillName);
     if (!existsSync(dir)) return null;
 
+    return this.getSkillCodeFromDir(dir);
+  }
+
+  copySkillPackageTo(skillName: string, destDir: string) {
+    const srcDir = this.getSkillPath(skillName);
+    this.copyDirectoryTo(srcDir, destDir);
+  }
+
+  readSkillPackage(packageDir: string): SkillPackageMetadata {
+    const rootDir = resolve(packageDir);
+    if (!existsSync(rootDir)) {
+      return {
+        path: rootDir,
+        metadata: {},
+        instructions: '',
+        code: null,
+      };
+    }
+
+    let metadata: Record<string, any> = {};
+    let instructions = '';
+    const skillMdPath = resolve(rootDir, 'SKILL.md');
+
+    if (existsSync(skillMdPath)) {
+      const content = readFileSync(skillMdPath, 'utf8');
+      const parsed = parseSkillMarkdown(content);
+      metadata = parsed.metadata;
+      instructions = parsed.body;
+    }
+
+    instructions += this.aggregateOtherMarkdownFiles(rootDir);
+
+    return {
+      path: rootDir,
+      metadata,
+      instructions: instructions.trim(),
+      code: this.getSkillCodeFromDir(rootDir),
+    };
+  }
+
+  copyDirectoryTo(srcDir: string, destDir: string) {
+    if (!existsSync(srcDir)) return;
+
+    cpSync(srcDir, destDir, {
+      recursive: true,
+      force: true,
+      filter: (src) => {
+        const name = src.split(/[\\/]/).pop();
+        return !['node_modules', '.git', '__pycache__'].includes(name || '') && !src.endsWith('.pyc');
+      },
+    });
+  }
+
+
+
+  private getSkillCodeFromDir(dir: string): string | null {
     if (existsSync(resolve(dir, 'index.py'))) {
       return readFileSync(resolve(dir, 'index.py'), 'utf8');
     }
@@ -65,32 +116,27 @@ export class SkillRepositoryService {
     return null;
   }
 
-  copySkillPackageTo(skillName: string, destDir: string) {
-    const srcDir = this.getSkillPath(skillName);
-    if (existsSync(srcDir)) {
-      cpSync(srcDir, destDir, { recursive: true, force: true });
-    }
-  }
-
-  private parseFrontmatter(markdown: string) {
-    // Basic regex to pull YAML out of markdown frontmatter
-    const match = markdown.match(/^---\n([\s\S]*?)\n---/);
-    if (!match) return {};
+  private aggregateOtherMarkdownFiles(dir: string, baseDir = dir): string {
+    let combined = '';
     
-    const yamlString = match[1];
-    const result: any = {};
+    if (!existsSync(dir)) return combined;
     
-    yamlString.split('\n').forEach(line => {
-      const parts = line.split(':');
-      if (parts.length > 1) {
-        const key = parts[0].trim();
-        const value = parts.slice(1).join(':').trim();
-        if (key) {
-          result[key] = value;
+    const items = readdirSync(dir);
+    for (const item of items) {
+      const fullPath = resolve(dir, item);
+      const stat = statSync(fullPath);
+      
+      if (stat.isDirectory()) {
+        if (item !== 'node_modules' && item !== '.git') {
+          combined += this.aggregateOtherMarkdownFiles(fullPath, baseDir);
         }
+      } else if (stat.isFile() && item.toLowerCase().endsWith('.md') && item.toUpperCase() !== 'SKILL.md') {
+        const relPath = relative(baseDir, fullPath);
+        const content = readFileSync(fullPath, 'utf8');
+        combined += `\n\n--- Content from ${relPath} ---\n\n${content}`;
       }
-    });
-
-    return result;
+    }
+    
+    return combined;
   }
 }

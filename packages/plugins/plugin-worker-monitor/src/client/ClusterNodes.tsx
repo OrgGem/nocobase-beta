@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Table, Tag, Button, Space, Row, Col, Statistic, Descriptions, Select, Spin, Alert, Popconfirm, message } from 'antd';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Card, Table, Tag, Button, Space, Row, Col, Statistic, Descriptions, Select, Spin, Alert, Popconfirm, message, Modal, Input, Switch } from 'antd';
 import {
   ReloadOutlined,
   CheckCircleOutlined,
@@ -7,11 +7,146 @@ import {
   CloseCircleOutlined,
   ClusterOutlined,
   CloudServerOutlined,
+  FileTextOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useT, formatBytes, formatUptime } from './utils';
 
 
+
+function LogViewerModal({ open, node, onClose }: { open: boolean; node: any; onClose: () => void }) {
+  const t = useT();
+  const api = useAPIClient();
+  const [lines, setLines] = useState<string[]>([]);
+  const [logMeta, setLogMeta] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [searchText, setSearchText] = useState('');
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchLogs = useCallback(async () => {
+    if (!open) return;
+    setLoading(true);
+    try {
+      const res = await api.request({
+        url: 'workerMonitorCluster:logs',
+        params: { lines: 200, targetNodeId: node?.id },
+      });
+      const data = res?.data?.data;
+      if (data) {
+        if (data._error) {
+          message.warning(data._error);
+        }
+        setLines(data.lines || []);
+        setLogMeta(data.node);
+      }
+    } catch {
+      message.error('Failed to load logs');
+    } finally {
+      setLoading(false);
+    }
+  }, [api, open, node]);
+
+  useEffect(() => {
+    if (open) {
+      setLines([]);
+      setSearchText('');
+      setAutoRefresh(true);
+      fetchLogs();
+    }
+  }, [open, fetchLogs]);
+
+  useEffect(() => {
+    if (!open || !autoRefresh) return;
+    const timer = setInterval(fetchLogs, 5000);
+    return () => clearInterval(timer);
+  }, [open, autoRefresh, fetchLogs]);
+
+  useEffect(() => {
+    if (logEndRef.current && !searchText) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [lines, searchText]);
+
+  const filteredLines = searchText
+    ? lines.filter((l) => l.toLowerCase().includes(searchText.toLowerCase()))
+    : lines;
+
+  return (
+    <Modal
+      title={
+        <Space>
+          <FileTextOutlined />
+          {t('Instance Logs')} — {node?.name || ''}
+          {logMeta && (
+            <Tag>{logMeta.hostname}:{logMeta.pid} ({logMeta.workerMode})</Tag>
+          )}
+        </Space>
+      }
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width="80vw"
+      styles={{ body: { height: '70vh', display: 'flex', flexDirection: 'column', padding: '12px 24px' } }}
+      destroyOnClose
+    >
+      <Space style={{ marginBottom: 8, flexShrink: 0 }}>
+        <Input
+          placeholder={t('Search logs...')}
+          prefix={<SearchOutlined />}
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          allowClear
+          style={{ width: 300 }}
+        />
+        <Switch
+          checked={autoRefresh}
+          onChange={setAutoRefresh}
+          checkedChildren={t('Auto 5s')}
+          unCheckedChildren={t('Paused')}
+        />
+        <Button icon={<ReloadOutlined />} onClick={fetchLogs} loading={loading} size="small">
+          {t('Refresh')}
+        </Button>
+        <span style={{ fontSize: 12, color: '#888' }}>
+          {filteredLines.length} / {lines.length} {t('lines')}
+        </span>
+      </Space>
+      <div
+        style={{
+          flex: 1,
+          overflow: 'auto',
+          background: '#1e1e1e',
+          color: '#d4d4d4',
+          fontFamily: 'Consolas, Monaco, "Courier New", monospace',
+          fontSize: 12,
+          lineHeight: 1.5,
+          padding: 12,
+          borderRadius: 6,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-all',
+        }}
+      >
+        {filteredLines.length === 0 && !loading && (
+          <div style={{ color: '#888', textAlign: 'center', paddingTop: 40 }}>
+            {lines.length === 0 ? t('No logs available') : t('No matching logs')}
+          </div>
+        )}
+        {filteredLines.map((line, i) => {
+          let color = '#d4d4d4';
+          if (/\berror\b/i.test(line)) color = '#f5222d';
+          else if (/\bwarn(ing)?\b/i.test(line)) color = '#faad14';
+          else if (/\bdebug\b/i.test(line)) color = '#8c8c8c';
+          return (
+            <div key={i} style={{ padding: '1px 0', color }}>{line}</div>
+          );
+        })}
+        <div ref={logEndRef} />
+      </div>
+    </Modal>
+  );
+}
 
 const statusColors: Record<string, string> = {
   ok: 'green',
@@ -32,6 +167,7 @@ export function ClusterNodes() {
   const [environments, setEnvironments] = useState<any[]>([]);
   const [health, setHealth] = useState<any>(null);
   const [autoRefresh, setAutoRefresh] = useState<number | null>(null);
+  const [logNode, setLogNode] = useState<any>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -99,7 +235,10 @@ export function ClusterNodes() {
       dataIndex: 'workerMode',
       key: 'workerMode',
       width: 100,
-      render: (mode: string) => {
+      render: (mode: string, record: any) => {
+        if (record.isSandbox) {
+          return <Tag color="purple">SANDBOX</Tag>;
+        }
         const isWorker = mode === 'worker' || mode === 'task' || mode === '*';
         return (
           <Tag color={isWorker ? 'blue' : 'green'}>
@@ -114,24 +253,12 @@ export function ClusterNodes() {
     {
       title: 'Action',
       key: 'action',
-      width: 180,
+      width: 100,
       render: (_: any, r: any) => (
         <Space size="small">
-          <Popconfirm
-            title="Soft Restart Node?"
-            description="Reload the NocoBase app inside this process (does not clear RAM leaks)."
-            onConfirm={() => handleRestartNode(r.name, 'soft')}
-          >
-            <Button type="link" style={{ color: '#faad14' }} disabled={r.status === 'offline'}>Soft Restart</Button>
-          </Popconfirm>
-          
-          <Popconfirm
-            title="Hard Restart Node?"
-            description="Force kill process. Docker will recreate this container (clears RAM)."
-            onConfirm={() => handleRestartNode(r.name, 'hard')}
-          >
-            <Button type="link" danger disabled={r.status === 'offline'}>Hard Restart</Button>
-          </Popconfirm>
+          <Button type="link" icon={<FileTextOutlined />} onClick={() => setLogNode(r)} disabled={r.status === 'offline'}>
+            {t('Logs')}
+          </Button>
         </Space>
       ),
     },
@@ -284,6 +411,7 @@ export function ClusterNodes() {
             </Descriptions>
           </Card>
         )}
+        <LogViewerModal open={!!logNode} node={logNode} onClose={() => setLogNode(null)} />
       </Space>
     </Spin>
   );

@@ -1,6 +1,19 @@
 {
   "name": "plugin-build-guide-block",
-  "version": "1.0.11",
+  "displayName": "Build Guide Block",
+  "displayName.vi-VN": "Khối tạo hướng dẫn",
+  "displayName.zh-CN": "构建指南区块",
+  "description": "Generate user guides, tutorials and help books from documents using AI, then render the result as a block (HTML or Markdown).",
+  "description.vi-VN": "Tạo hướng dẫn người dùng, tutorial và help book từ tài liệu bằng AI, hiển thị kết quả dưới dạng block (HTML hoặc Markdown).",
+  "version": "1.0.12",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ai",
+    "guide",
+    "tutorial",
+    "documentation",
+    "nocobase-plugin"
+  ],
   "main": "dist/server/index.js",
   "files": [
     "dist",
@@ -12,6 +25,7 @@
   ],
   "dependencies": {
     "dompurify": "^3.1.2",
+    "marked": "^12.0.2",
     "sanitize-html": "^2.13.0"
   },
   "devDependencies": {
@@ -27,5 +41,11 @@
     "@nocobase/plugin-file-manager": "2.x",
     "@langchain/core": "*",
     "axios": "*"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
   }
 }

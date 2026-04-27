@@ -75,6 +75,18 @@ export const spacesSchema = {
                             },
                           },
                         },
+                        outputFormat: {
+                          type: 'string',
+                          title: '{{t("Output format")}}',
+                          required: true,
+                          default: 'html',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Select',
+                          enum: [
+                            { label: 'HTML', value: 'html' },
+                            { label: 'Markdown', value: 'markdown' },
+                          ],
+                        },
                         systemPrompt: {
                           type: 'string',
                           title: '{{t("System Prompt")}}',
@@ -84,7 +96,7 @@ export const spacesSchema = {
                             rows: 4,
                           },
                           default:
-                            'You are an expert technical writer. Please generate a comprehensive HTML user guide based on the provided documents. Ensure the output is valid HTML and does not include Markdown syntax like ```html blocks.',
+                            'You are an expert technical writer. Generate a comprehensive user guide based on the provided documents.',
                         },
                         documents: {
                           type: 'array',
@@ -231,6 +243,17 @@ export const spacesSchema = {
                                   'x-decorator': 'FormItem',
                                   'x-component': 'ModelSelect',
                                 },
+                                outputFormat: {
+                                  type: 'string',
+                                  title: '{{t("Output format")}}',
+                                  required: true,
+                                  'x-decorator': 'FormItem',
+                                  'x-component': 'Select',
+                                  enum: [
+                                    { label: 'HTML', value: 'html' },
+                                    { label: 'Markdown', value: 'markdown' },
+                                  ],
+                                },
                                 systemPrompt: {
                                   type: 'string',
                                   title: '{{t("System Prompt")}}',
@@ -260,6 +283,24 @@ export const spacesSchema = {
                                     rows: 6,
                                   },
                                   'x-read-pretty': true,
+                                },
+                                generatedMarkdown: {
+                                  type: 'string',
+                                  title: '{{t("Generated Markdown")}}',
+                                  'x-decorator': 'FormItem',
+                                  'x-component': 'Input.TextArea',
+                                  'x-component-props': {
+                                    rows: 6,
+                                  },
+                                  'x-read-pretty': true,
+                                  'x-reactions': {
+                                    dependencies: ['outputFormat'],
+                                    fulfill: {
+                                      state: {
+                                        visible: '{{$deps[0] === "markdown"}}',
+                                      },
+                                    },
+                                  },
                                 },
                                 buildLog: {
                                   type: 'string',

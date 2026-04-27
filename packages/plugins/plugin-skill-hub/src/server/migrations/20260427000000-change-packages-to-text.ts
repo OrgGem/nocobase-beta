@@ -1,0 +1,47 @@
+import { Migration } from '@nocobase/server';
+
+export default class ChangePackagesToTextMigration extends Migration {
+  async up() {
+    const queryInterface = this.db.sequelize.getQueryInterface();
+    const tableName = `${this.db.options.tablePrefix || ''}skillDefinitions`;
+
+    try {
+      const tableExists = await queryInterface.tableExists(tableName);
+      if (!tableExists) return;
+
+      const tableDesc = await queryInterface.describeTable(tableName);
+      const columnsToChange = ['packages', 'inputSchema', 'interactionSchema'];
+      const fieldRepo = this.db.getRepository('fields');
+      const collectionName = 'skillDefinitions';
+
+      for (const col of columnsToChange) {
+        if (tableDesc[col]) {
+          // Change physical column type in Postgres if needed
+          const dialect = this.db.sequelize.getDialect();
+          if (dialect === 'postgres') {
+            await this.db.sequelize.query(`ALTER TABLE "${tableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+          } else {
+            await queryInterface.changeColumn(tableName, col, {
+              type: 'TEXT',
+            });
+          }
+          
+          // Also update NocoBase metadata
+          const fieldMeta = await fieldRepo.findOne({
+            filter: { name: col, collectionName },
+          });
+
+          if (fieldMeta) {
+            await fieldRepo.update({
+              filterByTk: fieldMeta.get('id'),
+              values: { type: 'text' },
+            });
+          }
+          this.app.logger.info(`[skill-hub] Changed ${col} column type to text to support markdown`);
+        }
+      }
+    } catch (error) {
+      this.app.logger.error(`[skill-hub] Failed to change packages field type: ${error.message}`);
+    }
+  }
+}

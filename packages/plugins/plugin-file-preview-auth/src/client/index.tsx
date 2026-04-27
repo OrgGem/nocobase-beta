@@ -14,6 +14,7 @@ import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype } from '@nocob
 // @ts-ignore
 import { filePreviewTypes } from '@nocobase/plugin-file-manager/client';
 import { useT } from './locale';
+import { AIFilePreviewAction, registerFilePreviewAIWorkContext } from './AIFilePreviewAction';
 
 // ─── Supported MIME types ────────────────────────────────────────────
 
@@ -266,6 +267,17 @@ function LoadingIndicator({ message: msg }: { message: string }) {
 
 function ErrorMessage({ message: msg }: { message: string }) {
   return <div style={{ padding: 20, textAlign: 'center', color: '#ff4d4f' }}>{msg}</div>;
+}
+
+function PreviewModalTitle({ file, title }: { file: any; title: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingRight: 40 }}>
+      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>
+        {title}
+      </span>
+      <AIFilePreviewAction file={file} />
+    </div>
+  );
 }
 
 // ─── Inline Previewers (used inside modals) ─────────────────────────
@@ -638,7 +650,7 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
     return (
       <Modal
         open={open}
-        title={title}
+        title={<PreviewModalTitle file={file} title={title} />}
         onCancel={() => {
           onOpenChange?.(false);
           onClose?.();
@@ -708,24 +720,6 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
     [file, apiClient, t],
   );
 
-  const onOpenNewWindow = useCallback(
-    async (e: any) => {
-      e?.preventDefault?.();
-      e?.stopPropagation?.();
-      const token = apiClient.auth?.token || '';
-      const url = resolveFileUrl(file);
-      if (!url) return;
-      try {
-        const blob = await fetchFileAsBlob(url, token);
-        const objectUrl = URL.createObjectURL(blob);
-        window.open(objectUrl);
-      } catch (err) {
-        message.error(t('Failed to load file preview'));
-      }
-    },
-    [file, apiClient, t],
-  );
-
   const onClose = useCallback(() => {
     onSwitchIndex(null);
   }, [onSwitchIndex]);
@@ -746,14 +740,9 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
   return (
     <Modal
       open={index != null}
-      title={file?.title || file?.filename || file?.name || 'File'}
+      title={<PreviewModalTitle file={file} title={file?.title || file?.filename || file?.name || 'File'} />}
       onCancel={onClose}
       footer={[
-        canPreview && (
-          <Button key="open" onClick={onOpenNewWindow}>
-            {t('Open in new window')}
-          </Button>
-        ),
         <Button key="download" onClick={onDownload} loading={downloading}>
           {t('Download')}
         </Button>,
@@ -829,6 +818,8 @@ function AuthDownloadPreviewer({ file }: any) {
 
 export class PluginFilePreviewAuthClient extends Plugin {
   async load() {
+    registerFilePreviewAIWorkContext(this.app);
+
     // ────────────────────────────────────────────────────────────────
     // 1) attachmentFileTypes: Catch-ALL handler for Upload/Attachment
     //    This intercepts ALL file clicks (any type) and provides:

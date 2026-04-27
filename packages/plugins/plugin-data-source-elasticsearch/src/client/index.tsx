@@ -10,6 +10,7 @@
 import { Plugin } from '@nocobase/client';
 import PluginDataSourceManagerClient from '@nocobase/plugin-data-source-manager/client';
 import { ElasticsearchConfigForm } from './components/ElasticsearchConfigForm';
+import { ElasticsearchDeleteCollection } from './components/ElasticsearchDeleteCollection';
 
 export class PluginDataSourceElasticsearchClient extends Plugin {
   async load() {
@@ -21,6 +22,7 @@ export class PluginDataSourceElasticsearchClient extends Plugin {
       icon: 'SearchOutlined',
       color: 'gold',
       DataSourceSettingsForm: ElasticsearchConfigForm,
+      DeleteCollection: ElasticsearchDeleteCollection,
       disableTestConnection: false,
       disableAddFields: true,
       allowCollectionDeletion: true,

@@ -1,0 +1,6 @@
+{
+  "verifyPackages": [
+    "xlsx",
+    "dayjs"
+  ]
+}

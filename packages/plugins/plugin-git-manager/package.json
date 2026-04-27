@@ -1,0 +1,32 @@
+{
+  "name": "plugin-git-manager",
+  "displayName": "Git Manager",
+  "displayName.zh-CN": "Git 管理器",
+  "description": "Manage Git repositories with PAT authentication - pull, push, fetch, diff, file browsing",
+  "version": "1.0.3",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/test": "2.x"
+  },
+  "dependencies": {
+    "simple-git": "^3.27.0"
+  }
+}

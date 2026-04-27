@@ -17,8 +17,7 @@ export const embedSettingsBlockSettings = new SchemaSettings({
         const currentPluginName = fieldSchema?.['x-component-props']?.pluginName || '';
 
         return {
-          title: t('Edit embed settings'),
-          components: { EmbedSettingsPluginSelect },
+          title: t('Select plugin'),
           schema: {
             type: 'object',
             properties: {

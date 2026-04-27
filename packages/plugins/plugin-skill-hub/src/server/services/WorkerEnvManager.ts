@@ -1,8 +1,9 @@
 import { exec as execCb } from 'child_process';
-import { writeFileSync, mkdirSync, existsSync, cpSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, cpSync, readFileSync } from 'fs';
 import { promisify } from 'util';
 import Application from '@nocobase/server';
 import { resolve } from 'path';
+import { parseJsonText } from '../utils/json-fields';
 
 const execAsync = promisify(execCb);
 
@@ -63,8 +64,8 @@ export class WorkerEnvManager {
       },
       packages: {
         apt: PREDEFINED_PACKAGES.apt,
-        python: Array.from(new Set([...PREDEFINED_PACKAGES.python, ...(config.customPackages?.python || [])])),
-        node: Array.from(new Set([...PREDEFINED_PACKAGES.node, ...(config.customPackages?.node || [])])),
+        python: Array.from(new Set([...PREDEFINED_PACKAGES.python, ...(parseJsonText(config.customPackages, { python: [], node: [] }).python || [])])),
+        node: Array.from(new Set([...PREDEFINED_PACKAGES.node, ...(parseJsonText(config.customPackages, { python: [], node: [] }).node || [])])),
       },
     });
 
@@ -162,9 +163,20 @@ export class WorkerEnvManager {
 
       // Step 9: Verify Node
       const nodePath = resolve(this.sandboxWorkspace, 'node_modules').replace(/\\/g, '/');
+      const sandboxConfig = JSON.parse(readFileSync(resolve(__dirname, '../sandbox-config.json'), 'utf-8'));
+      const requires = sandboxConfig.verifyPackages.map((pkg: string) => `require('${pkg}');`).join(' ');
+      const checkScript = `
+        try {
+          ${requires}
+          console.log('Node packages OK');
+        } catch (e) {
+          console.error(e.message);
+          process.exit(1);
+        }
+      `;
       const verifyNodeCmd = process.platform === 'win32'
-          ? `set NODE_PATH=${nodePath} && node -e "require('xlsx'); require('dayjs'); console.log('Node packages OK')"`
-          : `NODE_PATH="${nodePath}" node -e "require('xlsx'); require('dayjs'); console.log('Node packages OK')"`;
+          ? `set NODE_PATH=${nodePath} && node -e "${checkScript.replace(/\n/g, ' ')}"`
+          : `NODE_PATH="${nodePath}" node -e "${checkScript.replace(/\n/g, ' ')}"`;
       
       await this.runCommand(
         verifyNodeCmd,

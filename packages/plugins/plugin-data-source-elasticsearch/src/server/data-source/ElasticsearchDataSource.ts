@@ -19,6 +19,7 @@ export type ElasticsearchDataSourceOptions = {
   apiKey?: string;
   rejectUnauthorized?: boolean;
   indexPattern?: string;
+  addAllCollections?: boolean;
   [key: string]: any;
 };
 
@@ -120,6 +121,68 @@ function buildClientOptions(options: ElasticsearchDataSourceOptions): ClientOpti
 }
 
 /**
+ * Introspect a single ES index and return a collection definition.
+ */
+async function introspectIndex(
+  client: Client,
+  indexName: string,
+): Promise<{ name: string; fields: any[]; [key: string]: any }> {
+  const mappingResult = await client.indices.getMapping({ index: indexName });
+  const mapping = mappingResult[indexName]?.mappings?.properties || {};
+
+  // Build fields from mapping
+  const fields: any[] = [
+    {
+      name: '_id',
+      field: '_id',
+      type: 'string',
+      rawType: '_id',
+      primaryKey: true,
+      autoIncrement: false,
+      allowNull: false,
+      interface: 'input',
+      uiSchema: {
+        type: 'string',
+        title: '_id',
+        'x-component': 'Input',
+        'x-read-pretty': true,
+      },
+    },
+  ];
+
+  for (const [fieldName, fieldMeta] of Object.entries(mapping)) {
+    const meta = fieldMeta as any;
+    const esType = meta.type || 'object';
+    const mapped = mapEsType(esType);
+
+    fields.push({
+      name: fieldName,
+      field: fieldName,
+      rawType: esType,
+      type: mapped.type,
+      interface: mapped.interface,
+      allowNull: true,
+      uiSchema: {
+        ...mapped.uiSchema,
+        title: fieldName,
+      },
+    });
+  }
+
+  return {
+    name: indexName,
+    tableName: indexName,
+    title: indexName,
+    fields,
+    filterTargetKey: '_id',
+    repository: 'elasticsearch-repo',
+    timestamps: false,
+    introspected: true,
+    simplePaginate: true,
+  };
+}
+
+/**
  * Elasticsearch DataSource for NocoBase.
  * Each Elasticsearch index is mapped to a NocoBase collection.
  */
@@ -161,6 +224,7 @@ export class ElasticsearchDataSource extends DataSource {
 
   /**
    * Load: connect to ES, introspect indices, create collections.
+   * Called by DataSourceManager.add() with { localData } from persisted metadata.
    */
   async load(options: any = {}) {
     try {
@@ -197,65 +261,9 @@ export class ElasticsearchDataSource extends DataSource {
         const indexName = indexInfo.index;
 
         try {
-          // Get mapping for this index
-          const mappingResult = await this.esClient.indices.getMapping({
-            index: indexName,
-          });
+          const collectionOptions = await introspectIndex(this.esClient, indexName);
 
-          const mapping = mappingResult[indexName]?.mappings?.properties || {};
-
-          // Build fields from mapping
-          const fields: any[] = [
-            {
-              name: '_id',
-              field: '_id',
-              type: 'string',
-              rawType: '_id',
-              primaryKey: true,
-              autoIncrement: false,
-              allowNull: false,
-              interface: 'input',
-              uiSchema: {
-                type: 'string',
-                title: '_id',
-                'x-component': 'Input',
-                'x-read-pretty': true,
-              },
-            },
-          ];
-
-          for (const [fieldName, fieldMeta] of Object.entries(mapping)) {
-            const meta = fieldMeta as any;
-            const esType = meta.type || 'object';
-            const mapped = mapEsType(esType);
-
-            fields.push({
-              name: fieldName,
-              field: fieldName,
-              rawType: esType,
-              type: mapped.type,
-              interface: mapped.interface,
-              allowNull: true,
-              uiSchema: {
-                ...mapped.uiSchema,
-                title: fieldName,
-              },
-            });
-          }
-
-          // Define collection
-          this.collectionManager.defineCollection({
-            name: indexName,
-            tableName: indexName,
-            title: indexName,
-            fields,
-            filterTargetKey: '_id',
-            repository: 'elasticsearch-repo',
-            timestamps: false,
-            introspected: true,
-            // Use simple pagination (no COUNT query) — more efficient for ES
-            simplePaginate: true,
-          } as any);
+          this.collectionManager.defineCollection(collectionOptions as any);
 
           // Mark unsupported actions on the collection
           const collection = this.collectionManager.getCollection(indexName);
@@ -281,6 +289,75 @@ export class ElasticsearchDataSource extends DataSource {
     } catch (error) {
       this.logger?.error?.('[Elasticsearch] Failed to introspect indices:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Read all available indices from Elasticsearch.
+   * Called by the data-source-manager's loadDataSourceTablesIntoCollections
+   * middleware when `addAllCollections` is true.
+   * Returns objects with { name } for the CollectionsTable UI component.
+   */
+  async readTables(): Promise<any> {
+    try {
+      const connectionOptions = this.getConnectionOptions();
+      const indexPattern = connectionOptions.indexPattern || '*';
+      const catResult = await this.esClient.cat.indices({
+        index: indexPattern,
+        format: 'json',
+        h: 'index',
+      });
+
+      const indices = (catResult as any[])
+        .filter((idx: any) => idx.index && !idx.index.startsWith('.'))
+        .map((idx: any) => ({ name: idx.index }));
+
+      return indices;
+    } catch (error) {
+      this.logger?.error?.('[Elasticsearch] readTables failed:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Load specific indices from Elasticsearch as collections.
+   * Called by the data-source-manager's loadDataSourceTablesIntoCollections
+   * middleware during data source creation/update.
+   *
+   * The middleware persists the selected collections to the
+   * `dataSourcesCollections` table after this method returns.
+   */
+  async loadTables(ctx: any, tables: string[]): Promise<any> {
+    if (!tables || tables.length === 0) {
+      return;
+    }
+
+    this.logger?.info?.(`[Elasticsearch] Loading ${tables.length} specific indices:`, tables);
+
+    for (const indexName of tables) {
+      try {
+        const collectionOptions = await introspectIndex(this.esClient, indexName);
+
+        this.collectionManager.defineCollection(collectionOptions as any);
+
+        // Mark unsupported actions on the collection
+        const collection = this.collectionManager.getCollection(indexName);
+        if (collection) {
+          (collection as any).unavailableActions = () => [
+            'add',
+            'remove',
+            'set',
+            'toggle',
+            'firstOrCreate',
+            'updateOrCreate',
+          ];
+        }
+
+        this.logger?.debug?.(`[Elasticsearch] Loaded index ${indexName} as collection`);
+      } catch (error) {
+        this.logger?.error?.(`[Elasticsearch] Failed to load index ${indexName}:`, error);
+        throw error;
+      }
     }
   }
 

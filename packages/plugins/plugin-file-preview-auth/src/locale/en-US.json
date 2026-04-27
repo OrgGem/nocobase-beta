@@ -6,6 +6,9 @@
   "Loading preview...": "Loading preview...",
   "Failed to load file preview": "Failed to load file preview",
   "Failed to download file": "Failed to download file",
+  "Ask AI": "Ask AI",
+  "Please help me analyze the file currently open in preview.": "Please help me analyze the file currently open in preview.",
+  "Failed to open AI chat": "Failed to open AI chat",
   "This file type cannot be previewed. Click Download to save the file.": "This file type cannot be previewed. Click Download to save the file.",
   "This file type cannot be previewed. ": "This file type cannot be previewed. "
 }

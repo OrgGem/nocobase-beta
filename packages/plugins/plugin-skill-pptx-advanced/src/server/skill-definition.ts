@@ -13,7 +13,20 @@ title_raw = '''{{title}}'''
 title = json.loads(title_raw) if title_raw.startswith('"') else title_raw
 
 slides_raw = '''{{slides_svg}}'''
-slides_svg = json.loads(slides_raw) if slides_raw and slides_raw.strip() and slides_raw != '{{' + 'slides_svg}}' else []
+import re
+slides_svg = []
+if slides_raw and slides_raw.strip() and slides_raw != '{{' + 'slides_svg}}':
+    try:
+        parsed = json.loads(slides_raw)
+        if isinstance(parsed, list):
+            slides_svg = parsed
+        elif isinstance(parsed, str):
+            slides_svg = re.findall(r'<svg[^>]*>.*?</svg>', parsed, re.IGNORECASE | re.DOTALL)
+    except Exception:
+        slides_svg = re.findall(r'<svg[^>]*>.*?</svg>', slides_raw, re.IGNORECASE | re.DOTALL)
+    if not slides_svg:
+        # Fallback if no full SVG matches, maybe the LLM forgot to escape something
+        slides_svg = re.findall(r'<svg[^>]*>.*?</svg>', slides_raw, re.IGNORECASE | re.DOTALL)
 
 canvas_raw = '''{{canvas_format}}'''
 canvas_format = canvas_raw if canvas_raw != '{{' + 'canvas_format}}' else 'ppt169'
@@ -133,7 +146,8 @@ export const PPTX_ADVANCED_SKILL = {
   title: 'Advanced PPTX Export (SVG → Native Shapes)',
   description:
     'Convert SVG slide content to a professional PPTX presentation with native editable DrawingML shapes. ' +
-    'IMPORTANT FOR AI: YOU MUST generate the raw SVG code yourself and pass it in the slides_svg array. ' +
+    'IMPORTANT FOR AI: You MUST NOT call this tool with an empty input or guess the schema. ' +
+    'You MUST generate the raw SVG code yourself and pass it in the `slides_svg` array/string property. ' +
     'Do NOT say you lack the capability to create SVGs—you are fully capable of writing raw SVG XML text code. ' +
     'Use standard SVG tags (<svg viewBox="0 0 1280 720">, <rect>, <text>, <path>) to design each slide creatively before calling this tool. ' +
     'SVG elements are converted to native PowerPoint shapes (editable text, paths, images). ' +
@@ -145,13 +159,12 @@ export const PPTX_ADVANCED_SKILL = {
     properties: {
       title: { type: 'string', description: 'Presentation title (used for filename)' },
       slides_svg: {
-        type: 'array',
-        items: { type: 'string' },
+        type: 'string',
         description:
-          'Array of SVG content strings, one per slide. Each SVG should use viewBox="0 0 1280 720" for 16:9 format. ' +
-          'Auto-margin is applied internally (scaled to 90% and centered) to prevent text overflow, so use the full 1280x720 area safely. ' +
-          'CRITICAL JSON ENCODING: Because you are passing raw XML inside a JSON string array, you MUST use single quotes (\') instead of double quotes (\") for all SVG attributes (e.g. <rect fill=\'red\'>). ' +
-          'If you must use double quotes, they MUST be escaped properly like \\\". Newlines inside the SVG must be escaped as \\n or removed. Failure to follow this will break the JSON parser and your execution will fail.',
+          'ALL SVG slide content joined together as a SINGLE string. You MUST output ALL slides\' raw SVG code directly here, one after another (e.g. <svg>...</svg><svg>...</svg>). ' +
+          'Each SVG should use viewBox="0 0 1280 720" for 16:9 format. Auto-margin is applied internally. ' +
+          'CRITICAL JSON ENCODING: Because you are passing raw XML inside a JSON string, you MUST use single quotes (\') instead of double quotes (\") for all SVG attributes (e.g. <rect fill=\'red\'>). ' +
+          'If you must use double quotes, they MUST be escaped properly like \\\". Newlines inside the SVG must be escaped as \\n or removed. Failure to follow this will break the JSON parser.',
       },
       canvas_format: {
         type: 'string',

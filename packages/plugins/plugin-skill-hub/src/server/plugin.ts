@@ -10,6 +10,8 @@ import { SkillExecutionTask } from './tasks/SkillExecutionTask';
 import { createSkillExecuteTool } from './tools/skill-execute';
 import { McpController } from './mcp/McpController';
 import { SkillRepositoryService } from './services/SkillRepositoryService';
+import { gitListSkills, gitSyncSkills } from './actions/git-import';
+import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fields';
 
 /**
  * Simple in-memory rate limiter per user.
@@ -88,6 +90,12 @@ export class PluginSkillHubServer extends Plugin {
       directory: resolve(__dirname, 'collections'),
     });
 
+    this.db.addMigrations({
+      namespace: this.name,
+      directory: resolve(__dirname, 'migrations'),
+      context: { plugin: this },
+    });
+
     // 2. Init services
     const storagePath = resolve(process.cwd(), 'storage', this.name);
     this.fileManager = new FileManager(storagePath);
@@ -108,6 +116,8 @@ export class PluginSkillHubServer extends Plugin {
         mcpListTools: this.mcpController.listTools.bind(this.mcpController),
         mcpCallTool: this.mcpController.callTool.bind(this.mcpController),
         listTemplates: this.handleListTemplates.bind(this),
+        gitListSkills,
+        gitSyncSkills,
       },
     });
 
@@ -164,7 +174,7 @@ export class PluginSkillHubServer extends Plugin {
 
             if (require('fs').existsSync(tempZipPath)) {
               const skillName = model.get('name');
-              const { metadata } = await this.skillRepoService.extractSkillPackage(skillName, tempZipPath);
+              const { metadata, instructions } = await this.skillRepoService.extractSkillPackage(skillName, tempZipPath);
               const code = this.skillRepoService.getSkillCode(skillName);
 
               const updateValues: any = { storageType: attachment.get('storageId') ? `storage-${attachment.get('storageId')}` : 'local' };
@@ -172,8 +182,11 @@ export class PluginSkillHubServer extends Plugin {
               if (metadata.description) updateValues.description = metadata.description;
               if (metadata.title) updateValues.title = metadata.title;
               if (metadata.language) updateValues.language = metadata.language;
-              if (metadata.inputSchema) updateValues.inputSchema = metadata.inputSchema;
+              if (metadata.inputSchema) updateValues.inputSchema = stringifyJsonText(parseJsonLike(metadata.inputSchema, null));
+              if (metadata.interactionSchema) updateValues.interactionSchema = stringifyJsonText(parseJsonLike(metadata.interactionSchema, null));
+              if (metadata.packages) updateValues.packages = stringifyJsonText(parseJsonLike(metadata.packages, []), []);
               if (metadata.timeoutSeconds) updateValues.timeoutSeconds = metadata.timeoutSeconds;
+              if (instructions) updateValues.instructions = instructions;
 
               await this.db.getRepository('skillDefinitions').update({
                 filter: { id: model.get('id') },
@@ -255,7 +268,7 @@ export class PluginSkillHubServer extends Plugin {
       values: {
         skillId: skill.id,
         status: 'pending',
-        inputArgs,
+        inputArgs: stringifyJsonText(inputArgs, {}),
         sessionId: ctx?.state?.sessionId,
         triggeredById: ctx?.state?.currentUser?.id,
       },
@@ -362,7 +375,7 @@ export class PluginSkillHubServer extends Plugin {
       ctx.throw(400, 'Missing execId or filename');
     }
 
-    const currentUser = ctx.state.currentUser;
+    const currentUser = ctx?.state?.currentUser;
     if (!currentUser) {
       ctx.throw(401, 'Unauthorized');
     }
@@ -416,6 +429,10 @@ export class PluginSkillHubServer extends Plugin {
    */
   private async handleInitEnv(ctx: any, next: any) {
     const config = await this.workerEnvManager.getOrCreateConfig();
+    const customPackages = parseJsonText(config.get?.('customPackages') ?? config.customPackages, {
+      python: [],
+      node: [],
+    });
     const message = await this.workerEnvManager.initEnvironment(
       config.get ? {
         npmRegistryUrl: config.get('npmRegistryUrl'),
@@ -424,6 +441,7 @@ export class PluginSkillHubServer extends Plugin {
         pypiTrustedHost: config.get('pypiTrustedHost'),
         aptMirrorUrl: config.get('aptMirrorUrl'),
         aptGpgKeyUrl: config.get('aptGpgKeyUrl'),
+        customPackages,
       } : config,
     );
     ctx.body = { message };
@@ -442,7 +460,7 @@ export class PluginSkillHubServer extends Plugin {
           lastInitLog: data.log,
         };
         if (data.status === 'succeeded' && data.whitelist) {
-          values.packageWhitelist = data.whitelist;
+          values.packageWhitelist = stringifyJsonText(data.whitelist, { python: [], node: [], apt: [] });
         }
         await this.db.getRepository('skillWorkerConfigs').update({
           filter: {},
@@ -485,13 +503,6 @@ export class PluginSkillHubServer extends Plugin {
       // 1. General tool (list + execute)
       aiPlugin.ai.toolsManager.registerTools(createSkillExecuteTool(this));
 
-      // Register a group for our skills
-      aiPlugin.ai.toolsManager.registerToolGroup({
-        groupName: 'skill_hub',
-        title: 'Skill Hub',
-        description: 'Auto-generated tools from Skill Hub',
-      });
-
       // 2. Dynamic tools — each enabled skill becomes a separate AI tool.
       aiPlugin.ai.toolsManager.registerDynamicTools(async (register: { registerTools: (options: any) => void }) => {
         try {
@@ -501,20 +512,27 @@ export class PluginSkillHubServer extends Plugin {
 
           if (!skills || skills.length === 0) return;
 
-          const tools = skills.map((skill: any) => {
+          const tools = await Promise.all(skills.map(async (skill: any) => {
             const sanitizedToolName = skill.get('name').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+            const autoCall = !!skill.get('autoCall');
+            const interactionSchema = parseJsonText(skill.get('interactionSchema'), null);
+            const fullDescription = await this.getSkillDescriptionForAI(skill);
+            const baseDescription = `${fullDescription || skill.get('description')}\nLanguage: ${skill.get('language')}`;
+            const description = !autoCall && interactionSchema
+              ? `${baseDescription}\n\nIMPORTANT: This skill requires human confirmation. Pass best-effort args; the user will adjust them in UI before execution.`
+              : baseDescription;
             return {
               scope: 'CUSTOM' as const,
               execution: 'backend' as const,
-              defaultPermission: 'ASK' as const,
+              defaultPermission: (autoCall ? 'ALLOW' : 'ASK') as 'ALLOW' | 'ASK',
               introduction: {
                 title: `Skill Hub: ${skill.get('title')}`,
                 about: skill.get('description') || `Thực thi kỹ năng ${skill.get('title')}`,
               },
               definition: {
-                name: `skill_hub.${sanitizedToolName}`,
-                description: `${skill.get('description')}\nLanguage: ${skill.get('language')}`,
-                schema: skill.get('inputSchema') || { type: 'object', properties: {} },
+                name: `skill_hub_${sanitizedToolName}`,
+                description,
+                schema: parseJsonText(skill.get('inputSchema'), { type: 'object', properties: {} }),
               },
               invoke: async (toolCtx: any, args: any) => {
                 // Re-fetch skill to get latest version (hot-reload support)
@@ -531,7 +549,7 @@ export class PluginSkillHubServer extends Plugin {
                 };
               },
             };
-          });
+          }));
 
           register.registerTools(tools);
         } catch (err) {
@@ -630,20 +648,16 @@ export class PluginSkillHubServer extends Plugin {
   }
 
   private async handleListTemplates(ctx: any, next: () => Promise<any>) {
-    const templates = Array.from(this.skillTemplates.values());
-    
     // Dynamic Pull: discover templates from all active plugins in the system
     try {
       const allPlugins = this.app.pm.getPlugins();
-      for (const [pluginName, pluginInstance] of allPlugins) {
+      for (const [, pluginInstance] of allPlugins) {
         if (typeof (pluginInstance as any).getSkillTemplates === 'function') {
           const pluginSkills = (pluginInstance as any).getSkillTemplates();
           if (Array.isArray(pluginSkills)) {
             for (const s of pluginSkills) {
               if (!this.skillTemplates.has(s.name)) {
-                const enriched = { ...s, pluginSource: pluginName };
-                this.skillTemplates.set(s.name, enriched);
-                templates.push(enriched);
+                this.skillTemplates.set(s.name, this.hydrateSkillTemplate(pluginInstance.name, s));
               }
             }
           }
@@ -653,7 +667,7 @@ export class PluginSkillHubServer extends Plugin {
       this.app.logger.warn(`[skill-hub] Failed to discover some plugin skills: ${e.message}`);
     }
 
-    ctx.body = { data: templates };
+    ctx.body = { data: Array.from(this.skillTemplates.values()) };
     await next();
   }
 
@@ -665,11 +679,83 @@ export class PluginSkillHubServer extends Plugin {
    * Register a skill template into memory for UI importing.
    */
   registerSkillTemplate(pluginName: string, skillDef: any) {
-    this.skillTemplates.set(skillDef.name, {
-      ...skillDef,
-      pluginSource: pluginName,
-    });
+    this.skillTemplates.set(skillDef.name, this.hydrateSkillTemplate(pluginName, skillDef));
     this.app.logger.info(`[skill-hub] Registered skill template "${skillDef.name}" from plugin "${pluginName}"`);
+  }
+
+  resolveSkillTemplate(templateName: string) {
+    if (!templateName) return null;
+    const cached = this.skillTemplates.get(templateName);
+    if (cached) return cached;
+
+    try {
+      const allPlugins = this.app.pm.getPlugins();
+      for (const [, pluginInstance] of allPlugins) {
+        if (typeof (pluginInstance as any).getSkillTemplates !== 'function') continue;
+        const pluginSkills = (pluginInstance as any).getSkillTemplates();
+        if (!Array.isArray(pluginSkills)) continue;
+        const found = pluginSkills.find((s: any) => s?.name === templateName);
+        if (found) {
+          const hydrated = this.hydrateSkillTemplate(pluginInstance.name, found);
+          this.skillTemplates.set(templateName, hydrated);
+          return hydrated;
+        }
+      }
+    } catch (e: any) {
+      this.app.logger.warn(`[skill-hub] Failed to resolve plugin skill "${templateName}": ${e.message}`);
+    }
+
+    return null;
+  }
+
+  async getSkillDescriptionForAI(skill: any) {
+    const description = skill.get ? skill.get('description') : skill.description;
+    const instructions = await this.getSkillInstructions(skill);
+    const maxInlineInstructionChars = 24000;
+    const inlineInstructions = instructions && instructions.length > maxInlineInstructionChars
+      ? `${instructions.slice(0, maxInlineInstructionChars)}\n\n[Instructions truncated in tool description. Call skill_hub_execute with action="describe" and this skillName to load the complete workflow.]`
+      : instructions;
+    return [description, inlineInstructions ? `Instructions:\n${inlineInstructions}` : ''].filter(Boolean).join('\n\n');
+  }
+
+  async getSkillInstructions(skill: any) {
+    const storedInstructions = skill.get ? skill.get('instructions') : skill.instructions;
+    if (storedInstructions) return storedInstructions;
+
+    const storageType = skill.get ? skill.get('storageType') : skill.storageType;
+    if (storageType !== 'plugin') return '';
+
+    const templateName = (skill.get ? skill.get('pluginSource') : skill.pluginSource) ||
+      (skill.get ? skill.get('name') : skill.name);
+    const template = this.resolveSkillTemplate(templateName);
+    return template?.instructions || '';
+  }
+
+  private hydrateSkillTemplate(pluginName: string, skillDef: any) {
+    const skillName = skillDef.name;
+    const packageRoot = skillDef.skillPackage?.rootDir;
+    let packageInfo: any = null;
+
+    if (packageRoot && this.skillRepoService) {
+      packageInfo = this.skillRepoService.readSkillPackage(packageRoot);
+    }
+
+    const metadata = packageInfo?.metadata || {};
+    const packageInstructions = packageInfo?.instructions;
+
+    return {
+      ...skillDef,
+      title: skillDef.title || metadata.title || skillName,
+      description: skillDef.description || metadata.description || '',
+      instructions: [skillDef.instructions, packageInstructions].filter(Boolean).join('\n\n').trim(),
+      language: skillDef.language || metadata.language || 'python',
+      codeTemplate: skillDef.codeTemplate || packageInfo?.code || '',
+      storageType: 'plugin',
+      storageUrl: skillDef.storageUrl || `plugin://${pluginName}/${skillName}`,
+      // Keep pluginSource as the skill template name because existing DB records use it for lookup.
+      pluginSource: skillName,
+      pluginName,
+    };
   }
 
 

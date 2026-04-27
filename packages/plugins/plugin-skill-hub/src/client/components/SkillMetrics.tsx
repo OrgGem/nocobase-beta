@@ -24,7 +24,8 @@ export const SkillMetrics: React.FC = () => {
           appends: ['skill'],
         },
       });
-      setExecutions(data?.data || []);
+      const responseData = data?.data?.data || data?.data || [];
+      setExecutions(responseData);
     } catch {
       // ignore
     } finally {

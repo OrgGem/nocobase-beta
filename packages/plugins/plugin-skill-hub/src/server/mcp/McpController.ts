@@ -1,4 +1,5 @@
 import type PluginSkillHubServer from '../plugin';
+import { parseJsonText } from '../utils/json-fields';
 
 export class McpController {
   constructor(private plugin: PluginSkillHubServer) {}
@@ -12,12 +13,16 @@ export class McpController {
       filter: { enabled: true },
     });
 
-    ctx.body = {
-      tools: skills.map((skill: any) => ({
+    const tools = await Promise.all(skills.map(async (skill: any) => ({
         name: skill.get('name').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_'),
-        description: skill.get('description'),
-        inputSchema: skill.get('inputSchema'),
-      })),
+        description: typeof this.plugin.getSkillDescriptionForAI === 'function'
+          ? await this.plugin.getSkillDescriptionForAI(skill)
+          : skill.get('description'),
+        inputSchema: parseJsonText(skill.get('inputSchema'), null),
+      })));
+
+    ctx.body = {
+      tools,
     };
 
     await next();

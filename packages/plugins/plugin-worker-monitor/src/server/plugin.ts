@@ -4,7 +4,8 @@ import { tasksActions } from './actions/tasks';
 import { workflowActions } from './actions/workflow-executions';
 import { redisActions } from './actions/redis-monitor';
 import { aclCacheActions, createAclCacheMiddleware } from './actions/acl-cache';
-import { clusterActions } from './actions/cluster-nodes';
+import { clusterActions, readLocalLogs } from './actions/cluster-nodes';
+import { getLocalNodeId } from './utils/node';
 import { eventQueueActions } from './actions/event-queue-monitor';
 import { lockActions } from './actions/lock-monitor';
 import { cacheMonitorActions } from './actions/cache-monitor';
@@ -53,9 +54,31 @@ export class PluginWorkerMonitorServer extends Plugin {
       this.app.logger.info('[WorkerMonitor] Polyfilled RedisLockAdapter as an active distributed lock provider');
     }
 
-    // Listen to remote restart commands
+    // Listen to remote restart commands and log requests
     const pubSub = (this.app as any).pubSubManager;
     if (pubSub) {
+      const myNodeId = getLocalNodeId(this.app);
+      
+      // ── Log request handler: ONLY the targeted node receives this via dynamic channel ──
+      pubSub.subscribe(`worker-monitor:log-request:${myNodeId}`, async (msg: string) => {
+        try {
+          const { requestId, targetNodeId, lines } = JSON.parse(msg);
+
+          const redis = (this.app as any).redisConnectionManager?.getConnection();
+          if (!redis || !requestId) return;
+
+          const logData = await readLocalLogs(this.app, lines || 200);
+          const responseKey = `worker-monitor:log-response:${requestId}`;
+          await redis.sendCommand([
+            'SET', responseKey, JSON.stringify(logData), 'EX', '30',
+          ]);
+          this.app.logger.debug(`[WorkerMonitor] Served log request ${requestId} for ${targetNodeId}`);
+        } catch (err: any) {
+          this.app.logger.error(`[WorkerMonitor] Error handling log request: ${err.message}`);
+        }
+      });
+
+      // ── Restart handler ──
       pubSub.subscribe('worker-monitor:restart', (msg: string) => {
         try {
           let target = msg;

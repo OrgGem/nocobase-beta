@@ -8,7 +8,7 @@ NocoBase plugin for integrating external LLM providers that support OpenAI-compa
 - **Auto content detection**: Handles both string and array content blocks (`[{type: 'text', text: '...'}]`)
 - **Response mapping**: Transform non-standard API responses to OpenAI format via JSON config (supports streaming SSE and JSON)
 - **Reasoning content**: Display thinking/reasoning from DeepSeek-compatible providers (multi-path detection)
-- **Stream keepalive**: Prevent proxy/gateway timeouts during long model thinking phases
+- **Stream keepalive**: Prevent proxy/gateway timeouts during long model thinking phases, including non-streaming fallback
 - **Tool calling support**: Gemini-compatible tool schema fixing (Zod + JSON Schema)
 - **Configurable**: JSON config editors for request and response customization
 - **Locale support**: English, Vietnamese, Chinese
@@ -26,10 +26,10 @@ Upload `plugin-custom-llm-x.x.x.tgz` via NocoBase Plugin Manager UI, then enable
 | **Base URL** | LLM endpoint URL, e.g. `https://your-llm-server.com/v1` |
 | **API Key** | Authentication key |
 | **Disable Streaming** | Disable streaming for models that return empty stream values |
-| **Stream Keep Alive** | Enable keepalive to prevent timeouts during long thinking phases |
+| **Stream Keep Alive** | Keepalive is enabled by default; disable only if your provider cannot tolerate invisible heartbeat chunks |
 | **Keep Alive Interval** | Interval in ms between keepalive signals (default: 5000) |
 | **Keep Alive Content** | Visual indicator text during keepalive (default: `...`) |
-| **Timeout** | Custom timeout in ms for slow-responding models |
+| **Timeout** | Custom timeout in ms for slow-responding models; values below 30 minutes are raised to 30 minutes |
 | **Request config (JSON)** | Optional. Extra request configuration |
 | **Response config (JSON)** | Optional. Response parsing and mapping configuration |
 

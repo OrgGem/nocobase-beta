@@ -1,0 +1,43 @@
+{
+  "name": "plugin-agent-orchestrator",
+  "displayName": "Agent Orchestrator",
+  "displayName.zh-CN": "代理协调器",
+  "displayName.vi-VN": "Điều phối Agent",
+  "description": "Hierarchical Multi-Agent orchestration for NocoBase AI Employees. Enables Leader agents to delegate tasks to Sub-Agent employees without modifying core plugin-ai.",
+  "version": "1.0.7",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "AI",
+    "Agent",
+    "Orchestrator",
+    "Multi-Agent",
+    "Swarm"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "zod": "^3.23.0"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/ai": "2.x",
+    "@nocobase/plugin-ai": "2.x"
+  }
+}
