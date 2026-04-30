@@ -9,6 +9,13 @@
 
 import { Context } from '@nocobase/actions';
 import PluginKnowledgeBaseServer from '../plugin';
+import {
+  buildAccessibleKnowledgeBaseFilter,
+  getAuthUserId,
+  getCurrentRoles,
+  isAdminRole,
+  sameId,
+} from '../utils/access';
 
 /**
  * Helper to get the knowledge base plugin instance via class reference (not string name).
@@ -21,7 +28,7 @@ function getPlugin(ctx: Context): PluginKnowledgeBaseServer {
 /**
  * Permission check helper for KB ownership/role access.
  */
-async function checkKBPermission(ctx: Context, filterByTk: string, action: 'update' | 'destroy'): Promise<boolean> {
+async function checkKBPermission(ctx: Context, filterByTk: string, _action: 'update' | 'destroy'): Promise<boolean> {
   const repo = ctx.db.getRepository('aiKnowledgeBases');
   const record = await repo.findOne({ filterByTk });
 
@@ -30,9 +37,9 @@ async function checkKBPermission(ctx: Context, filterByTk: string, action: 'upda
   }
 
   const data = record.toJSON();
-  const userId = ctx.auth?.user?.id;
-  const roles = ctx.state.currentRoles ?? [];
-  const isAdmin = roles.includes('root') || roles.includes('admin');
+  const userId = getAuthUserId(ctx);
+  const roles = getCurrentRoles(ctx);
+  const isAdmin = isAdminRole(roles);
 
   if (isAdmin) {
     return true;
@@ -40,7 +47,7 @@ async function checkKBPermission(ctx: Context, filterByTk: string, action: 'upda
 
   if (data.accessLevel === 'BASIC') {
     // Only owner can update/destroy their own BASIC KB
-    return data.ownerId === userId;
+    return sameId(data.ownerId, userId);
   }
 
   if (data.accessLevel === 'PUBLIC') {
@@ -64,21 +71,16 @@ export default {
       const { filter = {}, fields, sort, page, pageSize } = ctx.action.params;
 
       // Apply permission-based filtering
-      const userId = ctx.auth?.user?.id;
-      const roles = ctx.state.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
-
-      if (!isAdmin) {
-        // Non-root users can only see KBs they have access to
-        filter.$or = [
-          { accessLevel: 'PUBLIC' },
-          ...(userId ? [{ accessLevel: 'BASIC', ownerId: userId }] : []),
-          ...(roles.length ? [{ accessLevel: 'SHARED', 'allowedRoles.$anyOf': roles }] : []),
-        ];
-      }
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
+      const effectiveFilter = isAdmin
+        ? filter
+        : {
+            $and: [{ ...filter }, buildAccessibleKnowledgeBaseFilter(ctx)],
+          };
 
       ctx.body = await repo.find({
-        filter,
+        filter: effectiveFilter,
         fields,
         sort: sort ?? ['-createdAt'],
         limit: pageSize,
@@ -105,15 +107,15 @@ export default {
       }
 
       const data = record.toJSON();
-      const userId = ctx.auth?.user?.id;
-      const roles = ctx.state.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
+      const userId = getAuthUserId(ctx);
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
 
       // Check access
       if (!isAdmin) {
         const hasAccess =
           data.accessLevel === 'PUBLIC' ||
-          (data.accessLevel === 'BASIC' && data.ownerId === userId) ||
+          (data.accessLevel === 'BASIC' && sameId(data.ownerId, userId)) ||
           (data.accessLevel === 'SHARED' && data.allowedRoles?.some((r: string) => roles.includes(r)));
 
         if (!hasAccess) {
@@ -130,17 +132,21 @@ export default {
       const rawValues = ctx.action.params.values || {};
       const values = rawValues.values || rawValues;
       const repo = ctx.db.getRepository('aiKnowledgeBases');
-      const userId = ctx.auth?.user?.id;
-      const roles = ctx.state.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
+      const userId = getAuthUserId(ctx);
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
 
-      // Only admin/root can create PUBLIC KBs
-      if (values.accessLevel === 'PUBLIC' && !isAdmin) {
-        ctx.throw(403, 'Only administrators can create public knowledge bases');
-        return;
+      if (!isAdmin) {
+        if (values.accessLevel && values.accessLevel !== 'BASIC') {
+          ctx.throw(403, 'Only administrators can create shared or public knowledge bases');
+          return;
+        }
+        values.accessLevel = 'BASIC';
+        delete values.allowedRoles;
+        delete values.uploadRoles;
       }
 
-      // For BASIC KBs, automatically set the owner
+      // For BASIC KBs, automatically set the owner.
       if (values.accessLevel === 'BASIC') {
         values.ownerId = userId;
       }
@@ -174,6 +180,19 @@ export default {
         return;
       }
 
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
+      if (!isAdmin) {
+        delete values.ownerId;
+        delete values.allowedRoles;
+        delete values.uploadRoles;
+        if (values.accessLevel && values.accessLevel !== 'BASIC') {
+          ctx.throw(403, 'Only administrators can change knowledge base access level');
+          return;
+        }
+        values.accessLevel = 'BASIC';
+      }
+
       ctx.body = await repo.update({
         filterByTk,
         values,
@@ -194,6 +213,37 @@ export default {
 
       await repo.destroy({ filterByTk });
       ctx.body = { success: true };
+
+      await next();
+    },
+
+    async search(ctx: Context, next: Function) {
+      const plugin = getPlugin(ctx);
+      const rawValues = ctx.action.params.values || {};
+      const values = rawValues.values || rawValues;
+      const query = ctx.action.params.query ?? values.query;
+      const knowledgeBaseIds =
+        ctx.action.params.knowledgeBaseIds ??
+        values.knowledgeBaseIds ??
+        (ctx.action.params.filterByTk ? [ctx.action.params.filterByTk] : undefined);
+
+      if (!query || typeof query !== 'string' || !query.trim()) {
+        ctx.throw(400, 'Search query is required');
+        return;
+      }
+
+      const results = await plugin.searchKnowledgeBases(ctx, query, {
+        knowledgeBaseIds: Array.isArray(knowledgeBaseIds) ? knowledgeBaseIds.map(String) : undefined,
+        topK: ctx.action.params.topK ?? values.topK,
+        candidateK: ctx.action.params.candidateK ?? values.candidateK,
+        scoreThreshold: ctx.action.params.scoreThreshold ?? values.scoreThreshold,
+        rerank: ctx.action.params.rerank ?? values.rerank,
+      });
+
+      ctx.body = {
+        query,
+        data: results,
+      };
 
       await next();
     },

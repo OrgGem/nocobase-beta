@@ -16,3 +16,4 @@ export const namespace = name;
 // Public extension API types — import these in dependent plugins
 export type { RagSearchStrategy, RagSearchResult, RagSearchOptions } from './providers/external-rag';
 export { EXTERNAL_RAG_KB_TYPE, EXTERNAL_HTTP_RAG_PROVIDER } from './providers/external-rag';
+export type { KnowledgeSearchOptions, KnowledgeSearchResult } from './services/knowledge-search';

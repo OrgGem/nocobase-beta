@@ -1,0 +1,38 @@
+{
+  "name": "plugin-markitdown-parser",
+  "displayName": "MarkItDown Parser",
+  "description": "Convert attachments to Markdown with Microsoft MarkItDown and register as a Document Parser internal handler.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "README.md",
+    "vendor",
+    "src"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-document-parser": "2.x",
+    "@nocobase/plugin-file-manager": "2.x"
+  },
+  "keywords": [
+    "AI",
+    "document",
+    "markdown",
+    "markitdown",
+    "parser"
+  ]
+}

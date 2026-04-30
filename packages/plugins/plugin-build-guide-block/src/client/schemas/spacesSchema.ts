@@ -1,3 +1,7 @@
+export const MIN_TARGET_CHAPTER_COUNT = 1;
+export const MAX_TARGET_CHAPTER_COUNT = 12;
+export const DEFAULT_TARGET_CHAPTER_COUNT = 5;
+
 export const spacesSchema = {
   type: 'void',
   name: 'ai-build-guide-spaces',
@@ -87,6 +91,32 @@ export const spacesSchema = {
                             { label: 'Markdown', value: 'markdown' },
                           ],
                         },
+                        targetChapterCount: {
+                          type: 'number',
+                          title: '{{t("Target chapters")}}',
+                          required: true,
+                          default: DEFAULT_TARGET_CHAPTER_COUNT,
+                          'x-decorator': 'FormItem',
+                          'x-component': 'InputNumber',
+                          'x-component-props': {
+                            min: MIN_TARGET_CHAPTER_COUNT,
+                            max: MAX_TARGET_CHAPTER_COUNT,
+                            precision: 0,
+                            style: {
+                              width: '100%',
+                            },
+                          },
+                        },
+                        chapterGuidance: {
+                          type: 'string',
+                          title: '{{t("Chapter guidance")}}',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input.TextArea',
+                          'x-component-props': {
+                            rows: 3,
+                            placeholder: '{{t("Describe how the guide should be split into chapters")}}',
+                          },
+                        },
                         systemPrompt: {
                           type: 'string',
                           title: '{{t("System Prompt")}}',
@@ -154,7 +184,7 @@ export const spacesSchema = {
               properties: {
                 title: {
                   type: 'string',
-                  'x-component': 'CollectionField',
+                  'x-component': 'Input',
                   'x-read-pretty': true,
                 },
               },
@@ -172,6 +202,32 @@ export const spacesSchema = {
                 },
               },
             },
+            buildPhase: {
+              type: 'void',
+              title: '{{t("Build Phase")}}',
+              'x-decorator': 'TableV2.Column.Decorator',
+              'x-component': 'TableV2.Column',
+              properties: {
+                buildPhase: {
+                  type: 'string',
+                  'x-component': 'Input',
+                  'x-read-pretty': true,
+                },
+              },
+            },
+            pageCount: {
+              type: 'void',
+              title: '{{t("Chapters")}}',
+              'x-decorator': 'TableV2.Column.Decorator',
+              'x-component': 'TableV2.Column',
+              properties: {
+                pageCount: {
+                  type: 'integer',
+                  'x-component': 'InputNumber',
+                  'x-read-pretty': true,
+                },
+              },
+            },
             buildLog: {
               type: 'void',
               title: '{{t("Build Log")}}',
@@ -180,7 +236,7 @@ export const spacesSchema = {
               properties: {
                 buildLog: {
                   type: 'string',
-                  'x-component': 'CollectionField',
+                  'x-component': 'Input.TextArea',
                   'x-read-pretty': true,
                 },
               },
@@ -253,6 +309,32 @@ export const spacesSchema = {
                                     { label: 'HTML', value: 'html' },
                                     { label: 'Markdown', value: 'markdown' },
                                   ],
+                                },
+                                targetChapterCount: {
+                                  type: 'number',
+                                  title: '{{t("Target chapters")}}',
+                                  required: true,
+                                  default: DEFAULT_TARGET_CHAPTER_COUNT,
+                                  'x-decorator': 'FormItem',
+                                  'x-component': 'InputNumber',
+                                  'x-component-props': {
+                                    min: MIN_TARGET_CHAPTER_COUNT,
+                                    max: MAX_TARGET_CHAPTER_COUNT,
+                                    precision: 0,
+                                    style: {
+                                      width: '100%',
+                                    },
+                                  },
+                                },
+                                chapterGuidance: {
+                                  type: 'string',
+                                  title: '{{t("Chapter guidance")}}',
+                                  'x-decorator': 'FormItem',
+                                  'x-component': 'Input.TextArea',
+                                  'x-component-props': {
+                                    rows: 3,
+                                    placeholder: '{{t("Describe how the guide should be split into chapters")}}',
+                                  },
                                 },
                                 systemPrompt: {
                                   type: 'string',

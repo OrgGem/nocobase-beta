@@ -51,9 +51,10 @@ export function registerTracingResource(plugin: Plugin) {
               totalPage: Math.ceil(count / Number(pageSize)),
             },
           };
-        } catch (e) {
+        } catch (e: any) {
+          // Bubble up so the admin sees an error toast instead of an empty grid.
           ctx.log.error('[AgentOrchestrator] Tracing list error', e);
-          ctx.body = { data: [], meta: { count: 0 } };
+          ctx.throw(500, e?.message || 'Failed to load tracing logs');
         }
 
         await next();
@@ -77,9 +78,9 @@ export function registerTracingResource(plugin: Plugin) {
           });
 
           ctx.body = { data: log?.toJSON?.() || log || null };
-        } catch (e) {
+        } catch (e: any) {
           ctx.log.error('[AgentOrchestrator] Tracing get error', e);
-          ctx.body = { data: null };
+          ctx.throw(500, e?.message || 'Failed to load tracing log');
         }
 
         await next();

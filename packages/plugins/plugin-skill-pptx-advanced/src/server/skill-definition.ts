@@ -6,29 +6,34 @@
  * bundled with plugin-skill-hub.
  */
 
-const PPTX_ADVANCED_TEMPLATE = `import os, json, tempfile
+const PPTX_ADVANCED_TEMPLATE = `import os, json, tempfile, base64, re
 from pathlib import Path
 
-title_raw = '''{{title}}'''
-title = json.loads(title_raw) if title_raw.startswith('"') else title_raw
+# Decode title safely from base64 to avoid triple-quote injection issues
+title_b64 = '{{title_b64}}'
+title_raw = base64.b64decode(title_b64).decode('utf-8') if title_b64 and title_b64 != '{{' + 'title_b64}}' else ''
+title = title_raw.strip() or 'presentation'
 
-slides_raw = '''{{slides_svg}}'''
-import re
+# Decode slides_svg safely from base64 — prevents triple-quote SyntaxError
+# when SVG content contains single/double quotes or backslashes
+slides_b64 = '{{slides_svg_b64}}'
+slides_raw = base64.b64decode(slides_b64).decode('utf-8') if slides_b64 and slides_b64 != '{{' + 'slides_svg_b64}}' else ''
 slides_svg = []
-if slides_raw and slides_raw.strip() and slides_raw != '{{' + 'slides_svg}}':
+if slides_raw and slides_raw.strip():
     try:
         parsed = json.loads(slides_raw)
         if isinstance(parsed, list):
             slides_svg = parsed
         elif isinstance(parsed, str):
-            slides_svg = re.findall(r'<svg[^>]*>.*?</svg>', parsed, re.IGNORECASE | re.DOTALL)
+            slides_svg = re.findall(r'<svg.*?</svg>', parsed, re.IGNORECASE | re.DOTALL)
     except Exception:
-        slides_svg = re.findall(r'<svg[^>]*>.*?</svg>', slides_raw, re.IGNORECASE | re.DOTALL)
+        # Input is raw SVG string (not JSON) — extract all <svg>...</svg> blocks
+        slides_svg = re.findall(r'<svg.*?</svg>', slides_raw, re.IGNORECASE | re.DOTALL)
     if not slides_svg:
-        # Fallback if no full SVG matches, maybe the LLM forgot to escape something
-        slides_svg = re.findall(r'<svg[^>]*>.*?</svg>', slides_raw, re.IGNORECASE | re.DOTALL)
+        # Last resort: try greedy match in case SVG has unexpected structure
+        slides_svg = re.findall(r'<svg.+?</svg>', slides_raw, re.IGNORECASE | re.DOTALL)
 
-canvas_raw = '''{{canvas_format}}'''
+canvas_raw = '{{canvas_format}}'
 canvas_format = canvas_raw if canvas_raw != '{{' + 'canvas_format}}' else 'ppt169'
 
 notes_raw = '''{{notes}}'''
@@ -163,8 +168,8 @@ export const PPTX_ADVANCED_SKILL = {
         description:
           'ALL SVG slide content joined together as a SINGLE string. You MUST output ALL slides\' raw SVG code directly here, one after another (e.g. <svg>...</svg><svg>...</svg>). ' +
           'Each SVG should use viewBox="0 0 1280 720" for 16:9 format. Auto-margin is applied internally. ' +
-          'CRITICAL JSON ENCODING: Because you are passing raw XML inside a JSON string, you MUST use single quotes (\') instead of double quotes (\") for all SVG attributes (e.g. <rect fill=\'red\'>). ' +
-          'If you must use double quotes, they MUST be escaped properly like \\\". Newlines inside the SVG must be escaped as \\n or removed. Failure to follow this will break the JSON parser.',
+          'You can freely use both single and double quotes in SVG attributes. Newlines are also fine. ' +
+          'CRITICAL: Do NOT wrap slides in a JSON array unless the schema explicitly requires it—pass raw SVG strings directly.',
       },
       canvas_format: {
         type: 'string',

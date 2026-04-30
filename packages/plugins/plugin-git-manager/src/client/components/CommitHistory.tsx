@@ -12,6 +12,7 @@ import {
 } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useGitManager } from '../context/GitManagerContext';
+import { RunReviewButton } from './RunReviewButton';
 import { useT } from '../locale';
 
 const { Text } = Typography;
@@ -210,6 +211,19 @@ export const CommitHistory: React.FC = () => {
           setDiffFile(null);
         }}
         width={800}
+        extra={
+          selectedCommit && selectedRepo ? (
+            <RunReviewButton
+              target={{
+                type: 'commit',
+                repositoryId: selectedRepo.id,
+                commitSha: selectedCommit.hash,
+                title: selectedCommit.message,
+              }}
+              size="small"
+            />
+          ) : null
+        }
       >
         {detailLoading ? (
           <Spin />

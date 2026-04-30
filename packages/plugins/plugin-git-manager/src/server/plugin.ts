@@ -1,6 +1,11 @@
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import * as gitActions from './actions/git-actions';
+import * as gitlabApi from './actions/gitlab-api';
+import * as reviewActions from './actions/review';
+import * as pollerActions from './actions/poller';
+import { registerGitReviewAiTools } from './ai-tools';
+import { startPoller, stopPoller } from './poller';
 
 export class PluginGitManagerServer extends Plugin {
   async load() {
@@ -23,8 +28,19 @@ export class PluginGitManagerServer extends Plugin {
         fileTree: gitActions.fileTree,
         fileContent: gitActions.fileContent,
         commitDetail: gitActions.commitDetail,
+        mergeRequests: gitlabApi.mergeRequests,
+        mergeRequestDetail: gitlabApi.mergeRequestDetail,
+        mergeRequestNotes: gitlabApi.mergeRequestNotes,
+        triggerReview: reviewActions.triggerReview,
+        reviewApprovePost: reviewActions.reviewApprovePost,
+        reviewReject: reviewActions.reviewReject,
+        pollNow: pollerActions.pollNow,
+        pollerStatus: pollerActions.pollerStatus,
       },
     });
+
+    registerGitReviewAiTools(this.app);
+    startPoller(this.app);
 
     // Read-only operations available to all plugin users
     this.app.acl.registerSnippet({
@@ -32,6 +48,10 @@ export class PluginGitManagerServer extends Plugin {
       actions: [
         'gitRepositories:list',
         'gitRepositories:get',
+        'gitReviewFlows:list',
+        'gitReviewFlows:get',
+        'gitCodeReviews:list',
+        'gitCodeReviews:get',
         'gitManager:status',
         'gitManager:log',
         'gitManager:branches',
@@ -39,6 +59,10 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:fileTree',
         'gitManager:fileContent',
         'gitManager:commitDetail',
+        'gitManager:mergeRequests',
+        'gitManager:mergeRequestDetail',
+        'gitManager:mergeRequestNotes',
+        'gitManager:pollerStatus',
       ],
     });
 
@@ -49,11 +73,21 @@ export class PluginGitManagerServer extends Plugin {
         'gitRepositories:create',
         'gitRepositories:update',
         'gitRepositories:destroy',
+        'gitReviewFlows:create',
+        'gitReviewFlows:update',
+        'gitReviewFlows:destroy',
+        'gitCodeReviews:create',
+        'gitCodeReviews:update',
+        'gitCodeReviews:destroy',
         'gitManager:clone',
         'gitManager:pull',
         'gitManager:push',
         'gitManager:fetch',
         'gitManager:checkout',
+        'gitManager:triggerReview',
+        'gitManager:reviewApprovePost',
+        'gitManager:reviewReject',
+        'gitManager:pollNow',
       ],
     });
 
@@ -76,6 +110,14 @@ export class PluginGitManagerServer extends Plugin {
   }
 
   async install() {}
+
+  async beforeDisable() {
+    stopPoller();
+  }
+
+  async beforeUnload() {
+    stopPoller();
+  }
 }
 
 export default PluginGitManagerServer;

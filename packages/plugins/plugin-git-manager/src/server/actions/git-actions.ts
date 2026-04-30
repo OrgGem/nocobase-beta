@@ -45,23 +45,38 @@ function validateRepoUrl(repoUrl: string): void {
   }
 }
 
-async function withAuth(git: ReturnType<typeof simpleGit>, repoUrl: string, pat: string, fn: () => Promise<any>) {
+async function withAuth(git: ReturnType<typeof simpleGit>, repoUrl: string, pat: string, fn: () => Promise<any>, username?: string) {
   const lockKey = repoUrl;
   const lock = acquireLock(lockKey);
   await lock.promise;
-  const authUrl = getAuthUrl(repoUrl, pat);
+  const authUrl = getAuthUrl(repoUrl, pat, username);
   await git.remote(['set-url', 'origin', authUrl]);
   try {
     return await fn();
   } finally {
-    await git.remote(['set-url', 'origin', repoUrl]);
+    // H-2 fix: guard PAT cleanup — if reset fails, the PAT-embedded URL persists on disk
+    try {
+      await git.remote(['set-url', 'origin', repoUrl]);
+    } catch (cleanupErr) {
+      // Critical: PAT may be persisted in .git/config — attempt one more cleanup
+      try {
+        await git.remote(['set-url', 'origin', repoUrl]);
+      } catch {
+        // Log but don't throw — the original operation already completed
+        console.error(
+          `[plugin-git-manager] CRITICAL: failed to remove PAT from remote URL for ${repoUrl}. ` +
+          `Manual cleanup of .git/config may be required.`,
+          cleanupErr,
+        );
+      }
+    }
     lock.release();
   }
 }
 
-function getAuthUrl(repoUrl: string, pat: string): string {
+function getAuthUrl(repoUrl: string, pat: string, username?: string): string {
   const url = new URL(repoUrl);
-  url.username = 'oauth2';
+  url.username = username || 'oauth2';
   url.password = pat;
   return url.toString();
 }
@@ -101,6 +116,7 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const repoUrl = repo.get('repoUrl') as string;
   const pat = repo.get('pat') as string;
+  const username = repo.get('username') as string;
 
   validateRepoUrl(repoUrl);
 
@@ -113,7 +129,7 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
   }
 
-  const authUrl = getAuthUrl(repoUrl, pat);
+  const authUrl = getAuthUrl(repoUrl, pat, username);
   try {
     await simpleGit().clone(authUrl, localPath, ['--branch', repo.get('defaultBranch') || 'main']);
     // Remove PAT from the cloned repo's remote URL
@@ -138,9 +154,10 @@ export async function pull(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const pat = repo.get('pat') as string;
   const repoUrl = repo.get('repoUrl') as string;
+  const username = repo.get('username') as string;
 
   const git = getGit(localPath);
-  const result = await withAuth(git, repoUrl, pat, () => git.pull());
+  const result = await withAuth(git, repoUrl, pat, () => git.pull(), username);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -151,9 +168,10 @@ export async function push(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const pat = repo.get('pat') as string;
   const repoUrl = repo.get('repoUrl') as string;
+  const username = repo.get('username') as string;
 
   const git = getGit(localPath);
-  const result = await withAuth(git, repoUrl, pat, () => git.push());
+  const result = await withAuth(git, repoUrl, pat, () => git.push(), username);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -164,9 +182,10 @@ export async function fetch(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const pat = repo.get('pat') as string;
   const repoUrl = repo.get('repoUrl') as string;
+  const username = repo.get('username') as string;
 
   const git = getGit(localPath);
-  const result = await withAuth(git, repoUrl, pat, () => git.fetch());
+  const result = await withAuth(git, repoUrl, pat, () => git.fetch(), username);
 
   ctx.body = { success: true, data: result };
   await next();

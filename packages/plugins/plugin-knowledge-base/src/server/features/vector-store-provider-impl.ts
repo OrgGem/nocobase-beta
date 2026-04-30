@@ -127,7 +127,6 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
 
     return new DefaultVectorStoreService(vectorStore, { accessLevel, ownerId, allowedRoles });
   }
-
 }
 
 type AccessContext = {
@@ -154,6 +153,7 @@ class DefaultVectorStoreService implements VectorStoreService {
 
   async search(query: string, options?: VectorStoreSearchOptions): Promise<DocumentSegmentedWithScore[]> {
     const { topK = 3, score, filter } = options ?? {};
+    const effectiveTopK = Math.min(Math.max(Number(topK) || 3, 1), 100);
 
     const level = this.accessContext.accessLevel;
 
@@ -171,17 +171,19 @@ class DefaultVectorStoreService implements VectorStoreService {
       };
     }
 
-    const results = await this.vectorStore.similaritySearchWithScore(query, topK, mergedFilter);
+    const results = await this.vectorStore.similaritySearchWithScore(query, effectiveTopK, mergedFilter);
 
-    const scoreThreshold = score ? parseFloat(score) : 0;
+    const parsedThreshold = score == null ? 0 : Number(score);
+    const scoreThreshold = Number.isFinite(parsedThreshold) ? parsedThreshold : 0;
 
     return results
       .filter(([, resultScore]: [any, number]) => resultScore >= scoreThreshold)
       .map(([doc, resultScore]: [any, number]) => ({
-        content: doc.pageContent,
+        content: doc.pageContent ?? '',
         metadata: doc.metadata || {},
         id: doc.metadata?.id,
-        score: resultScore,
-      }));
+        score: Number(resultScore) || 0,
+      }))
+      .filter((doc: DocumentSegmentedWithScore) => doc.content.trim().length > 0);
   }
 }

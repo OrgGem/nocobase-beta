@@ -143,8 +143,10 @@ export const externalHttpRagStrategy: RagSearchStrategy = async (
   const apiUrl: string = opts.ragApiUrl ?? '';
   const apiKey: string = opts.ragApiKey ?? '';
   const namespace: string | undefined = opts.ragNamespace;
-  const effectiveTopK = opts.ragTopK ? Number(opts.ragTopK) : topK;
-  const effectiveThreshold = opts.ragScoreThreshold != null ? Number(opts.ragScoreThreshold) : scoreThreshold;
+  const parsedTopK = opts.ragTopK != null ? Number(opts.ragTopK) : topK;
+  const parsedThreshold = opts.ragScoreThreshold != null ? Number(opts.ragScoreThreshold) : scoreThreshold;
+  const effectiveTopK = Number.isFinite(parsedTopK) ? Math.min(Math.max(Math.floor(parsedTopK), 1), 100) : 5;
+  const effectiveThreshold = Number.isFinite(parsedThreshold) ? parsedThreshold : 0;
 
   if (!apiUrl) {
     throw new Error(`Knowledge base "${kb.name ?? kb.id}" (EXTERNAL_RAG) is missing options.ragApiUrl`);
@@ -199,10 +201,11 @@ export const externalHttpRagStrategy: RagSearchStrategy = async (
   }
 
   return data.results
-    .filter((r) => (r.score ?? 0) >= effectiveThreshold)
+    .filter((r) => typeof r.content === 'string' && r.content.trim().length > 0)
+    .filter((r) => (Number(r.score) || 0) >= effectiveThreshold)
     .map((r) => ({
       content: r.content,
-      score: r.score ?? 0,
+      score: Number(r.score) || 0,
       metadata: r.metadata ?? {},
       id: r.id,
     }));

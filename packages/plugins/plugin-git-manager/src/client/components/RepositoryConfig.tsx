@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons';
+import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, Switch, Tooltip, message } from 'antd';
+import { PlusOutlined, DeleteOutlined, LinkOutlined, RobotOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useGitManager } from '../context/GitManagerContext';
 import { useT } from '../locale';
@@ -82,6 +82,38 @@ export const RepositoryConfig: React.FC = () => {
     { title: t('Repository URL'), dataIndex: 'repoUrl', key: 'repoUrl', ellipsis: true },
     { title: t('Local Path'), dataIndex: 'localPath', key: 'localPath', ellipsis: true },
     { title: t('Default Branch'), dataIndex: 'defaultBranch', key: 'defaultBranch', width: 120 },
+    {
+      title: (
+        <Tooltip title={t('Auto-poll new merge requests every 5 minutes')}>
+          <Space size={4}>
+            <RobotOutlined />
+            {t('Auto Review')}
+          </Space>
+        </Tooltip>
+      ),
+      dataIndex: 'autoReview',
+      key: 'autoReview',
+      width: 110,
+      render: (v: boolean, record: any) => (
+        <Switch
+          size="small"
+          checked={!!v}
+          onChange={async (checked) => {
+            try {
+              await api.request({
+                url: 'gitRepositories:update',
+                method: 'post',
+                params: { filterByTk: record.id },
+                data: { autoReview: checked },
+              });
+              await refreshRepos();
+            } catch (err: any) {
+              message.error(err?.message || t('Failed to save'));
+            }
+          }}
+        />
+      ),
+    },
     {
       title: t('Status'),
       dataIndex: 'status',
@@ -170,7 +202,10 @@ export const RepositoryConfig: React.FC = () => {
             <Input placeholder="my-project" />
           </Form.Item>
           <Form.Item name="repoUrl" label={t('Repository URL')} rules={[{ required: true }]}>
-            <Input placeholder="https://github.com/user/repo.git" />
+            <Input placeholder="https://gitlab.com/user/repo.git" />
+          </Form.Item>
+          <Form.Item name="username" label={t('Username')} rules={[{ required: true }]} extra={t('GitLab username for PAT authentication')}>
+            <Input placeholder="gitlab-username" />
           </Form.Item>
           <Form.Item name="localPath" label={t('Local Path')} rules={[{ required: true }]}>
             <Input placeholder="my-project" />

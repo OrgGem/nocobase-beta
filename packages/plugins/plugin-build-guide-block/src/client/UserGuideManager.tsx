@@ -12,23 +12,51 @@ import { createForm } from '@formily/core';
 import { useForm } from '@formily/react';
 import { App } from 'antd';
 import { useTranslation } from 'react-i18next';
-import { spacesSchema } from './schemas/spacesSchema';
+import {
+  DEFAULT_TARGET_CHAPTER_COUNT,
+  MAX_TARGET_CHAPTER_COUNT,
+  MIN_TARGET_CHAPTER_COUNT,
+  spacesSchema,
+} from './schemas/spacesSchema';
 import { LLMServiceSelect } from './components/LLMServiceSelect';
 import { ModelSelect } from './components/ModelSelect';
 import { StatusTag } from './components/StatusTag';
 import { BuildButton } from './components/BuildButton';
 
+const normalizeTargetChapterCount = (value: unknown) => {
+  const count = Number(value);
+  if (!Number.isFinite(count)) return DEFAULT_TARGET_CHAPTER_COUNT;
+  return Math.max(MIN_TARGET_CHAPTER_COUNT, Math.min(MAX_TARGET_CHAPTER_COUNT, Math.round(count)));
+};
+
 export const UserGuideManager = () => {
   const { t } = useTranslation();
 
   const useCreateFormProps = () => {
-    const form = useMemo(() => createForm(), []);
+    const form = useMemo(
+      () =>
+        createForm({
+          initialValues: {
+            targetChapterCount: DEFAULT_TARGET_CHAPTER_COUNT,
+          },
+        }),
+      [],
+    );
     return { form };
   };
 
   const useEditFormProps = () => {
     const record = useCollectionRecordData();
-    const form = useMemo(() => createForm({ initialValues: record }), [record]);
+    const form = useMemo(
+      () =>
+        createForm({
+          initialValues: {
+            ...record,
+            targetChapterCount: normalizeTargetChapterCount(record?.targetChapterCount),
+          },
+        }),
+      [record],
+    );
     return { form };
   };
 
@@ -44,6 +72,7 @@ export const UserGuideManager = () => {
 
   const normalizeValues = (values: any) => {
     const { documents, ...rest } = values;
+    rest.targetChapterCount = normalizeTargetChapterCount(rest.targetChapterCount);
     if (Array.isArray(documents)) {
       rest.documents = documents.map((doc: any) => (typeof doc === 'object' && doc?.id ? { id: doc.id } : doc));
     }

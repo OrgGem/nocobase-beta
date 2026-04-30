@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import { Context } from '@nocobase/actions';
 // @ts-ignore - subpath export types resolve at build time via NocoBase bundler
 import { createReactAgent } from '@langchain/langgraph/prebuilt';
@@ -12,6 +13,13 @@ import type { ToolsEntry } from '@nocobase/ai';
  * Used to prevent circular/recursive delegation chains.
  */
 const ORCHESTRATOR_DEPTH_KEY = '__orchestratorDepth';
+
+/** Max sub-agents that the dispatch tool runs concurrently in one call. */
+const MAX_DISPATCH_CONCURRENCY = 5;
+/** Hard cap on tasks per dispatch call to keep output bounded. */
+const MAX_DISPATCH_TASKS = 20;
+/** OpenAI/Anthropic tool-name limit. Names exceeding this are silently rejected by providers. */
+const MAX_TOOL_NAME_LENGTH = 64;
 
 type TraceEvent = {
   type: string;
@@ -36,8 +44,43 @@ function buildDelegateToolName(leaderUsername: string, subAgentUsername: string)
   return `delegate_${sanitizeToolPart(leaderUsername)}_to_${sanitizeToolPart(subAgentUsername)}`;
 }
 
-function isDelegateToolName(toolName: string) {
-  return toolName.startsWith('delegate_to_') || (toolName.startsWith('delegate_') && toolName.includes('_to_'));
+function buildDispatchToolName(leaderUsername: string) {
+  return `dispatch_subagents_${sanitizeToolPart(leaderUsername)}`;
+}
+
+/**
+ * Set of tool names this plugin actually registered in the most recent build.
+ * Sub-agents must not see these tools (would enable circular delegation), but
+ * we don't want to drop unrelated user tools whose names happen to start with
+ * "delegate_" — so we filter by the known registry, not a regex pattern.
+ */
+let registeredDelegateNamesByPlugin: WeakMap<object, ReadonlySet<string>> = new WeakMap();
+
+function isDelegateToolName(plugin: any, toolName: string) {
+  return registeredDelegateNamesByPlugin.get(plugin)?.has(toolName) ?? false;
+}
+
+/**
+ * Run async work over `items` with at most `limit` concurrent executions.
+ * Preserves input order in the returned array.
+ */
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const i = cursor;
+      cursor += 1;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function createDelegateToolOptions(
@@ -50,15 +93,33 @@ function createDelegateToolOptions(
     timeout?: number;
     toolName: string;
     legacyAlias?: boolean;
+    llmService?: string;
+    model?: string;
+    recursionLimit?: number;
   },
 ) {
-  const { leaderUsername, subAgentUsername, subAgentEmployee, maxDepth, timeout, toolName, legacyAlias } = options;
+  const {
+    leaderUsername,
+    subAgentUsername,
+    subAgentEmployee,
+    maxDepth,
+    timeout,
+    toolName,
+    legacyAlias,
+    llmService,
+    model,
+    recursionLimit,
+  } = options;
+  const dispatchToolName = buildDispatchToolName(leaderUsername);
   const toolDescription = [
     `Delegate a task from "${leaderUsername}" to the AI Employee "${subAgentEmployee.nickname || subAgentUsername}".`,
     legacyAlias ? 'This is a backward-compatible alias for existing skill assignments.' : '',
     subAgentEmployee.about ? `Specialist profile: ${subAgentEmployee.about.substring(0, 200)}` : '',
     'The sub-agent will execute the task independently and return its final answer.',
-  ].filter(Boolean).join(' ');
+    `For multiple INDEPENDENT sub-tasks, prefer "${dispatchToolName}" to fan-out in one call (up to ${MAX_DISPATCH_CONCURRENCY} run in parallel), or emit several delegate_* calls in the SAME assistant turn so they run concurrently.`,
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return {
     scope: 'CUSTOM',
@@ -74,11 +135,32 @@ function createDelegateToolOptions(
       description: toolDescription,
       schema: z.object({
         task: z.string().describe('The detailed task description for the sub-agent to execute.'),
-        context: z.string().optional().describe('Optional additional context to help the sub-agent understand the task better.'),
+        context: z
+          .string()
+          .optional()
+          .describe('Optional additional context to help the sub-agent understand the task better.'),
       }),
     },
     invoke: async (ctx: Context, args: { task: string; context?: string }, id: string) => {
-      const callingEmployee = resolveCallingEmployee(ctx);
+      const callingEmployee = await resolveCallingEmployee(ctx, plugin);
+      if (!callingEmployee) {
+        await logDelegation(ctx, plugin, {
+          leaderUsername,
+          subAgentUsername,
+          toolName,
+          task: args.task,
+          context: args.context,
+          result: '',
+          status: 'error',
+          depth: (ctx as any)[ORCHESTRATOR_DEPTH_KEY] ?? 0,
+          durationMs: 0,
+          error: `Cannot determine calling AI employee for delegation tool "${toolName}".`,
+        });
+        return {
+          status: 'error' as const,
+          content: `Cannot determine calling AI employee for "${toolName}". Start the request from an AI Employee conversation so leader scoping can be enforced.`,
+        };
+      }
       if (callingEmployee && callingEmployee !== leaderUsername) {
         await logDelegation(ctx, plugin, {
           leaderUsername,
@@ -108,18 +190,278 @@ function createDelegateToolOptions(
         timeout: timeout ?? 120000,
         toolCallId: id,
         toolName,
+        llmService,
+        model,
+        recursionLimit,
       });
     },
   };
 }
 
-function resolveCallingEmployee(ctx: Context) {
+type DispatchRuleEntry = {
+  rule: any;
+  employee: any;
+};
+
+type DispatchTaskResult = {
+  index: number;
+  subAgent: string;
+  status: 'success' | 'error';
+  content: string;
+  durationMs: number;
+};
+
+function formatDispatchResults(results: DispatchTaskResult[], rulesBySubAgent: Map<string, DispatchRuleEntry>) {
+  const total = results.length;
+  const ok = results.filter((r) => r.status === 'success').length;
+  const lines = [
+    `Dispatched ${total} sub-task(s) — ${ok} succeeded, ${
+      total - ok
+    } failed (max ${MAX_DISPATCH_CONCURRENCY} ran in parallel).`,
+    '',
+  ];
+  for (const r of results) {
+    const employee = rulesBySubAgent.get(r.subAgent)?.employee;
+    const displayName = employee?.nickname || r.subAgent;
+    const dur = `${(r.durationMs / 1000).toFixed(1)}s`;
+    lines.push(`--- [${r.index + 1}] ${displayName} (${r.subAgent}) [${r.status}] (${dur}) ---`);
+    lines.push(r.content || '(empty)');
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd();
+}
+
+/**
+ * Build a single fan-out tool per leader. The leader passes a list of
+ * `{ subAgent, task, context? }` items; we run them concurrently (capped at
+ * MAX_DISPATCH_CONCURRENCY) and aggregate the results into one response.
+ *
+ * Each underlying execution still goes through `invokeDelegateTask`, so depth
+ * limits, per-rule timeouts, LLM overrides, and orchestratorLogs entries
+ * behave identically to a direct `delegate_*_to_*` call.
+ */
+function createDispatchToolOptions(
+  plugin: any,
+  options: {
+    leaderUsername: string;
+    rulesBySubAgent: Map<string, DispatchRuleEntry>;
+  },
+) {
+  const { leaderUsername, rulesBySubAgent } = options;
+  const toolName = buildDispatchToolName(leaderUsername);
+  const subAgentNames = Array.from(rulesBySubAgent.keys());
+
+  const subAgentList = subAgentNames
+    .map((username) => {
+      const entry = rulesBySubAgent.get(username);
+      if (!entry) return `- ${username}`;
+      const profile = entry.employee?.about ? ` — ${String(entry.employee.about).substring(0, 120)}` : '';
+      const display = entry.employee?.nickname ? ` (${entry.employee.nickname})` : '';
+      return `- ${username}${display}${profile}`;
+    })
+    .join('\n');
+
+  const description = [
+    `Dispatch multiple tasks from "${leaderUsername}" to its configured sub-agents in one call.`,
+    `At most ${MAX_DISPATCH_CONCURRENCY} sub-tasks run in parallel; up to ${MAX_DISPATCH_TASKS} tasks per call.`,
+    'Use this when you have already planned independent sub-tasks and want to fan-out, then aggregate the results.',
+    `Available sub-agents:\n${subAgentList}`,
+  ].join(' ');
+
+  return {
+    scope: 'CUSTOM',
+    execution: 'backend',
+    defaultPermission: 'ALLOW',
+    silence: false,
+    introduction: {
+      title: `[${leaderUsername}] Dispatch sub-agents`,
+      about: description,
+    },
+    definition: {
+      name: toolName,
+      description,
+      schema: z.object({
+        tasks: z
+          .array(
+            z.object({
+              subAgent: z
+                .enum(subAgentNames as [string, ...string[]])
+                .describe('Username of the sub-agent that should execute this task.'),
+              task: z.string().describe('Detailed task description for the sub-agent.'),
+              context: z.string().optional().describe('Optional additional context for the sub-agent.'),
+            }),
+          )
+          .min(1)
+          .max(MAX_DISPATCH_TASKS)
+          .describe(`List of sub-tasks to dispatch concurrently. Up to ${MAX_DISPATCH_CONCURRENCY} run in parallel.`),
+      }),
+    },
+    invoke: async (
+      ctx: Context,
+      args: { tasks: Array<{ subAgent: string; task: string; context?: string }> },
+      id: string,
+    ) => {
+      const callingEmployee = await resolveCallingEmployee(ctx, plugin);
+      if (!callingEmployee) {
+        const distinctSubs = Array.from(new Set((args.tasks ?? []).map((t) => t.subAgent).filter(Boolean)));
+        const reportedSub = distinctSubs.length === 1 ? distinctSubs[0] : '(multiple)';
+        await logDelegation(ctx, plugin, {
+          leaderUsername,
+          subAgentUsername: reportedSub,
+          toolName,
+          task: truncateText(args.tasks ?? [], 2000),
+          result: '',
+          status: 'error',
+          depth: (ctx as any)[ORCHESTRATOR_DEPTH_KEY] ?? 0,
+          durationMs: 0,
+          error: `Cannot determine calling AI employee for dispatch tool "${toolName}". Targets: ${
+            distinctSubs.join(', ') || '(empty)'
+          }.`,
+        });
+        return {
+          status: 'error' as const,
+          content: `Cannot determine calling AI employee for "${toolName}". Start the request from an AI Employee conversation so leader scoping can be enforced.`,
+        };
+      }
+      if (callingEmployee && callingEmployee !== leaderUsername) {
+        // Mirror the per-rule delegate tool: persist the rejection to
+        // orchestratorLogs so admins can investigate via the Tracing tab.
+        const distinctSubs = Array.from(new Set((args.tasks ?? []).map((t) => t.subAgent).filter(Boolean)));
+        const reportedSub = distinctSubs.length === 1 ? distinctSubs[0] : '(multiple)';
+        await logDelegation(ctx, plugin, {
+          leaderUsername,
+          subAgentUsername: reportedSub,
+          toolName,
+          task: truncateText(args.tasks ?? [], 2000),
+          result: '',
+          status: 'error',
+          depth: (ctx as any)[ORCHESTRATOR_DEPTH_KEY] ?? 0,
+          durationMs: 0,
+          error: `Employee "${callingEmployee}" is not authorized to dispatch sub-agents for leader "${leaderUsername}". Targets: ${
+            distinctSubs.join(', ') || '(empty)'
+          }.`,
+        });
+        return {
+          status: 'error' as const,
+          content: `Employee "${callingEmployee}" is not authorized to dispatch sub-agents for leader "${leaderUsername}".`,
+        };
+      }
+
+      const tasks = args.tasks ?? [];
+      if (!tasks.length) {
+        return {
+          status: 'error' as const,
+          content: 'No tasks provided. Pass at least one item in `tasks`.',
+        };
+      }
+
+      const results = await runWithConcurrency<
+        { subAgent: string; task: string; context?: string },
+        DispatchTaskResult
+      >(tasks, MAX_DISPATCH_CONCURRENCY, async (item, i) => {
+        const startedAt = Date.now();
+        const entry = rulesBySubAgent.get(item.subAgent);
+        if (!entry) {
+          return {
+            index: i,
+            subAgent: item.subAgent,
+            status: 'error',
+            content: `Unknown sub-agent "${item.subAgent}". Allowed: ${subAgentNames.join(', ')}.`,
+            durationMs: 0,
+          };
+        }
+
+        try {
+          const res = await invokeDelegateTask(ctx, plugin, {
+            leaderUsername,
+            subAgentUsername: item.subAgent,
+            subAgentEmployee: entry.employee,
+            task: item.task,
+            context: item.context,
+            maxDepth: entry.rule.maxDepth ?? 1,
+            timeout: entry.rule.timeout ?? 120000,
+            toolCallId: `${id}-${i}`,
+            toolName,
+            llmService: entry.rule.llmService,
+            model: entry.rule.model,
+            recursionLimit: entry.rule.recursionLimit,
+          });
+          return {
+            index: i,
+            subAgent: item.subAgent,
+            status: res.status,
+            content: res.content,
+            durationMs: Date.now() - startedAt,
+          };
+        } catch (e: any) {
+          return {
+            index: i,
+            subAgent: item.subAgent,
+            status: 'error',
+            content: e?.message || String(e),
+            durationMs: Date.now() - startedAt,
+          };
+        }
+      });
+
+      const successCount = results.filter((r) => r.status === 'success').length;
+      return {
+        status: (successCount > 0 ? 'success' : 'error') as 'success' | 'error',
+        content: formatDispatchResults(results, rulesBySubAgent),
+      };
+    },
+  };
+}
+
+type CtxSnapshot = {
+  userId?: number;
+};
+
+/**
+ * Read the few ctx fields we depend on once, before kicking off the long-running
+ * sub-agent. Avoids "ctx is destroyed" or stale-state issues when we later
+ * write the orchestratorLogs row from inside the agent's execution promise.
+ */
+function captureCtxSnapshot(ctx: Context): CtxSnapshot {
+  let userId: number | undefined;
+  try {
+    userId = (ctx as any).auth?.user?.id || (ctx as any).state?.currentUser?.id;
+  } catch {
+    // ctx already disposed — nothing to capture.
+  }
+  return { userId };
+}
+
+function normalizeEmployeeUsername(raw: any) {
+  if (!raw) return null;
+  if (typeof raw === 'string') return raw;
+  return raw.username || raw.aiEmployeeUsername || raw.name || null;
+}
+
+async function resolveCallingEmployee(ctx: Context, plugin: any) {
+  const values = (ctx as any).action?.params?.values || {};
   const raw =
     (ctx as any)._currentAIEmployee ||
     (ctx as any).state?.currentAIEmployee ||
-    (ctx as any).runtime?.context?.currentAIEmployee;
-  if (!raw) return null;
-  return typeof raw === 'string' ? raw : raw.username;
+    (ctx as any).runtime?.context?.currentAIEmployee ||
+    values.aiEmployee;
+
+  const direct = normalizeEmployeeUsername(raw);
+  if (direct) return direct;
+
+  const sessionId = values.sessionId || (ctx as any).action?.params?.sessionId;
+  if (!sessionId) return null;
+
+  try {
+    const repo = (ctx as any).db?.getRepository?.('aiConversations') || plugin.db.getRepository('aiConversations');
+    const conversation = await repo.findOne({
+      filter: { sessionId },
+    });
+    return normalizeEmployeeUsername(conversation?.aiEmployeeUsername || conversation?.get?.('aiEmployeeUsername'));
+  } catch (e) {
+    plugin.app.log.warn(`[AgentOrchestrator] Failed to resolve AI employee for session "${sessionId}"`, e);
+    return null;
+  }
 }
 
 function truncateText(value: any, maxLen: number) {
@@ -129,6 +471,202 @@ function truncateText(value: any, maxLen: number) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function hasModelSettings(value: any): value is { llmService: string; model: string } {
+  return Boolean(value?.llmService && value?.model);
+}
+
+/**
+ * Cache for built delegate tool descriptors to avoid re-querying DB on every
+ * core toolsManager.listTools() call (which can fire many times per chat turn).
+ *
+ * - TTL is a safety net in case event hooks miss an external write path.
+ * - DB hooks invalidate immediately on rule/employee changes so admin edits
+ *   take effect on the next request.
+ */
+const TOOLS_CACHE_TTL_MS = 30_000;
+let toolsCacheByPlugin: WeakMap<object, { tools: any[]; expiresAt: number }> = new WeakMap();
+let hooksAttached: WeakSet<object> | null = null;
+
+function attachInvalidationHooks(plugin: any) {
+  // Attach once per plugin instance (handles dev hot-reload safely).
+  if (!hooksAttached) hooksAttached = new WeakSet<object>();
+  if (hooksAttached.has(plugin)) return;
+  hooksAttached.add(plugin);
+
+  const invalidate = () => {
+    toolsCacheByPlugin.delete(plugin);
+    registeredDelegateNamesByPlugin.delete(plugin);
+  };
+  plugin.db.on('orchestratorConfig.afterCreate', invalidate);
+  plugin.db.on('orchestratorConfig.afterUpdate', invalidate);
+  plugin.db.on('orchestratorConfig.afterDestroy', invalidate);
+  plugin.db.on('aiEmployees.afterCreate', invalidate);
+  plugin.db.on('aiEmployees.afterUpdate', invalidate);
+  plugin.db.on('aiEmployees.afterDestroy', invalidate);
+}
+
+async function buildDelegateTools(plugin: any) {
+  const configRepo = plugin.db.getRepository('orchestratorConfig');
+  if (!configRepo) {
+    registeredDelegateNamesByPlugin.set(plugin, new Set());
+    return [];
+  }
+
+  const configs = await configRepo.find({
+    filter: { enabled: true },
+  });
+  if (!configs?.length) {
+    registeredDelegateNamesByPlugin.set(plugin, new Set());
+    return [];
+  }
+
+  const employeeCache = new Map<string, any>();
+  const tools: any[] = [];
+  // Track every generated tool name to surface sanitize() collisions
+  // (e.g. "pm-1" and "pm.1" both → "pm_1"). Collisions are skipped + logged.
+  const generatedNames = new Map<string, { leader: string; sub: string }>();
+  const configsBySubAgent = new Map<string, any[]>();
+  for (const config of configs) {
+    const items = configsBySubAgent.get(config.subAgentUsername) || [];
+    items.push(config);
+    configsBySubAgent.set(config.subAgentUsername, items);
+  }
+
+  for (const config of configs) {
+    const { leaderUsername, subAgentUsername, maxDepth, timeout, recursionLimit } = config;
+
+    let subAgentEmployee = employeeCache.get(subAgentUsername);
+    if (!subAgentEmployee) {
+      subAgentEmployee = await plugin.db.getRepository('aiEmployees').findOne({
+        filter: { username: subAgentUsername },
+      });
+      if (subAgentEmployee) {
+        employeeCache.set(subAgentUsername, subAgentEmployee);
+      }
+    }
+    if (!subAgentEmployee) continue;
+
+    const toolName = buildDelegateToolName(leaderUsername, subAgentUsername);
+    if (toolName.length > MAX_TOOL_NAME_LENGTH) {
+      plugin.app.log.error(
+        `[AgentOrchestrator] Tool name "${toolName}" exceeds the ${MAX_TOOL_NAME_LENGTH}-char limit enforced by most LLM providers. Skipping rule (${leaderUsername} → ${subAgentUsername}). Shorten one of the usernames.`,
+      );
+      continue;
+    }
+    const existing = generatedNames.get(toolName);
+    if (existing) {
+      const suffix = createHash('sha1').update(`${leaderUsername}::${subAgentUsername}`).digest('hex').slice(0, 6);
+      plugin.app.log.error(
+        `[AgentOrchestrator] Tool-name collision: rule (${leaderUsername} → ${subAgentUsername}) sanitizes to "${toolName}", same as (${existing.leader} → ${existing.sub}). Skipping duplicate registration. Rename one of the usernames or apply suffix "_${suffix}" manually.`,
+      );
+      continue;
+    }
+    generatedNames.set(toolName, { leader: leaderUsername, sub: subAgentUsername });
+    tools.push(
+      createDelegateToolOptions(plugin, {
+        leaderUsername,
+        subAgentUsername,
+        subAgentEmployee,
+        maxDepth,
+        timeout,
+        toolName,
+        llmService: config.llmService,
+        model: config.model,
+        recursionLimit,
+      }),
+    );
+  }
+
+  // Compatibility for existing single-parent setups that already assigned
+  // delegate_to_<sub> to the parent employee's skills.
+  for (const [subAgentUsername, items] of configsBySubAgent.entries()) {
+    if (items.length !== 1) {
+      // Multiple leaders for the same sub-agent ⇒ alias is ambiguous.
+      // Surface it so admins know why old skill assignments may stop working.
+      const leaders = items.map((c: any) => c.leaderUsername).join(', ');
+      plugin.app.log.warn(
+        `[AgentOrchestrator] Legacy alias "delegate_to_${sanitizeToolPart(
+          subAgentUsername,
+        )}" is NOT registered for sub-agent "${subAgentUsername}" because it has multiple leaders (${leaders}). Leaders must use the per-rule "delegate_<leader>_to_<sub>" tool name.`,
+      );
+      continue;
+    }
+    const config = items[0];
+    const subAgentEmployee = employeeCache.get(subAgentUsername);
+    if (!subAgentEmployee) continue;
+    const legacyToolName = `delegate_to_${sanitizeToolPart(subAgentUsername)}`;
+    if (legacyToolName.length > MAX_TOOL_NAME_LENGTH) {
+      plugin.app.log.error(
+        `[AgentOrchestrator] Legacy alias "${legacyToolName}" exceeds the ${MAX_TOOL_NAME_LENGTH}-char limit. Skipping alias for sub-agent "${subAgentUsername}".`,
+      );
+      continue;
+    }
+    const aliasExisting = generatedNames.get(legacyToolName);
+    if (aliasExisting) {
+      plugin.app.log.error(
+        `[AgentOrchestrator] Legacy alias "${legacyToolName}" collides with another rule (${aliasExisting.leader} → ${aliasExisting.sub}). Skipping alias registration.`,
+      );
+      continue;
+    }
+    generatedNames.set(legacyToolName, {
+      leader: config.leaderUsername,
+      sub: subAgentUsername,
+    });
+    tools.push(
+      createDelegateToolOptions(plugin, {
+        leaderUsername: config.leaderUsername,
+        subAgentUsername,
+        subAgentEmployee,
+        maxDepth: config.maxDepth,
+        timeout: config.timeout,
+        toolName: legacyToolName,
+        legacyAlias: true,
+        llmService: config.llmService,
+        model: config.model,
+        recursionLimit: config.recursionLimit,
+      }),
+    );
+  }
+
+  // One dispatch fan-out tool per leader.
+  const rulesByLeader = new Map<string, Map<string, DispatchRuleEntry>>();
+  for (const config of configs) {
+    const subAgentEmployee = employeeCache.get(config.subAgentUsername);
+    if (!subAgentEmployee) continue;
+    let bucket = rulesByLeader.get(config.leaderUsername);
+    if (!bucket) {
+      bucket = new Map<string, DispatchRuleEntry>();
+      rulesByLeader.set(config.leaderUsername, bucket);
+    }
+    bucket.set(config.subAgentUsername, { rule: config, employee: subAgentEmployee });
+  }
+  for (const [leaderUsername, rulesBySubAgent] of rulesByLeader.entries()) {
+    if (!rulesBySubAgent.size) continue;
+    const dispatchToolName = buildDispatchToolName(leaderUsername);
+    if (dispatchToolName.length > MAX_TOOL_NAME_LENGTH) {
+      plugin.app.log.error(
+        `[AgentOrchestrator] Dispatch tool "${dispatchToolName}" exceeds the ${MAX_TOOL_NAME_LENGTH}-char limit. Skipping for leader "${leaderUsername}".`,
+      );
+      continue;
+    }
+    const dispatchExisting = generatedNames.get(dispatchToolName);
+    if (dispatchExisting) {
+      plugin.app.log.error(
+        `[AgentOrchestrator] Dispatch tool "${dispatchToolName}" collides with another generated tool (${dispatchExisting.leader} → ${dispatchExisting.sub}). Skipping dispatch registration for leader "${leaderUsername}".`,
+      );
+      continue;
+    }
+    generatedNames.set(dispatchToolName, { leader: leaderUsername, sub: '(dispatch)' });
+    tools.push(createDispatchToolOptions(plugin, { leaderUsername, rulesBySubAgent }));
+  }
+
+  // Refresh the registry that `isDelegateToolName` consults so sub-agents
+  // running concurrently filter exactly the names we just registered.
+  registeredDelegateNamesByPlugin.set(plugin, new Set(generatedNames.keys()));
+
+  return tools;
 }
 
 /**
@@ -146,78 +684,32 @@ function nowIso() {
  *   leaderUsername field, so scoping is enforced in the invoke callback)
  */
 export function createDelegateToolsProvider(plugin: any) {
+  attachInvalidationHooks(plugin);
+
   return async (register: any) => {
     try {
-      const configRepo = plugin.db.getRepository('orchestratorConfig');
-      if (!configRepo) return;
-
-      const configs = await configRepo.find({
-        filter: { enabled: true },
-      });
-      if (!configs?.length) return;
-
-      const employeeCache = new Map<string, any>();
-      const tools = [];
-      const configsBySubAgent = new Map<string, any[]>();
-      for (const config of configs) {
-        const items = configsBySubAgent.get(config.subAgentUsername) || [];
-        items.push(config);
-        configsBySubAgent.set(config.subAgentUsername, items);
+      let toolsCache = toolsCacheByPlugin.get(plugin);
+      if (!toolsCache || toolsCache.expiresAt <= Date.now()) {
+        const tools = await buildDelegateTools(plugin);
+        toolsCache = { tools, expiresAt: Date.now() + TOOLS_CACHE_TTL_MS };
+        toolsCacheByPlugin.set(plugin, toolsCache);
       }
 
-      for (const config of configs) {
-        const { leaderUsername, subAgentUsername, maxDepth, timeout } = config;
-
-        // Fetch the sub-agent employee model for its description and LLM config
-        let subAgentEmployee = employeeCache.get(subAgentUsername);
-        if (!subAgentEmployee) {
-          subAgentEmployee = await plugin.db.getRepository('aiEmployees').findOne({
-            filter: { username: subAgentUsername },
-          });
-          if (subAgentEmployee) {
-            employeeCache.set(subAgentUsername, subAgentEmployee);
-          }
-        }
-        if (!subAgentEmployee) continue;
-
-        const toolName = buildDelegateToolName(leaderUsername, subAgentUsername);
-        tools.push(createDelegateToolOptions(plugin, {
-          leaderUsername,
-          subAgentUsername,
-          subAgentEmployee,
-          maxDepth,
-          timeout,
-          toolName,
-        }));
-      }
-
-      // Compatibility for existing single-parent setups that already assigned
-      // delegate_to_<sub> to the parent employee's skills.
-      for (const [subAgentUsername, items] of configsBySubAgent.entries()) {
-        if (items.length !== 1) continue;
-        const config = items[0];
-        const subAgentEmployee = employeeCache.get(subAgentUsername);
-        if (!subAgentEmployee) continue;
-        const legacyToolName = `delegate_to_${sanitizeToolPart(subAgentUsername)}`;
-        if (tools.some((tool: any) => tool.definition.name === legacyToolName)) continue;
-        tools.push(createDelegateToolOptions(plugin, {
-          leaderUsername: config.leaderUsername,
-          subAgentUsername,
-          subAgentEmployee,
-          maxDepth: config.maxDepth,
-          timeout: config.timeout,
-          toolName: legacyToolName,
-          legacyAlias: true,
-        }));
-      }
-
-      if (tools.length) {
-        register.registerTools(tools);
+      if (toolsCache.tools.length) {
+        register.registerTools(toolsCache.tools);
       }
     } catch (e) {
       plugin.app.log.error('[AgentOrchestrator] Failed to register delegate tools', e);
     }
   };
+}
+
+/**
+ * Test/internal helper to drop the in-memory tool cache (e.g., from a CLI op).
+ */
+export function invalidateDelegateToolsCache() {
+  toolsCacheByPlugin = new WeakMap();
+  registeredDelegateNamesByPlugin = new WeakMap();
 }
 
 /**
@@ -249,9 +741,32 @@ async function invokeDelegateTask(
     timeout: number;
     toolCallId: string;
     toolName: string;
+    llmService?: string;
+    model?: string;
+    recursionLimit?: number;
   },
 ) {
-  const { leaderUsername, subAgentUsername, subAgentEmployee, task, context, maxDepth, timeout, toolCallId, toolName } = options;
+  const {
+    leaderUsername,
+    subAgentUsername,
+    subAgentEmployee,
+    task,
+    context,
+    maxDepth,
+    timeout,
+    toolCallId,
+    toolName,
+    llmService,
+    model,
+    recursionLimit,
+  } = options;
+
+  // --- Snapshot ctx fields up-front ---
+  // Long-running agent execution (up to `timeout` ms) outlives the parent HTTP
+  // request, so middleware may have cleared `ctx.auth`, `ctx.state`, or even
+  // disposed the underlying socket by the time we finalize the log row.
+  // Capturing the values once here keeps log/audit fields stable.
+  const ctxSnapshot = captureCtxSnapshot(ctx);
 
   // --- P1: Depth enforcement ---
   const currentDepth: number = (ctx as any)[ORCHESTRATOR_DEPTH_KEY] ?? 0;
@@ -267,6 +782,7 @@ async function invokeDelegateTask(
       depth: currentDepth,
       durationMs: 0,
       error: `Delegation depth limit reached (${currentDepth}/${maxDepth}).`,
+      snapshot: ctxSnapshot,
     });
     return {
       status: 'error' as const,
@@ -294,6 +810,7 @@ async function invokeDelegateTask(
     depth: currentDepth,
     durationMs: 0,
     trace,
+    snapshot: ctxSnapshot,
   });
 
   try {
@@ -303,9 +820,33 @@ async function invokeDelegateTask(
     }
 
     // --- Step 1: Resolve LLM model from sub-agent's employee config ---
-    const modelSettings = subAgentEmployee.modelSettings;
-    if (!modelSettings?.llmService || !modelSettings?.model) {
-      throw new Error(`Sub-agent "${subAgentUsername}" has no LLM model configured. Please configure a model in the AI Employee settings.`);
+    let modelSettings = hasModelSettings(subAgentEmployee.modelSettings) ? subAgentEmployee.modelSettings : undefined;
+
+    // Override with orchestrator config if provided
+    if (llmService && model) {
+      modelSettings = { llmService, model };
+    }
+
+    if (!hasModelSettings(modelSettings)) {
+      // Fallback to leader's LLM model if sub-agent doesn't have one
+      const leaderEmployee = await plugin.db.getRepository('aiEmployees').findOne({
+        filter: { username: leaderUsername },
+      });
+
+      // The leader's model might be empty in the DB if it relies on the dynamic system default.
+      // In that case, we extract the dynamic `model` passed from the frontend request.
+      const dynamicModel = ctx.action?.params?.values?.model;
+      modelSettings = hasModelSettings(leaderEmployee?.modelSettings)
+        ? leaderEmployee.modelSettings
+        : hasModelSettings(dynamicModel)
+          ? dynamicModel
+          : undefined;
+
+      if (!hasModelSettings(modelSettings)) {
+        throw new Error(
+          `Sub-agent "${subAgentUsername}" has no LLM model configured (and leader fallback failed). Please configure a model in the Orchestrator Config or AI Employee settings.`,
+        );
+      }
     }
 
     const { provider } = await aiPlugin.aiManager.getLLMService({
@@ -329,20 +870,20 @@ async function invokeDelegateTask(
     const langchainTools: DynamicStructuredTool[] = [];
 
     for (const toolEntry of allTools) {
-      const toolName = toolEntry.definition.name;
-      if (!toolName) continue;
+      const entryName = toolEntry.definition.name;
+      if (!entryName) continue;
 
       // Only include tools that the sub-agent employee is configured to use.
-      // Also skip our own delegate_to_* tools to prevent circular delegation
+      // Also skip our own orchestration tools to prevent circular delegation
       // (belt-and-suspenders with the depth check above).
-      if (!employeeSkills.includes(toolName) || isDelegateToolName(toolName)) {
+      if (!employeeSkills.includes(entryName) || isDelegateToolName(plugin, entryName)) {
         continue;
       }
 
       langchainTools.push(
         new DynamicStructuredTool({
-          name: toolName.replace(/[^a-zA-Z0-9_-]/g, '_'),
-          description: toolEntry.definition.description || toolName,
+          name: entryName.replace(/[^a-zA-Z0-9_-]/g, '_'),
+          description: toolEntry.definition.description || entryName,
           schema: (toolEntry.definition.schema || z.object({})) as any,
           func: async (toolArgs) => {
             // Forward the invoke with depth tracking
@@ -395,23 +936,36 @@ async function invokeDelegateTask(
     });
 
     // --- Step 4: Construct messages ---
-    const systemPrompt = subAgentEmployee.chatSettings?.systemPrompt
-      || subAgentEmployee.bio
-      || `You are an AI assistant named "${subAgentEmployee.nickname || subAgentUsername}". ${subAgentEmployee.about || ''}`;
+    const systemPrompt =
+      subAgentEmployee.chatSettings?.systemPrompt ||
+      subAgentEmployee.bio ||
+      `You are an AI assistant named "${subAgentEmployee.nickname || subAgentUsername}". ${
+        subAgentEmployee.about || ''
+      }`;
 
-    const combinedTask = context
-      ? `Task: ${task}\n\nContext Provided:\n${context}`
-      : `Task: ${task}`;
+    const combinedTask = context ? `Task: ${task}\n\nContext Provided:\n${context}` : `Task: ${task}`;
 
     // --- Step 5: Execute with timeout + abort ---
     // P3 FIX: AbortController signal cancels the in-flight stream on timeout,
     // preventing continued token consumption after the timeout fires.
-    const invokePromise = executeAgent(executor, systemPrompt, combinedTask, abortController.signal);
+    const effectiveRecursionLimit =
+      Number.isFinite(recursionLimit) && (recursionLimit as number) > 0 ? (recursionLimit as number) : 50;
+    const invokePromise = executeAgent(
+      executor,
+      systemPrompt,
+      combinedTask,
+      abortController.signal,
+      effectiveRecursionLimit,
+    );
 
-    const result = await Promise.race([
-      invokePromise,
-      createTimeout(timeout, subAgentUsername, abortController),
-    ]) as AgentExecutionResult;
+    const timeoutHandle = createTimeout(timeout, subAgentUsername, abortController);
+    let result: AgentExecutionResult;
+    try {
+      result = (await Promise.race([invokePromise, timeoutHandle.promise])) as AgentExecutionResult;
+    } finally {
+      // Always release the timer so it doesn't keep the event loop alive.
+      timeoutHandle.cancel();
+    }
 
     const content = result.content || 'Sub-agent completed the task but produced no output.';
     trace.push({
@@ -436,6 +990,7 @@ async function invokeDelegateTask(
       durationMs: Date.now() - startTime,
       trace,
       messages: result.messages,
+      snapshot: ctxSnapshot,
     });
 
     return {
@@ -468,6 +1023,7 @@ async function invokeDelegateTask(
           content: e.message,
         },
       ],
+      snapshot: ctxSnapshot,
     }).catch((logErr) => {
       plugin.app.log.warn('[AgentOrchestrator] Failed to save error log for delegation', logErr);
     });
@@ -499,6 +1055,7 @@ async function logDelegation(
     error?: string;
     trace?: TraceEvent[];
     messages?: any[];
+    snapshot?: CtxSnapshot;
   },
 ) {
   try {
@@ -508,12 +1065,16 @@ async function logDelegation(
       return;
     }
 
-    // Safely resolve userId — ctx may be stale after long-running agent execution
-    let userId: number | undefined;
-    try {
-      userId = ctx.auth?.user?.id || ctx.state?.currentUser?.id;
-    } catch {
-      // ctx lifecycle ended — proceed without userId
+    // Prefer the early snapshot captured in invokeDelegateTask — by the time
+    // the agent finishes, ctx may already be disposed. Fall back to ctx for
+    // call sites that don't pass a snapshot (e.g. authz-failure short-circuit).
+    let userId: number | undefined = data.snapshot?.userId;
+    if (userId == null) {
+      try {
+        userId = ctx.auth?.user?.id || ctx.state?.currentUser?.id;
+      } catch {
+        // ctx lifecycle ended — proceed without userId
+      }
     }
 
     const values = {
@@ -563,8 +1124,9 @@ async function executeAgent(
   systemPrompt: string,
   task: string,
   signal?: AbortSignal,
+  recursionLimit = 50,
 ): Promise<AgentExecutionResult> {
-  const config: any = { recursionLimit: 50 };
+  const config: any = { recursionLimit };
   if (signal) {
     config.signal = signal;
   }
@@ -578,9 +1140,9 @@ async function executeAgent(
 
   // finalState.messages contains the entire conversation history of this delegation
   const messages = finalState?.messages || [];
-  
+
   // Find the last AI message in the chain
-  const lastAIMessage = [...messages].reverse().find(m => m.getType() === 'ai');
+  const lastAIMessage = [...messages].reverse().find((m) => m.getType() === 'ai');
 
   if (!lastAIMessage || !lastAIMessage.content) {
     return { content: '', messages: serializeMessages(messages) };
@@ -590,9 +1152,7 @@ async function executeAgent(
   if (typeof lastAIMessage.content === 'string') {
     content = lastAIMessage.content;
   } else if (Array.isArray(lastAIMessage.content)) {
-    content = lastAIMessage.content
-      .map((c: any) => c.text || JSON.stringify(c))
-      .join('\n');
+    content = lastAIMessage.content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
   } else {
     content = String(lastAIMessage.content);
   }
@@ -617,14 +1177,27 @@ function serializeMessages(messages: any[]) {
 }
 
 /**
- * Create a timeout promise that rejects after the specified duration.
- * P3 FIX: Also triggers AbortController to cancel the in-flight stream.
+ * Schedule a rejection-on-timeout that also aborts the in-flight stream.
+ * Returns the promise plus a `cancel()` so callers can release the timer
+ * when the race resolves successfully (otherwise the handle keeps the event
+ * loop alive until `ms` elapses).
  */
-function createTimeout(ms: number, agentName: string, abortController?: AbortController): Promise<never> {
-  return new Promise((_, reject) =>
-    setTimeout(() => {
+function createTimeout(
+  ms: number,
+  agentName: string,
+  abortController?: AbortController,
+): { promise: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
       abortController?.abort();
       reject(new Error(`Sub-agent "${agentName}" timed out after ${ms / 1000}s`));
-    }, ms),
-  );
+    }, ms);
+  });
+  return {
+    promise,
+    cancel: () => {
+      if (timer) clearTimeout(timer);
+    },
+  };
 }

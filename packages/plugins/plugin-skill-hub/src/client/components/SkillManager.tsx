@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card,
   Button,
@@ -40,8 +40,8 @@ export const SkillManager: React.FC = () => {
     setLoading(true);
     try {
       const { data } = await api.request({ url: 'skillDefinitions:list', params: { pageSize: 100 } });
-      const responseData = data?.data?.data || data?.data || [];
-      setSkills(responseData);
+      const rawData = data?.data?.data ?? data?.data ?? [];
+      setSkills(Array.isArray(rawData) ? rawData : []);
     } catch {
       message.error(t('Failed to load skills'));
     } finally {

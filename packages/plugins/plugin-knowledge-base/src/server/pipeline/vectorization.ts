@@ -7,10 +7,11 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { resolve as resolvePath, sep, join } from 'path';
+import { resolve as resolvePath, sep } from 'path';
 import { unlink, access, readFile } from 'fs/promises';
 import type PluginKnowledgeBaseServer from '../plugin';
-import { DocumentTextSplitter, type TextSplitterOptions } from './text-splitter';
+import { DocumentTextSplitter } from './text-splitter';
+import type { TextSplitterOptions } from './text-splitter';
 import { createEmbeddingsForVectorStore } from './embedding-factory';
 import type { DocPixieExtractor } from '../services/docpixie-extractor';
 
@@ -53,7 +54,7 @@ export class VectorizationPipeline {
       // handler are fully committed before we query with appends.
       // Without this, appended relations (file, knowledgeBase) can return null
       // when the vectorization trigger fires immediately after repo.update().
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       // 1. Load the document record with knowledge base info (with retry for FK propagation)
       let docRecord = await docRepo.findOne({
         filter: { id: documentId },
@@ -64,10 +65,8 @@ export class VectorizationPipeline {
       // DB connection pool returns a stale read (common with replicas or
       // heavy concurrent writes).
       if (docRecord && (!docRecord.get('knowledgeBaseId') || !docRecord.knowledgeBase)) {
-        this.plugin.app.logger.warn(
-          `[Vectorization] FK not yet visible for doc ${documentId}, retrying after 1s...`,
-        );
-        await new Promise((r) => setTimeout(r, 1000));
+        this.plugin.app.logger.warn(`[Vectorization] FK not yet visible for doc ${documentId}, retrying after 1s...`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         docRecord = await docRepo.findOne({
           filter: { id: documentId },
           appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
@@ -92,7 +91,7 @@ export class VectorizationPipeline {
       }
 
       // 2. Get the text content — try DocPixie → plugin-ai loaders → raw fallback
-      let rawText: string;
+      let rawText = '';
       let docpixieDocumentId: number | null = null;
 
       if (textContent) {
@@ -270,10 +269,10 @@ export class VectorizationPipeline {
         this.plugin.app.logger.warn(
           `[Vectorization] ${label} attempt ${attempt}/${maxRetries} failed (${err.message}), retrying in ${delayMs}ms...`,
         );
-        await new Promise((r) => setTimeout(r, delayMs));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
-    throw lastError!;
+    throw lastError ?? new Error(`${label} failed`);
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -284,12 +283,8 @@ export class VectorizationPipeline {
    */
   private async deleteSourceFile(documentId: string, file: any): Promise<void> {
     try {
-      let filePath = file.path || file.url;
+      const filePath = this.resolveLocalPath(file);
       if (filePath) {
-        if (filePath.startsWith('/storage/') || filePath.startsWith('storage/')) {
-          const storageBase = resolvePath(process.cwd(), 'storage');
-          filePath = resolvePath(storageBase, filePath.replace(/^\/?(?:storage\/)?/, ''));
-        }
         try {
           await access(filePath);
           await unlink(filePath);

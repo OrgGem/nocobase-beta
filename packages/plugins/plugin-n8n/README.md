@@ -1,13 +1,15 @@
 # plugin-n8n
 
-Monitor and manage n8n workflows, executions, variables, credentials and performance metrics inside NocoBase.
+## Overview
+Monitor and manage n8n workflows, executions, variables, credentials and performance metrics.
 
 ## Features
+- **Workflow Sync**: View all active n8n workflows inside NocoBase.
+- **Execution Tracking**: Monitor success, failure, and execution times.
+- **Centralized Management**: Manage n8n credentials and global variables without leaving the NocoBase admin panel.
 
-- **Workflow Management**: View and monitor n8n workflows.
-- **Execution History**: Track execution logs and performance metrics.
-- **Variables & Credentials**: Securely manage n8n environment variables and credentials from within NocoBase.
-
-## License
-
-Apache-2.0
+## Usage
+1. Enable the plugin.
+2. Go to n8n Settings and connect your n8n instance via its API URL and Token.
+3. Create a new NocoBase page and add the "n8n Workflows" or "n8n Executions" block.
+4. You can now monitor your automation pipelines directly from your dashboard.

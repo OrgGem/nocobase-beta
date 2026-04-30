@@ -1,0 +1,38 @@
+{
+  "name": "plugin-ai-drawio",
+  "displayName": "AI Drawio",
+  "displayName.vi-VN": "AI Drawio",
+  "displayName.zh-CN": "AI Drawio",
+  "description": "Embed self-hosted drawio editor as a NocoBase block, with AI Employee tools to create / edit / append diagrams via chat.",
+  "description.vi-VN": "Nhúng drawio editor (self-host) vào NocoBase qua block, kèm AI Employee tools để tạo/sửa/append diagram qua chat.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ai",
+    "drawio",
+    "diagram",
+    "nocobase-plugin"
+  ],
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/plugin-ai": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
+}

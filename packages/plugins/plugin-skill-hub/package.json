@@ -6,7 +6,7 @@
   "description": "Manage and execute Python/Node.js skills in sandbox on worker server for AI Employees",
   "description.zh-CN": "管理并在工作服务器沙箱中执行 Python/Node.js 技能，供 AI 员工使用",
   "description.vi-VN": "Quan ly va thuc thi skill Python/Node.js tren worker server cho AI Employee",
-  "version": "1.2.4",
+  "version": "1.2.6",
   "license": "Apache-2.0",
   "files": [
     "dist",

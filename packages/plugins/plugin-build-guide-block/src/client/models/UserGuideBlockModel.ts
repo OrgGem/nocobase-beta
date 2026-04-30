@@ -2,6 +2,7 @@ import { BlockModel } from '@nocobase/client';
 import { escapeT } from '@nocobase/flow-engine';
 import React from 'react';
 import { UserGuideBlock } from '../UserGuideBlock';
+import { SpaceSelect } from '../components/SpaceSelect';
 
 export class UserGuideBlockModel extends BlockModel {
   renderComponent() {
@@ -23,18 +24,7 @@ UserGuideBlockModel.registerFlow({
             title: t('Space'),
             type: 'string',
             'x-decorator': 'FormItem',
-            'x-component': 'RemoteSelect',
-            'x-component-props': {
-              showSearch: true,
-              fieldNames: { label: 'title', value: 'id' },
-              service: {
-                resource: 'aiBuildGuideSpaces',
-                action: 'list',
-                params: {
-                  filter: { status: 'completed' },
-                },
-              },
-            },
+            'x-component': SpaceSelect,
             required: true,
           },
         };

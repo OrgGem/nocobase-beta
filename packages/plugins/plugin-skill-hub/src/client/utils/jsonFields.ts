@@ -7,7 +7,16 @@ export function parseJsonText<T = any>(value: any, fallback: T): T {
   const json = fenced ? fenced[1].trim() : trimmed;
 
   try {
-    return JSON.parse(json);
+    let parsed = JSON.parse(json);
+    if (typeof parsed === 'string') {
+      const innerTrimmed = parsed.trim();
+      const innerFenced = innerTrimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+      const innerJson = innerFenced ? innerFenced[1].trim() : innerTrimmed;
+      try {
+        parsed = JSON.parse(innerJson);
+      } catch {}
+    }
+    return parsed;
   } catch {
     return fallback;
   }

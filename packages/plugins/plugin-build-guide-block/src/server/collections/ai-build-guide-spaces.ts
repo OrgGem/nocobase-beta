@@ -34,12 +34,39 @@ export default defineCollection({
       defaultValue: 'html',
     },
     {
+      type: 'integer',
+      name: 'targetChapterCount',
+      defaultValue: 5,
+    },
+    {
+      type: 'text',
+      name: 'chapterGuidance',
+    },
+    {
       type: 'text',
       name: 'generatedHtml',
     },
     {
       type: 'text',
       name: 'generatedMarkdown',
+    },
+    {
+      type: 'json',
+      name: 'planJson',
+    },
+    {
+      type: 'string',
+      name: 'buildPhase',
+      defaultValue: 'idle',
+    },
+    {
+      type: 'integer',
+      name: 'pageCount',
+      defaultValue: 0,
+    },
+    {
+      type: 'string',
+      name: 'sourceHash',
     },
     {
       type: 'string',
@@ -54,6 +81,12 @@ export default defineCollection({
       type: 'belongsToMany',
       name: 'documents',
       target: 'attachments',
+    },
+    {
+      type: 'hasMany',
+      name: 'pages',
+      target: 'aiBuildGuidePages',
+      foreignKey: 'spaceId',
     },
   ],
 });

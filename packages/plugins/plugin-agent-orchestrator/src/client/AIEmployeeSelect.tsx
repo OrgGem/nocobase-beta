@@ -39,9 +39,7 @@ export const AIEmployeeSelect: React.FC<{
       optionRender={(option) => (
         <div>
           <div style={{ fontWeight: 500 }}>{option.label}</div>
-          {option.data.description && (
-            <div style={{ fontSize: 12, color: '#888' }}>{option.data.description}</div>
-          )}
+          {option.data.description && <div style={{ fontSize: 12, color: '#888' }}>{option.data.description}</div>}
         </div>
       )}
     />

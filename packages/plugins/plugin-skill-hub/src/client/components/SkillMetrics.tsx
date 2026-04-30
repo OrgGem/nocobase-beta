@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, Table, Typography, Space, Row, Col, Statistic, Progress } from 'antd';
 import { SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
@@ -24,8 +24,8 @@ export const SkillMetrics: React.FC = () => {
           appends: ['skill'],
         },
       });
-      const responseData = data?.data?.data || data?.data || [];
-      setExecutions(responseData);
+      const rawData = data?.data?.data ?? data?.data ?? [];
+      setExecutions(Array.isArray(rawData) ? rawData : []);
     } catch {
       // ignore
     } finally {

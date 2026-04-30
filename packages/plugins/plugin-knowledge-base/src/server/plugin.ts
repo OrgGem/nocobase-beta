@@ -16,15 +16,12 @@ import { VectorDatabaseFeatureImpl } from './features/vector-database-impl';
 import { VectorDatabaseProviderImpl } from './features/vector-database-provider-impl';
 import { VectorStoreProviderImpl } from './features/vector-store-provider-impl';
 import { pgVectorProviderInfo } from './providers/pgvector';
-import {
-  externalHttpRagStrategy,
-  EXTERNAL_RAG_KB_TYPE,
-  EXTERNAL_HTTP_RAG_PROVIDER,
-  type RagSearchStrategy,
-  type RagSearchResult,
-} from './providers/external-rag';
+import { externalHttpRagStrategy, EXTERNAL_HTTP_RAG_PROVIDER } from './providers/external-rag';
+import type { RagSearchStrategy } from './providers/external-rag';
 import { VectorizationPipeline } from './pipeline/vectorization';
 import { DocPixieExtractor } from './services/docpixie-extractor';
+import { KnowledgeSearchService } from './services/knowledge-search';
+import type { KnowledgeSearchOptions } from './services/knowledge-search';
 import aiKnowledgeBase from './resources/ai-knowledge-base';
 import aiKnowledgeBaseDocuments from './resources/ai-knowledge-base-documents';
 import aiVectorStores from './resources/ai-vector-stores';
@@ -35,6 +32,8 @@ import requestContext from './request-context';
 export class PluginKnowledgeBaseServer extends Plugin {
   vectorizationPipeline: VectorizationPipeline;
   docpixieExtractor: DocPixieExtractor;
+  knowledgeBaseFeature: KnowledgeBaseFeatureImpl;
+  knowledgeSearchService: KnowledgeSearchService;
   private retryTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
@@ -108,6 +107,17 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.ragSearchStrategies.set(name, strategy);
   }
 
+  getRagSearchStrategy(name: string): RagSearchStrategy | undefined {
+    return this.ragSearchStrategies.get(name);
+  }
+
+  searchKnowledgeBases(ctx: any, query: string, options?: KnowledgeSearchOptions) {
+    if (!this.knowledgeSearchService) {
+      this.knowledgeSearchService = new KnowledgeSearchService(this);
+    }
+    return this.knowledgeSearchService.search(ctx, query, options);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
 
   async afterAdd() {}
@@ -126,6 +136,8 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.ragSearchStrategies.set(EXTERNAL_HTTP_RAG_PROVIDER, externalHttpRagStrategy);
     const vectorDatabase = new VectorDatabaseFeatureImpl(this);
     const knowledgeBase = new KnowledgeBaseFeatureImpl(this);
+    this.knowledgeBaseFeature = knowledgeBase;
+    this.knowledgeSearchService = new KnowledgeSearchService(this);
 
     // 2. Register features with plugin-ai
     this.aiPlugin.features.enableFeatures({
@@ -190,7 +202,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     );
 
     // 8. Register work context strategy for per-chat KB selection
-    this.registerKnowledgeBaseWorkContext(vectorStoreProvider, knowledgeBase);
+    this.registerKnowledgeBaseWorkContext();
 
     // 9. Start background retry job for failed documents (every 5 minutes)
     this.startRetryJob();
@@ -276,10 +288,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
    * Knowledge Bases via the AddContext button in AI chat, the background
    * strategy performs a RAG search and injects results into the system prompt.
    */
-  private registerKnowledgeBaseWorkContext(
-    vectorStoreProvider: VectorStoreProviderImpl,
-    knowledgeBaseFeature: KnowledgeBaseFeatureImpl,
-  ) {
+  private registerKnowledgeBaseWorkContext() {
     const plugin = this;
     this.aiPlugin.workContextHandler.registerStrategy('knowledge-base', {
       resolve: async (_ctx, contextItem) => {
@@ -290,31 +299,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
         const kbIds = [...new Set(workContextItems.map((item) => item.uid).filter(Boolean))];
         if (!kbIds.length) return '';
 
-        // 2. Filter KBs by user's access level (prevent bypass)
-        const userId = ctx.auth?.user?.id;
-        const roles = ctx.state?.currentRoles ?? [];
-        const isAdmin = roles.includes('root') || roles.includes('admin');
-
-        let filteredIds = kbIds;
-        if (!isAdmin) {
-          const kbRepo = plugin.db.getRepository('aiKnowledgeBases');
-          const accessibleKBs = await kbRepo.find({
-            filter: {
-              id: { $in: kbIds },
-              enabled: true,
-              $or: [
-                { accessLevel: 'PUBLIC' },
-                ...(userId ? [{ accessLevel: 'BASIC', ownerId: userId }] : []),
-                ...(roles.length ? [{ accessLevel: 'SHARED', 'allowedRoles.$anyOf': roles }] : []),
-              ],
-            },
-            fields: ['id'],
-          });
-          filteredIds = accessibleKBs.map((kb: any) => kb.id || kb.get('id'));
-          if (!filteredIds.length) return '';
-        }
-
-        // 3. Extract the last user message content as the search query
+        // 2. Extract the last user message content as the search query
         const lastUserMsg = [...aiMessages].reverse().find((m) => m.role === 'user');
 
         // Handle multiple content structures from plugin-ai:
@@ -345,122 +330,17 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
         if (!queryString) return '';
 
-        // 4a. Separate EXTERNAL_RAG KBs from standard (vector-store-backed) KBs
-        const kbRepo = plugin.db.getRepository('aiKnowledgeBases');
-        const allKbRecords = await kbRepo.find({
-          filter: { id: { $in: filteredIds }, enabled: true },
-          fields: ['id', 'name', 'type', 'options'],
+        // 3. Search and rerank relevant documents. The service also rechecks
+        // access permissions so selected work-context IDs cannot bypass ACL.
+        const allDocs = await plugin.searchKnowledgeBases(ctx, queryString, {
+          knowledgeBaseIds: kbIds.map(String),
+          topK: 5,
+          candidateK: 20,
+          scoreThreshold: 0.3,
+          rerank: true,
         });
-        const externalRagIds = new Set<string>();
-        const externalRagKbs: any[] = [];
-        for (const rec of allKbRecords) {
-          const kbData = rec.toJSON ? rec.toJSON() : rec;
-          if (kbData.type === EXTERNAL_RAG_KB_TYPE) {
-            externalRagIds.add(String(kbData.id));
-            externalRagKbs.push(kbData);
-          }
-        }
-        const standardIds = filteredIds.filter((id) => !externalRagIds.has(String(id)));
 
-        // 4b. Get KB groups for standard (vector-store-backed) IDs
-        let knowledgeBaseGroup: any[] = [];
-        if (standardIds.length > 0) {
-          try {
-            knowledgeBaseGroup = await knowledgeBaseFeature.getKnowledgeBaseGroup(standardIds);
-          } catch (err) {
-            plugin.app.logger.error('[KB WorkContext] Failed to get KB group:', err);
-          }
-        }
-
-        plugin.app.logger.info(
-          `[KB WorkContext] Found ${knowledgeBaseGroup.length} local KB groups, ${
-            externalRagKbs.length
-          } external RAG KBs: ${JSON.stringify(
-            knowledgeBaseGroup.map((g: any) => ({
-              type: g.knowledgeBaseType,
-              provider: g.vectorStoreConfig?.vectorStoreProvider,
-              configId: g.vectorStoreConfig?.vectorStoreConfigId,
-              kbCount: g.knowledgeBaseList?.length,
-            })),
-          )}`,
-        );
-
-        // 5. Search for relevant documents via vector store (standard KBs)
-        const allDocs: { content: string; score: number }[] = [];
-        const topK = 5;
-        const score = '0.3';
-
-        for (const entry of knowledgeBaseGroup) {
-          const { vectorStoreConfig, knowledgeBaseType, knowledgeBaseList } = entry;
-          if (!knowledgeBaseList?.length) continue;
-
-          try {
-            if (knowledgeBaseType === 'LOCAL') {
-              // LOCAL: single search across multiple KBs sharing same vector store
-              const firstKB = knowledgeBaseList[0];
-              const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
-                vectorStoreConfig.vectorStoreProvider,
-                firstKB.vectorStoreProps,
-              );
-              const knowledgeBaseOuterIds = knowledgeBaseList.map((x: any) => x.knowledgeBaseOuterId);
-              const result = await vectorStoreService.search(queryString, {
-                topK,
-                score,
-                filter: { knowledgeBaseOuterId: { in: knowledgeBaseOuterIds } },
-              });
-              plugin.app.logger.info(
-                `[KB WorkContext] LOCAL search: ${result.length} results, scores: ${result
-                  .map((r: any) => r.score?.toFixed(3))
-                  .join(', ')}`,
-              );
-              allDocs.push(...result);
-            } else {
-              // READONLY / EXTERNAL: per-KB search with individual vectorStoreProps
-              for (const kb of knowledgeBaseList) {
-                const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
-                  vectorStoreConfig.vectorStoreProvider,
-                  kb.vectorStoreProps,
-                );
-                const result = await vectorStoreService.search(queryString, { topK, score });
-                plugin.app.logger.info(
-                  `[KB WorkContext] ${knowledgeBaseType} search (${kb.name}): ${result.length} results, scores: ${result
-                    .map((r: any) => r.score?.toFixed(3))
-                    .join(', ')}`,
-                );
-                allDocs.push(...result);
-              }
-            }
-          } catch (err) {
-            plugin.app.logger.error(`[KB WorkContext] Vector search failed for type=${knowledgeBaseType}:`, err);
-          }
-        }
-
-        // 5b. Search external RAG KBs via registered strategies
-        for (const kb of externalRagKbs) {
-          const providerName: string = kb.options?.ragProvider ?? EXTERNAL_HTTP_RAG_PROVIDER;
-          const strategy = plugin.ragSearchStrategies.get(providerName);
-          if (!strategy) {
-            plugin.app.logger.warn(
-              `[KB WorkContext] No RAG strategy registered for provider "${providerName}" (KB: ${kb.name ?? kb.id})`,
-            );
-            continue;
-          }
-          try {
-            const results: RagSearchResult[] = await strategy(queryString, kb, {
-              topK,
-              scoreThreshold: parseFloat(score),
-            });
-            plugin.app.logger.info(
-              `[KB WorkContext] EXTERNAL_RAG (${kb.name}, provider=${providerName}): ${results.length} results`,
-            );
-            allDocs.push(...results);
-          } catch (err) {
-            plugin.app.logger.error(
-              `[KB WorkContext] External RAG search failed (${kb.name}, provider=${providerName}):`,
-              err,
-            );
-          }
-        }
+        plugin.app.logger.info(`[KB WorkContext] Search returned ${allDocs.length} reranked result(s)`);
 
         if (!allDocs.length) return '';
 
@@ -511,6 +391,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     // Allow logged-in users to list/get knowledge bases (needed by AI Employee KB selector)
     this.app.acl.allow('aiKnowledgeBase', 'list', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'get', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'search', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'addDocument', 'loggedIn');
 
     // Allow logged-in users to manage their own documents.

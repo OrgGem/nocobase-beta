@@ -1,47 +1,16 @@
 # plugin-antd-style-theme
 
-Advanced Ant Design Theme Editor plugin for NocoBase. Customize component-level styles, layout colors, login page appearance, and access 300+ extra icons — all without code.
+## Overview
+Advanced Ant Design component-level style theme editor for NocoBase. Customize styles for Menu, Table, Button, Input, Select, and all other Ant Design components.
 
 ## Features
+- **Visual Editor**: Real-time visual interface for tweaking Ant Design CSS variables.
+- **Component-Level Control**: Fine-tune specific UI elements rather than just global colors.
+- **Theme Export/Import**: Easily share or backup your custom themes.
 
-### 🎨 Component Style Editor
-- Fine-tune styles for **all Ant Design components** (Menu, Table, Button, Input, Select, etc.)
-- Live preview with real-time token editing
-- Color, size, and spacing customization per component
-
-### 🏗️ Layout Styles
-- Customize **header** and **sider** colors
-- 13 NocoBase-specific layout tokens (colorBgHeader, colorPrimaryHeader, colorBgSider, etc.)
-- Live preview with debounced updates
-
-### 🔐 Login Page Styles
-- Custom **background** (color, gradient, or image URL — full viewport cover)
-- Custom **logo** (URL + height)
-- **Login card** styling (background, border-radius, shadow, width)
-- **Button** styling (color, border-radius)
-- Mini live preview in the editor
-
-### 🎯 300+ Extra Icons
-- **Google Material Design** (~180 icons) — dashboard, analytics, business, security, etc.
-- **Bootstrap Icons** (~120 icons) — grid, kanban, social media, dev tools, etc.
-- Seamlessly integrated into NocoBase's **IconPicker** with new tabs
-- All icons are bundled in the plugin (no external dependencies at runtime)
-
-### 📐 Pre-built Theme Templates
-- Default, Dark, Compact, Compact Dark (built-in)
-- **Neo Enterprise** — modern professional theme with subtle blue accents
-- **Flat Futuristic** — ultra-clean flat design with vibrant teal palette
-- Custom theme templates support
-
-## Installation
-
-Upload the `.tgz` file via NocoBase Plugin Manager → Add New → Upload.
-
-## Compatibility
-
-- NocoBase `2.x`
-- Ant Design `5.x`
-
-## License
-
-Apache-2.0
+## Usage
+1. Enable the plugin.
+2. Go to `Settings -> Theme Editor` (or User Interface Settings).
+3. Select the component category you wish to customize (e.g., "Buttons" or "Tables").
+4. Adjust properties (colors, border-radius, padding) and preview changes instantly.
+5. Save and apply the theme globally.

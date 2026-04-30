@@ -4,7 +4,7 @@
   "displayName.vi-VN": "Skill PPTX Nâng Cao",
   "description": "Advanced SVG-to-PPTX presentation generation skill for Skill Hub",
   "description.vi-VN": "Skill tạo PPTX nâng cao từ SVG cho Skill Hub",
-  "version": "1.1.2",
+  "version": "1.1.4",
   "license": "Apache-2.0",
   "files": [
     "dist",

@@ -15,13 +15,31 @@ import {
   Alert,
   Collapse,
   Empty,
+  Select,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SwapRightOutlined } from '@ant-design/icons';
+import {
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  SwapRightOutlined,
+  WarningOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
 import { useAIEmployees } from './AIEmployeesContext';
 
 const { Text } = Typography;
+
+/**
+ * Mirrors server-side `sanitizeToolPart` in delegate-task.ts so we can compute
+ * the expected delegation tool names here and detect when the leader hasn't
+ * added them to its skillSettings.
+ */
+const sanitizeToolPart = (value: string) => (value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+const expectedDelegateToolName = (leader: string, sub: string) =>
+  `delegate_${sanitizeToolPart(leader)}_to_${sanitizeToolPart(sub)}`;
+const expectedDispatchToolName = (leader: string) => `dispatch_subagents_${sanitizeToolPart(leader)}`;
 
 export const RulesTab: React.FC = () => {
   const api = useAPIClient();
@@ -36,21 +54,92 @@ export const RulesTab: React.FC = () => {
     },
   });
 
+  const { data: llmServicesData, loading: llmLoading } = useRequest({
+    url: 'ai:listAllEnabledModels',
+  });
+
+  const llmServices = React.useMemo(() => {
+    const raw = (llmServicesData as any)?.data ?? llmServicesData;
+    if (Array.isArray(raw)) return raw;
+    return Array.isArray(raw?.data) ? raw.data : [];
+  }, [llmServicesData]);
+
   // P3 FIX: Use shared context instead of duplicate API call
-  const { employeeMap } = useAIEmployees();
+  const { employeeMap, skillsMap, refresh: refreshEmployees } = useAIEmployees();
   const rules = React.useMemo(() => {
     const rows = (data as any)?.data;
     return Array.isArray(rows) ? rows : [];
   }, [data]);
 
+  const handleAddSkillToEmployee = async (employeeUsername: string, toolName: string) => {
+    try {
+      // Re-fetch the leader to merge its current skills (skillsMap may be stale).
+      const leaderResp = await api.request({
+        url: 'aiEmployees:get',
+        params: { filterByTk: employeeUsername },
+      });
+      const leader = (leaderResp as any)?.data?.data;
+      if (!leader) {
+        message.error('Could not load AI employee.');
+        return;
+      }
+      const existing = Array.isArray(leader.skillSettings?.skills) ? leader.skillSettings.skills : [];
+      if (existing.some((s: any) => (typeof s === 'string' ? s : s?.name) === toolName)) {
+        message.info('Skill already present.');
+        await refreshEmployees();
+        return;
+      }
+      const nextSkills = [...existing, { name: toolName, autoCall: false }];
+      await api.request({
+        url: 'aiEmployees:update',
+        method: 'put',
+        params: { filterByTk: employeeUsername },
+        data: { skillSettings: { ...(leader.skillSettings || {}), skills: nextSkills } },
+      });
+      message.success(`Added "${toolName}" to ${employeeUsername}'s skills.`);
+      await refreshEmployees();
+    } catch (e: any) {
+      message.error(`Auto-assign failed: ${e?.message || 'unknown error'}`);
+    }
+  };
+
+  const handleAutoAssignSkill = async (record: any) => {
+    await handleAddSkillToEmployee(
+      record.leaderUsername,
+      expectedDelegateToolName(record.leaderUsername, record.subAgentUsername),
+    );
+  };
+
+  const handleAutoAssignDispatchSkill = async (leaderUsername: string) => {
+    await handleAddSkillToEmployee(leaderUsername, expectedDispatchToolName(leaderUsername));
+  };
+
+  const subAgentLeaderCount = React.useMemo(() => {
+    const counts = new Map<string, Set<string>>();
+    for (const rule of rules) {
+      const set = counts.get(rule.subAgentUsername) || new Set<string>();
+      set.add(rule.leaderUsername);
+      counts.set(rule.subAgentUsername, set);
+    }
+    return counts;
+  }, [rules]);
+
+  const aliasConflicts = React.useMemo(() => {
+    return Array.from(subAgentLeaderCount.entries())
+      .filter(([, leaders]) => leaders.size > 1)
+      .map(([sub, leaders]) => ({ sub, leaders: Array.from(leaders) }));
+  }, [subAgentLeaderCount]);
+
   const groupedRules = React.useMemo(() => {
     const groups = new Map<string, any[]>();
     for (const rule of rules) {
       const key = rule.leaderUsername || 'unknown';
-      if (!groups.has(key)) {
-        groups.set(key, []);
+      let items = groups.get(key);
+      if (!items) {
+        items = [];
+        groups.set(key, items);
       }
-      groups.get(key)!.push(rule);
+      items.push(rule);
     }
 
     return Array.from(groups.entries()).map(([leaderUsername, items]) => ({
@@ -65,7 +154,7 @@ export const RulesTab: React.FC = () => {
       form.setFieldsValue(record);
     } else {
       form.resetFields();
-      form.setFieldsValue({ enabled: true, maxDepth: 1, timeout: 120000 });
+      form.setFieldsValue({ enabled: true, maxDepth: 1, timeout: 120000, recursionLimit: 50 });
     }
     setVisible(true);
   };
@@ -126,9 +215,7 @@ export const RulesTab: React.FC = () => {
       title: 'Leader (Orchestrator)',
       dataIndex: 'leaderUsername',
       key: 'leaderUsername',
-      render: (username: string) => (
-        <Tag color="blue">{employeeMap.get(username) || username}</Tag>
-      ),
+      render: (username: string) => <Tag color="blue">{employeeMap.get(username) || username}</Tag>,
     },
     {
       title: '',
@@ -140,9 +227,7 @@ export const RulesTab: React.FC = () => {
       title: 'Sub-Agent',
       dataIndex: 'subAgentUsername',
       key: 'subAgentUsername',
-      render: (username: string) => (
-        <Tag color="green">{employeeMap.get(username) || username}</Tag>
-      ),
+      render: (username: string) => <Tag color="green">{employeeMap.get(username) || username}</Tag>,
     },
     {
       title: 'Max Depth',
@@ -157,6 +242,30 @@ export const RulesTab: React.FC = () => {
       key: 'timeout',
       width: 100,
       render: (v: number) => `${((v ?? 120000) / 1000).toFixed(0)}s`,
+    },
+    {
+      title: 'LLM Override',
+      key: 'llmOverride',
+      width: 140,
+      render: (_: any, record: any) => {
+        if (record.llmService && record.model) {
+          const svc = llmServices.find((s: any) => s.llmService === record.llmService);
+          const svcName = svc ? svc.llmServiceTitle : record.llmService;
+          return (
+            <Space direction="vertical" size={0}>
+              <Text style={{ fontSize: 12 }}>{svcName}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {record.model}
+              </Text>
+            </Space>
+          );
+        }
+        return (
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Inherited
+          </Text>
+        );
+      },
     },
     {
       title: 'Enabled',
@@ -180,6 +289,41 @@ export const RulesTab: React.FC = () => {
       ),
     },
     {
+      title: 'Skill',
+      key: 'skill',
+      width: 150,
+      render: (_: any, record: any) => {
+        const expected = expectedDelegateToolName(record.leaderUsername, record.subAgentUsername);
+        const leaderSkills = skillsMap.get(record.leaderUsername);
+        if (!leaderSkills) {
+          return (
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              —
+            </Text>
+          );
+        }
+        const present = leaderSkills.has(expected);
+        if (present) {
+          return <Tag color="success">Assigned</Tag>;
+        }
+        return (
+          <Space size={4}>
+            <Tag icon={<WarningOutlined />} color="warning">
+              Missing
+            </Tag>
+            <Button
+              type="link"
+              size="small"
+              icon={<ThunderboltOutlined />}
+              onClick={() => handleAutoAssignSkill(record)}
+            >
+              Auto-add
+            </Button>
+          </Space>
+        );
+      },
+    },
+    {
       title: 'Actions',
       key: 'actions',
       width: 160,
@@ -200,6 +344,28 @@ export const RulesTab: React.FC = () => {
 
   const leaderUsername = Form.useWatch('leaderUsername', form);
 
+  const missingSkillCount = React.useMemo(() => {
+    return rules.reduce((acc: number, r: any) => {
+      const leaderSkills = skillsMap.get(r.leaderUsername);
+      if (!leaderSkills) return acc;
+      const expected = expectedDelegateToolName(r.leaderUsername, r.subAgentUsername);
+      return leaderSkills.has(expected) ? acc : acc + 1;
+    }, 0);
+  }, [rules, skillsMap]);
+
+  const missingDispatchSkills = React.useMemo(() => {
+    return groupedRules
+      .map((group) => {
+        const leaderSkills = skillsMap.get(group.leaderUsername);
+        if (!leaderSkills) return null;
+        const toolName = expectedDispatchToolName(group.leaderUsername);
+        return leaderSkills.has(toolName)
+          ? null
+          : { leaderUsername: group.leaderUsername, toolName, count: group.items.length };
+      })
+      .filter(Boolean) as Array<{ leaderUsername: string; toolName: string; count: number }>;
+  }, [groupedRules, skillsMap]);
+
   return (
     <div>
       <Alert
@@ -214,6 +380,79 @@ export const RulesTab: React.FC = () => {
           </Text>
         }
       />
+
+      {missingSkillCount > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${missingSkillCount} rule${missingSkillCount > 1 ? 's' : ''} missing required skill assignment`}
+          description={
+            <Text type="secondary">
+              The Leader employee hasn&apos;t added the corresponding{' '}
+              <Text code>delegate_&lt;leader&gt;_to_&lt;sub&gt;</Text> tool to its skillSettings, so the LLM cannot
+              actually call these sub-agents. Use the <b>Auto-add</b> button in the Skill column to fix.
+            </Text>
+          }
+        />
+      )}
+
+      {missingDispatchSkills.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${missingDispatchSkills.length} leader${
+            missingDispatchSkills.length > 1 ? 's' : ''
+          } missing dispatch skill assignment`}
+          description={
+            <Space direction="vertical" size={6}>
+              <Text type="secondary">
+                The fan-out tool lets a Leader dispatch multiple independent sub-tasks in one call. Add it to the
+                Leader&apos;s skills to enable the new multi-agent flow.
+              </Text>
+              {missingDispatchSkills.map(({ leaderUsername, toolName, count }) => (
+                <Space key={leaderUsername} size={8} wrap>
+                  <Tag color="blue">{employeeMap.get(leaderUsername) || leaderUsername}</Tag>
+                  <Text type="secondary">
+                    {count} sub-agent{count > 1 ? 's' : ''}
+                  </Text>
+                  <Text code>{toolName}</Text>
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<ThunderboltOutlined />}
+                    onClick={() => handleAutoAssignDispatchSkill(leaderUsername)}
+                  >
+                    Auto-add
+                  </Button>
+                </Space>
+              ))}
+            </Space>
+          }
+        />
+      )}
+
+      {aliasConflicts.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Legacy delegate_to_<sub> alias is no longer registered for these sub-agents"
+          description={
+            <Space direction="vertical" size={2}>
+              {aliasConflicts.map(({ sub, leaders }) => (
+                <Text key={sub} type="secondary">
+                  <Tag color="green">{employeeMap.get(sub) || sub}</Tag>
+                  has multiple leaders ({leaders.map((l) => employeeMap.get(l) || l).join(', ')}). The legacy alias is
+                  dropped to avoid ambiguity — leaders must use <Text code>delegate_&lt;leader&gt;_to_&lt;sub&gt;</Text>{' '}
+                  in their skills.
+                </Text>
+              ))}
+            </Space>
+          }
+        />
+      )}
 
       <Card bordered={false}>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
@@ -230,7 +469,12 @@ export const RulesTab: React.FC = () => {
               label: (
                 <Space>
                   <Tag color="blue">{employeeMap.get(group.leaderUsername) || group.leaderUsername}</Tag>
-                  <Text type="secondary">{group.items.length} sub-agent{group.items.length > 1 ? 's' : ''}</Text>
+                  <Text type="secondary">
+                    {group.items.length} sub-agent{group.items.length > 1 ? 's' : ''}
+                  </Text>
+                  {missingDispatchSkills.some((item) => item.leaderUsername === group.leaderUsername) && (
+                    <Tag color="warning">Dispatch missing</Tag>
+                  )}
                 </Space>
               ),
               children: (
@@ -289,10 +533,7 @@ export const RulesTab: React.FC = () => {
             rules={[{ required: true, message: 'Please select a Sub-Agent' }]}
             tooltip="The AI Employee that will receive delegated tasks"
           >
-            <AIEmployeeSelect
-              placeholder="Select Sub-Agent AI Employee..."
-              exclude={leaderUsername}
-            />
+            <AIEmployeeSelect placeholder="Select Sub-Agent AI Employee..." exclude={leaderUsername} />
           </Form.Item>
 
           <Form.Item
@@ -309,6 +550,63 @@ export const RulesTab: React.FC = () => {
             tooltip="Maximum time in milliseconds for the sub-agent to complete its task"
           >
             <InputNumber min={10000} max={600000} step={10000} style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="recursionLimit"
+            label="Recursion Limit"
+            tooltip="Max LangGraph reasoning steps per delegation. Higher = more complex multi-step tasks; lower = stricter cap on token usage. Default 50."
+          >
+            <InputNumber min={5} max={200} step={5} style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="llmService"
+            label="Override LLM Service"
+            tooltip="Optional: Provider name. Leave empty to inherit from Leader."
+          >
+            <Select
+              allowClear
+              placeholder="Inherit from Leader"
+              loading={llmLoading}
+              options={llmServices.map((svc: any) => ({
+                label: svc.llmServiceTitle || svc.llmService,
+                value: svc.llmService,
+              }))}
+              onChange={() => form.setFieldValue('model', undefined)}
+            />
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prevValues, currentValues) => prevValues.llmService !== currentValues.llmService}
+          >
+            {() => {
+              const selectedServiceId = form.getFieldValue('llmService');
+              const selectedService = llmServices.find((s: any) => s.llmService === selectedServiceId);
+              const availableModels = Array.isArray(selectedService?.enabledModels)
+                ? selectedService.enabledModels
+                : [];
+
+              return (
+                <Form.Item
+                  name="model"
+                  label="Override Model"
+                  tooltip="Optional: Model name. Leave empty to inherit from Leader."
+                  rules={[{ required: !!selectedServiceId, message: 'Please select a model' }]}
+                >
+                  <Select
+                    allowClear
+                    placeholder={selectedServiceId ? 'Select a model' : 'Inherit from Leader'}
+                    disabled={!selectedServiceId}
+                    options={availableModels.map((m: any) => ({
+                      label: m.label,
+                      value: m.value,
+                    }))}
+                  />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
 
           <Form.Item name="enabled" label="Enabled" valuePropName="checked">

@@ -1,0 +1,262 @@
+import React, { useEffect, useState } from 'react';
+import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, Tag, Alert } from 'antd';
+import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useAPIClient } from '@nocobase/client';
+import { useT } from '../locale';
+
+interface ReviewFlow {
+  id: number;
+  name: string;
+  enabled: boolean;
+  triggerMode: string;
+  aiEmployeeUsername?: string;
+  postMode: string;
+  repositoryId?: number;
+}
+
+type Target =
+  | { type: 'mr'; repositoryId: number; mrIid: number; title?: string }
+  | { type: 'commit'; repositoryId: number; commitSha: string; title?: string }
+  | { type: 'branch'; repositoryId: number; branch: string; title?: string };
+
+/**
+ * Button that lets the user kick off a code review for a given target.
+ * Two paths:
+ *  - "Run review" → POST gitManager:triggerReview (server-side, async)
+ *  - "Open chat" → call useChatBoxActions().triggerTask if plugin-ai is loaded,
+ *    so the user can chat with the AI employee using the same context.
+ */
+export const RunReviewButton: React.FC<{
+  target: Target;
+  size?: 'small' | 'middle' | 'large';
+  type?: 'default' | 'primary' | 'link';
+  onTriggered?: (reviewId: number) => void;
+}> = ({ target, size = 'small', type = 'default', onTriggered }) => {
+  const t = useT();
+  const api = useAPIClient();
+  const [open, setOpen] = useState(false);
+  const [flows, setFlows] = useState<ReviewFlow[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [existingReview, setExistingReview] = useState<any | null>(null);
+  const [form] = Form.useForm();
+
+  // Look up existing review for this MR target — used to label the button as "Re-run"
+  useEffect(() => {
+    if (target.type !== 'mr') return;
+    let cancelled = false;
+    api
+      .request({
+        url: 'gitCodeReviews:list',
+        params: {
+          pageSize: 1,
+          filter: {
+            repositoryId: target.repositoryId,
+            targetType: 'mr',
+            mrIid: target.mrIid,
+          },
+        },
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const list = res?.data?.data || [];
+        setExistingReview(list[0] || null);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [api, target]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    api
+      .request({
+        url: 'gitReviewFlows:list',
+        params: {
+          pageSize: 100,
+          filter: {
+            enabled: true,
+            $or: [{ repositoryId: target.repositoryId }, { repositoryId: null }],
+          },
+        },
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const list: ReviewFlow[] = res?.data?.data || [];
+        setFlows(list);
+        // Pre-select the most specific enabled flow
+        const repoFlow = list.find((f) => f.repositoryId === target.repositoryId);
+        const fallback = list[0];
+        const flowId = repoFlow?.id ?? fallback?.id;
+        if (flowId) form.setFieldValue('flowId', flowId);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, api, target.repositoryId, form]);
+
+  const handleRun = async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      const params: any = {
+        repositoryId: target.repositoryId,
+        targetType: target.type,
+        flowId: values.flowId,
+        extraInstructions: values.extraInstructions || undefined,
+      };
+      if (target.type === 'mr') params.mrIid = target.mrIid;
+      if (target.type === 'commit') params.commitSha = target.commitSha;
+      if (target.type === 'branch') params.branch = target.branch;
+      const res = await api.request({
+        url: 'gitManager:triggerReview',
+        method: 'post',
+        data: params,
+      });
+      const reviewId = res?.data?.data?.reviewId;
+      message.success(t('Review started'));
+      setOpen(false);
+      form.resetFields();
+      onTriggered?.(reviewId);
+    } catch (err: any) {
+      if (err?.errorFields) return; // validation error
+      message.error(err?.response?.data?.errors?.[0]?.message || err?.message || t('Failed to trigger review'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleOpenChat = () => {
+    const aiManager = (api.app as any)?.aiManager;
+    if (!aiManager) {
+      message.warning(t('AI plugin is not available'));
+      return;
+    }
+    message.info(t('Open the AI Employee floating button and select a workflow'));
+  };
+
+  const buildContextHint = () => {
+    if (target.type === 'mr') return `MR !${target.mrIid}`;
+    if (target.type === 'commit') return `Commit ${String(target.commitSha).slice(0, 7)}`;
+    return `Branch ${target.branch}`;
+  };
+
+  // Derive re-run state for MR targets
+  const hasNewCommits =
+    existingReview &&
+    existingReview.headSha &&
+    existingReview.latestSha &&
+    existingReview.headSha !== existingReview.latestSha;
+  const isReReview = !!existingReview && existingReview.status !== 'pending';
+  const buttonLabel = isReReview
+    ? hasNewCommits
+      ? t('Re-review (new commits)')
+      : t('Re-run review')
+    : t('Code Review');
+  const ButtonIcon = isReReview ? ReloadOutlined : RobotOutlined;
+
+  const items = [
+    {
+      key: 'run',
+      icon: <ThunderboltOutlined />,
+      label: isReReview ? t('Re-run automated review') : t('Run automated review'),
+      onClick: () => setOpen(true),
+    },
+    {
+      key: 'chat',
+      icon: <MessageOutlined />,
+      label: t('Ask AI Employee'),
+      onClick: handleOpenChat,
+    },
+  ];
+
+  return (
+    <>
+      <Dropdown menu={{ items }} placement="bottomRight" trigger={['click']}>
+        <Button
+          size={size}
+          type={hasNewCommits ? 'primary' : type}
+          icon={<ButtonIcon />}
+          danger={!!hasNewCommits}
+        >
+          {buttonLabel}
+        </Button>
+      </Dropdown>
+      <Modal
+        title={
+          <Space>
+            <RobotOutlined />
+            <span>{isReReview ? t('Re-run code review') : t('Run code review')}</span>
+            <span style={{ color: '#999', fontSize: 12, fontWeight: 400 }}>{buildContextHint()}</span>
+          </Space>
+        }
+        open={open}
+        onCancel={() => setOpen(false)}
+        onOk={handleRun}
+        okText={isReReview ? t('Re-run') : t('Start Review')}
+        confirmLoading={submitting}
+        destroyOnClose
+      >
+        {isReReview && (
+          <Alert
+            type={hasNewCommits ? 'warning' : 'info'}
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={
+              hasNewCommits
+                ? t('New commits detected since last review. Re-running will overwrite the existing review.')
+                : t('A review already exists for this target. Re-running will overwrite it.')
+            }
+            description={
+              <Space size={8} wrap style={{ fontSize: 12 }}>
+                {existingReview?.headSha && (
+                  <span>
+                    {t('Reviewed at')}:&nbsp;
+                    <Tag style={{ fontFamily: 'monospace' }}>{String(existingReview.headSha).slice(0, 7)}</Tag>
+                  </span>
+                )}
+                {hasNewCommits && existingReview?.latestSha && (
+                  <span>
+                    {t('Latest')}:&nbsp;
+                    <Tag color="orange" style={{ fontFamily: 'monospace' }}>
+                      {String(existingReview.latestSha).slice(0, 7)}
+                    </Tag>
+                  </span>
+                )}
+              </Space>
+            }
+          />
+        )}
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="flowId"
+            label={t('Review Flow')}
+            rules={[{ required: true, message: t('Please select a review flow') }]}
+            extra={
+              flows.length === 0 ? (
+                <Tooltip title={t('Create a review flow in the Review Flows tab first')}>
+                  <span style={{ color: '#faad14' }}>{t('No enabled flow found for this repository')}</span>
+                </Tooltip>
+              ) : null
+            }
+          >
+            <Select
+              options={flows.map((f) => ({
+                value: f.id,
+                label: `${f.name}${f.aiEmployeeUsername ? ` — @${f.aiEmployeeUsername}` : ''}${
+                  f.repositoryId == null ? ` (${t('global')})` : ''
+                }`,
+              }))}
+              placeholder={t('Select a review flow')}
+            />
+          </Form.Item>
+          <Form.Item name="extraInstructions" label={t('Extra instructions (optional)')}>
+            <Input.TextArea rows={4} placeholder={t('e.g. Focus on security issues in authentication')} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </>
+  );
+};

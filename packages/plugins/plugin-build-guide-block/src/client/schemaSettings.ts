@@ -1,6 +1,7 @@
 import { useFieldSchema } from '@formily/react';
 import { SchemaSettings, useDesignable } from '@nocobase/client';
 import { useT } from './locale';
+import { SpaceSelect } from './components/SpaceSelect';
 
 export const userGuideBlockSettings = new SchemaSettings({
   name: 'userGuideBlockSettings',
@@ -24,18 +25,7 @@ export const userGuideBlockSettings = new SchemaSettings({
                 title: t('Space'),
                 type: 'string',
                 'x-decorator': 'FormItem',
-                'x-component': 'RemoteSelect',
-                'x-component-props': {
-                  showSearch: true,
-                  fieldNames: { label: 'title', value: 'id' },
-                  service: {
-                    resource: 'aiBuildGuideSpaces',
-                    action: 'list',
-                    params: {
-                      filter: { status: 'completed' },
-                    },
-                  },
-                },
+                'x-component': SpaceSelect,
                 default: currentSpaceId,
                 required: true,
               },

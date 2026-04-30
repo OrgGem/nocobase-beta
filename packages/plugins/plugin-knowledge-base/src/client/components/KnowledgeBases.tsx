@@ -29,6 +29,8 @@ import {
   Card,
   Row,
   Col,
+  InputNumber,
+  List,
 } from 'antd';
 import {
   PlusOutlined,
@@ -44,6 +46,7 @@ import {
   FileTextOutlined,
   SettingOutlined,
   MenuUnfoldOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 
 const { Text, Title } = Typography;
@@ -85,6 +88,10 @@ export const KnowledgeBases: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [docsLoading, setDocsLoading] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
+  const [kbSearchQuery, setKbSearchQuery] = useState('');
+  const [kbSearchLoading, setKbSearchLoading] = useState(false);
+  const [kbSearchResults, setKbSearchResults] = useState<any[]>([]);
+  const [kbSearchTopK, setKbSearchTopK] = useState(5);
 
   const [vectorStores, setVectorStores] = useState<any[]>([]);
   const [roleOptions, setRoleOptions] = useState<any[]>([]);
@@ -364,6 +371,36 @@ export const KnowledgeBases: React.FC = () => {
     }
   };
 
+  const handleKnowledgeSearch = async () => {
+    if (!selectedKB || !kbSearchQuery.trim()) {
+      message.warning('Enter a search query first');
+      return;
+    }
+
+    setKbSearchLoading(true);
+    try {
+      const res = await api.request({
+        url: 'aiKnowledgeBase:search',
+        method: 'post',
+        data: {
+          values: {
+            query: kbSearchQuery,
+            knowledgeBaseIds: [selectedKB.id],
+            topK: kbSearchTopK,
+            candidateK: Math.max(kbSearchTopK * 4, 20),
+            scoreThreshold: 0.3,
+            rerank: true,
+          },
+        },
+      });
+      setKbSearchResults(res?.data?.data?.data ?? []);
+    } catch {
+      message.error('Search failed');
+    } finally {
+      setKbSearchLoading(false);
+    }
+  };
+
   // Renders
   const renderSidebar = () => {
     const filtered = knowledgeBases.filter((kb) => kb.name.toLowerCase().includes(searchText.toLowerCase()));
@@ -595,6 +632,62 @@ export const KnowledgeBases: React.FC = () => {
     );
   };
 
+  const renderSearchTab = () => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <Input.Search
+          value={kbSearchQuery}
+          placeholder="Search this knowledge base..."
+          enterButton={
+            <Button type="primary" icon={<SearchOutlined />} loading={kbSearchLoading}>
+              Search
+            </Button>
+          }
+          allowClear
+          onChange={(e) => setKbSearchQuery(e.target.value)}
+          onSearch={handleKnowledgeSearch}
+          style={{ maxWidth: 720 }}
+        />
+        <Space>
+          <Text type="secondary">Top K</Text>
+          <InputNumber min={1} max={20} value={kbSearchTopK} onChange={(value) => setKbSearchTopK(value || 5)} />
+        </Space>
+      </div>
+
+      {kbSearchLoading ? (
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          <Spin />
+        </div>
+      ) : kbSearchResults.length === 0 ? (
+        <Empty description="No search results" />
+      ) : (
+        <List
+          itemLayout="vertical"
+          dataSource={kbSearchResults}
+          renderItem={(item: any, index) => (
+            <List.Item key={item.id ?? index}>
+              <List.Item.Meta
+                title={
+                  <Space>
+                    <Text strong>#{index + 1}</Text>
+                    <Tag color="blue">rerank {Number(item.rerankScore ?? item.score ?? 0).toFixed(3)}</Tag>
+                    <Tag>vector {Number(item.vectorScore ?? item.score ?? 0).toFixed(3)}</Tag>
+                    {item.metadata?.source && <Text type="secondary">{item.metadata.source}</Text>}
+                  </Space>
+                }
+                description={
+                  <Typography.Paragraph ellipsis={{ rows: 4, expandable: true }} style={{ marginBottom: 0 }}>
+                    {item.content}
+                  </Typography.Paragraph>
+                }
+              />
+            </List.Item>
+          )}
+        />
+      )}
+    </div>
+  );
+
   const formFields = (
     formObj: any,
     currentType: string,
@@ -811,6 +904,13 @@ export const KnowledgeBases: React.FC = () => {
                     <div style={{ padding: '24px 32px', overflowY: 'auto', height: '100%' }}>
                       {renderDocumentsTab()}
                     </div>
+                  ),
+                },
+                {
+                  key: 'search',
+                  label: 'Search',
+                  children: (
+                    <div style={{ padding: '24px 32px', overflowY: 'auto', height: '100%' }}>{renderSearchTab()}</div>
                   ),
                 },
                 {

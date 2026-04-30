@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Tag, Button, Typography, Space, Tooltip, Popconfirm, message } from 'antd';
 import { ReloadOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPIClient, Upload } from '@nocobase/client';
@@ -35,8 +35,8 @@ export const ExecutionHistory: React.FC = () => {
           appends: ['skill', 'triggeredBy'],
         },
       });
-      const responseData = data?.data?.data || data?.data || [];
-      setExecutions(responseData);
+      const rawData = data?.data?.data ?? data?.data ?? [];
+      setExecutions(Array.isArray(rawData) ? rawData : []);
       setTotal(data?.meta?.count || 0);
     } catch {
       // ignore
@@ -101,7 +101,7 @@ export const ExecutionHistory: React.FC = () => {
       width: 250,
       render: (files: any[], record: any) => {
         files = parseJsonText(files, []);
-        if (!files?.length) return '-';
+        if (!Array.isArray(files) || !files.length) return '-';
         const formattedFiles = files.map((f, i) => ({
           id: `${record.id}-${f.name}-${i}`,
           title: f.name,

@@ -279,7 +279,12 @@ export class SkillExecutionTask {
     let code = template;
     for (const [key, value] of Object.entries(args)) {
       const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+      // Raw injection — use for simple scalar values (canvas_format, transition, etc.)
       code = code.replaceAll(`{{${key}}}`, serialized);
+      // Safe base64 injection — use for fields that may contain quotes/newlines (slides_svg, title, etc.)
+      // Template placeholder: {{key_b64}}
+      const b64 = Buffer.from(serialized, 'utf-8').toString('base64');
+      code = code.replaceAll(`{{${key}_b64}}`, b64);
     }
     // Inject outputDir so code templates can use {{outputDir}}
     code = code.replaceAll('{{outputDir}}', this.fileManager.getOutputDir(execId).replace(/\\/g, '/'));

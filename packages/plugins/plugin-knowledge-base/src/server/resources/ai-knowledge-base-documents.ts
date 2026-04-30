@@ -9,6 +9,7 @@
 
 import { Context } from '@nocobase/actions';
 import PluginKnowledgeBaseServer from '../plugin';
+import { getAuthUserId, getCurrentRoles, isAdminRole, sameId } from '../utils/access';
 
 /**
  * Helper: get plugin instance via class reference (avoids fragile string-based lookup).
@@ -28,9 +29,9 @@ async function checkKBAccess(
   ctx: Context,
   knowledgeBaseId: string,
 ): Promise<{ hasAccess: boolean; isAdmin: boolean; kbData?: any }> {
-  const userId = ctx.auth?.user?.id;
-  const roles = ctx.state?.currentRoles ?? [];
-  const isAdmin = roles.includes('root') || roles.includes('admin');
+  const userId = getAuthUserId(ctx);
+  const roles = getCurrentRoles(ctx);
+  const isAdmin = isAdminRole(roles);
 
   if (isAdmin) {
     return { hasAccess: true, isAdmin };
@@ -45,7 +46,7 @@ async function checkKBAccess(
   const kbData = kb.toJSON();
   const hasAccess =
     kbData.accessLevel === 'PUBLIC' ||
-    (kbData.accessLevel === 'BASIC' && kbData.ownerId === userId) ||
+    (kbData.accessLevel === 'BASIC' && sameId(kbData.ownerId, userId)) ||
     (kbData.accessLevel === 'SHARED' && kbData.allowedRoles?.some((r: string) => roles.includes(r)));
 
   return { hasAccess: !!hasAccess, isAdmin, kbData };
@@ -60,9 +61,9 @@ export default {
       const { filter = {}, sort, page, pageSize } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
-      const userId = ctx.auth?.user?.id;
-      const roles = ctx.state?.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
+      const userId = getAuthUserId(ctx);
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
 
       // If filtering by knowledgeBaseId, check KB access first
       if (filter.knowledgeBaseId && !isAdmin) {
@@ -112,14 +113,24 @@ export default {
 
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
       // Always derive userId from the authenticated session — never trust client-provided userId
-      const userId = ctx.auth?.user?.id;
-      const roles = ctx.state.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
+      const userId = getAuthUserId(ctx);
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
+
+      if (!values.knowledgeBaseId) {
+        ctx.throw(400, 'knowledgeBaseId is required');
+        return;
+      }
 
       // Check upload permission based on KB access level
       if (values.knowledgeBaseId) {
         const kbRepo = ctx.db.getRepository('aiKnowledgeBases');
         const kb = await kbRepo.findOne({ filter: { id: values.knowledgeBaseId } });
+
+        if (!kb) {
+          ctx.throw(404, 'Knowledge base not found');
+          return;
+        }
 
         if (kb) {
           const kbData = kb.toJSON();
@@ -130,7 +141,7 @@ export default {
             return;
           }
 
-          if (kbData.accessLevel === 'BASIC' && kbData.ownerId !== userId) {
+          if (kbData.accessLevel === 'BASIC' && !sameId(kbData.ownerId, userId)) {
             ctx.throw(403, 'Only the owner can upload documents to a personal knowledge base');
             return;
           }
@@ -189,9 +200,9 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
-      const userId = ctx.auth?.user?.id;
-      const roles = ctx.state?.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
+      const userId = getAuthUserId(ctx);
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
 
       // Find the document to check its KB's access level
       const doc = await repo.findOne({ filterByTk });
@@ -208,11 +219,16 @@ export default {
           return;
         }
 
-        // For BASIC KBs, only owner can delete
-        // For SHARED KBs, only uploaders can delete their own docs (or users with uploadRoles)
+        // For PUBLIC KBs, only admins can delete. For SHARED KBs, only uploaders
+        // can delete their own docs (or users with uploadRoles).
+        if (kbData?.accessLevel === 'PUBLIC') {
+          ctx.throw(403, 'Only administrators can delete public knowledge base documents');
+          return;
+        }
+
         if (kbData?.accessLevel === 'SHARED') {
           const canUpload = kbData.uploadRoles?.some((r: string) => roles.includes(r));
-          const isUploader = docData.uploadedById === userId;
+          const isUploader = sameId(docData.uploadedById, userId);
           if (!canUpload && !isUploader) {
             ctx.throw(403, 'You do not have permission to delete this document');
             return;
@@ -230,8 +246,8 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
-      const roles = ctx.state?.currentRoles ?? [];
-      const isAdmin = roles.includes('root') || roles.includes('admin');
+      const roles = getCurrentRoles(ctx);
+      const isAdmin = isAdminRole(roles);
 
       // Check permission: same as upload (need write access to the KB)
       if (!isAdmin) {
@@ -242,6 +258,10 @@ export default {
             const { hasAccess, kbData } = await checkKBAccess(ctx, docData.knowledgeBaseId);
             if (!hasAccess) {
               ctx.throw(403, 'You do not have permission to reprocess this document');
+              return;
+            }
+            if (kbData?.accessLevel === 'PUBLIC') {
+              ctx.throw(403, 'Only administrators can reprocess public knowledge base documents');
               return;
             }
             if (kbData?.accessLevel === 'SHARED') {

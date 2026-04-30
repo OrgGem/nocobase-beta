@@ -5,6 +5,8 @@ import { getHtml } from './actions/getHtml';
 import { getMarkdown } from './actions/getMarkdown';
 
 export class PluginBuildGuideBlockServer extends Plugin {
+  private readonly schemaCollections = ['aiBuildGuideSpaces', 'aiBuildGuidePages'];
+
   afterAdd() {}
 
   beforeLoad() {}
@@ -31,6 +33,8 @@ export class PluginBuildGuideBlockServer extends Plugin {
         'aiBuildGuideSpaces:list',
         'aiBuildGuideSpaces:get',
         'aiBuildGuideSpaces:build',
+        'aiBuildGuidePages:list',
+        'aiBuildGuidePages:get',
       ],
     });
 
@@ -39,6 +43,15 @@ export class PluginBuildGuideBlockServer extends Plugin {
       try {
         const repo = this.db.getRepository('aiBuildGuideSpaces');
         await repo.update({
+          filter: { status: 'building' },
+          values: {
+            status: 'error',
+            buildPhase: 'error',
+            buildLog: 'Build interrupted by server restart',
+          },
+        });
+        const pageRepo = this.db.getRepository('aiBuildGuidePages');
+        await pageRepo.update({
           filter: { status: 'building' },
           values: {
             status: 'error',
@@ -51,26 +64,60 @@ export class PluginBuildGuideBlockServer extends Plugin {
     });
   }
 
-  async install(options?: InstallOptions) {
-    const collection = this.db.getCollection('aiBuildGuideSpaces');
-    if (collection) {
-      await collection.model.sync();
+  private async ensureCollectionSchema(collectionName: string) {
+    const collection = this.db.getCollection(collectionName);
+    if (!collection) {
+      this.app.logger.warn(`[plugin-build-guide-block] Collection "${collectionName}" is not registered`);
+      return;
     }
-    const repo = this.db.getRepository<any>('collections');
-    if (repo) {
-      await repo.db2cm('aiBuildGuideSpaces');
+
+    const queryInterface = this.db.sequelize.getQueryInterface();
+    const tableName = collection.getTableNameWithSchema();
+    let columns: Record<string, any> | null = null;
+
+    try {
+      columns = await queryInterface.describeTable(tableName);
+    } catch (error) {
+      await collection.model.sync();
+      columns = await queryInterface.describeTable(tableName);
+    }
+
+    const attributes = collection.model.rawAttributes as Record<string, any>;
+    for (const [attributeName, attribute] of Object.entries(attributes)) {
+      const columnName = attribute.field || attributeName;
+      if (columns[columnName]) {
+        continue;
+      }
+
+      const columnDefinition = { ...attribute };
+      delete columnDefinition.Model;
+      delete columnDefinition.fieldName;
+
+      await queryInterface.addColumn(tableName, columnName, columnDefinition);
+      columns[columnName] = columnDefinition;
+      this.app.logger.info(`[plugin-build-guide-block] Added missing column "${columnName}" to "${collectionName}"`);
     }
   }
 
-  async upgrade() {
-    const collection = this.db.getCollection('aiBuildGuideSpaces');
-    if (collection) {
-      await collection.model.sync();
+  private async ensureSchema() {
+    for (const collectionName of this.schemaCollections) {
+      await this.ensureCollectionSchema(collectionName);
     }
+
     const repo = this.db.getRepository<any>('collections');
     if (repo) {
-      await repo.db2cm('aiBuildGuideSpaces');
+      for (const collectionName of this.schemaCollections) {
+        await repo.db2cm(collectionName);
+      }
     }
+  }
+
+  async install(options?: InstallOptions) {
+    await this.ensureSchema();
+  }
+
+  async upgrade() {
+    await this.ensureSchema();
   }
 
   async afterEnable() {}

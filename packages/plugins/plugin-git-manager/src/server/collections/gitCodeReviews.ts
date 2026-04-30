@@ -1,0 +1,191 @@
+import { defineCollection } from '@nocobase/database';
+
+export default defineCollection({
+  name: 'gitCodeReviews',
+  title: 'Git Code Reviews',
+  autoGenId: true,
+  createdBy: true,
+  updatedBy: true,
+  createdAt: true,
+  updatedAt: true,
+  fields: [
+    {
+      type: 'belongsTo',
+      name: 'flow',
+      target: 'gitReviewFlows',
+      foreignKey: 'flowId',
+      interface: 'm2o',
+      uiSchema: {
+        title: 'Flow',
+        'x-component': 'AssociationField',
+        'x-component-props': { fieldNames: { label: 'name', value: 'id' } },
+      },
+    },
+    {
+      type: 'belongsTo',
+      name: 'repository',
+      target: 'gitRepositories',
+      foreignKey: 'repositoryId',
+      interface: 'm2o',
+      uiSchema: {
+        title: 'Repository',
+        'x-component': 'AssociationField',
+        'x-component-props': { fieldNames: { label: 'name', value: 'id' } },
+      },
+    },
+    {
+      type: 'string',
+      name: 'targetType',
+      interface: 'select',
+      uiSchema: {
+        title: 'Target Type',
+        type: 'string',
+        'x-component': 'Select',
+        enum: [
+          { value: 'mr', label: 'Merge Request' },
+          { value: 'commit', label: 'Commit' },
+          { value: 'branch', label: 'Branch' },
+        ],
+      },
+    },
+    {
+      type: 'integer',
+      name: 'mrIid',
+      interface: 'integer',
+      uiSchema: { title: 'MR IID', type: 'number', 'x-component': 'InputNumber' },
+    },
+    {
+      type: 'string',
+      name: 'commitSha',
+      interface: 'input',
+      uiSchema: { title: 'Commit SHA', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'branch',
+      interface: 'input',
+      uiSchema: { title: 'Branch', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'headSha',
+      interface: 'input',
+      uiSchema: { title: 'Reviewed SHA', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'latestSha',
+      interface: 'input',
+      uiSchema: { title: 'Latest SHA', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'triggeredBy',
+      defaultValue: 'manual',
+      interface: 'input',
+      uiSchema: { title: 'Triggered By', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'status',
+      defaultValue: 'pending',
+      interface: 'select',
+      uiSchema: {
+        title: 'Status',
+        type: 'string',
+        'x-component': 'Select',
+        enum: [
+          { value: 'pending', label: 'Pending' },
+          { value: 'running', label: 'Running' },
+          { value: 'completed', label: 'Completed' },
+          { value: 'failed', label: 'Failed' },
+        ],
+      },
+    },
+    {
+      type: 'text',
+      length: 'long',
+      name: 'reviewMarkdown',
+      interface: 'vditor',
+      uiSchema: {
+        title: 'Review Content',
+        type: 'string',
+        'x-component': 'MarkdownVditor',
+      },
+    },
+    {
+      type: 'json',
+      name: 'metadata',
+      interface: 'json',
+      uiSchema: {
+        title: 'Metadata',
+        type: 'object',
+        'x-component': 'Input.JSON',
+      },
+    },
+    {
+      type: 'string',
+      name: 'postStatus',
+      defaultValue: 'pending_approval',
+      interface: 'select',
+      uiSchema: {
+        title: 'Post Status',
+        type: 'string',
+        'x-component': 'Select',
+        enum: [
+          { value: 'pending_approval', label: 'Pending Approval' },
+          { value: 'approved', label: 'Approved' },
+          { value: 'posted', label: 'Posted' },
+          { value: 'skipped', label: 'Skipped' },
+          { value: 'rejected', label: 'Rejected' },
+        ],
+      },
+    },
+    {
+      type: 'string',
+      name: 'postedNoteId',
+      interface: 'input',
+    },
+    {
+      type: 'string',
+      name: 'approvedBy',
+      interface: 'input',
+    },
+    {
+      type: 'date',
+      name: 'approvedAt',
+      interface: 'datetime',
+    },
+    {
+      type: 'integer',
+      name: 'durationMs',
+      interface: 'integer',
+    },
+    {
+      type: 'date',
+      name: 'startedAt',
+      interface: 'datetime',
+    },
+    {
+      type: 'date',
+      name: 'finishedAt',
+      interface: 'datetime',
+    },
+    {
+      type: 'text',
+      name: 'error',
+      interface: 'textarea',
+    },
+    {
+      type: 'text',
+      length: 'long',
+      name: 'rawOutput',
+      interface: 'textarea',
+    },
+    {
+      type: 'string',
+      name: 'sessionId',
+      interface: 'input',
+    },
+  ],
+});

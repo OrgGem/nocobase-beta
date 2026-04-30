@@ -39,6 +39,23 @@ export default defineCollection({
       defaultValue: 120000,
       comment: 'Timeout in ms for sub-agent execution',
     },
+    {
+      name: 'recursionLimit',
+      type: 'integer',
+      defaultValue: 50,
+      comment:
+        'Max LangGraph reasoning steps (tool-call + LLM-step iterations) per delegation. Lower = safer; higher = more complex multi-step tasks. Default 50.',
+    },
+    {
+      name: 'llmService',
+      type: 'string',
+      comment: 'Optional overridden LLM provider for the sub-agent',
+    },
+    {
+      name: 'model',
+      type: 'string',
+      comment: 'Optional overridden model for the sub-agent',
+    },
   ],
   indexes: [
     {

@@ -1,11 +1,18 @@
 import React, { useEffect } from 'react';
 import { Tabs, Select, Space, Typography, Tag, theme } from 'antd';
-import { BranchesOutlined, FolderOutlined, HistoryOutlined, ToolOutlined, DatabaseOutlined } from '@ant-design/icons';
+import {
+  BranchesOutlined, FolderOutlined, HistoryOutlined, ToolOutlined, DatabaseOutlined, MergeOutlined,
+  RobotOutlined, AuditOutlined, ClockCircleOutlined,
+} from '@ant-design/icons';
 import { GitManagerProvider, useGitManager } from '../context/GitManagerContext';
 import { RepositoryConfig } from './RepositoryConfig';
 import { FileExplorer } from './FileExplorer';
 import { CommitHistory } from './CommitHistory';
+import { MergeRequests } from './MergeRequests';
 import { GitOperations } from './GitOperations';
+import { ReviewFlows } from './ReviewFlows';
+import { ReviewHistory } from './ReviewHistory';
+import { PollingStatus } from './PollingStatus';
 import { useT } from '../locale';
 
 const { Text } = Typography;
@@ -100,6 +107,15 @@ const GitManagerContent: React.FC = () => {
             children: <CommitHistory />,
           },
           {
+            key: 'merge-requests',
+            label: (
+              <span>
+                <MergeOutlined /> {t('Merge Requests')}
+              </span>
+            ),
+            children: <MergeRequests />,
+          },
+          {
             key: 'operations',
             label: (
               <span>
@@ -107,6 +123,33 @@ const GitManagerContent: React.FC = () => {
               </span>
             ),
             children: <GitOperations />,
+          },
+          {
+            key: 'review-flows',
+            label: (
+              <span>
+                <RobotOutlined /> {t('Review Flows')}
+              </span>
+            ),
+            children: <ReviewFlows />,
+          },
+          {
+            key: 'review-history',
+            label: (
+              <span>
+                <AuditOutlined /> {t('Review History')}
+              </span>
+            ),
+            children: <ReviewHistory />,
+          },
+          {
+            key: 'polling',
+            label: (
+              <span>
+                <ClockCircleOutlined /> {t('Polling')}
+              </span>
+            ),
+            children: <PollingStatus />,
           },
         ]}
       />

@@ -3,6 +3,9 @@ import { defineCollection } from '@nocobase/database';
 export default defineCollection({
   name: 'gitRepositories',
   title: 'Git Repositories',
+  autoGenId: true,
+  createdAt: true,
+  updatedAt: true,
   fields: [
     {
       type: 'string',
@@ -15,6 +18,12 @@ export default defineCollection({
       name: 'repoUrl',
       interface: 'input',
       uiSchema: { title: 'Repository URL', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'username',
+      interface: 'input',
+      uiSchema: { title: 'Username', type: 'string', 'x-component': 'Input' },
     },
     {
       type: 'string',
@@ -40,6 +49,18 @@ export default defineCollection({
       name: 'status',
       defaultValue: 'disconnected',
       interface: 'input',
+    },
+    {
+      type: 'boolean',
+      name: 'autoReview',
+      defaultValue: false,
+      interface: 'checkbox',
+      uiSchema: { title: 'Auto Review', type: 'boolean', 'x-component': 'Checkbox' },
+    },
+    {
+      type: 'date',
+      name: 'lastPolledAt',
+      interface: 'datetime',
     },
   ],
 });

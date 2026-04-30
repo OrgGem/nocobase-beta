@@ -1,4 +1,4 @@
-import { Plugin, RemoteSelect } from '@nocobase/client';
+import { Plugin } from '@nocobase/client';
 import { UserGuideManager } from './UserGuideManager';
 import { UserGuideBlockProvider } from './UserGuideBlockProvider';
 import { UserGuideBlockInitializer } from './UserGuideBlockInitializer';
@@ -9,6 +9,7 @@ import { BuildButton } from './components/BuildButton';
 import { LLMServiceSelect } from './components/LLMServiceSelect';
 import { ModelSelect } from './components/ModelSelect';
 import { StatusTag } from './components/StatusTag';
+import { SpaceSelect } from './components/SpaceSelect';
 import { namespace } from './locale';
 
 export class PluginBuildGuideBlockClient extends Plugin {
@@ -20,7 +21,7 @@ export class PluginBuildGuideBlockClient extends Plugin {
       LLMServiceSelect,
       ModelSelect,
       StatusTag,
-      RemoteSelect,
+      SpaceSelect,
     });
 
     this.app.schemaSettingsManager.add(userGuideBlockSettings);
