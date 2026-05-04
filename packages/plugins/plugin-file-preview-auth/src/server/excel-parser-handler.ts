@@ -86,7 +86,7 @@ export class ExcelParserHandler implements InternalParserHandler {
   }
 
   async parse(attachment: AttachmentLike, ctx: Context): Promise<InternalParseResult> {
-    const docParserPlugin = (ctx.app as any).pm?.get('@nocobase/plugin-document-parser') as any;
+    const docParserPlugin = ((ctx.app as any).pm?.get('@nocobase/plugin-document-parser') || (ctx.app as any).pm?.get('plugin-document-parser')) as any;
     if (!docParserPlugin?.fetchFileBuffer) {
       ctx.log?.warn?.('[ExcelParser] plugin-document-parser not available — cannot fetch file bytes');
       return { text: '', handled: false };

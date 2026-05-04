@@ -17,7 +17,7 @@ export class PluginUserMemoryClient extends Plugin {
 
   async load() {
     // Register plugin settings page
-    this.app.pluginSettingsManager.add(this.name, {
+    this.app.pluginSettingsManager.add('plugin-user-memory', {
       title: '{{t("User Memory")}}',
       icon: 'BulbOutlined',
       Component: MemorySettingsPage,

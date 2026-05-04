@@ -18,10 +18,10 @@
     "@nocobase/plugin-ai": "2.x"
   },
   "devDependencies": {
-    "@nocobase/client": "workspace:*",
-    "@nocobase/server": "workspace:*",
-    "@nocobase/database": "workspace:*",
-    "@nocobase/plugin-ai": "workspace:*",
-    "@nocobase/test": "workspace:*"
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/test": "2.x"
   }
 }

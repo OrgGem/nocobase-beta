@@ -1,0 +1,1137 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nocobase
+---
+# ==========================================
+# Orchestrator RBAC
+# ==========================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nocobase-orchestrator
+  namespace: nocobase
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nocobase-orchestrator
+  namespace: nocobase
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "create", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nocobase-orchestrator
+  namespace: nocobase
+subjects:
+  - kind: ServiceAccount
+    name: nocobase-orchestrator
+    namespace: nocobase
+roleRef:
+  kind: Role
+  name: nocobase-orchestrator
+  apiGroup: rbac.authorization.k8s.io
+---
+# ==========================================
+# 1. ConfigMap và Secret
+# ==========================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nocobase-config
+  namespace: nocobase
+data:
+  APP_ENV: "production"
+  DB_DIALECT: "postgres"
+  DB_HOST: "postgres"
+  DB_PORT: "5432"
+  DB_DATABASE: "nocobase"
+  DB_USER: "nocobase"
+  DB_LOGGING: "off"
+  CACHE_DEFAULT_STORE: "redis"
+  CACHE_REDIS_URL: "redis://redis:6379/0"
+  REDIS_URL: "redis://redis:6379/1"
+  PUBSUB_ADAPTER: "redis"
+  PUBSUB_ADAPTER_REDIS_URL: "redis://redis:6379/2"
+  QUEUE_ADAPTER: "redis"
+  QUEUE_ADAPTER_REDIS_URL: "redis://redis:6379/3"
+  LOCK_ADAPTER_DEFAULT: "redis"
+  LOCK_ADAPTER_REDIS_URL: "redis://redis:6379/4"
+  ORCHESTRATOR_ADAPTER: "kubernetes"
+  APPEND_PRESET_LOCAL_PLUGINS: "plugin-cluster-manager"
+  LOGGER_LEVEL: "debug"
+  LOGGER_TRANSPORT: "console,dailyRotateFile"
+  TZ: "UTC"
+  NOCOBASE_VERSION: "2.0.46-full"
+  SKIP_SAME_VERSION_UPGRADE: "true"
+  GIT_REPOS_BASE_PATH: "/app/nocobase/storage/git-repo"
+  ELASTICSEARCH_URL: "http://elasticsearch:9200"
+  SFTP_HOST: "sftp"
+  SFTP_PORT: "22"
+  CARBONE_URL: "http://carbone:4000"
+  NPM_REGISTRY_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/npm/"
+  APT_MIRROR_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/debian/"
+  PYPI_INDEX_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/pypi-simple/"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nocobase-secret
+  namespace: nocobase
+type: Opaque
+stringData:
+  APP_KEY: "change-this-secret-key"
+  ENCRYPTION_FIELD_KEY: "change-this-encryption-key"
+  DB_PASSWORD: "nocobase-db-password"
+  MINIO_ROOT_USER: "admin"
+  MINIO_ROOT_PASSWORD: "password123"
+  ELASTIC_PASSWORD: "elastic-password-change-me"
+  SFTP_USER: "sftpuser"
+  SFTP_PASSWORD: "sftp-password-change-me"
+  CARBONE_EE_STUDIO_TOKEN: "change-this-carbone-token"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nocobase-scripts
+  namespace: nocobase
+data:
+  hotfix-license.js: |
+    const fs = require('fs');
+    const path = require('path');
+    function hotfixLicenseKit() {
+      const targetPath = path.resolve(process.cwd(), 'node_modules/@nocobase/license-kit/index.js');
+      if (!fs.existsSync(targetPath)) return;
+      let content = fs.readFileSync(targetPath, 'utf8');
+      if (content.includes('[Offline Bypass]')) return;
+      const targetRegex = /if\s*\(!nativeBinding\)\s*\{\s*if\s*\(loadError\)\s*\{\s*throw\s*loadError\s*\}\s*throw\s*new\s*Error\(`Failed to load native binding`\)\s*\}/g;
+      const replacementCode = `if (!nativeBinding) {
+      console.warn('[Offline Bypass] @nocobase/license-kit native binding not found. Using mock implementation.');
+      nativeBinding = {
+        getEnvAsync: async () => ({ sys: 'mock', osVer: 'mock', db: { id: 'mock' } }),
+        getInstanceIdWithPublicKeyAsync: async () => 'mock-id',
+        getInstanceIdAsync: async () => 'mock-id',
+        instanceIdDecrypt: () => 'mock',
+        createKeyPair: () => ({ publicKey: 'mock', privateKey: 'mock' }),
+        encryptWithPublicKey: () => 'mock',
+        encrypt: () => 'mock',
+        decryptWithPrivateKey: () => 'mock',
+        createSignature: () => 'mock',
+        verifySignature: () => true,
+        keyEncrypt: () => 'mock',
+        keyDecrypt: () => JSON.stringify({
+          accessKeyId: 'mock-user',
+          accessKeySecret: 'mock-pass',
+          licenseKey: { domain: '*' },
+          instanceData: { sys: 'mock', osVer: 'mock', db: { id: 'mock' } }
+        }),
+      };
+    }`;
+      if (!targetRegex.test(content)) return;
+      content = content.replace(targetRegex, replacementCode);
+      fs.writeFileSync(targetPath, content, 'utf8');
+    }
+    hotfixLicenseKit();
+
+  upgrade-with-lock.js: |
+    /**
+     * Wraps `yarn nocobase upgrade` with a Postgres advisory lock so that
+     * only ONE node in the cluster runs upgrade at a time.
+     *
+     * Behavior:
+     *   1. Connect to Postgres using the same env vars NocoBase uses.
+     *   2. Try pg_try_advisory_lock(777100).
+     *   3. If acquired → run `yarn nocobase upgrade` → release lock.
+     *   4. If NOT acquired → poll every 5s until the lock is free
+     *      (meaning the other node finished), then skip upgrade.
+     *
+     * Advisory lock 777100 is session-scoped: auto-released if the
+     * holder crashes or disconnects.
+     */
+    const { execSync } = require('child_process');
+    const { Client } = require('pg');
+
+    const LOCK_ID = 777100;
+    const POLL_INTERVAL_MS = 5000;
+    const MAX_WAIT_MS = 600000; // 10 minutes
+
+    async function main() {
+      const client = new Client({
+        host:     process.env.DB_HOST,
+        port:     parseInt(process.env.DB_PORT || '5432', 10),
+        database: process.env.DB_DATABASE,
+        user:     process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+      });
+
+      await client.connect();
+      console.log('[upgrade-lock] Connected to Postgres');
+
+      try {
+        // Try to acquire the advisory lock (non-blocking)
+        const { rows } = await client.query(
+          `SELECT pg_try_advisory_lock(${LOCK_ID}) AS locked`
+        );
+        const acquired = rows[0].locked === true;
+
+        if (acquired) {
+          console.log('[upgrade-lock] Lock acquired — this node will run upgrade');
+          try {
+            execSync('yarn nocobase upgrade', {
+              cwd: process.cwd(),
+              stdio: 'inherit',
+              env: process.env,
+            });
+            console.log('[upgrade-lock] Upgrade completed successfully');
+          } finally {
+            await client.query(`SELECT pg_advisory_unlock(${LOCK_ID})`);
+            console.log('[upgrade-lock] Lock released');
+          }
+        } else {
+          console.log('[upgrade-lock] Another node is running upgrade — waiting...');
+          let waited = 0;
+          while (waited < MAX_WAIT_MS) {
+            await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+            waited += POLL_INTERVAL_MS;
+            const check = await client.query(
+              `SELECT pg_try_advisory_lock(${LOCK_ID}) AS locked`
+            );
+            if (check.rows[0].locked === true) {
+              // Lock is free now → the other node finished
+              await client.query(`SELECT pg_advisory_unlock(${LOCK_ID})`);
+              console.log(`[upgrade-lock] Other node finished after ${waited / 1000}s — skipping upgrade`);
+              break;
+            }
+            console.log(`[upgrade-lock] Still waiting... (${waited / 1000}s)`);
+          }
+          if (waited >= MAX_WAIT_MS) {
+            console.error('[upgrade-lock] Timed out waiting for upgrade lock!');
+            process.exit(1);
+          }
+        }
+      } finally {
+        await client.end();
+      }
+    }
+
+  LOGGER_TRANSPORT: "console,dailyRotateFile"
+  TZ: "UTC"
+  NOCOBASE_VERSION: "2.0.46-full"
+  SKIP_SAME_VERSION_UPGRADE: "true"
+  GIT_REPOS_BASE_PATH: "/app/nocobase/storage/git-repo"
+  ELASTICSEARCH_URL: "http://elasticsearch:9200"
+  SFTP_HOST: "sftp"
+  SFTP_PORT: "22"
+  CARBONE_URL: "http://carbone:4000"
+  NPM_REGISTRY_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/npm/"
+  APT_MIRROR_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/ubuntu/"
+  PYPI_INDEX_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/pypi-simple/"
+  NPM_REGISTRY_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/npm/"
+  APT_MIRROR_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/ubuntu/"
+  PYPI_INDEX_URL: "http://nginx-cache-registry.nocobase.svc.cluster.local/pypi-simple/"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: nocobase-secret
+  namespace: nocobase
+type: Opaque
+stringData:
+  APP_KEY: "change-this-secret-key"
+  ENCRYPTION_FIELD_KEY: "change-this-encryption-key"
+  DB_PASSWORD: "nocobase-db-password"
+  MINIO_ROOT_USER: "admin"
+  MINIO_ROOT_PASSWORD: "password123"
+  ELASTIC_PASSWORD: "elastic-password-change-me"
+  SFTP_USER: "sftpuser"
+  SFTP_PASSWORD: "sftp-password-change-me"
+  CARBONE_EE_STUDIO_TOKEN: "change-this-carbone-token"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nocobase-scripts
+  namespace: nocobase
+data:
+  hotfix-license.js: |
+    const fs = require('fs');
+    const path = require('path');
+    function hotfixLicenseKit() {
+      const targetPath = path.resolve(process.cwd(), 'node_modules/@nocobase/license-kit/index.js');
+      if (!fs.existsSync(targetPath)) return;
+      let content = fs.readFileSync(targetPath, 'utf8');
+      if (content.includes('[Offline Bypass]')) return;
+      const targetRegex = /if\s*\(!nativeBinding\)\s*\{\s*if\s*\(loadError\)\s*\{\s*throw\s*loadError\s*\}\s*throw\s*new\s*Error\(`Failed to load native binding`\)\s*\}/g;
+      const replacementCode = `if (!nativeBinding) {
+      console.warn('[Offline Bypass] @nocobase/license-kit native binding not found. Using mock implementation.');
+      nativeBinding = {
+        getEnvAsync: async () => ({ sys: 'mock', osVer: 'mock', db: { id: 'mock' } }),
+        getInstanceIdWithPublicKeyAsync: async () => 'mock-id',
+        getInstanceIdAsync: async () => 'mock-id',
+        instanceIdDecrypt: () => 'mock',
+        createKeyPair: () => ({ publicKey: 'mock', privateKey: 'mock' }),
+        encryptWithPublicKey: () => 'mock',
+        encrypt: () => 'mock',
+        decryptWithPrivateKey: () => 'mock',
+        createSignature: () => 'mock',
+        verifySignature: () => true,
+        keyEncrypt: () => 'mock',
+        keyDecrypt: () => JSON.stringify({
+          accessKeyId: 'mock-user',
+          accessKeySecret: 'mock-pass',
+          licenseKey: { domain: '*' },
+          instanceData: { sys: 'mock', osVer: 'mock', db: { id: 'mock' } }
+        }),
+      };
+    }`;
+      if (!targetRegex.test(content)) return;
+      content = content.replace(targetRegex, replacementCode);
+      fs.writeFileSync(targetPath, content, 'utf8');
+    }
+    hotfixLicenseKit();
+
+  upgrade-with-lock.js: |
+    /**
+     * Wraps `yarn nocobase upgrade` with a Postgres advisory lock so that
+     * only ONE node in the cluster runs upgrade at a time.
+     *
+     * Behavior:
+     *   1. Connect to Postgres using the same env vars NocoBase uses.
+     *   2. Try pg_try_advisory_lock(777100).
+     *   3. If acquired → run `yarn nocobase upgrade` → release lock.
+     *   4. If NOT acquired → poll every 5s until the lock is free
+     *      (meaning the other node finished), then skip upgrade.
+     *
+     * Advisory lock 777100 is session-scoped: auto-released if the
+     * holder crashes or disconnects.
+     */
+    const { execSync } = require('child_process');
+    const { Client } = require('pg');
+
+    const LOCK_ID = 777100;
+    const POLL_INTERVAL_MS = 5000;
+    const MAX_WAIT_MS = 600000; // 10 minutes
+
+    async function main() {
+      const client = new Client({
+        host:     process.env.DB_HOST,
+        port:     parseInt(process.env.DB_PORT || '5432', 10),
+        database: process.env.DB_DATABASE,
+        user:     process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+      });
+
+      await client.connect();
+      console.log('[upgrade-lock] Connected to Postgres');
+
+      try {
+        // Try to acquire the advisory lock (non-blocking)
+        const { rows } = await client.query(
+          `SELECT pg_try_advisory_lock(${LOCK_ID}) AS locked`
+        );
+        const acquired = rows[0].locked === true;
+
+        if (acquired) {
+          console.log('[upgrade-lock] Lock acquired — this node will run upgrade');
+          try {
+            execSync('yarn nocobase upgrade', {
+              cwd: process.cwd(),
+              stdio: 'inherit',
+              env: process.env,
+            });
+            console.log('[upgrade-lock] Upgrade completed successfully');
+          } finally {
+            await client.query(`SELECT pg_advisory_unlock(${LOCK_ID})`);
+            console.log('[upgrade-lock] Lock released');
+          }
+        } else {
+          console.log('[upgrade-lock] Another node is running upgrade — waiting...');
+          let waited = 0;
+          while (waited < MAX_WAIT_MS) {
+            await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+            waited += POLL_INTERVAL_MS;
+            const check = await client.query(
+              `SELECT pg_try_advisory_lock(${LOCK_ID}) AS locked`
+            );
+            if (check.rows[0].locked === true) {
+              // Lock is free now → the other node finished
+              await client.query(`SELECT pg_advisory_unlock(${LOCK_ID})`);
+              console.log(`[upgrade-lock] Other node finished after ${waited / 1000}s — skipping upgrade`);
+              break;
+            }
+            console.log(`[upgrade-lock] Still waiting... (${waited / 1000}s)`);
+          }
+          if (waited >= MAX_WAIT_MS) {
+            console.error('[upgrade-lock] Timed out waiting for upgrade lock!');
+            process.exit(1);
+          }
+        }
+      } finally {
+        await client.end();
+      }
+    }
+
+    main().catch(err => {
+      console.error('[upgrade-lock] Fatal error:', err);
+      process.exit(1);
+    });
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-cache-config
+  namespace: nocobase
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+    http {
+        proxy_cache_path /var/cache/nginx/packages levels=1:2 keys_zone=package_cache:10m max_size=20g inactive=30d use_temp_path=off;
+
+        server {
+            listen 80;
+
+            # --- NPM Cache ---
+            location /npm/ {
+                proxy_pass https://registry.npmjs.org/;
+                proxy_cache package_cache;
+                proxy_cache_valid 200 302 7d;
+                proxy_cache_valid 404 1m;
+                proxy_cache_use_stale error timeout updating http_500 http_502 http_503 http_504;
+                proxy_set_header Host registry.npmjs.org;
+                proxy_ssl_server_name on;
+                proxy_ssl_name registry.npmjs.org;
+            }
+
+            # --- APT Debian Cache ---
+            location /debian/ {
+                proxy_pass http://deb.debian.org/debian/;
+                proxy_cache package_cache;
+                proxy_cache_valid 200 302 7d;
+                proxy_cache_valid 404 1m;
+                proxy_set_header Host deb.debian.org;
+            }
+
+            # --- APT Ubuntu Cache ---
+            location /ubuntu/ {
+                proxy_pass http://archive.ubuntu.com/ubuntu/;
+                proxy_cache package_cache;
+                proxy_cache_valid 200 302 7d;
+                proxy_cache_valid 404 1m;
+                proxy_set_header Host archive.ubuntu.com;
+            }
+
+            # --- PyPI Cache ---
+            location /pypi-simple/ {
+                proxy_pass https://pypi.org/simple/;
+                proxy_cache package_cache;
+                proxy_cache_valid 200 302 1d;
+                proxy_cache_valid 404 1m;
+                proxy_set_header Host pypi.org;
+                proxy_ssl_server_name on;
+                proxy_ssl_name pypi.org;
+                proxy_set_header Accept-Encoding ""; # Force uncompressed HTML to allow sub_filter
+                # Modify PyPI HTML to point to our proxy for file downloads
+                sub_filter 'https://files.pythonhosted.org' 'http://$host/pypi-files';
+                sub_filter_once off;
+            }
+
+            location /pypi-files/ {
+                proxy_pass https://files.pythonhosted.org/;
+                proxy_cache package_cache;
+                proxy_cache_valid 200 302 30d; # Wheels rarely change
+                proxy_set_header Host files.pythonhosted.org;
+                proxy_ssl_server_name on;
+                proxy_ssl_name files.pythonhosted.org;
+            }
+        }
+    }
+# 2. Persistent Volume Claims
+# ==========================================
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-data
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sftp-data
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: carbone-templates
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: carbone-renders
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: app-storage
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nginx-cache-data
+  namespace: nocobase
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+
+# ==========================================
+# 3. Infrastructure: Postgres, Redis, MinIO
+# ==========================================
+---
+# Postgres
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine 
+          args:
+            - postgres
+            - -c
+            - wal_level=logical
+            - -c
+            - max_connections=200
+            - -c
+            - shared_buffers=256MB
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: nocobase-config
+            - secretRef:
+                name: nocobase-secret
+          env:
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef:
+                  name: nocobase-config
+                  key: DB_DATABASE
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: nocobase-config
+                  key: DB_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nocobase-secret
+                  key: DB_PASSWORD
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: nocobase
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
+# Redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:8-alpine
+          args: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru", "--appendonly", "yes"]
+          ports:
+            - containerPort: 6379
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: nocobase
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+---
+# MinIO
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          envFrom:
+            - secretRef:
+                name: nocobase-secret
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: nocobase
+spec:
+  type: NodePort
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      nodePort: 30900
+    - name: console
+      port: 9001
+      nodePort: 30901
+---
+# Elasticsearch
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticsearch
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command: ["sh", "-c", "chown -R 1000:1000 /usr/share/elasticsearch/data"]
+          volumeMounts:
+            - name: elasticsearch-data
+              mountPath: /usr/share/elasticsearch/data
+        - name: increase-vm-max-map
+          image: busybox
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.17.4
+          ports:
+            - containerPort: 9200
+            - containerPort: 9300
+          env:
+            - name: discovery.type
+              value: "single-node"
+            - name: ES_JAVA_OPTS
+              value: "-Xms512m -Xmx512m"
+            - name: xpack.security.enabled
+              value: "true"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nocobase-secret
+                  key: ELASTIC_PASSWORD
+          resources:
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: elasticsearch-data
+              mountPath: /usr/share/elasticsearch/data
+      volumes:
+        - name: elasticsearch-data
+          persistentVolumeClaim:
+            claimName: elasticsearch-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: nocobase
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+    - name: transport
+      port: 9300
+---
+# SFTP
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sftp
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sftp
+  template:
+    metadata:
+      labels:
+        app: sftp
+    spec:
+      containers:
+        - name: sftp
+          image: atmoz/sftp:alpine
+          args:
+            - "$(SFTP_USER):$(SFTP_PASSWORD):1001:1001:upload"
+          ports:
+            - containerPort: 22
+          env:
+            - name: SFTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: nocobase-secret
+                  key: SFTP_USER
+            - name: SFTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nocobase-secret
+                  key: SFTP_PASSWORD
+          volumeMounts:
+            - name: sftp-data
+              mountPath: /home/sftpuser/upload
+      volumes:
+        - name: sftp-data
+          persistentVolumeClaim:
+            claimName: sftp-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sftp
+  namespace: nocobase
+spec:
+  type: NodePort
+  selector:
+    app: sftp
+  ports:
+    - name: ssh
+      port: 22
+---
+# ==========================================
+# Carbone.io — document template render engine
+# Used by plugin-carbone-template-manager.
+# Image: https://hub.docker.com/r/carbone/carbone-ee
+# Free tier when no license is provided.
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: carbone
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: carbone
+  template:
+    metadata:
+      labels:
+        app: carbone
+    spec:
+      containers:
+        - name: carbone
+          image: carbone/carbone-ee:latest
+          ports:
+            - containerPort: 4000
+          env:
+            - name: CARBONE_EE_PORT
+              value: "4000"
+            - name: CARBONE_EE_AUTHENTICATION
+              value: "true"
+            - name: CARBONE_EE_FACTORIES
+              value: "1"
+            - name: CARBONE_EE_STUDIO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nocobase-secret
+                  key: CARBONE_EE_STUDIO_TOKEN
+          resources:
+            limits:
+              memory: 1Gi
+            requests:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: 4000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          volumeMounts:
+            - name: carbone-templates
+              mountPath: /app/template
+            - name: carbone-renders
+              mountPath: /app/render
+      volumes:
+        - name: carbone-templates
+          persistentVolumeClaim:
+            claimName: carbone-templates
+        - name: carbone-renders
+          persistentVolumeClaim:
+            claimName: carbone-renders
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: carbone
+  namespace: nocobase
+spec:
+  selector:
+    app: carbone
+  ports:
+    - name: http
+      port: 4000
+      targetPort: 4000
+      nodePort: 30022
+
+---
+# Nginx Cache Registry
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-cache-registry
+  namespace: nocobase
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-cache-registry
+  template:
+    metadata:
+      labels:
+        app: nginx-cache-registry
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.25-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: nginx-cache-data
+              mountPath: /var/cache/nginx/packages
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-cache-config
+        - name: nginx-cache-data
+          persistentVolumeClaim:
+            claimName: nginx-cache-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-cache-registry
+  namespace: nocobase
+spec:
+  selector:
+    app: nginx-cache-registry
+  ports:
+    - port: 80
+
+# ==========================================
+# 4. NocoBase App Cluster
+# ==========================================
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-primary
+  namespace: nocobase
+spec:
+  # Increase this value for multi-app mode. Workers are created and scaled
+  # from the Cluster Manager plugin, not from this bootstrap manifest.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-primary
+  template:
+    metadata:
+      labels:
+        app: app-primary
+        role: app
+    spec:
+      serviceAccountName: nocobase-orchestrator
+      containers:
+        - name: nocobase
+          image: nocobase/nocobase:2.0.46-full
+          command:
+            - /bin/sh
+            - -c
+            - |
+              export NOCOBASE_RUNNING_IN_DOCKER=true
+              # NOTE: OS/pip/npm packages (including git) are managed by the
+              # Cluster Manager plugin's PackageInstaller tab. There is no need
+              # to pre-install them here; the plugin broadcasts installs to every
+              # node via Redis PubSub on demand.
+              if [ ! -d /app/nocobase ]; then mkdir /app/nocobase; fi
+              if [ ! -f /app/nocobase/package.json ]; then
+                echo "copying..."
+                tar -zxf /app/nocobase.tar.gz --absolute-names -C /app/nocobase
+                touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
+              fi
+              echo "Applying license hotfix..."
+              cd /app/nocobase && node /hotfix-license.js
+              yarn nocobase postinstall
+              yarn nocobase db:auth
+              node /upgrade-with-lock.js
+              exec yarn start
+          ports:
+            - containerPort: 13000
+          envFrom:
+            - configMapRef:
+                name: nocobase-config
+            - secretRef:
+                name: nocobase-secret
+          env:
+            - name: APP_ROLE
+              value: "app"
+            - name: WORKER_MODE
+              value: "!"
+            - name: APP_PORT
+              value: "13000"
+            - name: SKILL_HUB_SANDBOX
+              value: "false"
+          volumeMounts:
+            - name: app-storage
+              mountPath: /app/nocobase/storage
+            - name: script-volume
+              mountPath: /hotfix-license.js
+              subPath: hotfix-license.js
+            - name: script-volume
+              mountPath: /upgrade-with-lock.js
+              subPath: upgrade-with-lock.js
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: app-storage
+        - name: script-volume
+          configMap:
+            name: nocobase-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-primary
+  namespace: nocobase
+spec:
+  selector:
+    app: app-primary
+  ports:
+    - port: 13000
+
+# ==========================================
+# 5. Workers  (managed entirely by plugin-cluster-manager)
+#
+# ── Container lifecycle (Orchestrator tab) ──────────────────────────────────
+# Worker Deployments are NOT created here. Open Cluster Manager → Orchestrator,
+# create one or more worker stacks (image, replicas, envFrom, volumes, …) and
+# scale them from the UI. The plugin uses the nocobase-orchestrator ServiceAccount
+# and the RBAC defined above to create/patch/delete K8s Deployments at runtime.
+#
+# Default values pre-filled in the "New worker stack" form:
+#   image:              nocobase/nocobase:2.0.46-full
+#   deploymentName:     app-workers
+#   serviceAccountName: nocobase-orchestrator
+#   envFrom:            nocobase-config + nocobase-secret
+#   volumes:            app-storage PVC + nocobase-scripts ConfigMap
+#
+# ── OS / Python / Node dependencies (PackageInstaller tab) ──────────────────
+# System packages such as git, python3, pip modules, and npm globals are NOT
+# pre-installed in this YAML. Use Cluster Manager → Package Installer to push
+# apt/pip/npm installs to every node (app + worker) via Redis PubSub.
+# Each node idempotently checks whether a package is already present before
+# running the installer, so repeated dispatches are safe.
+# ==========================================
+
+# ==========================================
+# 6. Ingress (Nginx Controller Proxy)
+# ==========================================
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nocobase-ingress
+  namespace: nocobase
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "86400"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "86400"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: localhost
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app-primary
+                port:
+                  number: 13000

@@ -42,6 +42,7 @@ export default defineCollection({
       name: 'storage',
       type: 'belongsTo',
       target: 'storages', // Belongs to NocoBase storage configuration
+      foreignKey: 'storageId',
     },
     {
       name: 'packages',

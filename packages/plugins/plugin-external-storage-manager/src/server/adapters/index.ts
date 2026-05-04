@@ -8,5 +8,3 @@
  */
 
 export { IStorageAdapter, FileEntry, PutStreamOptions } from './types';
-export { S3Adapter } from './s3-adapter';
-export { SftpAdapter } from './sftp-adapter';

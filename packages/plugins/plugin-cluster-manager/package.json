@@ -1,0 +1,35 @@
+{
+  "name": "plugin-cluster-manager",
+  "displayName": "Cluster Manager",
+  "displayName.zh-CN": "Cluster Manager",
+  "description": "Cluster node tracking, task orchestration, worker management, and package distribution",
+  "version": "1.0.12",
+  "license": "Apache-2.0",
+  "main": "./dist/server/index.js",
+  "keywords": ["Monitoring", "DevOps"],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x"
+  },
+  "dependencies": {
+    "@nocobase/lock-manager": "2.x",
+    "@kubernetes/client-node": "^0.22.3",
+    "dockerode": "^3.3.5",
+    "redis": "^5.10.0",
+    "redlock": "5.0.0-beta.2",
+    "uuid": "^9.0.1"
+  },
+  "nocobase": {
+    "supportedVersions": ["2.x"],
+    "editionLevel": 0
+  }
+}

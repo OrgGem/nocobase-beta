@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, Tag, Alert } from 'antd';
 import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
@@ -40,20 +40,23 @@ export const RunReviewButton: React.FC<{
   const [existingReview, setExistingReview] = useState<any | null>(null);
   const [form] = Form.useForm();
 
-  // Look up existing review for this MR target — used to label the button as "Re-run"
-  useEffect(() => {
-    if (target.type !== 'mr') return;
+  const loadExistingReview = useCallback(() => {
     let cancelled = false;
+    const filter: any = {
+      repositoryId: target.repositoryId,
+      targetType: target.type,
+    };
+    if (target.type === 'mr') filter.mrIid = target.mrIid;
+    if (target.type === 'commit') filter.commitSha = target.commitSha;
+    if (target.type === 'branch') filter.branch = target.branch;
+
     api
       .request({
         url: 'gitCodeReviews:list',
         params: {
           pageSize: 1,
-          filter: {
-            repositoryId: target.repositoryId,
-            targetType: 'mr',
-            mrIid: target.mrIid,
-          },
+          sort: ['-id'],
+          filter,
         },
       })
       .then((res) => {
@@ -66,6 +69,10 @@ export const RunReviewButton: React.FC<{
       cancelled = true;
     };
   }, [api, target]);
+
+  useEffect(() => {
+    return loadExistingReview();
+  }, [loadExistingReview]);
 
   useEffect(() => {
     if (!open) return;
@@ -119,6 +126,7 @@ export const RunReviewButton: React.FC<{
       message.success(t('Review started'));
       setOpen(false);
       form.resetFields();
+      loadExistingReview();
       onTriggered?.(reviewId);
     } catch (err: any) {
       if (err?.errorFields) return; // validation error
@@ -164,6 +172,14 @@ export const RunReviewButton: React.FC<{
       label: isReReview ? t('Re-run automated review') : t('Run automated review'),
       onClick: () => setOpen(true),
     },
+    ...(existingReview ? [{
+      key: 'view',
+      icon: <RobotOutlined />,
+      label: t(`Status: ${existingReview.status}`) + ' - ' + t('View in Review History tab'),
+      onClick: () => {
+        message.info(t('Please switch to the "Review History" tab to see the details.'));
+      },
+    }] : []),
     {
       key: 'chat',
       icon: <MessageOutlined />,

@@ -14,10 +14,13 @@
 #
 #   Boot order:
 #     1. postgres + redis start and become healthy
-#     2. app-1 starts with --quickstart (runs migrations/install/upgrade)
+#     2. app-1 starts (runs migrations/install/upgrade)
 #     3. app-1 becomes healthy (API responding on :13000)
-#     4. nginx, worker-1, worker-2 start
+#     4. nginx starts
 #
+#   Workers:
+#     Workers are now managed dynamically by plugin-cluster-manager.
+#     app-1 mounts /var/run/docker.sock to manage worker containers.
 # ==============================================================================
 
 x-nocobase-env: &nocobase-env
@@ -44,21 +47,25 @@ x-nocobase-env: &nocobase-env
   # Lock adapter (required for distributed locks)
   LOCK_ADAPTER_DEFAULT: redis
   LOCK_ADAPTER_REDIS_URL: ${LOCK_ADAPTER_REDIS_URL:-redis://redis:6379/4}
+  # Orchestrator
+  ORCHESTRATOR_ADAPTER: ${ORCHESTRATOR_ADAPTER:-docker}
   # Logging
   LOGGER_LEVEL: debug
   LOGGER_TRANSPORT: console,dailyRotateFile
   # Timezone
   TZ: ${TZ:-UTC}
   # Custom plugins
-  APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
+  APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-plugin-cluster-manager}
 
 x-nocobase-base: &nocobase-base
-  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.0.32-full}
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.0.46-full}
   restart: unless-stopped
   networks:
     - nocobase
   volumes:
     - app-storage:/app/nocobase/storage
+    - ../../scripts/hotfix-license.js:/hotfix-license.js:ro
+    - /var/run/docker.sock:/var/run/docker.sock
   depends_on:
     postgres:
       condition: service_healthy
@@ -66,64 +73,7 @@ x-nocobase-base: &nocobase-base
       condition: service_healthy
   init: true
 
-# Worker nodes: inline entrypoint — waits for app-1, starts without --quickstart
-# All $$ are shell variables escaped from Docker Compose interpolation
-x-nocobase-worker: &nocobase-worker
-  <<: *nocobase-base
-  entrypoint: ['/bin/sh', '-c']
-  command:
-    - |
-      echo "COMMIT_HASH: $$(cat /app/commit_hash.txt 2>/dev/null || echo unknown)"
-      export NOCOBASE_RUNNING_IN_DOCKER=true
-      if [ -f /opt/libreoffice24.8.zip ] && [ ! -d /opt/libreoffice24.8 ]; then
-        unzip -q /opt/libreoffice24.8.zip -d /opt/
-      fi
-      if [ -f /opt/instantclient_19_25.zip ] && [ ! -d /opt/instantclient_19_25 ]; then
-        unzip -q /opt/instantclient_19_25.zip -d /opt/
-        echo "/opt/instantclient_19_25" > /etc/ld.so.conf.d/oracle-instantclient.conf
-        ldconfig
-      fi
-      [ ! -d /app/nocobase ] && mkdir /app/nocobase
-      if [ ! -f /app/nocobase/package.json ]; then
-        echo "copying..."
-        tar -zxf /app/nocobase.tar.gz --absolute-names -C /app/nocobase
-        touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
-      fi
-      cd /app/nocobase && yarn nocobase postinstall
-      cd /app/nocobase && yarn nocobase db:auth
-      cd /app/nocobase && yarn nocobase create-nginx-conf
-      cd /app/nocobase && yarn nocobase generate-instance-id
-      rm -rf /etc/nginx/sites-enabled/nocobase.conf
-      ln -s /app/nocobase/storage/nocobase.conf /etc/nginx/sites-enabled/nocobase.conf
-      nginx
-      if [ -d /app/nocobase/storage/scripts ]; then
-        for f in /app/nocobase/storage/scripts/*.sh; do
-          [ -e "$$f" ] || continue
-          echo "Running $$f"
-          sh "$$f"
-        done
-      fi
-      PRIMARY_URL="$${PRIMARY_CHECK_URL:-http://app-1:13000/api/app:getInfo}"
-      MAX_WAIT=300
-      WAITED=0
-      while [ $$WAITED -lt $$MAX_WAIT ]; do
-        if wget -q --spider "$$PRIMARY_URL" 2>/dev/null; then
-          echo "Primary ready after $${WAITED}s, starting worker..."
-          break
-        fi
-        echo "Waiting for primary... ($${WAITED}s/$${MAX_WAIT}s)"
-        sleep 5
-        WAITED=$$(($$WAITED + 5))
-      done
-      [ $$WAITED -ge $$MAX_WAIT ] && echo "WARNING: Primary not ready after $${MAX_WAIT}s, starting anyway..."
-      exec yarn --cwd /app/nocobase start
-  depends_on:
-    postgres:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
-    app-1:
-      condition: service_healthy
+
 
 networks:
   nocobase:
@@ -139,6 +89,10 @@ volumes:
   nginx-cache:
     driver: local
   minio-data:
+    driver: local
+  carbone-templates:
+    driver: local
+  carbone-renders:
     driver: local
 
 
@@ -311,14 +265,16 @@ services:
       retries: 3
 
   # ============================================================================
-  # PRIMARY App - Runs migrations/install/upgrade via --quickstart
-  # This is the ONLY node that touches the migrations table
+  # PRIMARY App - Runs migrations/install/upgrade via yarn nocobase upgrade
+  # This is the ONLY node that touches the migrations table on boot
   # ============================================================================
   app-1:
     <<: *nocobase-base
     container_name: app-1
+    command: ['/bin/sh', '-c', 'node /hotfix-license.js && yarn nocobase upgrade && yarn start']
     environment:
       <<: *nocobase-env
+      APP_ROLE: 'app'
       WORKER_MODE: '!'
       APP_PORT: 13000
       SKILL_HUB_SANDBOX: "false"
@@ -329,47 +285,7 @@ services:
       retries: 20
       start_period: 180s
 
-  # ============================================================================
-  # Workers - Wait for app-1, then start WITHOUT --quickstart
-  # ============================================================================
-  worker-1:
-    <<: *nocobase-worker
-    environment:
-      <<: *nocobase-env
-      WORKER_MODE: '*'
-      APP_PORT: 13000
-      SKILL_HUB_SANDBOX: "false"
-    deploy:
-      resources:
-        limits:
-          memory: 1536M
 
-  worker-2:
-    <<: *nocobase-worker
-    environment:
-      <<: *nocobase-env
-      WORKER_MODE: '*'
-      APP_PORT: 13000
-      SKILL_HUB_SANDBOX: "false"
-    deploy:
-      resources:
-        limits:
-          memory: 1536M
-
-  # ============================================================================
-  # Dedicated Sandbox Worker
-  # ============================================================================
-  worker-sandbox:
-    <<: *nocobase-worker
-    environment:
-      <<: *nocobase-env
-      WORKER_MODE: '*'
-      APP_PORT: 13000
-      SKILL_HUB_SANDBOX: "true"
-    deploy:
-      resources:
-        limits:
-          memory: 2G
 
   # ============================================================================
   # Redis 7
@@ -453,3 +369,39 @@ services:
       - minio-data:/data
     networks:
       - nocobase
+
+  # ============================================================================
+  # Carbone.io — document template render engine
+  # Used by plugin-carbone-template-manager.
+  # Image: https://hub.docker.com/r/carbone/carbone-ee
+  # Free tier when no license is provided. NocoBase reaches it via the
+  # `nocobase` network at http://carbone:4000.
+  # ============================================================================
+  carbone:
+    image: carbone/carbone-ee:latest
+    container_name: carbone
+    restart: unless-stopped
+    environment:
+      # When this token is set, Carbone requires Bearer auth on every request.
+      # Configure the same value under Plugin Settings → Carbone Template Manager.
+      CARBONE_EE_STUDIO_TOKEN: ${CARBONE_EE_STUDIO_TOKEN:-}
+      CARBONE_EE_AUTHENTICATION: ${CARBONE_EE_AUTHENTICATION:-true}
+      CARBONE_EE_FACTORIES: ${CARBONE_EE_FACTORIES:-1}
+      CARBONE_EE_PORT: '4000'
+    ports:
+      - '${CARBONE_PORT:-4000}:4000'
+    volumes:
+      - carbone-templates:/app/template
+      - carbone-renders:/app/render
+    networks:
+      - nocobase
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1:4000/status']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G

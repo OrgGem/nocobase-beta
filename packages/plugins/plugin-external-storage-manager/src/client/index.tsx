@@ -15,46 +15,63 @@ import { NAMESPACE } from '../constants';
 const FileBrowser = React.lazy(() => import('./components/FileBrowser'));
 const DirectoryManager = React.lazy(() => import('./components/DirectoryManager'));
 
-/**
- * Main settings page with tabs for Settings (directory config) and Browse Files.
- */
-const ExternalStorageSettingsPage: React.FC = () => {
+const FileBrowserPage = () => {
   return (
-    <Tabs
-      defaultActiveKey="browse"
-      items={[
-        {
-          key: 'browse',
-          label: 'Browse Files',
-          children: (
-            <React.Suspense fallback={<div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>}>
-              <FileBrowser />
-            </React.Suspense>
-          ),
-        },
-        {
-          key: 'settings',
-          label: 'Settings',
-          children: (
-            <React.Suspense fallback={<div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>}>
-              <DirectoryManager />
-            </React.Suspense>
-          ),
-        },
-      ]}
-    />
+    <div style={{ padding: 24 }}>
+      <React.Suspense fallback={<div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>}>
+        <FileBrowser />
+      </React.Suspense>
+    </div>
   );
 };
+
+import PluginACLClient from '@nocobase/plugin-acl/client';
+import { ExternalStoragePermissions } from './components/ExternalStoragePermissions';
 
 export class PluginExternalStorageManagerClient extends Plugin {
   async load() {
     this.app.pluginSettingsManager.add(NAMESPACE, {
-      title: 'External Storage Manager',
+      title: 'External Storage',
       icon: 'HddOutlined',
-      Component: ExternalStorageSettingsPage,
+    });
+
+    this.app.pluginSettingsManager.add(`${NAMESPACE}.browse`, {
+      title: 'Browse Files',
+      Component: FileBrowserPage,
+      aclSnippet: `pm.plugin-external-storage-manager.browse`,
+    });
+
+    this.app.pluginSettingsManager.add(`${NAMESPACE}.settings`, {
+      title: 'Directory Settings',
+      Component: () => (
+        <React.Suspense fallback={<div style={{ padding: 40, textAlign: 'center' }}>Loading...</div>}>
+          <DirectoryManager />
+        </React.Suspense>
+      ),
       aclSnippet: `pm.plugin-external-storage-manager.directories`,
     });
+
+    // Exporting FileBrowser so it can be imported by other plugins
+    this.app.addComponents({ FileBrowser });
+
+    const aclPlugin = this.app.pm.get(PluginACLClient);
+    if (aclPlugin) {
+      aclPlugin.settingsUI.addPermissionsTab(({ t, TabLayout, activeRole }) => ({
+        key: 'external-storage',
+        label: 'External storage',
+        sort: 25,
+        children: (
+          <TabLayout>
+            <ExternalStoragePermissions activeRole={activeRole} />
+          </TabLayout>
+        ),
+      }));
+    }
   }
 }
 
 export default PluginExternalStorageManagerClient;
+
+export { default as FileBrowser } from './components/FileBrowser';
+export { DirectoryManager } from './components/DirectoryManager';
+export { ExternalStoragePermissions } from './components/ExternalStoragePermissions';

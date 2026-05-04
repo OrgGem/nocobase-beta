@@ -182,16 +182,28 @@ export function useFileBrowser() {
     async (filePath: string) => {
       if (!currentDir) return null;
 
-      const res = await api.request({
-        url: 'extStorage:stat',
-        method: 'get',
-        params: {
-          directoryId: currentDir.id,
-          path: filePath,
-        },
-      });
+      try {
+        const res = await api.request({
+          url: 'extStorage:stat',
+          method: 'get',
+          params: {
+            directoryId: currentDir.id,
+            path: filePath,
+          },
+        });
 
-      return res?.data?.data || null;
+        const d1 = res?.data;
+        const d2 = d1?.data;
+        const d3 = d2?.data;
+
+        if (d3 && typeof d3.name === 'string') return d3;
+        if (d2 && typeof d2.name === 'string') return d2;
+        if (d1 && typeof d1.name === 'string') return d1;
+
+        return null;
+      } catch (e) {
+        return null;
+      }
     },
     [api, currentDir],
   );

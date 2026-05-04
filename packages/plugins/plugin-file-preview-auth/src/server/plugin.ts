@@ -14,7 +14,10 @@ const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
 
 export class PluginFilePreviewAuthServer extends Plugin {
+  private cache: any;
+
   async load() {
+    this.cache = await this.app.cacheManager.createCache({ name: 'file-preview-auth' });
     this.registerExcelParser();
     this.registerAIWorkContext();
     this.registerDownloadApi();
@@ -27,9 +30,23 @@ export class PluginFilePreviewAuthServer extends Plugin {
         getContent: async (ctx: any, next: any) => {
           const params = ctx.action.params || {};
           const values = params.values || {};
-          const attachment = await this.resolveAttachment(ctx, values.file || params.file || params);
+          // NocoBase strips non-standard query parameters from ctx.action.params, so we check ctx.request.query and ctx.request.body
+          const reqQuery = ctx.request.query || {};
+          const reqBody = ctx.request.body || {};
+          
+          const fileInput = values.file || params.file || reqQuery.file || reqBody.file || params;
+          const attachment = await this.resolveAttachment(ctx, fileInput);
           this.assertAuthenticated(ctx);
-          const text = await this.extractAttachmentText(ctx, attachment);
+
+          const cacheKey = `parsed_text:${attachment.id || attachment.key || attachment.url || attachment.path}`;
+          let text = await this.cache.get(cacheKey);
+
+          if (text == null) {
+            text = await this.extractAttachmentText(ctx, attachment);
+            // Cache the extracted text for 1 day (86400000 ms)
+            // Even if empty string, we cache it so it doesn't repeatedly fail
+            await this.cache.set(cacheKey, text, 86400000);
+          }
 
           ctx.body = {
             filename: getAttachmentDisplayName(attachment),
@@ -41,26 +58,79 @@ export class PluginFilePreviewAuthServer extends Plugin {
         },
 
         download: async (ctx: any, next: any) => {
-          const { url } = ctx.action.params;
-          if (!url) {
+          const params = ctx.action.params || {};
+          const reqQuery = ctx.request.query || {};
+          const reqBody = ctx.request.body || {};
+          
+          let rawUrl = params.url || reqQuery.url || reqBody.url;
+          if (!rawUrl) {
             ctx.throw(400, 'url is required');
           }
+          
+          let url = rawUrl;
+          try {
+            url = decodeURIComponent(rawUrl);
+          } catch (e) {
+            // ignore
+          }
+
+          const collection = params.collection || reqQuery.collection || reqBody.collection;
+          const storageIdInput = params.storageId || reqQuery.storageId || reqBody.storageId;
+          let storageId = storageIdInput;
 
           const fileManager = this.pm.get('@nocobase/plugin-file-manager') as any;
           if (!fileManager) {
             ctx.throw(500, 'File manager plugin not found');
           }
 
-          const attachmentRepo = this.db.getRepository('attachments');
-          const attachment = await attachmentRepo.findOne({
-            filter: { url },
-          });
+          let filterByTk = null;
+          try {
+            // Parse the decoded URL to extract inner parameters
+            const parsedUrl = new URL(url, 'http://local');
+            filterByTk = parsedUrl.searchParams.get('filterByTk');
+            if (!storageId) {
+              storageId = parsedUrl.searchParams.get('storageId') || parsedUrl.searchParams.get('storage_id');
+            }
+          } catch (e) {
+            // ignore
+          }
+
+          let attachment = null;
+          let isVirtual = false;
+          // Prioritize aiFiles since chat attachments are mostly aiFiles
+          const collectionsToTry = Array.from(new Set([collection, 'aiFiles', 'attachments'].filter(Boolean)));
+          
+          for (const colName of collectionsToTry) {
+            const repo = this.db.getRepository(colName);
+            if (repo) {
+              if (filterByTk) {
+                attachment = await repo.findOne({ filterByTk });
+              }
+              if (!attachment) {
+                attachment = await repo.findOne({ filter: { url } });
+              }
+              if (attachment) {
+                // To prevent finding a record in 'attachments' when it actually belongs to 'aiFiles' 
+                // and having permissions fail, if we found it in the wrong collection, we shouldn't break yet if url doesn't match?
+                // Actually, just break.
+                break;
+              }
+            }
+          }
+
+          // Fallback: If DB query fails but we have storageId, construct virtual attachment
+          if (!attachment && storageId) {
+            attachment = { url, storageId, filename: reqQuery.filename || 'file' };
+            isVirtual = true;
+          }
 
           if (!attachment) {
             ctx.throw(404, 'Attachment not found for this URL');
           }
 
-          await this.assertCanAccessAttachment(ctx, attachment);
+          if (!isVirtual) {
+            await this.assertCanAccessAttachment(ctx, attachment);
+          }
 
           try {
             const storageModel = fileManager.storagesCache.get(attachment.storageId);
@@ -159,6 +229,11 @@ export class PluginFilePreviewAuthServer extends Plugin {
       }
     }
 
+    // Fallback for files from plugin-external-storage (which might not exist in attachments collection)
+    if ((file.storageId || file.url?.includes('extStorage:download')) && (file.url || file.path || file.key)) {
+      return file;
+    }
+
     ctx.throw(404, 'Attachment not found for this preview file');
   }
 
@@ -188,7 +263,7 @@ export class PluginFilePreviewAuthServer extends Plugin {
   }
 
   private async extractAttachmentText(ctx: any, attachment: any): Promise<string> {
-    const docParserPlugin = this.pm.get('@nocobase/plugin-document-parser') as any;
+    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') || this.pm.get('plugin-document-parser')) as any;
     if (docParserPlugin?.internalParserRegistry) {
       try {
         const result = await docParserPlugin.internalParserRegistry.parse(attachment, ctx);
@@ -217,7 +292,7 @@ export class PluginFilePreviewAuthServer extends Plugin {
     for await (const chunk of stream) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
-    return Buffer.concat(chunks).toString('utf-8');
+    return Buffer.concat(chunks as any[]).toString('utf-8');
   }
 
   private formatAttachmentWorkContext(attachment: any, text: string): string {
@@ -248,7 +323,7 @@ export class PluginFilePreviewAuthServer extends Plugin {
    * Silent no-op when plugin-document-parser is not loaded.
    */
   private registerExcelParser() {
-    const docParserPlugin = this.pm.get('@nocobase/plugin-document-parser') as any;
+    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') || this.pm.get('plugin-document-parser')) as any;
     if (!docParserPlugin?.internalParserRegistry) {
       this.log.debug('[FilePreviewAuth] plugin-document-parser not found — Excel parser registration skipped');
       return;

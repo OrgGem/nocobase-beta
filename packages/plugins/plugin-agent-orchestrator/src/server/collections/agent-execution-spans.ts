@@ -1,0 +1,129 @@
+import { defineCollection } from '@nocobase/database';
+
+/**
+ * Unified execution graph for agent orchestration.
+ *
+ * A root run can contain sub-agent spans and child tool/skill spans. Skill Hub
+ * keeps its own sandbox execution records; this collection stores the flow
+ * relationship and links to those records when applicable.
+ */
+export default defineCollection({
+  name: 'agentExecutionSpans',
+  title: 'Agent Execution Spans',
+  fields: [
+    {
+      name: 'id',
+      type: 'bigInt',
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    {
+      name: 'rootRunId',
+      type: 'string',
+      length: 100,
+      allowNull: false,
+    },
+    {
+      name: 'parentSpanId',
+      type: 'string',
+      length: 100,
+    },
+    {
+      name: 'type',
+      type: 'string',
+      length: 30,
+      comment: 'sub_agent, tool, skill, dispatch',
+    },
+    {
+      name: 'status',
+      type: 'string',
+      length: 20,
+      comment: 'running, success, error, canceled, timeout',
+    },
+    {
+      name: 'leaderUsername',
+      type: 'string',
+      length: 100,
+    },
+    {
+      name: 'employeeUsername',
+      type: 'string',
+      length: 100,
+      comment: 'The AI Employee currently executing this span',
+    },
+    {
+      name: 'toolName',
+      type: 'string',
+      length: 200,
+    },
+    {
+      name: 'title',
+      type: 'string',
+      length: 500,
+    },
+    {
+      name: 'input',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'output',
+      type: 'text',
+    },
+    {
+      name: 'error',
+      type: 'text',
+    },
+    {
+      name: 'durationMs',
+      type: 'integer',
+    },
+    {
+      name: 'startedAt',
+      type: 'date',
+    },
+    {
+      name: 'endedAt',
+      type: 'date',
+    },
+    {
+      name: 'orchestratorLogId',
+      type: 'bigInt',
+    },
+    {
+      name: 'skillExecutionId',
+      type: 'bigInt',
+    },
+    {
+      name: 'metadata',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'userId',
+      type: 'bigInt',
+    },
+    {
+      name: 'createdAt',
+      type: 'date',
+    },
+    {
+      name: 'updatedAt',
+      type: 'date',
+    },
+  ],
+  indexes: [
+    {
+      fields: ['rootRunId'],
+    },
+    {
+      fields: ['parentSpanId'],
+    },
+    {
+      fields: ['type'],
+    },
+    {
+      fields: ['status'],
+    },
+  ],
+});

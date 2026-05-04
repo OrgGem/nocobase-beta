@@ -1,0 +1,152 @@
+export default {
+  name: 'orchestratorStacks',
+  autoGenId: true,
+  createdAt: true,
+  updatedAt: true,
+  fields: [
+    {
+      name: 'name',
+      type: 'string',
+      unique: true,
+      interface: 'input',
+      uiSchema: { title: 'Stack Name', 'x-component': 'Input' },
+    },
+    {
+      name: 'adapter',
+      type: 'string',
+      defaultValue: 'docker',
+      interface: 'select',
+      uiSchema: {
+        title: 'Adapter',
+        'x-component': 'Select',
+        enum: [
+          { value: 'docker', label: 'Docker' },
+          { value: 'kubernetes', label: 'Kubernetes' },
+        ],
+      },
+    },
+    {
+      name: 'image',
+      type: 'string',
+      interface: 'input',
+      uiSchema: { title: 'Image', 'x-component': 'Input' },
+    },
+    {
+      name: 'command',
+      type: 'text',
+      interface: 'textarea',
+      uiSchema: { title: 'Command', 'x-component': 'Input.TextArea' },
+    },
+    {
+      name: 'envVars',
+      type: 'json',
+      defaultValue: {},
+      interface: 'json',
+      uiSchema: { title: 'Environment Variables' },
+    },
+    {
+      name: 'volumes',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Volume Mounts' },
+    },
+    {
+      name: 'networks',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Networks' },
+    },
+    {
+      name: 'resourceLimits',
+      type: 'json',
+      defaultValue: {},
+      interface: 'json',
+      uiSchema: { title: 'Resource Limits' },
+    },
+    {
+      name: 'replicas',
+      type: 'integer',
+      defaultValue: 0,
+      interface: 'integer',
+      uiSchema: { title: 'Current Replicas' },
+    },
+    {
+      name: 'desiredReplicas',
+      type: 'integer',
+      defaultValue: 1,
+      interface: 'integer',
+      uiSchema: { title: 'Desired Replicas' },
+    },
+    {
+      name: 'enabled',
+      type: 'boolean',
+      defaultValue: true,
+      interface: 'checkbox',
+      uiSchema: { title: 'Enabled' },
+    },
+    // K8s specific
+    {
+      name: 'namespace',
+      type: 'string',
+      defaultValue: 'nocobase',
+    },
+    {
+      name: 'deploymentName',
+      type: 'string',
+    },
+    {
+      name: 'serviceAccountName',
+      type: 'string',
+    },
+    {
+      name: 'imagePullPolicy',
+      type: 'string',
+      defaultValue: 'IfNotPresent',
+    },
+    {
+      name: 'k8sContainerName',
+      type: 'string',
+      defaultValue: 'worker',
+    },
+    {
+      name: 'k8sEnv',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Kubernetes Env' },
+    },
+    {
+      name: 'k8sEnvFrom',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Kubernetes EnvFrom' },
+    },
+    {
+      name: 'k8sVolumeMounts',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Kubernetes Volume Mounts' },
+    },
+    {
+      name: 'k8sVolumes',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Kubernetes Volumes' },
+    },
+    // Docker specific
+    {
+      name: 'networkMode',
+      type: 'string',
+    },
+    {
+      name: 'restartPolicy',
+      type: 'string',
+      defaultValue: 'unless-stopped',
+    },
+  ],
+};

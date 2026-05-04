@@ -40,7 +40,16 @@ export class PluginGitManagerServer extends Plugin {
     });
 
     registerGitReviewAiTools(this.app);
-    startPoller(this.app);
+
+    this.app.on('afterStart', () => {
+      startPoller(this.app);
+    });
+    this.app.on('beforeStop', () => {
+      stopPoller();
+    });
+    this.app.on('beforeDestroy', () => {
+      stopPoller();
+    });
 
     // Read-only operations available to all plugin users
     this.app.acl.registerSnippet({
@@ -89,6 +98,22 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:reviewReject',
         'gitManager:pollNow',
       ],
+    });
+
+    // Prevent overwriting PAT with obfuscated value on updates
+    this.app.resourceManager.use(async (ctx, next) => {
+      if (
+        ctx.action?.resourceName === 'gitRepositories' &&
+        ['create', 'update'].includes(ctx.action?.actionName)
+      ) {
+        if (ctx.action.params?.values?.pat === '••••••••') {
+          delete ctx.action.params.values.pat;
+        }
+        if (ctx.request.body?.pat === '••••••••') {
+          delete ctx.request.body.pat;
+        }
+      }
+      return next();
     });
 
     // Strip PAT from API responses — scoped to gitRepositories only

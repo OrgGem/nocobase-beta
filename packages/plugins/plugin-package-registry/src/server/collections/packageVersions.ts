@@ -3,6 +3,12 @@ import { defineCollection } from '@nocobase/database';
 export default defineCollection({
   name: 'packageVersions',
   title: 'Package Versions',
+  indexes: [
+    {
+      fields: ['packageId', 'version'],
+      unique: true,
+    },
+  ],
   fields: [
     {
       name: 'version',

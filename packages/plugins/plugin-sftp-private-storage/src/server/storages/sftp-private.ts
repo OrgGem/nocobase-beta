@@ -270,6 +270,7 @@ export default class SftpPrivateStorage extends StorageType {
       return '';
     }
     const mode = preview ? 'inline' : 'attachment';
-    return `/api/attachments:stream?filterByTk=${fileId}&mode=${mode}`;
+    const collectionName = file.constructor?.name === 'aiFiles' ? 'aiFiles' : ((file.constructor as any)?.collection?.name || 'attachments');
+    return `/api/attachments:stream?filterByTk=${fileId}&mode=${mode}&collection=${collectionName}`;
   }
 }

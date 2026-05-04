@@ -8,9 +8,9 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
+import { DownloadOutlined, LeftOutlined, RightOutlined, CopyOutlined } from '@ant-design/icons';
 import { Modal, Button, Spin, Alert, Space, message } from 'antd';
-import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype } from '@nocobase/client';
+import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype, useComponent } from '@nocobase/client';
 // @ts-ignore
 import { filePreviewTypes } from '@nocobase/plugin-file-manager/client';
 import { useT } from './locale';
@@ -646,6 +646,7 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
     const title = getFileDisplayName(file);
     const canPrev = typeof index === 'number' && !!onSwitchIndex && index > 0;
     const canNext = typeof index === 'number' && !!onSwitchIndex && index < list.length - 1;
+    const [previewMode, setPreviewMode] = useState<'visual' | 'raw'>('visual');
 
     return (
       <Modal
@@ -654,19 +655,27 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
         onCancel={() => {
           onOpenChange?.(false);
           onClose?.();
+          setPreviewMode('visual');
         }}
         footer={
-          <Space size={14} style={{ fontSize: '20px' }}>
-            <LeftOutlined
-              style={{ cursor: canPrev ? 'pointer' : 'not-allowed' }}
-              onClick={() => canPrev && onSwitchIndex?.(index - 1)}
-            />
-            <RightOutlined
-              style={{ cursor: canNext ? 'pointer' : 'not-allowed' }}
-              onClick={() => canNext && onSwitchIndex?.(index + 1)}
-            />
-            <DownloadOutlined onClick={() => authOnDownload(file)} />
-          </Space>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+            <div key="left-actions">
+              <Button onClick={() => setPreviewMode(prev => prev === 'visual' ? 'raw' : 'visual')}>
+                {previewMode === 'visual' ? t('View Raw Parsed Text') : t('View Visual Preview')}
+              </Button>
+            </div>
+            <Space size={14} style={{ fontSize: '20px' }}>
+              <LeftOutlined
+                style={{ cursor: canPrev ? 'pointer' : 'not-allowed' }}
+                onClick={() => canPrev && onSwitchIndex?.(index - 1)}
+              />
+              <RightOutlined
+                style={{ cursor: canNext ? 'pointer' : 'not-allowed' }}
+                onClick={() => canNext && onSwitchIndex?.(index + 1)}
+              />
+              <DownloadOutlined onClick={() => authOnDownload(file)} />
+            </Space>
+          </div>
         }
         width="90%"
         centered={true}
@@ -685,12 +694,151 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
             overflowY: 'auto',
           }}
         >
-          <Previewer {...props} onDownload={authOnDownload} />
+          {previewMode === 'raw' ? (
+            <AuthRawTextPreviewer file={file} />
+          ) : (
+            <Previewer {...props} onDownload={authOnDownload} />
+          )}
         </div>
       </Modal>
     );
   };
 };
+
+function AuthRawTextPreviewer({ file }: any) {
+  const apiClient = useAPIClient();
+  const t = useT();
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Use NocoBase's Markdown renderer if available (e.g. from plugin-field-markdown-vditor)
+  const MarkdownVditor = useComponent('MarkdownVditor');
+  const MarkdownVoid = useComponent('Markdown.Void');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await apiClient.request({
+          url: 'filePreviewAuth:getContent',
+          params: { file },
+        });
+        if (cancelled) return;
+        const text = response?.data?.data?.content || '';
+
+        // The server wraps content in <file_preview> XML tags, let's strip it for a cleaner raw text view
+        let cleanText = text;
+        const match = text.match(/<file_preview[^>]*>([\s\S]*?)<\/file_preview>/i);
+        if (match) {
+          cleanText = match[1].trim();
+        }
+
+        setContent(cleanText);
+        setLoading(false);
+      } catch (err: any) {
+        if (cancelled) return;
+        setError(err.message || 'Failed to fetch raw text');
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [file, apiClient]);
+
+  if (loading) return <Spin size="large" tip={t('Extracting raw text...')} style={{ marginTop: '40px' }} />;
+  if (error) return <Alert type="error" message={error} style={{ width: '100%', margin: '20px' }} />;
+
+  if (!content) {
+    return (
+      <Alert
+        type="info"
+        style={{ width: '100%', margin: '20px' }}
+        description={t('No text content could be extracted from this file.')}
+        showIcon
+      />
+    );
+  }
+
+  const handleCopy = () => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(content).then(() => {
+        message.success(t('Copied to clipboard'));
+      }).catch((err) => {
+        message.error(t('Failed to copy'));
+        console.error('Copy error', err);
+      });
+    } else {
+      // Fallback
+      const textArea = document.createElement("textarea");
+      textArea.value = content;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        message.success(t('Copied to clipboard'));
+      } catch (err) {
+        message.error(t('Failed to copy'));
+      }
+      document.body.removeChild(textArea);
+    }
+  };
+
+  return (
+    <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <span
+        onClick={handleCopy}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '25px',
+          zIndex: 10,
+          cursor: 'pointer',
+          padding: '4px 10px',
+          background: 'rgba(255, 255, 255, 0.85)',
+          border: '1px solid #e8e8e8',
+          borderRadius: '4px',
+          color: '#1890ff',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
+          fontSize: '13px'
+        }}
+        title={t('Copy')}
+      >
+        <CopyOutlined />
+        {t('Copy')}
+      </span>
+      <div style={{ flex: 1, overflow: 'auto', padding: '20px', textAlign: 'left' }}>
+        <style>
+          {`
+            .hide-vditor-toolbar .vditor-toolbar {
+              display: none !important;
+            }
+            .hide-vditor-toolbar .vditor {
+              border: none !important;
+            }
+          `}
+        </style>
+        <div className="hide-vditor-toolbar" style={{ height: '100%' }}>
+          {MarkdownVditor ? (
+            <MarkdownVditor value={content} disabled={false} />
+          ) : MarkdownVoid ? (
+            <MarkdownVoid content={content} />
+          ) : (
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'monospace', fontSize: '13px' }}>
+              {content}
+            </pre>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ─── Catch-all Modal Previewer (for attachmentFileTypes) ────────────
 // Intercepts ALL file clicks in Upload/Attachment components and provides:
@@ -702,6 +850,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
   const apiClient = useAPIClient();
   const file = list[index];
   const [downloading, setDownloading] = useState(false);
+  const [previewMode, setPreviewMode] = useState<'visual' | 'raw'>('visual');
 
   const onDownload = useCallback(
     async (e: any) => {
@@ -722,6 +871,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
 
   const onClose = useCallback(() => {
     onSwitchIndex(null);
+    setPreviewMode('visual');
   }, [onSwitchIndex]);
 
   // Determine which inline previewer to use (null for non-previewable)
@@ -735,21 +885,30 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
     return null;
   }, [file]);
 
-  const canPreview = PreviewerComponent != null;
+  const canPreview = PreviewerComponent != null || previewMode === 'raw';
 
   return (
     <Modal
       open={index != null}
       title={<PreviewModalTitle file={file} title={file?.title || file?.filename || file?.name || 'File'} />}
       onCancel={onClose}
-      footer={[
-        <Button key="download" onClick={onDownload} loading={downloading}>
-          {t('Download')}
-        </Button>,
-        <Button key="close" onClick={onClose}>
-          {t('Close')}
-        </Button>,
-      ].filter(Boolean)}
+      footer={
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <div key="left-actions">
+            <Button onClick={() => setPreviewMode(prev => prev === 'visual' ? 'raw' : 'visual')}>
+              {previewMode === 'visual' ? t('View Raw Parsed Text') : t('View Visual Preview')}
+            </Button>
+          </div>
+          <Space>
+            <Button key="download" onClick={onDownload} loading={downloading}>
+              {t('Download')}
+            </Button>
+            <Button key="close" onClick={onClose}>
+              {t('Close')}
+            </Button>
+          </Space>
+        </div>
+      }
       width={canPreview ? '90%' : 520}
       centered={true}
     >
@@ -767,7 +926,9 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
           overflowY: 'auto',
         }}
       >
-        {canPreview ? (
+        {previewMode === 'raw' ? (
+          <AuthRawTextPreviewer file={file} />
+        ) : PreviewerComponent ? (
           <PreviewerComponent file={file} />
         ) : (
           <Alert

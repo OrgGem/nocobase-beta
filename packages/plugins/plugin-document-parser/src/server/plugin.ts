@@ -18,6 +18,7 @@ const STORAGE_ROOT = resolve(process.cwd());
 import { InternalParserRegistry } from './services/internal-parser-registry';
 import { BuiltinAIDocumentHandler } from './services/builtin-ai-handler';
 import { BuiltinExcelHandler } from './services/builtin-excel-handler';
+import { BuiltinMarkitdownHandler } from './services/builtin-markitdown-handler';
 import { ParseRouter } from './services/parse-router';
 import { testConnection, getSettings, saveSettings } from './resource/docParserProviders';
 import type { AttachmentLike } from './services/internal-parser-registry';
@@ -38,14 +39,20 @@ export class PluginDocumentParserServer extends Plugin {
   async beforeLoad() {
     // Excel handler — higher priority than the AI loader (prepend: true)
     this.internalParserRegistry.register(new BuiltinExcelHandler(this.fetchFileBuffer.bind(this)), { prepend: true });
+    
+    // MarkItDown handler - uses python markitdown CLI
+    this.internalParserRegistry.register(
+      new BuiltinMarkitdownHandler(
+        this.fetchFileBuffer.bind(this),
+        () => this.db.getRepository('docParserSettings')
+      ), 
+      { prepend: true }
+    );
 
     // Built-in AI document handler (lowest priority — appended last)
     // Done in beforeLoad so other plugins' load() can prepend higher-priority handlers
     this.internalParserRegistry.register(
-      new BuiltinAIDocumentHandler(() => {
-        const aiPlugin = this.pm.get('@nocobase/plugin-ai') as any;
-        return aiPlugin?.documentLoaders;
-      }),
+      new BuiltinAIDocumentHandler(this.fetchFileBuffer.bind(this)),
     );
   }
 
@@ -171,11 +178,11 @@ export class PluginDocumentParserServer extends Plugin {
     if (attachment.storageId) {
       try {
         const { stream } = await fileManager.getFileStream(attachment);
-        const chunks: Buffer[] = [];
+        const chunks: Uint8Array[] = [];
         for await (const chunk of stream) {
           chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
         }
-        const buffer = Buffer.concat(chunks);
+        const buffer = Buffer.concat(chunks as any[]);
         // Resolve the URL separately for callers that need it (best-effort)
         let url = '';
         try {
@@ -201,6 +208,22 @@ export class PluginDocumentParserServer extends Plugin {
         responseType: 'arraybuffer',
         timeout: 60_000,
         headers: { referer, 'User-Agent': ua },
+      });
+      return { buffer: Buffer.from(response.data), url };
+    }
+
+    if (url.startsWith('/api/')) {
+      const port = process.env.APP_PORT || 13000;
+      const fullUrl = `http://127.0.0.1:${port}${url}`;
+      const headers: any = { ...ctx.request.headers };
+      delete headers.host;
+      delete headers['content-length'];
+      delete headers['connection'];
+
+      const response = await axios.get(fullUrl, {
+        responseType: 'arraybuffer',
+        timeout: 60_000,
+        headers,
       });
       return { buffer: Buffer.from(response.data), url };
     }

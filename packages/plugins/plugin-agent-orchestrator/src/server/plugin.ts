@@ -2,20 +2,33 @@ import { Plugin } from '@nocobase/server';
 import path from 'path';
 import { createDelegateToolsProvider } from './tools/delegate-task';
 import { registerTracingResource } from './resources/tracing';
+import SkillHubSubFeature from './skill-hub/plugin';
 
 export class PluginAgentOrchestratorServer extends Plugin {
-  async afterAdd() {}
+  skillHub: SkillHubSubFeature;
+
+  async afterAdd() {
+    this.skillHub = new SkillHubSubFeature(this);
+  }
 
   async beforeLoad() {
     // Import collection definitions
     this.db.import({ directory: path.resolve(__dirname, 'collections') });
+
+    this.db.addMigrations({
+      namespace: this.name,
+      directory: path.resolve(__dirname, 'migrations'),
+      context: { plugin: this },
+    });
   }
 
   async load() {
+    await this.skillHub.load();
+
     // --- ACL ---
     this.app.acl.registerSnippet({
       name: `pm.${this.name}`,
-      actions: ['orchestratorConfig:*'],
+      actions: ['orchestratorConfig:*', 'orchestratorTracing:*', 'agentExecutionSpans:*', 'skillDefinitions:*', 'skillExecutions:*', 'skillHub:*', 'skillWorkerConfigs:*'],
     });
 
     // --- Register Dynamic Tools ---
@@ -30,7 +43,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     registerTracingResource(this);
 
     // --- Log Retention ---
-    // Daily prune of orchestratorLogs to keep the table bounded.
+    // Daily prune of orchestratorLogs / agentExecutionSpans to keep tables bounded.
     // Override window via env: ORCHESTRATOR_LOG_RETENTION_DAYS (default 30).
     this.app.cronJobManager.addJob({
       cronTime: '0 30 2 * * *',
@@ -40,11 +53,20 @@ export class PluginAgentOrchestratorServer extends Plugin {
           if (!Number.isFinite(days) || days <= 0) return;
           const cutoff = new Date(Date.now() - days * 86400000);
           const repo = this.db.getRepository('orchestratorLogs');
-          if (!repo) return;
-          const deleted = await repo.destroy({
-            filter: { createdAt: { $lt: cutoff.toISOString() } },
-          });
-          this.app.log.info(`[AgentOrchestrator] Pruned ${deleted} orchestratorLogs rows older than ${days} day(s).`);
+          const spansRepo = this.db.getRepository('agentExecutionSpans');
+          const deletedLogs = repo
+            ? await repo.destroy({
+                filter: { createdAt: { $lt: cutoff.toISOString() } },
+              })
+            : 0;
+          const deletedSpans = spansRepo
+            ? await spansRepo.destroy({
+                filter: { createdAt: { $lt: cutoff.toISOString() } },
+              })
+            : 0;
+          this.app.log.info(
+            `[AgentOrchestrator] Pruned ${deletedLogs} orchestratorLogs and ${deletedSpans} agentExecutionSpans rows older than ${days} day(s).`,
+          );
         } catch (e) {
           this.app.log.error('[AgentOrchestrator] Log retention job failed', e);
         }
@@ -57,12 +79,16 @@ export class PluginAgentOrchestratorServer extends Plugin {
   }
 
   async install() {
-    // No seed data needed on first install
+    await this.skillHub.install();
   }
 
   async afterEnable() {}
   async afterDisable() {}
   async remove() {}
+  
+  async beforeStop() {
+    await this.skillHub.beforeStop();
+  }
 }
 
 export default PluginAgentOrchestratorServer;

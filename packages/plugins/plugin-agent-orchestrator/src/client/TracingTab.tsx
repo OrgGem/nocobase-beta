@@ -92,7 +92,7 @@ export const TracingTab: React.FC = () => {
     try {
       const res = await api.request({
         url: 'orchestratorTracing:get',
-        params: { filterByTk: record.id },
+        params: { filterByTk: record.id, source: record.hasUnifiedTrace ? 'span' : 'log' },
       });
       setSelectedLog((res as any)?.data?.data || (res as any)?.data || record);
     } finally {
@@ -199,11 +199,11 @@ export const TracingTab: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Swarm Tracing"
+        message="Execution Tracing"
         description={
           <Text type="secondary">
-            View delegation execution logs. Each row represents one sub-agent invocation triggered by a Leader&apos;s
-            tool call. Use the filters below to narrow large result sets.
+            View orchestration execution logs. Each row represents one sub-agent invocation, with child tool and Skill
+            Hub executions shown in the detail flow.
           </Text>
         }
       />
@@ -291,7 +291,7 @@ export const TracingTab: React.FC = () => {
         />
       </Card>
 
-      <Drawer title="Delegation Detail" width={760} onClose={() => setSelectedLog(null)} open={!!selectedLog}>
+      <Drawer title="Execution Detail" width={820} onClose={() => setSelectedLog(null)} open={!!selectedLog}>
         {selectedLog && (
           <Spin spinning={detailLoading}>
             <>
@@ -336,7 +336,7 @@ export const TracingTab: React.FC = () => {
                 </Card>
               )}
 
-              <Card title="Sub-Agent Flow" size="small" style={{ marginBottom: 16 }}>
+              <Card title="Execution Flow" size="small" style={{ marginBottom: 16 }}>
                 {Array.isArray(selectedLog.trace) && selectedLog.trace.length ? (
                   <Timeline
                     items={selectedLog.trace.map((item: any, index: number) => ({
@@ -348,6 +348,9 @@ export const TracingTab: React.FC = () => {
                             <Text strong>{item.title || item.type}</Text>
                             <Text type="secondary">{item.at ? new Date(item.at).toLocaleString() : ''}</Text>
                             {item.toolName && <Text code>{item.toolName}</Text>}
+                            {item.skillExecutionId && (
+                              <Text type="secondary">Skill execution #{item.skillExecutionId}</Text>
+                            )}
                             {item.content && (
                               <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
                                 {item.content}
@@ -364,7 +367,7 @@ export const TracingTab: React.FC = () => {
                     }))}
                   />
                 ) : (
-                  <Empty description="No flow trace captured" />
+                  <Empty description="No execution flow captured" />
                 )}
               </Card>
 

@@ -1,15 +1,27 @@
 import { Plugin } from '@nocobase/server';
-import * as collections from './collections';
+import path from 'path';
+import { createPackageRegistryActions, createPackageRegistryRouter } from './registry-router';
 
 export class PluginPackageRegistryServer extends Plugin {
-  async afterAdd() {
-    // Register collections
-    this.db.import(collections);
+  async afterAdd() {}
+
+  async beforeLoad() {
+    await this.db.import({
+      directory: path.resolve(__dirname, 'collections'),
+    });
   }
 
-  async beforeLoad() {}
-
-  async load() {}
+  async load() {
+    this.app.use(createPackageRegistryRouter(this), { before: 'resourcer' });
+    this.app.resourceManager.define({
+      name: 'packageRegistry',
+      actions: createPackageRegistryActions(this),
+    });
+    this.app.acl.registerSnippet({
+      name: `pm.${this.name}`,
+      actions: ['packageRegistry:*', 'packageRegistries:*', 'packages:*', 'packageVersions:*', 'packageAssets:*'],
+    });
+  }
 
   async install() {}
 

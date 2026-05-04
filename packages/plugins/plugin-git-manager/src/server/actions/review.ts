@@ -21,6 +21,7 @@ interface TriggerArgs {
  * the background. The action returns immediately with the reviewId.
  */
 export async function triggerReview(ctx: Context, next: () => Promise<void>) {
+  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
   const {
     flowId,
     repositoryId,
@@ -29,7 +30,7 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
     commitSha,
     branch,
     extraInstructions,
-  } = ctx.action.params;
+  } = params;
 
   if (!repositoryId) ctx.throw(400, 'repositoryId is required');
   if (!targetType) ctx.throw(400, 'targetType is required');
@@ -173,7 +174,8 @@ export async function triggerReviewInternal(app: Application, args: TriggerArgs)
  * Mark a review as approved and post its content to GitLab as an MR note.
  */
 export async function reviewApprovePost(ctx: Context, next: () => Promise<void>) {
-  const { reviewId, editedMarkdown } = ctx.action.params;
+  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const { reviewId, editedMarkdown } = params;
   if (!reviewId) ctx.throw(400, 'reviewId is required');
 
   const reviewsRepo = ctx.db.getRepository('gitCodeReviews');
@@ -212,7 +214,8 @@ export async function reviewApprovePost(ctx: Context, next: () => Promise<void>)
  * Reject a pending review (do not post to GitLab).
  */
 export async function reviewReject(ctx: Context, next: () => Promise<void>) {
-  const { reviewId, reason } = ctx.action.params;
+  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const { reviewId, reason } = params;
   if (!reviewId) ctx.throw(400, 'reviewId is required');
 
   const reviewsRepo = ctx.db.getRepository('gitCodeReviews');
@@ -299,6 +302,17 @@ async function runReview(app: Application, args: RunReviewArgs) {
       req: { headers: { 'x-timezone': 'UTC', 'x-locale': 'en-US' } },
       get(name: string) {
         return this.req.headers[String(name).toLowerCase()];
+      },
+      getCurrentLocale() {
+        return 'en-US';
+      },
+      t(key: string) {
+        return key;
+      },
+      i18n: {
+        t(key: string) {
+          return key;
+        },
       },
     };
 
@@ -483,14 +497,26 @@ async function fetchMrHeadSha(repo: any, mrIid: number): Promise<string | null> 
   const repoUrl = repo.get('repoUrl') as string;
   const pat = repo.get('pat') as string;
   if (!pat) return null;
+  const isGitHub = repoUrl.includes('github.com');
+  
   try {
-    const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
-    const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests/${mrIid}`, {
-      headers: { 'PRIVATE-TOKEN': pat, Accept: 'application/json' },
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return (data?.sha as string) || (data?.diff_refs?.head_sha as string) || null;
+    if (isGitHub) {
+      const { projectPath } = parseGitLabProject(repoUrl);
+      const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls/${mrIid}`, {
+        headers: { 'Authorization': `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return data?.head?.sha || null;
+    } else {
+      const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
+      const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests/${mrIid}`, {
+        headers: { 'PRIVATE-TOKEN': pat, Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      return (data?.sha as string) || (data?.diff_refs?.head_sha as string) || null;
+    }
   } catch {
     return null;
   }
@@ -499,25 +525,49 @@ async function fetchMrHeadSha(repo: any, mrIid: number): Promise<string | null> 
 async function postNoteToGitLab(repo: any, mrIid: number, body: string): Promise<number | string> {
   const repoUrl = repo.get('repoUrl') as string;
   const pat = repo.get('pat') as string;
-  if (!pat) throw new Error('Repository has no PAT configured');
+  const isGitHub = repoUrl.includes('github.com');
+  
+  if (isGitHub) {
+    if (!pat) throw new Error('Repository has no PAT configured');
+    const { projectPath } = parseGitLabProject(repoUrl);
+    
+    const response = await fetch(`https://api.github.com/repos/${projectPath}/issues/${mrIid}/comments`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${pat}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json',
+      },
+      body: JSON.stringify({ body }),
+    });
+    
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`GitHub note post failed ${response.status}: ${text}`);
+    }
+    const data = await response.json();
+    return data?.id;
+  } else {
+    if (!pat) throw new Error('Repository has no PAT configured');
 
-  const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
+    const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
 
-  const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests/${mrIid}/notes`, {
-    method: 'POST',
-    headers: {
-      'PRIVATE-TOKEN': pat,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({ body }),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`GitLab note post failed ${response.status}: ${text}`);
+    const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests/${mrIid}/notes`, {
+      method: 'POST',
+      headers: {
+        'PRIVATE-TOKEN': pat,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({ body }),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`GitLab note post failed ${response.status}: ${text}`);
+    }
+    const data = await response.json();
+    return data?.id;
   }
-  const data = await response.json();
-  return data?.id;
 }
 
 /* ───────── Flow matching helpers ───────── */

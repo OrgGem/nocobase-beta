@@ -522,12 +522,8 @@ export class PluginSftpPrivateStorageClient extends Plugin {
       fileManagerPlugin.registerStorageType(STORAGE_TYPE_SFTP_PRIVATE, sftpPrivateStorageType);
     }
 
-    this.app.pluginSettingsManager.add(NAMESPACE, {
-      title: 'SFTP Private Storage',
-      icon: 'CloudServerOutlined',
-      Component: SftpSettingsPage,
-      aclSnippet: `pm.plugin-sftp-private-storage.sftpStorageConfigs`,
-    });
+    // Settings for SFTP are now managed directly in the File Manager plugin.
+    // The left navigator setting "SFTP Private Storage" has been hidden.
   }
 }
 

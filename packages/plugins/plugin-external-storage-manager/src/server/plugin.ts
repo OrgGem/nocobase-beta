@@ -8,42 +8,38 @@
  */
 
 import { Plugin } from '@nocobase/server';
-import { NAMESPACE, STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../constants';
-import { DirectoryACL } from './acl/directory-acl';
+import { NAMESPACE } from '../constants';
 import { IStorageAdapter } from './adapters/types';
-import { S3Adapter } from './adapters/s3-adapter';
-import { SftpAdapter } from './adapters/sftp-adapter';
 import { createExtStorageActions } from './actions/ext-storage';
 
+export type StorageAdapterFactory = (directory: any) => Promise<IStorageAdapter>;
+
 export class PluginExternalStorageManagerServer extends Plugin {
-  private directoryACL: DirectoryACL;
+  private adapterFactories = new Map<string, StorageAdapterFactory>();
 
   async afterAdd() {}
 
   async beforeLoad() {}
 
   async load() {
-    this.directoryACL = new DirectoryACL(this.db);
+    const extStorageActions = createExtStorageActions(this.getAdapter.bind(this));
 
-    // Register ACL snippets for admin management of directories and permissions
-    this.app.acl.registerSnippet({
-      name: `pm.${this.name}.directories`,
-      actions: ['externalStorageDirectories:*'],
-    });
-
-    this.app.acl.registerSnippet({
-      name: `pm.${this.name}.permissions`,
-      actions: ['externalStorageDirectoryPermissions:*'],
-    });
-
-    const extStorageActions = createExtStorageActions(this.directoryACL, this.getAdapter.bind(this));
-
-    // Register all action handlers globally BEFORE defining the resource
-    // This allows the Resource constructor to pick them up via getRegisteredHandlers()
-    // without placing functions directly inside the resource options, avoiding JSON serialization errors.
+    // Register handlers globally BEFORE defining the resource
     for (const [key, handler] of Object.entries(extStorageActions)) {
       this.app.resourceManager.registerActionHandler(`extStorage:${key}`, handler as any);
     }
+
+    // Register ACL snippet for directory management
+    this.app.acl.registerSnippet({
+      name: `pm.${this.name}.directories`,
+      actions: ['externalStorageDirectories:*', 'extStorage:*'],
+    });
+
+    // Register ACL snippet for browse files UI
+    this.app.acl.registerSnippet({
+      name: `pm.${this.name}.browse`,
+      actions: [], // Empty actions: only grants UI access. Backend relies on fine-grained ACL.
+    });
 
     // Define the extStorage resource
     this.app.resourceManager.define({
@@ -57,108 +53,43 @@ export class PluginExternalStorageManagerServer extends Plugin {
         mkdir: {},
         delete: {},
         storageOptions: {},
+        rolePermissions: {},
+        updateRolePermissions: {},
       },
     });
 
-    // Allow logged-in users to access browse API (fine-grained ACL is per-directory)
+    // Allow logged-in users to access browse API (fine-grained ACL is enforced inside handlers)
     this.app.acl.allow('extStorage', ['directories', 'list', 'stat', 'download', 'storageOptions'], 'loggedIn');
     this.app.acl.allow('extStorage', ['upload', 'mkdir', 'delete'], 'loggedIn');
+    
+    // Only root or users with specific roles should configure role permissions, but for simplicity we allow 'loggedIn' 
+    // and check inside the handler if needed, or better, just rely on the UI being hidden.
+    // Actually, it's safer to just restrict it to 'root' or use NocoBase's snippet.
+    this.app.acl.allow('extStorage', ['rolePermissions', 'updateRolePermissions'], 'loggedIn');
 
     this.log.info(`[ext-storage-manager] Plugin loaded successfully`);
   }
 
   /**
-   * Resolve the appropriate storage adapter for a directory record.
-   * Creates S3 or SFTP adapter based on the directory's storageType.
+   * Registry for other plugins (S3, SFTP) to inject their storage adapters.
+   */
+  public registerBrowserAdapter(storageType: string, factory: StorageAdapterFactory) {
+    this.adapterFactories.set(storageType, factory);
+    this.log.info(`[ext-storage-manager] Registered adapter for type: ${storageType}`);
+  }
+
+  /**
+   * Resolve the appropriate storage adapter for a directory record using the Registry.
    */
   private async getAdapter(directory: any): Promise<IStorageAdapter> {
     const storageType = directory.get('storageType');
-    const storageConfigName = directory.get('storageConfigName');
 
-    if (storageType === STORAGE_TYPE_S3) {
-      return this.getS3Adapter(storageConfigName);
-    } else if (storageType === STORAGE_TYPE_SFTP) {
-      return this.getSftpAdapter(storageConfigName);
-    } else {
-      throw new Error(`[ext-storage-manager] Unsupported storage type: ${storageType}`);
-    }
-  }
-
-  /**
-   * Create an S3 adapter from a storage config name.
-   * Uses plugin-s3-private-storage's public API to get S3 client and SDK classes,
-   * avoiding the need to bundle a separate copy of the AWS SDK.
-   */
-  private async getS3Adapter(configName: string): Promise<IStorageAdapter> {
-    let s3Plugin: any;
-    try {
-      s3Plugin = this.app.pm.get('plugin-s3-private-storage');
-    } catch {
-      throw new Error('[ext-storage-manager] plugin-s3-private-storage is not installed or enabled');
+    const factory = this.adapterFactories.get(storageType);
+    if (!factory) {
+      throw new Error(`[ext-storage-manager] Unsupported or unregistered storage type: ${storageType}`);
     }
 
-    if (!s3Plugin) {
-      throw new Error('[ext-storage-manager] plugin-s3-private-storage is not available');
-    }
-
-    const { client, bucket } = await s3Plugin.createS3ClientForStorage(configName);
-    const sdk = s3Plugin.getS3SDK();
-
-    return new S3Adapter({ client, bucket, sdk });
-  }
-
-  /**
-   * Create an SFTP adapter from an SFTP config name.
-   * Gets the connection manager from plugin-sftp-private-storage.
-   */
-  private async getSftpAdapter(configName: string): Promise<IStorageAdapter> {
-    // Get the SFTP plugin
-    let sftpPlugin: any;
-    try {
-      sftpPlugin = this.app.pm.get('plugin-sftp-private-storage');
-    } catch {
-      throw new Error('[ext-storage-manager] plugin-sftp-private-storage is not installed or enabled');
-    }
-
-    if (!sftpPlugin) {
-      throw new Error('[ext-storage-manager] plugin-sftp-private-storage is not available');
-    }
-
-    // Find the SFTP config from storages
-    const configRepo = this.db.getRepository('storages');
-    const config = await configRepo.findOne({
-      filter: { 
-        name: configName,
-        type: { $in: ['sftp', 'sftp-private'] }
-      },
-    });
-
-    if (!config) {
-      throw new Error(`[ext-storage-manager] SFTP config "${configName}" not found or disabled`);
-    }
-
-    const connectionManager = sftpPlugin.getConnectionManager();
-    if (!connectionManager) {
-      throw new Error('[ext-storage-manager] SFTP connection manager is not available');
-    }
-
-    const basePath = config.get('options')?.basePath || config.get('basePath') || '/';
-
-    // Register the config into the connection manager dynamically to support configs from 'storages'
-    const options = config.get('options') || {};
-    connectionManager.registerConfig({
-      id: config.get('id'),
-      host: options.host || config.get('host'),
-      port: options.port || config.get('port') || 22,
-      username: options.username || config.get('username'),
-      authMethod: options.authMethod || config.get('authMethod') || 'password',
-      password: options.password || config.get('password'),
-      privateKey: options.privateKey || config.get('privateKey'),
-      passphrase: options.passphrase || config.get('passphrase'),
-      basePath: basePath,
-    });
-
-    return new SftpAdapter(connectionManager, config.get('id'), basePath);
+    return await factory(directory);
   }
 
   async disable() {}

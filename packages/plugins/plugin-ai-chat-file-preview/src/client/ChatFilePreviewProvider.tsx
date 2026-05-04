@@ -246,26 +246,44 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, [apiClient]);
 
+  const token = apiClient.auth?.token || '';
+
   // Track global drop and input change events to intercept file object selection ONLY for AI chat
   useEffect(() => {
-    // Modify href attributes of native NocoBase file links in chat to use the proxy
+    // Modify href attributes of native NocoBase file links and images in chat to use the proxy and append the token
     const rewriteObtrusiveLinks = () => {
-      const links = document.querySelectorAll<HTMLAnchorElement>('.ant-attachment-list-card-name');
+      const appendToken = (url: string) => {
+        if (!token) return url;
+        if (url.includes('token=')) return url;
+        return url + (url.includes('?') ? '&' : '?') + `token=${token}`;
+      };
+
+      const links = document.querySelectorAll<HTMLAnchorElement>('a[href*="/api/attachments"]');
       links.forEach(link => {
         const href = link.getAttribute('href');
         if (href && !href.includes('/api/filePreviewAuth:download')) {
-           link.setAttribute('href', `/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`);
+           link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
         }
       });
+
       // Also rewrite ai-attachment-link anchors
       const aiLinks = document.querySelectorAll<HTMLAnchorElement>('a.ai-attachment-link');
       aiLinks.forEach(link => {
         const href = link.getAttribute('href');
         if (href && !href.includes('/api/filePreviewAuth:download') && !href.includes('skillHub:download') && !href.includes('worker-monitor')) {
-           link.setAttribute('href', `/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`);
+           link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
         }
       });
       
+      // Also rewrite image tags so thumbnails don't 404
+      const imgs = document.querySelectorAll<HTMLImageElement>('img[src*="/api/attachments"]');
+      imgs.forEach(img => {
+        const src = img.getAttribute('src');
+        if (src && !src.includes('/api/filePreviewAuth:download')) {
+           img.setAttribute('src', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(src)}`));
+        }
+      });
+
       // Auto-style raw markdown links for Skill Hub and Worker Monitor as interactive file attachments
       const rawFileLinks = document.querySelectorAll<HTMLAnchorElement>('.nb-markdown a[href*="skillHub:download"], .nb-markdown a[href*="worker-monitor"]');
       rawFileLinks.forEach(link => {
@@ -278,7 +296,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     // Run periodically to catch newly rendered chat messages
     const timer = setInterval(rewriteObtrusiveLinks, 1000);
     return () => clearInterval(timer);
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     const handleDrop = (e: DragEvent) => {
@@ -554,8 +572,23 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       e.stopPropagation();
 
       // Convert to secure proxy URL for everything EXCEPT natively secured endpoints that don't belong to the attachments table
-      const shouldUseProxy = originalFallbackUrl && !originalFallbackUrl.includes('skillHub:download') && !originalFallbackUrl.includes('worker-monitor');
-      const secureUrl = shouldUseProxy ? `/api/filePreviewAuth:download?url=${encodeURIComponent(originalFallbackUrl)}` : (originalFallbackUrl || file.url);
+      const proxyTargetUrl = originalFallbackUrl || file.url;
+      const shouldUseProxy = proxyTargetUrl && !proxyTargetUrl.includes('skillHub:download') && !proxyTargetUrl.includes('worker-monitor') && !proxyTargetUrl.includes('filePreviewAuth:download');
+      
+      let secureUrl = proxyTargetUrl;
+      if (shouldUseProxy) {
+        secureUrl = `/api/filePreviewAuth:download?url=${encodeURIComponent(proxyTargetUrl)}`;
+        const collectionName = (file as any).collectionName || (isAIGenerated ? 'aiFiles' : '');
+        const storageId = (file as any).storage_id || (file as any).storageId;
+        
+        if (collectionName) {
+          secureUrl += `&collection=${encodeURIComponent(collectionName)}`;
+        }
+        if (storageId) {
+          secureUrl += `&storageId=${encodeURIComponent(storageId)}`;
+        }
+      }
+      
       file = { ...file, url: secureUrl };
 
       setSessionId(currentSessionIdRef.current || '');

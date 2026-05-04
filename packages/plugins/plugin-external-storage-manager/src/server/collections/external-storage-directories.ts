@@ -68,13 +68,6 @@ export default defineCollection({
       defaultValue: 0,
       comment: 'Display order',
     },
-    {
-      type: 'hasMany',
-      name: 'permissions',
-      target: 'externalStorageDirectoryPermissions',
-      foreignKey: 'directoryId',
-      onDelete: 'CASCADE',
-    },
   ],
   timestamps: true,
   createdBy: true,

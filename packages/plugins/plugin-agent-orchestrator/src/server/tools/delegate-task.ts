@@ -7,6 +7,11 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type PluginAIServer from '@nocobase/plugin-ai/dist/server';
 import type { ToolsEntry } from '@nocobase/ai';
+import {
+  ExecutionSpanService,
+  getOrchestratorTraceContext,
+  setOrchestratorTraceContext,
+} from '../services/ExecutionSpanService';
 
 /**
  * Maximum delegation depth key stored in ctx metadata.
@@ -36,6 +41,11 @@ type AgentExecutionResult = {
   messages: any[];
 };
 
+type EmployeeSkillConfig = {
+  name: string;
+  autoCall: boolean;
+};
+
 function sanitizeToolPart(value: string) {
   return (value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -46,6 +56,14 @@ function buildDelegateToolName(leaderUsername: string, subAgentUsername: string)
 
 function buildDispatchToolName(leaderUsername: string) {
   return `dispatch_subagents_${sanitizeToolPart(leaderUsername)}`;
+}
+
+function createRootRunId(seed = '') {
+  const hash = createHash('sha1')
+    .update(`${Date.now()}::${Math.random()}::${seed}`)
+    .digest('hex')
+    .slice(0, 10);
+  return `run_${Date.now()}_${hash}`;
 }
 
 /**
@@ -355,6 +373,9 @@ function createDispatchToolOptions(
         };
       }
 
+      const dispatchRootRunId =
+        getOrchestratorTraceContext(ctx)?.rootRunId || createRootRunId(`${leaderUsername}:dispatch`);
+
       const results = await runWithConcurrency<
         { subAgent: string; task: string; context?: string },
         DispatchTaskResult
@@ -385,6 +406,7 @@ function createDispatchToolOptions(
             llmService: entry.rule.llmService,
             model: entry.rule.model,
             recursionLimit: entry.rule.recursionLimit,
+            rootRunId: dispatchRootRunId,
           });
           return {
             index: i,
@@ -744,6 +766,8 @@ async function invokeDelegateTask(
     llmService?: string;
     model?: string;
     recursionLimit?: number;
+    rootRunId?: string;
+    parentSpanId?: string;
   },
 ) {
   const {
@@ -759,6 +783,8 @@ async function invokeDelegateTask(
     llmService,
     model,
     recursionLimit,
+    rootRunId: providedRootRunId,
+    parentSpanId: providedParentSpanId,
   } = options;
 
   // --- Snapshot ctx fields up-front ---
@@ -790,6 +816,11 @@ async function invokeDelegateTask(
     };
   }
 
+  const spanService = new ExecutionSpanService(plugin);
+  const upstreamTraceContext = getOrchestratorTraceContext(ctx);
+  const rootRunId =
+    providedRootRunId || upstreamTraceContext?.rootRunId || createRootRunId(`${leaderUsername}:${subAgentUsername}`);
+  const parentSpanId = providedParentSpanId || upstreamTraceContext?.spanId || upstreamTraceContext?.parentSpanId;
   const startTime = Date.now();
   const trace: TraceEvent[] = [
     {
@@ -799,6 +830,25 @@ async function invokeDelegateTask(
       content: task,
     },
   ];
+  const executionSpan = await spanService.create({
+    rootRunId,
+    parentSpanId,
+    type: 'sub_agent',
+    status: 'running',
+    leaderUsername,
+    employeeUsername: subAgentUsername,
+    title: `Delegation: ${leaderUsername} -> ${subAgentUsername}`,
+    input: { task, context },
+    metadata: {
+      depth: currentDepth,
+      maxDepth,
+      toolName,
+      recursionLimit,
+      llmOverride: llmService && model ? { llmService, model } : undefined,
+    },
+    userId: ctxSnapshot.userId,
+  });
+  const executionSpanId = executionSpan?.id ? String(executionSpan.id) : undefined;
   const logRecord = await logDelegation(ctx, plugin, {
     leaderUsername,
     subAgentUsername,
@@ -812,6 +862,9 @@ async function invokeDelegateTask(
     trace,
     snapshot: ctxSnapshot,
   });
+  if (executionSpanId && logRecord?.id) {
+    await spanService.update(executionSpanId, { orchestratorLogId: logRecord.id });
+  }
 
   try {
     const aiPlugin = ctx.app.pm.get('ai') as PluginAIServer;
@@ -863,20 +916,36 @@ async function invokeDelegateTask(
 
     // skillSettings.skills is { name: string, autoCall: boolean }[]
     // (verified at ai-employee.ts:1028-1029)
-    const employeeSkills: string[] = (subAgentEmployee.skillSettings?.skills ?? [])
-      .map((s: any) => (typeof s === 'string' ? s : s.name))
-      .filter(Boolean);
+    const employeeSkills: EmployeeSkillConfig[] = (subAgentEmployee.skillSettings?.skills ?? [])
+      .map((s: any) =>
+        typeof s === 'string'
+          ? { name: s, autoCall: false }
+          : { name: s?.name, autoCall: s?.autoCall === true },
+      )
+      .filter((s: EmployeeSkillConfig) => Boolean(s.name));
+    const employeeSkillMap = new Map(employeeSkills.map((skill) => [skill.name, skill]));
 
     const langchainTools: DynamicStructuredTool[] = [];
 
     for (const toolEntry of allTools) {
       const entryName = toolEntry.definition.name;
       if (!entryName) continue;
+      const employeeSkill = employeeSkillMap.get(entryName);
 
       // Only include tools that the sub-agent employee is configured to use.
       // Also skip our own orchestration tools to prevent circular delegation
       // (belt-and-suspenders with the depth check above).
-      if (!employeeSkills.includes(entryName) || isDelegateToolName(plugin, entryName)) {
+      //
+      // Headless sub-agent execution has no human confirmation surface, so we
+      // require both the employee assignment and the tool definition to be
+      // explicitly auto-callable. This prevents ASK/interactionSchema Skill Hub
+      // tools from being executed silently by a delegated sub-agent.
+      if (
+        !employeeSkill ||
+        isDelegateToolName(plugin, entryName) ||
+        employeeSkill.autoCall !== true ||
+        toolEntry.defaultPermission !== 'ALLOW'
+      ) {
         continue;
       }
 
@@ -889,6 +958,35 @@ async function invokeDelegateTask(
             // Forward the invoke with depth tracking
             const invokeCtx = Object.create(ctx);
             (invokeCtx as any)[ORCHESTRATOR_DEPTH_KEY] = currentDepth + 1;
+            const toolStartedAt = Date.now();
+            const isSkillHubTool = entryName === 'skill_hub_execute' || entryName.startsWith('skill_hub_');
+            const toolSpan = await spanService.create({
+              rootRunId,
+              parentSpanId: executionSpanId,
+              type: isSkillHubTool ? 'skill' : 'tool',
+              status: 'running',
+              leaderUsername,
+              employeeUsername: subAgentUsername,
+              toolName: toolEntry.definition.name,
+              title: isSkillHubTool ? `Skill: ${toolEntry.definition.name}` : `Tool: ${toolEntry.definition.name}`,
+              input: toolArgs,
+              metadata: {
+                depth: currentDepth + 1,
+                toolCallId: `orch-${toolCallId}`,
+                defaultPermission: toolEntry.defaultPermission,
+              },
+              userId: ctxSnapshot.userId,
+            });
+            const toolSpanId = toolSpan?.id ? String(toolSpan.id) : undefined;
+            setOrchestratorTraceContext(invokeCtx, {
+              rootRunId,
+              spanId: toolSpanId,
+              parentSpanId: executionSpanId,
+              toolCallId: `orch-${toolCallId}`,
+              leaderUsername,
+              employeeUsername: subAgentUsername,
+              toolName: toolEntry.definition.name,
+            });
 
             trace.push({
               type: 'tool_call',
@@ -900,17 +998,26 @@ async function invokeDelegateTask(
 
             try {
               const res = await toolEntry.invoke(invokeCtx, toolArgs, `orch-${toolCallId}`);
+              const output = truncateText(res?.content ?? res?.result ?? res, 50000);
               trace.push({
                 type: 'tool_result',
                 at: nowIso(),
                 title: `Tool finished: ${toolEntry.definition.name}`,
                 toolName: toolEntry.definition.name,
                 status: res?.status || 'success',
-                content: truncateText(res?.content ?? res, 2000),
+                content: truncateText(output, 2000),
               });
               if (res?.status === 'error') {
+                await spanService.finish(toolSpanId, 'error', toolStartedAt, {
+                  output,
+                  error: truncateText(res.content || output, 10000),
+                });
                 throw new Error(`Tool <${toolEntry.definition.name}> failed: ${res.content}`);
               }
+              await spanService.finish(toolSpanId, 'success', toolStartedAt, {
+                output,
+                skillExecutionId: res?.result?.execId || res?.execId,
+              });
               return typeof res?.content === 'string' ? res.content : JSON.stringify(res);
             } catch (e: any) {
               trace.push({
@@ -920,6 +1027,9 @@ async function invokeDelegateTask(
                 toolName: toolEntry.definition.name,
                 status: 'error',
                 content: e.message,
+              });
+              await spanService.finish(toolSpanId, 'error', toolStartedAt, {
+                error: truncateText(e.message, 10000),
               });
               throw e;
             }
@@ -992,6 +1102,17 @@ async function invokeDelegateTask(
       messages: result.messages,
       snapshot: ctxSnapshot,
     });
+    await spanService.finish(executionSpanId, 'success', startTime, {
+      output: content,
+      metadata: {
+        depth: currentDepth,
+        maxDepth,
+        toolName,
+        recursionLimit,
+        messages: result.messages,
+        traceCount: trace.length,
+      },
+    });
 
     return {
       status: 'success' as const,
@@ -1026,6 +1147,16 @@ async function invokeDelegateTask(
       snapshot: ctxSnapshot,
     }).catch((logErr) => {
       plugin.app.log.warn('[AgentOrchestrator] Failed to save error log for delegation', logErr);
+    });
+    await spanService.finish(executionSpanId, 'error', startTime, {
+      error: truncateText(e.message, 10000),
+      metadata: {
+        depth: currentDepth,
+        maxDepth,
+        toolName,
+        recursionLimit,
+        traceCount: trace.length + 1,
+      },
     });
 
     return {

@@ -24,6 +24,7 @@ type Settings = {
   imagePassThrough: boolean;
   includedExtnames: string[];
   useDocpixie: boolean;
+  enableMarkitdown: boolean;
 };
 
 type Provider = {
@@ -181,6 +182,17 @@ export const GlobalSettings: React.FC = () => {
               { label: '.html', value: '.html' },
             ]}
           />
+        </Form.Item>
+
+        <Divider />
+
+        <Form.Item
+          name="enableMarkitdown"
+          valuePropName="checked"
+          label={t('Enable MarkItDown Parser')}
+          help={<Text type="secondary">{t('Prioritize using Microsoft MarkItDown for internal parsing of documents before falling back.')}</Text>}
+        >
+          <Switch />
         </Form.Item>
 
         <Divider />

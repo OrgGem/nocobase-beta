@@ -30,7 +30,6 @@ export class PluginSftpPrivateStorageServer extends Plugin {
 
     this.app.resourceManager.registerActionHandler('attachments:stream', this.streamAction.bind(this));
     this.app.acl.allow('attachments', 'stream', 'loggedIn');
-    this.patchFsReadFile();
 
     // Register ACL snippet for admin management of SFTP configs
     this.app.acl.registerSnippet({
@@ -43,66 +42,30 @@ export class PluginSftpPrivateStorageServer extends Plugin {
       'sftpStorageConfigs:testConnection',
       this.testConnectionAction.bind(this),
     );
-    this.app.acl.allow('sftpStorageConfigs', 'testConnection', 'loggedIn');
 
-    // Load existing configs into the connection manager on startup
-    this.app.on('afterStart', async () => {
-      await this.loadConfigs();
+    // Register Browser Adapter into External Storage Manager Hub if available
+    this.app.on('afterLoad', () => {
+      try {
+        const extStoragePlugin = this.app.pm.get('plugin-external-storage-manager') as any;
+        if (extStoragePlugin && extStoragePlugin.registerBrowserAdapter) {
+          const { SftpAdapter } = require('./adapters/sftp-adapter');
+          extStoragePlugin.registerBrowserAdapter('sftp-private', async (directory: any) => {
+            const configName = directory.get('storageConfigName');
+            const config = await this.getConfigByName(configName);
+            if (!config) {
+              throw new Error(`[sftp-private] Storage config "${configName}" not found`);
+            }
+            const basePath = config.basePath || '/';
+            return new SftpAdapter(this.connectionManager, config.id, basePath);
+          });
+        }
+      } catch (e) {
+        // plugin-external-storage-manager is not installed, that's fine
+      }
     });
 
-    // Reload configs when they change
-    const SftpConfigModel = this.db.getModel('sftpStorageConfigs');
-    if (SftpConfigModel) {
-      SftpConfigModel.afterSave(async () => {
-        await this.loadConfigs();
-        this.sendSyncMessage({ type: 'reloadSftpConfigs' });
-      });
-      SftpConfigModel.afterDestroy(async () => {
-        await this.loadConfigs();
-        this.sendSyncMessage({ type: 'reloadSftpConfigs' });
-      });
-    }
-  }
-
-  async handleSyncMessage(message: any) {
-    if (message.type === 'reloadSftpConfigs') {
-      await this.loadConfigs();
-    }
-  }
-
-  /**
-   * Load all SFTP configs from the database into the connection manager
-   */
-  async loadConfigs() {
-    try {
-      const repository = this.db.getRepository('sftpStorageConfigs');
-      const configs = await repository.find({
-        filter: { enabled: true },
-      });
-
-      // Clear existing and re-register
-      for (const config of configs) {
-        const sftpConfig: SftpConfig = {
-          id: config.get('id'),
-          host: config.get('host'),
-          port: config.get('port') || 22,
-          username: config.get('username'),
-          authMethod: config.get('authMethod') || 'password',
-          password: config.get('password'),
-          privateKey: config.get('privateKey'),
-          passphrase: config.get('passphrase'),
-          basePath: config.get('basePath') || '/',
-        };
-        this.connectionManager.registerConfig(sftpConfig);
-      }
-
-      this.log.info(`[sftp-private] Loaded ${configs.length} SFTP configuration(s)`);
-    } catch (error) {
-      this.log.error('[sftp-private] Failed to load SFTP configs:', error);
-    }
-  }
-
-  /**
+    // Connection manager manages connections dynamically when requested via getConfigByName
+  }  /**
    * Get the connection manager (public API for other plugins)
    */
   getConnectionManager(): SftpConnectionManager {
@@ -113,24 +76,61 @@ export class PluginSftpPrivateStorageServer extends Plugin {
    * Get an SFTP config by name
    */
   async getConfigByName(name: string): Promise<SftpConfig | null> {
-    const repository = this.db.getRepository('sftpStorageConfigs');
-    const config = await repository.findOne({
-      filter: { name, enabled: true },
-    });
+    const configsRepo = this.db.getRepository('sftpStorageConfigs');
+    const config = configsRepo
+      ? await configsRepo.findOne({
+          filter: { name, enabled: true },
+        })
+      : null;
 
-    if (!config) return null;
+    let sftpConfig: SftpConfig | null = null;
 
-    return {
-      id: config.get('id'),
-      host: config.get('host'),
-      port: config.get('port') || 22,
-      username: config.get('username'),
-      authMethod: config.get('authMethod') || 'password',
-      password: config.get('password'),
-      privateKey: config.get('privateKey'),
-      passphrase: config.get('passphrase'),
-      basePath: config.get('basePath') || '/',
-    };
+    if (config) {
+      const parsed = this.app.environment
+        ? this.app.environment.renderJsonTemplate(config.toJSON())
+        : config.toJSON();
+
+      sftpConfig = {
+        id: config.get('id'),
+        host: parsed.host,
+        port: parsed.port || 22,
+        username: parsed.username,
+        authMethod: parsed.authMethod || 'password',
+        password: parsed.password,
+        privateKey: parsed.privateKey,
+        passphrase: parsed.passphrase,
+        basePath: parsed.basePath || '/',
+      };
+    } else {
+      // Backward compatibility for older setups that stored SFTP configs in file-manager storages.
+      const storage = await this.db.getRepository('storages').findOne({
+        filter: { name, type: STORAGE_TYPE_SFTP_PRIVATE },
+      });
+
+      if (!storage) return null;
+
+      const parsed = this.app.environment
+        ? this.app.environment.renderJsonTemplate(storage.toJSON())
+        : storage.toJSON();
+      const options = parsed.options || {};
+
+      sftpConfig = {
+        id: storage.get('id'),
+        host: options.host,
+        port: options.port || 22,
+        username: options.username,
+        authMethod: options.authMethod || 'password',
+        password: options.password,
+        privateKey: options.privateKey,
+        passphrase: options.passphrase,
+        basePath: options.basePath || '/',
+      };
+    }
+
+    // Ensure the connection manager has this config registered
+    this.connectionManager.registerConfig(sftpConfig);
+
+    return sftpConfig;
   }
 
   /**
@@ -157,55 +157,14 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     ctx.body = result;
   }
 
-  private patchFsReadFile() {
-    try {
-      const fs = require('fs');
-      if (fs.promises.readFile.__patchedBySftpPrivate) return;
 
-      const originalReadFile = fs.promises.readFile;
-      fs.promises.readFile = async (pathLike: any, options?: any) => {
-        const pathStr = typeof pathLike === 'string' ? pathLike : pathLike?.toString();
-        if (pathStr && pathStr.includes('/api/attachments:stream?filterByTk=')) {
-          const match = pathStr.match(/filterByTk=([^&]+)/);
-          if (match) {
-            const id = match[1];
-            try {
-              const repository = this.db.getRepository('attachments');
-              const record = await repository.findOne({ filterByTk: id });
-              if (record) {
-                const fileManagerPlugin = this.app.pm.get(PluginFileManagerServer) as PluginFileManagerServer;
-                const { stream } = await fileManagerPlugin.getFileStream(record);
-
-                const chunks: Buffer[] = [];
-                for await (const chunk of stream) {
-                  chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-                }
-                const buffer = Buffer.concat(chunks);
-
-                if (options) {
-                  const encoding = typeof options === 'string' ? options : options.encoding;
-                  if (encoding) return buffer.toString(encoding);
-                }
-                return buffer as any;
-              }
-            } catch (err) {
-              this.log.error(`[sftp-private-storage] Intercept readFile failed for ${pathStr}`, err);
-            }
-          }
-        }
-        return originalReadFile.call(fs.promises, pathLike, options);
-      };
-      fs.promises.readFile.__patchedBySftpPrivate = true;
-    } catch (e) {
-      this.log.error('[sftp-private-storage] Failed to patch fs.promises.readFile', e);
-    }
-  }
 
   private getParentCollections(fileCollectionName: string) {
     const parents: Array<{
       collectionName: string;
       throughTable: string;
       otherKey: string;
+      foreignKey?: string;
     }> = [];
 
     for (const collection of this.db.collections.values()) {
@@ -218,6 +177,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
             collectionName: collection.name,
             throughTable: options.through,
             otherKey: options.otherKey || 'attachmentId',
+            foreignKey: options.foreignKey || `${collection.model.name.toLowerCase()}Id`,
           });
         }
       }
@@ -230,6 +190,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     attachmentId: number | string,
     fileCollectionName: string,
     currentRoles: string[],
+    ctx?: any,
   ): Promise<boolean> {
     const parents = this.getParentCollections(fileCollectionName);
 
@@ -254,13 +215,34 @@ export class PluginSftpPrivateStorageServer extends Plugin {
       try {
         const throughCollection = this.db.getCollection(parent.throughTable);
         if (throughCollection) {
-          const count = await throughCollection.repository.count({
-            filter: {
-              [parent.otherKey]: attachmentId,
-            },
+          const links = await throughCollection.repository.find({
+            filter: { [parent.otherKey]: attachmentId },
           });
-          if (count > 0) {
-            return true;
+          if (links.length > 0) {
+            const parentIds = links.map(l => l.get(parent['foreignKey'])).filter(Boolean);
+            if (parentIds.length > 0) {
+              let dataScopeFilter = canView.params?.filter || {};
+              if (ctx && ctx.app.environment) {
+                dataScopeFilter = ctx.app.environment.renderJsonTemplate(dataScopeFilter, {
+                  $user: ctx.state.currentUser?.toJSON ? ctx.state.currentUser.toJSON() : ctx.state.currentUser,
+                  $nRole: ctx.state.currentRole,
+                });
+              }
+
+              const parentCollection = this.db.getCollection(parent.collectionName);
+              const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
+              const count = await parentCollection.repository.count({
+                filter: {
+                  $and: [
+                    { [pk]: { $in: parentIds } },
+                    dataScopeFilter
+                  ]
+                }
+              });
+              if (count > 0) return true;
+            } else {
+              return false; // Fix P0 fail-open
+            }
           }
         }
       } catch (error) {
@@ -273,6 +255,8 @@ export class PluginSftpPrivateStorageServer extends Plugin {
 
   async streamAction(ctx) {
     const { filterByTk, mode = 'inline' } = ctx.action.params;
+    const reqQuery = ctx.request.query || {};
+    const collection = ctx.action.params.collection || reqQuery.collection || 'attachments';
 
     if (!filterByTk) {
       ctx.throw(400, 'Missing filterByTk parameter');
@@ -282,12 +266,34 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     const currentRoles: string[] = ctx.state.currentRoles || [];
     const isRoot = currentRoles.includes('root');
 
-    const repository = ctx.db.getRepository('attachments');
-    const record = await repository.findOne({
+    const repository = ctx.db.getRepository(collection);
+    let record = await repository.findOne({
       filterByTk,
     });
 
+    // Fallback for old URLs generated before the 'collection' parameter was added
+    if (!record && collection === 'attachments') {
+      const allCollections = Array.from(ctx.db.collections.values());
+      const fileCollections = allCollections.filter(
+        (c: any) => c.options?.template === 'file' || c.name === 'aiFiles'
+      );
+      
+      for (const col of fileCollections as any[]) {
+        if (col.name === 'attachments') continue;
+        const repo = ctx.db.getRepository(col.name);
+        if (repo) {
+          try {
+            record = await repo.findOne({ filterByTk });
+            if (record) break;
+          } catch (e) {
+            // ignore format errors if filterByTk is incompatible with the collection
+          }
+        }
+      }
+    }
+
     if (!record) {
+      ctx.logger.error(`[sftp-private-storage] Attachment not found. filterByTk=${filterByTk}, collection=${collection}`);
       ctx.throw(404, 'Attachment not found');
       return;
     }
@@ -301,7 +307,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
       let hasAccess = isCreator;
 
       if (!hasAccess) {
-        hasAccess = await this.checkParentCollectionAccess(filterByTk, fileCollectionName, currentRoles);
+        hasAccess = await this.checkParentCollectionAccess(filterByTk, fileCollectionName, currentRoles, ctx);
       }
 
       if (!hasAccess) {

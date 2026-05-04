@@ -128,7 +128,7 @@ const guideStyles = `
   .user-guide-shell {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    max-width: 1180px;
+    max-width: 95%;
     margin: 0 auto;
   }
 
@@ -175,7 +175,7 @@ const guideStyles = `
   }
 
   .user-guide-content {
-    max-width: 920px;
+    max-width: 95%;
     margin: 0 auto;
     padding: 32px;
     color: rgba(0, 0, 0, 0.82);

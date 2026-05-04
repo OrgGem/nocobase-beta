@@ -64,5 +64,11 @@ export default defineCollection({
       type: 'boolean',
       defaultValue: false,
     },
+    {
+      name: 'enableMarkitdown',
+      type: 'boolean',
+      defaultValue: true,
+      comment: 'Enable python markitdown CLI for local parsing before fallback',
+    },
   ],
 });

@@ -12,17 +12,11 @@ import {
   Card, Table, Button, Modal, Form, Input, Select, Switch, Space, message, Popconfirm,
   Tag, Typography, Checkbox, Divider, InputNumber,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SafetyOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAPIClient, useRequest } from '@nocobase/client';
-import { DIRECTORY_ACTIONS } from '../../constants';
 
 const { Text } = Typography;
 const { TextArea } = Input;
-
-const ACTION_LABELS: Record<string, string> = {
-  list: 'List', view: 'View', upload: 'Upload',
-  download: 'Download', delete: 'Delete', mkdir: 'Create Folder',
-};
 
 /**
  * Admin settings component for managing virtual directories
@@ -31,19 +25,15 @@ const ACTION_LABELS: Record<string, string> = {
 export const DirectoryManager: React.FC = () => {
   const api = useAPIClient();
   const [dirModalOpen, setDirModalOpen] = useState(false);
-  const [permModalOpen, setPermModalOpen] = useState(false);
   const [editingDir, setEditingDir] = useState<any>(null);
-  const [editingPerm, setEditingPerm] = useState<any>(null);
-  const [selectedDirId, setSelectedDirId] = useState<number | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [dirForm] = Form.useForm();
-  const [permForm] = Form.useForm();
   const [configForm] = Form.useForm();
 
   const { data: dirsData, loading: dirsLoading, refresh: refreshDirs } = useRequest<any>({
     url: 'externalStorageDirectories:list',
-    params: { sort: ['sort', 'name'], appends: ['permissions'], pageSize: 100 },
+    params: { sort: ['sort', 'name'], pageSize: 100 },
   });
 
   const { data: rolesData } = useRequest<any>({ url: 'roles:list', params: { pageSize: 100 } });
@@ -178,33 +168,6 @@ export const DirectoryManager: React.FC = () => {
     refreshDirs();
   };
 
-  // --- Permission CRUD ---
-  const openPermissions = (dirId: number) => {
-    setSelectedDirId(dirId);
-    setPermModalOpen(true);
-    setEditingPerm(null);
-  };
-
-  const handleSavePerm = async () => {
-    const values = await permForm.validateFields();
-    values.directoryId = selectedDirId;
-    if (editingPerm) {
-      await api.resource('externalStorageDirectoryPermissions').update({ filterByTk: editingPerm.id, values });
-    } else {
-      await api.resource('externalStorageDirectoryPermissions').create({ values });
-    }
-    message.success('Permission saved');
-    setEditingPerm(null);
-    permForm.resetFields();
-    refreshDirs();
-  };
-
-  const handleDeletePerm = async (id: number) => {
-    await api.resource('externalStorageDirectoryPermissions').destroy({ filterByTk: id });
-    message.success('Permission deleted');
-    refreshDirs();
-  };
-
   const dirColumns = [
     { title: 'Name', dataIndex: 'name', key: 'name', width: 160 },
     { title: 'Slug', dataIndex: 'slug', key: 'slug', width: 120, render: (v: string) => <Text code>{v}</Text> },
@@ -212,10 +175,6 @@ export const DirectoryManager: React.FC = () => {
     { title: 'Config', dataIndex: 'storageConfigName', key: 'storageConfigName', width: 140, render: (v: string) => <Text code>{v}</Text> },
     { title: 'Root Path', dataIndex: 'rootPath', key: 'rootPath', width: 180, render: (v: string) => <Text code>{v}</Text> },
     { title: 'Enabled', dataIndex: 'enabled', key: 'enabled', width: 70, render: (v: boolean) => v ? <Tag color="success">Yes</Tag> : <Tag>No</Tag> },
-    {
-      title: 'Permissions', key: 'perms', width: 100,
-      render: (_: any, r: any) => <Button size="small" icon={<SafetyOutlined />} onClick={() => openPermissions(r.id)}>{(r.permissions || []).length}</Button>,
-    },
     {
       title: 'Actions', key: 'actions', width: 100,
       render: (_: any, r: any) => (
@@ -228,9 +187,6 @@ export const DirectoryManager: React.FC = () => {
       ),
     },
   ];
-
-  const selectedDir = dirs.find((d: any) => d.id === selectedDirId);
-  const selectedPerms = selectedDir?.permissions || [];
 
   return (
     <>
@@ -365,37 +321,6 @@ export const DirectoryManager: React.FC = () => {
               </Form.Item>
             </>
           )}
-        </Form>
-      </Modal>
-
-      {/* Permissions Modal */}
-      <Modal title={`Permissions: ${selectedDir?.name || ''}`} open={permModalOpen} onCancel={() => setPermModalOpen(false)} width={650} footer={null}>
-        <Table dataSource={selectedPerms} rowKey="id" pagination={false} size="small" columns={[
-          { title: 'Role', dataIndex: 'roleName', key: 'roleName', width: 120, render: (v: string) => <Tag>{v}</Tag> },
-          { title: 'Actions', dataIndex: 'actions', key: 'actions', render: (acts: string[]) => (acts || []).map((a) => <Tag key={a} color="blue">{ACTION_LABELS[a] || a}</Tag>) },
-          { title: 'Sub Path', dataIndex: 'subPath', key: 'subPath', width: 140, render: (v: string) => v ? <Text code>{v}</Text> : <Text type="secondary">All</Text> },
-          { title: '', key: 'act', width: 80, render: (_: any, r: any) => (
-            <Space size="small">
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => { setEditingPerm(r); permForm.setFieldsValue(r); }} />
-              <Popconfirm title="Remove?" onConfirm={() => handleDeletePerm(r.id)}><Button type="link" size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
-            </Space>
-          )},
-        ]} />
-
-        <Divider />
-        <Text strong>{editingPerm ? 'Edit Permission' : 'Add Permission'}</Text>
-        <Form form={permForm} layout="vertical" style={{ marginTop: 12 }}>
-          <Form.Item name="roleName" label="Role" rules={[{ required: true }]}>
-            <Select placeholder="Select role" options={roles.map((r: any) => ({ label: r.title || r.name, value: r.name }))} />
-          </Form.Item>
-          <Form.Item name="actions" label="Allowed Actions" rules={[{ required: true }]}>
-            <Checkbox.Group options={DIRECTORY_ACTIONS.map((a) => ({ label: ACTION_LABELS[a] || a, value: a }))} />
-          </Form.Item>
-          <Form.Item name="subPath" label="Sub Path Restriction"><Input placeholder="Leave empty for full access" /></Form.Item>
-          <Space>
-            <Button type="primary" onClick={handleSavePerm}>{editingPerm ? 'Update' : 'Add'}</Button>
-            {editingPerm && <Button onClick={() => { setEditingPerm(null); permForm.resetFields(); }}>Cancel</Button>}
-          </Space>
         </Form>
       </Modal>
     </>

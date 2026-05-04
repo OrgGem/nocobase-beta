@@ -1,6 +1,6 @@
 {
   "name": "plugin-external-storage-manager",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "displayName": "External Storage Manager",
   "displayName.zh-CN": "外部存储管理器",
   "description": "Unified file browser for external storage backends (S3, SFTP) with virtual directory mapping, per-directory ACL, and streaming data transfer.",
@@ -36,8 +36,6 @@
     "@nocobase/database": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/server": "2.x",
-    "@nocobase/utils": "2.x",
-    "plugin-s3-private-storage": "1.x",
-    "plugin-sftp-private-storage": "1.x"
+    "@nocobase/utils": "2.x"
   }
 }

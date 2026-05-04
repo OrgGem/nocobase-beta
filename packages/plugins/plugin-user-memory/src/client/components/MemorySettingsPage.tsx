@@ -63,7 +63,7 @@ const MemorySettingsPage: React.FC = () => {
     try {
       const { data } = await api.request({ url: 'userMemoryAdmin:getSettings' });
       setSettings(data?.data || {});
-      form.setFieldsValues(data?.data || {});
+      form.setFieldsValue(data?.data || {});
     } catch (e) {
       // Non-admin users will get 403, silently ignore
     }

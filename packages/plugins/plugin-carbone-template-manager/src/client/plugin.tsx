@@ -1,0 +1,27 @@
+import { Plugin, lazy } from '@nocobase/client';
+import { NAMESPACE } from './locale';
+
+const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'SettingsPage');
+
+export class PluginCarboneTemplateManagerClient extends Plugin {
+  async load() {
+    const locale = this.app.i18n.language || 'en-US';
+    try {
+      const messages = await import(`../locale/${locale}.json`).catch(
+        () => import('../locale/en-US.json'),
+      );
+      this.app.i18n.addResourceBundle(locale, NAMESPACE, messages.default || messages, true, true);
+    } catch {
+      // Locale file may not exist for this language — silently skip
+    }
+
+    this.app.pluginSettingsManager.add(NAMESPACE, {
+      title: `{{t("Carbone Template Manager", { ns: "${NAMESPACE}" })}}`,
+      icon: 'FileWordOutlined',
+      Component: SettingsPage,
+      aclSnippet: `pm.${NAMESPACE}.settings`,
+    });
+  }
+}
+
+export default PluginCarboneTemplateManagerClient;

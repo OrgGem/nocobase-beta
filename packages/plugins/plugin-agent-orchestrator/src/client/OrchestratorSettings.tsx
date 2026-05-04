@@ -1,11 +1,12 @@
 import React from 'react';
 import { Tabs } from 'antd';
-import { ApartmentOutlined, MonitorOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, BarChartOutlined, CodeOutlined, HistoryOutlined, MonitorOutlined } from '@ant-design/icons';
 import { RulesTab } from './RulesTab';
 import { TracingTab } from './TracingTab';
 import { AIEmployeesProvider } from './AIEmployeesContext';
+import { SkillManager, ExecutionHistory, SkillMetrics } from './skill-hub';
 
-export const OrchestratorSettings: React.FC = () => {
+const OrchestratorSettings: React.FC = () => {
   return (
     <AIEmployeesProvider>
       <div style={{ padding: '0 24px 24px' }}>
@@ -25,10 +26,37 @@ export const OrchestratorSettings: React.FC = () => {
               key: 'tracing',
               label: (
                 <span>
-                  <MonitorOutlined /> Swarm Tracing
+                  <MonitorOutlined /> Execution Tracing
                 </span>
               ),
               children: <TracingTab />,
+            },
+            {
+              key: 'skill-definitions',
+              label: (
+                <span>
+                  <CodeOutlined /> Skill Hub Definitions
+                </span>
+              ),
+              children: <SkillManager />,
+            },
+            {
+              key: 'skill-executions',
+              label: (
+                <span>
+                  <HistoryOutlined /> Execution History
+                </span>
+              ),
+              children: <ExecutionHistory />,
+            },
+            {
+              key: 'skill-metrics',
+              label: (
+                <span>
+                  <BarChartOutlined /> Metrics
+                </span>
+              ),
+              children: <SkillMetrics />,
             },
           ]}
         />
@@ -36,3 +64,5 @@ export const OrchestratorSettings: React.FC = () => {
     </AIEmployeesProvider>
   );
 };
+
+export { OrchestratorSettings };

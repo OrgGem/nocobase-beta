@@ -26,57 +26,26 @@ export class PluginS3PrivateStorageServer extends Plugin {
     this.app.resourceManager.registerActionHandler('attachments:stream', this.streamAction.bind(this));
     this.app.acl.allow('attachments', 'stream', 'loggedIn');
 
-    this.patchFsReadFile();
-  }
-
-  /**
-   * Monkey patches fs.promises.readFile to intercept `/api/attachments:stream` URLs.
-   * This is required because plugins like `plugin-ai` treat URLs not starting with `http`
-   * as local file paths, and try to use `fs.readFile` on them.
-   */
-  private patchFsReadFile() {
-    try {
-      const fs = require('fs');
-      if (fs.promises.readFile.__patchedByS3Private) return;
-
-      const originalReadFile = fs.promises.readFile;
-      fs.promises.readFile = async (pathLike: any, options?: any) => {
-        const pathStr = typeof pathLike === 'string' ? pathLike : pathLike?.toString();
-        if (pathStr && pathStr.includes('/api/attachments:stream?filterByTk=')) {
-          const match = pathStr.match(/filterByTk=([^&]+)/);
-          if (match) {
-            const id = match[1];
-            try {
-              const repository = this.db.getRepository('attachments');
-              const record = await repository.findOne({ filterByTk: id });
-              if (record) {
-                const fileManagerPlugin = this.app.pm.get(PluginFileManagerServer) as PluginFileManagerServer;
-                const { stream } = await fileManagerPlugin.getFileStream(record);
-
-                const chunks: Buffer[] = [];
-                for await (const chunk of stream) {
-                  chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-                }
-                const buffer = Buffer.concat(chunks);
-
-                if (options) {
-                  const encoding = typeof options === 'string' ? options : options.encoding;
-                  if (encoding) return buffer.toString(encoding);
-                }
-                return buffer as any;
-              }
-            } catch (err) {
-              this.log.error(`[s3-private-storage] Intercept readFile failed for ${pathStr}`, err);
-            }
-          }
+    // Register Browser Adapter into External Storage Manager Hub if available
+    this.app.on('afterLoad', () => {
+      try {
+        const extStoragePlugin = this.app.pm.get('plugin-external-storage-manager') as any;
+        if (extStoragePlugin && extStoragePlugin.registerBrowserAdapter) {
+          const { S3Adapter } = require('./adapters/s3-adapter');
+          extStoragePlugin.registerBrowserAdapter('s3-private', async (directory: any) => {
+            const configName = directory.get('storageConfigName');
+            const { client, bucket } = await this.createS3ClientForStorage(configName);
+            const sdk = this.getS3SDK();
+            return new S3Adapter({ client, bucket, sdk });
+          });
         }
-        return originalReadFile.call(fs.promises, pathLike, options);
-      };
-      fs.promises.readFile.__patchedByS3Private = true;
-    } catch (e) {
-      this.log.error('[s3-private-storage] Failed to patch fs.promises.readFile', e);
-    }
+      } catch (e) {
+        // plugin-external-storage-manager is not installed, that's fine
+      }
+    });
   }
+
+
 
   /**
    * Find all parent collections that have a belongsToMany association
@@ -90,6 +59,7 @@ export class PluginS3PrivateStorageServer extends Plugin {
       collectionName: string;
       throughTable: string;
       otherKey: string;
+      foreignKey?: string;
     }> = [];
 
     for (const collection of this.db.collections.values()) {
@@ -104,6 +74,7 @@ export class PluginS3PrivateStorageServer extends Plugin {
             collectionName: collection.name,
             throughTable: options.through,
             otherKey: options.otherKey || 'attachmentId',
+            foreignKey: options.foreignKey || `${collection.model.name.toLowerCase()}Id`,
           });
         }
       }
@@ -126,6 +97,7 @@ export class PluginS3PrivateStorageServer extends Plugin {
     attachmentId: number | string,
     fileCollectionName: string,
     currentRoles: string[],
+    ctx?: any,
   ): Promise<boolean> {
     const parents = this.getParentCollections(fileCollectionName);
 
@@ -154,13 +126,34 @@ export class PluginS3PrivateStorageServer extends Plugin {
       try {
         const throughCollection = this.db.getCollection(parent.throughTable);
         if (throughCollection) {
-          const count = await throughCollection.repository.count({
-            filter: {
-              [parent.otherKey]: attachmentId,
-            },
+          const links = await throughCollection.repository.find({
+            filter: { [parent.otherKey]: attachmentId },
           });
-          if (count > 0) {
-            return true;
+          if (links.length > 0) {
+            const parentIds = links.map(l => l.get(parent['foreignKey'])).filter(Boolean);
+            if (parentIds.length > 0) {
+              let dataScopeFilter = canView.params?.filter || {};
+              if (ctx && ctx.app.environment) {
+                dataScopeFilter = ctx.app.environment.renderJsonTemplate(dataScopeFilter, {
+                  $user: ctx.state.currentUser?.toJSON ? ctx.state.currentUser.toJSON() : ctx.state.currentUser,
+                  $nRole: ctx.state.currentRole,
+                });
+              }
+
+              const parentCollection = this.db.getCollection(parent.collectionName);
+              const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
+              const count = await parentCollection.repository.count({
+                filter: {
+                  $and: [
+                    { [pk]: { $in: parentIds } },
+                    dataScopeFilter
+                  ]
+                }
+              });
+              if (count > 0) return true;
+            } else {
+              return false; // Fix P0 fail-open
+            }
           }
         }
       } catch (error) {
@@ -183,7 +176,11 @@ export class PluginS3PrivateStorageServer extends Plugin {
    *    that the user has 'view' permission on
    */
   async streamAction(ctx) {
-    const { filterByTk, mode = 'inline' } = ctx.action.params;
+    const params = ctx.action.params || {};
+    const reqQuery = ctx.request.query || {};
+    const filterByTk = params.filterByTk || reqQuery.filterByTk;
+    const mode = params.mode || reqQuery.mode || 'inline';
+    const collection = params.collection || reqQuery.collection || 'attachments';
 
     if (!filterByTk) {
       ctx.throw(400, 'Missing filterByTk parameter');
@@ -194,15 +191,43 @@ export class PluginS3PrivateStorageServer extends Plugin {
     const currentRoles: string[] = ctx.state.currentRoles || [];
     const isRoot = currentRoles.includes('root');
 
-    const repository = ctx.db.getRepository('attachments');
-    const record = await repository.findOne({
+    const repository = ctx.db.getRepository(collection);
+    if (!repository) {
+      ctx.throw(400, `Invalid collection: ${collection}`);
+      return;
+    }
+    let record = await repository.findOne({
       filterByTk,
     });
 
+    // Fallback for old URLs generated before the 'collection' parameter was added
+    if (!record && collection === 'attachments') {
+      const allCollections = Array.from(ctx.db.collections.values());
+      const fileCollections = allCollections.filter(
+        (c: any) => c.options?.template === 'file' || c.name === 'aiFiles'
+      );
+      
+      for (const col of fileCollections as any[]) {
+        if (col.name === 'attachments') continue;
+        const repo = ctx.db.getRepository(col.name);
+        if (repo) {
+          try {
+            record = await repo.findOne({ filterByTk });
+            if (record) break;
+          } catch (e) {
+            // ignore format errors if filterByTk is incompatible with the collection
+          }
+        }
+      }
+    }
+
     if (!record) {
+      console.error(`[s3-private-storage] Attachment not found. filterByTk=${filterByTk}, collection=${collection}`);
       ctx.throw(404, 'Attachment not found');
       return;
     }
+
+    console.log(`[s3-private-storage] Record found: ID=${record.get('id')}, storage=${record.get('storageId')}`);
 
     // Check role-based permission via parent collection reverse lookup
     if (!isRoot) {
@@ -216,7 +241,7 @@ export class PluginS3PrivateStorageServer extends Plugin {
       let hasAccess = isCreator;
 
       if (!hasAccess) {
-        hasAccess = await this.checkParentCollectionAccess(filterByTk, fileCollectionName, currentRoles);
+        hasAccess = await this.checkParentCollectionAccess(filterByTk, fileCollectionName, currentRoles, ctx);
       }
 
       if (!hasAccess) {

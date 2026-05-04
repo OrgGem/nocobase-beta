@@ -226,7 +226,8 @@ export default class S3PrivateStorage extends StorageType {
     if (!fileId) {
       return '';
     }
+    const collectionName = file.constructor?.collection?.name || 'attachments';
     const mode = preview ? 'inline' : 'attachment';
-    return `/api/attachments:stream?filterByTk=${fileId}&mode=${mode}`;
+    return `/api/attachments:stream?filterByTk=${fileId}&mode=${mode}&collection=${collectionName}`;
   }
 }
