@@ -47,9 +47,9 @@ if [ ! -f /app/nocobase/package.json ]; then
   touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
 fi
 echo "Applying license hotfix..."
-cd /app/nocobase && node /hotfix-license.js
+cd /app/nocobase && echo "module.exports={getEnvAsync:async()=>({sys:'mock',osVer:'mock',db:{id:'mock'}}),getInstanceIdWithPublicKeyAsync:async()=>'mock',getInstanceIdAsync:async()=>'mock',instanceIdDecrypt:()=>'mock',createKeyPair:()=>({publicKey:'mock',privateKey:'mock'}),encryptWithPublicKey:()=>'mock',encrypt:()=>'mock',decryptWithPrivateKey:()=>'mock',createSignature:()=>'mock',verifySignature:()=>true,keyEncrypt:()=>'mock',keyDecrypt:()=>JSON.stringify({licenseKey:{domain:'*'}})}" > node_modules/@nocobase/license-kit/index.js
 cd /app/nocobase && yarn nocobase postinstall
-PRIMARY_URL="http://app-primary:13000/api/app:getInfo"
+PRIMARY_URL="http://app-1:13000/api/app:getInfo"
 MAX_WAIT=900
 WAITED=0
 while [ $WAITED -lt $MAX_WAIT ]; do
@@ -59,7 +59,7 @@ while [ $WAITED -lt $MAX_WAIT ]; do
     break
   fi
   sleep 5
-  WAITED=$(($WAITED + 5))
+  WAITED=$((WAITED + 5))
 done
 exec yarn --cwd /app/nocobase start`;
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolRegisterOptions } from '@nocobase/plugin-ai/dist/server/manager/tool-manager';
+type ToolRegisterOptions = any;
 
 const description = `Display a diagram on the active draw.io block. Pass ONLY the mxCell elements - wrapper tags and root cells are added automatically.
 

@@ -12,6 +12,7 @@ import { Readable, Transform, TransformCallback } from 'stream';
 import SftpClient from 'ssh2-sftp-client';
 import { AttachmentModel, StorageModel, StorageType, cloudFilenameGetter } from '@nocobase/plugin-file-manager';
 import { STORAGE_TYPE_SFTP_PRIVATE } from '../../constants';
+import { sftpPoolManager, SftpPoolOptions } from '../sftp-pool-manager';
 
 class CountingStream extends Transform {
   size = 0;
@@ -53,7 +54,7 @@ export default class SftpPrivateStorage extends StorageType {
     super(storage);
   }
 
-  private getConnectOptions() {
+  private getConnectOptions(): SftpPoolOptions {
     const {
       host,
       port = 22,
@@ -62,38 +63,17 @@ export default class SftpPrivateStorage extends StorageType {
       password,
       privateKey,
       passphrase,
-      readyTimeout = 15000,
-      retries = 2,
-      retry_factor = 2,
-      retry_minTimeout = 2000,
     } = this.storage.options || {};
 
-    const connectOptions: any = {
+    return {
       host,
       port: Number(port || 22),
       username,
-      readyTimeout,
-      retries,
-      retry_factor,
-      retry_minTimeout,
+      authMethod,
+      password,
+      privateKey,
+      passphrase,
     };
-
-    if (authMethod === 'privateKey' && privateKey) {
-      connectOptions.privateKey = privateKey;
-      if (passphrase) {
-        connectOptions.passphrase = passphrase;
-      }
-    } else if (password) {
-      connectOptions.password = password;
-    }
-
-    return connectOptions;
-  }
-
-  private async connect() {
-    const client = new SftpClient();
-    await client.connect(this.getConnectOptions());
-    return client;
   }
 
   private resolveRemotePath(key: string) {
@@ -160,12 +140,13 @@ export default class SftpPrivateStorage extends StorageType {
           return;
         }
 
-        let client: SftpClient | null = null;
+        let clientData: any = null;
 
         try {
           const remotePath = this.resolveRemotePath(key);
           const parentDir = path.posix.dirname(remotePath);
-          client = await this.connect();
+          clientData = await sftpPoolManager.acquire(this.getConnectOptions());
+          const { client } = clientData;
 
           if (parentDir && parentDir !== '.') {
             await client.mkdir(parentDir, true);
@@ -183,21 +164,21 @@ export default class SftpPrivateStorage extends StorageType {
         } catch (error) {
           done(error);
         } finally {
-          await client?.end().catch(() => {});
+          if (clientData) clientData.release();
         }
       },
 
       _removeFile: (req: any, file: any, cb: Function) => {
         (async () => {
-          let client: SftpClient | null = null;
+          let clientData: any = null;
           try {
-            client = await this.connect();
-            await client.delete(this.resolveRemotePath(file.key));
+            clientData = await sftpPoolManager.acquire(this.getConnectOptions());
+            await clientData.client.delete(this.resolveRemotePath(file.key));
             cb(null);
           } catch (err) {
             cb(err);
           } finally {
-            await client?.end().catch(() => {});
+            if (clientData) clientData.release();
           }
         })();
       },
@@ -205,7 +186,7 @@ export default class SftpPrivateStorage extends StorageType {
   }
 
   async delete(records: AttachmentModel[]): Promise<[number, AttachmentModel[]]> {
-    const client = await this.connect();
+    const { client, release } = await sftpPoolManager.acquire(this.getConnectOptions());
     let count = 0;
     const undeleted = [];
 
@@ -224,42 +205,55 @@ export default class SftpPrivateStorage extends StorageType {
         }
       }
     } finally {
-      await client.end().catch(() => {});
+      release();
     }
 
     return [count, undeleted];
   }
 
   async getFileStream(file: AttachmentModel): Promise<{ stream: Readable; contentType?: string }> {
-    const client = await this.connect();
+    const { client, release, pool } = await sftpPoolManager.acquire(this.getConnectOptions());
     const remotePath = this.resolveRemotePath(this.getFileKey(file));
     const sftp = (client as any).sftp;
 
     if (!sftp) {
       try {
         const buffer = (await client.get(remotePath)) as Buffer;
-        await client.end().catch(() => {});
+        release();
         return {
           stream: Readable.from(buffer),
           contentType: file.mimetype,
         };
       } catch (error) {
-        await client.end().catch(() => {});
+        pool.destroy(client).catch(() => {});
         throw error;
       }
     }
 
     try {
       const stream = sftp.createReadStream(remotePath);
-      const cleanup = () => client.end().catch(() => {});
+      let released = false;
+      const cleanup = () => {
+        if (!released) {
+          released = true;
+          release();
+        }
+      };
+      const cleanupError = () => {
+        if (!released) {
+          released = true;
+          pool.destroy(client).catch(() => {});
+        }
+      };
       stream.once('close', cleanup);
-      stream.once('error', cleanup);
+      stream.once('end', cleanup);
+      stream.once('error', cleanupError);
       return {
         stream,
         contentType: file.mimetype,
       };
     } catch (error) {
-      await client.end().catch(() => {});
+      pool.destroy(client).catch(() => {});
       throw error;
     }
   }

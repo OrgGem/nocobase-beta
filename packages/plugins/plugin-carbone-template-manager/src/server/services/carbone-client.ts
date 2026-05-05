@@ -78,6 +78,23 @@ export class CarboneClient {
     await this.withRetry(() => this.http.delete(`/template/${templateId}`));
   }
 
+  /**
+   * Check whether Carbone still has a templateId. The community edition LRU
+   * may evict entries; callers use this to decide whether to re-upload.
+   */
+  async templateExists(templateId: string): Promise<boolean> {
+    try {
+      await this.withRetry(() =>
+        this.http.get(`/template/${templateId}`, { responseType: 'arraybuffer' }),
+      );
+      return true;
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 404 || status === 410) return false;
+      throw err;
+    }
+  }
+
   async render(templateId: string, options: CarboneRenderOptions): Promise<CarboneRenderResult> {
     const { data: postData } = await this.withRetry(() =>
       this.http.post(`/render/${templateId}`, options),
@@ -91,7 +108,7 @@ export class CarboneClient {
     return {
       buffer: Buffer.from(fileData as ArrayBuffer),
       filename: this.parseFilename(headers['content-disposition']) ?? renderId,
-      mimeType: headers['content-type'] ?? 'application/octet-stream',
+      mimeType: (headers['content-type'] as string) ?? 'application/octet-stream',
     };
   }
 

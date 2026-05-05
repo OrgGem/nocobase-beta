@@ -1,29 +1,54 @@
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
+import WorkflowPlugin from '@nocobase/plugin-workflow';
 import { COLLECTION, DEFAULTS } from '../shared/constants';
 import { CarboneClient, CarboneClientConfig } from './services/carbone-client';
 import { CacheManager } from './services/cache-manager';
+import { RateLimiter } from './services/rate-limiter';
+import { RenderLogger } from './services/render-logger';
 import { getSettings, saveSettings, testConnection } from './resources/settings';
 import { makeTemplateActions, makeVersionActions } from './resources/templates';
-import { makeRenderActions, makeCacheActions } from './resources/renders';
+import { makeRenderActions, makeCacheActions, makeMonitoringActions } from './resources/renders';
+import { makeCarboneRenderInstructionClass } from './workflow/carbone-render-instruction';
 
 /**
- * P1 — Foundation skeleton for the Carbone Template Manager plugin.
+ * Carbone Template Manager — server plugin.
  *
- * Wires up:
- *   - the singleton `carboneSettings` collection,
- *   - get/save/testConnection resource actions,
- *   - ACL snippets for every planned resource (most are empty placeholders
- *     until P2/P3/P4/P5 land).
- *
- * Subsequent phases add:
+ * Phases:
+ *   P1 — settings + connection + ACL skeleton
  *   P2 — templates + versions collections, upload/parse/CRUD
- *   P3 — render + cache
- *   P4 — versioning rollback + test playground
- *   P5 — monitoring dashboard + rate limit + audit
- *   P6 — workflow instruction + record action
+ *   P3 — render + content-addressable cache
+ *   P4 — playground + cache management UI
+ *   P5 — render logs + per-user rate limit + retention prune (this file)
+ *   P6 — workflow instruction (next)
  */
 export class PluginCarboneTemplateManagerServer extends Plugin {
+  /** In-memory rate limiter shared across all render actions. */
+  readonly rateLimiter = new RateLimiter();
+
+  private maintenanceTimer?: NodeJS.Timeout;
+
+  async beforeLoad() {
+    // Prepare migrations directory for future schema evolution (#14).
+    this.db.addMigrations({
+      namespace: this.name,
+      directory: resolve(__dirname, 'migrations'),
+    });
+  }
+
+  /**
+   * Ensure the singleton settings row exists on first install so that
+   * workflow / API renders before the admin visits the UI don't fail
+   * with "Carbone settings are not configured" (#5).
+   */
+  async install() {
+    const repo = this.db.getRepository(COLLECTION.settings);
+    const existing = await repo.findOne({});
+    if (!existing) {
+      await repo.create({ values: { ...DEFAULTS } });
+    }
+  }
+
   async load() {
     // 1. Auto-load collections
     await this.db.import({ directory: resolve(__dirname, 'collections') });
@@ -69,6 +94,15 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
       },
     });
 
+    const monitoringActions = makeMonitoringActions(this);
+    this.app.resourceManager.define({
+      name: COLLECTION.renderLogs,
+      actions: {
+        replay: monitoringActions.replay,
+        summary: monitoringActions.summary,
+      },
+    });
+
     // 2.5 Cache invalidation hook — purge cache rows when a template is removed.
     this.db.on(`${COLLECTION.templates}.afterDestroy`, async (model: any) => {
       try {
@@ -79,6 +113,18 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
         this.app.logger.warn(`[carbone] cache invalidation on destroy failed: ${err}`);
       }
     });
+
+    // 2.6 Hourly maintenance — prune expired logs + idle rate-limit windows.
+    this.maintenanceTimer = setInterval(() => this.runMaintenance(), 3_600_000);
+    this.app.on('beforeStop', () => {
+      if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+    });
+
+    // 2.7 Workflow integration (P6) — register the `carbone-render` instruction.
+    const workflowPlugin = this.app.pm.get(WorkflowPlugin) as WorkflowPlugin | undefined;
+    if (workflowPlugin) {
+      workflowPlugin.registerInstruction('carbone-render', makeCarboneRenderInstructionClass(this));
+    }
 
     // 3. ACL snippets — admin-only by default. Placeholders for resources
     //    that don't exist yet are scoped now to keep migrations stable.
@@ -119,7 +165,11 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     this.app.acl.registerSnippet({
       name: `pm.${ns}.monitoring`,
       actions: [
-        `${COLLECTION.renderLogs}:*`,
+        `${COLLECTION.renderLogs}:list`,
+        `${COLLECTION.renderLogs}:get`,
+        `${COLLECTION.renderLogs}:destroy`,
+        `${COLLECTION.renderLogs}:replay`,
+        `${COLLECTION.renderLogs}:summary`,
         `${COLLECTION.renderCache}:list`,
         `${COLLECTION.renderCache}:get`,
         `${COLLECTION.renderCache}:destroy`,
@@ -145,6 +195,16 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
       maxRetries: row.maxRetries ?? DEFAULTS.maxRetries,
     };
     return new CarboneClient(cfg);
+  }
+
+  private async runMaintenance() {
+    try {
+      this.rateLimiter.prune();
+      const removed = await new RenderLogger(this.app).pruneExpired();
+      if (removed) this.app.logger.info(`[carbone] pruned ${removed} expired render logs`);
+    } catch (err) {
+      this.app.logger.warn(`[carbone] maintenance task failed: ${err}`);
+    }
   }
 }
 

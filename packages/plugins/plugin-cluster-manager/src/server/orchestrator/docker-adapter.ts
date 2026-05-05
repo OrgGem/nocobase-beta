@@ -104,6 +104,48 @@ export class DockerAdapter implements IOrchestratorAdapter {
 
     if (diff > 0) {
       // Scale UP
+      let targetNetworks = stack.networks && stack.networks.length > 0 ? stack.networks : [];
+      let targetNetworkMode = stack.networkMode;
+      let targetEnvVars = this.buildEnvArray(stack.envVars);
+      let targetVolumes = stack.volumes || [];
+
+      // Auto-detect current container's configuration to inherit networks and env vars
+      try {
+        const os = require('os');
+        const myContainerId = os.hostname();
+        const myContainer = this.docker.getContainer(myContainerId);
+        const myInfo = await myContainer.inspect();
+        
+        // Inherit Networks if none specified
+        if (!targetNetworkMode && targetNetworks.length === 0) {
+          if (myInfo?.NetworkSettings?.Networks) {
+            targetNetworks = Object.keys(myInfo.NetworkSettings.Networks);
+          }
+        }
+        
+        // Inherit Environment Variables and merge with stack.envVars
+        if (myInfo?.Config?.Env) {
+           const envDict: Record<string, string> = {};
+           myInfo.Config.Env.forEach((e: string) => {
+             const idx = e.indexOf('=');
+             if (idx !== -1) {
+               envDict[e.substring(0, idx)] = e.substring(idx + 1);
+             }
+           });
+           // Overwrite with explicitly defined env vars
+           Object.assign(envDict, stack.envVars || {});
+           targetEnvVars = Object.entries(envDict).map(([k, v]) => `${k}=${v}`);
+        }
+
+        // Inherit Volumes (Binds)
+        if (myInfo?.HostConfig?.Binds) {
+          const inheritedBinds = myInfo.HostConfig.Binds as string[];
+          targetVolumes = Array.from(new Set([...inheritedBinds, ...targetVolumes]));
+        }
+      } catch (e) {
+        // Ignore error if not running in a container or cannot inspect
+      }
+
       for (let i = 0; i < diff; i++) {
         const suffix = `${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
         const containerName = `${stack.name}-${suffix}`;
@@ -111,14 +153,14 @@ export class DockerAdapter implements IOrchestratorAdapter {
         const createOpts: any = {
           Image: stack.image,
           name: containerName,
-          Env: this.buildEnvArray(stack.envVars),
+          Env: targetEnvVars,
           Labels: {
             [LABEL_STACK]: stack.name,
             [LABEL_MANAGED]: 'true',
             ...this.workerLabels,
           },
           HostConfig: {
-            Binds: stack.volumes || [],
+            Binds: targetVolumes,
             RestartPolicy: { Name: stack.restartPolicy || 'unless-stopped' },
           },
         };
@@ -131,16 +173,29 @@ export class DockerAdapter implements IOrchestratorAdapter {
           createOpts.HostConfig.Memory = this.parseMemory(stack.resourceLimits.memory);
         }
 
-        if (stack.networkMode) {
-          createOpts.HostConfig.NetworkMode = stack.networkMode;
-        } else if (stack.networks && stack.networks.length > 0) {
-          createOpts.HostConfig.NetworkMode = stack.networks[0];
+        if (targetNetworkMode) {
+          createOpts.HostConfig.NetworkMode = targetNetworkMode;
+        } else if (targetNetworks.length > 0) {
+          createOpts.HostConfig.NetworkMode = targetNetworks[0];
         }
 
         // Security hardening
         createOpts.HostConfig.SecurityOpt = ['no-new-privileges:true'];
 
         const container = await this.docker.createContainer(createOpts);
+        
+        // Connect to additional networks before starting
+        if (!targetNetworkMode && targetNetworks.length > 1) {
+          for (let i = 1; i < targetNetworks.length; i++) {
+            try {
+              const net = this.docker.getNetwork(targetNetworks[i]);
+              await net.connect({ Container: container.id });
+            } catch (err: any) {
+              console.warn(`[DockerAdapter] Failed to connect container ${container.id} to network ${targetNetworks[i]}: ${err.message}`);
+            }
+          }
+        }
+
         await container.start();
         result.containersCreated!.push(container.id.substring(0, 12));
       }

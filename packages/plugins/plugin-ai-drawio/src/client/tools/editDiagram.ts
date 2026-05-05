@@ -53,7 +53,6 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
   const fullXml = wrapWithMxFile(editedXml);
   try {
     handle.setXml(fullXml);
-    await handle.persist(fullXml);
     handle.bridge.load(fullXml);
   } catch (err: any) {
     return { status: 'error', content: `Failed to apply edits to canvas: ${err?.message || String(err)}` };

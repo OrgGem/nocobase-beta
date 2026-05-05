@@ -23,6 +23,7 @@ export async function getConfig(ctx: Context, next: Next) {
 }
 
 export async function setConfig(ctx: Context, next: Next) {
+  // Security note: Any admin with pm.ai-drawio snippet access can point all users to an arbitrary host via this config.
   const body = (ctx.request as any).body || {};
   const url = typeof body === 'string' ? body : body.drawioBaseUrl;
   if (typeof url !== 'string' || !url.trim()) {

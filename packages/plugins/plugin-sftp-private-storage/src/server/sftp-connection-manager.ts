@@ -9,6 +9,7 @@
 
 import SftpClient from 'ssh2-sftp-client';
 import { Readable } from 'stream';
+import { sftpPoolManager } from './sftp-pool-manager';
 
 export interface SftpConfig {
   id: number | string;
@@ -59,133 +60,38 @@ export interface SftpFileStat {
  * Handles reconnection, cleanup, and provides a unified API for SFTP operations.
  */
 export class SftpConnectionManager {
-  private connections = new Map<string | number, SftpClient>();
   private configs = new Map<string | number, SftpConfig>();
-  private connecting = new Map<string | number, Promise<SftpClient>>();
   private logger: any;
 
   constructor(logger?: any) {
     this.logger = logger || console;
   }
 
-  /**
-   * Register an SFTP config for connection management
-   */
   registerConfig(config: SftpConfig) {
     this.configs.set(config.id, config);
   }
 
-  /**
-   * Remove a config and close its connection
-   */
   async unregisterConfig(configId: string | number) {
-    await this.disconnect(configId);
+    // With pooling, we can't easily destroy a specific pool by configId 
+    // unless we resolve the options hash. For now, just remove from map.
     this.configs.delete(configId);
   }
 
-  /**
-   * Get or create an SFTP connection for the given config ID
-   */
-  async getConnection(configId: string | number): Promise<SftpClient> {
-    // Return existing healthy connection
-    const existing = this.connections.get(configId);
-    if (existing) {
-      try {
-        // Quick health check - try to get cwd
-        await existing.cwd();
-        return existing;
-      } catch {
-        // Connection is dead, clean up and reconnect
-        this.connections.delete(configId);
-        try { existing.end(); } catch { /* ignore */ }
-      }
-    }
-
-    // If already connecting, wait for it
-    const pendingConnect = this.connecting.get(configId);
-    if (pendingConnect) {
-      return pendingConnect;
-    }
-
-    // Create new connection
-    const connectPromise = this.connect(configId);
-    this.connecting.set(configId, connectPromise);
-
-    try {
-      const client = await connectPromise;
-      return client;
-    } finally {
-      this.connecting.delete(configId);
-    }
-  }
-
-  private async connect(configId: string | number): Promise<SftpClient> {
+  private getConfigOptions(configId: string | number) {
     const config = this.configs.get(configId);
     if (!config) {
       throw new Error(`[sftp-private] No config found for ID: ${configId}`);
     }
-
-    const client = new SftpClient();
-
-    const connectOptions: any = {
-      host: config.host,
-      port: config.port || 22,
-      username: config.username,
-      readyTimeout: 15000,
-      retries: 2,
-      retry_factor: 2,
-      retry_minTimeout: 2000,
-    };
-
-    if (config.authMethod === 'privateKey' && config.privateKey) {
-      connectOptions.privateKey = config.privateKey;
-      if (config.passphrase) {
-        connectOptions.passphrase = config.passphrase;
-      }
-    } else if (config.password) {
-      connectOptions.password = config.password;
-    }
-
-    try {
-      await client.connect(connectOptions);
-      this.connections.set(configId, client);
-      this.logger.info?.(`[sftp-private] Connected to ${config.host}:${config.port}`);
-      return client;
-    } catch (error) {
-      this.logger.error?.(`[sftp-private] Failed to connect to ${config.host}:${config.port}`, error);
-      throw error;
-    }
+    return config;
   }
 
-  /**
-   * Test connection to an SFTP server using the given config
-   */
   async testConnection(config: Omit<SftpConfig, 'id'>): Promise<{ success: boolean; message: string; cwd?: string }> {
-    const client = new SftpClient();
     try {
-      const connectOptions: any = {
-        host: config.host,
-        port: config.port || 22,
-        username: config.username,
-        readyTimeout: 10000,
-      };
-
-      if (config.authMethod === 'privateKey' && config.privateKey) {
-        connectOptions.privateKey = config.privateKey;
-        if (config.passphrase) {
-          connectOptions.passphrase = config.passphrase;
-        }
-      } else if (config.password) {
-        connectOptions.password = config.password;
-      }
-
-      await client.connect(connectOptions);
+      const { client, release, pool } = await sftpPoolManager.acquire(config as any);
       const cwd = await client.cwd();
-      await client.end();
-
+      release();
       return { success: true, message: 'Connection successful', cwd };
     } catch (error: any) {
-      try { await client.end(); } catch { /* ignore */ }
       return { success: false, message: error.message || 'Connection failed' };
     }
   }
@@ -194,65 +100,91 @@ export class SftpConnectionManager {
    * List files in a directory
    */
   async listFiles(configId: string | number, remotePath: string): Promise<SftpFileEntry[]> {
-    const client = await this.getConnection(configId);
-    const rawList = await client.list(remotePath);
-
-    return rawList
-      .filter((item) => item.name !== '.' && item.name !== '..')
-      .map((item) => ({
-        name: item.name,
-        path: remotePath.replace(/\/$/, '') + '/' + item.name,
-        type: item.type === 'd' ? 'directory' as const : item.type === 'l' ? 'link' as const : 'file' as const,
-        size: item.size,
-        modifyTime: item.modifyTime,
-        accessTime: item.accessTime,
-        rights: item.rights,
-        owner: item.owner,
-        group: item.group,
-      }));
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      const rawList = await client.list(remotePath);
+      return rawList
+        .filter((item) => item.name !== '.' && item.name !== '..')
+        .map((item) => ({
+          name: item.name,
+          path: remotePath.replace(/\/$/, '') + '/' + item.name,
+          type: item.type === 'd' ? 'directory' as const : item.type === 'l' ? 'link' as const : 'file' as const,
+          size: item.size,
+          modifyTime: item.modifyTime,
+          accessTime: item.accessTime,
+          rights: item.rights,
+          owner: item.owner,
+          group: item.group,
+        }));
+    } finally {
+      release();
+    }
   }
 
   /**
    * Get file stats
    */
   async stat(configId: string | number, remotePath: string): Promise<SftpFileStat> {
-    const client = await this.getConnection(configId);
-    const stats = await client.stat(remotePath);
-    return stats as unknown as SftpFileStat;
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      const stats = await client.stat(remotePath);
+      return stats as unknown as SftpFileStat;
+    } finally {
+      release();
+    }
   }
 
-  /**
-   * Check if a path exists
-   */
   async exists(configId: string | number, remotePath: string): Promise<false | 'd' | '-' | 'l'> {
-    const client = await this.getConnection(configId);
-    return client.exists(remotePath);
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      return await client.exists(remotePath);
+    } finally {
+      release();
+    }
   }
 
   /**
    * Get a readable stream for a remote file
    */
   async getFileStream(configId: string | number, remotePath: string): Promise<Readable> {
-    const client = await this.getConnection(configId);
-    // ssh2-sftp-client's get with a dst of undefined returns a buffer
-    // We need to use createReadStream for streaming
+    const { client, release, pool } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
     const sftp = (client as any).sftp;
     if (!sftp) {
-      // Fallback: get as buffer and convert to stream
-      const buffer = await client.get(remotePath) as Buffer;
-      const stream = new Readable();
-      stream.push(buffer);
-      stream.push(null);
-      return stream;
+      try {
+        const buffer = await client.get(remotePath) as Buffer;
+        release();
+        const stream = new Readable();
+        stream.push(buffer);
+        stream.push(null);
+        return stream;
+      } catch (err) {
+        pool.destroy(client).catch(() => {});
+        throw err;
+      }
     }
 
     return new Promise<Readable>((resolve, reject) => {
       try {
         const readStream = sftp.createReadStream(remotePath);
-        readStream.on('error', reject);
-        // Wait for 'ready' or resolve immediately
+        let released = false;
+        const cleanup = () => {
+          if (!released) {
+            released = true;
+            release();
+          }
+        };
+        const cleanupError = () => {
+          if (!released) {
+            released = true;
+            pool.destroy(client).catch(() => {});
+          }
+        };
+        readStream.once('close', cleanup);
+        readStream.once('end', cleanup);
+        readStream.once('error', cleanupError);
         resolve(readStream);
       } catch (err) {
+        pool.destroy(client).catch(() => {});
         reject(err);
       }
     });
@@ -262,69 +194,60 @@ export class SftpConnectionManager {
    * Upload a file from a readable stream
    */
   async putFileStream(configId: string | number, remotePath: string, stream: Readable): Promise<void> {
-    const client = await this.getConnection(configId);
-    await client.put(stream, remotePath);
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      await client.put(stream, remotePath);
+    } finally {
+      release();
+    }
   }
 
-  /**
-   * Create a directory (recursive)
-   */
   async mkdir(configId: string | number, remotePath: string): Promise<void> {
-    const client = await this.getConnection(configId);
-    await client.mkdir(remotePath, true);
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      await client.mkdir(remotePath, true);
+    } finally {
+      release();
+    }
   }
 
-  /**
-   * Delete a file
-   */
   async deleteFile(configId: string | number, remotePath: string): Promise<void> {
-    const client = await this.getConnection(configId);
-    await client.delete(remotePath);
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      await client.delete(remotePath);
+    } finally {
+      release();
+    }
   }
 
-  /**
-   * Delete a directory (recursive)
-   */
   async deleteDir(configId: string | number, remotePath: string): Promise<void> {
-    const client = await this.getConnection(configId);
-    await client.rmdir(remotePath, true);
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      await client.rmdir(remotePath, true);
+    } finally {
+      release();
+    }
   }
 
-  /**
-   * Rename/move a file or directory
-   */
   async rename(configId: string | number, oldPath: string, newPath: string): Promise<void> {
-    const client = await this.getConnection(configId);
-    await client.rename(oldPath, newPath);
+    const { client, release } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    try {
+      await client.rename(oldPath, newPath);
+    } finally {
+      release();
+    }
   }
 
   /**
    * Disconnect a specific connection
    */
   async disconnect(configId: string | number): Promise<void> {
-    const client = this.connections.get(configId);
-    if (client) {
-      try {
-        await client.end();
-      } catch (error) {
-        this.logger.warn?.(`[sftp-private] Error disconnecting ${configId}:`, error);
-      }
-      this.connections.delete(configId);
-    }
+    // Left empty for compatibility, pooling handles this
   }
 
-  /**
-   * Disconnect all connections and cleanup
-   */
   async destroy(): Promise<void> {
-    const promises: Promise<void>[] = [];
-    for (const [id] of this.connections) {
-      promises.push(this.disconnect(id));
-    }
-    await Promise.allSettled(promises);
-    this.connections.clear();
+    await sftpPoolManager.closeAll();
     this.configs.clear();
-    this.connecting.clear();
   }
 }
 

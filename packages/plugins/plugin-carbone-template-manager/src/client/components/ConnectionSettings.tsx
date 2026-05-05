@@ -57,7 +57,7 @@ export const ConnectionSettings: React.FC = () => {
     try {
       const values = form.getFieldsValue();
       const res: any = await api.resource(COLLECTION.settings).testConnection({ values });
-      const body = res.data;
+      const body = res?.data?.data || res?.data;
       setTestResult({
         ok: !!body?.ok,
         message: body?.ok

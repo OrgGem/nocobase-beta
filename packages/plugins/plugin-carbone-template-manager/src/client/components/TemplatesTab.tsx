@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Button, Input, Popconfirm, Space, Table, Tag, message } from 'antd';
+import { Button, Input, Popconfirm, Space, Switch, Table, Tag, message } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { useCarboneTranslation } from '../locale';
@@ -53,6 +53,15 @@ export const TemplatesTab: React.FC = () => {
     }
   };
 
+  const onToggleEnabled = async (row: TemplateRow, enabled: boolean) => {
+    try {
+      await api.resource(COLLECTION.templates).update({ filterByTk: row.id, values: { enabled } });
+      refresh();
+    } catch (err: any) {
+      message.error(err?.message || t('Save failed'));
+    }
+  };
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
@@ -90,14 +99,21 @@ export const TemplatesTab: React.FC = () => {
               <div>
                 <div>
                   <strong>{name}</strong>
-                  {!row.enabled && (
-                    <Tag color="default" style={{ marginLeft: 6 }}>
-                      {t('disabled')}
-                    </Tag>
-                  )}
                 </div>
                 {row.description && <div style={{ color: '#888', fontSize: 12 }}>{row.description}</div>}
               </div>
+            ),
+          },
+          {
+            title: t('Enabled'),
+            dataIndex: 'enabled',
+            width: 80,
+            render: (enabled, row) => (
+              <Switch
+                size="small"
+                checked={enabled}
+                onChange={(v) => onToggleEnabled(row, v)}
+              />
             ),
           },
           {

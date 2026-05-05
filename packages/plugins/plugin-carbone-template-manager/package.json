@@ -6,7 +6,7 @@
   "description": "Manage document templates rendered by an external Carbone.io service: upload templates, auto-extract placeholders, version & rollback, test playground, monitoring, MD5 cache, REST API, workflow instruction.",
   "description.zh-CN": "通过外部 Carbone.io 服务管理文档模板：上传模板、自动提取占位符、版本回滚、测试运行、监控、MD5 缓存、REST API、工作流指令。",
   "description.vi-VN": "Quản lý mẫu tài liệu render qua Carbone.io: upload mẫu, tự động trích xuất placeholder, versioning & rollback, playground test, monitoring, cache MD5, REST API, workflow instruction.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "dist/server/index.js",
   "files": [
     "dist",
@@ -17,23 +17,31 @@
     "src"
   ],
   "nocobase": {
-    "supportedVersions": ["2.x"]
+    "supportedVersions": [
+      "2.x"
+    ]
   },
   "peerDependencies": {
     "@nocobase/client": "2.x",
-    "@nocobase/server": "2.x",
     "@nocobase/database": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
-    "@nocobase/plugin-workflow": "2.x"
+    "@nocobase/plugin-workflow": "2.x",
+    "@nocobase/server": "2.x"
   },
   "devDependencies": {
-    "@nocobase/test": "2.x"
-  },
-  "dependencies": {
+    "@nocobase/test": "2.x",
+    "adm-zip": "^0.5.17",
     "axios": "^1.6.0",
-    "form-data": "^4.0.0",
-    "unzipper": "^0.10.14"
+    "form-data": "^4.0.0"
   },
-  "keywords": ["carbone", "template", "document", "docx", "xlsx", "pdf", "render"],
+  "keywords": [
+    "carbone",
+    "template",
+    "document",
+    "docx",
+    "xlsx",
+    "pdf",
+    "render"
+  ],
   "license": "Apache-2.0"
 }

@@ -1,4 +1,4 @@
-import unzipper from 'unzipper';
+import AdmZip from 'adm-zip';
 import type { PlaceholderNode, PlaceholderNodeType, PlaceholderSchema } from '../../shared/types';
 
 /**
@@ -16,14 +16,15 @@ import type { PlaceholderNode, PlaceholderNodeType, PlaceholderSchema } from '..
  */
 export class PlaceholderParser {
   async parse(buffer: Buffer, mimeType?: string): Promise<PlaceholderSchema> {
-    const directory = await unzipper.Open.buffer(buffer);
+    const zip = new AdmZip(buffer);
     const fragments: string[] = [];
     const warnings: string[] = [];
 
-    for (const entry of directory.files) {
-      if (entry.type !== 'File') continue;
-      if (!shouldRead(entry.path)) continue;
-      const xml = (await entry.buffer()).toString('utf8');
+    const zipEntries = zip.getEntries();
+    for (const entry of zipEntries) {
+      if (entry.isDirectory) continue;
+      if (!shouldRead(entry.entryName)) continue;
+      const xml = zip.readAsText(entry);
       fragments.push(extractText(xml));
     }
 
@@ -242,7 +243,7 @@ function buildSchema(tokens: Token[], warnings: string[]): PlaceholderSchema {
     if (!segments.length) continue;
 
     let cursor = root;
-    let parentPath = tok.scope;
+    let parentPath: string = tok.scope;
     for (let i = 0; i < segments.length; i++) {
       const node = getOrCreate(cursor, segments[i], parentPath);
       const isLast = i === segments.length - 1;

@@ -2,7 +2,7 @@ import React from 'react';
 import { ApartmentOutlined } from '@ant-design/icons';
 import { Space, message } from 'antd';
 import { i18n } from '@nocobase/client';
-import type { WorkContextOptions } from '@nocobase/plugin-ai/dist/client/ai-employees/types';
+type WorkContextOptions = any;
 import { getHandleByUid, getAllHandles } from './lib/activeRegistry';
 import { namespace, useT } from './locale';
 

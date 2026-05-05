@@ -72,7 +72,7 @@ const DiagramsTab: React.FC = () => {
   const { data, refresh, loading } = useRequest<any>({
     resource: 'aiDiagrams',
     action: 'list',
-    params: { pageSize: 100, sort: ['-updatedAt'] },
+    params: { pageSize: 100, sort: ['-updatedAt'], fields: ['id', 'title', 'description', 'updatedAt'] },
   });
 
   const records = data?.data?.data || data?.data || [];

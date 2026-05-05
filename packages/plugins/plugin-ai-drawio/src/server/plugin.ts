@@ -9,14 +9,8 @@ import { displayDiagramTool, editDiagramTool, appendDiagramTool, getShapeLibrary
 export class PluginAIDrawioServer extends Plugin {
   private readonly schemaCollections = ['aiDiagrams', 'aiDrawioConfig'];
 
-  afterAdd() {}
-
-  beforeLoad() {}
-
   async load() {
-    await this.db.import({
-      directory: resolve(__dirname, 'collections'),
-    });
+    await this.importCollections(resolve(__dirname, 'collections'));
 
     this.app.resourceManager.define({
       name: 'aiDrawio',
@@ -30,10 +24,21 @@ export class PluginAIDrawioServer extends Plugin {
     this.app.resourceManager.registerActionHandlers({
       'aiDiagrams:loadXml': loadXml,
       'aiDiagrams:saveXml': saveXml,
+      'aiDiagrams:getMeta': async (ctx: any, next: any) => {
+        const { filterByTk } = ctx.action.params;
+        const repository = ctx.db.getRepository('aiDiagrams');
+        const model = await repository.findById(filterByTk);
+        if (!model) ctx.throw(404, 'Diagram not found');
+        const { assertDiagramAccess } = await import('./actions/access');
+        assertDiagramAccess(ctx, model);
+        ctx.body = { id: model.get('id'), title: model.get('title') };
+        await next();
+      },
     });
 
     this.app.acl.allow('aiDiagrams', 'loadXml', 'loggedIn');
     this.app.acl.allow('aiDiagrams', 'saveXml', 'loggedIn');
+    this.app.acl.allow('aiDiagrams', 'getMeta', 'loggedIn');
     this.app.acl.allow('aiDrawio', 'getConfig', 'loggedIn');
     this.app.acl.allow('aiDrawio', 'getSystemPrompt', 'loggedIn');
 
@@ -44,7 +49,6 @@ export class PluginAIDrawioServer extends Plugin {
         'aiDiagrams:update',
         'aiDiagrams:destroy',
         'aiDiagrams:list',
-        'aiDiagrams:get',
         'aiDrawio:setConfig',
       ],
     });
@@ -53,8 +57,8 @@ export class PluginAIDrawioServer extends Plugin {
   }
 
   private registerAITools() {
-    const aiManager = (this.app as any).aiManager;
-    const toolsManager = aiManager?.toolsManager;
+    const pluginAI = this.app.pm.get('@nocobase/plugin-ai') as any;
+    const toolsManager = pluginAI?.aiManager?.toolsManager;
     if (!toolsManager) {
       this.app.logger.warn('[plugin-ai-drawio] aiManager.toolsManager is not available; skipping tool registration');
       return;
@@ -68,73 +72,17 @@ export class PluginAIDrawioServer extends Plugin {
         sort: 100,
       });
     } catch (e) {
-      // Group may already be registered (idempotent on hot-reload)
+      this.app.logger.debug('[plugin-ai-drawio] Tool group drawio already registered or failed: ' + e);
     }
 
     toolsManager.registerTools([displayDiagramTool, editDiagramTool, appendDiagramTool, getShapeLibraryTool]);
   }
 
-  private async ensureCollectionSchema(collectionName: string) {
-    const collection = this.db.getCollection(collectionName);
-    if (!collection) {
-      this.app.logger.warn(`[plugin-ai-drawio] Collection "${collectionName}" is not registered`);
-      return;
-    }
-
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tableName = collection.getTableNameWithSchema();
-    let columns: Record<string, any> | null = null;
-
-    try {
-      columns = await queryInterface.describeTable(tableName);
-    } catch (error) {
-      await collection.model.sync();
-      columns = await queryInterface.describeTable(tableName);
-    }
-
-    const attributes = collection.model.rawAttributes as Record<string, any>;
-    for (const [attributeName, attribute] of Object.entries(attributes)) {
-      const columnName = attribute.field || attributeName;
-      if (columns[columnName]) {
-        continue;
-      }
-
-      const columnDefinition = { ...attribute };
-      delete columnDefinition.Model;
-      delete columnDefinition.fieldName;
-
-      await queryInterface.addColumn(tableName, columnName, columnDefinition);
-      columns[columnName] = columnDefinition;
-      this.app.logger.info(`[plugin-ai-drawio] Added missing column "${columnName}" to "${collectionName}"`);
-    }
-  }
-
-  private async ensureSchema() {
-    for (const collectionName of this.schemaCollections) {
-      await this.ensureCollectionSchema(collectionName);
-    }
-
-    const repo = this.db.getRepository<any>('collections');
-    if (repo && typeof repo.db2cm === 'function') {
-      for (const collectionName of this.schemaCollections) {
-        await repo.db2cm(collectionName);
-      }
-    }
-  }
-
   async install(options?: InstallOptions) {
-    await this.ensureSchema();
   }
 
   async upgrade() {
-    await this.ensureSchema();
   }
-
-  async afterEnable() {}
-
-  async afterDisable() {}
-
-  async remove() {}
 }
 
 export default PluginAIDrawioServer;

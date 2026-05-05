@@ -194,29 +194,29 @@ export function makeVersionActions(plugin: PluginCarboneTemplateManagerServer) {
 
     let carboneTemplateId = version.carboneTemplateId;
 
-    // Probe Carbone — community edition may have evicted the templateId.
+    // Probe Carbone via HEAD-like GET — community edition may have evicted the
+    // templateId. If gone, re-upload from the backup attachment.
+    let exists = true;
     try {
-      await client.render(carboneTemplateId, { data: {} });
+      exists = await client.templateExists(carboneTemplateId);
     } catch (err: any) {
-      const status = err?.response?.status;
-      if (status === 404 || status === 410) {
-        if (!version.fileBackupId) {
-          ctx.throw(409, 'Carbone no longer has this template and no backup is available');
-        }
-        const { buffer, attachment } = await readAttachmentBuffer(
-          plugin.app,
-          version.fileBackupId,
-        );
-        carboneTemplateId = await client.uploadTemplate(
-          buffer,
-          attachment.filename || version.originalFileName || 'template',
-        );
-        await verRepo.update({ filterByTk: version.id, values: { carboneTemplateId } });
-      } else {
-        plugin.app.logger.warn(
-          `[carbone-template-manager] rollback probe error (continuing): ${err?.message ?? err}`,
-        );
+      plugin.app.logger.warn(
+        `[carbone-template-manager] rollback probe error (continuing): ${err?.message ?? err}`,
+      );
+    }
+    if (!exists) {
+      if (!version.fileBackupId) {
+        ctx.throw(409, 'Carbone no longer has this template and no backup is available');
       }
+      const { buffer, attachment } = await readAttachmentBuffer(
+        plugin.app,
+        version.fileBackupId,
+      );
+      carboneTemplateId = await client.uploadTemplate(
+        buffer,
+        attachment.filename || version.originalFileName || 'template',
+      );
+      await verRepo.update({ filterByTk: version.id, values: { carboneTemplateId } });
     }
 
     await tplRepo.update({

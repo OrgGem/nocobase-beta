@@ -1,5 +1,5 @@
 {
-  "name": "@nocobase/plugin-user-memory",
+  "name": "plugin-user-memory",
   "version": "1.0.0",
   "description": "User Memory plugin — synthesizes chat history into persistent user profiles for personalized AI responses",
   "displayName": "User Memory",

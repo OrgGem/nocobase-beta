@@ -13,12 +13,22 @@ function userHasAdminSnippet(ctx: Context): boolean {
 }
 
 export function assertDiagramAccess(ctx: Context, model: any) {
+  const isRead = ['get', 'getMeta', 'list', 'loadXml'].includes(ctx.action.actionName);
+
+  if (userHasAdminSnippet(ctx)) return;
+
   const currentUserId = (ctx.state as any)?.currentUser?.id;
+
+  if (isRead) {
+    return;
+  }
+
   if (!currentUserId) {
     ctx.throw(401, 'Login required');
   }
+
   const createdById = model?.get?.('createdById');
   if (createdById && createdById === currentUserId) return;
-  if (userHasAdminSnippet(ctx)) return;
+
   ctx.throw(403, 'You do not have permission to access this diagram');
 }

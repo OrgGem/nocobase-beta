@@ -4,7 +4,6 @@ import { useAPIClient, useRequest } from '@nocobase/client';
 import { useFieldSchema } from '@formily/react';
 import { useT } from './locale';
 import { DrawioBridge, buildDrawioEmbedUrl } from './lib/drawioBridge';
-import { useOptionalDrawioContext } from './context/DrawioContext';
 import { registerActiveHandle, setActiveBlockUid } from './lib/activeRegistry';
 
 type Props = {
@@ -28,7 +27,6 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   const api = useAPIClient();
   const { message } = AntApp.useApp();
   const fieldSchema = useFieldSchema();
-  const drawioCtx = useOptionalDrawioContext();
   const [fallbackUid] = useState(() => `inline-${Math.random().toString(36).slice(2, 10)}`);
   const blockUid = String(fieldSchema?.['x-uid'] || fallbackUid);
 
@@ -48,7 +46,6 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   const baseUrl =
     baseUrlOverride ||
     settingsData?.data?.drawioBaseUrl ||
-    drawioCtx?.baseUrl ||
     'https://embed.diagrams.net';
 
   const embedUrl = useMemo(() => buildDrawioEmbedUrl(baseUrl, { ui }), [baseUrl, ui]);
@@ -65,8 +62,8 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   const { data: metaData } = useRequest<any>(
     {
       resource: 'aiDiagrams',
-      action: 'get',
-      params: { filterByTk: diagramId, fields: ['id', 'title'] },
+      action: 'getMeta',
+      params: { filterByTk: diagramId },
     },
     { refreshDeps: [diagramId], manual: !diagramId },
   );
@@ -120,7 +117,6 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
         onSave: async (xml) => {
           xmlRef.current = xml;
           await persistXml(xml);
-          // Trigger an svg export so the thumbnail stays fresh.
           bridge.export('xmlsvg');
         },
         onAutosave: async (xml) => {
@@ -143,18 +139,22 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
       initialXml,
     );
 
-    const unregisterCtx = drawioCtx?.registerHandle({
-      blockUid,
-      diagramId,
-      bridge,
-      getXml: () => xmlRef.current,
-    });
+    return () => {
+      bridge.detach();
+      bridgeRef.current = null;
+      setIframeReady(false);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagramId, baseUrl, persistXml]);
 
+  useEffect(() => {
+    if (!diagramId || !bridgeRef.current) return;
+    
     const unregisterActive = registerActiveHandle({
       blockUid,
       diagramId,
       diagramTitle,
-      bridge,
+      bridge: bridgeRef.current,
       getXml: () => xmlRef.current,
       setXml: (xml: string) => {
         xmlRef.current = xml;
@@ -165,14 +165,13 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
     setActiveBlockUid(blockUid);
 
     return () => {
-      bridge.detach();
-      bridgeRef.current = null;
-      unregisterCtx?.();
       unregisterActive();
-      setIframeReady(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diagramId, baseUrl, diagramTitle]);
+  }, [diagramId, blockUid, diagramTitle, persistXml]);
+
+  const handleInteraction = useCallback(() => {
+    setActiveBlockUid(blockUid);
+  }, [blockUid]);
 
   useEffect(() => {
     if (iframeReady && bridgeRef.current && initialXml) {
@@ -199,7 +198,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   }
 
   return (
-    <Card bodyStyle={{ padding: 0, position: 'relative', overflow: 'hidden' }}>
+    <Card bodyStyle={{ padding: 0, position: 'relative', overflow: 'hidden' }} onClick={handleInteraction} onMouseEnter={handleInteraction}>
       {(loadingXml || !iframeReady) && (
         <div
           style={{

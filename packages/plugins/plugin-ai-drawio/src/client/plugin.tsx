@@ -20,8 +20,6 @@ export class PluginAIDrawioClient extends Plugin {
 
     this.app.schemaSettingsManager.add(drawioBlockSettings);
 
-    this.app.use(DrawioBlockProvider);
-
     this.app.pluginSettingsManager.add('ai-drawio', {
       icon: 'ApartmentOutlined',
       title: `{{t("AI Drawio", { ns: "${namespace}" })}}`,

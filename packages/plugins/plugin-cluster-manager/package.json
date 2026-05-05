@@ -3,7 +3,7 @@
   "displayName": "Cluster Manager",
   "displayName.zh-CN": "Cluster Manager",
   "description": "Cluster node tracking, task orchestration, worker management, and package distribution",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
   "keywords": ["Monitoring", "DevOps"],
@@ -21,7 +21,9 @@
     "@nocobase/database": "2.x"
   },
   "dependencies": {
-    "@nocobase/lock-manager": "2.x",
+    "@nocobase/lock-manager": "2.x"
+  },
+  "devDependencies": {
     "@kubernetes/client-node": "^0.22.3",
     "dockerode": "^3.3.5",
     "redis": "^5.10.0",

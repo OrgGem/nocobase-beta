@@ -1,6 +1,6 @@
 {
   "name": "plugin-sftp-private-storage",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "displayName": "SFTP Private Storage",
   "displayName.zh-CN": "SFTP 私有存储",
   "description": "Provides SFTP connection management and file operations for external storage integration.",
@@ -22,14 +22,13 @@
     "private-storage",
     "file-manager"
   ],
-  "dependencies": {
-    "ssh2-sftp-client": "^11.0.0"
-  },
   "devDependencies": {
     "@formily/antd-v5": "1.x",
     "@formily/react": "2.x",
     "antd": "5.x",
-    "react": "^18.2.0"
+    "generic-pool": "^3.9.0",
+    "react": "^18.2.0",
+    "ssh2-sftp-client": "^11.0.0"
   },
   "peerDependencies": {
     "@nocobase/client": "2.x",

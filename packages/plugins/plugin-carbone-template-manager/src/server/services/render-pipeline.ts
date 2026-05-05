@@ -2,7 +2,7 @@ import { Application } from '@nocobase/server';
 import { COLLECTION, DEFAULTS, SUPPORTED_OUTPUT_FORMATS, CarboneOutputFormat } from '../../shared/constants';
 import { CarboneClient } from './carbone-client';
 import { CacheManager, buildCacheKey, inputMd5 } from './cache-manager';
-import { writeBufferAsAttachment } from './attachment-helper';
+import { readAttachmentBuffer, writeBufferAsAttachment } from './attachment-helper';
 
 export interface RenderInput {
   templateId?: number;
@@ -49,24 +49,45 @@ export class RenderPipeline {
     }
 
     const cacheKey = buildCacheKey(input.carboneTemplateId, input.data, format);
-    const useCache = settings.enableCache && !input.bypassCache && input.persistOutput !== false;
+    // Cache LOOKUP runs whenever caching is on and the caller didn't bypass —
+    // independent of `persistOutput`, so inline previews (playground) can hit
+    // entries populated by earlier persisted renders.
+    const useCache = settings.enableCache && !input.bypassCache;
+    const persistOutput = input.persistOutput !== false;
 
     const t0 = Date.now();
 
     if (useCache) {
       const hit = await this.cache.lookup(cacheKey);
       if (hit.status === 'hit') {
-        return {
-          attachmentId: hit.attachmentId,
-          url: hit.url,
-          buffer: null,
-          format,
-          size: hit.sizeBytes,
-          cacheHit: true,
-          cacheKey,
-          inputMd5: inputMd5(input.data),
-          durationMs: Date.now() - t0,
-        };
+        // Inline callers need the buffer back; read it from the cache
+        // attachment. If that read fails (file vanished mid-flight) fall
+        // through to a fresh render rather than returning empty bytes.
+        let buffer: Buffer | null = null;
+        let bufferOk = persistOutput;
+        if (!persistOutput) {
+          try {
+            buffer = (await readAttachmentBuffer(this.app, hit.attachmentId)).buffer;
+            bufferOk = true;
+          } catch (err) {
+            this.app.logger?.warn(
+              `[carbone] cache hit but attachment unreadable, re-rendering: ${err}`,
+            );
+          }
+        }
+        if (bufferOk) {
+          return {
+            attachmentId: persistOutput ? hit.attachmentId : null,
+            url: persistOutput ? hit.url : null,
+            buffer,
+            format,
+            size: hit.sizeBytes,
+            cacheHit: true,
+            cacheKey,
+            inputMd5: inputMd5(input.data),
+            durationMs: Date.now() - t0,
+          };
+        }
       }
     }
 
@@ -76,55 +97,57 @@ export class RenderPipeline {
       convertTo: format,
       reportName: input.filename,
     });
+    const filename =
+      input.filename || `${input.carboneTemplateId.slice(0, 8)}-${Date.now()}.${format}`;
 
     let attachmentId: number | null = null;
     let url: string | null = null;
-
-    if (input.persistOutput !== false) {
-      const filename =
-        input.filename || `${input.carboneTemplateId.slice(0, 8)}-${Date.now()}.${format}`;
+    if (persistOutput) {
       const attachment = await writeBufferAsAttachment(this.app, result.buffer, {
         filename,
         storageId: settings.outputStorageId,
       });
       attachmentId = attachment.id;
       url = attachment.url;
+    }
 
-      if (useCache) {
-        // The output may live on a different storage than the cache wants —
-        // re-store on the cache storage when set, otherwise reuse the same
-        // attachment (saves disk).
-        let cacheAttachmentId = attachmentId;
-        let cacheSize = result.buffer.length;
-        if (
-          settings.cacheStorageId &&
-          settings.cacheStorageId !== settings.outputStorageId
-        ) {
-          const cacheAttachment = await writeBufferAsAttachment(this.app, result.buffer, {
-            filename,
-            storageId: settings.cacheStorageId,
-          });
-          cacheAttachmentId = cacheAttachment.id;
-          cacheSize = cacheAttachment.size ?? cacheSize;
-        }
-        await this.cache.store({
-          cacheKey,
-          templateId: input.templateId,
-          versionId: input.versionId,
-          carboneTemplateId: input.carboneTemplateId,
-          format,
-          inputMd5: inputMd5(input.data),
-          outputAttachmentId: cacheAttachmentId!,
-          sizeBytes: cacheSize,
-          ttlSeconds: settings.cacheTTL ?? DEFAULTS.cacheTTL,
+    if (useCache) {
+      // Cache attachment: reuse the output one when storages match (saves
+      // disk); otherwise write a dedicated cache attachment. When the caller
+      // didn't persist, we always need a fresh attachment for the cache row.
+      let cacheAttachmentId: number;
+      let cacheSize: number;
+      const cacheStorageDiffers =
+        settings.cacheStorageId && settings.cacheStorageId !== settings.outputStorageId;
+      if (attachmentId !== null && !cacheStorageDiffers) {
+        cacheAttachmentId = attachmentId;
+        cacheSize = result.buffer.length;
+      } else {
+        const cacheAttachment = await writeBufferAsAttachment(this.app, result.buffer, {
+          filename,
+          storageId: settings.cacheStorageId ?? settings.outputStorageId,
         });
+        cacheAttachmentId = cacheAttachment.id;
+        cacheSize = cacheAttachment.size ?? result.buffer.length;
       }
+      await this.cache.store({
+        cacheKey,
+        templateId: input.templateId,
+        versionId: input.versionId,
+        carboneTemplateId: input.carboneTemplateId,
+        format,
+        inputMd5: inputMd5(input.data),
+        outputAttachmentId: cacheAttachmentId,
+        sizeBytes: cacheSize,
+        ttlSeconds: settings.cacheTTL ?? DEFAULTS.cacheTTL,
+        cacheMaxSize: settings.cacheMaxSize ?? DEFAULTS.cacheMaxSize,
+      });
     }
 
     return {
       attachmentId,
       url,
-      buffer: input.persistOutput === false ? result.buffer : null,
+      buffer: persistOutput ? null : result.buffer,
       format,
       size: result.buffer.length,
       cacheHit: false,

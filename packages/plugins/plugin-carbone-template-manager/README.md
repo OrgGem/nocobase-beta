@@ -7,12 +7,11 @@ Manage document templates rendered by an **external Carbone.io service**.
 - **Template management** — upload `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`; CRUD metadata; per-role ACL.
 - **Auto placeholder extraction** — parse `{d.xxx}` Carbone tags to a JSON schema (loops, formatters, complement scope).
 - **Versioning + rollback** — every upload creates a new version; one-click rollback; schema diff between versions.
-- **Test playground** — Monaco JSON editor + sample-data generator; preview rendered file inline.
+- **Test playground** — JSON editor + sample-data generator; preview rendered file inline.
 - **Render API** — `POST /api/carboneTemplates:renderById` and `:renderDirect`; output to PDF / DOCX / XLSX / HTML / ODT / TXT / CSV / JPG / PNG.
 - **MD5 cache** — keyed on `templateId | versionId | input | format`; output stored via `plugin-file-manager` (any registered storage: local, S3, SFTP, OSS …).
 - **Monitoring dashboard** — call count, latency p95, cache hit ratio, error rate, replay logs.
 - **Workflow integration** — `carbone-render` instruction for `plugin-workflow`.
-- **Action button** — "Generate document" record action for any FlowEngine block.
 
 ## Architecture
 

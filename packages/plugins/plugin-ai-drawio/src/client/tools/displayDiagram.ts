@@ -39,7 +39,6 @@ async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> 
 
   try {
     handle.setXml(fullXml);
-    await handle.persist(fullXml);
     handle.bridge.load(fullXml);
     return { status: 'success', content: 'Successfully displayed the diagram.' };
   } catch (err: any) {

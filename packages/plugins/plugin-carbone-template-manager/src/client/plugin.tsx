@@ -1,5 +1,7 @@
 import { Plugin, lazy } from '@nocobase/client';
+import WorkflowPlugin from '@nocobase/plugin-workflow/client';
 import { NAMESPACE } from './locale';
+import CarboneRenderInstruction from './workflow/CarboneRenderInstruction';
 
 const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'SettingsPage');
 
@@ -21,6 +23,11 @@ export class PluginCarboneTemplateManagerClient extends Plugin {
       Component: SettingsPage,
       aclSnippet: `pm.${NAMESPACE}.settings`,
     });
+
+    // P6 — register the workflow instruction. Skipped silently when the
+    // workflow plugin isn't enabled.
+    const workflow = this.app.pm.get('workflow') as WorkflowPlugin | undefined;
+    workflow?.registerInstruction('carbone-render', CarboneRenderInstruction);
   }
 }
 

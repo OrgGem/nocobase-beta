@@ -109,6 +109,7 @@ export class CacheManager {
     outputAttachmentId: number;
     sizeBytes: number;
     ttlSeconds: number;
+    cacheMaxSize?: number;
   }): Promise<void> {
     const expiresAt = values.ttlSeconds > 0 ? new Date(Date.now() + values.ttlSeconds * 1000) : null;
     const repo = this.app.db.getRepository(COLLECTION.renderCache);
@@ -122,6 +123,11 @@ export class CacheManager {
       });
     } else {
       await repo.create({ values: { ...values, expiresAt } });
+    }
+
+    // Enforce cacheMaxSize via LRU eviction (#3).
+    if (values.cacheMaxSize && values.cacheMaxSize > 0) {
+      await this.enforceSizeLimit(values.cacheMaxSize);
     }
   }
 
@@ -150,5 +156,26 @@ export class CacheManager {
     const rows = await repo.find({ filter: { templateId } });
     for (const row of rows) await this.evict(row.id);
     return rows.length;
+  }
+
+  /**
+   * Evict oldest cache entries (by lastHitAt) until total size is at or below
+   * `maxSize`. Prevents unbounded cache growth (#3).
+   */
+  private async enforceSizeLimit(maxSize: number): Promise<void> {
+    const repo = this.app.db.getRepository(COLLECTION.renderCache);
+    const allRows = await repo.find({
+      fields: ['id', 'sizeBytes', 'lastHitAt'],
+      sort: ['lastHitAt'], // oldest first — LRU eviction order
+    });
+
+    let totalSize = 0;
+    for (const row of allRows) totalSize += row.sizeBytes ?? 0;
+
+    for (const row of allRows) {
+      if (totalSize <= maxSize) break;
+      totalSize -= row.sizeBytes ?? 0;
+      await this.evict(row.id);
+    }
   }
 }

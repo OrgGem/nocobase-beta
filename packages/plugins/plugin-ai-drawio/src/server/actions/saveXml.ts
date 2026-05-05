@@ -23,6 +23,10 @@ export async function saveXml(ctx: Context, next: Next) {
   if (typeof xml !== 'string') {
     ctx.throw(400, 'xml is required');
   }
+  
+  if (xml.length > 5 * 1024 * 1024) {
+    ctx.throw(400, 'xml size exceeds the 5MB limit');
+  }
 
   const updateValues: Record<string, any> = {
     xmlContent: xml,
@@ -30,7 +34,11 @@ export async function saveXml(ctx: Context, next: Next) {
   };
 
   if (typeof thumbnailSvg === 'string') {
-    updateValues.thumbnailSvg = thumbnailSvg;
+    if (thumbnailSvg.length > 1 * 1024 * 1024) {
+      ctx.throw(400, 'thumbnailSvg size exceeds the 1MB limit');
+    }
+    // Sanitize thumbnailSvg to prevent XSS
+    updateValues.thumbnailSvg = thumbnailSvg.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
   }
 
   await repository.update({

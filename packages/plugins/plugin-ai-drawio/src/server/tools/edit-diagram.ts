@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolRegisterOptions } from '@nocobase/plugin-ai/dist/server/manager/tool-manager';
+type ToolRegisterOptions = any;
 
 const description = `Edit the current diagram by ID-based operations (update/add/delete cells).
 

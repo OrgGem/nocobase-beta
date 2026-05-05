@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolRegisterOptions } from '@nocobase/plugin-ai/dist/server/manager/tool-manager';
+type ToolRegisterOptions = any;
 import { loadShapeLibrary, SHAPE_LIBRARY_NAMES } from '../shape-libraries';
 
 const description = `Get draw.io shape/icon library documentation with style syntax and shape names.

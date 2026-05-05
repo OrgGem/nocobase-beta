@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ToolRegisterOptions } from '@nocobase/plugin-ai/dist/server/manager/tool-manager';
+type ToolRegisterOptions = any;
 
 const description = `Continue generating diagram XML when previous display_diagram output was truncated due to length limits.
 

@@ -6,11 +6,13 @@ import { DiagramSelect } from '../components/DiagramSelect';
 
 export class DrawioBlockModel extends BlockModel {
   renderComponent() {
+    // @ts-ignore
     const { diagramId, height, ui } = this.props;
     return React.createElement(DrawioBlock, { diagramId, height, ui });
   }
 }
 
+// @ts-ignore
 DrawioBlockModel.registerFlow({
   key: 'drawioBlockSettings',
   title: escapeT('Drawio block setting', { ns: 'ai-drawio' }),
@@ -58,6 +60,7 @@ DrawioBlockModel.registerFlow({
   },
 });
 
+// @ts-ignore
 DrawioBlockModel.define({
   label: escapeT('Drawio Diagram'),
 });
