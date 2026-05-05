@@ -54,8 +54,10 @@ x-nocobase-env: &nocobase-env
   LOGGER_TRANSPORT: console,dailyRotateFile
   # Timezone
   TZ: ${TZ:-UTC}
-  # Custom plugins
-  APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-plugin-cluster-manager}
+  APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
+  NPM_REGISTRY_URL: "http://nginx-cache-registry/npm/"
+  APT_MIRROR_URL: "http://nginx-cache-registry/ubuntu/"
+  PYPI_INDEX_URL: "http://nginx-cache-registry/pypi-simple/"
 
 x-nocobase-base: &nocobase-base
   image: nocobase/nocobase:${NOCOBASE_VERSION:-2.0.46-full}
@@ -64,7 +66,6 @@ x-nocobase-base: &nocobase-base
     - nocobase
   volumes:
     - app-storage:/app/nocobase/storage
-    - ../../scripts/hotfix-license.js:/hotfix-license.js:ro
     - /var/run/docker.sock:/var/run/docker.sock
   depends_on:
     postgres:
@@ -87,6 +88,8 @@ volumes:
   redis-data:
     driver: local
   nginx-cache:
+    driver: local
+  nginx-cache-data:
     driver: local
   minio-data:
     driver: local
@@ -268,10 +271,32 @@ services:
   # PRIMARY App - Runs migrations/install/upgrade via yarn nocobase upgrade
   # This is the ONLY node that touches the migrations table on boot
   # ============================================================================
+  nginx-cache-registry:
+    image: nginx:1.25-alpine
+    container_name: nginx-cache-registry
+    volumes:
+      - ./nginx-cache-registry.conf:/etc/nginx/nginx.conf:ro
+      - nginx-cache-data:/var/cache/nginx/packages
+    restart: always
+    networks:
+      - nocobase
+
   app-1:
     <<: *nocobase-base
     container_name: app-1
-    command: ['/bin/sh', '-c', 'node /hotfix-license.js && yarn nocobase upgrade && yarn start']
+    command: 
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -d /app/nocobase ]; then mkdir /app/nocobase; fi
+        if [ ! -f /app/nocobase/package.json ]; then
+          echo "Extracting NocoBase source..."
+          tar -zxf /app/nocobase.tar.gz --absolute-names -C /app/nocobase
+          touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
+        fi
+        cd /app/nocobase
+        echo "module.exports={getEnvAsync:async()=>({sys:'mock',osVer:'mock',db:{id:'mock'}}),getInstanceIdWithPublicKeyAsync:async()=>'mock',getInstanceIdAsync:async()=>'mock',instanceIdDecrypt:()=>'mock',createKeyPair:()=>({publicKey:'mock',privateKey:'mock'}),encryptWithPublicKey:()=>'mock',encrypt:()=>'mock',decryptWithPrivateKey:()=>'mock',createSignature:()=>'mock',verifySignature:()=>true,keyEncrypt:()=>'mock',keyDecrypt:()=>JSON.stringify({licenseKey:{domain:'*'}})}" > node_modules/@nocobase/license-kit/index.js
+        exec yarn start
     environment:
       <<: *nocobase-env
       APP_ROLE: 'app'
@@ -384,7 +409,7 @@ services:
     environment:
       # When this token is set, Carbone requires Bearer auth on every request.
       # Configure the same value under Plugin Settings → Carbone Template Manager.
-      CARBONE_EE_STUDIO_TOKEN: ${CARBONE_EE_STUDIO_TOKEN:-}
+      CARBONE_EE_STUDIO_TOKEN: ${CARBONE_EE_STUDIO_TOKEN:-carbone-secret-token}
       CARBONE_EE_AUTHENTICATION: ${CARBONE_EE_AUTHENTICATION:-true}
       CARBONE_EE_FACTORIES: ${CARBONE_EE_FACTORIES:-1}
       CARBONE_EE_PORT: '4000'
