@@ -146,6 +146,7 @@ function stackToFormValues(stack?: StackInfo | null) {
       k8sEnvFrom: jsonText(DEFAULT_K8S_ENV_FROM, []),
       k8sVolumeMounts: jsonText(DEFAULT_K8S_VOLUME_MOUNTS, []),
       k8sVolumes: jsonText(DEFAULT_K8S_VOLUMES, []),
+      networkMode: '',
     };
   }
 
@@ -196,6 +197,19 @@ export function ContainerOrchestrator() {
   });
   const [settingsForm] = Form.useForm();
   const [stackForm] = Form.useForm();
+  const [dockerNetworks, setDockerNetworks] = useState<{id: string, name: string}[]>([]);
+
+  // Fetch Docker networks
+  const fetchNetworks = useCallback(async () => {
+    try {
+      const res = await api.request({ url: '/workerOrchestrator:networks' });
+      let networks = res.data?.data || res.data;
+      if (!Array.isArray(networks)) networks = [];
+      setDockerNetworks(networks);
+    } catch {
+      setDockerNetworks([]);
+    }
+  }, [api]);
 
   // Ping the orchestrator adapter
   const fetchPing = useCallback(async () => {
@@ -268,6 +282,7 @@ export function ContainerOrchestrator() {
   const openStackModal = (stack?: StackInfo) => {
     setStackModal({ visible: true, stack: stack || null });
     stackForm.setFieldsValue(stackToFormValues(stack));
+    fetchNetworks();
   };
 
   const closeStackModal = () => {
@@ -774,16 +789,36 @@ export function ContainerOrchestrator() {
             </Col>
           </Row>
 
-          {/* Row 4: Container name | Namespace */}
+          {/* Row 4: Container name | Namespace | Network Mode */}
           <Row gutter={12}>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="k8sContainerName" label={t('Container name')}>
                 <Input placeholder="worker" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={8}>
               <Form.Item name="namespace" label={t('Namespace')}>
                 <Input placeholder="nocobase" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item noStyle shouldUpdate={(prev, curr) => prev.adapter !== curr.adapter}>
+                {() => {
+                  if (stackForm.getFieldValue('adapter') === 'docker') {
+                    return (
+                      <Form.Item name="networkMode" label={t('Docker Network')} extra={t('Main network. Workers also inherit app networks.')}>
+                        <Select allowClear placeholder={t('Default (bridge)')}>
+                          <Select.Option value="bridge">bridge</Select.Option>
+                          <Select.Option value="host">host</Select.Option>
+                          {(Array.isArray(dockerNetworks) ? dockerNetworks : []).map(n => (
+                            <Select.Option key={n.id} value={n.name}>{n.name}</Select.Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                    );
+                  }
+                  return null;
+                }}
               </Form.Item>
             </Col>
           </Row>

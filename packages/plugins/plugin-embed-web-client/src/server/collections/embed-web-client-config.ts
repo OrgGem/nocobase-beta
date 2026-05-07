@@ -84,10 +84,15 @@ export default defineCollection({
     // ── S3 / object-storage settings ────────────────────────────────────────
     {
       // 'local' = store model files on the NocoBase server disk (default)
-      // 's3'    = store model files in an S3-compatible bucket
+      // 's3'    = store model files in a File Manager S3-compatible storage
       type: 'string',
       name: 'storageMode',
       defaultValue: 'local',
+    },
+    {
+      // File Manager storage id. Must point to a storage of type "s3" or "s3-private".
+      type: 'bigInt',
+      name: 's3StorageId',
     },
     {
       type: 'string',

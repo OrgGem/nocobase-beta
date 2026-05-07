@@ -4,8 +4,8 @@ import { promises as fsp } from 'fs';
 import path from 'path';
 import Application from '@nocobase/server';
 
-/** Allow only safe package name characters: letters, digits, dash, underscore, dot, @, / */
-const SAFE_PKG_RE = /^[a-zA-Z0-9_\-\.@\/]+$/;
+/** Allow only safe package name characters: letters, digits, dash, underscore, dot, @, /, [, ] */
+const SAFE_PKG_RE = /^[a-zA-Z0-9_\-\.@\/\[\]]+$/;
 const INSTALL_CHANNEL = 'cluster-manager.install-packages';
 
 type TargetRole = 'app' | 'worker' | 'sandbox' | 'all';

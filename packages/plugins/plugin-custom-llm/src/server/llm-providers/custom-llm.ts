@@ -70,11 +70,11 @@ function getChatOpenAICompletions() {
 }
 
 /**
- * Sanitize a tool call ID by stripping the `__thought__<base64>` suffix
- * that Gemini models append during streaming. The suffix is excessively
- * long and causes errors when langgraph reads messages back from history.
+ * Strip the `__thought__<base64>` suffix that Gemini models append to
+ * tool call IDs during streaming. The suffix is excessively long and
+ * causes errors when langgraph reads messages back from history.
  */
-function sanitizeToolCallId(id: string | undefined): string | undefined {
+function stripGeminiThoughtSuffix(id: string | undefined): string | undefined {
   if (!id || typeof id !== 'string') return id;
   const idx = id.indexOf('__thought__');
   return idx !== -1 ? id.substring(0, idx) : id;
@@ -637,7 +637,10 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                         ],
                       };
                       const enqueueChunked = (baseMapped: any) => {
-                        const CHUNK_SIZE = 128;
+                        // SSE proxy layer chunk size — intentionally smaller than
+                        // DEFAULT_STREAM_CHUNK_SIZE (512) because we're splitting raw
+                        // HTTP response body bytes before LangChain parses them.
+                        const SSE_MAPPING_CHUNK_SIZE = 128;
                         const delta = baseMapped.choices[0].delta;
                         const content = delta.content;
                         const toolCalls = delta.tool_calls;
@@ -647,18 +650,18 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                         // 1. Process and stream content if it exists
                         if (content !== undefined && content !== null) {
                           const contentStr = String(content);
-                          if (contentStr.length > CHUNK_SIZE) {
-                            for (let i = 0; i < contentStr.length; i += CHUNK_SIZE) {
+                          if (contentStr.length > SSE_MAPPING_CHUNK_SIZE) {
+                            for (let i = 0; i < contentStr.length; i += SSE_MAPPING_CHUNK_SIZE) {
                               const chunkMapped = cloneDeep(baseMapped);
                               const newDelta = { ...delta };
                               if (i > 0) delete newDelta.role; // Only send role on first chunk
                               delete newDelta.tool_calls; // Handled separately
 
-                              newDelta.content = contentStr.slice(i, i + CHUNK_SIZE);
+                              newDelta.content = contentStr.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
                               chunkMapped.choices[0].delta = newDelta;
 
                               // Clear finish_reason for intermediate chunks or if toolCalls will follow
-                              if (i + CHUNK_SIZE < contentStr.length || toolCalls) {
+                              if (i + SSE_MAPPING_CHUNK_SIZE < contentStr.length || toolCalls) {
                                 chunkMapped.choices[0].finish_reason = null;
                               }
                               controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
@@ -681,7 +684,7 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                         if (toolCalls && toolCalls.length > 0) {
                           let needsChunking = false;
                           for (const tc of toolCalls) {
-                            if (tc.function?.arguments && tc.function.arguments.length > CHUNK_SIZE) {
+                            if (tc.function?.arguments && tc.function.arguments.length > SSE_MAPPING_CHUNK_SIZE) {
                               needsChunking = true;
                               break;
                             }
@@ -696,7 +699,7 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                               }
                             }
 
-                            for (let i = 0; i < maxLen; i += CHUNK_SIZE) {
+                            for (let i = 0; i < maxLen; i += SSE_MAPPING_CHUNK_SIZE) {
                               const chunkMapped = cloneDeep(baseMapped);
                               const newDelta = (!hasEmitted && i === 0) ? { ...delta } : {};
                               if (delta.role && i === 0) newDelta.role = delta.role;
@@ -705,7 +708,7 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                               chunkMapped.choices[0].delta = newDelta;
 
                               // Only keep finish_reason on the very last chunk
-                              if (i + CHUNK_SIZE < maxLen) {
+                              if (i + SSE_MAPPING_CHUNK_SIZE < maxLen) {
                                 chunkMapped.choices[0].finish_reason = null;
                               }
 
@@ -714,7 +717,7 @@ function createMappingFetch(responseMapping: Record<string, string>) {
                                 if (i < args.length) {
                                   const chunkTc = cloneDeep(tc);
                                   if (chunkTc.function) {
-                                    chunkTc.function.arguments = args.slice(i, i + CHUNK_SIZE);
+                                    chunkTc.function.arguments = args.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
                                   }
                                   // Strip metadata on subsequent chunks to conform to OpenAI stream protocol
                                   if (i > 0) {
@@ -960,25 +963,29 @@ function fixEmptyToolProperties(model: any) {
 }
 
 /**
- * Sanitize tool_calls on an AIMessage (mutates in place).
+ * Strip Gemini __thought__ suffixes from tool_calls on an AIMessage (mutates in place).
  */
 function sanitizeAIMessageToolCalls(msg: any): void {
   if (!msg) return;
   if (msg.tool_calls) {
     for (const tc of msg.tool_calls) {
-      tc.id = sanitizeToolCallId(tc.id);
+      tc.id = stripGeminiThoughtSuffix(tc.id);
     }
   }
   if (msg.tool_call_chunks) {
     for (const tc of msg.tool_call_chunks) {
-      tc.id = sanitizeToolCallId(tc.id);
+      tc.id = stripGeminiThoughtSuffix(tc.id);
     }
   }
 }
 
 /**
  * Estimate token count for a message.
- * Uses a rough heuristic: CJK chars ~1 token each, Latin ~4 chars/token.
+ * ⚠️ ROUGH HEURISTIC ONLY — not suitable for hard budget enforcement.
+ * Uses CJK chars ~1 token each, Latin ~4 chars/token. Does NOT account
+ * for tool_calls payload, role/structure overhead, or emoji (which cost
+ * 2-3 tokens each but are counted as 1 here). Consider js-tiktoken if
+ * accuracy is critical.
  */
 function estimateTokens(msg: any): number {
   let text = '';
@@ -1362,7 +1369,7 @@ export class CustomLLMProvider extends LLMProvider {
 
     if (toolCalls) {
       content.tool_calls = Array.isArray(toolCalls)
-        ? toolCalls.map((tc: any) => ({ ...tc, id: sanitizeToolCallId(tc.id) }))
+        ? toolCalls.map((tc: any) => ({ ...tc, id: stripGeminiThoughtSuffix(tc.id) }))
         : toolCalls;
     }
 

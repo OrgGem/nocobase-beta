@@ -3,7 +3,7 @@
     "code-graph": {
       "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
       "args": [
-        "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages\\GravityKit\\.agent\\skills\\code-graph-index\\scripts\\graph_mcp_server.py",
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\code-graph-index\\scripts\\graph_mcp_server.py",
         "--graph",
         "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.code-graph-index\\graph.json"
       ],
@@ -13,7 +13,7 @@
     "faiss-code-index": {
       "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
       "args": [
-        "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\site-packages\\GravityKit\\.agent\\skills\\code-graph-index\\scripts\\faiss_mcp_server.py",
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\code-graph-index\\scripts\\faiss_mcp_server.py",
         "--index-dir",
         "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.code-graph-index\\faiss-index"
       ],

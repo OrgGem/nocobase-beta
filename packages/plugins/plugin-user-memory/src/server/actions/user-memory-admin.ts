@@ -1,10 +1,58 @@
 /**
  * Admin API actions for User Memory plugin management.
+ *
+ * Phase 5: All mutating actions now invalidate the MemoryInjector cache.
+ * Phase 6: updateSettings validates all incoming fields and reschedules the
+ *           cron job when syncSchedule changes.
  */
 
 import { Context, Next } from '@nocobase/actions';
 import { MemorySyncJob } from '../cron/memory-sync-job';
 import { MemoryProfileService } from '../services/memory-profile.service';
+import type { PluginUserMemoryServer } from '../plugin';
+
+/** Resolve plugin singleton from context */
+function getPlugin(ctx: Context): PluginUserMemoryServer | null {
+  try {
+    return ctx.app.pm.get('user-memory') as PluginUserMemoryServer;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Phase 6: Settings validation helpers ────────────────────────────────────────────
+
+const CRON_REGEX = /^(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)(\s+(\*|[0-9,\-*/]+))?$/;
+
+function validateSettings(values: Record<string, any>): string | null {
+  if ('enabled' in values && typeof values.enabled !== 'boolean') {
+    return 'enabled must be a boolean';
+  }
+  if ('syncSchedule' in values) {
+    if (typeof values.syncSchedule !== 'string' || !CRON_REGEX.test(values.syncSchedule.trim())) {
+      return 'syncSchedule must be a valid cron expression (5 or 6 fields)';
+    }
+  }
+  if ('maxTokens' in values) {
+    const v = Number(values.maxTokens);
+    if (!Number.isInteger(v) || v < 100 || v > 3000) {
+      return 'maxTokens must be an integer between 100 and 3000';
+    }
+  }
+  if ('maxConversationsPerSync' in values) {
+    const v = Number(values.maxConversationsPerSync);
+    if (!Number.isInteger(v) || v < 1 || v > 200) {
+      return 'maxConversationsPerSync must be an integer between 1 and 200';
+    }
+  }
+  if ('syncLogRetentionDays' in values) {
+    const v = Number(values.syncLogRetentionDays);
+    if (!Number.isInteger(v) || v < 1 || v > 365) {
+      return 'syncLogRetentionDays must be an integer between 1 and 365';
+    }
+  }
+  return null; // valid
+}
 
 /**
  * GET /api/userMemoryAdmin:getSettings — Get global settings
@@ -16,23 +64,46 @@ export async function getSettings(ctx: Context, next: Next) {
 }
 
 /**
- * POST /api/userMemoryAdmin:updateSettings — Update global settings
+ * POST /api/userMemoryAdmin:updateSettings — Update global settings (admin only)
+ *
+ * Phase 6: Validates all incoming fields. Reschedules cron job when syncSchedule changes.
  */
 export async function updateSettings(ctx: Context, next: Next) {
   const values = ctx.action.params.values || {};
-  const repo = ctx.db.getRepository('userMemorySettings');
 
-  let settings = await repo.findOne();
-  if (settings) {
+  // Phase 6: Validate incoming settings before persisting
+  const validationError = validateSettings(values);
+  if (validationError) {
+    ctx.status = 400;
+    ctx.body = { error: validationError };
+    return next();
+  }
+
+  const repo = ctx.db.getRepository('userMemorySettings');
+  const existingSettings = await repo.findOne();
+
+  if (existingSettings) {
     await repo.update({
-      filter: { id: settings.id },
+      filter: { id: existingSettings.id },
       values,
     });
   } else {
     await repo.create({ values });
   }
 
-  ctx.body = await repo.findOne();
+  const updated = await repo.findOne();
+
+  // Phase 6: If syncSchedule changed, reschedule the cron job immediately
+  if ('syncSchedule' in values && values.syncSchedule !== existingSettings?.syncSchedule) {
+    try {
+      await getPlugin(ctx)?.rescheduleSyncJob(values.syncSchedule);
+    } catch (err: any) {
+      ctx.app.logger.warn('[UserMemory] Failed to reschedule cron job:', err.message);
+      // Don't fail the settings update — just log
+    }
+  }
+
+  ctx.body = updated;
   await next();
 }
 
@@ -42,6 +113,9 @@ export async function updateSettings(ctx: Context, next: Next) {
 export async function syncAll(ctx: Context, next: Next) {
   const syncJob = new MemorySyncJob(ctx.app);
   const result = await syncJob.syncAll();
+
+  // Phase 5: Invalidate ALL cached profiles after admin-triggered full sync
+  getPlugin(ctx)?.invalidateMemoryCache();
 
   ctx.body = result;
   await next();
@@ -100,6 +174,10 @@ export async function syncUser(ctx: Context, next: Next) {
   const syncJob = new MemorySyncJob(ctx.app);
   try {
     const result = await syncJob.syncUser(Number(userId), 'manual');
+
+    // Phase 5: Invalidate cache for this user so next chat uses fresh memory
+    getPlugin(ctx)?.invalidateMemoryCache(Number(userId));
+
     const service = new MemoryProfileService(ctx.db);
     const profile = await service.getOrCreate(Number(userId));
 

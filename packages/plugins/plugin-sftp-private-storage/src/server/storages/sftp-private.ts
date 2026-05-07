@@ -9,7 +9,6 @@
 
 import path from 'path';
 import { Readable, Transform, TransformCallback } from 'stream';
-import SftpClient from 'ssh2-sftp-client';
 import { AttachmentModel, StorageModel, StorageType, cloudFilenameGetter } from '@nocobase/plugin-file-manager';
 import { STORAGE_TYPE_SFTP_PRIVATE } from '../../constants';
 import { sftpPoolManager, SftpPoolOptions } from '../sftp-pool-manager';
@@ -46,6 +45,11 @@ export default class SftpPrivateStorage extends StorageType {
         passphrase: process.env.SFTP_STORAGE_PASSPHRASE,
         authMethod: process.env.SFTP_STORAGE_AUTH_METHOD || 'password',
         basePath: process.env.SFTP_STORAGE_BASE_PATH || '/',
+        poolMax: Number(process.env.SFTP_POOL_MAX || 10),
+        poolMin: Number(process.env.SFTP_POOL_MIN || 0),
+        acquireTimeoutMillis: Number(process.env.SFTP_POOL_ACQUIRE_TIMEOUT || 15000),
+        idleTimeoutMillis: Number(process.env.SFTP_POOL_IDLE_TIMEOUT || 30000),
+        readyTimeout: Number(process.env.SFTP_POOL_READY_TIMEOUT || 15000),
       },
     };
   }
@@ -63,6 +67,11 @@ export default class SftpPrivateStorage extends StorageType {
       password,
       privateKey,
       passphrase,
+      poolMax,
+      poolMin,
+      acquireTimeoutMillis,
+      idleTimeoutMillis,
+      readyTimeout,
     } = this.storage.options || {};
 
     return {
@@ -73,6 +82,11 @@ export default class SftpPrivateStorage extends StorageType {
       password,
       privateKey,
       passphrase,
+      poolMax,
+      poolMin,
+      acquireTimeoutMillis,
+      idleTimeoutMillis,
+      readyTimeout,
     };
   }
 
@@ -212,22 +226,13 @@ export default class SftpPrivateStorage extends StorageType {
   }
 
   async getFileStream(file: AttachmentModel): Promise<{ stream: Readable; contentType?: string }> {
-    const { client, release, pool } = await sftpPoolManager.acquire(this.getConnectOptions());
+    const { client, release, destroy } = await sftpPoolManager.acquire(this.getConnectOptions());
     const remotePath = this.resolveRemotePath(this.getFileKey(file));
     const sftp = (client as any).sftp;
 
     if (!sftp) {
-      try {
-        const buffer = (await client.get(remotePath)) as Buffer;
-        release();
-        return {
-          stream: Readable.from(buffer),
-          contentType: file.mimetype,
-        };
-      } catch (error) {
-        pool.destroy(client).catch(() => {});
-        throw error;
-      }
+      await destroy();
+      throw new Error('SFTP stream API is unavailable; refusing to buffer remote file in memory');
     }
 
     try {
@@ -242,7 +247,7 @@ export default class SftpPrivateStorage extends StorageType {
       const cleanupError = () => {
         if (!released) {
           released = true;
-          pool.destroy(client).catch(() => {});
+          destroy().catch(() => {});
         }
       };
       stream.once('close', cleanup);
@@ -253,7 +258,7 @@ export default class SftpPrivateStorage extends StorageType {
         contentType: file.mimetype,
       };
     } catch (error) {
-      pool.destroy(client).catch(() => {});
+      await destroy();
       throw error;
     }
   }

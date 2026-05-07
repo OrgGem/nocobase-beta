@@ -162,6 +162,13 @@ export class PluginN8nServer extends Plugin {
   private startMetricsCron() {
     this.metricsTimer = setInterval(async () => {
       try {
+        // Use a distributed cache lock to ensure only 1 container fetches metrics (15s TTL)
+        const lockKey = 'plugin-n8n:metrics-cron-lock';
+        const isLocked = await this.app.cache.get(lockKey);
+        if (isLocked) return;
+        
+        await this.app.cache.set(lockKey, 'locked', 15000);
+
         const repo = this.db.getRepository('n8nInstances');
         const instances = await repo.find({ filter: { enabled: true, metricsEnabled: true } });
 
@@ -175,14 +182,22 @@ export class PluginN8nServer extends Plugin {
 
           try {
             const snapshot = await client.getMetricsSnapshot();
-            if (!this.metricsHistory.has(id)) {
-              this.metricsHistory.set(id, []);
+            
+            const cacheKey = `n8n-metrics:history:${id}`;
+            let history = (await this.app.cache.get(cacheKey)) as MetricsSnapshot[];
+            if (!history || !Array.isArray(history)) {
+              history = this.metricsHistory.get(id) || [];
             }
-            const history = this.metricsHistory.get(id)!;
+            
             history.push(snapshot);
             if (history.length > MAX_METRICS_HISTORY) {
               history.splice(0, history.length - MAX_METRICS_HISTORY);
             }
+            
+            // Save to memory fallback
+            this.metricsHistory.set(id, history);
+            // Save to distributed cache (TTL = 2 hours)
+            await this.app.cache.set(cacheKey, history, 2 * 60 * 60 * 1000);
 
             await this.evaluateAlerts(id, snapshot);
           } catch (err) {
@@ -195,6 +210,7 @@ export class PluginN8nServer extends Plugin {
         for (const key of this.metricsHistory.keys()) {
           if (!activeIds.has(key)) {
             this.metricsHistory.delete(key);
+            this.app.cache.del(`n8n-metrics:history:${key}`).catch(() => {});
           }
         }
       } catch (err) {

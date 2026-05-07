@@ -31,6 +31,7 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
       const config = processor.getParsedValue(node.config, node.id) || {};
       const {
         templateId,
+        versionId,
         data,
         format,
         filename,
@@ -56,14 +57,25 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
           return failOrIgnore(ignoreFail, `template ${templateId} has no Carbone id`);
         }
 
+        const version = versionId
+          ? await plugin.db
+              .getRepository(COLLECTION.versions)
+              .findOne({ filterByTk: versionId })
+          : tpl.currentVersion;
+        if (!version) return failOrIgnore(ignoreFail, `template version ${versionId ?? tpl.currentVersionId} not found`);
+        if (Number(version.templateId) !== Number(tpl.id)) {
+          return failOrIgnore(ignoreFail, `version ${version.id} does not belong to template ${tpl.id}`);
+        }
+        const carboneTemplateId = version.carboneTemplateId ?? tpl.carboneTemplateId;
+
         const client = await plugin.getCarboneClient();
         if (!client) return failOrIgnore(ignoreFail, 'Carbone settings are not configured');
 
         const pipeline = new RenderPipeline(plugin.app, client, new CacheManager(plugin.app));
         const outcome = await pipeline.render({
           templateId: tpl.id,
-          versionId: tpl.currentVersionId,
-          carboneTemplateId: tpl.carboneTemplateId,
+          versionId: version.id,
+          carboneTemplateId,
           data: data ?? {},
           format: (format as CarboneOutputFormat | undefined) ?? tpl.defaultOutputFormat,
           filename: filename ?? tpl.originalFileName?.replace(/\.[^.]+$/, '') ?? tpl.name,
@@ -76,8 +88,8 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
           .log({
             action: 'renderById',
             templateId: tpl.id,
-            versionId: tpl.currentVersionId,
-            carboneTemplateId: tpl.carboneTemplateId,
+            versionId: version.id,
+            carboneTemplateId,
             format: outcome.format,
             filename,
             cacheKey: outcome.cacheKey,
@@ -102,7 +114,7 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
             cacheHit: outcome.cacheHit,
             cacheKey: outcome.cacheKey,
             durationMs: outcome.durationMs,
-            carboneTemplateId: tpl.carboneTemplateId,
+            carboneTemplateId,
           },
         };
       } catch (err: any) {
@@ -110,7 +122,7 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
           .log({
             action: 'renderById',
             templateId: resolvedTpl?.id ?? (templateId ? Number(templateId) : undefined),
-            versionId: resolvedTpl?.currentVersionId,
+            versionId: versionId ? Number(versionId) : resolvedTpl?.currentVersionId,
             carboneTemplateId: resolvedTpl?.carboneTemplateId,
             format: (format as CarboneOutputFormat | undefined) ?? resolvedTpl?.defaultOutputFormat,
             filename,

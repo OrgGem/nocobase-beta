@@ -14,11 +14,11 @@ export default class AddRetryCountField extends Migration {
   appVersion = '<1.0.0-alpha.1';
 
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
     const tableInfo = await queryInterface.describeTable('aiKnowledgeBaseDocuments');
     if (!tableInfo.retryCount) {
       await queryInterface.addColumn('aiKnowledgeBaseDocuments', 'retryCount', {
-        type: this.db.sequelize.constructor['DataTypes'].INTEGER,
+        type: (this as any).db.sequelize.constructor['DataTypes'].INTEGER,
         defaultValue: 0,
         allowNull: true,
       });

@@ -14,8 +14,8 @@ export default class AddS3ConfigFieldsMigration extends Migration {
   appVersion = '<=2.x';
 
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tablePrefix = this.db.options.tablePrefix ?? '';
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tablePrefix = (this as any).db.options.tablePrefix ?? '';
     const tableName = `${tablePrefix}embed_web_client_configs`;
 
     const tableExists = await queryInterface
@@ -34,6 +34,7 @@ export default class AddS3ConfigFieldsMigration extends Migration {
     };
 
     await addIfMissing('storage_mode', { type: 'VARCHAR(20)', defaultValue: 'local', allowNull: true });
+    await addIfMissing('s3_storage_id', { type: 'BIGINT', allowNull: true });
     await addIfMissing('s3_bucket', { type: 'VARCHAR(255)', allowNull: true });
     await addIfMissing('s3_region', { type: 'VARCHAR(100)', allowNull: true });
     await addIfMissing('s3_endpoint', { type: 'VARCHAR(500)', allowNull: true });
@@ -43,12 +44,13 @@ export default class AddS3ConfigFieldsMigration extends Migration {
   }
 
   async down() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tablePrefix = this.db.options.tablePrefix ?? '';
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tablePrefix = (this as any).db.options.tablePrefix ?? '';
     const tableName = `${tablePrefix}embed_web_client_configs`;
 
     for (const col of [
       'storage_mode',
+      's3_storage_id',
       's3_bucket',
       's3_region',
       's3_endpoint',

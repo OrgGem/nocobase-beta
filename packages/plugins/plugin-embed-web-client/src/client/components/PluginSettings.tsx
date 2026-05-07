@@ -85,6 +85,7 @@ export const PluginSettings: React.FC = () => {
   const [storageMode, setStorageMode] = useState<'local' | 's3'>('local');
   const [modelSource, setModelSource] = useState<'server' | 'cdn' | 'huggingface'>('server');
   const [installedModels, setInstalledModels] = useState<any[]>([]);
+  const [s3Storages, setS3Storages] = useState<any[]>([]);
 
   // Check WebGPU availability
   useEffect(() => {
@@ -129,6 +130,15 @@ export const PluginSettings: React.FC = () => {
       .finally(() => setLoading(false));
 
     fetchModelStatus().catch(() => {});
+
+    api
+      .resource('storages')
+      .list({ pageSize: 200, fields: ['id', 'title', 'name', 'type'] })
+      .then((res: any) => {
+        const arr = res?.data?.data ?? res?.data ?? [];
+        setS3Storages(Array.isArray(arr) ? arr.filter((s) => ['s3', 's3-private'].includes(s.type)) : []);
+      })
+      .catch(() => setS3Storages([]));
   }, [api, form, fetchModelStatus]);
 
   const handleSave = async () => {
@@ -167,9 +177,13 @@ export const PluginSettings: React.FC = () => {
   };
 
   const handleDownloadModel = async () => {
-    const values = form.getFieldsValue();
-    const modelId = Array.isArray(values.modelId) ? values.modelId[0] : values.modelId;
-    const dtype = values.dtype ?? 'q8';
+    const values = await form.validateFields();
+    const submitValues = { ...values };
+    if (Array.isArray(submitValues.modelId)) {
+      submitValues.modelId = submitValues.modelId[0] ?? '';
+    }
+    const modelId = submitValues.modelId;
+    const dtype = submitValues.dtype ?? 'q8';
 
     if (!modelId) {
       message.warning(t('Select a model first'));
@@ -178,6 +192,11 @@ export const PluginSettings: React.FC = () => {
 
     setDownloading(true);
     try {
+      await api.request({
+        url: 'embedWebClient:updateConfig',
+        method: 'post',
+        data: submitValues,
+      });
       const res = await api.request({
         url: 'embedWebClient:downloadModel',
         method: 'post',
@@ -250,10 +269,9 @@ export const PluginSettings: React.FC = () => {
       // Validate model is available on server before attempting to load
       if (currentModelSource === 'server') {
         try {
-          const checkRes = await fetch(
-            `${window.location.origin}/embed-web-client/models/${testModelId}/config.json`,
-            { method: 'HEAD' },
-          );
+          const checkRes = await fetch(`${window.location.origin}/embed-web-client/models/${testModelId}/config.json`, {
+            method: 'HEAD',
+          });
           if (!checkRes.ok) {
             message.error(
               t('Model files not found on server. Please download the model first via "Download Model to Server".'),
@@ -535,7 +553,9 @@ export const PluginSettings: React.FC = () => {
                         label={t('Custom Model File Name')}
                         extra={
                           <span>
-                            {t("Leave empty for default. Enter 'model' to force fetching 'model.onnx' (instead of model_quantized.onnx) from the CDN.")}
+                            {t(
+                              "Leave empty for default. Enter 'model' to force fetching 'model.onnx' (instead of model_quantized.onnx) from the CDN.",
+                            )}
                           </span>
                         }
                       >
@@ -577,7 +597,7 @@ export const PluginSettings: React.FC = () => {
                 name="storageMode"
                 label={t('Storage Mode')}
                 extra={t(
-                  "'local' saves model files on the NocoBase server disk. 's3' uploads them to an S3-compatible bucket.",
+                  "'local' saves model files on the NocoBase server disk. 's3' uploads them to a File Manager S3 storage.",
                 )}
               >
                 <Select
@@ -604,51 +624,32 @@ export const PluginSettings: React.FC = () => {
                       children: (
                         <Space direction="vertical" style={{ width: '100%' }} size={0}>
                           <Alert
-                            type="warning"
+                            type="info"
                             showIcon
-                            message={t('S3 credentials are stored securely and never sent to the browser.')}
+                            message={t(
+                              'Select an S3 storage configured in File Manager. Credentials are not duplicated in this plugin.',
+                            )}
                             style={{ marginBottom: 16 }}
                           />
                           <Form.Item
-                            name="s3Bucket"
-                            label={t('Bucket')}
-                            rules={[{ required: storageMode === 's3', message: t('Bucket is required') }]}
+                            name="s3StorageId"
+                            label={t('File Manager S3 Storage')}
+                            rules={[{ required: storageMode === 's3', message: t('S3 storage is required') }]}
                           >
-                            <Input placeholder="my-nocobase-models" />
-                          </Form.Item>
-                          <Form.Item
-                            name="s3Region"
-                            label={t('Region')}
-                            rules={[{ required: storageMode === 's3', message: t('Region is required') }]}
-                          >
-                            <Input placeholder="us-east-1" />
-                          </Form.Item>
-                          <Form.Item
-                            name="s3Endpoint"
-                            label={t('Custom Endpoint')}
-                            extra={t('Leave empty for AWS S3. Set for MinIO, Cloudflare R2, etc.')}
-                          >
-                            <Input placeholder="https://minio.example.com" />
-                          </Form.Item>
-                          <Form.Item
-                            name="s3AccessKeyId"
-                            label={t('Access Key ID')}
-                            rules={[{ required: storageMode === 's3', message: t('Access Key ID is required') }]}
-                          >
-                            <Input />
-                          </Form.Item>
-                          <Form.Item
-                            name="s3SecretAccessKey"
-                            label={t('Secret Access Key')}
-                            extra={t("Enter '***' to keep the existing key unchanged.")}
-                            rules={[{ required: storageMode === 's3', message: t('Secret Access Key is required') }]}
-                          >
-                            <Input.Password placeholder="***" />
+                            <Select
+                              showSearch
+                              optionFilterProp="label"
+                              placeholder={t('Select a File Manager S3 storage')}
+                              options={s3Storages.map((s) => ({
+                                label: `${s.title || s.name} (${s.name}, ${s.type})`,
+                                value: s.id,
+                              }))}
+                            />
                           </Form.Item>
                           <Form.Item
                             name="s3KeyPrefix"
                             label={t('Key Prefix')}
-                            extra={t("Folder prefix inside the bucket. Defaults to 'embed-web-client'.")}
+                            extra={t("Folder prefix inside the selected bucket. Defaults to 'embed-web-client'.")}
                           >
                             <Input placeholder="embed-web-client" />
                           </Form.Item>

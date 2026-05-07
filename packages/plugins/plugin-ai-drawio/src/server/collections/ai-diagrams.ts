@@ -21,6 +21,11 @@ export default defineCollection({
       name: 'description',
     },
     {
+      type: 'string',
+      name: 'mode',
+      defaultValue: 'editable',
+    },
+    {
       type: 'text',
       name: 'xmlContent',
       length: 'long',

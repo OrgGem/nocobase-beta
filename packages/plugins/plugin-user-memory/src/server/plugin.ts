@@ -11,20 +11,29 @@ import { MemorySyncJob } from './cron/memory-sync-job';
 import * as userMemoryActions from './actions/user-memory';
 import * as userMemoryAdminActions from './actions/user-memory-admin';
 
+
 export class PluginUserMemoryServer extends Plugin {
   memoryInjector: MemoryInjector;
   syncJob: MemorySyncJob;
+  private _cronJobInstance: any = null;
 
   async afterAdd() {}
 
   async beforeLoad() {}
 
   async load() {
+    // Ensure dayjs timezone + utc plugins are loaded globally to prevent 'm.startOf is not a function' errors
+    const dayjsLib = require('dayjs');
+    const utcPlugin = require('dayjs/plugin/utc');
+    const timezonePlugin = require('dayjs/plugin/timezone');
+    dayjsLib.extend(utcPlugin);
+    dayjsLib.extend(timezonePlugin);
+
     // 1. Initialize services
     this.memoryInjector = new MemoryInjector(this);
     this.syncJob = new MemorySyncJob(this.app);
 
-    // 2. Register memory injection into AI system prompts
+    // 2. Register memory injection into AI system prompts via plugin-ai extension point
     this.memoryInjector.register();
 
     // 3. Define API resources
@@ -38,6 +47,30 @@ export class PluginUserMemoryServer extends Plugin {
 
     this.app.logger.info('[UserMemory] Plugin loaded successfully');
   }
+
+  // ─── Public helpers (called by action handlers via plugin singleton) ────────────────
+
+  /**
+   * Invalidate the in-memory cache for a specific user (or ALL users when userId is omitted).
+   * Must be called after clearMemory / toggleEnabled / syncNow / syncUser / syncAll
+   * so the next chat request picks up the updated profile immediately.
+   */
+  invalidateMemoryCache(userId?: number): void {
+    if (userId !== undefined) {
+      this.memoryInjector?.invalidateCache(userId);
+    } else {
+      this.memoryInjector?.invalidateAll();
+    }
+  }
+
+  /**
+   * Reschedule the sync cron job when the admin changes syncSchedule in settings.
+   */
+  async rescheduleSyncJob(newCronTime: string): Promise<void> {
+    await this.scheduleSyncJob(newCronTime);
+  }
+
+  // ─── Private helpers ─────────────────────────────────────────────────────────────────
 
   private defineResources() {
     // User-facing resource
@@ -82,36 +115,55 @@ export class PluginUserMemoryServer extends Plugin {
     });
   }
 
-  private async scheduleSyncJob() {
-    // Get schedule from settings or use default
-    let cronTime = '0 0 3 * * *'; // Default: 3 AM daily
-
-    try {
-      const settings = await this.db.getRepository('userMemorySettings').findOne();
-      if (settings?.syncSchedule) {
-        cronTime = settings.syncSchedule;
+  private async scheduleSyncJob(overrideCronTime?: string): Promise<void> {
+    // Remove the existing job before re-adding (for reschedule support)
+    if (this._cronJobInstance) {
+      try {
+        this.app.cronJobManager.removeJob(this._cronJobInstance);
+        this._cronJobInstance = null;
+      } catch {
+        // No existing job — that's fine on first load
       }
-    } catch {
-      // Settings collection may not be synced yet during first install
     }
 
-    this.app.cronJobManager.addJob({
+    // Resolve schedule: use override, then settings, then default
+    let cronTime = overrideCronTime || '0 0 3 * * *'; // Default: 3 AM daily
+
+    if (!overrideCronTime) {
+      try {
+        const settings = await this.db.getRepository('userMemorySettings').findOne();
+        if (settings?.syncSchedule) {
+          cronTime = settings.syncSchedule;
+        }
+      } catch {
+        // Settings collection may not be synced yet during first install
+      }
+    }
+
+    this._cronJobInstance = this.app.cronJobManager.addJob({
       cronTime,
       onTick: async () => {
         try {
           this.app.logger.info('[UserMemory] Running scheduled memory sync...');
-          await this.syncJob.syncAll();
+          const result = await this.syncJob.syncAll();
+
+          // Phase 5: Invalidate ALL cached profiles after a full sync
+          this.invalidateMemoryCache();
 
           // Also cleanup old logs
           const deleted = await this.syncJob.cleanupOldLogs();
           if (deleted > 0) {
             this.app.logger.info(`[UserMemory] Cleaned up ${deleted} old sync logs`);
           }
+
+          this.app.logger.info(
+            `[UserMemory] Sync complete: ${result.processed} processed, ${result.skipped} skipped, ${result.errors} errors`,
+          );
         } catch (error: any) {
           this.app.logger.error('[UserMemory] Scheduled sync failed:', error);
         }
       },
-    });
+    } as any);
 
     this.app.logger.info(`[UserMemory] Scheduled sync job: ${cronTime}`);
   }
@@ -137,9 +189,17 @@ export class PluginUserMemoryServer extends Plugin {
 
   async afterEnable() {}
 
-  async afterDisable() {}
+  async afterDisable() {
+    // Memory injection is handled via Koa middleware which checks settings.enabled per request.
+    // Invalidate the entire cache so the disabled state is reflected immediately
+    // without waiting for 5-min TTL to expire.
+    this.memoryInjector?.invalidateAll();
+    this.app.logger.info('[UserMemory] Plugin disabled — memory cache cleared');
+  }
 
-  async remove() {}
+  async remove() {
+    this.memoryInjector?.invalidateAll();
+  }
 }
 
 export default PluginUserMemoryServer;

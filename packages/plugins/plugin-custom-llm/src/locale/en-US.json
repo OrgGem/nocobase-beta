@@ -27,5 +27,14 @@
   "Request config (JSON)": "Request config (JSON)",
   "Request config description": "Extra configuration for LLM requests. Supported keys: extraHeaders (custom HTTP headers), extraBody (extra request body fields), modelKwargs (LangChain model kwargs).",
   "Response config (JSON)": "Response config (JSON)",
-  "Response config description": "Configure response parsing. contentPath: 'auto' or dot-path. reasoningKey: key for reasoning content. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — maps non-standard LLM response to OpenAI format. tool_calls/finish_reason are auto-detected if not specified."
+  "Response config description": "Configure response parsing. contentPath: 'auto' or dot-path. reasoningKey: key for reasoning content. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — maps non-standard LLM response to OpenAI format. tool_calls/finish_reason are auto-detected if not specified.",
+  "Auto Tool-call Retry (invoke only)": "Auto Tool-call Retry (invoke only)",
+  "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.": "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.",
+  "Auto-truncate History": "Auto-truncate History",
+  "Uses a rough heuristic to estimate token count (not exact). May over- or under-count for some content types. Enable only when hitting context length limits.": "Uses a rough heuristic to estimate token count (not exact). May over- or under-count for some content types. Enable only when hitting context length limits.",
+  "Max Context Tokens": "Max Context Tokens",
+  "Enable native Vision": "Enable native Vision",
+  "JSON Schema (Strict)": "JSON Schema (Strict)",
+  "JSON Schema Definition": "JSON Schema Definition",
+  "Max tool retries": "Max tool retries"
 }

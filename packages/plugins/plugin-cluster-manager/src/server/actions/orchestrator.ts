@@ -251,4 +251,24 @@ export const orchestratorActions = {
     }
     await next();
   },
+
+  /**
+   * GET /workerOrchestrator:networks
+   * List available networks (if supported by adapter)
+   */
+  async networks(ctx: Context, next: () => Promise<void>) {
+    const adapter = getAdapter(ctx);
+    if (!adapter.listNetworks) {
+      ctx.body = { data: [] };
+    } else {
+      try {
+        const networks = await adapter.listNetworks();
+        ctx.body = { data: networks };
+      } catch (err: any) {
+        ctx.app.logger.warn(`Failed to list networks: ${err.message}`);
+        ctx.body = { data: [] };
+      }
+    }
+    await next();
+  },
 };

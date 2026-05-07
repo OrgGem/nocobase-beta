@@ -16,13 +16,14 @@
 
 import {
   S3Client,
-  PutObjectCommand,
   GetObjectCommand,
   DeleteObjectsCommand,
   ListObjectsV2Command,
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import type { Readable } from 'stream';
+import { Readable as NodeReadable } from 'stream';
 
 export interface S3Config {
   bucket: string;
@@ -35,22 +36,31 @@ export interface S3Config {
   keyPrefix?: string;
 }
 
+function createS3Client(config: S3Config): S3Client {
+  const client = new S3Client({
+    region: config.region,
+    ...(config.endpoint ? { endpoint: config.endpoint } : {}),
+    credentials: {
+      accessKeyId: config.accessKeyId,
+      secretAccessKey: config.secretAccessKey,
+    },
+    // Required for MinIO / custom endpoints.
+    forcePathStyle: !!config.endpoint,
+    // Match File Manager S3 behavior for S3-compatible providers.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+  } as any);
+  client.middlewareStack.remove('flexibleChecksumsMiddleware');
+  client.middlewareStack.remove('flexibleChecksumsInputMiddleware');
+  return client;
+}
+
 export class S3ModelStorage {
   private client: S3Client;
   private bucket: string;
   private keyPrefix: string;
 
   constructor(config: S3Config) {
-    this.client = new S3Client({
-      region: config.region,
-      ...(config.endpoint ? { endpoint: config.endpoint } : {}),
-      credentials: {
-        accessKeyId: config.accessKeyId,
-        secretAccessKey: config.secretAccessKey,
-      },
-      // Required for MinIO / custom endpoints
-      forcePathStyle: !!config.endpoint,
-    });
+    this.client = createS3Client(config);
     this.bucket = config.bucket;
     this.keyPrefix = (config.keyPrefix ?? 'embed-web-client').replace(/\/$/, '');
   }
@@ -80,14 +90,18 @@ export class S3ModelStorage {
   }
 
   async uploadFile(key: string, data: Buffer, contentType = 'application/octet-stream'): Promise<void> {
-    await this.client.send(
-      new PutObjectCommand({
+    const upload = new Upload({
+      client: this.client as any,
+      params: {
         Bucket: this.bucket,
         Key: key,
-        Body: data,
+        Body: NodeReadable.from(data),
         ContentType: contentType,
-      }),
-    );
+      },
+      queueSize: 1,
+      leavePartsOnError: false,
+    });
+    await upload.done();
   }
 
   async downloadToBuffer(key: string): Promise<Buffer> {
@@ -192,6 +206,76 @@ export function createS3StorageFromConfig(config: Record<string, any>): S3ModelS
     secretAccessKey: config.s3SecretAccessKey,
     keyPrefix: config.s3KeyPrefix || 'embed-web-client',
   });
+}
+
+function normalizeStorageId(id: any): number | string | undefined {
+  if (id == null || id === '') return undefined;
+  if (typeof id === 'number') return id;
+  if (typeof id === 'string' && /^[1-9]\d*$/.test(id)) {
+    const bigIntVal = BigInt(id);
+    if (bigIntVal <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(id);
+  }
+  return String(id);
+}
+
+function getPluginSafely(app: any, name: string): any {
+  try {
+    return app.pm?.get?.(name);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build S3 model storage from the File Manager storage selected in plugin config.
+ * Falls back to legacy inline S3 fields for existing installations.
+ */
+export async function createS3StorageFromConfigWithFileManager(
+  config: Record<string, any>,
+  app?: any,
+): Promise<S3ModelStorage | null> {
+  if (config?.storageMode !== 's3') return null;
+
+  const storageId = normalizeStorageId(config.s3StorageId);
+  if (storageId != null && app) {
+    const fileManager =
+      getPluginSafely(app, '@nocobase/plugin-file-manager') ||
+      getPluginSafely(app, 'file-manager') ||
+      getPluginSafely(app, 'plugin-file-manager');
+
+    if (fileManager && !fileManager.storagesCache?.size && fileManager.loadStorages) {
+      await fileManager.loadStorages();
+    }
+
+    const storage =
+      fileManager?.storagesCache?.get(storageId) ||
+      Array.from(fileManager?.storagesCache?.values?.() ?? []).find(
+        (item: any) => String(item.id) === String(storageId),
+      );
+
+    if (!storage) {
+      throw new Error(`File Manager storage "${config.s3StorageId}" was not found`);
+    }
+    if (!['s3', 's3-private'].includes(storage.type)) {
+      throw new Error(`File Manager storage "${storage.name}" is not an S3 storage`);
+    }
+
+    const options = storage.options ?? {};
+    if (!options.bucket || !options.region || !options.accessKeyId || !options.secretAccessKey) {
+      throw new Error(`File Manager S3 storage "${storage.name}" is missing bucket, region, or credentials`);
+    }
+
+    return new S3ModelStorage({
+      bucket: options.bucket,
+      region: options.region,
+      endpoint: options.endpoint || undefined,
+      accessKeyId: options.accessKeyId,
+      secretAccessKey: options.secretAccessKey,
+      keyPrefix: config.s3KeyPrefix || 'embed-web-client',
+    });
+  }
+
+  return createS3StorageFromConfig(config);
 }
 
 /** Returns the MIME type for a model file extension. */

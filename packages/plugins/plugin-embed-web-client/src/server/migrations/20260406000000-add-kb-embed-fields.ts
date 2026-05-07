@@ -18,11 +18,11 @@ export default class AddKbEmbedFieldsMigration extends Migration {
   on = 'afterLoad' as const;
 
   async up() {
-    const collection = this.db.getCollection('aiKnowledgeBases');
+    const collection = (this as any).db.getCollection('aiKnowledgeBases');
     if (!collection) return;
 
     const tableNameWithSchema = collection.getTableNameWithSchema();
-    const qi = this.db.sequelize.getQueryInterface();
+    const qi = (this as any).db.sequelize.getQueryInterface();
 
     // embedModelId — stores the model ID string (e.g. "Xenova/all-MiniLM-L6-v2")
     const embedModelCol = collection.getField('embedModelId');

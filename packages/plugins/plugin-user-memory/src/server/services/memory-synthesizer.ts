@@ -2,13 +2,19 @@
  * MemorySynthesizer — LLM-powered service that summarizes user conversations
  * into a concise markdown memory profile.
  *
- * Uses the configured LLM from plugin-ai to analyze conversation history
- * and merge findings with existing memory content.
+ * Phase 4 changes:
+ * - Synthesis prompt explicitly forbids storing KB content, tool output, business
+ *   data, or customer/organization information in the memory profile.
+ * - maxTokens from settings is enforced: passed as a budget hint to the LLM,
+ *   and the response is truncated if it still exceeds the limit.
  */
 
 import type { Application } from '@nocobase/server';
 
-const SYNTHESIS_PROMPT = `You are a User Profile Analyst. Your job is to maintain a concise memory profile about a user based on their chat history with AI assistants.
+// Approximate characters-per-token ratio (GPT-4 style: ~4 chars/token)
+const CHARS_PER_TOKEN = 4;
+
+const SYNTHESIS_PROMPT = `You are a User Profile Analyst. Your job is to maintain a concise, privacy-safe memory profile about a user based on their chat history with AI assistants.
 
 ## Current Profile
 {existingMemory}
@@ -17,7 +23,7 @@ const SYNTHESIS_PROMPT = `You are a User Profile Analyst. Your job is to maintai
 {newConversations}
 
 ## Instructions
-1. Analyze the new conversations for:
+1. Analyze the new conversations for ONLY user-specific information:
    - Communication style and language preferences (which language do they use most?)
    - Technical skills, tools, and preferred technologies
    - Common topics and recurring questions/needs
@@ -30,7 +36,7 @@ const SYNTHESIS_PROMPT = `You are a User Profile Analyst. Your job is to maintai
    - UPDATE information that has changed (e.g., new tech stack, new focus areas)
    - REMOVE information that is contradicted by recent behavior
    - PRIORITIZE recent patterns over old ones
-   - Keep the profile CONCISE — max 500 words total
+   - Keep the profile CONCISE — max {maxWords} words total
 
 3. Output format: Return ONLY the updated markdown profile using these sections:
 
@@ -52,10 +58,16 @@ const SYNTHESIS_PROMPT = `You are a User Profile Analyst. Your job is to maintai
 ## Recent Focus Areas
 (what they've been working on lately — update frequently)
 
-CRITICAL RULES:
-- Be factual. Only include information DIRECTLY observed from conversations.
-- Do NOT infer, speculate, or assume anything not evidenced in the chat.
-- Do NOT include sensitive personal data (passwords, emails, phone numbers).
+CRITICAL PRIVACY & SAFETY RULES (MUST follow — these are non-negotiable):
+- ONLY store information about the USER's preferences, habits, skills, and personality.
+- DO NOT store content from knowledge bases, document repositories, or RAG results.
+- DO NOT store business data, customer data, organization-specific facts, or project details.
+- DO NOT store tool call results, system messages, or AI-generated responses based on internal data.
+- DO NOT store secrets, credentials, emails, phone numbers, or any PII.
+- If a piece of information came from a knowledge base or tool output (not from the user's own words), DISCARD it.
+- If you are unsure whether information is the user's preference vs. factual knowledge base content — DISCARD it.
+- Be factual. Only include information DIRECTLY observed from the USER's own messages.
+- Do NOT infer, speculate, or assume anything not evidenced in the user's own words.
 - Keep each bullet point SHORT (1 line max).
 - If the current profile is empty, create a new one from scratch.
 - Output ONLY the markdown profile — no explanations, no preamble.`;
@@ -72,12 +84,15 @@ export class MemorySynthesizer {
   /**
    * Synthesize a memory profile from existing memory + new conversation data.
    * Uses the LLM configured in userMemorySettings (or falls back to default).
+   *
+   * Phase 6: maxTokens is now used to budget the LLM output and post-truncate if needed.
    */
   async synthesize(
     existingMemory: string,
     newConversationsText: string,
     llmServiceId?: string,
     llmModel?: string,
+    maxTokens?: number,
   ): Promise<SynthesisResult> {
     try {
       const aiPlugin = this.app.pm.get('ai') as any;
@@ -85,11 +100,15 @@ export class MemorySynthesizer {
         return { content: '', success: false, error: 'plugin-ai not available' };
       }
 
-      // Build the prompt — use arrow functions to prevent replacement pattern injection
-      // (prevents existingMemory containing '{newConversations}' from being expanded)
+      // Resolve maxTokens (default 800 if not set)
+      const effectiveMaxTokens = Math.max(100, Math.min(3000, maxTokens || 800));
+      const maxWords = Math.floor(effectiveMaxTokens * 0.75); // tokens → approximate words
+
+      // Build the prompt — use arrow function replacements to prevent injection of placeholders
       const prompt = SYNTHESIS_PROMPT
         .replace('{existingMemory}', () => existingMemory || '(Empty — no existing profile)')
-        .replace('{newConversations}', () => newConversationsText);
+        .replace('{newConversations}', () => newConversationsText)
+        .replace('{maxWords}', () => String(maxWords));
 
       // Get LLM service from settings or use default
       const { provider, model } = await this.getLLMService(aiPlugin, llmServiceId, llmModel);
@@ -105,10 +124,19 @@ export class MemorySynthesizer {
         { role: 'user', content: 'Please analyze the new conversations and update the user memory profile.' },
       ]);
 
-      const content = this.extractResponseContent(response);
+      let content = this.extractResponseContent(response);
 
       if (!content || content.length < 10) {
         return { content: '', success: false, error: 'LLM returned empty or too short response' };
+      }
+
+      // Phase 6: Enforce maxTokens by truncating overly long responses
+      const maxChars = effectiveMaxTokens * CHARS_PER_TOKEN;
+      if (content.length > maxChars) {
+        content = this.truncateProfile(content, maxChars);
+        this.app.logger.debug(
+          `[UserMemory] Synthesis output truncated to ~${effectiveMaxTokens} tokens`,
+        );
       }
 
       return { content: content.trim(), success: true };
@@ -163,5 +191,24 @@ export class MemorySynthesizer {
     }
     if (response?.text) return response.text;
     return '';
+  }
+
+  /**
+   * Truncate the profile to approximately maxChars characters,
+   * trying to cut at a section boundary (## heading) to keep it coherent.
+   */
+  private truncateProfile(content: string, maxChars: number): string {
+    if (content.length <= maxChars) return content;
+
+    // Try to cut at the last '## ' section header before the limit
+    const truncated = content.slice(0, maxChars);
+    const lastSectionBoundary = truncated.lastIndexOf('\n## ');
+    if (lastSectionBoundary > maxChars * 0.5) {
+      return truncated.slice(0, lastSectionBoundary).trimEnd();
+    }
+
+    // Fall back to word boundary
+    const lastSpace = truncated.lastIndexOf(' ');
+    return (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trimEnd() + '\n\n*(truncated)*';
   }
 }

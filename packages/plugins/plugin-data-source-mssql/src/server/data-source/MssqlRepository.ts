@@ -24,9 +24,9 @@ export class MssqlRepository<
 
     // Initialize MSSQL-specific cursor builder
     this.mssqlCursorBuilder = new MssqlSmartCursorBuilder(
-      this.database.sequelize,
-      this.model.tableName,
-      this.collection,
+      (this as any).database.sequelize,
+      (this as any).model.tableName,
+      collection,
     );
   }
 
@@ -51,7 +51,7 @@ export class MssqlRepository<
   ) {
     return await this.mssqlCursorBuilder.chunk({
       ...options,
-      find: this.find.bind(this),
+      find: (this as any).find.bind(this),
     });
   }
 }

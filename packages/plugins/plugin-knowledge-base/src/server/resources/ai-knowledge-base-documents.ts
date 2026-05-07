@@ -9,6 +9,7 @@
 
 import { Context } from '@nocobase/actions';
 import PluginKnowledgeBaseServer from '../plugin';
+import { getServerEmbeddingPipeline } from '../utils/embed-web-client';
 import { getAuthUserId, getCurrentRoles, isAdminRole, sameId } from '../utils/access';
 
 /**
@@ -60,7 +61,6 @@ export default {
     async list(ctx: Context, next: Function) {
       const { filter = {}, sort, page, pageSize } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
-
       const userId = getAuthUserId(ctx);
       const roles = getCurrentRoles(ctx);
       const isAdmin = isAdminRole(roles);
@@ -112,6 +112,7 @@ export default {
       const values = rawValues.values || rawValues;
 
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
+      let kbData: any;
       // Always derive userId from the authenticated session — never trust client-provided userId
       const userId = getAuthUserId(ctx);
       const roles = getCurrentRoles(ctx);
@@ -133,7 +134,7 @@ export default {
         }
 
         if (kb) {
-          const kbData = kb.toJSON();
+          kbData = kb.toJSON();
 
           // EXTERNAL_RAG KBs are managed by external services — no local document uploads
           if (kbData.type === 'EXTERNAL_RAG') {
@@ -184,9 +185,22 @@ export default {
         }
       }
 
-      // Trigger async vectorization via class-reference plugin lookup
+      // Trigger async processing via the right pipeline. Client-mode WEB_CLIENT_EMBED
+      // is completed by the browser calling embedWebClient:storeVectors.
       const plugin = getPlugin(ctx);
-      if (plugin?.vectorizationPipeline) {
+      if (kbData?.type === 'WEB_CLIENT_EMBED') {
+        if (kbData.embedMode === 'server' && plugin) {
+          try {
+            getServerEmbeddingPipeline(plugin)
+              .processDocument(doc.id)
+              .catch((err: Error) => {
+                ctx.logger.error(`Server embedding failed for document ${doc.id}:`, err);
+              });
+          } catch (err: any) {
+            ctx.logger.error(`Failed to trigger server embedding for document ${doc.id}:`, err);
+          }
+        }
+      } else if (plugin?.vectorizationPipeline) {
         plugin.vectorizationPipeline.processDocument(doc.id).catch((err: Error) => {
           ctx.logger.error(`Vectorization failed for document ${doc.id}:`, err);
         });
@@ -275,15 +289,37 @@ export default {
         }
       }
 
-      // Reset status to pending
+      const doc = await repo.findOne({ filterByTk, appends: ['knowledgeBase'] });
+      if (!doc) {
+        ctx.throw(404, 'Document not found');
+        return;
+      }
+      const kbData = doc.knowledgeBase?.toJSON ? doc.knowledgeBase.toJSON() : doc.knowledgeBase;
+      const nextStatus =
+        kbData?.type === 'WEB_CLIENT_EMBED' && kbData.embedMode !== 'server' ? 'pending_client' : 'pending';
+
+      // Reset status for the matching processing mode.
       await repo.update({
         filterByTk,
-        values: { status: 'pending', error: null, chunkCount: 0, retryCount: 0 },
+        values: { status: nextStatus, error: null, chunkCount: 0, retryCount: 0 },
       });
 
-      // Trigger re-vectorization via class-reference plugin lookup
+      // Trigger re-processing via the matching pipeline.
       const plugin = getPlugin(ctx);
-      if (plugin?.vectorizationPipeline) {
+      if (kbData?.type === 'WEB_CLIENT_EMBED') {
+        if (kbData.embedMode === 'server' && plugin) {
+          try {
+            getServerEmbeddingPipeline(plugin)
+              .processDocument(filterByTk)
+              .catch((err: Error) => {
+                ctx.logger.error(`Server embedding reprocess failed for document ${filterByTk}:`, err);
+              });
+          } catch (err: any) {
+            ctx.throw(400, err.message ?? 'Failed to trigger server embedding');
+            return;
+          }
+        }
+      } else if (plugin?.vectorizationPipeline) {
         plugin.vectorizationPipeline.processDocument(filterByTk).catch((err: Error) => {
           ctx.logger.error(`Re-vectorization failed for document ${filterByTk}:`, err);
         });

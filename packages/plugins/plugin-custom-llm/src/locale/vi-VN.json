@@ -27,5 +27,14 @@
   "Request config (JSON)": "Cấu hình request (JSON)",
   "Request config description": "Cấu hình bổ sung cho request LLM. Các key hỗ trợ: extraHeaders (HTTP headers tùy chỉnh), extraBody (thêm trường vào request body), modelKwargs (tham số model LangChain).",
   "Response config (JSON)": "Cấu hình response (JSON)",
-  "Response config description": "Cấu hình parse response. contentPath: 'auto' hoặc dot-path. reasoningKey: key reasoning. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — mapping response không chuẩn OpenAI. tool_calls/finish_reason tự động phát hiện nếu không chỉ định."
+  "Response config description": "Cấu hình parse response. contentPath: 'auto' hoặc dot-path. reasoningKey: key reasoning. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — mapping response không chuẩn OpenAI. tool_calls/finish_reason tự động phát hiện nếu không chỉ định.",
+  "Auto Tool-call Retry (invoke only)": "Tự động thử lại Tool-call (chỉ invoke)",
+  "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.": "Tự động thử lại các tool call lỗi. Chỉ có hiệu lực ở chế độ non-streaming (invoke) — không có tác dụng khi streaming được bật.",
+  "Auto-truncate History": "Tự động cắt ngắn lịch sử",
+  "Uses a rough heuristic to estimate token count (not exact). May over- or under-count for some content types. Enable only when hitting context length limits.": "Sử dụng phương pháp ước lượng token gần đúng (không chính xác). Có thể đếm thừa hoặc thiếu cho một số loại nội dung. Chỉ bật khi gặp giới hạn context length.",
+  "Max Context Tokens": "Số token ngữ cảnh tối đa",
+  "Enable native Vision": "Bật Vision gốc",
+  "JSON Schema (Strict)": "JSON Schema (Nghiêm ngặt)",
+  "JSON Schema Definition": "Định nghĩa JSON Schema",
+  "Max tool retries": "Số lần thử lại tool tối đa"
 }

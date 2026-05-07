@@ -15,6 +15,7 @@
 import type PluginKnowledgeBaseServer from '../plugin';
 import { SimpleHTTPEmbeddings } from './simple-embeddings';
 import { LocalOnnxEmbeddings } from './local-onnx-embeddings';
+import { getEmbedWebClientPlugin, loadEmbedTexts } from '../utils/embed-web-client';
 
 export async function createEmbeddingsForVectorStore(
   plugin: PluginKnowledgeBaseServer,
@@ -51,26 +52,14 @@ async function createLlmServiceEmbeddings(
   });
 }
 
-function createLocalEmbeddings(
-  plugin: PluginKnowledgeBaseServer,
-  vectorStoreConfig: any,
-): LocalOnnxEmbeddings {
-  const embedPlugin = plugin.pm.get('@nocobase/plugin-embed-web-client') as any;
+function createLocalEmbeddings(plugin: PluginKnowledgeBaseServer, vectorStoreConfig: any): LocalOnnxEmbeddings {
+  const embedPlugin = getEmbedWebClientPlugin(plugin);
   if (!embedPlugin) {
     throw new Error('Local embedding requires plugin-embed-web-client to be installed and enabled');
-  }
-
-  // Dynamic require to avoid hard build-time dependency
-  let embedTexts: any;
-  try {
-    const serverEmbedding = require('@nocobase/plugin-embed-web-client/dist/server/pipeline/server-embedding');
-    embedTexts = serverEmbedding.embedTexts;
-  } catch {
-    throw new Error('Failed to load embedTexts from plugin-embed-web-client. Ensure the plugin is built.');
   }
 
   const modelId = vectorStoreConfig.localEmbedModelId || 'Xenova/all-MiniLM-L6-v2';
   const dtype = vectorStoreConfig.localEmbedDtype || 'q8';
 
-  return new LocalOnnxEmbeddings(embedTexts, modelId, dtype);
+  return new LocalOnnxEmbeddings(loadEmbedTexts(), modelId, dtype);
 }

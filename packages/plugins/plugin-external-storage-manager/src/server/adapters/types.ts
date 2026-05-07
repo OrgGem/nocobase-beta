@@ -85,6 +85,11 @@ export interface IStorageAdapter {
   deleteDir(remotePath: string): Promise<void>;
 
   /**
+   * Rename or move a file/directory.
+   */
+  rename(oldPath: string, newPath: string): Promise<void>;
+
+  /**
    * Check if a path exists.
    */
   exists(remotePath: string): Promise<boolean>;

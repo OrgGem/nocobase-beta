@@ -34,10 +34,6 @@ export const DrawioWorkContext: WorkContextOptions = {
         onAdd({
           uid: handle.blockUid,
           title: handle.diagramTitle || `${tNs('Diagram')} ${handle.diagramId}`,
-          content: {
-            diagramId: handle.diagramId,
-            diagramTitle: handle.diagramTitle,
-          } satisfies DrawioContextItemContent,
         });
         added++;
       }
@@ -61,7 +57,8 @@ export const DrawioWorkContext: WorkContextOptions = {
     }
     const xml = handle.getXml() || '';
     const meta = item.content as DrawioContextItemContent | undefined;
-    const titleLine = meta?.diagramTitle ? `Title: ${meta.diagramTitle}\n` : '';
+    const title = meta?.diagramTitle || handle.diagramTitle || item.title;
+    const titleLine = title ? `Title: ${title}\n` : '';
     return (
       `${titleLine}Current diagram XML (AUTHORITATIVE - the source of truth on the canvas right now). ` +
       `When using edit_diagram, COPY cell IDs and attribute order EXACTLY from this XML.\n\n` +

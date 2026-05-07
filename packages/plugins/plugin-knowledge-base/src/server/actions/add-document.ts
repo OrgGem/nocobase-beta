@@ -8,6 +8,7 @@
  */
 
 import PluginKnowledgeBaseServer from '../plugin';
+import { getServerEmbeddingPipeline } from '../utils/embed-web-client';
 
 /**
  * API action: aiKnowledgeBase:addDocument
@@ -63,6 +64,9 @@ export async function addDocumentAction(ctx: any, next: any) {
       'Cannot add documents to an external RAG knowledge base. Documents are managed by the external service.',
     );
   }
+  if (kbData.type === 'WEB_CLIENT_EMBED' && kbData.embedMode !== 'server') {
+    ctx.throw(400, 'WEB_CLIENT_EMBED client mode requires browser upload via plugin-embed-web-client');
+  }
 
   const docRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
@@ -88,7 +92,13 @@ export async function addDocumentAction(ctx: any, next: any) {
   // Trigger vectorization via class-reference plugin lookup (avoids fragile string matching)
   try {
     const plugin = ctx.app.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
-    if (plugin?.vectorizationPipeline) {
+    if (kbData.type === 'WEB_CLIENT_EMBED') {
+      getServerEmbeddingPipeline(plugin)
+        .processDocument(doc.id)
+        .catch((err: any) => {
+          ctx.app.logger.error(`[addDocument] Server embedding failed for doc ${doc.id}:`, err);
+        });
+    } else if (plugin?.vectorizationPipeline) {
       // Don't await — let it run in the background
       plugin.vectorizationPipeline.processDocument(doc.id).catch((err: any) => {
         ctx.app.logger.error(`[addDocument] Vectorization failed for doc ${doc.id}:`, err);

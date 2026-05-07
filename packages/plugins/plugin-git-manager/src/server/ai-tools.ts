@@ -18,11 +18,46 @@ export function registerGitReviewAiTools(app: Application) {
     return;
   }
 
+  /**
+   * Enforce that the AI session has an authenticated user and that this user
+   * is permitted to invoke the underlying resource:action. Without this check,
+   * a prompt-injected AI could pass an arbitrary `repositoryId` to the tools
+   * and read any repository's MRs / commits / file content regardless of the
+   * caller's ACL.
+   */
+  const enforceAcl = (ctx: any, resource: string, action: string) => {
+    const user = ctx?.state?.currentUser;
+    if (!user?.id) {
+      const err: any = new Error('AI tool requires an authenticated user context');
+      err.status = 401;
+      throw err;
+    }
+    const acl = ctx.app?.acl;
+    if (!acl?.can) return; // ACL not available — fail-open is acceptable for legacy contexts
+    const role =
+      ctx?.state?.currentRole ||
+      (Array.isArray(user.roles) && user.roles[0]?.name) ||
+      null;
+    if (!role) {
+      const err: any = new Error('AI tool requires a resolvable role on the current user');
+      err.status = 403;
+      throw err;
+    }
+    const allowed = acl.can({ role, resource, action });
+    if (!allowed) {
+      const err: any = new Error(`Permission denied: ${resource}:${action}`);
+      err.status = 403;
+      throw err;
+    }
+  };
+
   const runResourceAction = async (
     ctx: any,
     handler: (ctx: any, next: () => Promise<void>) => Promise<void>,
     params: Record<string, any>,
+    gate: { resource: string; action: string },
   ) => {
+    enforceAcl(ctx, gate.resource, gate.action);
     const synthCtx: any = {
       ...ctx,
       app: ctx.app,
@@ -55,7 +90,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitlabApi.mergeRequestDetail, args);
+        const body = await runResourceAction(ctx, gitlabApi.mergeRequestDetail, args, {
+          resource: 'gitManager',
+          action: 'mergeRequestDetail',
+        });
         return body?.data ?? body;
       },
     },
@@ -77,7 +115,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitlabApi.mergeRequests, args);
+        const body = await runResourceAction(ctx, gitlabApi.mergeRequests, args, {
+          resource: 'gitManager',
+          action: 'mergeRequests',
+        });
         return body?.data ?? body;
       },
     },
@@ -96,7 +137,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitlabApi.mergeRequestNotes, args);
+        const body = await runResourceAction(ctx, gitlabApi.mergeRequestNotes, args, {
+          resource: 'gitManager',
+          action: 'mergeRequestNotes',
+        });
         return body?.data ?? body;
       },
     },
@@ -115,7 +159,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitActions.commitDetail, args);
+        const body = await runResourceAction(ctx, gitActions.commitDetail, args, {
+          resource: 'gitManager',
+          action: 'commitDetail',
+        });
         return body?.data ?? body;
       },
     },
@@ -137,7 +184,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitActions.diff, args);
+        const body = await runResourceAction(ctx, gitActions.diff, args, {
+          resource: 'gitManager',
+          action: 'diff',
+        });
         return body?.data ?? body;
       },
     },
@@ -158,7 +208,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitActions.fileContent, args);
+        const body = await runResourceAction(ctx, gitActions.fileContent, args, {
+          resource: 'gitManager',
+          action: 'fileContent',
+        });
         return body?.data ?? body;
       },
     },
@@ -174,7 +227,10 @@ export function registerGitReviewAiTools(app: Application) {
         schema: z.object({ repositoryId: z.number() }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitActions.branches, args);
+        const body = await runResourceAction(ctx, gitActions.branches, args, {
+          resource: 'gitManager',
+          action: 'branches',
+        });
         return body?.data ?? body;
       },
     },
@@ -194,7 +250,10 @@ export function registerGitReviewAiTools(app: Application) {
         }),
       },
       invoke: async (ctx: any, args: any) => {
-        const body = await runResourceAction(ctx, gitActions.log, args);
+        const body = await runResourceAction(ctx, gitActions.log, args, {
+          resource: 'gitManager',
+          action: 'log',
+        });
         return body?.data ?? body;
       },
     },

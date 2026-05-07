@@ -22,7 +22,7 @@
 import { RecursiveCharacterTextSplitter } from './text-splitter';
 
 // Typed self for DedicatedWorkerGlobalScope
-declare const self: DedicatedWorkerGlobalScope;
+declare const self: any;
 
 // ── Message Types ────────────────────────────────────────────────────────────
 
@@ -263,7 +263,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
           env.allowLocalModels = false;
         }
         pipe = await pipeline('feature-extraction', msg.modelId, {
-          dtype: msg.dtype,
+          dtype: msg.dtype as any,
           device: (pipe as any)?._device ?? 'wasm',
         });
         modelId = msg.modelId;

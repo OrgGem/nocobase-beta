@@ -28,6 +28,7 @@ import aiVectorStores from './resources/ai-vector-stores';
 import aiVectorDatabases from './resources/ai-vector-databases';
 import { addDocumentAction } from './actions/add-document';
 import requestContext from './request-context';
+import { getServerEmbeddingPipeline } from './utils/embed-web-client';
 
 export class PluginKnowledgeBaseServer extends Plugin {
   vectorizationPipeline: VectorizationPipeline;
@@ -209,6 +210,10 @@ export class PluginKnowledgeBaseServer extends Plugin {
   }
 
   async disable() {
+    this.clearRetryTimer();
+  }
+
+  private clearRetryTimer() {
     if (this.retryTimer) {
       clearInterval(this.retryTimer);
       this.retryTimer = null;
@@ -222,6 +227,9 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.retryTimer = setInterval(async () => {
       try {
         const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
+        // Atomic claim: find candidates then update status to 'retrying' atomically.
+        // This prevents duplicate processing when multiple NocoBase instances run the
+        // same retry job concurrently.
         const failedDocs = await docRepo.find({
           filter: {
             status: 'failed',
@@ -231,20 +239,29 @@ export class PluginKnowledgeBaseServer extends Plugin {
           limit: 10,
         });
 
+        // Claim each document by atomically setting status — skip if already claimed
+        const claimedDocs = [];
         for (const doc of failedDocs) {
+          const [affected] = await this.db.sequelize.query(
+            `UPDATE "${docRepo.collection.model.tableName}" SET "status" = 'retrying' WHERE "id" = :id AND "status" = 'failed'`,
+            { replacements: { id: doc.id }, type: (this.db.sequelize.constructor as any).QueryTypes.UPDATE },
+          );
+          if (affected > 0) claimedDocs.push(doc);
+        }
+
+        for (const doc of claimedDocs) {
           if (!doc.knowledgeBase) continue;
           const kbType = doc.knowledgeBase.type;
 
           try {
             if (kbType === 'WEB_CLIENT_EMBED' && doc.knowledgeBase.embedMode === 'server') {
               // Retry via embed-web-client server pipeline
-              const embedPlugin = this.pm.get('@nocobase/plugin-embed-web-client') as any;
-              if (embedPlugin?.serverEmbeddingPipeline) {
-                await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
-                embedPlugin.serverEmbeddingPipeline.processDocument(doc.id).catch((err: any) => {
+              await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
+              getServerEmbeddingPipeline(this)
+                .processDocument(doc.id)
+                .catch((err: any) => {
                   this.app.logger.warn(`[KBRetry] Server embedding retry failed for doc ${doc.id}: ${err.message}`);
                 });
-              }
             } else if (kbType !== 'WEB_CLIENT_EMBED') {
               // Retry via vectorization pipeline (LOCAL and other types)
               await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
@@ -407,9 +424,13 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
   async afterEnable() {}
 
-  async afterDisable() {}
+  async afterDisable() {
+    this.clearRetryTimer();
+  }
 
-  async remove() {}
+  async remove() {
+    this.clearRetryTimer();
+  }
 }
 
 export default PluginKnowledgeBaseServer;

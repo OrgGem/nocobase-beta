@@ -116,11 +116,11 @@ export class DockerAdapter implements IOrchestratorAdapter {
         const myContainer = this.docker.getContainer(myContainerId);
         const myInfo = await myContainer.inspect();
         
-        // Inherit Networks if none specified
-        if (!targetNetworkMode && targetNetworks.length === 0) {
-          if (myInfo?.NetworkSettings?.Networks) {
-            targetNetworks = Object.keys(myInfo.NetworkSettings.Networks);
-          }
+        // Always inherit Networks so worker can communicate with main app
+        if (myInfo?.NetworkSettings?.Networks) {
+          const inheritedNetworks = Object.keys(myInfo.NetworkSettings.Networks);
+          targetNetworks = Array.from(new Set([...inheritedNetworks, ...targetNetworks]));
+          console.log('[DockerAdapter] Inherited networks:', targetNetworks);
         }
         
         // Inherit Environment Variables and merge with stack.envVars
@@ -134,16 +134,23 @@ export class DockerAdapter implements IOrchestratorAdapter {
            });
            // Overwrite with explicitly defined env vars
            Object.assign(envDict, stack.envVars || {});
+           
            targetEnvVars = Object.entries(envDict).map(([k, v]) => `${k}=${v}`);
         }
-
         // Inherit Volumes (Binds)
         if (myInfo?.HostConfig?.Binds) {
           const inheritedBinds = myInfo.HostConfig.Binds as string[];
           targetVolumes = Array.from(new Set([...inheritedBinds, ...targetVolumes]));
         }
-      } catch (e) {
+      } catch (e: any) {
         // Ignore error if not running in a container or cannot inspect
+        console.error('[DockerAdapter] Failed to inherit container config:', e.message);
+      }
+
+      // Automatically separate logs for workers to prevent log interleaving with the main app
+      const hasLoggerBase = targetEnvVars.some(e => e.startsWith('LOGGER_BASE_PATH='));
+      if (!hasLoggerBase) {
+        targetEnvVars.push(`LOGGER_BASE_PATH=/app/nocobase/storage/logs/${stack.name}`);
       }
 
       for (let i = 0; i < diff; i++) {
@@ -185,8 +192,9 @@ export class DockerAdapter implements IOrchestratorAdapter {
         const container = await this.docker.createContainer(createOpts);
         
         // Connect to additional networks before starting
-        if (!targetNetworkMode && targetNetworks.length > 1) {
-          for (let i = 1; i < targetNetworks.length; i++) {
+        if (targetNetworks.length > 0) {
+          const startIndex = targetNetworkMode ? 0 : 1;
+          for (let i = startIndex; i < targetNetworks.length; i++) {
             try {
               const net = this.docker.getNetwork(targetNetworks[i]);
               await net.connect({ Container: container.id });
@@ -282,6 +290,14 @@ export class DockerAdapter implements IOrchestratorAdapter {
 
     // Docker logs come with 8-byte header per frame; strip them
     return this.demuxDockerLogs(logBuffer);
+  }
+
+  async listNetworks(): Promise<{ id: string; name: string }[]> {
+    const networks = await this.docker.listNetworks();
+    return networks.map((n: any) => ({
+      id: n.Id,
+      name: n.Name,
+    }));
   }
 
   // ─── Private helpers ───

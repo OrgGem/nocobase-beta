@@ -1,6 +1,6 @@
 import SftpClient from 'ssh2-sftp-client';
 import genericPool, { Pool } from 'generic-pool';
-import { Readable } from 'stream';
+import crypto from 'crypto';
 
 export interface SftpPoolOptions {
   host: string;
@@ -10,20 +10,31 @@ export interface SftpPoolOptions {
   privateKey?: string;
   passphrase?: string;
   authMethod?: 'password' | 'privateKey';
+  readyTimeout?: number;
+  retries?: number;
+  retryFactor?: number;
+  retryMinTimeout?: number;
+  poolMax?: number;
+  poolMin?: number;
+  idleTimeoutMillis?: number;
+  acquireTimeoutMillis?: number;
 }
 
 class SftpPoolManager {
   private pools = new Map<string, Pool<SftpClient>>();
 
   private getConfigHash(config: SftpPoolOptions): string {
+    const secretFingerprint = crypto
+      .createHash('sha256')
+      .update([config.password || '', config.privateKey || '', config.passphrase || ''].join('\n'))
+      .digest('hex');
+
     return JSON.stringify({
       host: config.host,
       port: config.port || 22,
       username: config.username,
       authMethod: config.authMethod,
-      password: config.password,
-      privateKey: config.privateKey,
-      passphrase: config.passphrase,
+      secretFingerprint,
     });
   }
 
@@ -37,10 +48,10 @@ class SftpPoolManager {
             host: config.host,
             port: config.port || 22,
             username: config.username,
-            readyTimeout: 15000,
-            retries: 2,
-            retry_factor: 2,
-            retry_minTimeout: 2000,
+            readyTimeout: Number(config.readyTimeout || process.env.SFTP_POOL_READY_TIMEOUT || 15000),
+            retries: Number(config.retries ?? process.env.SFTP_POOL_RETRIES ?? 2),
+            retry_factor: Number(config.retryFactor || process.env.SFTP_POOL_RETRY_FACTOR || 2),
+            retry_minTimeout: Number(config.retryMinTimeout || process.env.SFTP_POOL_RETRY_MIN_TIMEOUT || 2000),
           };
           if (config.authMethod === 'privateKey' && config.privateKey) {
             connectOptions.privateKey = config.privateKey;
@@ -67,10 +78,10 @@ class SftpPoolManager {
       };
 
       const poolOpts = {
-        max: 10,
-        min: 0,
-        idleTimeoutMillis: 30000,
-        acquireTimeoutMillis: 15000,
+        max: Number(config.poolMax || process.env.SFTP_POOL_MAX || 10),
+        min: Number(config.poolMin ?? process.env.SFTP_POOL_MIN ?? 0),
+        idleTimeoutMillis: Number(config.idleTimeoutMillis || process.env.SFTP_POOL_IDLE_TIMEOUT || 30000),
+        acquireTimeoutMillis: Number(config.acquireTimeoutMillis || process.env.SFTP_POOL_ACQUIRE_TIMEOUT || 15000),
         testOnBorrow: true,
       };
 
@@ -81,15 +92,31 @@ class SftpPoolManager {
     return this.pools.get(hash)!;
   }
 
-  async acquire(config: SftpPoolOptions): Promise<{ client: SftpClient; release: () => void; pool: Pool<SftpClient> }> {
+  async acquire(config: SftpPoolOptions): Promise<{ client: SftpClient; release: () => void; destroy: () => Promise<void>; pool: Pool<SftpClient> }> {
     const pool = this.getPool(config);
     const client = await pool.acquire();
+    let returned = false;
     const release = () => {
+      if (returned) return;
+      returned = true;
       try {
         pool.release(client);
       } catch (e) {}
     };
-    return { client, release, pool };
+    const destroy = async () => {
+      if (returned) return;
+      returned = true;
+      await pool.destroy(client).catch(() => {});
+    };
+    return { client, release, destroy, pool };
+  }
+
+  async closePool(config: SftpPoolOptions) {
+    const hash = this.getConfigHash(config);
+    const pool = this.pools.get(hash);
+    if (!pool) return;
+    this.pools.delete(hash);
+    await pool.drain().then(() => pool.clear()).catch(() => {});
   }
 
   async closeAll() {

@@ -13,8 +13,7 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
   if (!handle) {
     return {
       status: 'error',
-      content:
-        'No active draw.io block found. Open a Drawio Diagram block on the page before calling edit_diagram.',
+      content: 'No active draw.io block found. Open a Drawio Diagram block on the page before calling edit_diagram.',
     };
   }
 
@@ -53,6 +52,7 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
   const fullXml = wrapWithMxFile(editedXml);
   try {
     handle.setXml(fullXml);
+    await handle.persist(fullXml);
     handle.bridge.load(fullXml);
   } catch (err: any) {
     return { status: 'error', content: `Failed to apply edits to canvas: ${err?.message || String(err)}` };
@@ -64,7 +64,4 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
   };
 }
 
-export const editDiagramTool: [string, ToolsOptions] = [
-  'drawio-edit_diagram',
-  { invoke },
-];
+export const editDiagramTool: [string, ToolsOptions] = ['drawio-edit_diagram', { invoke }];

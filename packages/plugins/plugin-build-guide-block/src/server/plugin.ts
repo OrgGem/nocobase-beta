@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { build } from './actions/build';
 import { getHtml } from './actions/getHtml';
 import { getMarkdown } from './actions/getMarkdown';
+import { searchBuildGuidesTool } from './tools';
 
 export class PluginBuildGuideBlockServer extends Plugin {
   private readonly schemaCollections = ['aiBuildGuideSpaces', 'aiBuildGuidePages'];
@@ -62,6 +63,38 @@ export class PluginBuildGuideBlockServer extends Plugin {
         this.app.logger.warn('[plugin-build-guide-block] Failed to recover stale builds', err);
       }
     });
+
+    this.registerAITools();
+  }
+
+  private registerAITools() {
+    const toolsManager = (this.app as any).aiManager?.toolsManager;
+    if (!toolsManager) {
+      this.app.logger.warn('[plugin-build-guide-block] aiManager.toolsManager is not available; skipping tool registration');
+      return;
+    }
+
+    const tools = [searchBuildGuidesTool];
+    toolsManager.registerTools(
+      tools.map((item: any) => {
+        const name = `${item.groupName}-${item.tool.name}`;
+        return {
+          scope: 'CUSTOM',
+          defaultPermission: item.tool.execution === 'backend' ? 'ALLOW' : 'ASK',
+          execution: item.tool.execution,
+          introduction: {
+            title: item.tool.title,
+            about: item.tool.description,
+          },
+          definition: {
+            name,
+            description: item.tool.description,
+            schema: item.tool.schema,
+          },
+          invoke: item.tool.invoke,
+        };
+      }),
+    );
   }
 
   private async ensureCollectionSchema(collectionName: string) {

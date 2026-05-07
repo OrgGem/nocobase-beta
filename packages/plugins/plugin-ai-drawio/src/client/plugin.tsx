@@ -44,19 +44,35 @@ export class PluginAIDrawioClient extends Plugin {
   }
 
   private registerAITools() {
-    const aiManager = (this.app as any).aiManager;
-    if (!aiManager) {
+    const toolsManager = (this.app as any).aiManager?.toolsManager;
+    if (!toolsManager) {
       console.warn('[plugin-ai-drawio] aiManager not available; skipping AI integration');
       return;
     }
-    const toolsManager = aiManager.toolsManager;
-    if (toolsManager?.registerTools) {
-      for (const [name, options] of drawioClientTools) {
-        toolsManager.registerTools(name, options);
-      }
+
+    for (const [name, options] of drawioClientTools) {
+      toolsManager.registerTools(name, options);
     }
-    if (aiManager.registerWorkContext) {
-      aiManager.registerWorkContext('drawio', DrawioWorkContext);
+
+    const getAIPlugin = () => {
+      try {
+        return this.app.pm.get('ai') as any;
+      } catch {
+        try {
+          return this.app.pm.get('@nocobase/plugin-ai') as any;
+        } catch {
+          return null;
+        }
+      }
+    };
+
+    try {
+      const aiManager = getAIPlugin()?.aiManager;
+      if (aiManager?.registerWorkContext && !aiManager.getWorkContext?.('drawio')) {
+        aiManager.registerWorkContext('drawio', DrawioWorkContext);
+      }
+    } catch {
+      console.warn('[plugin-ai-drawio] plugin-ai client is not available; skipping drawio work context registration');
     }
   }
 }

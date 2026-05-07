@@ -10,7 +10,13 @@
 import { Plugin } from '@nocobase/server';
 import { crossJoinQuery } from './actions/cross-join-query';
 
+import path from 'path';
+
 export class PluginBlockCrossJoinServer extends Plugin {
+  async beforeLoad() {
+    await this.db.import({ directory: path.resolve(__dirname, 'collections') });
+  }
+
   async load() {
     this.app.resourcer.define({
       name: 'crossJoin',

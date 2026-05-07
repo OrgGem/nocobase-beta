@@ -24,7 +24,7 @@ import type { Context, Next } from '@nocobase/actions';
 import { koaMulter as multer } from '@nocobase/utils';
 import { DTYPE_ONNX, REQUIRED_BASE_FILES } from '../../shared/constants';
 import { safeJoin } from '../../shared/utils';
-import { createS3StorageFromConfig, modelFileMimeType } from '../utils/s3-storage';
+import { createS3StorageFromConfigWithFileManager, modelFileMimeType } from '../utils/s3-storage';
 
 export const BUNDLED_MODELS_ROOT = resolve(__dirname, '../../public/models');
 export const STORAGE_MODELS_ROOT = resolve(process.cwd(), 'storage/plugin-embed-web-client/models');
@@ -156,7 +156,7 @@ export async function listModels(ctx: Context, next: Next) {
   // Check S3 for additional models
   const configRepo = ctx.db.getRepository('embedWebClientConfig');
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, ctx.app);
 
   let s3Models: ModelInfo[] = [];
   if (s3) {
@@ -256,7 +256,7 @@ export async function uploadModelFile(ctx: Context, next: Next) {
   // Load config to determine storage mode
   const configRepo = ctx.db.getRepository('embedWebClientConfig');
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, ctx.app);
 
   try {
     if (s3) {
@@ -304,7 +304,7 @@ export async function deleteModel(ctx: Context, next: Next) {
   // Load config to determine storage mode
   const configRepo = ctx.db.getRepository('embedWebClientConfig');
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, ctx.app);
 
   let deleted = false;
 
@@ -356,7 +356,7 @@ export async function getModelFiles(ctx: Context, next: Next) {
   // Load config for S3
   const configRepo = ctx.db.getRepository('embedWebClientConfig');
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, ctx.app);
 
   function checkLocal(root: string, source: 'bundled' | 'uploaded') {
     const base = join(root, modelId);
@@ -373,8 +373,8 @@ export async function getModelFiles(ctx: Context, next: Next) {
   // Check S3 existence for files not found locally
   const merged = await Promise.all(
     requiredFiles.map(async (f) => {
-      const b = bundled.find((x) => x.file === f)!;
-      const u = uploaded.find((x) => x.file === f)!;
+      const b = bundled.find((x) => x.file === f) ?? { file: f, present: false, source: 'bundled' as const };
+      const u = uploaded.find((x) => x.file === f) ?? { file: f, present: false, source: 'uploaded' as const };
       if (u.present) return u;
       if (b.present) return b;
 
@@ -411,7 +411,7 @@ export async function createModelDirectory(ctx: Context, next: Next) {
 
   const configRepo = ctx.db.getRepository('embedWebClientConfig');
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, ctx.app);
 
   if (!s3) {
     const destPath = safeJoin(join(STORAGE_MODELS_ROOT, modelId), 'placeholder');

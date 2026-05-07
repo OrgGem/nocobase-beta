@@ -21,6 +21,7 @@
 
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
+import { pipeline, env } from '@huggingface/transformers';
 import type { Database } from '@nocobase/database';
 import { BUNDLED_MODELS_ROOT, STORAGE_MODELS_ROOT } from '../actions/model-manager';
 import {
@@ -37,8 +38,29 @@ import { validateDimensions } from '../../shared/utils';
 // Re-export for convenience
 export { BUNDLED_MODELS_ROOT, STORAGE_MODELS_ROOT };
 
-// Lazy-loaded pipeline instances (one per modelId+dtype combination)
+// Lazy-loaded pipeline instances (one per modelId+dtype combination).
+// Each entry holds ~50-200MB of WASM memory — must be disposed when no longer needed.
 const pipelineCache = new Map<string, any>();
+
+/**
+ * Dispose all cached ONNX pipelines and free WASM memory.
+ * Call this when:
+ *  - Admin changes the model/dtype in plugin settings
+ *  - Plugin is disabled or removed
+ *  - Server is shutting down
+ */
+export async function clearPipelineCache(): Promise<void> {
+  for (const [key, pipe] of pipelineCache) {
+    try {
+      // @huggingface/transformers pipeline.dispose() frees the underlying
+      // ONNX Runtime session and its WASM linear memory.
+      await pipe?.dispose?.();
+    } catch {
+      // Best-effort — some older versions may not have dispose()
+    }
+  }
+  pipelineCache.clear();
+}
 
 function resolveModelRoot(modelId: string): string {
   // Prefer user-uploaded over bundled
@@ -61,7 +83,6 @@ export async function embedTexts(texts: string[], modelId: string, dtype: string
   const cacheKey = `${modelId}::${dtype}`;
 
   if (!pipelineCache.has(cacheKey)) {
-    const { pipeline, env } = await import('@huggingface/transformers');
 
     const modelRoot = resolveModelRoot(modelId);
 
@@ -76,13 +97,16 @@ export async function embedTexts(texts: string[], modelId: string, dtype: string
     env.allowRemoteModels = false;
 
     const pipe = await pipeline('feature-extraction', modelId, {
-      dtype,
+      dtype: dtype as any,
       device: 'cpu',
     });
     pipelineCache.set(cacheKey, pipe);
   }
 
-  const pipe = pipelineCache.get(cacheKey)!;
+  const pipe = pipelineCache.get(cacheKey);
+  if (!pipe) {
+    throw new Error(`Failed to initialize embedding pipeline for ${modelId}`);
+  }
   const output = await pipe(texts, { pooling: 'mean', normalize: true });
 
   // output is a batch Tensor — extract each row as a plain number[]
@@ -98,13 +122,28 @@ export async function embedTexts(texts: string[], modelId: string, dtype: string
  * Reads doc → chunks → embeds → stores in PGVector.
  */
 export class ServerEmbeddingPipeline {
-  constructor(private db: Database) {}
+  private processingDocuments = new Set<string>();
+
+  constructor(
+    private db: Database,
+    private app?: any,
+  ) {}
 
   async processDocument(documentId: string): Promise<void> {
+    if (this.processingDocuments.has(documentId)) return;
+    this.processingDocuments.add(documentId);
+    try {
+      await this.processDocumentInternal(documentId);
+    } finally {
+      this.processingDocuments.delete(documentId);
+    }
+  }
+
+  private async processDocumentInternal(documentId: string): Promise<void> {
     const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
     const doc = await docRepo.findOne({
       filter: { id: documentId },
-      appends: ['knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
+      appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
     });
 
     if (!doc) throw new Error(`Document ${documentId} not found`);
@@ -184,18 +223,51 @@ export class ServerEmbeddingPipeline {
   }
 
   private async readDocumentText(doc: any): Promise<string> {
-    // Fallback: read from file path (reuse VectorizationPipeline's approach)
-    if (!doc.fileId) return '';
-    const fileRepo = this.db.getRepository('attachments');
-    const file = await fileRepo.findOne({ filter: { id: doc.fileId } });
-    if (!file?.path) return '';
+    const fileModel =
+      doc.file ?? (doc.fileId ? await this.db.getRepository('aiFiles').findOne({ filter: { id: doc.fileId } }) : null);
+    const file = fileModel?.toJSON ? fileModel.toJSON() : fileModel;
+    if (!file) return '';
 
-    const absPath = resolve(process.cwd(), file.path.replace(/^\//, ''));
-    const { readFileSync } = await import('fs');
+    if (this.app && file.storageId) {
+      try {
+        const fileManager =
+          this.getPluginSafely('@nocobase/plugin-file-manager') ||
+          this.getPluginSafely('file-manager') ||
+          this.getPluginSafely('plugin-file-manager');
+        const { stream } = await fileManager.getFileStream(file);
+        const chunks: Buffer[] = [];
+        for await (const chunk of stream) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        return Buffer.concat(chunks).toString('utf-8');
+      } catch {
+        // Fall back to local path below.
+      }
+    }
+
+    // Prevent path traversal: only allow files under storage/uploads
+    const filePath = file.path ?? '';
+    if (!filePath) return '';
+    const absPath = resolve(process.cwd(), filePath.replace(/^\//, ''));
+    const allowedRoot = resolve(process.cwd(), 'storage', 'uploads');
+    if (!absPath.startsWith(allowedRoot + require('path').sep) && absPath !== allowedRoot) {
+      this.app?.logger?.warn(`[ServerEmbedding] Blocked path traversal attempt: "${absPath}" outside storage/uploads`);
+      return '';
+    }
+
+    const { readFile } = await import('fs/promises');
     try {
-      return readFileSync(absPath, 'utf-8');
+      return await readFile(absPath, 'utf-8');
     } catch {
       return '';
+    }
+  }
+
+  private getPluginSafely(name: string): any {
+    try {
+      return this.app?.pm.get(name);
+    } catch {
+      return null;
     }
   }
 
@@ -255,8 +327,11 @@ export class ServerEmbeddingPipeline {
             batch[j].text,
             JSON.stringify({
               knowledgeBaseId: kb.id,
+              knowledgeBaseOuterId: kb.id,
               documentId: doc.id,
               source: doc.filename ?? 'unknown',
+              userId: doc.uploadedById ?? null,
+              accessLevel: kb.accessLevel ?? 'PUBLIC',
             }),
             `[${batch[j].embedding.join(',')}]`,
           );

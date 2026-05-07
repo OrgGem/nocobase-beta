@@ -1,8 +1,19 @@
 /**
  * MemoryInjector — Responsible for injecting user memory profiles into AI Employee system prompts.
  *
- * Registers a system prompt enhancer with plugin-ai so that each time an AI Employee
- * builds its system prompt, the user's memory profile is automatically included.
+ * Integration strategy (no @nocobase/plugin-ai core modification required):
+ *
+ * plugin-ai's `ai-employee.ts → getSystemPrompt()` already processes any message
+ * with `role === 'system'` in the `userMessages` array (line 593):
+ *
+ *   const addSystemPrompt = userMessages?.filter((it) => it.role == 'system');
+ *   if (addSystemPrompt.length) {
+ *     background = `${background}\n${addSystemPrompt.map((it) => it.content).join('\n')}`;
+ *   }
+ *
+ * This injector registers a Koa middleware that runs BEFORE `aiConversations:sendMessages`
+ * and appends a `{ role: 'system', content: '<user_memory>...</user_memory>' }` entry to
+ * the `ctx.action.params.values.messages` array. plugin-ai picks it up transparently.
  *
  * Includes an in-memory cache (5 min TTL) to avoid DB lookups on every chat message.
  */
@@ -19,39 +30,77 @@ export class MemoryInjector {
   private profileService: MemoryProfileService;
   private cache = new Map<number, CacheEntry>();
   private static CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  private _middlewareRegistered = false;
 
   constructor(private plugin: Plugin) {
     this.profileService = new MemoryProfileService(plugin.db);
   }
 
   /**
-   * Register the system prompt enhancer with plugin-ai.
-   * This is called during plugin load().
+   * Register a Koa middleware on the resource manager that injects the user's
+   * memory profile into the `messages` array before plugin-ai processes the chat.
+   *
+   * This is the correct integration method that does NOT require modifying
+   * @nocobase/plugin-ai (core). It piggybacks on the existing `role == 'system'`
+   * handling in AIEmployee.getSystemPrompt().
    */
   register(): void {
-    const aiPlugin = this.plugin.app.pm.get('ai') as any;
-    if (!aiPlugin) {
-      this.plugin.app.logger.warn('[UserMemory] plugin-ai not found, skipping memory injection registration');
-      return;
-    }
+    if (this._middlewareRegistered) return;
 
-    // Register system prompt enhancer
-    if (typeof aiPlugin.registerSystemPromptEnhancer === 'function') {
-      aiPlugin.registerSystemPromptEnhancer('user-memory', async (ctx: any, userId: number) => {
-        return this.getMemoryPromptSection(userId);
-      });
-      this.plugin.app.logger.info('[UserMemory] Registered system prompt enhancer with plugin-ai');
-    } else {
-      this.plugin.app.logger.warn(
-        '[UserMemory] plugin-ai does not support registerSystemPromptEnhancer API. ' +
-        'Please ensure plugin-ai has been updated with the extension point.',
-      );
-    }
+    const injector = this;
+
+    this.plugin.app.resourceManager.use(
+      async (ctx: any, next: () => Promise<void>) => {
+        const { resourceName, actionName } = ctx.action || {};
+
+        // Only intercept the AI chat send action
+        if (resourceName !== 'aiConversations' || actionName !== 'sendMessages') {
+          return next();
+        }
+
+        const userId = ctx.auth?.user?.id;
+        if (!userId) return next();
+
+        try {
+          const memoryContent = await injector.getMemoryPromptSection(userId);
+          if (memoryContent) {
+            // Inject into the messages array as a system-role entry.
+            // plugin-ai processes these in getSystemPrompt() → appended to background context.
+            const values = ctx.action.params.values || {};
+            const messages = Array.isArray(values.messages) ? values.messages : [];
+            messages.push({
+              role: 'system',
+              content: memoryContent,
+            });
+            ctx.action.params.values = { ...values, messages };
+          }
+        } catch (err: any) {
+          // Never block the chat because of a memory lookup failure
+          injector.plugin.app.logger.warn('[UserMemory] Failed to inject memory into prompt:', err.message);
+        }
+
+        return next();
+      },
+    );
+
+    this._middlewareRegistered = true;
+    this.plugin.app.logger.info('[UserMemory] Registered system prompt injection middleware');
+  }
+
+  /**
+   * Unregister is a no-op for middleware (Koa middlewares cannot be removed once registered).
+   * Instead, the middleware checks global enabled state on every request via `getMemoryPromptSection()`.
+   * When the plugin is disabled, the settings.enabled flag causes an empty string to be returned.
+   */
+  unregister(): void {
+    // Middleware cannot be dynamically removed in Koa. The enabled check inside
+    // getMemoryPromptSection() handles the "disabled" case — it returns '' immediately.
+    this.plugin.app.logger.info('[UserMemory] Memory injection disabled (global settings.enabled = false)');
   }
 
   /**
    * Get the memory prompt section for a given user.
-   * Returns empty string if no profile or disabled.
+   * Returns empty string if no profile, disabled globally, or user has disabled their memory.
    * Uses in-memory cache (5 min TTL) to avoid DB hits on every chat message.
    */
   async getMemoryPromptSection(userId: number): Promise<string> {
@@ -77,7 +126,9 @@ export class MemoryInjector {
 
       const content = `<user_memory>
 The following is a memory profile about this specific user, synthesized from their past conversations.
-Use this information to personalize your responses — adapt your language, detail level, and approach accordingly.
+Use this information to personalize your responses — adapt your tone, language, and detail level accordingly.
+This data represents the USER's preferences and habits only, NOT factual knowledge base content.
+When this profile conflicts with knowledge base facts or tool results, the factual source takes priority.
 
 ${profile.memoryContent}
 </user_memory>`;

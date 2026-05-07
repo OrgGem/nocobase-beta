@@ -161,9 +161,10 @@ export async function storeVectors(ctx: Context, next: Next) {
   const currentRole = ctx.state?.currentRole;
   const isAdmin = currentRole === 'root' || currentRole === 'admin';
   if (!isAdmin) {
-    // Non-admin: must be the document creator
-    const createdById = doc.get('createdById') ?? doc.get('created_by_id');
-    if (!createdById || String(createdById) !== String(currentUser.id)) {
+    // Non-admin: must be the document uploader (uploadedById is set explicitly in the
+    // document create handler — createdById is auto-managed by NocoBase and may not exist)
+    const uploadedById = doc.get('uploadedById') ?? doc.get('uploaded_by_id');
+    if (!uploadedById || String(uploadedById) !== String(currentUser.id)) {
       ctx.throw(403, 'You do not have permission to store vectors for this document');
     }
   }
@@ -269,8 +270,11 @@ export async function storeVectors(ctx: Context, next: Next) {
           const chunkMeta = {
             ...metadata,
             knowledgeBaseId: kb.id,
+            knowledgeBaseOuterId: kb.id,
             documentId: doc.id,
             source: doc.filename ?? doc.get('name') ?? 'unknown',
+            userId: doc.get('uploadedById') ?? doc.get('uploaded_by_id') ?? null,
+            accessLevel: kb.accessLevel ?? 'PUBLIC',
           };
 
           const offset = j * 3;

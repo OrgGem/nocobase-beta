@@ -461,3 +461,74 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
   uid: 'vpbank',
   default: false,
 };
+
+/**
+ * Tween One — Theme inspired by https://tween-one.vercel.app/ (Dumi/Ant Motion style)
+ * Style: Clean white backgrounds, distinct gray-blue text (#454d64), classic Ant Design blue primary
+ */
+export const tweenOne: Omit<ThemeItem, 'id'> = {
+  config: {
+    name: 'Tween One',
+    token: {
+      colorPrimary: '#1890ff',
+      colorInfo: '#1890ff',
+      colorSuccess: '#52c41a',
+      colorWarning: '#faad14',
+      colorError: '#ff4d4f',
+
+      colorTextBase: '#454d64',
+      fontSize: 14,
+      fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'`,
+
+      // Spacing and sizing - tailored for a clean, documentation-like layout
+      sizeStep: 4,
+      sizeUnit: 4,
+      padding: 16,
+      paddingSM: 12,
+      paddingXS: 8,
+      margin: 16,
+      marginSM: 12,
+      marginXS: 8,
+      
+      colorBgBase: '#ffffff',
+      borderRadius: 4,
+
+      colorBgHeader: '#ffffff',
+      colorTextHeaderMenu: '#454d64',
+      colorTextHeaderMenuHover: '#1890ff',
+      colorTextHeaderMenuActive: '#1890ff',
+      colorBgHeaderMenuHover: '#f5f5f5',
+      colorBgHeaderMenuActive: '#e6f7ff',
+
+      colorBgSider: '#fafafa',
+      colorTextSiderMenu: '#454d64',
+      colorTextSiderMenuHover: '#1890ff',
+      colorTextSiderMenuActive: '#1890ff',
+      colorBgSiderMenuHover: '#e6f7ff',
+      colorBgSiderMenuActive: '#e6f7ff',
+    },
+    components: {
+      Button: {
+        borderRadius: 4,
+        defaultBg: '#ffffff',
+      },
+      Menu: {
+        itemBg: 'transparent',
+        itemHoverBg: '#f5f5f5',
+        itemSelectedBg: '#e6f7ff',
+        itemSelectedColor: '#1890ff',
+        itemColor: '#454d64',
+        subMenuItemBg: 'transparent',
+        itemBorderRadius: 4,
+      },
+      Table: {
+        headerBg: '#fafafa',
+        headerColor: '#454d64',
+      },
+    },
+  },
+  optional: true,
+  isBuiltIn: true,
+  uid: 'tween_one',
+  default: false,
+};

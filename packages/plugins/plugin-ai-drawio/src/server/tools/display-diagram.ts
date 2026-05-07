@@ -3,6 +3,8 @@ type ToolRegisterOptions = any;
 
 const description = `Display a diagram on the active draw.io block. Pass ONLY the mxCell elements - wrapper tags and root cells are added automatically.
 
+You can call this even when no draw.io block is currently open; the client will create and open a new diagram automatically. Include title and description when creating a new diagram from a user request.
+
 VALIDATION RULES (XML will be rejected if violated):
 1. Generate ONLY mxCell elements - NO wrapper tags (<mxfile>, <mxGraphModel>, <root>)
 2. Do NOT include root cells (id="0" or id="1") - they are added automatically
@@ -35,6 +37,8 @@ const displayDiagramTool: ToolRegisterOptions = {
     description,
     execution: 'frontend',
     schema: z.object({
+      title: z.string().optional().describe('Diagram title to use when a new draw.io diagram must be created.'),
+      description: z.string().optional().describe('Diagram description to save with a newly created diagram.'),
       xml: z.string().describe('XML string to be displayed on draw.io (mxCell elements only)'),
     }),
     invoke: async () => ({

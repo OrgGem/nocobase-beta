@@ -4,7 +4,14 @@ import { loadXml } from './actions/loadXml';
 import { saveXml } from './actions/saveXml';
 import { getConfig, setConfig } from './actions/getConfig';
 import { getSystemPrompt } from './actions/getSystemPrompt';
-import { displayDiagramTool, editDiagramTool, appendDiagramTool, getShapeLibraryTool } from './tools';
+import { assertDiagramAccess } from './actions/access';
+import {
+  displayModelDiagramTool,
+  displayDiagramTool,
+  editDiagramTool,
+  appendDiagramTool,
+  getShapeLibraryTool,
+} from './tools';
 
 export class PluginAIDrawioServer extends Plugin {
   private readonly schemaCollections = ['aiDiagrams', 'aiDrawioConfig'];
@@ -29,9 +36,8 @@ export class PluginAIDrawioServer extends Plugin {
         const repository = ctx.db.getRepository('aiDiagrams');
         const model = await repository.findById(filterByTk);
         if (!model) ctx.throw(404, 'Diagram not found');
-        const { assertDiagramAccess } = await import('./actions/access');
         assertDiagramAccess(ctx, model);
-        ctx.body = { id: model.get('id'), title: model.get('title') };
+        ctx.body = { id: model.get('id'), title: model.get('title'), mode: model.get('mode') || 'editable' };
         await next();
       },
     });
@@ -57,32 +63,39 @@ export class PluginAIDrawioServer extends Plugin {
   }
 
   private registerAITools() {
-    const pluginAI = this.app.pm.get('@nocobase/plugin-ai') as any;
-    const toolsManager = pluginAI?.aiManager?.toolsManager;
+    const toolsManager = this.app.aiManager?.toolsManager;
     if (!toolsManager) {
       this.app.logger.warn('[plugin-ai-drawio] aiManager.toolsManager is not available; skipping tool registration');
       return;
     }
 
-    try {
-      toolsManager.registerToolGroup({
-        groupName: 'drawio',
-        title: '{{t("Drawio", { ns: "ai-drawio" })}}',
-        description: '{{t("Tools for editing draw.io diagrams via AI", { ns: "ai-drawio" })}}',
-        sort: 100,
-      });
-    } catch (e) {
-      this.app.logger.debug('[plugin-ai-drawio] Tool group drawio already registered or failed: ' + e);
-    }
-
-    toolsManager.registerTools([displayDiagramTool, editDiagramTool, appendDiagramTool, getShapeLibraryTool]);
+    toolsManager.registerTools(
+      [displayModelDiagramTool, displayDiagramTool, editDiagramTool, appendDiagramTool, getShapeLibraryTool].map(
+        (item: any) => {
+          const name = `${item.groupName}-${item.tool.name}`;
+          return {
+            scope: 'CUSTOM',
+            defaultPermission: item.tool.execution === 'backend' ? 'ALLOW' : 'ASK',
+            execution: item.tool.execution,
+            introduction: {
+              title: item.tool.title,
+              about: item.tool.description,
+            },
+            definition: {
+              name,
+              description: item.tool.description,
+              schema: item.tool.schema,
+            },
+            invoke: item.tool.invoke,
+          };
+        },
+      ),
+    );
   }
 
-  async install(options?: InstallOptions) {
-  }
+  async install(options?: InstallOptions) {}
 
-  async upgrade() {
-  }
+  async upgrade() {}
 }
 
 export default PluginAIDrawioServer;

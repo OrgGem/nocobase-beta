@@ -13,10 +13,10 @@ import { getConfig, updateConfig, storeVectors } from './resources/embed-web-cli
 import { downloadModel, getModelStatus } from './actions/download-model';
 import { listModels, uploadModelFile, deleteModel, getModelFiles, createModelDirectory } from './actions/model-manager';
 import { createModelServerMiddleware } from './middleware/model-server';
-import { ServerEmbeddingPipeline } from './pipeline/server-embedding';
+import { ServerEmbeddingPipeline, clearPipelineCache } from './pipeline/server-embedding';
 
 export class PluginEmbedWebClientServer extends Plugin {
-  private serverEmbeddingPipeline: ServerEmbeddingPipeline;
+  serverEmbeddingPipeline: ServerEmbeddingPipeline;
 
   async beforeLoad() {
     // Extend aiKnowledgeBases with embedModelId + embedMode fields (declared here,
@@ -55,10 +55,10 @@ export class PluginEmbedWebClientServer extends Plugin {
     });
 
     // Serve bundled/uploaded/S3 model files at GET /embed-web-client/models/**
-    this.app.use(createModelServerMiddleware(this.db), { before: 'resourcer' });
+    this.app.use(createModelServerMiddleware(this.db, this.app), { before: 'resourcer' });
 
     // Server-side embedding pipeline (used when embedMode = 'server')
-    this.serverEmbeddingPipeline = new ServerEmbeddingPipeline(this.db);
+    this.serverEmbeddingPipeline = new ServerEmbeddingPipeline(this.db, this.app);
 
     // Hook: when a document is created for a server-mode WEB_CLIENT_EMBED KB,
     // trigger server-side ONNX embedding automatically.
@@ -78,6 +78,18 @@ export class PluginEmbedWebClientServer extends Plugin {
         }
       } catch (err: any) {
         this.log.warn(`embedMode check failed: ${err.message}`);
+      }
+    });
+
+    // Invalidate cached ONNX pipelines when admin changes model/dtype settings.
+    // This ensures the next embedding request loads the newly configured model
+    // instead of using a stale ~50-200MB WASM pipeline from memory.
+    this.db.on('embedWebClientConfig.afterUpdate', async () => {
+      try {
+        await clearPipelineCache();
+        this.log.info('[EmbedWebClient] Pipeline cache cleared after config update');
+      } catch (err: any) {
+        this.log.warn(`[EmbedWebClient] Failed to clear pipeline cache: ${err.message}`);
       }
     });
 
@@ -120,6 +132,15 @@ export class PluginEmbedWebClientServer extends Plugin {
         'embedWebClient:createModelDirectory',
       ],
     });
+  }
+
+  async disable() {
+    // Free WASM memory held by cached ONNX pipelines
+    await clearPipelineCache();
+  }
+
+  async remove() {
+    await clearPipelineCache();
   }
 }
 

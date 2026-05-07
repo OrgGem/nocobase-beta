@@ -9,7 +9,7 @@
 
 import { Plugin } from '@nocobase/server';
 import PluginFileManagerServer from '@nocobase/plugin-file-manager';
-import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, GetObjectCommand, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, HeadObjectCommand, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { STORAGE_TYPE_S3_PRIVATE } from '../constants';
 import S3PrivateStorage from './storages/s3-private';
@@ -325,6 +325,7 @@ export class PluginS3PrivateStorageServer extends Plugin {
       DeleteObjectCommand,
       DeleteObjectsCommand,
       HeadObjectCommand,
+      CopyObjectCommand,
       Upload,
     };
   }

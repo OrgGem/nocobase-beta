@@ -9,9 +9,11 @@
 
 import { Plugin } from '@nocobase/server';
 import { ElasticsearchDataSource } from './data-source/ElasticsearchDataSource';
+import path from 'path';
 
 export class PluginDataSourceElasticsearchServer extends Plugin {
   async beforeLoad() {
+    await this.db.import({ directory: path.resolve(__dirname, 'collections') });
     // Register 'elasticsearch' as a data source type
     (this as any).app.dataSourceManager.factory.register('elasticsearch', ElasticsearchDataSource);
   }

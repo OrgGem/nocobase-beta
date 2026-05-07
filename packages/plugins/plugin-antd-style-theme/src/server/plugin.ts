@@ -8,7 +8,7 @@
  */
 
 import { InstallOptions, Plugin } from '@nocobase/server';
-import { businessPro, compact, compactDark, dark, defaultTheme, midnightEnterprise, vpbank } from './builtinThemes';
+import { businessPro, compact, compactDark, dark, defaultTheme, midnightEnterprise, vpbank, tweenOne } from './builtinThemes';
 import { updateTheme } from './actions/update-user-theme';
 
 const THEME_EDITOR_NAMES = ['theme-editor', '@nocobase/plugin-theme-editor'];
@@ -63,7 +63,7 @@ export class PluginAntdStyleThemeServer extends Plugin {
       const themeRepo = this.db.getRepository('antdStyleThemeConfig');
       if (!themeRepo) return;
 
-      const allBuiltins = [defaultTheme, dark, compact, compactDark, businessPro, midnightEnterprise, vpbank];
+      const allBuiltins = [defaultTheme, dark, compact, compactDark, businessPro, midnightEnterprise, vpbank, tweenOne];
       for (const theme of allBuiltins) {
         const exists = await themeRepo.findOne({ filter: { uid: theme.uid } });
         if (!exists) {
@@ -82,7 +82,7 @@ export class PluginAntdStyleThemeServer extends Plugin {
 
     if ((await themeRepo.count()) === 0) {
       await themeRepo.create({
-        values: [defaultTheme, dark, compact, compactDark, businessPro, midnightEnterprise, vpbank],
+        values: [defaultTheme, dark, compact, compactDark, businessPro, midnightEnterprise, vpbank, tweenOne],
       });
     }
   }

@@ -15,10 +15,12 @@ function userHasAdminSnippet(ctx: Context): boolean {
 export function assertDiagramAccess(ctx: Context, model: any) {
   const isRead = ['get', 'getMeta', 'list', 'loadXml'].includes(ctx.action.actionName);
 
+  // Admin snippet holders bypass all checks
   if (userHasAdminSnippet(ctx)) return;
 
   const currentUserId = (ctx.state as any)?.currentUser?.id;
 
+  // Read operations are allowed for any authenticated user
   if (isRead) {
     return;
   }
@@ -28,7 +30,14 @@ export function assertDiagramAccess(ctx: Context, model: any) {
   }
 
   const createdById = model?.get?.('createdById');
-  if (createdById && createdById === currentUserId) return;
+
+  // If diagram has no owner (createdById is null/undefined), allow any
+  // authenticated user to write. This covers diagrams created via admin
+  // CRUD or before the createdById field was populated.
+  if (!createdById) return;
+
+  // Owner can always write their own diagrams
+  if (createdById === currentUserId) return;
 
   ctx.throw(403, 'You do not have permission to access this diagram');
 }

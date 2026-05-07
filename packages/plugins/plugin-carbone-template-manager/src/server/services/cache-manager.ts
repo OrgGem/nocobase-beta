@@ -15,8 +15,17 @@ export function stableStringify(input: unknown): string {
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
 }
 
-export function buildCacheKey(carboneTemplateId: string, data: unknown, format: string): string {
+export function buildCacheKey(
+  carboneTemplateId: string,
+  data: unknown,
+  format: string,
+  scope?: { templateId?: number; versionId?: number },
+): string {
   return createHash('md5')
+    .update(scope?.templateId != null ? String(scope.templateId) : '')
+    .update('|')
+    .update(scope?.versionId != null ? String(scope.versionId) : '')
+    .update('|')
     .update(carboneTemplateId)
     .update('|')
     .update(stableStringify(data))

@@ -34,7 +34,7 @@ import { join } from 'path';
 import type { Context, Next } from '@nocobase/actions';
 import { DTYPE_ONNX, REQUIRED_BASE_FILES, DEFAULT_MODEL_ID, DEFAULT_DTYPE } from '../../shared/constants';
 import { safeJoin } from '../../shared/utils';
-import { createS3StorageFromConfig, modelFileMimeType } from '../utils/s3-storage';
+import { createS3StorageFromConfigWithFileManager, modelFileMimeType } from '../utils/s3-storage';
 import { VALID_MODEL_ID_RE } from './model-manager';
 
 // Downloads go to storage/ so they survive plugin upgrades without overwriting bundled files
@@ -101,27 +101,27 @@ export async function downloadModel(ctx: Context, next: Next) {
   // Load plugin config to determine storage mode
   const configRepo = ctx.db.getRepository('embedWebClientConfig');
   const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, ctx.app);
 
   const files = [...REQUIRED_BASE_FILES, onnxFile];
   const results: { file: string; status: 'ok' | 'skipped' | 'failed'; error?: string }[] = [];
 
   for (const file of files) {
     const url = `${HF_BASE}/${modelId}/resolve/${revision}/${file}`;
-    const s3Key = s3?.buildKey(modelId, file, revision);
 
     try {
       if (s3) {
+        const s3Key = s3.buildKey(modelId, file, revision);
         // ── S3 mode ──────────────────────────────────────────────────────────
         // Check if already in S3
-        if (await s3.fileExists(s3Key!)) {
+        if (await s3.fileExists(s3Key)) {
           results.push({ file, status: 'skipped' });
           continue;
         }
 
         ctx.app.logger.info(`[downloadModel] Fetching ${url} → S3:${s3Key}`);
         const buffer = await downloadToBuffer(url);
-        await s3.uploadFile(s3Key!, buffer, modelFileMimeType(file));
+        await s3.uploadFile(s3Key, buffer, modelFileMimeType(file));
         results.push({ file, status: 'ok' });
       } else {
         // ── Local disk mode ───────────────────────────────────────────────────
@@ -175,7 +175,7 @@ export async function getModelStatus(ctx: Context, next: Next) {
   const onnxFile = DTYPE_ONNX[dtype] ?? DTYPE_ONNX.q8;
   const requiredFiles = [...REQUIRED_BASE_FILES, onnxFile];
 
-  const s3 = createS3StorageFromConfig(config ?? {});
+  const s3 = await createS3StorageFromConfigWithFileManager(config ?? {}, ctx.app);
 
   // Check bundled models first, then storage override
   const BUNDLED_ROOT = resolve(__dirname, '../../public/models');

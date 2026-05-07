@@ -22,7 +22,7 @@ import { resolve, extname, normalize, join } from 'path';
 import { createReadStream, existsSync, statSync } from 'fs';
 import type { Context, Next } from '@nocobase/actions';
 import type { Database } from '@nocobase/database';
-import { createS3StorageFromConfig } from '../utils/s3-storage';
+import { createS3StorageFromConfigWithFileManager } from '../utils/s3-storage';
 
 const URL_PREFIX = '/embed-web-client/models/';
 
@@ -63,7 +63,7 @@ async function getS3Config(db: Database): Promise<Record<string, any> | null> {
   }
 }
 
-export function createModelServerMiddleware(db: Database) {
+export function createModelServerMiddleware(db: Database, app?: any) {
   return async (ctx: Context, next: Next) => {
     if (!ctx.path.startsWith(URL_PREFIX)) {
       return next();
@@ -110,7 +110,7 @@ export function createModelServerMiddleware(db: Database) {
 
     // 3. Try S3 if configured
     const pluginConfig = await getS3Config(db);
-    const s3 = createS3StorageFromConfig(pluginConfig ?? {});
+    const s3 = await createS3StorageFromConfigWithFileManager(pluginConfig ?? {}, app);
 
     if (s3) {
       // The browser requests: /embed-web-client/models/{modelId}/{file}

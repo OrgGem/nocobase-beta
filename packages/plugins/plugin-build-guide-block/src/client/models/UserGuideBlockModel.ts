@@ -6,12 +6,12 @@ import { SpaceSelect } from '../components/SpaceSelect';
 
 export class UserGuideBlockModel extends BlockModel {
   renderComponent() {
-    const { spaceId } = this.props;
+    const { spaceId } = (this as any).props || {};
     return React.createElement(UserGuideBlock, { spaceId });
   }
 }
 
-UserGuideBlockModel.registerFlow({
+(UserGuideBlockModel as any).registerFlow({
   key: 'userGuideBlockSettings',
   title: escapeT('User guide block setting', { ns: 'build-guide-block' }),
   steps: {
@@ -39,6 +39,6 @@ UserGuideBlockModel.registerFlow({
   },
 });
 
-UserGuideBlockModel.define({
+(UserGuideBlockModel as any).define({
   label: escapeT('User Guide'),
 });

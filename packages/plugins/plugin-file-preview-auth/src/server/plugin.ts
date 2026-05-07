@@ -12,9 +12,14 @@ import { ExcelParserHandler } from './excel-parser-handler';
 
 const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
+import path from 'path';
 
 export class PluginFilePreviewAuthServer extends Plugin {
   private cache: any;
+
+  async beforeLoad() {
+    await this.db.import({ directory: path.resolve(__dirname, 'collections') });
+  }
 
   async load() {
     this.cache = await this.app.cacheManager.createCache({ name: 'file-preview-auth' });

@@ -71,6 +71,7 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
         upload: tplActions.upload,
         parsePlaceholders: tplActions.parsePlaceholders,
         download: tplActions.download,
+        render: renderActions.render,
         renderById: renderActions.renderById,
         renderDirect: renderActions.renderDirect,
         test: renderActions.test,
@@ -154,6 +155,7 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
       name: `pm.${ns}.render`,
       actions: [
         `${COLLECTION.templates}:test`,
+        `${COLLECTION.templates}:render`,
         `${COLLECTION.templates}:renderById`,
         `${COLLECTION.templates}:renderDirect`,
       ],

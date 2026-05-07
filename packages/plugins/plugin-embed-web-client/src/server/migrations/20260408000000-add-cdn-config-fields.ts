@@ -14,8 +14,8 @@ export default class AddCdnConfigFieldsMigration extends Migration {
   appVersion = '<=2.x';
 
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tablePrefix = this.db.options.tablePrefix ?? '';
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tablePrefix = (this as any).db.options.tablePrefix ?? '';
     const tableName = `${tablePrefix}embed_web_client_configs`;
 
     const tableExists = await queryInterface
@@ -40,8 +40,8 @@ export default class AddCdnConfigFieldsMigration extends Migration {
   }
 
   async down() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tablePrefix = this.db.options.tablePrefix ?? '';
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tablePrefix = (this as any).db.options.tablePrefix ?? '';
     const tableName = `${tablePrefix}embed_web_client_configs`;
 
     for (const col of ['model_source', 'cdn_base_url']) {

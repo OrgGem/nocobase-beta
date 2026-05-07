@@ -116,11 +116,12 @@ const Options: React.FC = () => {
                     },
 
                     enableToolRetry: {
-                      title: tval('Auto Tool-call Retry', { ns: namespace }),
+                      title: tval('Auto Tool-call Retry (invoke only)', { ns: namespace }),
                       type: 'boolean',
                       'x-decorator': 'FormItem',
                       'x-component': 'Checkbox',
                       default: true,
+                      description: tval('Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.', { ns: namespace }),
                     },
                     maxToolRetries: {
                       title: tval('Max tool retries', { ns: namespace }),
@@ -146,6 +147,7 @@ const Options: React.FC = () => {
                       'x-decorator': 'FormItem',
                       'x-component': 'Checkbox',
                       default: false,
+                      description: tval('Uses a rough heuristic to estimate token count (not exact). May over- or under-count for some content types. Enable only when hitting context length limits.', { ns: namespace }),
                     },
                     maxContextTokens: {
                       title: tval('Max Context Tokens', { ns: namespace }),

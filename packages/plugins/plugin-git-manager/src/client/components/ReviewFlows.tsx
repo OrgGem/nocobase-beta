@@ -6,6 +6,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, BranchesOutlined } from '@a
 import { useAPIClient } from '@nocobase/client';
 import { useGitManager } from '../context/GitManagerContext';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
+import { LLMServiceSelect } from './LLMServiceSelect';
 import { useT } from '../locale';
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -210,7 +211,7 @@ export const ReviewFlows: React.FC = () => {
           </Form.Item>
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="llmService" label={t('LLM Service (optional)')} style={{ flex: 1, marginRight: 8 }}>
-              <Input placeholder={t('Override flow LLM service')} />
+              <LLMServiceSelect placeholder={t('Override flow LLM service')} />
             </Form.Item>
             <Form.Item name="model" label={t('Model (optional)')} style={{ flex: 1 }}>
               <Input placeholder={t('Override LLM model')} />

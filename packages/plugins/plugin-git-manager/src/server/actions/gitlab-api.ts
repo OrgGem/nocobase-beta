@@ -42,8 +42,8 @@ async function getRepoApiContext(ctx: Context) {
   if (!repo) {
     ctx.throw(404, 'Repository not found');
   }
-  const pat = repo.get('pat') as string;
-  const repoUrl = repo.get('repoUrl') as string;
+  const pat = (repo.get('pat') as string || '').trim();
+  const repoUrl = (repo.get('repoUrl') as string || '').trim();
   const isGitHub = repoUrl.includes('github.com');
   const { apiBase, encodedProject, projectPath } = parseGitLabProject(repoUrl);
   return { repo, pat, apiBase, encodedProject, projectPath, isGitHub };
@@ -104,7 +104,8 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
   let items;
 
   if (isGitHub) {
-    // Map GitLab state to GitHub state
+    // Map GitLab state to GitHub state. `merged` requires fetching `closed`
+    // and filtering client-side, since GitHub has no dedicated state.
     const ghState = state === 'opened' ? 'open' : state === 'closed' ? 'closed' : state === 'merged' ? 'closed' : 'all';
     result = await githubFetch(`/repos/${projectPath}/pulls`, pat, {
       state: ghState,
@@ -113,11 +114,19 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
       sort: orderBy === 'updated_at' ? 'updated' : 'created',
       direction: sort,
     });
-    
+
     let pullRequests = result.data || [];
-    // If state is merged, filter the closed ones that are merged
+    // If state is merged, filter the closed ones that are merged.
+    // Pagination metadata from GitHub still reflects the unfiltered `closed`
+    // total — null it out to avoid misleading the UI.
+    let mergedFilterApplied = false;
     if (state === 'merged') {
       pullRequests = pullRequests.filter((pr: any) => pr.merged_at);
+      mergedFilterApplied = true;
+    }
+    if (mergedFilterApplied) {
+      result.totalPages = null;
+      result.total = null;
     }
 
     items = pullRequests.map((pr: any) => ({
@@ -133,16 +142,18 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
       reviewers: (pr.requested_reviewers || []).map((r: any) => ({ name: r.login, username: r.login, avatarUrl: r.avatar_url })),
       labels: (pr.labels || []).map((l: any) => l.name),
       draft: pr.draft || false,
-      mergedBy: null, // Not returned in list API
+      mergedBy: null, // Not returned by the PR list endpoint
       mergedAt: pr.merged_at,
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,
-      userNotesCount: 0, // Not returned in pull list API
+      userNotesCount: typeof pr.comments === 'number' ? pr.comments : 0,
       upvotes: 0,
       downvotes: 0,
       webUrl: pr.html_url,
-      hasConflicts: false, // Not guaranteed in list
-      changesCount: 0,
+      // GitHub's PR list does not include mergeability info — surface as
+      // `null` (unknown) so the UI doesn't render a misleading "no conflicts".
+      hasConflicts: null,
+      changesCount: typeof pr.changed_files === 'number' ? pr.changed_files : null,
     }));
   } else {
     if (!pat) ctx.throw(400, 'Personal Access Token is required for GitLab API access');
@@ -240,8 +251,20 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
       closedBy: null, // Not always readily available on GitHub without extra call
       closedAt: pr.closed_at,
       webUrl: pr.html_url,
-      hasConflicts: pr.mergeable_state === 'dirty',
-      diffStats: { additions: pr.additions },
+      // `mergeable_state === 'unknown'` when GitHub is still computing — surface
+      // `null` instead of `false` so the UI can distinguish "no conflicts" from
+      // "not yet known".
+      hasConflicts:
+        pr.mergeable_state === 'dirty'
+          ? true
+          : pr.mergeable_state === 'unknown' || pr.mergeable === null
+            ? null
+            : false,
+      diffStats: {
+        additions: typeof pr.additions === 'number' ? pr.additions : null,
+        deletions: typeof pr.deletions === 'number' ? pr.deletions : null,
+        changedFiles: typeof pr.changed_files === 'number' ? pr.changed_files : null,
+      },
       changes,
     };
   } else {

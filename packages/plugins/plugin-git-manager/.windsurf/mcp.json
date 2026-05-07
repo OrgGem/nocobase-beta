@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "code-graph": {
+      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": [
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\code-graph-index\\scripts\\graph_mcp_server.py",
+        "--graph",
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.code-graph-index\\graph.json"
+      ],
+      "env": {},
+      "disabled": false
+    },
+    "faiss-code-index": {
+      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": [
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\code-graph-index\\scripts\\faiss_mcp_server.py",
+        "--index-dir",
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.code-graph-index\\faiss-index"
+      ],
+      "env": {},
+      "disabled": false
+    },
+    "document-reader": {
+      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": [
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\document-reader\\scripts\\reader_mcp_server.py"
+      ],
+      "env": {},
+      "disabled": false
+    },
+    "brain-manager": {
+      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "args": [
+        "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\brain-manager\\scripts\\brain_mcp_server.py"
+      ],
+      "env": {},
+      "disabled": false
+    }
+  }
+}

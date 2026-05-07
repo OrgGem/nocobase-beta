@@ -14,6 +14,46 @@ import { IStorageAdapter, FileEntry } from '../adapters/types';
 import { koaMulter as multer } from '@nocobase/utils';
 import { STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
 
+const DEFAULT_LIST_LIMIT = 100;
+const MAX_LIST_LIMIT = 1000;
+
+function getActionPayload(ctx: any) {
+  return {
+    ...(ctx.request?.query || {}),
+    ...(ctx.action?.params || {}),
+    ...(ctx.request?.body || {}),
+    ...(ctx.action?.params?.values || {}),
+  };
+}
+
+function clampListLimit(value: any) {
+  const parsed = Number(value || DEFAULT_LIST_LIMIT);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LIST_LIMIT;
+  return Math.min(Math.floor(parsed), MAX_LIST_LIMIT);
+}
+
+function parseOffset(value: any) {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed) || parsed < 0) return 0;
+  return Math.floor(parsed);
+}
+
+function sortEntries(entries: FileEntry[], sort = 'name', order = 'asc') {
+  const direction = order === 'desc' ? -1 : 1;
+  return [...entries].sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+    const av = a[sort] ?? a.name;
+    const bv = b[sort] ?? b.name;
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * direction;
+    return String(av).localeCompare(String(bv)) * direction;
+  });
+}
+
+function safeUploadFilename(value: string) {
+  const normalized = String(value || 'unnamed').replace(/\\/g, '/');
+  return path.posix.basename(normalized) || 'unnamed';
+}
+
 /**
  * Sanitize path to prevent directory traversal attacks.
  * Removes '..' components, normalizes separators, and ensures paths stay within bounds.
@@ -195,9 +235,9 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
 
       const dataWithActions = directories.map(dir => {
         const id = dir.get('id');
-        const allowedActions = ['list', 'view', 'download'];
+        const allowedActions = ['list', 'view', 'download', 'exists'];
         if (updatableIds.includes(id)) {
-          allowedActions.push('upload', 'mkdir', 'update');
+          allowedActions.push('upload', 'mkdir', 'rename', 'update');
         }
         if (destroyableIds.includes(id)) {
           allowedActions.push('delete', 'destroy');
@@ -223,16 +263,34 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     const { directory, subPath } = result;
     const adapter = await getAdapter(directory);
     const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+    const payload = getActionPayload(ctx);
+    const limit = clampListLimit(payload.limit);
+    const offset = parseOffset(payload.offset ?? payload.page);
+    const type = payload.type;
+    const search = String(payload.search || payload.q || '').toLowerCase();
 
     try {
-      const files = await adapter.list(remotePath);
+      let files = (await adapter.list(remotePath)).map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+      if (type === 'file' || type === 'directory') {
+        files = files.filter((entry) => entry.type === type);
+      }
+      if (search) {
+        files = files.filter((entry) => entry.name.toLowerCase().includes(search));
+      }
+      const sorted = sortEntries(files, payload.sort || 'name', payload.order || 'asc');
+      const pageData = sorted.slice(offset, offset + limit);
       ctx.body = {
-        data: files.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry)),
+        data: pageData,
         meta: {
           directoryId: directory.get('id'),
           directoryName: directory.get('name'),
           currentPath: subPath,
           rootPath: directory.get('rootPath'),
+          total: sorted.length,
+          limit,
+          offset,
+          hasMore: offset + limit < sorted.length,
+          nextOffset: offset + limit < sorted.length ? offset + limit : null,
         },
       };
     } catch (error: any) {
@@ -313,12 +371,32 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     const { directory, subPath } = result;
     const adapter = await getAdapter(directory);
 
-    // Parse multipart using multer to disk
+    if (!ctx.request?.is?.('multipart/*')) {
+      if (!ctx.req || subPath === '/') {
+        ctx.throw(400, 'Raw stream upload requires a file path');
+        return;
+      }
+
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+      try {
+        await adapter.putStream(remotePath, ctx.req, {
+          size: Number(ctx.request?.headers?.['content-length'] || 0) || undefined,
+          mimetype: ctx.request?.headers?.['content-type'],
+        });
+        ctx.body = { data: { path: subPath, success: true } };
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] Raw upload failed for "${remotePath}":`, error);
+        ctx.throw(500, `Failed to upload file: ${error.message}`);
+      }
+      return;
+    }
+
     try {
       const uploadMiddleware = multer({ dest: os.tmpdir() }).any();
       await uploadMiddleware(ctx, () => {});
     } catch (err: any) {
       ctx.throw(400, `Upload parsing error: ${err.message}`);
+      return;
     }
 
     // Handle file uploads from Koa context (multer puts any() in ctx.files)
@@ -348,7 +426,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     const results: any[] = [];
 
     for (const file of fileList) {
-      const fileName = file.originalname || file.originalFilename || file.newFilename || file.name || 'unnamed';
+      const fileName = safeUploadFilename(file.originalname || file.originalFilename || file.newFilename || file.name);
       const filePath = file.path || file.filepath;
 
       if (!filePath) {
@@ -381,10 +459,6 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
           success: true,
         });
 
-        // Clean up temp file
-        try {
-          fs.unlinkSync(filePath);
-        } catch { /* ignore */ }
       } catch (error: any) {
         ctx.logger?.error?.(`[ext-storage] Upload failed for "${targetPath}":`, error);
         results.push({
@@ -392,10 +466,67 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
           success: false,
           error: error.message,
         });
+      } finally {
+        if (filePath) {
+          fs.unlink(filePath, () => {});
+        }
       }
     }
 
     ctx.body = { data: results };
+    },
+
+    /**
+     * POST extStorage:rename
+     * Rename or move a file/directory.
+     * Requires 'update' permission.
+     */
+    rename: async (ctx: any) => {
+      const result = await getDirectoryRecord(ctx, 'update');
+    if (!result) return;
+
+    const { directory } = result;
+    const payload = getActionPayload(ctx);
+    const oldSubPath = sanitizePath(payload.oldPath || payload.from || payload.path || '/');
+    const newSubPath = sanitizePath(payload.newPath || payload.to || '/');
+
+    if (oldSubPath === '/' || newSubPath === '/') {
+      ctx.throw(400, 'Refusing to rename root path');
+      return;
+    }
+
+    const adapter = await getAdapter(directory);
+    const oldRemotePath = resolveRemotePath(directory.get('rootPath'), oldSubPath);
+    const newRemotePath = resolveRemotePath(directory.get('rootPath'), newSubPath);
+
+    try {
+      await adapter.rename(oldRemotePath, newRemotePath);
+      ctx.body = { data: { oldPath: oldSubPath, newPath: newSubPath, success: true } };
+    } catch (error: any) {
+      ctx.logger?.error?.(`[ext-storage] Rename failed from "${oldRemotePath}" to "${newRemotePath}":`, error);
+      ctx.throw(500, `Failed to rename: ${error.message}`);
+    }
+    },
+
+    /**
+     * GET extStorage:exists
+     * Check whether a file or directory exists.
+     * Requires 'view' permission.
+     */
+    exists: async (ctx: any) => {
+      const result = await getDirectoryRecord(ctx, 'view');
+    if (!result) return;
+
+    const { directory, subPath } = result;
+    const adapter = await getAdapter(directory);
+    const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+
+    try {
+      ctx.body = { data: { path: subPath, exists: await adapter.exists(remotePath) } };
+    } catch (error: any) {
+      ctx.logger?.error?.(`[ext-storage] Exists check failed for "${remotePath}":`, error);
+      ctx.throw(500, `Failed to check path: ${error.message}`);
+    }
     },
 
     /**
@@ -540,6 +671,40 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
         }
       } catch (error: any) {
         ctx.logger?.warn?.('[ext-storage] Failed to load SFTP options:', error);
+      }
+
+      try {
+        if (s3Access && ctx.db.getCollection('storages')) {
+          const existingSftpNames = new Set(data.sftp.map((item) => item.name));
+          const storages = await ctx.db.getRepository('storages').find({
+            filter: { $and: [{ type: STORAGE_TYPE_SFTP }, s3Filter] },
+            sort: ['title', 'name'],
+          });
+
+          for (const storage of storages) {
+            const parsed = ctx.app.environment
+              ? ctx.app.environment.renderJsonTemplate(storage.toJSON())
+              : storage.toJSON();
+            const name = storage.get('name');
+
+            if (existingSftpNames.has(name)) {
+              continue;
+            }
+
+            data.sftp.push({
+              id: storage.get('id'),
+              name,
+              title: storage.get('title') || name,
+              type: STORAGE_TYPE_SFTP,
+              host: parsed.options?.host,
+              basePath: parsed.options?.basePath || '/',
+              source: 'storages',
+            });
+            existingSftpNames.add(name);
+          }
+        }
+      } catch (error: any) {
+        ctx.logger?.warn?.('[ext-storage] Failed to load File Manager SFTP storage options:', error);
       }
 
       ctx.body = { data };

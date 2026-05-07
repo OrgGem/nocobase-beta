@@ -498,7 +498,7 @@ export const KnowledgeBases: React.FC = () => {
       );
     }
 
-    if (selectedKB?.type === 'WEB_CLIENT_EMBED') {
+    if (selectedKB?.type === 'WEB_CLIENT_EMBED' && selectedKB.embedMode !== 'server') {
       // The WebClientDocumentUploader is provided by plugin-embed-web-client and
       // registered in the app component registry. Fall back to a hint if the plugin is not active.
       const WebClientUploader = app?.components?.['WebClientDocumentUploader'];

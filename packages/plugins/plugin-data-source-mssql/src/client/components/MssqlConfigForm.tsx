@@ -44,17 +44,23 @@ export const MssqlConfigForm: React.FC<MssqlConfigFormProps> = ({ CollectionsTab
 
     try {
       await api.request({
-        url: 'external-mssql:testConnection',
+        url: 'dataSources:testConnection',
         method: 'post',
-        data: values,
+        data: {
+          values: {
+            type: 'mssql',
+            options: values.options || values,
+          },
+        },
       });
       message.success(t('Connection successful'));
     } catch (error) {
-      const errMessage = error?.response?.data?.message || error.message;
+      const errMessage = error?.response?.data?.errors?.[0]?.message || error?.response?.data?.message || error.message;
       message.error(errMessage);
       return;
     }
   }, [api, form, t]);
+
 
   return (
     <SchemaComponent

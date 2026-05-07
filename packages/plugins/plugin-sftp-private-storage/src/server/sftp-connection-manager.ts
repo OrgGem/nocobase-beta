@@ -21,6 +21,11 @@ export interface SftpConfig {
   privateKey?: string;
   passphrase?: string;
   basePath?: string;
+  poolMax?: number;
+  poolMin?: number;
+  idleTimeoutMillis?: number;
+  acquireTimeoutMillis?: number;
+  readyTimeout?: number;
 }
 
 export interface SftpFileEntry {
@@ -72,9 +77,11 @@ export class SftpConnectionManager {
   }
 
   async unregisterConfig(configId: string | number) {
-    // With pooling, we can't easily destroy a specific pool by configId 
-    // unless we resolve the options hash. For now, just remove from map.
+    const config = this.configs.get(configId);
     this.configs.delete(configId);
+    if (config) {
+      await sftpPoolManager.closePool(config);
+    }
   }
 
   private getConfigOptions(configId: string | number) {
@@ -86,13 +93,21 @@ export class SftpConnectionManager {
   }
 
   async testConnection(config: Omit<SftpConfig, 'id'>): Promise<{ success: boolean; message: string; cwd?: string }> {
+    let clientData: Awaited<ReturnType<typeof sftpPoolManager.acquire>> | null = null;
     try {
-      const { client, release, pool } = await sftpPoolManager.acquire(config as any);
-      const cwd = await client.cwd();
-      release();
+      clientData = await sftpPoolManager.acquire(config as any);
+      const cwd = await clientData.client.cwd();
       return { success: true, message: 'Connection successful', cwd };
     } catch (error: any) {
+      if (clientData) {
+        await clientData.destroy();
+        clientData = null;
+      }
       return { success: false, message: error.message || 'Connection failed' };
+    } finally {
+      if (clientData) {
+        clientData.release();
+      }
     }
   }
 
@@ -147,20 +162,11 @@ export class SftpConnectionManager {
    * Get a readable stream for a remote file
    */
   async getFileStream(configId: string | number, remotePath: string): Promise<Readable> {
-    const { client, release, pool } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
+    const { client, release, destroy } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
     const sftp = (client as any).sftp;
     if (!sftp) {
-      try {
-        const buffer = await client.get(remotePath) as Buffer;
-        release();
-        const stream = new Readable();
-        stream.push(buffer);
-        stream.push(null);
-        return stream;
-      } catch (err) {
-        pool.destroy(client).catch(() => {});
-        throw err;
-      }
+      await destroy();
+      throw new Error('SFTP stream API is unavailable; refusing to buffer remote file in memory');
     }
 
     return new Promise<Readable>((resolve, reject) => {
@@ -176,7 +182,7 @@ export class SftpConnectionManager {
         const cleanupError = () => {
           if (!released) {
             released = true;
-            pool.destroy(client).catch(() => {});
+            destroy().catch(() => {});
           }
         };
         readStream.once('close', cleanup);
@@ -184,7 +190,7 @@ export class SftpConnectionManager {
         readStream.once('error', cleanupError);
         resolve(readStream);
       } catch (err) {
-        pool.destroy(client).catch(() => {});
+        destroy().catch(() => {});
         reject(err);
       }
     });

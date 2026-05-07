@@ -35,7 +35,15 @@ export function createMonitoringActions(plugin: PluginN8nServer) {
       try {
         const { instanceId } = ctx.action.params;
         const resolvedId = instanceId ? Number(instanceId) : await plugin.getDefaultInstanceId();
-        ctx.body = { data: plugin.metricsHistory.get(resolvedId) || [] };
+        
+        const cacheKey = `n8n-metrics:history:${resolvedId}`;
+        let data = await plugin.app.cache.get(cacheKey);
+        
+        if (!data || !Array.isArray(data)) {
+          data = plugin.metricsHistory.get(resolvedId) || [];
+        }
+        
+        ctx.body = { data };
       } catch (error) {
         handleError(ctx, error);
       }

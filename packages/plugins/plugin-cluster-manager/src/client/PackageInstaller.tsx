@@ -194,7 +194,7 @@ export const PackageInstaller: React.FC = () => {
         size="small"
         style={{ marginBottom: 16 }}
         extra={
-          <Button icon={<ReloadOutlined />} size="small" onClick={loadConfig} loading={loading}>
+          <Button icon={<ReloadOutlined />} size="small" onClick={() => loadConfig(false)} loading={loading}>
             {t('Refresh')}
           </Button>
         }

@@ -4,7 +4,7 @@ import { COLLECTION } from '../../shared/constants';
 /**
  * Content-addressable cache for rendered files.
  *
- *   cacheKey = md5(carboneTemplateId | stableJSON(data) | format)
+ *   cacheKey = md5(templateId | versionId | carboneTemplateId | stableJSON(data) | format)
  *
  * Because the key includes the SHA-256 from Carbone, version rollbacks
  * automatically use the right cache without any manual invalidation —

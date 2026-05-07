@@ -1,10 +1,24 @@
 /**
  * User Memory API actions — Resource handlers for the userMemory resource.
+ *
+ * Phase 5 change: All mutating actions now invalidate the MemoryInjector cache
+ * via the plugin singleton so that the next chat request uses fresh data
+ * immediately (instead of waiting up to 5 min for TTL expiry).
  */
 
 import { Context, Next } from '@nocobase/actions';
 import { MemoryProfileService } from '../services/memory-profile.service';
 import { MemorySyncJob } from '../cron/memory-sync-job';
+import type { PluginUserMemoryServer } from '../plugin';
+
+/** Resolve plugin singleton from context for cache invalidation */
+function getPlugin(ctx: Context): PluginUserMemoryServer | null {
+  try {
+    return ctx.app.pm.get('user-memory') as PluginUserMemoryServer;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * GET /api/userMemory:getProfile — Get current user's memory profile
@@ -47,6 +61,9 @@ export async function toggleEnabled(ctx: Context, next: Next) {
   const service = new MemoryProfileService(ctx.db);
   await service.toggleEnabled(userId, enabled);
 
+  // Phase 5: Invalidate cache so next chat reflects the toggle immediately
+  getPlugin(ctx)?.invalidateMemoryCache(userId);
+
   ctx.body = { success: true, enabled };
   await next();
 }
@@ -76,6 +93,10 @@ export async function syncNow(ctx: Context, next: Next) {
   const syncJob = new MemorySyncJob(ctx.app);
   try {
     const result = await syncJob.syncUser(userId, 'manual');
+
+    // Phase 5: Invalidate cache after sync so next chat uses fresh memory
+    getPlugin(ctx)?.invalidateMemoryCache(userId);
+
     const profile = await service.getOrCreate(userId);
 
     ctx.body = {
@@ -136,6 +157,9 @@ export async function clearMemory(ctx: Context, next: Next) {
 
   const service = new MemoryProfileService(ctx.db);
   await service.updateMemory(userId, '', null);
+
+  // Phase 5: Invalidate cache so next chat reflects cleared memory immediately
+  getPlugin(ctx)?.invalidateMemoryCache(userId);
 
   ctx.body = { success: true };
   await next();

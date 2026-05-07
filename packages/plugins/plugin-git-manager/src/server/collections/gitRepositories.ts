@@ -32,7 +32,7 @@ export default defineCollection({
       uiSchema: { title: 'Local Path', type: 'string', 'x-component': 'Input' },
     },
     {
-      type: 'password',
+      type: 'string',
       name: 'pat',
       interface: 'password',
       uiSchema: { title: 'Personal Access Token', type: 'string', 'x-component': 'Password' },

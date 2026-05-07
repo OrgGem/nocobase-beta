@@ -1,10 +1,33 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Tabs, Card, Button, Form, Input, Table, Space, Modal, App as AntApp, Typography, Drawer } from 'antd';
+import {
+  Tabs,
+  Card,
+  Button,
+  Form,
+  Input,
+  Table,
+  Space,
+  Modal,
+  App as AntApp,
+  Typography,
+  Drawer,
+  Select,
+  Tag,
+} from 'antd';
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { useT } from './locale';
 import { DrawioBlock } from './DrawioBlock';
 
 const { Text } = Typography;
+
+const diagramModeOptions = [
+  { label: 'Editable', value: 'editable' },
+  { label: 'Readonly', value: 'readonly' },
+];
+
+function getUserDisplayName(user: any) {
+  return user?.nickname || user?.name || user?.username || user?.email || user?.id || '-';
+}
 
 const SettingsTab: React.FC = () => {
   const t = useT();
@@ -72,7 +95,12 @@ const DiagramsTab: React.FC = () => {
   const { data, refresh, loading } = useRequest<any>({
     resource: 'aiDiagrams',
     action: 'list',
-    params: { pageSize: 100, sort: ['-updatedAt'], fields: ['id', 'title', 'description', 'updatedAt'] },
+    params: {
+      pageSize: 100,
+      sort: ['-updatedAt'],
+      fields: ['id', 'title', 'description', 'mode', 'createdById', 'updatedAt'],
+      appends: ['createdBy'],
+    },
   });
 
   const records = data?.data?.data || data?.data || [];
@@ -85,7 +113,7 @@ const DiagramsTab: React.FC = () => {
         resource: 'aiDiagrams',
         action: 'create',
         method: 'post',
-        data: values,
+        data: { values },
       });
       message.success(t('Saved successfully'));
       createForm.resetFields();
@@ -110,7 +138,7 @@ const DiagramsTab: React.FC = () => {
         action: 'update',
         method: 'post',
         params: { filterByTk: editing.id },
-        data: values,
+        data: { values },
       });
       message.success(t('Saved successfully'));
       createForm.resetFields();
@@ -145,6 +173,27 @@ const DiagramsTab: React.FC = () => {
     () => [
       { title: t('Title'), dataIndex: 'title', key: 'title' },
       { title: t('Description'), dataIndex: 'description', key: 'description', ellipsis: true },
+      {
+        title: t('Mode'),
+        dataIndex: 'mode',
+        key: 'mode',
+        width: 120,
+        render: (mode: string) => {
+          const value = mode || 'editable';
+          return (
+            <Tag color={value === 'readonly' ? 'orange' : 'green'}>
+              {t(value === 'readonly' ? 'Readonly' : 'Editable')}
+            </Tag>
+          );
+        },
+      },
+      {
+        title: t('User'),
+        dataIndex: 'createdBy',
+        key: 'createdBy',
+        width: 180,
+        render: (_: any, record: any) => getUserDisplayName(record.createdBy) || record.createdById || '-',
+      },
       { title: t('Updated at'), dataIndex: 'updatedAt', key: 'updatedAt', width: 200 },
       {
         title: t('Actions'),
@@ -159,7 +208,11 @@ const DiagramsTab: React.FC = () => {
               size="small"
               onClick={() => {
                 setEditing(record);
-                createForm.setFieldsValue({ title: record.title, description: record.description });
+                createForm.setFieldsValue({
+                  title: record.title,
+                  description: record.description,
+                  mode: record.mode || 'editable',
+                });
               }}
             >
               {t('Edit')}
@@ -182,12 +235,19 @@ const DiagramsTab: React.FC = () => {
           onClick={() => {
             setEditing({});
             createForm.resetFields();
+            createForm.setFieldsValue({ mode: 'editable' });
           }}
         >
           {t('Create diagram')}
         </Button>
       </Space>
-      <Table rowKey="id" dataSource={records} columns={columns as any} loading={loading} pagination={{ pageSize: 20 }} />
+      <Table
+        rowKey="id"
+        dataSource={records}
+        columns={columns as any}
+        loading={loading}
+        pagination={{ pageSize: 20 }}
+      />
 
       <Modal
         title={editing && editing.id ? t('Edit diagram') : t('Create diagram')}
@@ -202,6 +262,9 @@ const DiagramsTab: React.FC = () => {
           </Form.Item>
           <Form.Item label={t('Description')} name="description">
             <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item label={t('Mode')} name="mode" initialValue="editable">
+            <Select options={diagramModeOptions.map((item) => ({ ...item, label: t(item.label) }))} />
           </Form.Item>
         </Form>
       </Modal>

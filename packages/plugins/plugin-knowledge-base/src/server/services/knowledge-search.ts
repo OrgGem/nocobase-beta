@@ -138,41 +138,24 @@ export class KnowledgeSearchService {
       const groups = await this.plugin.knowledgeBaseFeature.getKnowledgeBaseGroup(standardIds);
       await Promise.all(
         groups.map(async (entry: any) => {
-          const { vectorStoreConfig, knowledgeBaseType, knowledgeBaseList } = entry;
+          const { vectorStoreConfig, knowledgeBaseList } = entry;
           if (!knowledgeBaseList?.length) return;
 
           try {
-            if (knowledgeBaseType === 'LOCAL') {
-              const firstKB = knowledgeBaseList[0];
-              const service = await this.plugin.vectorStoreProvider.createVectorStoreService(
-                vectorStoreConfig.vectorStoreProvider,
-                firstKB.vectorStoreProps,
-              );
-              const knowledgeBaseOuterIds = knowledgeBaseList.map((kb: any) => kb.knowledgeBaseOuterId);
-              const found = await service.search(trimmedQuery, {
-                topK: candidateK,
-                score: String(scoreThreshold),
-                filter: { knowledgeBaseOuterId: { in: knowledgeBaseOuterIds } },
-              });
-              results.push(...this.toSearchResults(found, knowledgeBaseList));
-              return;
-            }
-
-            await Promise.all(
-              knowledgeBaseList.map(async (kb: any) => {
-                const service = await this.plugin.vectorStoreProvider.createVectorStoreService(
-                  vectorStoreConfig.vectorStoreProvider,
-                  kb.vectorStoreProps,
-                );
-                const found = await service.search(trimmedQuery, {
-                  topK: candidateK,
-                  score: String(scoreThreshold),
-                });
-                results.push(...this.toSearchResults(found, [kb]));
-              }),
+            const firstKB = knowledgeBaseList[0];
+            const service = await this.plugin.vectorStoreProvider.createVectorStoreService(
+              vectorStoreConfig.vectorStoreProvider,
+              firstKB.vectorStoreProps,
             );
+            const knowledgeBaseOuterIds = knowledgeBaseList.map((kb: any) => kb.knowledgeBaseOuterId);
+            const found = await service.search(trimmedQuery, {
+              topK: candidateK,
+              score: String(scoreThreshold),
+              filter: { knowledgeBaseOuterId: { in: knowledgeBaseOuterIds } },
+            });
+            results.push(...this.toSearchResults(found, knowledgeBaseList));
           } catch (err) {
-            this.plugin.app.logger.error(`[KB Search] Vector search failed for type=${knowledgeBaseType}:`, err);
+            this.plugin.app.logger.error('[KB Search] Vector search failed:', err);
           }
         }),
       );

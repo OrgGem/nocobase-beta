@@ -48,7 +48,10 @@ export class RenderPipeline {
       throw new Error(`Unsupported output format: ${format}`);
     }
 
-    const cacheKey = buildCacheKey(input.carboneTemplateId, input.data, format);
+    const cacheKey = buildCacheKey(input.carboneTemplateId, input.data, format, {
+      templateId: input.templateId,
+      versionId: input.versionId,
+    });
     // Cache LOOKUP runs whenever caching is on and the caller didn't bypass —
     // independent of `persistOutput`, so inline previews (playground) can hit
     // entries populated by earlier persisted renders.
@@ -97,8 +100,10 @@ export class RenderPipeline {
       convertTo: format,
       reportName: input.filename,
     });
-    const filename =
-      input.filename || `${input.carboneTemplateId.slice(0, 8)}-${Date.now()}.${format}`;
+    const filename = ensureExtension(
+      input.filename || `${input.carboneTemplateId.slice(0, 8)}-${Date.now()}`,
+      format,
+    );
 
     let attachmentId: number | null = null;
     let url: string | null = null;
@@ -161,4 +166,11 @@ export class RenderPipeline {
     const row = await this.app.db.getRepository(COLLECTION.settings).findOne({});
     return row?.toJSON() ?? { ...DEFAULTS };
   }
+}
+
+function ensureExtension(filename: string, format: string): string {
+  const clean = filename.trim() || `render-${Date.now()}`;
+  const expected = `.${format}`;
+  if (clean.toLowerCase().endsWith(expected.toLowerCase())) return clean;
+  return `${clean.replace(/\.[^.\\/]+$/, '')}${expected}`;
 }

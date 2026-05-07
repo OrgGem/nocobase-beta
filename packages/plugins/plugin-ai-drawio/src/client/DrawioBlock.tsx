@@ -43,10 +43,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
     { manual: !!baseUrlOverride },
   );
 
-  const baseUrl =
-    baseUrlOverride ||
-    settingsData?.data?.drawioBaseUrl ||
-    'https://embed.diagrams.net';
+  const baseUrl = baseUrlOverride || settingsData?.data?.drawioBaseUrl || 'https://embed.diagrams.net';
 
   const embedUrl = useMemo(() => buildDrawioEmbedUrl(baseUrl, { ui }), [baseUrl, ui]);
 
@@ -69,6 +66,8 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   );
 
   const diagramTitle: string | undefined = metaData?.data?.title;
+  const diagramMode: string = metaData?.data?.mode || 'editable';
+  const readonly = diagramMode === 'readonly';
 
   const initialXml = getXmlFromResponse(xmlData);
 
@@ -80,7 +79,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
 
   const persistXml = useCallback(
     async (xml: string, thumbnailSvg?: string) => {
-      if (!diagramId) return;
+      if (!diagramId || readonly) return;
       try {
         await api.request({
           url: `aiDiagrams:saveXml/${encodeURIComponent(diagramId)}`,
@@ -92,7 +91,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
         message.error(err?.message || t('Save failed'));
       }
     },
-    [api, diagramId, message, t],
+    [api, diagramId, message, readonly, t],
   );
 
   useEffect(() => {
@@ -149,7 +148,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
 
   useEffect(() => {
     if (!diagramId || !bridgeRef.current) return;
-    
+
     const unregisterActive = registerActiveHandle({
       blockUid,
       diagramId,
@@ -198,7 +197,11 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   }
 
   return (
-    <Card bodyStyle={{ padding: 0, position: 'relative', overflow: 'hidden' }} onClick={handleInteraction} onMouseEnter={handleInteraction}>
+    <Card
+      bodyStyle={{ padding: 0, position: 'relative', overflow: 'hidden' }}
+      onClick={handleInteraction}
+      onMouseEnter={handleInteraction}
+    >
       {(loadingXml || !iframeReady) && (
         <div
           style={{

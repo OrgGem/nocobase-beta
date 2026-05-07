@@ -28,7 +28,7 @@ export class PluginClusterManagerServer extends Plugin {
   public leaderElection: LeaderElection | null = null;
 
   async beforeLoad() {
-    this.db.import({ directory: path.resolve(__dirname, 'collections') });
+    await this.db.import({ directory: path.resolve(__dirname, 'collections') });
   }
 
   async load() {

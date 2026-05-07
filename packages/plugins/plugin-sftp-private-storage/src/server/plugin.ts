@@ -9,7 +9,7 @@
 
 import { Plugin } from '@nocobase/server';
 import PluginFileManagerServer from '@nocobase/plugin-file-manager';
-import { NAMESPACE, STORAGE_TYPE_SFTP_PRIVATE } from '../constants';
+import { STORAGE_TYPE_SFTP_PRIVATE } from '../constants';
 import { SftpConnectionManager, SftpConfig } from './sftp-connection-manager';
 import SftpPrivateStorage from './storages/sftp-private';
 
@@ -100,6 +100,11 @@ export class PluginSftpPrivateStorageServer extends Plugin {
         privateKey: parsed.privateKey,
         passphrase: parsed.passphrase,
         basePath: parsed.basePath || '/',
+        poolMax: parsed.poolMax,
+        poolMin: parsed.poolMin,
+        idleTimeoutMillis: parsed.idleTimeoutMillis,
+        acquireTimeoutMillis: parsed.acquireTimeoutMillis,
+        readyTimeout: parsed.readyTimeout,
       };
     } else {
       // Backward compatibility for older setups that stored SFTP configs in file-manager storages.
@@ -124,6 +129,11 @@ export class PluginSftpPrivateStorageServer extends Plugin {
         privateKey: options.privateKey,
         passphrase: options.passphrase,
         basePath: options.basePath || '/',
+        poolMax: options.poolMax,
+        poolMin: options.poolMin,
+        idleTimeoutMillis: options.idleTimeoutMillis,
+        acquireTimeoutMillis: options.acquireTimeoutMillis,
+        readyTimeout: options.readyTimeout,
       };
     }
 

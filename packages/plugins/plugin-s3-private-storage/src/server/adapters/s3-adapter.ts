@@ -214,6 +214,57 @@ export class S3Adapter implements IStorageAdapter {
     }
   }
 
+  async rename(oldPath: string, newPath: string): Promise<void> {
+    const { CopyObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } = this.sdk;
+    const oldKey = oldPath.replace(/^\/+/, '');
+    const newKey = newPath.replace(/^\/+/, '');
+
+    const stat = await this.stat(oldPath);
+    if (stat.type === 'directory') {
+      const oldPrefix = oldKey.endsWith('/') ? oldKey : `${oldKey}/`;
+      const newPrefix = newKey.endsWith('/') ? newKey : `${newKey}/`;
+      const copiedObjects: { Key: string }[] = [];
+      let continuationToken: string | undefined;
+
+      do {
+        const response = await this.client.send(new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: oldPrefix,
+          MaxKeys: 1000,
+          ContinuationToken: continuationToken,
+        }));
+
+        for (const obj of response.Contents || []) {
+          if (!obj.Key) continue;
+          const targetKey = `${newPrefix}${obj.Key.slice(oldPrefix.length)}`;
+          await this.client.send(new CopyObjectCommand({
+            Bucket: this.bucket,
+            CopySource: encodeURIComponent(`${this.bucket}/${obj.Key}`),
+            Key: targetKey,
+          }));
+          copiedObjects.push({ Key: obj.Key });
+        }
+
+        continuationToken = response.NextContinuationToken;
+      } while (continuationToken);
+
+      for (let i = 0; i < copiedObjects.length; i += 1000) {
+        await this.client.send(new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: copiedObjects.slice(i, i + 1000), Quiet: true },
+        }));
+      }
+      return;
+    }
+
+    await this.client.send(new CopyObjectCommand({
+      Bucket: this.bucket,
+      CopySource: encodeURIComponent(`${this.bucket}/${oldKey}`),
+      Key: newKey,
+    }));
+    await this.delete(oldPath);
+  }
+
   async exists(remotePath: string): Promise<boolean> {
     try { await this.stat(remotePath); return true; } catch { return false; }
   }

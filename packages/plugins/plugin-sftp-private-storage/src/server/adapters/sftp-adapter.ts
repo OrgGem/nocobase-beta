@@ -22,6 +22,7 @@ interface SftpConnectionManager {
   mkdir(configId: string | number, remotePath: string): Promise<void>;
   deleteFile(configId: string | number, remotePath: string): Promise<void>;
   deleteDir(configId: string | number, remotePath: string): Promise<void>;
+  rename(configId: string | number, oldPath: string, newPath: string): Promise<void>;
 }
 
 /**
@@ -47,15 +48,32 @@ export class SftpAdapter implements IStorageAdapter {
     return normalized.startsWith('/') ? normalized : '/' + normalized;
   }
 
+  private assertSafePath(value: string): void {
+    const parts = this.normalizePath(value || '/').split('/').filter(Boolean);
+    if (parts.some((part) => part === '..' || part === '.')) {
+      const error = new Error('Access denied');
+      (error as NodeJS.ErrnoException).code = 'PATH_TRAVERSAL';
+      throw error;
+    }
+  }
+
   private resolveStoragePath(remotePath: string): string {
+    this.assertSafePath(remotePath || '/');
     const normalizedRemote = this.normalizePath(remotePath || '/');
-    if (this.basePath === '/') {
-      return normalizedRemote;
+    const normalizedBase = this.normalizePath(this.basePath || '/');
+    const resolved = normalizedBase === '/'
+      ? normalizedRemote
+      : normalizedRemote === '/'
+        ? normalizedBase
+        : `${normalizedBase.replace(/\/+$/, '')}${normalizedRemote}`;
+
+    if (normalizedBase !== '/' && resolved !== normalizedBase && !resolved.startsWith(`${normalizedBase.replace(/\/+$/, '')}/`)) {
+      const error = new Error('Access denied');
+      (error as NodeJS.ErrnoException).code = 'PATH_TRAVERSAL';
+      throw error;
     }
-    if (normalizedRemote === '/') {
-      return this.basePath;
-    }
-    return `${this.basePath.replace(/\/+$/, '')}${normalizedRemote}`;
+
+    return resolved;
   }
 
   private toAdapterPath(storagePath: string): string {
@@ -160,6 +178,14 @@ export class SftpAdapter implements IStorageAdapter {
 
   async deleteDir(remotePath: string): Promise<void> {
     await this.connectionManager.deleteDir(this.configId, this.resolveStoragePath(remotePath));
+  }
+
+  async rename(oldPath: string, newPath: string): Promise<void> {
+    await this.connectionManager.rename(
+      this.configId,
+      this.resolveStoragePath(oldPath),
+      this.resolveStoragePath(newPath),
+    );
   }
 
   async exists(remotePath: string): Promise<boolean> {

@@ -75,6 +75,71 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
 // Define a reliable, context-isolated module-level RAM cache independent of the window object
 export const AppRamCache = new Map<string, File | Blob>();
 
+const FILE_EXTENSIONS = [
+  'doc',
+  'docx',
+  'xls',
+  'xlsx',
+  'pdf',
+  'csv',
+  'txt',
+  'ppt',
+  'pptx',
+  'zip',
+  'rar',
+  '7z',
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'svg',
+];
+
+const FILENAME_IN_TEXT_RE = new RegExp(
+  `[^\\s"'<>()[\\]{}]+\\.(${FILE_EXTENSIONS.join('|')})(?=$|[\\s"'<>()[\\]{},.;:!?])`,
+  'gi',
+);
+
+function stripFilenameNoise(value: string): string {
+  return value
+    .trim()
+    .replace(/^[\s"'`(<[{]+/, '')
+    .replace(/[\s"'`)>}\].,;:!?]+$/, '');
+}
+
+function extractFilenameFromText(value: string): string {
+  const text = stripFilenameNoise(value);
+  if (!text) return '';
+
+  const matches = Array.from(text.matchAll(FILENAME_IN_TEXT_RE));
+  const lastMatch = matches[matches.length - 1];
+  if (lastMatch?.[0]) {
+    return stripFilenameNoise(lastMatch[0]);
+  }
+
+  return text;
+}
+
+function getDisplayNameCandidates(displayName: string): string[] {
+  const candidates = [displayName, extractFilenameFromText(displayName)]
+    .map((value) => stripFilenameNoise(value))
+    .filter(Boolean);
+
+  return Array.from(new Set(candidates));
+}
+
+function isKnownFileUrl(url?: string): boolean {
+  return !!url && (
+    url.includes('/api/attachments/') ||
+    url.includes('/api/files/download/') ||
+    url.includes('/api/worker-monitor/') ||
+    url.includes('/api/skillHub:download') ||
+    url.includes('/storage/uploads/') ||
+    url.includes('amazonaws.com')
+  );
+}
+
 /**
  * Extract displayed filename from a FileListCard DOM element.
  */
@@ -122,6 +187,7 @@ function attToPreviewFile(att: any): PreviewFile {
  */
 function findFileByDisplayName(displayName: string, messages: any[], pendingAttachments: any[]): PreviewFile | null {
   if (!displayName) return null;
+  const displayNames = getDisplayNameCandidates(displayName);
 
   // Search sent messages
   for (const msg of messages) {
@@ -132,16 +198,18 @@ function findFileByDisplayName(displayName: string, messages: any[], pendingAtta
     for (const att of attachments) {
       const attName = att.filename || att.name || '';
       const attTitleExt = `${att.title || ''}${att.extname || ''}`;
-      if (attName === displayName || attTitleExt === displayName) {
+      if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
         return attToPreviewFile(att);
       }
       
       // Relaxed match for NocoBase hashed file names
-      if (
-        (attName && displayName.includes(attName.replace(/\.[^/.]+$/, ''))) ||
-        (att.title && displayName.includes(att.title))
-      ) {
-         return attToPreviewFile(att);
+      for (const name of displayNames) {
+        if (
+          (attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) ||
+          (att.title && name.includes(att.title))
+        ) {
+          return attToPreviewFile(att);
+        }
       }
     }
   }
@@ -150,16 +218,18 @@ function findFileByDisplayName(displayName: string, messages: any[], pendingAtta
   for (const att of pendingAttachments || []) {
       const attName = att.filename || att.name || '';
       const attTitleExt = `${att.title || ''}${att.extname || ''}`;
-      if (attName === displayName || attTitleExt === displayName) {
+      if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
         return attToPreviewFile(att);
       }
       
       // Relaxed match for NocoBase hashed file names (e.g. report.docx-c2ywti.docx)
-      if (
-        (attName && displayName.includes(attName.replace(/\.[^/.]+$/, ''))) ||
-        (att.title && displayName.includes(att.title))
-      ) {
-         return attToPreviewFile(att);
+      for (const name of displayNames) {
+        if (
+          (attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) ||
+          (att.title && name.includes(att.title))
+        ) {
+          return attToPreviewFile(att);
+        }
       }
     }
 
@@ -390,12 +460,14 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         const file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
                      findFileByUrl(fallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
         const realName = file?.filename || file?.name || file?.title;
+        const normalizedDisplayName = extractFilenameFromText(displayName);
 
         // Strict RAM cache check
         const cacheHitName = realName && AppRamCache.has(realName) ? realName 
-                           : (displayName && AppRamCache.has(displayName) ? displayName : null);
+                           : (displayName && AppRamCache.has(displayName) ? displayName 
+                           : (normalizedDisplayName && AppRamCache.has(normalizedDisplayName) ? normalizedDisplayName : null));
 
-        const isAIGenerated = fallbackUrl && (fallbackUrl.includes('/api/attachments/') || fallbackUrl.includes('/api/files/download/') || fallbackUrl.includes('/api/worker-monitor/') || fallbackUrl.includes('/api/skillHub:download'));
+        const isAIGenerated = isKnownFileUrl(fallbackUrl);
 
         if (file || cacheHitName || isAIGenerated) {
           el.classList.add('is-cached-previewable');
@@ -539,14 +611,8 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       let file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
                    findFileByUrl(originalFallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
 
-      const isAIGenerated = originalFallbackUrl && (
-         originalFallbackUrl.includes('/api/attachments/') || 
-         originalFallbackUrl.includes('/api/files/download/') || 
-         originalFallbackUrl.includes('/api/worker-monitor/') || 
-         originalFallbackUrl.includes('/api/skillHub:download') ||
-         originalFallbackUrl.includes('/storage/uploads/') ||
-         originalFallbackUrl.includes('amazonaws.com') // Ensure only explicitly known S3 formats are caught if not in messagesRef
-      );
+      const normalizedDisplayName = extractFilenameFromText(displayName);
+      const isAIGenerated = isKnownFileUrl(originalFallbackUrl);
 
       // If we clicked a completely unrelated anchor tag in the admin panel and it's not a known file, abort immediately
       if (!file && !isAIGenerated && anchorNode && !cardEl) {
@@ -554,13 +620,15 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (!file && isAIGenerated) {
-        const extname = originalFallbackUrl.match(/\.([a-z0-9]+)(?:[\?#]|$)/i)?.[1];
+        const extname =
+          normalizedDisplayName.match(/\.([a-z0-9]+)$/i)?.[1] ||
+          originalFallbackUrl.match(/\.([a-z0-9]+)(?:[\?#]|$)/i)?.[1];
         file = {
           id: originalFallbackUrl,
           uid: originalFallbackUrl,
           url: originalFallbackUrl,
-          filename: displayName || 'attachment',
-          name: displayName || 'attachment',
+          filename: normalizedDisplayName || 'attachment',
+          name: normalizedDisplayName || 'attachment',
           extname: extname ? `.${extname}` : undefined,
           mimetype: '',
         } as PreviewFile;
@@ -572,7 +640,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       e.stopPropagation();
 
       // Convert to secure proxy URL for everything EXCEPT natively secured endpoints that don't belong to the attachments table
-      const proxyTargetUrl = originalFallbackUrl || file.url;
+      const proxyTargetUrl = file.url || originalFallbackUrl;
       const shouldUseProxy = proxyTargetUrl && !proxyTargetUrl.includes('skillHub:download') && !proxyTargetUrl.includes('worker-monitor') && !proxyTargetUrl.includes('filePreviewAuth:download');
       
       let secureUrl = proxyTargetUrl;

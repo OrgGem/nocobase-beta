@@ -3,7 +3,7 @@
   "displayName": "AI LLM: Custom (OpenAI Compatible)",
   "displayName.zh-CN": "AI LLM：自定义（OpenAI 兼容）",
   "description": "OpenAI-compatible LLM provider with auto response format detection for external LLM services.",
-  "version": "1.4.7",
+  "version": "1.4.9",
   "main": "dist/server/index.js",
   "files": [
     "dist",
@@ -23,11 +23,13 @@
     "@langchain/openai": "^1.0.0",
     "@langchain/core": "^1.0.0"
   },
+  "devDependencies": {
+    "@nocobase/test": "2.x"
+  },
   "peerDependencies": {
     "@nocobase/client": "2.x",
     "@nocobase/plugin-ai": "2.x",
-    "@nocobase/server": "2.x",
-    "@nocobase/test": "2.x"
+    "@nocobase/server": "2.x"
   },
   "keywords": [
     "AI"

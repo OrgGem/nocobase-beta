@@ -2,8 +2,11 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { Context } from '@nocobase/actions';
 import * as path from 'path';
 import * as fs from 'fs';
+import { redactPat, redactError } from '../utils/redact';
 
-const REF_PATTERN = /^[a-zA-Z0-9._\-\/]+$/;
+// Disallow leading `-` to prevent argument-injection (e.g. `--upload-pack=...`)
+// when refs are passed as positional args to git.
+const REF_PATTERN = /^(?!-)[a-zA-Z0-9._\-\/]+$/;
 
 // Per-repo mutex to prevent PAT race conditions in withAuth
 const repoLocks = new Map<string, Promise<any>>();
@@ -45,14 +48,21 @@ function validateRepoUrl(repoUrl: string): void {
   }
 }
 
-async function withAuth(git: ReturnType<typeof simpleGit>, repoUrl: string, pat: string, fn: () => Promise<any>, username?: string) {
-  const lockKey = repoUrl;
+async function withAuth(git: ReturnType<typeof simpleGit>, localPath: string, repoUrl: string, pat: string, fn: () => Promise<any>, username?: string) {
+  // Lock by local working tree — that's what `git.remote('set-url', ...)`
+  // mutates. Two repo records sharing a `repoUrl` but cloned to different
+  // paths can run in parallel safely; conversely, two repos pointed at the
+  // same `localPath` (config error) must NOT run concurrent set-url's.
+  const lockKey = localPath;
   const lock = acquireLock(lockKey);
   await lock.promise;
   const authUrl = getAuthUrl(repoUrl, pat, username);
   await git.remote(['set-url', 'origin', authUrl]);
   try {
     return await fn();
+  } catch (err) {
+    // simple-git often echoes the authenticated URL in stderr — scrub before re-throw
+    throw redactError(err);
   } finally {
     // H-2 fix: guard PAT cleanup — if reset fails, the PAT-embedded URL persists on disk
     try {
@@ -64,9 +74,9 @@ async function withAuth(git: ReturnType<typeof simpleGit>, repoUrl: string, pat:
       } catch {
         // Log but don't throw — the original operation already completed
         console.error(
-          `[plugin-git-manager] CRITICAL: failed to remove PAT from remote URL for ${repoUrl}. ` +
+          `[plugin-git-manager] CRITICAL: failed to remove PAT from remote URL for ${redactPat(repoUrl)}. ` +
           `Manual cleanup of .git/config may be required.`,
-          cleanupErr,
+          redactError(cleanupErr),
         );
       }
     }
@@ -75,9 +85,9 @@ async function withAuth(git: ReturnType<typeof simpleGit>, repoUrl: string, pat:
 }
 
 function getAuthUrl(repoUrl: string, pat: string, username?: string): string {
-  const url = new URL(repoUrl);
-  url.username = username || 'oauth2';
-  url.password = pat;
+  const url = new URL(repoUrl.trim());
+  url.username = (username || 'oauth2').trim();
+  url.password = pat.trim();
   return url.toString();
 }
 
@@ -114,11 +124,14 @@ function validateLocalPath(localPath: string): string {
 export async function clone(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const repoUrl = repo.get('repoUrl') as string;
-  const pat = repo.get('pat') as string;
-  const username = repo.get('username') as string;
+  const repoUrl = (repo.get('repoUrl') as string || '').trim();
+  const pat = (repo.get('pat') as string || '').trim();
+  const username = (repo.get('username') as string || '').trim();
+  const defaultBranch = ((repo.get('defaultBranch') as string) || 'main').trim() || 'main';
 
   validateRepoUrl(repoUrl);
+  // Prevent argument-injection through `defaultBranch` (e.g. `--upload-pack=...`)
+  validateBranch(defaultBranch);
 
   // Check if directory already exists
   if (fs.existsSync(localPath)) {
@@ -131,7 +144,7 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
 
   const authUrl = getAuthUrl(repoUrl, pat, username);
   try {
-    await simpleGit().clone(authUrl, localPath, ['--branch', repo.get('defaultBranch') || 'main']);
+    await simpleGit().clone(authUrl, localPath, ['--branch', defaultBranch]);
     // Remove PAT from the cloned repo's remote URL
     await simpleGit(localPath).remote(['set-url', 'origin', repoUrl]);
     await ctx.db.getRepository('gitRepositories').update({
@@ -144,7 +157,8 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
       filterByTk: repo.get('id'),
       values: { status: 'error' },
     });
-    throw err;
+    // Redact embedded PAT before the error reaches the client / log
+    throw redactError(err);
   }
   await next();
 }
@@ -152,12 +166,12 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
 export async function pull(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = repo.get('pat') as string;
-  const repoUrl = repo.get('repoUrl') as string;
-  const username = repo.get('username') as string;
+  const pat = (repo.get('pat') as string || '').trim();
+  const repoUrl = (repo.get('repoUrl') as string || '').trim();
+  const username = (repo.get('username') as string || '').trim();
 
   const git = getGit(localPath);
-  const result = await withAuth(git, repoUrl, pat, () => git.pull(), username);
+  const result = await withAuth(git, localPath, repoUrl, pat, () => git.pull(), username);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -166,12 +180,12 @@ export async function pull(ctx: Context, next: () => Promise<void>) {
 export async function push(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = repo.get('pat') as string;
-  const repoUrl = repo.get('repoUrl') as string;
-  const username = repo.get('username') as string;
+  const pat = (repo.get('pat') as string || '').trim();
+  const repoUrl = (repo.get('repoUrl') as string || '').trim();
+  const username = (repo.get('username') as string || '').trim();
 
   const git = getGit(localPath);
-  const result = await withAuth(git, repoUrl, pat, () => git.push(), username);
+  const result = await withAuth(git, localPath, repoUrl, pat, () => git.push(), username);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -180,12 +194,12 @@ export async function push(ctx: Context, next: () => Promise<void>) {
 export async function fetch(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = repo.get('pat') as string;
-  const repoUrl = repo.get('repoUrl') as string;
-  const username = repo.get('username') as string;
+  const pat = (repo.get('pat') as string || '').trim();
+  const repoUrl = (repo.get('repoUrl') as string || '').trim();
+  const username = (repo.get('username') as string || '').trim();
 
   const git = getGit(localPath);
-  const result = await withAuth(git, repoUrl, pat, () => git.fetch(), username);
+  const result = await withAuth(git, localPath, repoUrl, pat, () => git.fetch(), username);
 
   ctx.body = { success: true, data: result };
   await next();

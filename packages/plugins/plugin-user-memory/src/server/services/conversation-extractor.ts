@@ -76,10 +76,31 @@ export class ConversationExtractor {
 
       if (!messages.length) continue;
 
-      const extractedMessages: ExtractedMessage[] = messages.map((msg: any) => ({
-        role: msg.role,
-        content: this.extractTextContent(msg.content),
-      })).filter((m: ExtractedMessage) => m.content.length > 0);
+      const extractedMessages: ExtractedMessage[] = messages
+        .map((msg: any) => {
+          const content = this.extractTextContent(msg.content);
+          // Phase 4: Skip empty messages
+          if (!content) return null;
+
+          // Phase 4: For assistant messages, check if they appear to be primarily
+          // KB/RAG sourced (metadata flag set by plugin-knowledge-base or plugin-ai).
+          // We still include them but cap their length to limit KB content leakage
+          // into the synthesis input. The synthesizer prompt also has strong rules
+          // to not store KB-derived facts.
+          if (msg.role !== 'user' && content.length > 500) {
+            // Truncate long AI responses — these often contain KB-sourced paragraphs.
+            // Keeping only the first ~300 chars preserves conversational context
+            // (the question was about X) without including the full KB-sourced answer.
+            return {
+              role: msg.role,
+              content: content.slice(0, 300) + '...[truncated]',
+            };
+          }
+
+          return { role: msg.role, content };
+        })
+        .filter((m): m is ExtractedMessage => m !== null && m.content.length > 0);
+
 
       if (!extractedMessages.length) continue;
 

@@ -47,48 +47,93 @@ export function getPollerStatus() {
 }
 
 /**
+ * Handle returned by `tryAcquirePollerLock`. Caller must invoke `release()`
+ * exactly once when done. Returning a handle (rather than a boolean) lets us
+ * pin a Sequelize transaction to a single connection so that
+ * `pg_advisory_unlock` / `RELEASE_LOCK` run on the same connection that
+ * acquired the lock — pool-based queries previously could release on the
+ * wrong connection, leaving the lock held until that connection recycled.
+ */
+interface PollerLockHandle {
+  release: () => Promise<void>;
+}
+
+const ADVISORY_LOCK_KEY = 777_042;
+
+/**
  * Attempt to acquire a DB-level advisory lock so that only one node in an
  * HA cluster runs the poller at any given time.
  *
- * Returns `true` if the lock was acquired, `false` if another node holds it.
- * Falls back to the in-memory flag if the DB doesn't support advisory locks.
+ * Returns a handle when acquired, `null` when another node holds the lock.
+ * Falls back to a no-op handle when the DB doesn't support advisory locks
+ * (SQLite, unknown dialects) or when an unexpected error occurs.
  */
-async function tryAcquirePollerLock(app: Application): Promise<boolean> {
-  try {
-    const sequelize = (app.db as any).sequelize;
-    if (!sequelize) return true; // can't lock — allow
-    const dialect = sequelize.getDialect?.();
-    // Lock key derived from a fixed identifier for this plugin's poller
-    const lockKey = 777_042; // arbitrary stable int
-    if (dialect === 'postgres') {
-      const [results] = await sequelize.query(`SELECT pg_try_advisory_lock(${lockKey}) AS locked`);
-      return results?.[0]?.locked === true;
-    }
-    // For MySQL / MariaDB
-    if (dialect === 'mysql' || dialect === 'mariadb') {
-      const [results] = await sequelize.query(`SELECT GET_LOCK('git_poller', 0) AS locked`);
-      return results?.[0]?.locked === 1;
-    }
-    // SQLite or unknown — no distributed locking, allow
-    return true;
-  } catch {
-    return true; // on error, fall back to allowing
-  }
-}
+async function tryAcquirePollerLock(app: Application): Promise<PollerLockHandle | null> {
+  const noop: PollerLockHandle = { release: async () => undefined };
+  const sequelize = (app.db as any).sequelize;
+  if (!sequelize) return noop;
+  const dialect = sequelize.getDialect?.();
 
-async function releasePollerLock(app: Application): Promise<void> {
+  if (dialect !== 'postgres' && dialect !== 'mysql' && dialect !== 'mariadb') {
+    return noop; // SQLite / unknown — no distributed locking, allow
+  }
+
+  // A transaction pins all queries (and the lock) to a single connection.
+  let transaction: any;
   try {
-    const sequelize = (app.db as any).sequelize;
-    if (!sequelize) return;
-    const dialect = sequelize.getDialect?.();
-    const lockKey = 777_042;
-    if (dialect === 'postgres') {
-      await sequelize.query(`SELECT pg_advisory_unlock(${lockKey})`);
-    } else if (dialect === 'mysql' || dialect === 'mariadb') {
-      await sequelize.query(`SELECT RELEASE_LOCK('git_poller')`);
-    }
+    transaction = await sequelize.transaction();
   } catch {
-    // best-effort release
+    return noop; // can't open txn — fall back to allowing
+  }
+
+  try {
+    let acquired = false;
+    if (dialect === 'postgres') {
+      const [results] = await sequelize.query(
+        `SELECT pg_try_advisory_lock(${ADVISORY_LOCK_KEY}) AS locked`,
+        { transaction },
+      );
+      acquired = (results as any)?.[0]?.locked === true;
+    } else {
+      const [results] = await sequelize.query(
+        `SELECT GET_LOCK('git_poller', 0) AS locked`,
+        { transaction },
+      );
+      const v = (results as any)?.[0]?.locked;
+      acquired = v === 1 || v === '1' || v === true;
+    }
+
+    if (!acquired) {
+      try { await transaction.rollback(); } catch { /* ignore */ }
+      return null;
+    }
+
+    return {
+      release: async () => {
+        try {
+          if (dialect === 'postgres') {
+            await sequelize.query(
+              `SELECT pg_advisory_unlock(${ADVISORY_LOCK_KEY})`,
+              { transaction },
+            );
+          } else {
+            await sequelize.query(
+              `SELECT RELEASE_LOCK('git_poller')`,
+              { transaction },
+            );
+          }
+        } catch {
+          // best-effort release — txn close still recycles the connection
+        } finally {
+          try { await transaction.commit(); } catch {
+            try { await transaction.rollback(); } catch { /* ignore */ }
+          }
+        }
+      },
+    };
+  } catch {
+    try { await transaction.rollback(); } catch { /* ignore */ }
+    return noop; // on error, fall back to allowing
   }
 }
 
@@ -108,9 +153,10 @@ export async function pollAllRepos(app: Application): Promise<{ scanned: number;
     }
   }
 
-  // C-1 fix: acquire distributed lock for HA
-  const lockAcquired = await tryAcquirePollerLock(app);
-  if (!lockAcquired) {
+  // C-1 fix: acquire distributed lock for HA — handle pins the connection
+  // so unlock runs on the same connection that acquired the lock.
+  const lock = await tryAcquirePollerLock(app);
+  if (!lock) {
     app.log?.debug?.('poller: another node holds the advisory lock — skipping');
     return { scanned: 0, triggered: 0 };
   }
@@ -141,7 +187,7 @@ export async function pollAllRepos(app: Application): Promise<{ scanned: number;
   } finally {
     isPolling = false;
     pollStartedAt = null;
-    await releasePollerLock(app);
+    await lock.release();
   }
   return { scanned, triggered };
 }
@@ -232,8 +278,48 @@ export async function pollOneRepo(
 async function listMergeRequests(repo: any, updatedAfter: Date | null): Promise<any[]> {
   const repoUrl = repo.get('repoUrl') as string;
   const pat = repo.get('pat') as string;
-  const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
+  const isGitHub = typeof repoUrl === 'string' && repoUrl.includes('github.com');
 
+  if (isGitHub) {
+    // GitHub PRs: list endpoint sorts by updated; GitHub has no `updated_after`,
+    // so we filter client-side after fetching the most recently updated page.
+    const { projectPath } = parseGitLabProject(repoUrl);
+    const params = new URLSearchParams({
+      state: 'open',
+      per_page: String(MR_PAGE_SIZE),
+      sort: 'updated',
+      direction: 'desc',
+    });
+    const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
+    if (pat) headers['Authorization'] = `Bearer ${pat}`;
+
+    const response = await fetch(
+      `https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`,
+      { headers },
+    );
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`GitHub API error ${response.status}: ${body}`);
+    }
+    let prs = (await response.json()) as any[];
+    if (Array.isArray(prs) && updatedAfter) {
+      const cutoff = updatedAfter.getTime() - 1000;
+      prs = prs.filter((pr: any) => {
+        const t = pr?.updated_at ? new Date(pr.updated_at).getTime() : 0;
+        return t >= cutoff;
+      });
+    }
+    // Normalise to the GitLab MR shape that pollOneRepo consumes.
+    return (prs || []).map((pr: any) => ({
+      iid: pr.number,
+      sha: pr.head?.sha,
+      source_branch: pr.head?.ref,
+      target_branch: pr.base?.ref,
+    }));
+  }
+
+  // GitLab
+  const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
   const params = new URLSearchParams({
     state: 'opened',
     per_page: String(MR_PAGE_SIZE),

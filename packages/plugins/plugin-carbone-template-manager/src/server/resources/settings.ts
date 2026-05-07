@@ -34,11 +34,14 @@ export async function saveSettings(ctx: Context, next: Next) {
   const existing = await repo.findOne({});
   if (!values.apiToken && existing?.apiToken) values.apiToken = existing.apiToken;
 
-  const saved = existing
-    ? await repo.update({ filterByTk: existing.id, values })
-    : await repo.create({ values: { ...DEFAULTS, ...values } });
+  if (existing) {
+    await repo.update({ filterByTk: existing.id, values });
+  } else {
+    await repo.create({ values: { ...DEFAULTS, ...values } });
+  }
 
-  const json = (Array.isArray(saved) ? saved[0] : saved).toJSON() as any;
+  const saved = await repo.findOne({});
+  const json = saved.toJSON() as any;
   json.apiTokenSet = !!json.apiToken;
   delete json.apiToken;
   ctx.body = json;
@@ -60,7 +63,7 @@ export async function testConnection(ctx: Context, next: Next) {
     endpoint: overrides.endpoint ?? row.endpoint,
     apiToken: overrides.apiToken ?? row.apiToken,
     carboneVersion: overrides.carboneVersion ?? row.carboneVersion,
-    timeoutMs: row.timeoutMs ?? DEFAULTS.timeoutMs,
+    timeoutMs: overrides.timeoutMs ?? row.timeoutMs ?? DEFAULTS.timeoutMs,
     maxRetries: 0, // fail fast for diagnostics
   };
 

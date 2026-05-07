@@ -8,7 +8,8 @@
  */
 
 import React, { useState, useCallback, useRef } from 'react';
-import { useAPIClient, useTranslation } from '@nocobase/client';
+import { useAPIClient } from '@nocobase/client';
+import { useTranslation } from 'react-i18next';
 import { Button, Upload, Progress, Space, Typography, Alert, List, Tag, Tooltip } from 'antd';
 import {
   InboxOutlined,

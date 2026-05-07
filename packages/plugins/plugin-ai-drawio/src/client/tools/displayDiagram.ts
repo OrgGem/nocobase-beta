@@ -1,22 +1,14 @@
 import type { ToolsOptions } from '@nocobase/client';
+import { createAndOpenDiagram } from '../autoOpenDiagram';
 import { getActiveHandle } from '../lib/activeRegistry';
 import { isMxCellXmlComplete, wrapWithMxFile } from '../lib/xml-utils';
 import { resetPartialXml, setPartialXml } from './sharedState';
 import type { ToolResult } from './types';
 
-async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> {
+async function invoke(app: any, params: { xml?: string; title?: string; description?: string }): Promise<ToolResult> {
   const xml = params?.xml || '';
   if (!xml) {
     return { status: 'error', content: 'display_diagram called without xml.' };
-  }
-
-  const handle = getActiveHandle();
-  if (!handle) {
-    return {
-      status: 'error',
-      content:
-        'No active draw.io block found. Open a Drawio Diagram block on the page before calling display_diagram.',
-    };
   }
 
   if (!isMxCellXmlComplete(xml)) {
@@ -38,7 +30,14 @@ async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> 
   const fullXml = wrapWithMxFile(xml);
 
   try {
+    const handle =
+      getActiveHandle() ||
+      (await createAndOpenDiagram(app, {
+        title: params.title,
+        description: params.description || 'Created from AI Employee draw.io tool.',
+      }));
     handle.setXml(fullXml);
+    await handle.persist(fullXml);
     handle.bridge.load(fullXml);
     return { status: 'success', content: 'Successfully displayed the diagram.' };
   } catch (err: any) {
@@ -49,7 +48,4 @@ async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> 
   }
 }
 
-export const displayDiagramTool: [string, ToolsOptions] = [
-  'drawio-display_diagram',
-  { invoke },
-];
+export const displayDiagramTool: [string, ToolsOptions] = ['drawio-display_diagram', { invoke }];

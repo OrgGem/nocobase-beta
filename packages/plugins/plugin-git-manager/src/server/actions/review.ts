@@ -1,6 +1,7 @@
 import { Context } from '@nocobase/actions';
 import type { Application } from '@nocobase/server';
 import { parseGitLabProject } from '../utils/gitlab-url';
+import { redactPat } from '../utils/redact';
 
 interface TriggerArgs {
   flowId?: number | null;
@@ -13,6 +14,31 @@ interface TriggerArgs {
   extraInstructions?: string;
   triggeredBy?: 'manual' | 'poll';
   userId?: number | string | null;
+}
+
+/**
+ * Per-target mutex to prevent two concurrent calls to
+ * `triggerReviewInternal` for the same MR / commit / branch from racing
+ * `findOne` → `create` and producing two duplicate review rows or
+ * scheduling two `runReview`s.
+ *
+ * Uses `app.lockManager` so the same code path covers both single-node
+ * (in-memory `async-mutex`) and HA cluster (Redis-backed Redlock when
+ * `plugin-cluster-manager` is active and `LOCK_ADAPTER_DEFAULT=redis`).
+ * The locked region only does an upsert + setImmediate (a few ms), so a
+ * 30s TTL is generous and auto-releases if the process crashes.
+ */
+function targetKey(args: TriggerArgs): string {
+  if (args.targetType === 'mr') return `${args.repositoryId}:mr:${args.mrIid}`;
+  if (args.targetType === 'commit') return `${args.repositoryId}:commit:${args.commitSha}`;
+  return `${args.repositoryId}:branch:${args.branch}`;
+}
+
+const TRIGGER_LOCK_TTL_MS = 30_000;
+
+async function withTriggerLock<T>(app: Application, key: string, fn: () => Promise<T>): Promise<T> {
+  const lockKey = `git-review:trigger:${key}`;
+  return app.lockManager.runExclusive(lockKey, fn, TRIGGER_LOCK_TTL_MS);
 }
 
 /**
@@ -64,6 +90,10 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
  * Returns the reviewId of the upserted record.
  */
 export async function triggerReviewInternal(app: Application, args: TriggerArgs): Promise<number> {
+  return withTriggerLock(app, targetKey(args), () => triggerReviewInternalLocked(app, args));
+}
+
+async function triggerReviewInternalLocked(app: Application, args: TriggerArgs): Promise<number> {
   const db = app.db;
   const flowsRepo = db.getRepository('gitReviewFlows');
 
@@ -128,14 +158,25 @@ export async function triggerReviewInternal(app: Application, args: TriggerArgs)
     latestSha: headSha || existingLatestSha || null,
     triggeredBy: args.triggeredBy || 'manual',
     status: 'pending',
+    // Stamp startedAt synchronously so `recoverStuckReviews` can sweep rows
+    // that get stuck in `pending` (process died before runReview ran).
+    // runReview's own update will refresh this on actual start.
+    startedAt: new Date(),
+    finishedAt: null,
+    durationMs: null,
     postStatus: flow.get('postMode') === 'disabled' ? 'skipped' : 'pending_approval',
     error: null,
   };
 
   let reviewId: number;
   if (existing) {
-    if (existing.get('status') === 'running') {
-      // Already in flight — return existing id, do not start another
+    const st = existing.get('status');
+    // Treat `pending` the same as `running`: between this fn returning and
+    // the scheduled `runReview` flipping the row to `running`, a second
+    // caller would otherwise slip past and schedule a duplicate runReview.
+    // Stuck `pending` rows (process died before runReview ran) are swept
+    // by `recoverStuckReviews` on next startup.
+    if (st === 'running' || st === 'pending') {
       return existing.get('id') as number;
     }
     await reviewsRepo.update({
@@ -294,12 +335,25 @@ async function runReview(app: Application, args: RunReviewArgs) {
     const prompt = buildReviewPrompt(args);
 
     // Synthesize a minimal ctx-shaped object that AIEmployee accepts.
-    // It needs `app`, `db`, `state.currentUser`, `get(headerName)`, `req.headers`.
+    // It needs `app`, `db`, `state.currentUser`, `get(headerName)`, `req.headers`,
+    // `action.params.values` (used in getSystemPrompt), and `res.write` (used by
+    // ChatStreamProtocol). All stubs are no-ops since we use `invoke` (not stream).
     const syntheticCtx: any = {
       app,
       db,
       state: { currentUser: args.userId ? { id: args.userId } : null },
-      req: { headers: { 'x-timezone': 'UTC', 'x-locale': 'en-US' } },
+      auth: { user: args.userId ? { id: args.userId } : { id: null } },
+      req: { headers: { 'x-timezone': '+00:00', 'x-locale': 'en-US' } },
+      // AIEmployee.getSystemPrompt reads ctx.action.params.values.important
+      action: { params: { values: {} } },
+      // ChatStreamProtocol.write calls ctx.res.write — stub for non-stream invoke
+      res: {
+        write() {},
+        end() {},
+        writableEnded: false,
+      },
+      log: app.logger || console,
+      logger: app.logger || console,
       get(name: string) {
         return this.req.headers[String(name).toLowerCase()];
       },
@@ -417,11 +471,14 @@ async function runReview(app: Application, args: RunReviewArgs) {
     }
   } catch (err: any) {
     const finishedAt = new Date();
+    // Redact PAT before persisting the error — simple-git / fetch errors
+    // can echo back the authenticated remote URL in their messages.
+    const safeMessage = redactPat(err?.message || String(err));
     await reviewsRepo.update({
       filterByTk: args.reviewId,
       values: {
         status: 'failed',
-        error: err?.message || String(err),
+        error: safeMessage,
         finishedAt,
         durationMs: finishedAt.getTime() - startedAt.getTime(),
       },
@@ -477,18 +534,52 @@ function buildReviewPrompt(args: RunReviewArgs): string {
   return lines.join('\n');
 }
 
+/**
+ * Pick the AI's final reply out of a LangChain-style message list.
+ *
+ * The previous implementation relied solely on `constructor.name`, which is
+ * unsafe under bundling/minification (class names can be mangled to single
+ * letters) and after JSON serialisation (instances become plain objects).
+ * The new logic checks several signals in order: LangChain's `_getType()`,
+ * an explicit `role` field, then the constructor name as a last resort.
+ */
 function extractLastAiMessageContent(result: any): string {
-  if (!result?.messages || !Array.isArray(result.messages)) return '';
-  for (let i = result.messages.length - 1; i >= 0; i--) {
-    const msg = result.messages[i];
-    if (!msg) continue;
-    const className = msg?.constructor?.name;
-    if (className === 'HumanMessage' || className === 'ToolMessage') continue;
+  const messages = result?.messages;
+  if (!Array.isArray(messages)) return '';
+
+  const isAiMessage = (msg: any): boolean => {
+    if (!msg) return false;
+    if (typeof msg._getType === 'function') {
+      try {
+        return msg._getType() === 'ai';
+      } catch {
+        // fall through to other signals
+      }
+    }
+    if (typeof msg.role === 'string') {
+      const r = msg.role.toLowerCase();
+      return r === 'assistant' || r === 'ai';
+    }
+    if (typeof msg.type === 'string' && msg.type.toLowerCase() === 'ai') return true;
+    const name = msg?.constructor?.name;
+    if (name === 'AIMessage' || name === 'AIMessageChunk') return true;
+    return false;
+  };
+
+  const getContent = (msg: any): string => {
     if (typeof msg.content === 'string') return msg.content;
     if (Array.isArray(msg.content)) {
-      const textBlock = msg.content.find((c: any) => c.type === 'text');
-      if (textBlock?.text) return textBlock.text;
+      const textBlock = msg.content.find((c: any) => c?.type === 'text');
+      if (typeof textBlock?.text === 'string') return textBlock.text;
     }
+    return '';
+  };
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!isAiMessage(msg)) continue;
+    const content = getContent(msg);
+    if (content) return content;
   }
   return '';
 }
@@ -574,18 +665,37 @@ async function postNoteToGitLab(repo: any, mrIid: number, body: string): Promise
 
 /**
  * H-1 fix: guard against ReDoS by limiting regex length and wrapping
- * execution in a try-catch. Overly long patterns are rejected.
+ * execution in a try-catch.
+ *
+ * Fail-closed: an invalid or oversized pattern means "no branch matches".
+ * Reviewing all branches when a user explicitly configured a filter is more
+ * dangerous (auto-posts to GitLab, consumes LLM credits) than skipping a
+ * malformed flow. The poller logs once per process so misconfiguration is
+ * still observable.
  */
 const MAX_BRANCH_FILTER_LENGTH = 200;
+const loggedBadFilters = new Set<string>();
+
+function warnInvalidBranchFilter(filter: string, reason: string) {
+  if (loggedBadFilters.has(filter)) return;
+  loggedBadFilters.add(filter);
+  console.warn(
+    `[plugin-git-manager] branchFilter rejected (${reason}): ${JSON.stringify(filter)}. Flow will not match any branch.`,
+  );
+}
 
 export function branchMatches(flow: any, branch: string): boolean {
   const filter = flow.get('branchFilter') as string | null;
   if (!filter) return true;
-  if (filter.length > MAX_BRANCH_FILTER_LENGTH) return true; // reject overly complex patterns
+  if (filter.length > MAX_BRANCH_FILTER_LENGTH) {
+    warnInvalidBranchFilter(filter, `too long (>${MAX_BRANCH_FILTER_LENGTH} chars)`);
+    return false;
+  }
   try {
     return new RegExp(filter).test(branch);
-  } catch {
-    return true; // invalid regex → don't block
+  } catch (err: any) {
+    warnInvalidBranchFilter(filter, `invalid regex: ${err?.message || err}`);
+    return false;
   }
 }
 
@@ -602,4 +712,53 @@ function throwHttp(status: number, message: string): never {
   const err: any = new Error(message);
   err.status = status;
   throw err;
+}
+
+/**
+ * Reviews are launched via `setImmediate` and tracked entirely in process
+ * memory. When the app restarts mid-run, the in-memory promise dies but the
+ * DB record stays in `status='running'` indefinitely. On startup we sweep
+ * any `running` review whose `startedAt` is older than the in-process
+ * timeout (5 min) plus a safety margin and mark it as failed.
+ *
+ * The cutoff is intentionally larger than the runtime timeout so concurrent
+ * reviews running on a *different* node in an HA cluster aren't clobbered.
+ */
+const STUCK_REVIEW_CUTOFF_MS = 10 * 60 * 1000; // 10 minutes
+
+export async function recoverStuckReviews(app: Application): Promise<number> {
+  try {
+    const reviewsRepo = app.db.getRepository('gitCodeReviews');
+    const cutoff = new Date(Date.now() - STUCK_REVIEW_CUTOFF_MS);
+    // Sweep both `running` (interrupted mid-execution) and `pending`
+    // (interrupted between record creation and runReview's first update).
+    // Both have `startedAt` stamped at trigger time so the cutoff applies
+    // consistently.
+    const stuck = await reviewsRepo.find({
+      filter: {
+        status: { $in: ['running', 'pending'] },
+        startedAt: { $lt: cutoff },
+      },
+    });
+    if (!stuck?.length) return 0;
+    const finishedAt = new Date();
+    for (const review of stuck) {
+      const startedAt = review.get('startedAt') as Date | null;
+      const durationMs = startedAt ? finishedAt.getTime() - new Date(startedAt).getTime() : null;
+      await reviewsRepo.update({
+        filterByTk: review.get('id'),
+        values: {
+          status: 'failed',
+          error: 'Review interrupted by application restart',
+          finishedAt,
+          durationMs,
+        },
+      });
+    }
+    app.log?.info?.(`plugin-git-manager: marked ${stuck.length} stuck review(s) as failed after restart`);
+    return stuck.length;
+  } catch (err: any) {
+    app.log?.error?.(`plugin-git-manager: recoverStuckReviews failed: ${err?.message}`);
+    return 0;
+  }
 }

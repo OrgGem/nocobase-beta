@@ -129,12 +129,13 @@ export class MemorySyncJob {
       // Format conversations for summarization
       const conversationsText = this.extractor.formatForSummarization(extractionResult);
 
-      // Synthesize via LLM
+      // Synthesize via LLM (Phase 6: pass maxTokens from settings)
       const synthesisResult = await this.synthesizer.synthesize(
         profile.memoryContent || '',
         conversationsText,
         settings?.llmService,
         settings?.llmModel,
+        settings?.maxTokens,
       );
 
       if (!synthesisResult.success) {

@@ -92,4 +92,7 @@ export interface IOrchestratorAdapter {
 
   /** Get tail logs from a container */
   getLogs(containerId: string, tail?: number): Promise<string>;
+
+  /** List available networks (if supported by adapter) */
+  listNetworks?(): Promise<{ id: string; name: string }[]>;
 }

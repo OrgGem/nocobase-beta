@@ -4,11 +4,20 @@ import * as gitActions from './actions/git-actions';
 import * as gitlabApi from './actions/gitlab-api';
 import * as reviewActions from './actions/review';
 import * as pollerActions from './actions/poller';
+import { recoverStuckReviews } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
 
+
 export class PluginGitManagerServer extends Plugin {
   async load() {
+    // Ensure dayjs timezone + utc plugins are loaded globally to prevent 'm.startOf is not a function' errors
+    const dayjsLib = require('dayjs');
+    const utcPlugin = require('dayjs/plugin/utc');
+    const timezonePlugin = require('dayjs/plugin/timezone');
+    dayjsLib.extend(utcPlugin);
+    dayjsLib.extend(timezonePlugin);
+
     await this.db.import({
       directory: resolve(__dirname, 'collections'),
     });
@@ -39,9 +48,32 @@ export class PluginGitManagerServer extends Plugin {
       },
     });
 
+    // Suppress noisy workflow pre-action/post-action warnings for custom resources
+    this.app.use(async (ctx, next) => {
+      if (ctx.logger && ctx.logger.warn) {
+        const originalWarn = ctx.logger.warn.bind(ctx.logger);
+        ctx.logger.warn = (message: any, ...args: any[]) => {
+          if (
+            typeof message === 'string' &&
+            message.includes('[Workflow') &&
+            message.includes('collection') &&
+            message.includes('not found')
+          ) {
+            return ctx.logger;
+          }
+          return originalWarn(message, ...args);
+        };
+      }
+      return next();
+    });
+
     registerGitReviewAiTools(this.app);
 
     this.app.on('afterStart', () => {
+      // Sweep any review left in `running` state from a previous process.
+      recoverStuckReviews(this.app).catch((err) =>
+        this.app.log?.error?.('plugin-git-manager: recoverStuckReviews error', err),
+      );
       startPoller(this.app);
     });
     this.app.on('beforeStop', () => {

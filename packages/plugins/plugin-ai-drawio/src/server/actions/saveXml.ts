@@ -14,6 +14,12 @@ export async function saveXml(ctx: Context, next: Next) {
 
   assertDiagramAccess(ctx, model);
 
+  if (model.get?.('mode') === 'readonly') {
+    ctx.body = { success: true, readonly: true };
+    await next();
+    return;
+  }
+
   const body = (ctx.request as any).body || {};
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     ctx.throw(400, 'Request body must be an object');
@@ -23,7 +29,7 @@ export async function saveXml(ctx: Context, next: Next) {
   if (typeof xml !== 'string') {
     ctx.throw(400, 'xml is required');
   }
-  
+
   if (xml.length > 5 * 1024 * 1024) {
     ctx.throw(400, 'xml size exceeds the 5MB limit');
   }

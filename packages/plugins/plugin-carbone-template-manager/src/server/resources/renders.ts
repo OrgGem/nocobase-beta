@@ -25,31 +25,44 @@ import type { PluginCarboneTemplateManagerServer } from '../plugin';
 export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
   const logger = new RenderLogger(plugin.app);
 
-  async function renderById(ctx: Context, next: Next) {
+  async function render(ctx: Context, next: Next) {
     const t0 = Date.now();
     const v = ctx.action.params.values || {};
     const templateId = v.templateId ?? ctx.action.params.filterByTk;
+    const templateName = v.templateName ?? v.name;
+    const requestedVersionId = v.versionId ?? ctx.action.params.versionId;
     const data = v.data ?? {};
     const format = (v.format as CarboneOutputFormat | undefined) ?? undefined;
     const filename = v.filename;
     const inline = v.inline === true || ctx.action.params.inline === 'true';
 
-    if (!templateId) ctx.throw(400, 'templateId is required');
-    if (!(await checkRate(ctx, plugin, logger, 'renderById', { templateId }))) return;
+    if (!templateId && !templateName) ctx.throw(400, 'templateId or templateName is required');
+    if (!(await checkRate(ctx, plugin, logger, 'renderById', { templateId: templateId || templateName }))) return;
 
+    const filter = templateId ? { id: templateId } : { name: templateName };
     const tpl = await plugin.db
       .getRepository(COLLECTION.templates)
-      .findOne({ filterByTk: templateId, appends: ['currentVersion'] });
+      .findOne({ filter, appends: ['currentVersion'] });
     if (!tpl) ctx.throw(404, 'template not found');
     if (!tpl.enabled) ctx.throw(409, 'template is disabled');
-    if (!tpl.carboneTemplateId) ctx.throw(409, 'template has no Carbone id (re-upload required)');
+    const version = requestedVersionId
+      ? await plugin.db
+          .getRepository(COLLECTION.versions)
+          .findOne({ filterByTk: requestedVersionId })
+      : tpl.currentVersion;
+    if (!version) ctx.throw(404, 'template version not found');
+    if (Number(version.templateId) !== Number(tpl.id)) {
+      ctx.throw(400, 'versionId does not belong to templateId');
+    }
+    const carboneTemplateId = version.carboneTemplateId ?? tpl.carboneTemplateId;
+    if (!carboneTemplateId) ctx.throw(409, 'template has no Carbone id (re-upload required)');
 
     try {
       const pipeline = await buildPipeline(plugin);
       const outcome = await pipeline.render({
         templateId: tpl.id,
-        versionId: tpl.currentVersionId,
-        carboneTemplateId: tpl.carboneTemplateId,
+        versionId: version.id,
+        carboneTemplateId,
         data,
         format: format ?? tpl.defaultOutputFormat,
         filename: filename ?? tpl.originalFileName?.replace(/\.[^.]+$/, '') ?? tpl.name,
@@ -81,8 +94,8 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
       await logger.log({
         ...baseEntry(ctx, 'renderById', 'success'),
         templateId: tpl.id,
-        versionId: tpl.currentVersionId,
-        carboneTemplateId: tpl.carboneTemplateId,
+        versionId: version.id,
+        carboneTemplateId,
         format: outcome.format,
         filename,
         cacheKey: outcome.cacheKey,
@@ -99,8 +112,8 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
       await logger.log({
         ...baseEntry(ctx, 'renderById', 'error'),
         templateId: tpl?.id,
-        versionId: tpl?.currentVersionId,
-        carboneTemplateId: tpl?.carboneTemplateId,
+        versionId: version?.id ?? tpl?.currentVersionId,
+        carboneTemplateId: version?.carboneTemplateId ?? tpl?.carboneTemplateId,
         format: format ?? tpl?.defaultOutputFormat,
         filename,
         inputMd5: inputMd5(data),
@@ -255,7 +268,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
     }
   }
 
-  return { renderById, renderDirect, test };
+  return { render, renderById: render, renderDirect, test };
 }
 
 /**
@@ -295,7 +308,7 @@ export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer
     const log = await plugin.db.getRepository(COLLECTION.renderLogs).findOne({ filterByTk: id });
     if (!log) ctx.throw(404, 'log not found');
     if (!log.inputData) ctx.throw(409, 'inputData was not retained for this log');
-    if (!log.templateId) ctx.throw(409, 'replay only supports logged renderById/test entries');
+    if (!log.templateId) ctx.throw(409, 'replay only supports logged render/test entries');
 
     const pipeline = await buildPipeline(plugin);
     const tpl = await plugin.db

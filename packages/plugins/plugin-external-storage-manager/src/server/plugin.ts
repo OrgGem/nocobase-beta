@@ -51,7 +51,9 @@ export class PluginExternalStorageManagerServer extends Plugin {
         download: {},
         upload: {},
         mkdir: {},
+        rename: {},
         delete: {},
+        exists: {},
         storageOptions: {},
         rolePermissions: {},
         updateRolePermissions: {},
@@ -59,8 +61,8 @@ export class PluginExternalStorageManagerServer extends Plugin {
     });
 
     // Allow logged-in users to access browse API (fine-grained ACL is enforced inside handlers)
-    this.app.acl.allow('extStorage', ['directories', 'list', 'stat', 'download', 'storageOptions'], 'loggedIn');
-    this.app.acl.allow('extStorage', ['upload', 'mkdir', 'delete'], 'loggedIn');
+    this.app.acl.allow('extStorage', ['directories', 'list', 'stat', 'download', 'exists', 'storageOptions'], 'loggedIn');
+    this.app.acl.allow('extStorage', ['upload', 'mkdir', 'rename', 'delete'], 'loggedIn');
     
     // Only root or users with specific roles should configure role permissions, but for simplicity we allow 'loggedIn' 
     // and check inside the handler if needed, or better, just rely on the UI being hidden.
