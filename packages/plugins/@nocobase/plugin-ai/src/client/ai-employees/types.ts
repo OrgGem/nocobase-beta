@@ -33,6 +33,7 @@ export type AIEmployee = {
   webSearch?: boolean;
   toolsConflict?: boolean;
   category?: string;
+  deprecated?: boolean;
 };
 
 export type SkillSettings = {
