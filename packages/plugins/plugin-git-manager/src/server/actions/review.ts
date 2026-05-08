@@ -341,6 +341,8 @@ async function runReview(app: Application, args: RunReviewArgs) {
     const syntheticCtx: any = {
       app,
       db,
+      isBackgroundReview: true,
+      reviewTargetRepositoryId: args.repo.get('id'),
       state: { currentUser: args.userId ? { id: args.userId } : null },
       auth: { user: args.userId ? { id: args.userId } : { id: null } },
       req: { headers: { 'x-timezone': '+00:00', 'x-locale': 'en-US' } },

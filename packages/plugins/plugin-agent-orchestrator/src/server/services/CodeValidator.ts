@@ -43,7 +43,7 @@ const PYTHON_BUILTINS = [
   'decimal', 'fractions', 'random', 'statistics', 'copy', 'enum', 'dataclasses',
   'abc', 'contextlib', 'operator', 'time', 'calendar', 'locale', 'struct',
   'hashlib', 'base64', 'binascii', 'codecs', 'unicodedata', 'pprint',
-  'warnings', 'traceback', 'logging', 'unittest', 'argparse',
+  'warnings', 'traceback', 'logging', 'unittest', 'argparse', 'ast',
   'tempfile', 'xml', 'zipfile',
   // Pre-installed local packages (trusted, bundled with plugin)
   'svg_to_pptx',

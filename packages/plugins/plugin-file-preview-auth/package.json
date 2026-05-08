@@ -6,7 +6,7 @@
   "description": "Preview PDF, image, and text files with Bearer token authentication via blob URLs.",
   "description.vi-VN": "Xem trước file PDF, hình ảnh và văn bản với xác thực Bearer token qua blob URL.",
   "description.zh-CN": "通过 Bearer 令牌认证和 Blob URL 预览 PDF、图片和文本文件。",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "main": "dist/server/index.js",
   "files": [
     "dist",
@@ -21,7 +21,8 @@
     "@nocobase/client": "2.x",
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
-    "@nocobase/server": "2.x"
+    "@nocobase/server": "2.x",
+    "@nocobase/utils": "2.x"
   },
   "peerDependenciesMeta": {
     "@nocobase/plugin-ai": {

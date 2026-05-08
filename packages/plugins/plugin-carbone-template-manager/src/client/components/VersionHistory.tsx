@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Button, Drawer, List, Popconfirm, Space, Tag, message } from 'antd';
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION } from '../../shared/constants';
 import { PlaceholderTree, PlaceholderSchemaView } from './PlaceholderTree';
+import { TemplatePreviewModal } from './TemplatePreviewModal';
 
 interface VersionRow {
   id: number;
@@ -27,6 +28,7 @@ interface Props {
 export const VersionHistory: React.FC<Props> = ({ open, onClose, template, onChanged }) => {
   const api = useAPIClient();
   const { t } = useCarboneTranslation();
+  const [previewData, setPreviewData] = useState<{ url: string; filename: string } | null>(null);
 
   const { data, loading, refresh } = useRequest<{ data: VersionRow[] }>(
     () =>
@@ -49,15 +51,26 @@ export const VersionHistory: React.FC<Props> = ({ open, onClose, template, onCha
       message.success(t('Rolled back successfully'));
       refresh();
       onChanged();
+      onClose();
     } catch (err: any) {
       message.error(err?.response?.data?.errors?.[0]?.message || err?.message || t('Rollback failed'));
     }
   };
 
-  const onDownload = (versionId: number) => {
+  const onDelete = async (id: number) => {
+    try {
+      await api.resource(COLLECTION.versions).destroy({ filterByTk: id });
+      message.success(t('Version deleted successfully'));
+      refresh();
+    } catch (err: any) {
+      message.error(err?.response?.data?.errors?.[0]?.message || err?.message || t('Delete failed'));
+    }
+  };
+
+  const onPreview = (versionId: number, originalFileName: string) => {
     if (!template) return;
     const url = `/api/${COLLECTION.templates}:download/${template.id}?versionId=${versionId}`;
-    window.open(url, '_blank');
+    setPreviewData({ url, filename: originalFileName });
   };
 
   return (
@@ -75,28 +88,45 @@ export const VersionHistory: React.FC<Props> = ({ open, onClose, template, onCha
           const isCurrent = template?.currentVersionId === v.id;
           return (
             <List.Item
-              actions={[
-                <Button key="dl" size="small" onClick={() => onDownload(v.id)}>
-                  {t('Download')}
-                </Button>,
-                isCurrent ? (
-                  <Tag key="current" color="green">
-                    {t('Current')}
-                  </Tag>
-                ) : (
-                  <Popconfirm
-                    key="rb"
-                    title={t('Roll back to v{{n}}?', { n: v.versionNumber })}
-                    okText={t('Yes')}
-                    cancelText={t('No')}
-                    onConfirm={() => onRollback(v.id)}
+              actions={
+                [
+                  <Button
+                    key="dl"
+                    size="small"
+                    onClick={() => onPreview(v.id, v.originalFileName || `template-v${v.versionNumber}`)}
                   >
-                    <Button size="small" danger>
-                      {t('Roll back')}
-                    </Button>
-                  </Popconfirm>
-                ),
-              ]}
+                    {t('Preview')}
+                  </Button>,
+                  isCurrent ? (
+                    <Tag key="current" color="green">
+                      {t('Current')}
+                    </Tag>
+                  ) : (
+                    <Popconfirm
+                      key="rb"
+                      title={t('Roll back to v{{n}}?', { n: v.versionNumber })}
+                      okText={t('Yes')}
+                      cancelText={t('No')}
+                      onConfirm={() => onRollback(v.id)}
+                    >
+                      <Button size="small">{t('Roll back')}</Button>
+                    </Popconfirm>
+                  ),
+                  !isCurrent ? (
+                    <Popconfirm
+                      key="del"
+                      title={t('Delete version v{{n}}?', { n: v.versionNumber })}
+                      okText={t('Yes')}
+                      cancelText={t('No')}
+                      onConfirm={() => onDelete(v.id)}
+                    >
+                      <Button size="small" danger>
+                        {t('Delete')}
+                      </Button>
+                    </Popconfirm>
+                  ) : null,
+                ].filter(Boolean) as React.ReactNode[]
+              }
             >
               <List.Item.Meta
                 title={
@@ -109,14 +139,11 @@ export const VersionHistory: React.FC<Props> = ({ open, onClose, template, onCha
                   <div>
                     <div>{v.changeNote || <em style={{ color: '#aaa' }}>{t('(no note)')}</em>}</div>
                     <div style={{ fontSize: 12, color: '#aaa' }}>
-                      <code>{v.carboneTemplateId.slice(0, 12)}…</code> · MD5{' '}
-                      <code>{v.fileMd5?.slice(0, 8)}…</code>
+                      <code>{v.carboneTemplateId.slice(0, 12)}…</code> · MD5 <code>{v.fileMd5?.slice(0, 8)}…</code>
                     </div>
                     {v.placeholderSchema && (
                       <details style={{ marginTop: 6 }}>
-                        <summary style={{ cursor: 'pointer', color: '#1677ff' }}>
-                          {t('Show schema')}
-                        </summary>
+                        <summary style={{ cursor: 'pointer', color: '#1677ff' }}>{t('Show schema')}</summary>
                         <div style={{ marginTop: 6 }}>
                           <PlaceholderTree schema={v.placeholderSchema} />
                         </div>
@@ -128,6 +155,12 @@ export const VersionHistory: React.FC<Props> = ({ open, onClose, template, onCha
             </List.Item>
           );
         }}
+      />
+      <TemplatePreviewModal
+        open={!!previewData}
+        onClose={() => setPreviewData(null)}
+        url={previewData?.url || ''}
+        filename={previewData?.filename || ''}
       />
     </Drawer>
   );

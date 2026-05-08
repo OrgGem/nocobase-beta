@@ -6,6 +6,7 @@ import { useCarboneTranslation } from '../locale';
 import { COLLECTION } from '../../shared/constants';
 import { TemplateUploadModal } from './TemplateUploadModal';
 import { VersionHistory } from './VersionHistory';
+import { TemplatePreviewModal } from './TemplatePreviewModal';
 
 interface TemplateRow {
   id: number;
@@ -29,6 +30,7 @@ export const TemplatesTab: React.FC = () => {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [editing, setEditing] = useState<TemplateRow | null>(null);
+  const [previewData, setPreviewData] = useState<{ url: string; filename: string } | null>(null);
 
   const { data, loading, refresh } = useRequest<{ data: TemplateRow[] }>(
     () =>
@@ -62,6 +64,10 @@ export const TemplatesTab: React.FC = () => {
     }
   };
 
+  const onPreview = (url: string, filename: string) => {
+    setPreviewData({ url, filename });
+  };
+
   return (
     <div>
       <Space style={{ marginBottom: 16 }} wrap>
@@ -78,12 +84,7 @@ export const TemplatesTab: React.FC = () => {
         <Button icon={<ReloadOutlined />} onClick={refresh}>
           {t('Refresh')}
         </Button>
-        <Input.Search
-          placeholder={t('Search by name')}
-          allowClear
-          onSearch={setSearch}
-          style={{ width: 280 }}
-        />
+        <Input.Search placeholder={t('Search by name')} allowClear onSearch={setSearch} style={{ width: 280 }} />
       </Space>
 
       <Table<TemplateRow>
@@ -109,11 +110,7 @@ export const TemplatesTab: React.FC = () => {
             dataIndex: 'enabled',
             width: 80,
             render: (enabled, row) => (
-              <Switch
-                size="small"
-                checked={enabled}
-                onChange={(v) => onToggleEnabled(row, v)}
-              />
+              <Switch size="small" checked={enabled} onChange={(v) => onToggleEnabled(row, v)} />
             ),
           },
           {
@@ -142,8 +139,7 @@ export const TemplatesTab: React.FC = () => {
             title: t('Carbone ID'),
             dataIndex: 'carboneTemplateId',
             width: 140,
-            render: (v) =>
-              v ? <code style={{ fontSize: 11 }}>{v.slice(0, 12)}…</code> : <span>—</span>,
+            render: (v) => (v ? <code style={{ fontSize: 11 }}>{v.slice(0, 12)}…</code> : <span>—</span>),
           },
           {
             title: t('Updated'),
@@ -178,10 +174,11 @@ export const TemplatesTab: React.FC = () => {
                 <Button
                   size="small"
                   onClick={() => {
-                    window.open(`/api/${COLLECTION.templates}:download/${row.id}`, '_blank');
+                    const filename = row.originalFileName || `${row.name}.${row.defaultOutputFormat || 'pdf'}`;
+                    onPreview(`/api/${COLLECTION.templates}:download/${row.id}`, filename);
                   }}
                 >
-                  {t('Download')}
+                  {t('Preview')}
                 </Button>
                 <Popconfirm title={t('Delete this template?')} onConfirm={() => onDelete(row)}>
                   <Button size="small" danger>
@@ -205,6 +202,12 @@ export const TemplatesTab: React.FC = () => {
         onClose={() => setVersionsOpen(false)}
         template={editing}
         onChanged={refresh}
+      />
+      <TemplatePreviewModal
+        open={!!previewData}
+        onClose={() => setPreviewData(null)}
+        url={previewData?.url || ''}
+        filename={previewData?.filename || ''}
       />
     </div>
   );

@@ -7,6 +7,7 @@ import { useAPIClient } from '@nocobase/client';
 import { useGitManager } from '../context/GitManagerContext';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
 import { LLMServiceSelect } from './LLMServiceSelect';
+import { LLMModelSelect } from './LLMModelSelect';
 import { useT } from '../locale';
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -213,8 +214,22 @@ export const ReviewFlows: React.FC = () => {
             <Form.Item name="llmService" label={t('LLM Service (optional)')} style={{ flex: 1, marginRight: 8 }}>
               <LLMServiceSelect placeholder={t('Override flow LLM service')} />
             </Form.Item>
-            <Form.Item name="model" label={t('Model (optional)')} style={{ flex: 1 }}>
-              <Input placeholder={t('Override LLM model')} />
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) => prevValues.llmService !== currentValues.llmService}
+            >
+              {({ getFieldValue }) => {
+                const llmService = getFieldValue('llmService');
+                return (
+                  <Form.Item name="model" label={t('Model (optional)')} style={{ flex: 1 }}>
+                    {llmService ? (
+                      <LLMModelSelect llmService={llmService} placeholder={t('Override LLM model')} />
+                    ) : (
+                      <Input placeholder={t('Select an LLM service first')} disabled />
+                    )}
+                  </Form.Item>
+                );
+              }}
             </Form.Item>
           </Space.Compact>
           <Form.Item

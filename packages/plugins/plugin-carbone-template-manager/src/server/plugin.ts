@@ -53,55 +53,34 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     // 1. Auto-load collections
     await this.db.import({ directory: resolve(__dirname, 'collections') });
 
-    // 2. Resource actions
-    this.app.resourceManager.define({
-      name: COLLECTION.settings,
-      actions: {
-        get: getSettings,
-        save: saveSettings,
-        testConnection,
-      },
-    });
-
+    // 2. Resource actions (extend default collection actions using registerActionHandlers to avoid 404s)
     const tplActions = makeTemplateActions(this);
     const renderActions = makeRenderActions(this);
-    this.app.resourceManager.define({
-      name: COLLECTION.templates,
-      actions: {
-        upload: tplActions.upload,
-        parsePlaceholders: tplActions.parsePlaceholders,
-        download: tplActions.download,
-        render: renderActions.render,
-        renderById: renderActions.renderById,
-        renderDirect: renderActions.renderDirect,
-        test: renderActions.test,
-      },
-    });
-
     const verActions = makeVersionActions(this);
-    this.app.resourceManager.define({
-      name: COLLECTION.versions,
-      actions: {
-        rollback: verActions.rollback,
-        diffSchema: verActions.diffSchema,
-      },
-    });
-
     const cacheActions = makeCacheActions(this);
-    this.app.resourceManager.define({
-      name: COLLECTION.renderCache,
-      actions: {
-        invalidate: cacheActions.invalidate,
-      },
-    });
-
     const monitoringActions = makeMonitoringActions(this);
-    this.app.resourceManager.define({
-      name: COLLECTION.renderLogs,
-      actions: {
-        replay: monitoringActions.replay,
-        summary: monitoringActions.summary,
-      },
+
+    this.app.resourcer.registerActionHandlers({
+      [`${COLLECTION.settings}:get`]: getSettings,
+      [`${COLLECTION.settings}:save`]: saveSettings,
+      [`${COLLECTION.settings}:testConnection`]: testConnection,
+
+      [`${COLLECTION.templates}:upload`]: tplActions.upload,
+      [`${COLLECTION.templates}:parsePlaceholders`]: tplActions.parsePlaceholders,
+      [`${COLLECTION.templates}:download`]: tplActions.download,
+      [`${COLLECTION.templates}:render`]: renderActions.render,
+      [`${COLLECTION.templates}:renderById`]: renderActions.renderById,
+      [`${COLLECTION.templates}:renderDirect`]: renderActions.renderDirect,
+      [`${COLLECTION.templates}:test`]: renderActions.test,
+
+      [`${COLLECTION.versions}:rollback`]: verActions.rollback,
+      [`${COLLECTION.versions}:diffSchema`]: verActions.diffSchema,
+      [`${COLLECTION.versions}:destroy`]: verActions.destroy,
+
+      [`${COLLECTION.renderCache}:invalidate`]: cacheActions.invalidate,
+
+      [`${COLLECTION.renderLogs}:replay`]: monitoringActions.replay,
+      [`${COLLECTION.renderLogs}:summary`]: monitoringActions.summary,
     });
 
     // 2.5 Cache invalidation hook — purge cache rows when a template is removed.

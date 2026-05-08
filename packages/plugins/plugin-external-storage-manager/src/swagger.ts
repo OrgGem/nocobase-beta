@@ -9,7 +9,7 @@
 
 const directoryIdParameter = {
   name: 'filterByTk',
-  in: 'query',
+  in: 'path',
   required: true,
   description: 'External storage directory ID',
   schema: { type: 'integer' },
@@ -89,7 +89,7 @@ export default {
       },
     },
 
-    '/extStorage:list': {
+    '/extStorage:list/{filterByTk}': {
       get: {
         tags: ['extStorage'],
         summary: 'List files and directories',
@@ -138,7 +138,7 @@ export default {
       },
     },
 
-    '/extStorage:stat': {
+    '/extStorage:stat/{filterByTk}': {
       get: {
         tags: ['extStorage'],
         summary: 'Get file or directory metadata',
@@ -161,7 +161,7 @@ export default {
       },
     },
 
-    '/extStorage:download': {
+    '/extStorage:download/{filterByTk}': {
       get: {
         tags: ['extStorage'],
         summary: 'Download or preview a file as a stream',
@@ -197,7 +197,7 @@ export default {
       },
     },
 
-    '/extStorage:upload': {
+    '/extStorage:upload/{filterByTk}': {
       post: {
         tags: ['extStorage'],
         summary: 'Upload file data',
@@ -242,7 +242,7 @@ export default {
       },
     },
 
-    '/extStorage:mkdir': {
+    '/extStorage:mkdir/{filterByTk}': {
       post: {
         tags: ['extStorage'],
         summary: 'Create a directory',
@@ -264,7 +264,7 @@ export default {
       },
     },
 
-    '/extStorage:rename': {
+    '/extStorage:rename/{filterByTk}': {
       post: {
         tags: ['extStorage'],
         summary: 'Rename or move a file/directory',
@@ -289,7 +289,7 @@ export default {
       },
     },
 
-    '/extStorage:delete': {
+    '/extStorage:delete/{filterByTk}': {
       post: {
         tags: ['extStorage'],
         summary: 'Delete a file or directory',
@@ -311,7 +311,7 @@ export default {
       },
     },
 
-    '/extStorage:exists': {
+    '/extStorage:exists/{filterByTk}': {
       get: {
         tags: ['extStorage'],
         summary: 'Check whether a path exists',

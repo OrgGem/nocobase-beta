@@ -10,12 +10,9 @@ import { PlaceholderNodeView, PlaceholderSchemaView } from './PlaceholderTree';
  * filled recursively. Booleans alternate to make the generated sample obvious.
  */
 export function buildSampleData(schema?: PlaceholderSchemaView | null): Record<string, unknown> {
-  if (!schema) return { d: {}, c: {} };
+  if (!schema) return {};
   const out: Record<string, unknown> = {};
-  if (schema.d?.length) out.d = nodesToObject(schema.d);
-  if (schema.c?.length) out.c = nodesToObject(schema.c);
-  if (!out.d) out.d = {};
-  if (!out.c) out.c = {};
+  if (schema.d?.length) Object.assign(out, nodesToObject(schema.d));
   return out;
 }
 

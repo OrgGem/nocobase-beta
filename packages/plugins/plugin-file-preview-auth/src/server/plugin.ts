@@ -8,11 +8,15 @@
  */
 
 import { Plugin } from '@nocobase/server';
+import { koaMulter as multer } from '@nocobase/utils';
 import { ExcelParserHandler } from './excel-parser-handler';
+import { readFile, unlink } from 'fs/promises';
+import os from 'os';
+import path from 'path';
 
 const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
-import path from 'path';
+const MAX_RAW_PARSE_UPLOAD_BYTES = 200 * 1024 * 1024;
 
 export class PluginFilePreviewAuthServer extends Plugin {
   private cache: any;
@@ -33,21 +37,26 @@ export class PluginFilePreviewAuthServer extends Plugin {
       name: 'filePreviewAuth',
       actions: {
         getContent: async (ctx: any, next: any) => {
+          const uploaded = await this.consumeUploadedParseFile(ctx);
           const params = ctx.action.params || {};
           const values = params.values || {};
           // NocoBase strips non-standard query parameters from ctx.action.params, so we check ctx.request.query and ctx.request.body
           const reqQuery = ctx.request.query || {};
           const reqBody = ctx.request.body || {};
           
-          const fileInput = values.file || params.file || reqQuery.file || reqBody.file || params;
-          const attachment = await this.resolveAttachment(ctx, fileInput);
+          const fileInput = uploaded?.attachment || values.file || params.file || reqQuery.file || reqBody.file || params;
+          const attachment = uploaded
+            ? await this.resolveAttachment(ctx, fileInput).catch(() => fileInput)
+            : await this.resolveAttachment(ctx, fileInput);
           this.assertAuthenticated(ctx);
 
-          const cacheKey = `parsed_text:${attachment.id || attachment.key || attachment.url || attachment.path}`;
+          const cacheKey = `markitdown_parsed_text:${attachment.id || attachment.key || attachment.url || attachment.path || uploaded?.cacheKey}`;
           let text = await this.cache.get(cacheKey);
 
           if (text == null) {
-            text = await this.extractAttachmentText(ctx, attachment);
+            text = uploaded
+              ? await this.extractUploadedFileText(uploaded.buffer, attachment)
+              : await this.extractAttachmentText(ctx, attachment);
             // Cache the extracted text for 1 day (86400000 ms)
             // Even if empty string, we cache it so it doesn't repeatedly fail
             await this.cache.set(cacheKey, text, 86400000);
@@ -265,6 +274,103 @@ export class PluginFilePreviewAuthServer extends Plugin {
       ctx.throw(401, 'Unauthorized');
     }
     return currentUser;
+  }
+
+  private async consumeUploadedParseFile(ctx: any): Promise<{ buffer: Buffer; attachment: any; cacheKey: string } | null> {
+    if (!ctx.request?.is?.('multipart/*')) {
+      return null;
+    }
+
+    const upload = (multer as any)({
+      dest: os.tmpdir(),
+      limits: { fileSize: MAX_RAW_PARSE_UPLOAD_BYTES },
+    }).single('file');
+
+    try {
+      await upload(ctx, () => {});
+    } catch (err: any) {
+      ctx.throw(400, err?.message || 'Upload parsing error');
+    }
+
+    const file = ctx.file || ctx.request?.file;
+    if (!file?.path) {
+      ctx.throw(400, 'file is required');
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await readFile(file.path);
+    } finally {
+      unlink(file.path).catch(() => {});
+    }
+
+    const body = ctx.request.body || {};
+    let attachment: any = {};
+    if (body.attachment) {
+      try {
+        attachment = JSON.parse(body.attachment);
+      } catch {
+        attachment = {};
+      }
+    }
+
+    attachment = {
+      ...attachment,
+      filename: attachment.filename || file.originalname,
+      name: attachment.name || attachment.filename || file.originalname,
+      mimetype: attachment.mimetype || file.mimetype,
+      size: attachment.size || file.size,
+    };
+
+    return {
+      buffer,
+      attachment,
+      cacheKey: [
+        attachment.id || attachment.uid || attachment.url || attachment.path || file.originalname || attachment.filename || 'file',
+        attachment.lastModified || '',
+        file.size || buffer.length,
+      ].join(':'),
+    };
+  }
+
+  private async extractUploadedFileText(buffer: Buffer, attachment: any): Promise<string> {
+    const markitdownPlugin = this.getMarkItDownParserPlugin();
+    const service = markitdownPlugin?.service;
+    if (service?.convertBuffer) {
+      try {
+        if (!service.supports || service.supports(attachment)) {
+          const text = await service.convertBuffer(buffer, attachment);
+          if (text?.trim()) {
+            return text;
+          }
+        }
+      } catch (err) {
+        this.log.warn(`[FilePreviewAuth] MarkItDown parser failed: ${err}`);
+      }
+    } else {
+      this.log.warn('[FilePreviewAuth] plugin-markitdown-parser not found; uploaded raw text parsing fallback will be used');
+    }
+
+    if (isPlainTextAttachment(attachment)) {
+      return buffer.toString('utf-8');
+    }
+
+    return '';
+  }
+
+  private getMarkItDownParserPlugin(): any | null {
+    const candidates = ['@nocobase/plugin-markitdown-parser', 'plugin-markitdown-parser', 'markitdown-parser'];
+    for (const name of candidates) {
+      try {
+        const plugin = this.pm.get(name) as any;
+        if (plugin?.service?.convertBuffer) {
+          return plugin;
+        }
+      } catch {
+        // Try the next known plugin name.
+      }
+    }
+    return null;
   }
 
   private async extractAttachmentText(ctx: any, attachment: any): Promise<string> {

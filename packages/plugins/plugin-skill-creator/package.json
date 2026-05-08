@@ -1,0 +1,31 @@
+{
+  "name": "plugin-skill-creator",
+  "displayName": "Skill Creator Skill",
+  "displayName.vi-VN": "Skill tạo Skill",
+  "description": "Create and install new Skill Hub skills from AI Employee generated specifications.",
+  "description.vi-VN": "Tạo và cài skill mới vào Skill Hub từ đặc tả do AI Employee sinh ra.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "scripts": {
+    "prepack": "powershell -Command \"Copy-Item -Path src/server/skills/* -Destination dist/server/skills/ -Recurse -Force\""
+  },
+  "main": "dist/server/index.js",
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "plugin-skill-hub": ">=1.0.0"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
+}

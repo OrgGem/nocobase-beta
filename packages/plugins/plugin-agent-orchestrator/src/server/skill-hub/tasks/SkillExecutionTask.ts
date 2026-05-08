@@ -1,8 +1,10 @@
 import Application from '@nocobase/server';
-import { resolve } from 'path';
+import { cpSync, existsSync, readFileSync, rmSync } from 'fs';
+import { resolve, sep } from 'path';
 import { SandboxRunner } from '../../services/SandboxRunner';
 import { FileManager } from '../../services/FileManager';
 import { SkillRepositoryService } from '../../services/SkillRepositoryService';
+import { CodeValidator } from '../../services/CodeValidator';
 import { parseJsonText, stringifyJsonText } from '../utils/json-fields';
 
 /**
@@ -216,6 +218,13 @@ export class SkillExecutionTask {
         },
       });
 
+      if (result.success) {
+        const installMessage = await this.installGeneratedSkillIfRequested(execId);
+        if (installMessage) {
+          result.stdout = [result.stdout, installMessage].filter(Boolean).join('\n');
+        }
+      }
+
       // Determine final status
       let status: string;
       if (result.canceled) {
@@ -293,5 +302,112 @@ export class SkillExecutionTask {
     code = code.replaceAll('{{outputDir}}', this.fileManager.getOutputDir(execId).replace(/\\/g, '/'));
     code = code.replaceAll('{{skillDir}}', (skillDir || '').replace(/\\/g, '/'));
     return code;
+  }
+
+  private async installGeneratedSkillIfRequested(execId: string): Promise<string | null> {
+    const manifestPath = this.fileManager.getOutputFilePath(execId, 'skill-hub-install.json');
+    if (!manifestPath) return null;
+
+    let manifest: any;
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    } catch (error) {
+      throw new Error(`Generated skill install manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    if (!manifest?.autoInstall) return null;
+
+    const skill = manifest.skill || {};
+    const name = String(skill.name || '').trim();
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(name)) {
+      throw new Error(`Generated skill name "${name}" is invalid. Use lowercase letters, numbers, and hyphens.`);
+    }
+
+    const language = skill.language;
+    if (language !== 'python' && language !== 'node') {
+      throw new Error(`Generated skill "${name}" has unsupported language "${language}".`);
+    }
+
+    if (!skill.codeTemplate) {
+      throw new Error(`Generated skill "${name}" is missing codeTemplate.`);
+    }
+
+    const validator = new CodeValidator();
+    validator.validate(skill.codeTemplate, language);
+
+    const outputDir = this.fileManager.getOutputDir(execId);
+    const outputRoot = resolve(outputDir);
+    const packageDirName = String(manifest.packageDir || name);
+    const packageDir = resolve(outputRoot, packageDirName);
+    if ((packageDir !== outputRoot && !packageDir.startsWith(outputRoot + sep)) || !existsSync(packageDir)) {
+      throw new Error(`Generated skill package directory "${packageDirName}" was not found in output.`);
+    }
+
+    if (manifest.testInput && Object.keys(manifest.testInput).length > 0) {
+      const verifyExecId = `${execId}-verify-${name}`;
+      const verifyCode = this.renderTemplate(skill.codeTemplate, manifest.testInput, verifyExecId, packageDir);
+      const verifyResult = await this.sandboxRunner.execute({
+        language,
+        code: verifyCode,
+        execId: verifyExecId,
+        timeoutSeconds: Math.min(Number(skill.timeoutSeconds || 60), 30),
+        maxOutputSizeMb: Math.min(Number(skill.maxOutputSizeMb || 50), 10),
+        skillDir: packageDir,
+      });
+
+      if (!verifyResult.success) {
+        throw new Error(
+          `Generated skill "${name}" failed smoke verification: ${verifyResult.stderr || verifyResult.stdout || 'unknown error'}`,
+        );
+      }
+    }
+
+    const skillRepoDir = this.skillRepoService.getSkillPath(name);
+    if (existsSync(skillRepoDir)) {
+      rmSync(skillRepoDir, { recursive: true, force: true });
+    }
+    cpSync(packageDir, skillRepoDir, {
+      recursive: true,
+      force: true,
+      filter: (src) => {
+        const leaf = src.split(/[\\/]/).pop();
+        return !['node_modules', '.git', '__pycache__'].includes(leaf || '') && !src.endsWith('.pyc');
+      },
+    });
+
+    const values: any = {
+      name,
+      title: skill.title || name,
+      description: skill.description || '',
+      instructions: skill.instructions || '',
+      language,
+      codeTemplate: skill.codeTemplate,
+      inputSchema: stringifyJsonText(skill.inputSchema || { type: 'object', properties: {} }),
+      packages: stringifyJsonText(skill.packages || [], []),
+      timeoutSeconds: skill.timeoutSeconds || 60,
+      maxOutputSizeMb: skill.maxOutputSizeMb || 50,
+      enabled: skill.enabled !== false,
+      toolScope: skill.toolScope || 'CUSTOM',
+      autoCall: !!skill.autoCall,
+      storageType: 'local',
+      storageUrl: `local://generated/${name}`,
+    };
+
+    if (skill.interactionSchema) {
+      values.interactionSchema = stringifyJsonText(skill.interactionSchema);
+    }
+
+    const repo = this.app.db.getRepository('skillDefinitions');
+    const existing = await repo.findOne({ filter: { name } });
+    if (existing) {
+      if (manifest.overwrite === false) {
+        throw new Error(`Skill "${name}" already exists and overwrite=false.`);
+      }
+      await repo.update({ filter: { name }, values });
+      return `[skill-hub] Updated generated skill "${name}" in Skill Hub.`;
+    }
+
+    await repo.create({ values });
+    return `[skill-hub] Installed generated skill "${name}" in Skill Hub.`;
   }
 }

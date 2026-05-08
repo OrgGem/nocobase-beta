@@ -14,7 +14,7 @@ interface Props {
    * Existing template — if provided we upload a NEW VERSION instead of a new
    * template, and lock the metadata fields.
    */
-  template?: { id: number; name: string; defaultOutputFormat?: string } | null;
+  template?: { id: number; name: string; category?: string; defaultOutputFormat?: string } | null;
 }
 
 interface ParsedPreview {
@@ -50,7 +50,11 @@ export const TemplateUploadModal: React.FC<Props> = ({ open, onClose, onSaved, t
     setPreview(null);
     form.resetFields();
     if (template) {
-      form.setFieldsValue({ name: template.name, defaultOutputFormat: template.defaultOutputFormat });
+      form.setFieldsValue({
+        name: template.name,
+        category: template.category,
+        defaultOutputFormat: template.defaultOutputFormat,
+      });
     }
     // Resolve the storage name corresponding to the configured backupStorageId.
     api

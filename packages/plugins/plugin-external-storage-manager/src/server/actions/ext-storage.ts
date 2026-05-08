@@ -351,6 +351,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       }
 
       ctx.set('Cache-Control', 'private, max-age=300');
+      ctx.withoutDataWrapping = true;
       ctx.body = stream;
     } catch (error: any) {
       ctx.logger?.error?.(`[ext-storage] Download failed for "${remotePath}":`, error);

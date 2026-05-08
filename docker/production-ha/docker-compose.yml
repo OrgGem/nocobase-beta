@@ -410,7 +410,7 @@ services:
       # When this token is set, Carbone requires Bearer auth on every request.
       # Configure the same value under Plugin Settings → Carbone Template Manager.
       CARBONE_EE_STUDIO_TOKEN: ${CARBONE_EE_STUDIO_TOKEN:-carbone-secret-token}
-      CARBONE_EE_AUTHENTICATION: ${CARBONE_EE_AUTHENTICATION:-true}
+      CARBONE_EE_AUTHENTICATION: ${CARBONE_EE_AUTHENTICATION:-false}
       CARBONE_EE_FACTORIES: ${CARBONE_EE_FACTORIES:-1}
       CARBONE_EE_PORT: '4000'
     ports:

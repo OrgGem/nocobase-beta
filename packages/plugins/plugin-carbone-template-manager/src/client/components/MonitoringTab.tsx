@@ -4,6 +4,7 @@ import { ReloadOutlined, PlayCircleOutlined, EyeOutlined } from '@ant-design/ico
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION } from '../../shared/constants';
+import { TemplatePreviewModal } from './TemplatePreviewModal';
 
 interface LogRow {
   id: number;
@@ -58,6 +59,7 @@ export const MonitoringTab: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'all' | LogRow['status']>('all');
   const [inspecting, setInspecting] = useState<LogRow | null>(null);
   const [templateNames, setTemplateNames] = useState<Record<number, string>>({});
+  const [previewData, setPreviewData] = useState<{ url: string; filename: string } | null>(null);
 
   const summaryReq = useRequest<{ data: Summary }>(
     () =>
@@ -109,9 +111,10 @@ export const MonitoringTab: React.FC = () => {
         responseType: 'blob',
       });
       const url = URL.createObjectURL(res.data);
-      window.open(url, '_blank');
-      // Browser keeps the tab; revoke after a delay to free memory.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      if (previewData?.url?.startsWith('blob:')) URL.revokeObjectURL(previewData.url);
+      const filename =
+        filenameFromHeader(res.headers?.['content-disposition']) || `replay-${row.id}.${row.format || 'pdf'}`;
+      setPreviewData({ url, filename });
     } catch (err: any) {
       const text = await err?.response?.data?.text?.().catch(() => null);
       const msg = text ? safeJsonMessage(text) : err?.message;
@@ -120,6 +123,10 @@ export const MonitoringTab: React.FC = () => {
   };
 
   const summary = summaryReq.data?.data;
+  const closePreview = () => {
+    if (previewData?.url?.startsWith('blob:')) URL.revokeObjectURL(previewData.url);
+    setPreviewData(null);
+  };
 
   return (
     <div>
@@ -273,9 +280,7 @@ export const MonitoringTab: React.FC = () => {
               render: (s, row) => (
                 <span>
                   <Tag color={STATUS_COLORS[s]}>{s}</Tag>
-                  {row.errorMessage ? (
-                    <span style={{ fontSize: 11, color: '#cf1322' }}>{row.errorMessage}</span>
-                  ) : null}
+                  {row.errorMessage ? <span style={{ fontSize: 11, color: '#cf1322' }}>{row.errorMessage}</span> : null}
                 </span>
               ),
             },
@@ -289,12 +294,7 @@ export const MonitoringTab: React.FC = () => {
                     {t('Inspect')}
                   </Button>
                   {row.action !== 'renderDirect' && row.inputData && row.status !== 'rate_limited' ? (
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<PlayCircleOutlined />}
-                      onClick={() => onReplay(row)}
-                    >
+                    <Button size="small" type="primary" icon={<PlayCircleOutlined />} onClick={() => onReplay(row)}>
                       {t('Replay')}
                     </Button>
                   ) : null}
@@ -351,12 +351,18 @@ export const MonitoringTab: React.FC = () => {
           </div>
         )}
       </Drawer>
+      <TemplatePreviewModal
+        open={!!previewData}
+        onClose={closePreview}
+        url={previewData?.url || ''}
+        filename={previewData?.filename || ''}
+      />
     </div>
   );
 };
 
 const Sparkline: React.FC<{ buckets?: { t: string; count: number; errors: number }[] }> = ({ buckets }) => {
-  const data = buckets || [];
+  const data = useMemo(() => buckets || [], [buckets]);
   const max = useMemo(() => Math.max(1, ...data.map((d) => d.count)), [data]);
   if (!data.length) {
     return <span style={{ color: '#aaa' }}>—</span>;
@@ -387,6 +393,17 @@ function safeJsonMessage(text: string): string | null {
     return j?.errors?.[0]?.message || j?.message || null;
   } catch {
     return null;
+  }
+}
+
+function filenameFromHeader(cd?: string): string | null {
+  if (!cd) return null;
+  const m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
   }
 }
 

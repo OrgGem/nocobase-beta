@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tabs,
   Card,
@@ -109,12 +109,7 @@ const DiagramsTab: React.FC = () => {
     try {
       const values = await createForm.validateFields();
       setCreating(true);
-      const res = await api.request({
-        resource: 'aiDiagrams',
-        action: 'create',
-        method: 'post',
-        data: { values },
-      });
+      const res = await api.resource('aiDiagrams').create({ values });
       message.success(t('Saved successfully'));
       createForm.resetFields();
       setEditing(null);
@@ -133,13 +128,7 @@ const DiagramsTab: React.FC = () => {
     try {
       const values = await createForm.validateFields();
       setCreating(true);
-      await api.request({
-        resource: 'aiDiagrams',
-        action: 'update',
-        method: 'post',
-        params: { filterByTk: editing.id },
-        data: { values },
-      });
+      await api.resource('aiDiagrams').update({ filterByTk: editing.id, values });
       message.success(t('Saved successfully'));
       createForm.resetFields();
       setEditing(null);
@@ -152,22 +141,20 @@ const DiagramsTab: React.FC = () => {
     }
   };
 
-  const onDelete = (record: any) => {
-    modal.confirm({
-      title: t('Delete'),
-      content: record.title || record.id,
-      onOk: async () => {
-        await api.request({
-          resource: 'aiDiagrams',
-          action: 'destroy',
-          method: 'post',
-          params: { filterByTk: record.id },
-        });
-        message.success(t('Saved successfully'));
-        refresh();
-      },
-    });
-  };
+  const onDelete = useCallback(
+    (record: any) => {
+      modal.confirm({
+        title: t('Delete'),
+        content: record.title || record.id,
+        onOk: async () => {
+          await api.resource('aiDiagrams').destroy({ filterByTk: record.id });
+          message.success(t('Saved successfully'));
+          refresh();
+        },
+      });
+    },
+    [api, message, modal, refresh, t],
+  );
 
   const columns = useMemo(
     () => [
@@ -224,7 +211,7 @@ const DiagramsTab: React.FC = () => {
         ),
       },
     ],
-    [t, createForm],
+    [t, createForm, onDelete],
   );
 
   return (
@@ -292,21 +279,21 @@ const SystemPromptTab: React.FC = () => {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    api
-      .request({ url: 'aiDrawio:getSystemPrompt', method: 'get' })
-      .then((res) => {
+    const loadPrompt = async () => {
+      setLoading(true);
+      try {
+        const res = await api.request({ url: 'aiDrawio:getSystemPrompt', method: 'get' });
         if (cancelled) return;
         const body = res?.data;
         setPrompt(typeof body === 'string' ? body : String(body ?? ''));
-      })
-      .catch((err) => {
+      } catch (err: any) {
         if (cancelled) return;
         message.error(err?.message || t('Save failed'));
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    loadPrompt();
     return () => {
       cancelled = true;
     };

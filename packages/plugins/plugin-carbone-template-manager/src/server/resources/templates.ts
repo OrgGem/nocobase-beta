@@ -62,9 +62,7 @@ export function makeTemplateActions(plugin: PluginCarboneTemplateManagerServer) 
     const verRepo = db.getRepository(COLLECTION.versions);
 
     return await db.sequelize.transaction(async (transaction) => {
-      let template = templateId
-        ? await tplRepo.findOne({ filterByTk: templateId, transaction })
-        : null;
+      let template = templateId ? await tplRepo.findOne({ filterByTk: templateId, transaction }) : null;
 
       if (!template) {
         template = await tplRepo.create({
@@ -153,9 +151,7 @@ export function makeTemplateActions(plugin: PluginCarboneTemplateManagerServer) 
     const targetVersionId = versionId ?? tpl.currentVersionId;
     if (!targetVersionId) ctx.throw(404, 'no version to download');
 
-    const ver = await plugin.db
-      .getRepository(COLLECTION.versions)
-      .findOne({ filterByTk: targetVersionId });
+    const ver = await plugin.db.getRepository(COLLECTION.versions).findOne({ filterByTk: targetVersionId });
     if (!ver?.fileBackupId) ctx.throw(404, 'backup file not available');
 
     const { buffer, attachment } = await readAttachmentBuffer(plugin.app, ver.fileBackupId);
@@ -200,18 +196,13 @@ export function makeVersionActions(plugin: PluginCarboneTemplateManagerServer) {
     try {
       exists = await client.templateExists(carboneTemplateId);
     } catch (err: any) {
-      plugin.app.logger.warn(
-        `[carbone-template-manager] rollback probe error (continuing): ${err?.message ?? err}`,
-      );
+      plugin.app.logger.warn(`[carbone-template-manager] rollback probe error (continuing): ${err?.message ?? err}`);
     }
     if (!exists) {
       if (!version.fileBackupId) {
         ctx.throw(409, 'Carbone no longer has this template and no backup is available');
       }
-      const { buffer, attachment } = await readAttachmentBuffer(
-        plugin.app,
-        version.fileBackupId,
-      );
+      const { buffer, attachment } = await readAttachmentBuffer(plugin.app, version.fileBackupId);
       carboneTemplateId = await client.uploadTemplate(
         buffer,
         attachment.filename || version.originalFileName || 'template',
@@ -256,7 +247,39 @@ export function makeVersionActions(plugin: PluginCarboneTemplateManagerServer) {
     await next();
   }
 
-  return { rollback, diffSchema };
+  async function destroy(ctx: Context, next: Next) {
+    const { filterByTk } = ctx.action.params;
+    const verRepo = plugin.db.getRepository(COLLECTION.versions);
+    const tplRepo = plugin.db.getRepository(COLLECTION.templates);
+
+    const version = await verRepo.findOne({ filterByTk });
+    if (!version) ctx.throw(404, 'version not found');
+
+    const template = await tplRepo.findOne({ filterByTk: version.templateId });
+    if (template?.currentVersionId === version.id) {
+      ctx.throw(400, 'Cannot delete the current version');
+    }
+
+    const client = await plugin.getCarboneClient();
+    const deleteRemote = version.carboneTemplateId
+      ? await canDeleteRemoteTemplate(plugin, version.carboneTemplateId, version.id)
+      : false;
+    if (client && deleteRemote) {
+      try {
+        await client.deleteTemplate(version.carboneTemplateId);
+      } catch (err: any) {
+        plugin.app.logger.warn(
+          `[carbone-template-manager] delete template probe error (ignoring): ${err?.message ?? err}`,
+        );
+      }
+    }
+
+    await verRepo.destroy({ filterByTk });
+    ctx.body = { ok: true };
+    await next();
+  }
+
+  return { rollback, diffSchema, destroy };
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -275,4 +298,33 @@ function walk(nodes: any[], out: Set<string>) {
     if (n.children?.length) walk(n.children, out);
     else out.add(n.path);
   }
+}
+
+async function canDeleteRemoteTemplate(
+  plugin: PluginCarboneTemplateManagerServer,
+  carboneTemplateId: string,
+  deletingVersionId: number | string,
+): Promise<boolean> {
+  const verRepo = plugin.db.getRepository(COLLECTION.versions);
+  const tplRepo = plugin.db.getRepository(COLLECTION.templates);
+
+  const siblingVersions = await verRepo.find({
+    filter: {
+      carboneTemplateId,
+      id: { $ne: deletingVersionId },
+    },
+    fields: ['id'],
+    limit: 1,
+  });
+  if (siblingVersions.length > 0) return false;
+
+  const activeTemplates = await tplRepo.find({
+    filter: {
+      carboneTemplateId,
+      currentVersionId: { $ne: deletingVersionId },
+    },
+    fields: ['id'],
+    limit: 1,
+  });
+  return activeTemplates.length === 0;
 }

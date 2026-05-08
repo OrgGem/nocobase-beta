@@ -25,7 +25,15 @@ export function registerGitReviewAiTools(app: Application) {
    * and read any repository's MRs / commits / file content regardless of the
    * caller's ACL.
    */
-  const enforceAcl = (ctx: any, resource: string, action: string) => {
+  const enforceAcl = (ctx: any, resource: string, action: string, params: any) => {
+    if (ctx.isBackgroundReview) {
+      if (params.repositoryId && params.repositoryId !== ctx.reviewTargetRepositoryId) {
+        const err: any = new Error('Permission denied: AI cannot access other repositories');
+        err.status = 403;
+        throw err;
+      }
+      return; // Authorized for this specific repository in background context
+    }
     const user = ctx?.state?.currentUser;
     if (!user?.id) {
       const err: any = new Error('AI tool requires an authenticated user context');
@@ -51,13 +59,32 @@ export function registerGitReviewAiTools(app: Application) {
     }
   };
 
+  const sanitizeForDb = (obj: any): any => {
+    if (typeof obj === 'string') {
+      // Remove null bytes \u0000 which crash Postgres jsonb/text fields
+      // eslint-disable-next-line no-control-regex
+      return obj.replace(/\u0000/g, '');
+    }
+    if (Array.isArray(obj)) {
+      return obj.map(sanitizeForDb);
+    }
+    if (obj && typeof obj === 'object') {
+      const sanitized: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        sanitized[key] = sanitizeForDb(value);
+      }
+      return sanitized;
+    }
+    return obj;
+  };
+
   const runResourceAction = async (
     ctx: any,
     handler: (ctx: any, next: () => Promise<void>) => Promise<void>,
     params: Record<string, any>,
     gate: { resource: string; action: string },
   ) => {
-    enforceAcl(ctx, gate.resource, gate.action);
+    enforceAcl(ctx, gate.resource, gate.action, params);
     const synthCtx: any = {
       ...ctx,
       app: ctx.app,
@@ -70,7 +97,7 @@ export function registerGitReviewAiTools(app: Application) {
       },
     };
     await handler(synthCtx, async () => undefined);
-    return synthCtx.body;
+    return sanitizeForDb(synthCtx.body);
   };
 
   aiManager.toolsManager.registerTools([

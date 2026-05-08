@@ -118,6 +118,31 @@ const getFileDisplayName = (file: any): string => {
   return file.filename || file.name || file.title || 'download';
 };
 
+const loadedBlobCache = new Map<string, Promise<Blob>>();
+
+function getBlobCacheKey(url: string, token: string): string {
+  return `${token ? 'auth' : 'anon'}:${token || ''}:${url}`;
+}
+
+function normalizeFileForServer(file: any) {
+  return {
+    id: file?.id,
+    uid: file?.uid,
+    url: file?.url,
+    preview: file?.preview,
+    filename: file?.filename || file?.name,
+    name: file?.name || file?.filename,
+    title: file?.title,
+    extname: file?.extname,
+    mimetype: file?.mimetype,
+    size: file?.size,
+    path: file?.path,
+    storageId: file?.storageId,
+    collectionName: file?.collectionName,
+    lastModified: file?.lastModified,
+  };
+}
+
 // ─── fetchFileAsBlob: fetch with Bearer auth ────────────────────────
 
 async function fetchFileAsBlob(url: string, token: string): Promise<Blob> {
@@ -136,20 +161,21 @@ async function fetchFileAsBlob(url: string, token: string): Promise<Blob> {
   return response.blob();
 }
 
-async function fetchFileAsText(url: string, token: string): Promise<string> {
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+async function getLoadedFileBlob(file: any, token: string): Promise<Blob> {
+  const url = resolveFileUrl(file);
+  if (!url) {
+    throw new Error('No file URL');
   }
-  const response = await fetch(url, {
-    method: 'GET',
-    headers,
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch file: ${response.status} ${response.statusText}`);
+  const cacheKey = getBlobCacheKey(url, token);
+  let pending = loadedBlobCache.get(cacheKey);
+  if (!pending) {
+    pending = fetchFileAsBlob(url, token).catch((err) => {
+      loadedBlobCache.delete(cacheKey);
+      throw err;
+    });
+    loadedBlobCache.set(cacheKey, pending);
   }
-  return response.text();
+  return pending;
 }
 
 // ─── Authenticated download helper ─────────────────────────────────
@@ -157,7 +183,7 @@ async function fetchFileAsText(url: string, token: string): Promise<string> {
 async function downloadFileWithAuth(file: any, token: string): Promise<void> {
   const url = resolveFileUrl(file);
   if (!url) return;
-  const blob = await fetchFileAsBlob(url, token);
+  const blob = await getLoadedFileBlob(file, token);
   const fileName = getFileDisplayName(file);
   const a = document.createElement('a');
   const objectUrl = URL.createObjectURL(blob);
@@ -190,7 +216,7 @@ function useBlobUrl(file: any, token: string) {
     setLoading(true);
     setError(null);
 
-    fetchFileAsBlob(url, token)
+    getLoadedFileBlob(file, token)
       .then((blob) => {
         if (cancelled) return;
         const objectUrl = URL.createObjectURL(blob);
@@ -235,7 +261,8 @@ function useTextContent(file: any, token: string) {
     setLoading(true);
     setError(null);
 
-    fetchFileAsText(url, token)
+    getLoadedFileBlob(file, token)
+      .then((blob) => blob.text())
       .then((content) => {
         if (cancelled) return;
         setText(content);
@@ -361,7 +388,7 @@ function AuthDocxInlinePreviewer({ file }: any) {
 
     (async () => {
       try {
-        const blob = await fetchFileAsBlob(url, token);
+        const blob = await getLoadedFileBlob(file, token);
         if (cancelled) return;
         // Dynamic import for code-splitting (bundled, no CDN needed)
         // @ts-ignore
@@ -439,7 +466,7 @@ function AuthXlsxInlinePreviewer({ file }: any) {
 
     (async () => {
       try {
-        const blob = await fetchFileAsBlob(url, token);
+        const blob = await getLoadedFileBlob(file, token);
         if (cancelled) return;
         // Dynamic import for code-splitting (bundled, no CDN needed)
         // @ts-ignore
@@ -577,7 +604,7 @@ function AuthPptxInlinePreviewer({ file }: any) {
     (async () => {
       try {
         const [blob, module] = await Promise.all([
-          fetchFileAsBlob(url, token),
+          getLoadedFileBlob(file, token),
           // @ts-ignore
           import('react-pptx-preview-kit')
         ]);
@@ -722,9 +749,19 @@ function AuthRawTextPreviewer({ file }: any) {
       setLoading(true);
       setError(null);
       try {
+        const token = apiClient.auth?.token || '';
+        const blob = await getLoadedFileBlob(file, token);
+        if (cancelled) return;
+
+        const formData = new FormData();
+        formData.append('file', blob, getFileDisplayName(file));
+        formData.append('attachment', JSON.stringify(normalizeFileForServer(file)));
+
         const response = await apiClient.request({
           url: 'filePreviewAuth:getContent',
-          params: { file },
+          method: 'post',
+          data: formData,
+          headers: { 'Content-Type': 'multipart/form-data' },
         });
         if (cancelled) return;
         const text = response?.data?.data?.content || '';

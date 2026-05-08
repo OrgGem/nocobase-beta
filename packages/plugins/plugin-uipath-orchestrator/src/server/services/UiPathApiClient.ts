@@ -9,6 +9,9 @@
  * - Owns its own OAuth2 client_credentials flow with 60s pre-expiry refresh.
  * - Folder context resolved via priority: FolderKey > OrganizationUnitId > FolderPath.
  * - OData query builder for $top/$skip/$filter/$select/$expand/$orderby/$count.
+ * - Uses undici's fetch (not global fetch) so the `dispatcher` option works correctly
+ *   for ignoreSsl / custom TLS settings. Global fetch silently ignores `dispatcher`,
+ *   which causes unhandled rejections on self-signed / HTTP-only environments.
  */
 
 import type {
@@ -19,10 +22,11 @@ import type {
   TokenCacheEntry,
   ODataResponse,
 } from './types';
-import { Agent } from 'undici';
+import { fetch as undiciFetch, Agent } from 'undici';
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000; // Refresh 60s before expiry
 const DEFAULT_TIMEOUT_MS = 15_000;
+const TOKEN_TIMEOUT_MS = 10_000; // Timeout for token acquisition
 const DEFAULT_CLOUD_BASE_URL = 'https://cloud.uipath.com';
 
 export class UiPathApiClient {
@@ -60,6 +64,10 @@ export class UiPathApiClient {
     return `${base}/identity_/connect/token`;
   }
 
+  /**
+   * Build fetch options with proper dispatcher for SSL/TLS handling.
+   * Uses undici's Agent to support rejectUnauthorized on HTTP & self-signed HTTPS.
+   */
   private getFetchOptions(signal?: AbortSignal): Record<string, any> {
     const options: Record<string, any> = {};
     if (signal) options.signal = signal;
@@ -71,6 +79,21 @@ export class UiPathApiClient {
       });
     }
     return options;
+  }
+
+  /**
+   * Wrapper around undici fetch that catches network-level errors
+   * to prevent unhandled rejections from crashing the process.
+   */
+  private async safeFetch(url: string, init: Record<string, any>): Promise<Response> {
+    try {
+      return await (undiciFetch as any)(url, init);
+    } catch (err: any) {
+      // Normalize network errors into a standard Error with context
+      const code = err?.code || err?.cause?.code || '';
+      const message = err?.message || 'Network request failed';
+      throw new Error(`UiPath connection error [${code}]: ${message}`);
+    }
   }
 
   // ─── OAuth2 Token ──────────────────────────────────────────────────
@@ -97,6 +120,10 @@ export class UiPathApiClient {
   private async fetchToken(): Promise<string> {
     const { tokenUrl, clientId, clientSecret, scopes } = this.config;
 
+    if (!tokenUrl) {
+      throw new Error('UiPath token URL is not configured. Check your instance settings.');
+    }
+
     const body = new URLSearchParams({
       grant_type: 'client_credentials',
       client_id: clientId,
@@ -104,27 +131,40 @@ export class UiPathApiClient {
       scope: scopes,
     });
 
-    const res = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-      ...this.getFetchOptions(),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TOKEN_TIMEOUT_MS);
 
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`UiPath OAuth token error ${res.status}: ${text}`);
+    try {
+      const res = await this.safeFetch(tokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+        ...this.getFetchOptions(controller.signal),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`UiPath OAuth token error ${res.status}: ${text}`);
+      }
+
+      const data = await res.json() as any;
+      const expiresIn = (data.expires_in || 3600) * 1000; // ms
+
+      this.tokenCache = {
+        accessToken: data.access_token,
+        expiresAt: Date.now() + expiresIn,
+      };
+
+      return data.access_token;
+    } catch (err: any) {
+      // Re-throw with better context for connection failures
+      if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') {
+        throw new Error(`UiPath token request timed out after ${TOKEN_TIMEOUT_MS}ms. Check that the token URL is reachable: ${tokenUrl}`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-
-    const data = await res.json();
-    const expiresIn = (data.expires_in || 3600) * 1000; // ms
-
-    this.tokenCache = {
-      accessToken: data.access_token,
-      expiresAt: Date.now() + expiresIn,
-    };
-
-    return data.access_token;
   }
 
   /** Force-clear cached token (useful after 401 retry). */
@@ -187,65 +227,70 @@ export class UiPathApiClient {
     const { query, body, folder, timeout = DEFAULT_TIMEOUT_MS } = options;
 
     const token = await this.getAccessToken();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
 
-    try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json',
-        ...this.buildFolderHeaders(folder),
-      };
-      if (body) {
-        headers['Content-Type'] = 'application/json';
-      }
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      ...this.buildFolderHeaders(folder),
+    };
+    if (body) {
+      headers['Content-Type'] = 'application/json';
+    }
 
-      const qs = UiPathApiClient.buildODataParams(query);
-      const qsStr = qs.toString();
-      const sep = endpoint.includes('?') ? '&' : '?';
-      const url = `${this.config.apiBaseUrl}${endpoint}${qsStr ? `${sep}${qsStr}` : ''}`;
+    const qs = UiPathApiClient.buildODataParams(query);
+    const qsStr = qs.toString();
+    const sep = endpoint.includes('?') ? '&' : '?';
+    const url = `${this.config.apiBaseUrl}${endpoint}${qsStr ? `${sep}${qsStr}` : ''}`;
 
-      const res = await fetch(url, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-        ...this.getFetchOptions(controller.signal),
-      });
-
-      // 401 → clear token and retry once
-      if (res.status === 401) {
-        this.clearToken();
-        const retryToken = await this.getAccessToken();
-        headers['Authorization'] = `Bearer ${retryToken}`;
-
-        const retryRes = await fetch(url, {
+    // Each attempt gets its own AbortController so that timeout doesn't leak across retries
+    const doFetch = async (authToken: string): Promise<Response> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeout);
+      try {
+        headers['Authorization'] = `Bearer ${authToken}`;
+        const res = await this.safeFetch(url, {
           method,
           headers,
           body: body ? JSON.stringify(body) : undefined,
           ...this.getFetchOptions(controller.signal),
         });
-
-        if (!retryRes.ok) {
-          const text = await retryRes.text().catch(() => '');
-          throw new Error(`UiPath API error ${retryRes.status}: ${text}`);
+        return res;
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') {
+          throw new Error(`UiPath API request timed out after ${timeout}ms: ${method} ${endpoint}`);
         }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
 
-        return this.parseResponse<T>(retryRes);
+    const res = await doFetch(token);
+
+    // 401 → clear token and retry once with fresh credentials
+    if (res.status === 401) {
+      this.clearToken();
+      const retryToken = await this.getAccessToken();
+      const retryRes = await doFetch(retryToken);
+
+      if (!retryRes.ok) {
+        const text = await retryRes.text().catch(() => '');
+        throw new Error(`UiPath API error ${retryRes.status}: ${text}`);
       }
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`UiPath API error ${res.status}: ${text}`);
-      }
-
-      return this.parseResponse<T>(res);
-    } finally {
-      clearTimeout(timer);
+      return this.parseResponse<T>(retryRes);
     }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`UiPath API error ${res.status}: ${text}`);
+    }
+
+    return this.parseResponse<T>(res);
   }
 
-  private async parseResponse<T>(res: Response): Promise<T> {
-    const contentType = res.headers.get('content-type') || '';
+  private async parseResponse<T>(res: any): Promise<T> {
+    const contentType = (res.headers?.get?.('content-type') || res.headers?.['content-type'] || '') as string;
     if (contentType.includes('application/json')) {
       return res.json() as Promise<T>;
     }

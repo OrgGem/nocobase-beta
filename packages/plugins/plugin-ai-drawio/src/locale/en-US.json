@@ -32,5 +32,8 @@
   "Open in fullscreen": "Open in fullscreen",
   "Save": "Save",
   "No drawio diagram is currently open on the page.": "No drawio diagram is currently open on the page.",
-  "Drawio diagram already attached to this chat.": "Drawio diagram already attached to this chat."
+  "Drawio diagram already attached to this chat.": "Drawio diagram already attached to this chat.",
+  "Open Diagram": "Open Diagram",
+  "Ready": "Ready",
+  "Applied": "Applied"
 }
