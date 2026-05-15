@@ -8,6 +8,7 @@
  */
 
 import { Client } from 'pg';
+import { QdrantClient } from '@qdrant/js-client-rest';
 import { Context } from '@nocobase/actions';
 
 export default {
@@ -17,12 +18,21 @@ export default {
       const { filter, fields, sort, page, pageSize } = ctx.action.params;
       const repo = ctx.db.getRepository('aiVectorDatabases');
 
-      ctx.body = await repo.find({
+      const records = await repo.find({
         filter,
         fields,
         sort: sort ?? ['-createdAt'],
         limit: pageSize,
         offset: page ? (page - 1) * (pageSize || 20) : 0,
+      });
+
+      // Strip sensitive credentials from API responses (Fix P0-1)
+      ctx.body = records.map((r: any) => {
+        const data = r.toJSON ? r.toJSON() : r;
+        if (data.connectParams) {
+          data.connectParams = { ...data.connectParams, password: '***', apiKey: data.connectParams.apiKey ? '***' : undefined };
+        }
+        return data;
       });
 
       await next();
@@ -32,7 +42,17 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiVectorDatabases');
 
-      ctx.body = await repo.findOne({ filterByTk });
+      const record = await repo.findOne({ filterByTk });
+      if (record) {
+        // Strip sensitive credentials from API responses (Fix P0-1)
+        const data = record.toJSON ? record.toJSON() : record;
+        if (data.connectParams) {
+          data.connectParams = { ...data.connectParams, password: '***', apiKey: data.connectParams.apiKey ? '***' : undefined };
+        }
+        ctx.body = data;
+      } else {
+        ctx.body = null;
+      }
 
       await next();
     },
@@ -85,12 +105,36 @@ export default {
       }
 
       try {
+        if (provider === 'qdrant') {
+          if (!connectParams.url) {
+            ctx.body = { success: false, error: 'Qdrant URL is required' };
+            await next();
+            return;
+          }
+          if (!connectParams.collectionName) {
+            ctx.body = { success: false, error: 'Collection name is required' };
+            await next();
+            return;
+          }
+
+          const client = new QdrantClient({
+            url: connectParams.url,
+            apiKey: connectParams.apiKey,
+          });
+          await client.getCollections();
+          ctx.body = { success: true };
+          await next();
+          return;
+        }
+
         const client = new Client({
           host: connectParams.host,
           port: connectParams.port || 5432,
           user: connectParams.username,
           password: connectParams.password,
           database: connectParams.database,
+          connectionTimeoutMillis: 10_000, // Fix P0-2: prevent indefinite hang on non-responsive hosts
+          query_timeout: 10_000,
         });
 
         await client.connect();

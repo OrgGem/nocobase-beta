@@ -14,7 +14,7 @@ export default class FixInputArgsJsonToText extends Migration {
   appVersion = '>=0.1.0';
 
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
 
     // Check current column type
     const tableDesc = await queryInterface.describeTable('skillExecutions').catch(() => null);
@@ -25,7 +25,7 @@ export default class FixInputArgsJsonToText extends Migration {
 
     // Only migrate if still json type
     if (col.type && col.type.toLowerCase().includes('json')) {
-      await this.db.sequelize.query(
+      await (this as any).db.sequelize.query(
         `ALTER TABLE "skillExecutions" ALTER COLUMN "inputArgs" TYPE text USING "inputArgs"::text`,
       );
       console.log('[skill-hub] Migration: converted skillExecutions.inputArgs from json to text');

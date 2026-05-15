@@ -10,6 +10,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { useAPIClient } from '@nocobase/client';
 import type { WorkerMessage, WorkerResponse } from '../workers/embedding-worker';
+import { mainDataSourceRequest } from '../api';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,12 +24,10 @@ export interface EmbeddingConfig {
   chunkOverlap: number;
   batchSize: number;
   preferWebGPU: boolean;
-  /** Where the browser fetches model files: 'server' | 'cdn' | 'huggingface' */
-  modelSource?: 'server' | 'cdn' | 'huggingface';
-  /** Full CDN URL to the model folder — used when modelSource = 'cdn' */
-  cdnBaseUrl?: string;
-  /** Custom model file name to override default (e.g., 'model' instead of 'model_quantized') */
-  cdnModelFileName?: string;
+  /** Private mode always fetches model files from the NocoBase server. */
+  modelSource: 'server';
+  signature?: string;
+  knowledgeBaseId?: string;
 }
 
 interface ProcessOptions {
@@ -64,9 +63,13 @@ export function useEmbeddingWorker(): EmbeddingWorkerContextValue {
 
 // ── Provider ──────────────────────────────────────────────────────────────────
 
-export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode; knowledgeBaseId?: string }> = ({
+  children,
+  knowledgeBaseId,
+}) => {
   const api = useAPIClient();
   const workerRef = useRef<Worker | null>(null);
+  const configRef = useRef<EmbeddingConfig | null>(null);
   const [state, setState] = useState<WorkerState>('idle');
   const [modelProgress, setModelProgress] = useState(0);
   const [config, setConfig] = useState<EmbeddingConfig | null>(null);
@@ -79,10 +82,32 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
   // Promise that resolves when the model is ready (lazy init)
   const readyPromiseRef = useRef<Promise<void> | null>(null);
   const readyResolveRef = useRef<(() => void) | null>(null);
+  const readyRejectRef = useRef<((err: Error) => void) | null>(null);
 
   const send = useCallback((msg: WorkerMessage) => {
     workerRef.current?.postMessage(msg);
   }, []);
+
+  const resetReadyState = useCallback((err?: Error) => {
+    if (err) {
+      readyRejectRef.current?.(err);
+    }
+    readyPromiseRef.current = null;
+    readyResolveRef.current = null;
+    readyRejectRef.current = null;
+  }, []);
+
+  const failWorker = useCallback(
+    (err: Error) => {
+      setState('error');
+      resetReadyState(err);
+      pendingRef.current.forEach(({ reject }) => reject(err));
+      pendingRef.current.clear();
+      workerRef.current?.terminate();
+      workerRef.current = null;
+    },
+    [resetReadyState],
+  );
 
   // Lazy initialization — only creates the worker and loads the model when first needed
   const ensureReady = useCallback(async (): Promise<void> => {
@@ -98,14 +123,39 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
     if (readyPromiseRef.current) return readyPromiseRef.current;
 
     // Create the ready promise
-    readyPromiseRef.current = new Promise<void>((resolve) => {
+    readyPromiseRef.current = new Promise<void>((resolve, reject) => {
       readyResolveRef.current = resolve;
+      readyRejectRef.current = reject;
     });
+    void readyPromiseRef.current.catch(() => {});
 
-    // Load config from server
-    const res = await api.request({ url: 'embedWebClient:getConfig' });
-    const cfg: EmbeddingConfig = res?.data?.data;
-    setConfig(cfg);
+    // Load the offline embedding profile for this knowledge base.
+    let cfg: EmbeddingConfig | null = null;
+    try {
+      const res = await api.request(
+        mainDataSourceRequest({
+          url: 'embedWebClient:getConfig',
+          params: knowledgeBaseId ? { knowledgeBaseId } : undefined,
+        }),
+      );
+      cfg = res?.data?.data ?? res?.data;
+      if (!cfg?.modelId || !cfg?.dtype || cfg.dimensions == null) {
+        throw new Error('Invalid embedding configuration returned by server');
+      }
+      configRef.current = cfg;
+      setConfig(cfg);
+    } catch (err: any) {
+      const error = new Error(err?.message ?? 'Failed to load embedding configuration');
+      resetReadyState(error);
+      setState('error');
+      throw error;
+    }
+    if (!cfg) {
+      const error = new Error('Invalid embedding configuration returned by server');
+      resetReadyState(error);
+      setState('error');
+      throw error;
+    }
 
     // Create worker
     const worker = new Worker(new URL('../workers/embedding-worker.ts', import.meta.url), { type: 'module' });
@@ -126,7 +176,7 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
           setModelProgress(100);
           // Resolve the ready promise
           readyResolveRef.current?.();
-          readyResolveRef.current = null;
+          resetReadyState();
           break;
 
         case 'embed_progress': {
@@ -156,12 +206,15 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
 
         case 'error': {
           const key = msg.documentId ?? msg.requestId;
+          const error = new Error(msg.error);
           if (key) {
             const pending = pendingRef.current.get(key);
             if (pending) {
               pendingRef.current.delete(key);
-              pending.reject(new Error(msg.error));
+              pending.reject(error);
             }
+          } else {
+            failWorker(error);
           }
           setState('error');
           break;
@@ -170,43 +223,38 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
     };
 
     worker.onerror = (err) => {
-      setState('error');
-      pendingRef.current.forEach(({ reject }) => reject(new Error(err.message)));
-      pendingRef.current.clear();
+      failWorker(new Error(err.message));
     };
 
-    // Kick off model loading.
-    // Pass modelSource + cdnBaseUrl so the worker can route requests
-    // to the NocoBase server, a CDN, or HuggingFace Hub accordingly.
+    // Kick off model loading through the local NocoBase model server.
     setState('loading_model');
     send({
       type: 'init',
       modelId: cfg.modelId,
       dtype: cfg.dtype,
       preferWebGPU: cfg.preferWebGPU,
-      modelSource: cfg.modelSource ?? 'server',
+      modelSource: 'server',
       serverOrigin: window.location.origin,
-      cdnBaseUrl: cfg.cdnBaseUrl,
-      cdnModelFileName: cfg.cdnModelFileName,
     });
 
     return readyPromiseRef.current;
-  }, [api, send, state]);
+  }, [api, send, state, knowledgeBaseId, resetReadyState, failWorker]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      resetReadyState();
       workerRef.current?.terminate();
       workerRef.current = null;
     };
-  }, []);
+  }, [resetReadyState]);
 
   const processDocument = useCallback(
     async ({ documentId, text, metadata = {}, onProgress }: ProcessOptions): Promise<ProcessResult> => {
       // Ensure model is initialized before processing
       await ensureReady();
 
-      const cfg = config;
+      const cfg = configRef.current;
       if (!cfg) throw new Error('Config not loaded');
 
       return new Promise((resolve, reject) => {
@@ -223,7 +271,7 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode }> = 
         });
       });
     },
-    [config, send, ensureReady],
+    [send, ensureReady],
   );
 
   const embedQuery = useCallback(

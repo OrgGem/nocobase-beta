@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * This file is part of the NocoBase (R) project.
  * Copyright (c) 2020-2024 NocoBase Co., Ltd.
@@ -10,32 +11,59 @@
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import PluginAIServer from '@nocobase/plugin-ai';
-import type { VectorStoreProvider } from '@nocobase/plugin-ai/server';
+import type { VectorStoreProvider } from './features/vector-store-provider-impl';
 import { KnowledgeBaseFeatureImpl } from './features/knowledge-base-impl';
 import { VectorDatabaseFeatureImpl } from './features/vector-database-impl';
 import { VectorDatabaseProviderImpl } from './features/vector-database-provider-impl';
 import { VectorStoreProviderImpl } from './features/vector-store-provider-impl';
 import { pgVectorProviderInfo } from './providers/pgvector';
-import { externalHttpRagStrategy, EXTERNAL_HTTP_RAG_PROVIDER } from './providers/external-rag';
+import { qdrantProviderInfo } from './providers/qdrant';
+import {
+  E5_HTTP_RAG_PROVIDER,
+  createOpenAICompatibleRagStrategy,
+  externalHttpRagStrategy,
+  EXTERNAL_HTTP_RAG_PROVIDER,
+  OPENAI_COMPATIBLE_RAG_PROVIDER,
+} from './providers/external-rag';
 import type { RagSearchStrategy } from './providers/external-rag';
 import { VectorizationPipeline } from './pipeline/vectorization';
 import { DocPixieExtractor } from './services/docpixie-extractor';
 import { KnowledgeSearchService } from './services/knowledge-search';
 import type { KnowledgeSearchOptions } from './services/knowledge-search';
+import { SessionContextService } from './services/session-context';
+import { createSharedContextToolProvider } from './tools/shared-context-tool';
+import { createPromoteToKbToolProvider } from './tools/promote-to-kb-tool';
 import aiKnowledgeBase from './resources/ai-knowledge-base';
 import aiKnowledgeBaseDocuments from './resources/ai-knowledge-base-documents';
 import aiVectorStores from './resources/ai-vector-stores';
 import aiVectorDatabases from './resources/ai-vector-databases';
 import { addDocumentAction } from './actions/add-document';
+import * as sessionContextAdminActions from './actions/session-context-admin';
 import requestContext from './request-context';
 import { getServerEmbeddingPipeline } from './utils/embed-web-client';
 
 export class PluginKnowledgeBaseServer extends Plugin {
+  declare app: any;
+  declare db: any;
+  declare pm: any;
+  declare log: any;
   vectorizationPipeline: VectorizationPipeline;
   docpixieExtractor: DocPixieExtractor;
   knowledgeBaseFeature: KnowledgeBaseFeatureImpl;
   knowledgeSearchService: KnowledgeSearchService;
+
+  /**
+   * Session Context Service — ephemeral cross-agent scratchpad (Tier 1).
+   *
+   * Other plugins access this via:
+   *   const kb = this.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+   *   await kb.sessionContext.set({ rootRunId }, 'key', value);
+   *   const data = await kb.sessionContext.get({ rootRunId }, 'key');
+   */
+  sessionContext: SessionContextService;
+
   private retryTimer: ReturnType<typeof setInterval> | null = null;
+  private sessionPruneTimer: ReturnType<typeof setInterval> | null = null;
 
   /**
    * The VectorStore provider registry exposed publicly so that other plugins can
@@ -61,11 +89,11 @@ export class PluginKnowledgeBaseServer extends Plugin {
    */
   private ragSearchStrategies = new Map<string, RagSearchStrategy>();
 
-  private _aiPlugin: PluginAIServer;
+  private _aiPlugin: any;
 
-  get aiPlugin(): PluginAIServer {
+  get aiPlugin(): any {
     if (!this._aiPlugin) {
-      this._aiPlugin = this.pm.get(PluginAIServer) as PluginAIServer;
+      this._aiPlugin = this.pm.get(PluginAIServer) as any;
     }
     return this._aiPlugin;
   }
@@ -129,12 +157,17 @@ export class PluginKnowledgeBaseServer extends Plugin {
     // 1. Create feature implementations
     const vdbProvider = new VectorDatabaseProviderImpl();
     vdbProvider.register(pgVectorProviderInfo);
+    vdbProvider.register(qdrantProviderInfo);
 
     this.vectorStoreProvider = new VectorStoreProviderImpl(this, this.aiPlugin);
     const vectorStoreProvider = this.vectorStoreProvider;
 
     // Register built-in external-http RAG strategy
     this.ragSearchStrategies.set(EXTERNAL_HTTP_RAG_PROVIDER, externalHttpRagStrategy);
+    const openAICompatibleRagStrategy = createOpenAICompatibleRagStrategy({ db: this.db, app: this.app });
+    this.ragSearchStrategies.set(OPENAI_COMPATIBLE_RAG_PROVIDER, openAICompatibleRagStrategy);
+    // Backward-compatible alias for existing KBs configured with ragProvider=e5-http.
+    this.ragSearchStrategies.set(E5_HTTP_RAG_PROVIDER, openAICompatibleRagStrategy);
     const vectorDatabase = new VectorDatabaseFeatureImpl(this);
     const knowledgeBase = new KnowledgeBaseFeatureImpl(this);
     this.knowledgeBaseFeature = knowledgeBase;
@@ -154,6 +187,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // 4. Define resources
     this.defineResources();
+    await this.seedDefaultQdrantVectorStore();
 
     // 5. Middleware: propagate current userId + roles via AsyncLocalStorage
     this.app.resourceManager.use(async (ctx, next) => {
@@ -207,16 +241,46 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // 9. Start background retry job for failed documents (every 5 minutes)
     this.startRetryJob();
+
+    // 10. Initialize Session Context Service (Tier 1 — ephemeral cross-agent scratchpad)
+    this.sessionContext = new SessionContextService(this.db);
+
+    // 11. Register shared_context AI tool via toolsManager
+    this.registerSharedContextTool();
+
+    // 12. Start session context pruning cron (every hour)
+    this.startSessionContextPruning();
+
+    // 13. Auto-sync aiEmployees collection to prevent 500 errors if user didn't run `yarn nocobase upgrade`
+    this.app.on('beforeStart', async () => {
+      try {
+        const repo = this.db.getRepository('aiEmployees');
+        if (repo && repo.collection) {
+          await repo.collection.sync();
+          this.app.logger.info('[KnowledgeBase] aiEmployees collection synced successfully.');
+        }
+      } catch (e: any) {
+        this.app.logger.warn(`[KnowledgeBase] Failed to sync aiEmployees collection: ${e.message}`);
+      }
+    });
   }
 
   async disable() {
     this.clearRetryTimer();
+    this.clearSessionPruneTimer();
   }
 
   private clearRetryTimer() {
     if (this.retryTimer) {
       clearInterval(this.retryTimer);
       this.retryTimer = null;
+    }
+  }
+
+  private clearSessionPruneTimer() {
+    if (this.sessionPruneTimer) {
+      clearInterval(this.sessionPruneTimer);
+      this.sessionPruneTimer = null;
     }
   }
 
@@ -227,27 +291,34 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.retryTimer = setInterval(async () => {
       try {
         const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
-        // Atomic claim: find candidates then update status to 'retrying' atomically.
-        // This prevents duplicate processing when multiple NocoBase instances run the
-        // same retry job concurrently.
-        const failedDocs = await docRepo.find({
-          filter: {
-            status: 'failed',
-            retryCount: { $lt: MAX_RETRY_COUNT },
-          },
-          appends: ['knowledgeBase'],
-          limit: 10,
-        });
+        const tableName = docRepo.collection.model.tableName;
 
-        // Claim each document by atomically setting status — skip if already claimed
-        const claimedDocs = [];
-        for (const doc of failedDocs) {
-          const [affected] = await this.db.sequelize.query(
-            `UPDATE "${docRepo.collection.model.tableName}" SET "status" = 'retrying' WHERE "id" = :id AND "status" = 'failed'`,
-            { replacements: { id: doc.id }, type: (this.db.sequelize.constructor as any).QueryTypes.UPDATE },
-          );
-          if (affected > 0) claimedDocs.push(doc);
-        }
+        // Fix P1-2: Single atomic UPDATE+RETURNING to claim failed docs.
+        // Eliminates the race window between find() and UPDATE that existed before.
+        // The subquery with LIMIT prevents over-claiming, and WHERE status='failed'
+        // ensures no double-processing across concurrent instances.
+        const claimedRows = (await this.db.sequelize.query(
+          `UPDATE "${tableName}" SET "status" = 'retrying'
+           WHERE "id" IN (
+             SELECT "id" FROM "${tableName}"
+             WHERE "status" = 'failed' AND "retryCount" < :maxRetry
+             LIMIT 10
+           )
+           RETURNING "id"`,
+          {
+            replacements: { maxRetry: MAX_RETRY_COUNT },
+            type: (this.db.sequelize.constructor as any).QueryTypes.SELECT,
+          },
+        )) as any[];
+
+        const claimedIds = claimedRows.map((r: any) => r.id);
+        if (claimedIds.length === 0) return;
+
+        // Load full records for claimed docs only
+        const claimedDocs = await docRepo.find({
+          filter: { id: { $in: claimedIds } },
+          appends: ['knowledgeBase'],
+        });
 
         for (const doc of claimedDocs) {
           if (!doc.knowledgeBase) continue;
@@ -298,6 +369,97 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // Register addDocument action for workflow integration
     this.app.resourceManager.registerActionHandler('aiKnowledgeBase:addDocument', addDocumentAction);
+
+    // Register admin actions for Agent Session Context
+    this.app.resourceManager.define({
+      name: 'agentSessionContext',
+      actions: {
+        stats: sessionContextAdminActions.stats,
+        listScopes: sessionContextAdminActions.listScopes,
+        listEntries: sessionContextAdminActions.listEntries,
+        getEntry: sessionContextAdminActions.getEntry,
+        deleteEntry: sessionContextAdminActions.deleteEntry,
+        clearScope: sessionContextAdminActions.clearScope,
+        pruneExpired: sessionContextAdminActions.pruneExpired,
+        clearAll: sessionContextAdminActions.clearAll,
+      },
+    });
+  }
+
+  private async seedDefaultQdrantVectorStore() {
+    if (process.env.KB_DEFAULT_VECTOR_DATABASE_PROVIDER !== 'qdrant') {
+      return;
+    }
+    if (process.env.APP_ROLE === 'worker' || process.env.WORKER_MODE === '*') {
+      return;
+    }
+
+    const qdrantUrl = process.env.KB_DEFAULT_QDRANT_URL || 'http://qdrant:6333';
+    const collectionName = process.env.KB_DEFAULT_QDRANT_COLLECTION || 'nocobase_knowledge_base';
+    const vectorDatabaseName = process.env.KB_DEFAULT_VECTOR_DATABASE_NAME || 'Default Qdrant';
+    const vectorStoreName = process.env.KB_DEFAULT_VECTOR_STORE_NAME || 'Default Qdrant Vector Store';
+
+    try {
+      const vectorDatabaseRepo = this.db.getRepository('aiVectorDatabases');
+      let vectorDatabase = await vectorDatabaseRepo.findOne({ filter: { name: vectorDatabaseName } });
+      if (!vectorDatabase) {
+        vectorDatabase = await vectorDatabaseRepo.create({
+          values: {
+            name: vectorDatabaseName,
+            provider: 'qdrant',
+            connectParams: {
+              url: qdrantUrl,
+              apiKey: process.env.KB_DEFAULT_QDRANT_API_KEY || undefined,
+              collectionName,
+            },
+            enabled: true,
+          },
+        });
+      }
+
+      const embeddingProvider = process.env.KB_DEFAULT_EMBEDDING_PROVIDER || 'llmService';
+      const llmService = process.env.KB_DEFAULT_EMBEDDING_LLM_SERVICE || '';
+      const embeddingModel = process.env.KB_DEFAULT_EMBEDDING_MODEL || '';
+      const localEmbedModelId = process.env.KB_DEFAULT_LOCAL_EMBED_MODEL_ID || '';
+      const localEmbedDtype = process.env.KB_DEFAULT_LOCAL_EMBED_DTYPE || 'q8';
+      const canCreateVectorStore =
+        embeddingProvider === 'localEmbed' ? Boolean(localEmbedModelId) : Boolean(llmService && embeddingModel);
+
+      if (!canCreateVectorStore) {
+        this.app.logger.info(
+          '[KBSeed] Qdrant vector database is ready. Set KB_DEFAULT_EMBEDDING_LLM_SERVICE and KB_DEFAULT_EMBEDDING_MODEL to seed a default vector store.',
+        );
+        return;
+      }
+
+      const vectorStoreRepo = this.db.getRepository('aiVectorStores');
+      const existingVectorStore = await vectorStoreRepo.findOne({ filter: { name: vectorStoreName } });
+      if (existingVectorStore) {
+        return;
+      }
+
+      const values: Record<string, any> = {
+        name: vectorStoreName,
+        vectorDatabaseId: vectorDatabase.get('id'),
+        embeddingProvider,
+        enabled: true,
+      };
+      if (embeddingProvider === 'localEmbed') {
+        values.localEmbedModelId = localEmbedModelId;
+        values.localEmbedDtype = localEmbedDtype;
+      } else {
+        values.llmService = llmService;
+        values.embeddingModel = embeddingModel;
+      }
+
+      const vectorStore = await vectorStoreRepo.create({ values });
+      await vectorStoreRepo.update({
+        filterByTk: vectorStore.get('id'),
+        values: { vectorDatabaseId: vectorDatabase.get('id') },
+      });
+    } catch (err: any) {
+      this.app.logger.warn(`[KBSeed] Failed to seed default Qdrant vector store: ${err.message}`);
+    }
   }
 
   /**
@@ -402,7 +564,13 @@ export class PluginKnowledgeBaseServer extends Plugin {
     // Admin snippet for managing knowledge base, vector stores, and vector databases
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.knowledge-base`,
-      actions: ['aiKnowledgeBase:*', 'aiKnowledgeBaseDoc:*', 'aiVectorStore:*', 'aiVectorDatabase:*'],
+      actions: [
+        'aiKnowledgeBase:*',
+        'aiKnowledgeBaseDoc:*',
+        'aiVectorStore:*',
+        'aiVectorDatabase:*',
+        'agentSessionContext:*',
+      ],
     });
 
     // Allow logged-in users to list/get knowledge bases (needed by AI Employee KB selector)
@@ -420,16 +588,54 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.app.acl.allow('aiKnowledgeBaseDoc', 'reprocess', 'loggedIn');
   }
 
+  // ── Session Context Tool Registration ──────────────────────────────────
+
+  private registerSharedContextTool() {
+    try {
+      const toolsManager = this.aiPlugin?.ai?.toolsManager;
+      if (!toolsManager) {
+        this.app.logger.warn('[KnowledgeBase] plugin-ai toolsManager not available, skip context tools.');
+        return;
+      }
+      // Register shared_context tool (Tier 1: read/write session context)
+      toolsManager.registerDynamicTools(createSharedContextToolProvider(this.sessionContext));
+      // Register promote_to_kb tool (Tier 1 → Tier 2: save to permanent KB)
+      toolsManager.registerDynamicTools(createPromoteToKbToolProvider(this.sessionContext, this.db, this));
+      this.app.logger.info('[KnowledgeBase] shared_context + promote_to_kb AI tools registered.');
+    } catch (err) {
+      this.app.logger.warn('[KnowledgeBase] Failed to register context tools:', err);
+    }
+  }
+
+  // ── Session Context Pruning ────────────────────────────────────────────
+
+  private startSessionContextPruning() {
+    const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+
+    this.sessionPruneTimer = setInterval(async () => {
+      try {
+        const deleted = await this.sessionContext.pruneExpired();
+        if (deleted > 0) {
+          this.app.logger.info(`[KnowledgeBase] Pruned ${deleted} expired session context entries.`);
+        }
+      } catch (err: any) {
+        this.app.logger.warn(`[KnowledgeBase] Session context pruning failed: ${err.message}`);
+      }
+    }, PRUNE_INTERVAL_MS);
+  }
+
   async install() {}
 
   async afterEnable() {}
 
   async afterDisable() {
     this.clearRetryTimer();
+    this.clearSessionPruneTimer();
   }
 
   async remove() {
     this.clearRetryTimer();
+    this.clearSessionPruneTimer();
   }
 }
 

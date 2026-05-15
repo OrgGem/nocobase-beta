@@ -5,8 +5,8 @@ export default class AddLlmFieldsToOrchestratorConfig extends Migration {
   appVersion = '>=0.1.0';
 
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tablePrefix = this.db.options.tablePrefix || '';
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tablePrefix = (this as any).db.options.tablePrefix || '';
     const tableName = `${tablePrefix}orchestratorConfig`;
 
     const tableExists = await queryInterface.tableExists(tableName);

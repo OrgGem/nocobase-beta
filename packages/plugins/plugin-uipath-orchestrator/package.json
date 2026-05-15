@@ -23,9 +23,10 @@
     "RPA",
     "Automation"
   ],
-  "dependencies": {},
+  "dependencies": {
+    "undici": "^6.25.0"
+  },
   "devDependencies": {
-    "undici": "^6.25.0",
     "@formily/react": "2.x",
     "@formily/shared": "2.x",
     "ahooks": "^3.7.2",

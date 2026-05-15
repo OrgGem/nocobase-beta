@@ -90,6 +90,7 @@ export function registerGitReviewAiTools(app: Application) {
       app: ctx.app,
       db: ctx.db,
       action: { params },
+      request: { ...(ctx.request || {}), body: ctx.request?.body || {} },
       throw: (status: number, message: string) => {
         const err: any = new Error(message);
         err.status = status;

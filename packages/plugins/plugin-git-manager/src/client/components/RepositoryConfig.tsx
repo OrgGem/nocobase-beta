@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, Switch, Tooltip, message } from 'antd';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, Switch, Tooltip, Select, message } from 'antd';
 import { PlusOutlined, DeleteOutlined, LinkOutlined, RobotOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useGitManager } from '../context/GitManagerContext';
@@ -13,6 +13,33 @@ export const RepositoryConfig: React.FC = () => {
   const [editingRepo, setEditingRepo] = useState<any>(null);
   const [form] = Form.useForm();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [reviewFlows, setReviewFlows] = useState<any[]>([]);
+
+  const loadReviewFlows = useCallback(async () => {
+    const { data } = await api.request({
+      url: 'gitReviewFlows:list',
+      params: {
+        pageSize: 100,
+        filter: {
+          enabled: true,
+          triggerMode: { $in: ['onMergeRequestCreated', 'both'] },
+        },
+      },
+    });
+    setReviewFlows(data?.data || []);
+  }, [api]);
+
+  useEffect(() => {
+    loadReviewFlows().catch(() => undefined);
+  }, [loadReviewFlows]);
+
+  const getAutoFlowOptions = (repoId: number) =>
+    reviewFlows
+      .filter((flow) => flow.repositoryId === repoId || flow.repositoryId == null)
+      .map((flow) => ({
+        value: flow.id,
+        label: `${flow.name}${flow.repositoryId == null ? ` (${t('global')})` : ''}`,
+      }));
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -100,11 +127,15 @@ export const RepositoryConfig: React.FC = () => {
           checked={!!v}
           onChange={async (checked) => {
             try {
+              const options = getAutoFlowOptions(record.id);
               await api.request({
                 url: 'gitRepositories:update',
                 method: 'post',
                 params: { filterByTk: record.id },
-                data: { autoReview: checked },
+                data: {
+                  autoReview: checked,
+                  autoReviewFlowId: checked && !record.autoReviewFlowId ? options[0]?.value ?? null : record.autoReviewFlowId,
+                },
               });
               await refreshRepos();
             } catch (err: any) {
@@ -113,6 +144,40 @@ export const RepositoryConfig: React.FC = () => {
           }}
         />
       ),
+    },
+    {
+      title: t('Primary Auto Flow'),
+      dataIndex: 'autoReviewFlowId',
+      key: 'autoReviewFlowId',
+      width: 220,
+      render: (value: number | null, record: any) => {
+        const options = getAutoFlowOptions(record.id);
+        return (
+          <Select
+            allowClear
+            size="small"
+            style={{ width: '100%' }}
+            disabled={!record.autoReview}
+            placeholder={t('Select a flow')}
+            value={value || undefined}
+            options={options}
+            notFoundContent={t('No matching flow available')}
+            onChange={async (flowId) => {
+              try {
+                await api.request({
+                  url: 'gitRepositories:update',
+                  method: 'post',
+                  params: { filterByTk: record.id },
+                  data: { autoReviewFlowId: flowId || null },
+                });
+                await refreshRepos();
+              } catch (err: any) {
+                message.error(err?.message || t('Failed to save'));
+              }
+            }}
+          />
+        );
+      },
     },
     {
       title: t('Status'),
@@ -215,6 +280,14 @@ export const RepositoryConfig: React.FC = () => {
           </Form.Item>
           <Form.Item name="defaultBranch" label={t('Default Branch')}>
             <Input placeholder="main" />
+          </Form.Item>
+          <Form.Item name="autoReviewFlowId" label={t('Primary Auto Review Flow')} extra={t('Only flows with automatic trigger modes are shown')}>
+            <Select
+              allowClear
+              placeholder={t('Select a flow')}
+              options={getAutoFlowOptions(editingRepo?.id)}
+              notFoundContent={t('No matching flow available')}
+            />
           </Form.Item>
         </Form>
       </Modal>

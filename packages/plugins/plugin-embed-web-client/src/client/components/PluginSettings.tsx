@@ -37,6 +37,7 @@ import {
   CloudServerOutlined,
   GlobalOutlined,
 } from '@ant-design/icons';
+import { mainDataSourceRequest, MAIN_DATA_SOURCE_HEADERS } from '../api';
 
 const { Text, Title } = Typography;
 
@@ -81,7 +82,6 @@ export const PluginSettings: React.FC = () => {
   const [testResult, setTestResult] = useState<{ dims: number; timeMs: number } | null>(null);
   const [webGPUAvailable, setWebGPUAvailable] = useState<boolean | null>(null);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
-  const [downloading, setDownloading] = useState(false);
   const [storageMode, setStorageMode] = useState<'local' | 's3'>('local');
   const [modelSource, setModelSource] = useState<'server' | 'cdn' | 'huggingface'>('server');
   const [installedModels, setInstalledModels] = useState<any[]>([]);
@@ -94,13 +94,13 @@ export const PluginSettings: React.FC = () => {
 
   const fetchModelStatus = useCallback(async () => {
     try {
-      const res = await api.request({ url: 'embedWebClient:getModelStatus' });
-      setModelStatus(res?.data?.data ?? null);
+      const res = await api.request(mainDataSourceRequest({ url: 'embedWebClient:getModelStatus' }));
+      setModelStatus(res?.data?.data ?? res?.data ?? null);
     } catch {
       // non-fatal
     }
     try {
-      const resModels = await api.request({ url: 'embedWebClient:listModels' });
+      const resModels = await api.request(mainDataSourceRequest({ url: 'embedWebClient:listModels' }));
       let arr = resModels?.data?.data ?? resModels?.data;
       if (arr && !Array.isArray(arr) && Array.isArray(arr.data)) arr = arr.data;
       setInstalledModels(Array.isArray(arr) ? arr : []);
@@ -112,19 +112,20 @@ export const PluginSettings: React.FC = () => {
   useEffect(() => {
     // eslint-disable-next-line promise/catch-or-return
     api
-      .request({ url: 'embedWebClient:getConfig' })
+      .request(mainDataSourceRequest({ url: 'embedWebClient:getConfig' }))
       .then((res) => {
-        const data = res?.data?.data ?? {};
+        const data = res?.data?.data ?? res?.data ?? {};
         // Normalize modelId to array for tags Select
         if (data.modelId && !Array.isArray(data.modelId)) {
           data.modelId = [data.modelId];
         } else if (!data.modelId) {
           data.modelId = [];
         }
+        data.modelSource = 'server';
         setConfigData(data);
         form.setFieldsValue(data);
         setStorageMode(data.storageMode ?? 'local');
-        setModelSource(data.modelSource ?? 'server');
+        setModelSource('server');
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -132,7 +133,7 @@ export const PluginSettings: React.FC = () => {
     fetchModelStatus().catch(() => {});
 
     api
-      .resource('storages')
+      .resource('storages', undefined, MAIN_DATA_SOURCE_HEADERS)
       .list({ pageSize: 200, fields: ['id', 'title', 'name', 'type'] })
       .then((res: any) => {
         const arr = res?.data?.data ?? res?.data ?? [];
@@ -148,13 +149,16 @@ export const PluginSettings: React.FC = () => {
     if (Array.isArray(submitValues.modelId)) {
       submitValues.modelId = submitValues.modelId[0] ?? '';
     }
+    submitValues.modelSource = 'server';
     setSaving(true);
     try {
-      const res = await api.request({
-        url: 'embedWebClient:updateConfig',
-        method: 'post',
-        data: submitValues,
-      });
+      const res = await api.request(
+        mainDataSourceRequest({
+          url: 'embedWebClient:updateConfig',
+          method: 'post',
+          data: submitValues,
+        }),
+      );
       // Sync local state with the server response so the form doesn't "reset"
       const saved = res?.data?.data ?? res?.data ?? {};
       if (saved.modelId && !Array.isArray(saved.modelId)) {
@@ -162,10 +166,11 @@ export const PluginSettings: React.FC = () => {
       } else if (!saved.modelId) {
         saved.modelId = [];
       }
+      saved.modelSource = 'server';
       setConfigData(saved);
       form.setFieldsValue(saved);
       setStorageMode(saved.storageMode ?? 'local');
-      setModelSource(saved.modelSource ?? 'server');
+      setModelSource('server');
       message.success(t('Settings saved'));
       // Refresh model status — model may have changed
       await fetchModelStatus();
@@ -173,46 +178,6 @@ export const PluginSettings: React.FC = () => {
       message.error(t('Failed to save settings'));
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleDownloadModel = async () => {
-    const values = await form.validateFields();
-    const submitValues = { ...values };
-    if (Array.isArray(submitValues.modelId)) {
-      submitValues.modelId = submitValues.modelId[0] ?? '';
-    }
-    const modelId = submitValues.modelId;
-    const dtype = submitValues.dtype ?? 'q8';
-
-    if (!modelId) {
-      message.warning(t('Select a model first'));
-      return;
-    }
-
-    setDownloading(true);
-    try {
-      await api.request({
-        url: 'embedWebClient:updateConfig',
-        method: 'post',
-        data: submitValues,
-      });
-      const res = await api.request({
-        url: 'embedWebClient:downloadModel',
-        method: 'post',
-        data: { modelId, dtype },
-      });
-      const result = res?.data?.data;
-      if (result?.success) {
-        message.success(t('Model downloaded successfully'));
-      } else {
-        message.error(`${t('Download failed')}: ${result?.error ?? 'unknown error'}`);
-      }
-      await fetchModelStatus();
-    } catch (err: any) {
-      message.error(`${t('Download failed')}: ${err?.message}`);
-    } finally {
-      setDownloading(false);
     }
   };
 
@@ -234,31 +199,11 @@ export const PluginSettings: React.FC = () => {
         }
       }
 
-      const currentModelSource = values.modelSource ?? 'server';
-      if (currentModelSource === 'server') {
-        const origin = window.location.origin;
-        env.remoteHost = `${origin}/`;
-        env.remotePathTemplate = 'embed-web-client/models/{model}/';
-        env.allowRemoteModels = true;
-        env.allowLocalModels = false;
-      } else if (currentModelSource === 'cdn' && values.cdnBaseUrl) {
-        try {
-          const url = new URL(values.cdnBaseUrl.trim().replace(/\/?$/, '/'));
-          env.remoteHost = url.origin + '/';
-          env.remotePathTemplate = url.pathname.replace(/^\/+/, '');
-          env.allowRemoteModels = true;
-          env.allowLocalModels = false;
-        } catch {
-          env.allowRemoteModels = true;
-          env.allowLocalModels = false;
-        }
-      } else {
-        // huggingface default
-        env.remoteHost = 'https://huggingface.co/';
-        env.remotePathTemplate = '{model}/resolve/{revision}/';
-        env.allowRemoteModels = true;
-        env.allowLocalModels = false;
-      }
+      const origin = window.location.origin;
+      env.remoteHost = `${origin}/`;
+      env.remotePathTemplate = 'embed-web-client/models/{model}/';
+      env.allowRemoteModels = true;
+      env.allowLocalModels = false;
 
       const testModelId = Array.isArray(values.modelId) ? values.modelId[0] : values.modelId;
       if (!testModelId) {
@@ -266,22 +211,21 @@ export const PluginSettings: React.FC = () => {
         return;
       }
 
-      // Validate model is available on server before attempting to load
-      if (currentModelSource === 'server') {
-        try {
-          const checkRes = await fetch(`${window.location.origin}/embed-web-client/models/${testModelId}/config.json`, {
-            method: 'HEAD',
-          });
-          if (!checkRes.ok) {
-            message.error(
-              t('Model files not found on server. Please download the model first via "Download Model to Server".'),
-            );
-            return;
-          }
-        } catch {
-          message.error(t('Cannot reach model server. Check that the server is running.'));
+      try {
+        const checkRes = await fetch(`${window.location.origin}/embed-web-client/models/${testModelId}/config.json`, {
+          method: 'HEAD',
+        });
+        if (!checkRes.ok) {
+          message.error(
+            t(
+              'Model files not found on server. Select the bundled model or upload the required ONNX files in the Models tab.',
+            ),
+          );
           return;
         }
+      } catch {
+        message.error(t('Cannot reach model server. Check that the server is running.'));
+        return;
       }
 
       const pipeOptions: any = {
@@ -290,9 +234,6 @@ export const PluginSettings: React.FC = () => {
         // Bypass transformers.js cache to ensure fresh model files are loaded
         cache_dir: false,
       };
-      if (currentModelSource === 'cdn' && values.cdnModelFileName) {
-        pipeOptions.model_file_name = values.cdnModelFileName.replace(/\.onnx$/, '');
-      }
       const pipe = await pipeline('feature-extraction', testModelId, pipeOptions);
       const output = await pipe(['Hello world, this is a test sentence.'], {
         pooling: 'mean',
@@ -354,15 +295,11 @@ export const PluginSettings: React.FC = () => {
             </Space>
           }
           style={{ marginBottom: 24 }}
-          extra={
-            <Button icon={<CloudDownloadOutlined />} loading={downloading} onClick={handleDownloadModel}>
-              {t('Download Model to Server')}
-            </Button>
-          }
+          extra={null}
         >
           <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
             {t(
-              'Model files are served from the NocoBase server — no internet access required in the browser. Click "Download Model to Server" once (requires server internet access) to cache all model files locally.',
+              'Model files are served from this NocoBase server. The bundled MiniLM model works without internet; upload additional ONNX files in the Models tab when needed.',
             )}
           </Text>
 
@@ -406,7 +343,7 @@ export const PluginSettings: React.FC = () => {
             name="modelId"
             label={t('Embedding Model')}
             rules={[{ required: true }]}
-            extra={t('Must be an ONNX-compatible feature-extraction model from HuggingFace Hub')}
+            extra={t('Must match a bundled or uploaded ONNX feature-extraction model')}
           >
             <Select
               options={[
@@ -485,10 +422,10 @@ export const PluginSettings: React.FC = () => {
           </Form.Item>
 
           {/* ── Model Source ───────────────────────────────────────────────── */}
-          <Divider>{t('Model Source')}</Divider>
-
           <Form.Item
+            hidden
             name="modelSource"
+            initialValue="server"
             label={t('Model Source')}
             extra={t(
               "'Server' serves files from this NocoBase instance (offline-ready). 'CDN' fetches from a public CDN URL — no server download needed. 'HuggingFace' fetches directly from HuggingFace Hub.",

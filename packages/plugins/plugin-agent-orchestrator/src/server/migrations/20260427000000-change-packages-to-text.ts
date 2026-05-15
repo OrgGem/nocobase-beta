@@ -2,8 +2,8 @@ import { Migration } from '@nocobase/server';
 
 export default class ChangePackagesToTextMigration extends Migration {
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tableName = `${this.db.options.tablePrefix || ''}skillDefinitions`;
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tableName = `${(this as any).db.options.tablePrefix || ''}skillDefinitions`;
 
     try {
       const tableExists = await queryInterface.tableExists(tableName);
@@ -11,15 +11,15 @@ export default class ChangePackagesToTextMigration extends Migration {
 
       const tableDesc = await queryInterface.describeTable(tableName);
       const columnsToChange = ['packages', 'inputSchema', 'interactionSchema'];
-      const fieldRepo = this.db.getRepository('fields');
+      const fieldRepo = (this as any).db.getRepository('fields');
       const collectionName = 'skillDefinitions';
 
       for (const col of columnsToChange) {
         if (tableDesc[col]) {
           // Change physical column type in Postgres if needed
-          const dialect = this.db.sequelize.getDialect();
+          const dialect = (this as any).db.sequelize.getDialect();
           if (dialect === 'postgres') {
-            await this.db.sequelize.query(`ALTER TABLE "${tableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+            await (this as any).db.sequelize.query(`ALTER TABLE "${tableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
           } else {
             await queryInterface.changeColumn(tableName, col, {
               type: 'TEXT',
@@ -37,11 +37,11 @@ export default class ChangePackagesToTextMigration extends Migration {
               values: { type: 'text' },
             });
           }
-          this.app.logger.info(`[skill-hub] Changed ${col} column type to text to support markdown`);
+          (this as any).app.logger.info(`[skill-hub] Changed ${col} column type to text to support markdown`);
         }
       }
     } catch (error) {
-      this.app.logger.error(`[skill-hub] Failed to change packages field type: ${error.message}`);
+      (this as any).app.logger.error(`[skill-hub] Failed to change packages field type: ${error.message}`);
     }
   }
 }

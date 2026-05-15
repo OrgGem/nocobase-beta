@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, Tag, Alert } from 'antd';
 import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
+import * as aiClient from '@nocobase/plugin-ai/client';
 import { useT } from '../locale';
 
 interface ReviewFlow {
@@ -12,6 +13,9 @@ interface ReviewFlow {
   aiEmployeeUsername?: string;
   postMode: string;
   repositoryId?: number;
+  llmService?: string;
+  model?: string;
+  instructions?: string;
 }
 
 type Target =
@@ -23,7 +27,7 @@ type Target =
  * Button that lets the user kick off a code review for a given target.
  * Two paths:
  *  - "Run review" → POST gitManager:triggerReview (server-side, async)
- *  - "Open chat" → call useChatBoxActions().triggerTask if plugin-ai is loaded,
+ *  - "Open chat" → call (aiClient as any).useChatBoxActions?.() || {}.triggerTask if plugin-ai is loaded,
  *    so the user can chat with the AI employee using the same context.
  */
 export const RunReviewButton: React.FC<{
@@ -34,9 +38,12 @@ export const RunReviewButton: React.FC<{
 }> = ({ target, size = 'small', type = 'default', onTriggered }) => {
   const t = useT();
   const api = useAPIClient();
+  const aiConfigRepository = (aiClient as any).useAIConfigRepository?.() || {};
+  const { triggerTask } = (aiClient as any).useChatBoxActions?.() || {};
   const [open, setOpen] = useState(false);
   const [flows, setFlows] = useState<ReviewFlow[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [asking, setAsking] = useState(false);
   const [existingReview, setExistingReview] = useState<any | null>(null);
   const [form] = Form.useForm();
 
@@ -74,35 +81,41 @@ export const RunReviewButton: React.FC<{
     return loadExistingReview();
   }, [loadExistingReview]);
 
+  const loadFlows = useCallback(async () => {
+    const { data } = await api.request({
+      url: 'gitReviewFlows:list',
+      params: {
+        pageSize: 100,
+        filter: {
+          enabled: true,
+          $or: [{ repositoryId: target.repositoryId }, { repositoryId: null }],
+        },
+      },
+    });
+    const list: ReviewFlow[] = data?.data || [];
+    setFlows(list);
+    return list;
+  }, [api, target.repositoryId]);
+
+  const pickFlow = useCallback((list: ReviewFlow[]) => {
+    const repoFlow = list.find((f) => f.repositoryId === target.repositoryId);
+    return repoFlow ?? list[0] ?? null;
+  }, [target.repositoryId]);
+
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    api
-      .request({
-        url: 'gitReviewFlows:list',
-        params: {
-          pageSize: 100,
-          filter: {
-            enabled: true,
-            $or: [{ repositoryId: target.repositoryId }, { repositoryId: null }],
-          },
-        },
-      })
-      .then((res) => {
+    loadFlows()
+      .then((list) => {
         if (cancelled) return;
-        const list: ReviewFlow[] = res?.data?.data || [];
-        setFlows(list);
-        // Pre-select the most specific enabled flow
-        const repoFlow = list.find((f) => f.repositoryId === target.repositoryId);
-        const fallback = list[0];
-        const flowId = repoFlow?.id ?? fallback?.id;
-        if (flowId) form.setFieldValue('flowId', flowId);
+        const flow = pickFlow(list);
+        if (flow?.id) form.setFieldValue('flowId', flow.id);
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [open, api, target.repositoryId, form]);
+  }, [open, loadFlows, pickFlow, form]);
 
   const handleRun = async () => {
     try {
@@ -136,13 +149,95 @@ export const RunReviewButton: React.FC<{
     }
   };
 
-  const handleOpenChat = () => {
-    const aiManager = (api.app as any)?.aiManager;
-    if (!aiManager) {
+  const buildWorkContext = () => {
+    const title = target.title || buildContextHint();
+    if (target.type === 'mr') {
+      return {
+        type: 'git-merge-request',
+        uid: `${target.repositoryId}:${target.mrIid}`,
+        title,
+        content: {
+          repositoryId: target.repositoryId,
+          mrIid: target.mrIid,
+          title,
+        },
+      };
+    }
+    if (target.type === 'commit') {
+      return {
+        type: 'git-commit',
+        uid: `${target.repositoryId}:${target.commitSha}`,
+        title,
+        content: {
+          repositoryId: target.repositoryId,
+          commitSha: target.commitSha,
+          title,
+        },
+      };
+    }
+    return {
+      type: 'git-repository',
+      uid: String(target.repositoryId),
+      title,
+      content: {
+        repositoryId: target.repositoryId,
+        branch: target.branch,
+        title,
+      },
+    };
+  };
+
+  const buildChatPrompt = () => {
+    if (target.type === 'mr') {
+      return `Please review merge request !${target.mrIid} (${target.title || 'untitled'}). Use the attached Git merge request context and the available git tools when you need more detail.`;
+    }
+    if (target.type === 'commit') {
+      return `Please review commit ${target.commitSha} (${target.title || 'untitled'}). Use the attached Git commit context and the available git tools when you need more detail.`;
+    }
+    return `Please help me inspect branch ${target.branch}. Use the attached Git repository context and the available git tools when you need more detail.`;
+  };
+
+  const handleOpenChat = async () => {
+    if (!triggerTask || !aiConfigRepository?.getAIEmployees) {
       message.warning(t('AI plugin is not available'));
       return;
     }
-    message.info(t('Open the AI Employee floating button and select a workflow'));
+    setAsking(true);
+    try {
+      const list = flows.length ? flows : await loadFlows();
+      const flow = pickFlow(list);
+      if (!flow?.aiEmployeeUsername) {
+        message.warning(t('No matching flow available'));
+        return;
+      }
+      const employees: any[] = aiConfigRepository.aiEmployees?.length
+        ? aiConfigRepository.aiEmployees
+        : await aiConfigRepository.getAIEmployees();
+      const aiEmployee = employees.find((item) => item.username === flow.aiEmployeeUsername);
+      if (!aiEmployee) {
+        message.warning(t('AI employee not found'));
+        return;
+      }
+      await triggerTask({
+        aiEmployee,
+        tasks: [
+          {
+            title: `${flow.name}: ${buildContextHint()}`,
+            message: {
+              user: buildChatPrompt(),
+              system: flow.instructions || undefined,
+              workContext: [buildWorkContext()],
+            },
+            model: flow.llmService && flow.model ? { llmService: flow.llmService, model: flow.model } : null,
+            autoSend: false,
+          },
+        ],
+      });
+    } catch (err: any) {
+      message.error(err?.message || t('Failed to open AI chat'));
+    } finally {
+      setAsking(false);
+    }
   };
 
   const buildContextHint = () => {
@@ -165,7 +260,7 @@ export const RunReviewButton: React.FC<{
     : t('Code Review');
   const ButtonIcon = isReReview ? ReloadOutlined : RobotOutlined;
 
-  const items = [
+  const items = useMemo(() => [
     {
       key: 'run',
       icon: <ThunderboltOutlined />,
@@ -185,8 +280,9 @@ export const RunReviewButton: React.FC<{
       icon: <MessageOutlined />,
       label: t('Ask AI Employee'),
       onClick: handleOpenChat,
+      disabled: asking,
     },
-  ];
+  ], [isReReview, existingReview, asking, handleOpenChat]);
 
   return (
     <>
@@ -196,6 +292,7 @@ export const RunReviewButton: React.FC<{
           type={hasNewCommits ? 'primary' : type}
           icon={<ButtonIcon />}
           danger={!!hasNewCommits}
+          loading={asking}
         >
           {buttonLabel}
         </Button>

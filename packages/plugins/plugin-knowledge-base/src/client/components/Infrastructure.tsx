@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useAPIClient, useApp } from '@nocobase/client';
 import {
   Button,
   Modal,
@@ -39,11 +39,13 @@ import {
   CloseCircleOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
+import { isEmbedWebClientPluginEnabled } from '../utils/embed-web-client';
 
 const { Text, Title } = Typography;
 
 export const Infrastructure: React.FC = () => {
   const api = useAPIClient();
+  const app = useApp();
 
   // ----- Vector Databases State -----
   const [vectorDatabases, setVectorDatabases] = useState<any[]>([]);
@@ -122,6 +124,12 @@ export const Infrastructure: React.FC = () => {
   };
 
   const checkEmbedWebClient = async () => {
+    if (!isEmbedWebClientPluginEnabled(app)) {
+      setEmbedWebClientAvailable(false);
+      setLocalEmbedModels([]);
+      return;
+    }
+
     try {
       const res = await api.request({ url: 'embedWebClient:getConfig' });
       if (res?.data?.data) {
@@ -134,7 +142,8 @@ export const Infrastructure: React.FC = () => {
         }
       }
     } catch {
-      /* plugin not installed */
+      setEmbedWebClientAvailable(false);
+      setLocalEmbedModels([]);
     }
   };
 
@@ -307,7 +316,7 @@ export const Infrastructure: React.FC = () => {
             Physical databases storing the vector embeddings (e.g. PostgreSQL with pgvector).
           </Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleVdCreate}>
+        <Button type="primary" shape="round" icon={<PlusOutlined />} onClick={handleVdCreate}>
           Add Database
         </Button>
       </div>
@@ -324,14 +333,18 @@ export const Infrastructure: React.FC = () => {
             <Col span={8} key={vd.id}>
               <Card
                 hoverable
-                size="small"
+                style={{ borderRadius: 12, border: '1px solid #f0f0f0', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}
+                headStyle={{ borderBottom: '1px solid #f0f0f0' }}
+                bodyStyle={{ padding: 20 }}
                 title={
                   <Space>
-                    <HddOutlined style={{ color: '#1890ff' }} />
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#e6f4ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1890ff' }}>
+                      <HddOutlined />
+                    </div>
                     <Text strong>{vd.name}</Text>
                   </Space>
                 }
-                extra={<Tag color="blue">{vd.provider}</Tag>}
+                extra={<Tag color="blue" style={{ borderRadius: 4 }}>{vd.provider}</Tag>}
                 actions={[
                   <Button type="text" key="edit" icon={<EditOutlined />} onClick={() => handleVdEdit(vd)}>
                     Edit
@@ -343,20 +356,20 @@ export const Infrastructure: React.FC = () => {
                   </Popconfirm>,
                 ]}
               >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text type="secondary">Host</Text>
-                    <Text>
+                    <Text strong>
                       {vd.connectParams?.host}:{vd.connectParams?.port}
                     </Text>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text type="secondary">Database</Text>
-                    <Text>{vd.connectParams?.database}</Text>
+                    <Text strong>{vd.connectParams?.database}</Text>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text type="secondary">Table</Text>
-                    <Text>{vd.connectParams?.tableName}</Text>
+                    <Text strong>{vd.connectParams?.tableName}</Text>
                   </div>
                 </div>
               </Card>
@@ -376,7 +389,7 @@ export const Infrastructure: React.FC = () => {
           </Title>
           <Text type="secondary">Logical connections combining a vector database with an embedding model.</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleVsCreate}>
+        <Button type="primary" shape="round" icon={<PlusOutlined />} onClick={handleVsCreate}>
           Add Vector Store
         </Button>
       </div>
@@ -393,10 +406,14 @@ export const Infrastructure: React.FC = () => {
             <Col span={8} key={vs.id}>
               <Card
                 hoverable
-                size="small"
+                style={{ borderRadius: 12, border: '1px solid #f0f0f0', boxShadow: '0 2px 8px rgba(0,0,0,0.02)' }}
+                headStyle={{ borderBottom: '1px solid #f0f0f0' }}
+                bodyStyle={{ padding: 20 }}
                 title={
                   <Space>
-                    <DatabaseOutlined style={{ color: '#52c41a' }} />
+                    <div style={{ width: 32, height: 32, borderRadius: 8, background: '#f6ffed', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#52c41a' }}>
+                      <DatabaseOutlined />
+                    </div>
                     <Text strong>{vs.name}</Text>
                   </Space>
                 }
@@ -411,48 +428,48 @@ export const Infrastructure: React.FC = () => {
                   </Popconfirm>,
                 ]}
               >
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <HddOutlined style={{ color: '#8c8c8c' }} />
-                    <Text type="secondary" style={{ width: 60 }}>
-                      DB:
-                    </Text>
-                    <Text ellipsis>{vs.vectorDatabase?.name || 'Unknown'}</Text>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Space size={8}>
+                      <HddOutlined style={{ color: '#8c8c8c' }} />
+                      <Text type="secondary">DB</Text>
+                    </Space>
+                    <Text strong ellipsis style={{ maxWidth: 160 }}>{vs.vectorDatabase?.name || 'Unknown'}</Text>
                   </div>
                   {vs.embeddingProvider === 'localEmbed' ? (
                     <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <ApiOutlined style={{ color: '#8c8c8c' }} />
-                        <Text type="secondary" style={{ width: 60 }}>
-                          Embed:
-                        </Text>
-                        <Tag color="green">Local ONNX</Tag>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Space size={8}>
+                          <ApiOutlined style={{ color: '#8c8c8c' }} />
+                          <Text type="secondary">Embed</Text>
+                        </Space>
+                        <Tag color="green" style={{ margin: 0, borderRadius: 4 }}>Local ONNX</Tag>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <SettingOutlined style={{ color: '#8c8c8c' }} />
-                        <Text type="secondary" style={{ width: 60 }}>
-                          Model:
-                        </Text>
-                        <Text ellipsis>
-                          {vs.localEmbedModelId} ({vs.localEmbedDtype || 'q8'})
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Space size={8}>
+                          <SettingOutlined style={{ color: '#8c8c8c' }} />
+                          <Text type="secondary">Model</Text>
+                        </Space>
+                        <Text strong ellipsis style={{ maxWidth: 160 }}>
+                          {vs.localEmbedModelId} <Text type="secondary" style={{ fontSize: 12 }}>({vs.localEmbedDtype || 'q8'})</Text>
                         </Text>
                       </div>
                     </>
                   ) : (
                     <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <ApiOutlined style={{ color: '#8c8c8c' }} />
-                        <Text type="secondary" style={{ width: 60 }}>
-                          LLM:
-                        </Text>
-                        <Text ellipsis>{llmServiceTitleMap[vs.llmService] || vs.llmService}</Text>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Space size={8}>
+                          <ApiOutlined style={{ color: '#8c8c8c' }} />
+                          <Text type="secondary">LLM</Text>
+                        </Space>
+                        <Text strong ellipsis style={{ maxWidth: 160 }}>{llmServiceTitleMap[vs.llmService] || vs.llmService}</Text>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <SettingOutlined style={{ color: '#8c8c8c' }} />
-                        <Text type="secondary" style={{ width: 60 }}>
-                          Model:
-                        </Text>
-                        <Text ellipsis>{vs.embeddingModel}</Text>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Space size={8}>
+                          <SettingOutlined style={{ color: '#8c8c8c' }} />
+                          <Text type="secondary">Model</Text>
+                        </Space>
+                        <Text strong ellipsis style={{ maxWidth: 160 }}>{vs.embeddingModel}</Text>
                       </div>
                     </>
                   )}
@@ -466,13 +483,13 @@ export const Infrastructure: React.FC = () => {
   );
 
   return (
-    <div style={{ padding: 32, maxWidth: 1200, margin: '0 auto' }}>
+    <div style={{ padding: 32, maxWidth: 1200, margin: '0 auto', minHeight: '100vh' }}>
       <div style={{ marginBottom: 24 }}>
-        <Title level={3}>Knowledge Base Infrastructure</Title>
-        <Text type="secondary">Manage the underlying infrastructure that powers your AI knowledge bases.</Text>
+        <Title level={3} style={{ margin: 0, marginBottom: 8 }}>Knowledge Base Infrastructure</Title>
+        <Text type="secondary" style={{ fontSize: 15 }}>Manage the underlying infrastructure that powers your AI knowledge bases.</Text>
       </div>
 
-      <Card bodyStyle={{ padding: 0 }}>
+      <Card bodyStyle={{ padding: 0 }} style={{ borderRadius: 12, overflow: 'hidden', border: '1px solid #f0f0f0', boxShadow: '0 4px 16px rgba(0,0,0,0.03)' }}>
         <Tabs
           activeKey={activeTab}
           onChange={setActiveTab}
@@ -517,9 +534,34 @@ export const Infrastructure: React.FC = () => {
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="provider" label="Provider">
-            <Select options={[{ label: 'PGVector', value: 'pgvector' }]} />
+          <Form.Item name="provider" label="Provider" initialValue="pgvector">
+            <Select options={[
+              { label: 'PGVector', value: 'pgvector' },
+              { label: 'Qdrant', value: 'qdrant' }
+            ]} />
           </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prevValues, currentValues) => prevValues.provider !== currentValues.provider}>
+            {({ getFieldValue }) => {
+              const provider = getFieldValue('provider');
+              
+              if (provider === 'qdrant') {
+                return (
+                  <>
+                    <Form.Item name="url" label="Qdrant URL" rules={[{ required: true }]}>
+                      <Input placeholder="http://qdrant:6333" />
+                    </Form.Item>
+                    <Form.Item name="apiKey" label="API Key">
+                      <Input.Password placeholder="Optional API Key" />
+                    </Form.Item>
+                    <Form.Item name="collectionName" label="Collection Name" rules={[{ required: true }]}>
+                      <Input placeholder="e.g. nocobase_vectors" />
+                    </Form.Item>
+                  </>
+                );
+              }
+
+              return (
+                <>
           <Row gutter={16}>
             <Col span={16}>
               <Form.Item name="host" label="Host" rules={[{ required: true }]}>
@@ -556,6 +598,10 @@ export const Infrastructure: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
+              </>
+            );
+          }}
+          </Form.Item>
           <div
             style={{
               display: 'flex',

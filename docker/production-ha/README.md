@@ -97,3 +97,76 @@ The `plugin-worker-monitor` provides a settings page at:
 **Settings → Worker Monitor → Redis Monitor**
 
 Shows: memory, ops/sec, hit rate, connected clients, pub/sub channels, slow log.
+
+## Knowledge Base with Qdrant
+
+This stack includes Qdrant as the default vector database for
+`plugin-knowledge-base`:
+
+| Service | Internal URL | Host debug URL |
+|---|---|---|
+| `qdrant` | `http://qdrant:6333` | `http://127.0.0.1:6333` |
+
+On startup, `plugin-knowledge-base` can seed:
+
+- vector database: `Default Qdrant`
+- vector store: `Default Qdrant Vector Store`
+- Qdrant collection: `nocobase_knowledge_base`
+
+Set an embedding service/model in `.env` to seed the vector store automatically:
+
+```env
+KB_DEFAULT_EMBEDDING_LLM_SERVICE=<your-llm-service-name>
+KB_DEFAULT_EMBEDDING_MODEL=<your-embedding-model>
+```
+
+The selected LLM service should expose an OpenAI-compatible embedding API via
+`options.baseURL`/`options.baseUrl` and `options.apiKey` if required. Different
+embedding models are supported; choose a model whose output dimension matches
+the Qdrant collection you use.
+
+Create a normal NocoBase knowledge base with:
+
+| Field | Value |
+|---|---|
+| Type | `LOCAL` or `WEB_CLIENT_EMBED` |
+| Vector Store | `Default Qdrant Vector Store` |
+
+## External RAG HTTP
+
+Use `EXTERNAL_RAG` only when retrieval is delegated to a separate HTTP service.
+For services that need NocoBase to forward an embedding model config, use the
+generic provider `openai-compatible`:
+
+| Field | Value |
+|---|---|
+| Type | `EXTERNAL_RAG` |
+| Provider | `openai-compatible` |
+| API URL | external search endpoint |
+| API key | optional bearer token |
+| Namespace | e.g. `nocobase` or a per-KB namespace |
+| Embedding LLM Service | your configured OpenAI-compatible embedding service |
+| Embedding Model | any supported embedding model |
+
+The service should expose:
+
+- `POST /ingest`: `{ namespace, source, content | fileUrl, metadata }`
+- `POST /delete`: `{ namespace, sourceId }`
+- `POST /search`: `{ query, topK, scoreThreshold, namespace, filter, embedding? }`
+
+Example ingest:
+
+```bash
+curl -X POST http://127.0.0.1:8008/ingest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "namespace": "nocobase",
+    "source": { "id": "file-123", "filename": "contract.txt" },
+    "content": "Contract text to index",
+    "metadata": { "fileId": "123", "filename": "contract.txt" }
+  }'
+```
+
+Search results return `content`, `score`, and metadata such as `sourceId`,
+`filename`, `collection`, and `recordId`, matching the `EXTERNAL_RAG` contract
+used by `plugin-knowledge-base`.

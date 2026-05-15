@@ -1,0 +1,49 @@
+{
+  "name": "plugin-ai-browser",
+  "displayName": "AI Browser Automation",
+  "displayName.vi-VN": "AI Browser Automation",
+  "displayName.zh-CN": "AI 浏览器自动化",
+  "description": "AI Employee drives browser end-to-end in readonly mode. Manages sessions, profiles, policies, audit logs, artifacts, and cached workflow steps for faster reruns.",
+  "description.vi-VN": "AI Employee điều khiển browser end-to-end ở chế độ readonly. Quản lý session, profile, policy, audit log, artifact, và cache workflow/step/selector.",
+  "version": "1.0.18",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ai",
+    "browser",
+    "automation",
+    "browserless",
+    "playwright",
+    "nocobase-plugin"
+  ],
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "scripts": {
+    "build": "nocobase build --no-dts"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.42.0"
+  },
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/plugin-ai": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
+}

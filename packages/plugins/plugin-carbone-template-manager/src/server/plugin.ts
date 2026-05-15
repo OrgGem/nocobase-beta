@@ -23,6 +23,10 @@ import { makeCarboneRenderInstructionClass } from './workflow/carbone-render-ins
  *   P6 — workflow instruction (next)
  */
 export class PluginCarboneTemplateManagerServer extends Plugin {
+  declare app: any;
+  declare db: any;
+  declare name: string;
+
   /** In-memory rate limiter shared across all render actions. */
   readonly rateLimiter = new RateLimiter();
 
@@ -101,7 +105,7 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     });
 
     // 2.7 Workflow integration (P6) — register the `carbone-render` instruction.
-    const workflowPlugin = this.app.pm.get(WorkflowPlugin) as WorkflowPlugin | undefined;
+    const workflowPlugin = this.app.pm.get(WorkflowPlugin) as any;
     if (workflowPlugin) {
       workflowPlugin.registerInstruction('carbone-render', makeCarboneRenderInstructionClass(this));
     }

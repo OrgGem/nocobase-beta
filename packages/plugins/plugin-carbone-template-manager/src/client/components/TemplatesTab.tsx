@@ -1,12 +1,31 @@
 import React, { useState } from 'react';
-import { Button, Input, Popconfirm, Space, Switch, Table, Tag, message } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Button, Input, Popconfirm, Space, Switch, Table, Tag, Tooltip, Typography, message } from 'antd';
+import {
+  DeleteOutlined,
+  FileSearchOutlined,
+  HistoryOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  UploadOutlined,
+} from '@ant-design/icons';
 import { useAPIClient, useRequest } from '@nocobase/client';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION } from '../../shared/constants';
 import { TemplateUploadModal } from './TemplateUploadModal';
 import { VersionHistory } from './VersionHistory';
 import { TemplatePreviewModal } from './TemplatePreviewModal';
+
+interface CurrentVersion {
+  id: number;
+  versionNumber: number;
+  description?: string | null;
+  changeNote?: string | null;
+  originalFileName?: string;
+  fileSize?: number;
+  fileMd5?: string;
+  carboneTemplateId?: string;
+  createdAt?: string;
+}
 
 interface TemplateRow {
   id: number;
@@ -18,6 +37,7 @@ interface TemplateRow {
   enabled: boolean;
   carboneTemplateId?: string;
   currentVersionId?: number | null;
+  currentVersion?: CurrentVersion | null;
   originalFileName?: string;
   fileSize?: number;
   updatedAt: string;
@@ -39,6 +59,7 @@ export const TemplatesTab: React.FC = () => {
         .list({
           pageSize: 50,
           sort: ['-updatedAt'],
+          appends: ['currentVersion'],
           ...(search ? { filter: { name: { $includes: search } } } : {}),
         })
         .then((r: any) => r.data),
@@ -64,8 +85,14 @@ export const TemplatesTab: React.FC = () => {
     }
   };
 
-  const onPreview = (url: string, filename: string) => {
-    setPreviewData({ url, filename });
+  const onPreview = (row: TemplateRow) => {
+    const filename = currentFileName(row) || `${row.name}.${row.defaultOutputFormat || 'pdf'}`;
+    setPreviewData({ url: `/api/${COLLECTION.templates}:download/${row.id}`, filename });
+  };
+
+  const openNewVersion = (row: TemplateRow) => {
+    setEditing({ ...row, description: currentDescription(row) || undefined });
+    setUploadOpen(true);
   };
 
   return (
@@ -94,30 +121,63 @@ export const TemplatesTab: React.FC = () => {
         pagination={{ pageSize: 20 }}
         columns={[
           {
-            title: t('Name'),
+            title: t('Template'),
             dataIndex: 'name',
-            render: (name, row) => (
-              <div>
+            render: (name, row) => {
+              const description = currentDescription(row);
+              return (
                 <div>
-                  <strong>{name}</strong>
+                  <Space size={6} wrap>
+                    <Typography.Text strong>{name}</Typography.Text>
+                    {row.category && <Tag>{row.category}</Tag>}
+                  </Space>
+                  <Typography.Paragraph
+                    type="secondary"
+                    style={{ marginBottom: 0, maxWidth: 420 }}
+                    ellipsis={{ rows: 2, tooltip: description }}
+                  >
+                    {description || t('N/A')}
+                  </Typography.Paragraph>
                 </div>
-                {row.description && <div style={{ color: '#888', fontSize: 12 }}>{row.description}</div>}
-              </div>
-            ),
+              );
+            },
+          },
+          {
+            title: t('Current'),
+            width: 200,
+            render: (_, row) => {
+              const current = row.currentVersion;
+              if (!current) return <Typography.Text type="secondary">-</Typography.Text>;
+              return (
+                <Space direction="vertical" size={2}>
+                  <Tag color="green" style={{ width: 'fit-content', marginRight: 0 }}>
+                    v{current.versionNumber}
+                  </Tag>
+                  {current.createdAt && (
+                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                      {formatDate(current.createdAt)}
+                    </Typography.Text>
+                  )}
+                  {current.changeNote && (
+                    <Typography.Text 
+                      type="secondary" 
+                      style={{ fontSize: 12, maxWidth: 180 }}
+                      ellipsis={{ tooltip: current.changeNote }}
+                    >
+                      {current.changeNote}
+                    </Typography.Text>
+                  )}
+                </Space>
+              );
+            },
           },
           {
             title: t('Enabled'),
             dataIndex: 'enabled',
-            width: 80,
+            width: 90,
             render: (enabled, row) => (
               <Switch size="small" checked={enabled} onChange={(v) => onToggleEnabled(row, v)} />
             ),
-          },
-          {
-            title: t('Category'),
-            dataIndex: 'category',
-            width: 140,
-            render: (c) => c || <span style={{ color: '#aaa' }}>—</span>,
           },
           {
             title: t('Output'),
@@ -127,43 +187,53 @@ export const TemplatesTab: React.FC = () => {
           },
           {
             title: t('File'),
-            width: 160,
-            render: (_, row) => (
-              <span style={{ fontSize: 12, color: '#888' }}>
-                {row.originalFileName}
-                {row.fileSize ? ` · ${(row.fileSize / 1024).toFixed(1)} KB` : ''}
-              </span>
-            ),
+            width: 220,
+            render: (_, row) => {
+              const filename = currentFileName(row);
+              const fileSize = currentFileSize(row);
+              const md5 = row.currentVersion?.fileMd5;
+              return (
+                <Space direction="vertical" size={2}>
+                  <Typography.Text style={{ fontSize: 12 }} ellipsis={{ tooltip: filename }}>
+                    {filename || '-'}
+                  </Typography.Text>
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    {fileSize ? formatSize(fileSize) : ''}
+                    {md5 ? ` - MD5 ${md5.slice(0, 8)}...` : ''}
+                  </Typography.Text>
+                </Space>
+              );
+            },
           },
           {
             title: t('Carbone ID'),
-            dataIndex: 'carboneTemplateId',
             width: 140,
-            render: (v) => (v ? <code style={{ fontSize: 11 }}>{v.slice(0, 12)}…</code> : <span>—</span>),
+            render: (_, row) => {
+              const value = row.currentVersion?.carboneTemplateId || row.carboneTemplateId;
+              return value ? <code style={{ fontSize: 11 }}>{value.slice(0, 12)}...</code> : <span>-</span>;
+            },
           },
           {
             title: t('Updated'),
             dataIndex: 'updatedAt',
-            width: 160,
-            render: (v) => (v ? new Date(v).toLocaleString() : ''),
+            width: 150,
+            render: (v) => (v ? formatDate(v) : ''),
           },
           {
             title: t('Actions'),
             key: 'actions',
-            width: 320,
+            width: 260,
             render: (_, row) => (
               <Space wrap>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    setEditing(row);
-                    setUploadOpen(true);
-                  }}
-                >
+                <Tooltip title={t('Preview')}>
+                  <Button size="small" icon={<FileSearchOutlined />} onClick={() => onPreview(row)} />
+                </Tooltip>
+                <Button size="small" icon={<UploadOutlined />} onClick={() => openNewVersion(row)}>
                   {t('New version')}
                 </Button>
                 <Button
                   size="small"
+                  icon={<HistoryOutlined />}
                   onClick={() => {
                     setEditing(row);
                     setVersionsOpen(true);
@@ -171,17 +241,8 @@ export const TemplatesTab: React.FC = () => {
                 >
                   {t('Versions')}
                 </Button>
-                <Button
-                  size="small"
-                  onClick={() => {
-                    const filename = row.originalFileName || `${row.name}.${row.defaultOutputFormat || 'pdf'}`;
-                    onPreview(`/api/${COLLECTION.templates}:download/${row.id}`, filename);
-                  }}
-                >
-                  {t('Preview')}
-                </Button>
                 <Popconfirm title={t('Delete this template?')} onConfirm={() => onDelete(row)}>
-                  <Button size="small" danger>
+                  <Button size="small" icon={<DeleteOutlined />} danger>
                     {t('Delete')}
                   </Button>
                 </Popconfirm>
@@ -212,5 +273,26 @@ export const TemplatesTab: React.FC = () => {
     </div>
   );
 };
+
+function currentDescription(row: TemplateRow) {
+  return row.currentVersion?.description ?? row.description;
+}
+
+function currentFileName(row: TemplateRow) {
+  return row.currentVersion?.originalFileName || row.originalFileName;
+}
+
+function currentFileSize(row: TemplateRow) {
+  return row.currentVersion?.fileSize || row.fileSize;
+}
+
+function formatDate(value: string) {
+  return new Date(value).toLocaleString();
+}
+
+function formatSize(value: number) {
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
 
 export default TemplatesTab;

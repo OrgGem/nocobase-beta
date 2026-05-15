@@ -16,6 +16,10 @@ interface TriggerArgs {
   userId?: number | string | null;
 }
 
+function getActionParams(ctx: Context) {
+  return { ...ctx.action.params, ...ctx.action.params?.values, ...((ctx as any).request?.body || {}) };
+}
+
 /**
  * Per-target mutex to prevent two concurrent calls to
  * `triggerReviewInternal` for the same MR / commit / branch from racing
@@ -47,7 +51,7 @@ async function withTriggerLock<T>(app: Application, key: string, fn: () => Promi
  * the background. The action returns immediately with the reviewId.
  */
 export async function triggerReview(ctx: Context, next: () => Promise<void>) {
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const {
     flowId,
     repositoryId,
@@ -215,7 +219,7 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
  * Mark a review as approved and post its content to GitLab as an MR note.
  */
 export async function reviewApprovePost(ctx: Context, next: () => Promise<void>) {
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const { reviewId, editedMarkdown } = params;
   if (!reviewId) ctx.throw(400, 'reviewId is required');
 
@@ -255,7 +259,7 @@ export async function reviewApprovePost(ctx: Context, next: () => Promise<void>)
  * Reject a pending review (do not post to GitLab).
  */
 export async function reviewReject(ctx: Context, next: () => Promise<void>) {
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const { reviewId, reason } = params;
   if (!reviewId) ctx.throw(400, 'reviewId is required');
 

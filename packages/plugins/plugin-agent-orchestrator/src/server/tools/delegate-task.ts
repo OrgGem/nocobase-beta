@@ -1046,12 +1046,36 @@ async function invokeDelegateTask(
     });
 
     // --- Step 4: Construct messages ---
-    const systemPrompt =
+    let systemPrompt =
       subAgentEmployee.chatSettings?.systemPrompt ||
       subAgentEmployee.bio ||
       `You are an AI assistant named "${subAgentEmployee.nickname || subAgentUsername}". ${
         subAgentEmployee.about || ''
       }`;
+
+    // --- Step 4b: Inject shared context from Knowledge Base (soft dependency) ---
+    // If plugin-knowledge-base is installed, inject the session context summary
+    // so the sub-agent is aware of findings from previous agents in this run.
+    try {
+      const kbPlugin = ctx.app.pm.get('plugin-knowledge-base') as any;
+      if (kbPlugin?.sessionContext) {
+        const sessionId =
+          ctx.action?.params?.values?.sessionId ||
+          ctx.action?.params?.sessionId ||
+          ctx.state?.sessionId;
+
+        const contextSummary = await kbPlugin.sessionContext.buildSummary(
+          { rootRunId, ...(sessionId ? { sessionId } : {}) },
+          6000,
+        );
+        if (contextSummary) {
+          systemPrompt += `\n\n<shared_context>\nThe following context was shared by other agents in this workflow. Use it to avoid redundant work:\n${contextSummary}\n</shared_context>`;
+        }
+      }
+    } catch (e: any) {
+      // Graceful fallback — never block delegation due to context injection failure.
+      ctx.app.log?.debug?.(`[AgentOrchestrator] Shared context injection skipped: ${e.message}`);
+    }
 
     const combinedTask = context ? `Task: ${task}\n\nContext Provided:\n${context}` : `Task: ${task}`;
 

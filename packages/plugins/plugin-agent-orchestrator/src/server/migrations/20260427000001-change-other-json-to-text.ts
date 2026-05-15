@@ -2,11 +2,11 @@ import { Migration } from '@nocobase/server';
 
 export default class ChangeOtherJsonToTextMigration extends Migration {
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const dialect = this.db.sequelize.getDialect();
-    const fieldRepo = this.db.getRepository('fields');
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const dialect = (this as any).db.sequelize.getDialect();
+    const fieldRepo = (this as any).db.getRepository('fields');
 
-    const tablePrefix = this.db.options.tablePrefix || '';
+    const tablePrefix = (this as any).db.options.tablePrefix || '';
     
     // 1. skillWorkerConfigs
     const workerTableName = `${tablePrefix}skillWorkerConfigs`;
@@ -18,18 +18,18 @@ export default class ChangeOtherJsonToTextMigration extends Migration {
         for (const col of columns) {
           if (tableDesc[col]) {
             if (dialect === 'postgres') {
-              await this.db.sequelize.query(`ALTER TABLE "${workerTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+              await (this as any).db.sequelize.query(`ALTER TABLE "${workerTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
             } else {
               await queryInterface.changeColumn(workerTableName, col, { type: 'TEXT' });
             }
             const fieldMeta = await fieldRepo.findOne({ filter: { name: col, collectionName: 'skillWorkerConfigs' } });
             if (fieldMeta) await fieldRepo.update({ filterByTk: fieldMeta.get('id'), values: { type: 'text' } });
-            this.app.logger.info(`[skill-hub] Changed ${col} in skillWorkerConfigs to text`);
+            (this as any).app.logger.info(`[skill-hub] Changed ${col} in skillWorkerConfigs to text`);
           }
         }
       }
     } catch (e) {
-      this.app.logger.warn(`[skill-hub] Failed to migrate skillWorkerConfigs: ${e.message}`);
+      (this as any).app.logger.warn(`[skill-hub] Failed to migrate skillWorkerConfigs: ${e.message}`);
     }
 
     // 2. skillExecutions
@@ -41,17 +41,17 @@ export default class ChangeOtherJsonToTextMigration extends Migration {
         
         if (tableDesc[col]) {
           if (dialect === 'postgres') {
-            await this.db.sequelize.query(`ALTER TABLE "${execTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+            await (this as any).db.sequelize.query(`ALTER TABLE "${execTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
           } else {
             await queryInterface.changeColumn(execTableName, col, { type: 'TEXT' });
           }
           const fieldMeta = await fieldRepo.findOne({ filter: { name: col, collectionName: 'skillExecutions' } });
           if (fieldMeta) await fieldRepo.update({ filterByTk: fieldMeta.get('id'), values: { type: 'text' } });
-          this.app.logger.info(`[skill-hub] Changed ${col} in skillExecutions to text`);
+          (this as any).app.logger.info(`[skill-hub] Changed ${col} in skillExecutions to text`);
         }
       }
     } catch (e) {
-      this.app.logger.warn(`[skill-hub] Failed to migrate skillExecutions: ${e.message}`);
+      (this as any).app.logger.warn(`[skill-hub] Failed to migrate skillExecutions: ${e.message}`);
     }
   }
 }

@@ -75,30 +75,35 @@ export const FileExplorer: React.FC = () => {
   const loadTree = useCallback(
     async (treePath = '', ref = currentRef) => {
       if (!selectedRepo) return [];
-      const { data } = await api.request({
-        url: 'gitManager:fileTree',
-        params: { repositoryId: selectedRepo.id, ref, treePath },
-      });
-      const responseData = data?.data || data || [];
-      const list = Array.isArray(responseData) ? responseData : (Array.isArray(responseData?.data) ? responseData.data : []);
-      
-      return list.map((item: any) => ({
-        key: item.path,
-        title: (
-          <Text style={{ fontSize: 13 }}>
-            {item.name}
-            {item.type === 'blob' && item.size > 0 && (
-              <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
-                {item.size > 1024 ? `${(item.size / 1024).toFixed(1)}KB` : `${item.size}B`}
-              </Text>
-            )}
-          </Text>
-        ),
-        icon: getFileIcon(item.name, item.type),
-        isLeaf: item.type === 'blob',
-        filePath: item.path,
-        fileType: item.type,
-      }));
+      try {
+        const { data } = await api.request({
+          url: 'gitManager:fileTree',
+          params: { repositoryId: selectedRepo.id, ref, treePath },
+        });
+        const responseData = data?.data || data || [];
+        const list = Array.isArray(responseData) ? responseData : (Array.isArray(responseData?.data) ? responseData.data : []);
+        
+        return list.map((item: any) => ({
+          key: item.path,
+          title: (
+            <Text style={{ fontSize: 13 }}>
+              {item.name}
+              {item.type === 'blob' && item.size > 0 && (
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: 8 }}>
+                  {item.size > 1024 ? `${(item.size / 1024).toFixed(1)}KB` : `${item.size}B`}
+                </Text>
+              )}
+            </Text>
+          ),
+          icon: getFileIcon(item.name, item.type),
+          isLeaf: item.type === 'blob',
+          filePath: item.path,
+          fileType: item.type,
+        }));
+      } catch (error) {
+        console.warn('Failed to load file tree:', error);
+        return [];
+      }
     },
     [api, selectedRepo, currentRef],
   );

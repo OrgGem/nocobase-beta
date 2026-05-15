@@ -26,28 +26,35 @@ import {
   Empty,
   Spin,
   Tabs,
-  Card,
   Row,
   Col,
   InputNumber,
   List,
+  Table,
+  Alert,
+  Card,
+  Layout,
+  Divider,
 } from 'antd';
 import {
   PlusOutlined,
-  EditOutlined,
   DeleteOutlined,
   UploadOutlined,
   ReloadOutlined,
-  BookOutlined,
   InboxOutlined,
   GlobalOutlined,
   TeamOutlined,
   LockOutlined,
   FileTextOutlined,
   SettingOutlined,
-  MenuUnfoldOutlined,
   SearchOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  ClockCircleOutlined,
+  SyncOutlined,
+  BookOutlined,
 } from '@ant-design/icons';
+import { isEmbedWebClientPluginEnabled } from '../utils/embed-web-client';
 
 const { Text, Title } = Typography;
 const { Dragger } = Upload;
@@ -77,6 +84,40 @@ const accessLevelOptions = [
   { label: '🌐 Public (System-wide)', value: 'PUBLIC' },
 ];
 
+const kbTypeConfig: Record<string, { color: string; label: string }> = {
+  LOCAL: { color: 'blue', label: 'Local' },
+  READONLY: { color: 'default', label: 'Readonly' },
+  EXTERNAL: { color: 'purple', label: 'External' },
+  EXTERNAL_RAG: { color: 'cyan', label: 'External RAG' },
+  WEB_CLIENT_EMBED: { color: 'green', label: 'Web Embed' },
+};
+
+const statusFilters = [
+  { label: 'All', value: 'all' },
+  { label: 'Failed', value: 'failed' },
+  { label: 'Processing', value: 'processing' },
+  { label: 'Pending', value: 'pending' },
+  { label: 'Ready', value: 'success' },
+];
+
+function getDocumentStats(docs: any[]) {
+  return docs.reduce(
+    (stats, doc) => {
+      stats.total += 1;
+      stats[doc.status] = (stats[doc.status] || 0) + 1;
+      return stats;
+    },
+    { total: 0, pending: 0, pending_client: 0, processing: 0, success: 0, failed: 0 } as Record<string, number>,
+  );
+}
+
+function formatDate(value?: string) {
+  if (!value) {
+    return '-';
+  }
+  return new Date(value).toLocaleString();
+}
+
 export const KnowledgeBases: React.FC = () => {
   const api = useAPIClient();
   const app = useApp();
@@ -86,6 +127,8 @@ export const KnowledgeBases: React.FC = () => {
 
   // States
   const [searchText, setSearchText] = useState('');
+  const [sidebarTypeFilter, setSidebarTypeFilter] = useState<string>('all');
+  const [docStatusFilter, setDocStatusFilter] = useState<string>('all');
   const [docsLoading, setDocsLoading] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
   const [kbSearchQuery, setKbSearchQuery] = useState('');
@@ -94,8 +137,11 @@ export const KnowledgeBases: React.FC = () => {
   const [kbSearchTopK, setKbSearchTopK] = useState(5);
 
   const [vectorStores, setVectorStores] = useState<any[]>([]);
+  const [llmServices, setLlmServices] = useState<any[]>([]);
   const [roleOptions, setRoleOptions] = useState<any[]>([]);
   const [availableModels, setAvailableModels] = useState<any[]>([]);
+  const [embedWebClientReady, setEmbedWebClientReady] = useState(false);
+  const [embedWebClientStatus, setEmbedWebClientStatus] = useState('Enable plugin-embed-web-client to use this mode.');
 
   // Forms
   const [textModalVisible, setTextModalVisible] = useState(false);
@@ -110,7 +156,19 @@ export const KnowledgeBases: React.FC = () => {
   const [sAccessLevel, setSAccessLevel] = useState('PUBLIC');
   const [sType, setSType] = useState('LOCAL');
 
-  const fetchData = async () => {
+  const documentStats = React.useMemo(() => getDocumentStats(documents), [documents]);
+  const filteredDocuments = React.useMemo(() => {
+    if (docStatusFilter === 'all') {
+      return documents;
+    }
+    if (docStatusFilter === 'pending') {
+      return documents.filter((doc) => doc.status === 'pending' || doc.status === 'pending_client');
+    }
+    return documents.filter((doc) => doc.status === docStatusFilter);
+  }, [docStatusFilter, documents]);
+  const selectedTypeConfig = kbTypeConfig[selectedKB?.type || 'LOCAL'] || kbTypeConfig.LOCAL;
+
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.request({
@@ -119,38 +177,61 @@ export const KnowledgeBases: React.FC = () => {
       });
       const kbList = res?.data?.data ?? [];
       setKnowledgeBases(kbList);
-
-      if (!selectedKB && kbList.length > 0) {
-        setSelectedKB(kbList[0]);
-      } else if (selectedKB) {
-        // Update selected KB silently
-        const updated = kbList.find((k: any) => k.id === selectedKB.id);
-        if (updated) setSelectedKB(updated);
-      }
+      setSelectedKB((current) => {
+        if (!current) {
+          return kbList[0] ?? null;
+        }
+        return kbList.find((k: any) => k.id === current.id) ?? current;
+      });
     } catch {
       message.error('Failed to load knowledge bases');
     } finally {
       setLoading(false);
     }
-  };
+  }, [api]);
 
-  const fetchDependencies = async () => {
+  const fetchDependencies = useCallback(async () => {
     try {
       const vsRes = await api.request({ url: 'aiVectorStore:list' });
       setVectorStores(vsRes?.data?.data ?? []);
+      const llmRes = await api.request({ url: 'ai:listLLMServices' });
+      setLlmServices(llmRes?.data?.data ?? []);
       const roleRes = await api.request({ url: 'roles:list' });
       setRoleOptions((roleRes?.data?.data ?? []).map((r: any) => ({ label: r.title || r.name, value: r.name })));
-      // Load available embedding models from plugin-embed-web-client (if active)
-      try {
-        const modelRes = await api.request({ url: 'embedWebClient:listModels' });
-        setAvailableModels(modelRes?.data?.data ?? []);
-      } catch {
-        /* plugin not active */
+      // Load available embedding models from plugin-embed-web-client only when the plugin is active and configured.
+      if (isEmbedWebClientPluginEnabled(app)) {
+        try {
+          const configRes = await api.request({ url: 'embedWebClient:getConfig' });
+          const config = configRes?.data?.data ?? {};
+          const modelRes = await api.request({ url: 'embedWebClient:listModels' });
+          const readyModels = (modelRes?.data?.data ?? []).filter((model: any) => model.baseFilesReady);
+          const configuredModelId = config.modelId;
+          const configuredModelReady =
+            config.modelSource && config.modelSource !== 'server'
+              ? Boolean(configuredModelId)
+              : readyModels.some((model: any) => model.modelId === configuredModelId);
+
+          setAvailableModels(readyModels);
+          setEmbedWebClientReady(Boolean(configuredModelId && configuredModelReady));
+          setEmbedWebClientStatus(
+            configuredModelId && configuredModelReady
+              ? `Ready: ${configuredModelId}`
+              : 'Configure and download a usable model in plugin-embed-web-client before using this mode.',
+          );
+        } catch {
+          setAvailableModels([]);
+          setEmbedWebClientReady(false);
+          setEmbedWebClientStatus('plugin-embed-web-client is active but its model configuration cannot be loaded.');
+        }
+      } else {
+        setAvailableModels([]);
+        setEmbedWebClientReady(false);
+        setEmbedWebClientStatus('Enable plugin-embed-web-client to use this mode.');
       }
     } catch {
       // ignore
     }
-  };
+  }, [api, app]);
 
   const fetchDocuments = useCallback(
     async (kbId: string) => {
@@ -173,10 +254,11 @@ export const KnowledgeBases: React.FC = () => {
   useEffect(() => {
     fetchData();
     fetchDependencies();
-  }, []);
+  }, [fetchData, fetchDependencies]);
 
   useEffect(() => {
     if (selectedKB) {
+      setDocStatusFilter('all');
       fetchDocuments(selectedKB.id);
 
       const formValues = { ...selectedKB };
@@ -190,12 +272,19 @@ export const KnowledgeBases: React.FC = () => {
       setSAccessLevel(selectedKB.accessLevel);
       setSType(selectedKB.type || 'LOCAL');
     }
-  }, [selectedKB?.id, fetchDocuments]);
+  }, [selectedKB, fetchDocuments, settingsForm]);
 
   // Create
   const handleCreate = () => {
     createForm.resetFields();
-    createForm.setFieldsValue({ accessLevel: 'PUBLIC', enabled: true, type: 'LOCAL' });
+    createForm.setFieldsValue({
+      accessLevel: 'PUBLIC',
+      enabled: true,
+      type: 'LOCAL',
+      ragProvider: 'openai-compatible',
+      ragQueryPrefix: 'query: ',
+      ragPassagePrefix: 'passage: ',
+    });
     setCAccessLevel('PUBLIC');
     setCType('LOCAL');
     setCreateModalVisible(true);
@@ -204,12 +293,36 @@ export const KnowledgeBases: React.FC = () => {
   const submitCreate = async () => {
     try {
       const formValues = await createForm.validateFields();
-      const { ragApiUrl, ragApiKey, ragNamespace, ragTopK, ragScoreThreshold, embedModelId, embedMode, ...restValues } =
-        formValues;
+      const {
+        ragProvider,
+        ragApiUrl,
+        ragApiKey,
+        ragNamespace,
+        ragTopK,
+        ragScoreThreshold,
+        ragEmbeddingLlmService,
+        ragEmbeddingModel,
+        ragQueryPrefix,
+        ragPassagePrefix,
+        embedModelId,
+        embedMode,
+        ...restValues
+      } = formValues;
 
       const values: any = { ...restValues, options: {} };
       if (restValues.type === 'EXTERNAL_RAG') {
-        values.options = { ragApiUrl, ragApiKey, ragNamespace, ragTopK, ragScoreThreshold };
+        values.options = {
+          ragProvider,
+          ragApiUrl,
+          ragApiKey,
+          ragNamespace,
+          ragTopK,
+          ragScoreThreshold,
+          ragEmbeddingLlmService,
+          ragEmbeddingModel,
+          ragQueryPrefix,
+          ragPassagePrefix,
+        };
       }
       if (restValues.type === 'WEB_CLIENT_EMBED') {
         values.embedModelId = embedModelId ?? null;
@@ -236,12 +349,36 @@ export const KnowledgeBases: React.FC = () => {
       const formValues = await settingsForm.validateFields();
       if (!selectedKB) return;
 
-      const { ragApiUrl, ragApiKey, ragNamespace, ragTopK, ragScoreThreshold, embedModelId, embedMode, ...restValues } =
-        formValues;
+      const {
+        ragProvider,
+        ragApiUrl,
+        ragApiKey,
+        ragNamespace,
+        ragTopK,
+        ragScoreThreshold,
+        ragEmbeddingLlmService,
+        ragEmbeddingModel,
+        ragQueryPrefix,
+        ragPassagePrefix,
+        embedModelId,
+        embedMode,
+        ...restValues
+      } = formValues;
 
       const values: any = { ...restValues, options: {} };
       if (restValues.type === 'EXTERNAL_RAG') {
-        values.options = { ragApiUrl, ragApiKey, ragNamespace, ragTopK, ragScoreThreshold };
+        values.options = {
+          ragProvider,
+          ragApiUrl,
+          ragApiKey,
+          ragNamespace,
+          ragTopK,
+          ragScoreThreshold,
+          ragEmbeddingLlmService,
+          ragEmbeddingModel,
+          ragQueryPrefix,
+          ragPassagePrefix,
+        };
       }
       if (restValues.type === 'WEB_CLIENT_EMBED') {
         values.embedModelId = embedModelId ?? null;
@@ -403,82 +540,123 @@ export const KnowledgeBases: React.FC = () => {
 
   // Renders
   const renderSidebar = () => {
-    const filtered = knowledgeBases.filter((kb) => kb.name.toLowerCase().includes(searchText.toLowerCase()));
+    const filtered = knowledgeBases.filter((kb) => {
+      const matchesText = kb.name.toLowerCase().includes(searchText.toLowerCase());
+      const matchesType = sidebarTypeFilter === 'all' || (kb.type || 'LOCAL') === sidebarTypeFilter;
+      return matchesText && matchesType;
+    });
 
     return (
       <div
         style={{
-          width: 280,
+          width: 320,
           borderRight: '1px solid #f0f0f0',
           display: 'flex',
           flexDirection: 'column',
-          background: '#fafafa',
+          background: '#ffffff',
           height: '100%',
+          boxShadow: '2px 0 8px 0 rgba(29,35,41,.05)',
+          zIndex: 1,
         }}
       >
         <div
           style={{
-            padding: '16px',
+            padding: '20px 24px',
             display: 'flex',
             flexDirection: 'column',
-            gap: 12,
+            gap: 16,
             borderBottom: '1px solid #f0f0f0',
+            background: '#fafafa',
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text strong style={{ fontSize: 16 }}>
+            <Title level={5} style={{ margin: 0 }}>
               Knowledge Bases
-            </Text>
-            <Button type="primary" size="small" icon={<PlusOutlined />} onClick={handleCreate}>
-              Add
+            </Title>
+            <Button type="primary" shape="round" icon={<PlusOutlined />} onClick={handleCreate}>
+              Create
             </Button>
           </div>
           <Input.Search
-            placeholder="Filter knowledge bases..."
+            placeholder="Search bases..."
             allowClear
             onChange={(e) => setSearchText(e.target.value)}
+            style={{ borderRadius: 8 }}
+          />
+          <Select
+            value={sidebarTypeFilter}
+            onChange={setSidebarTypeFilter}
+            options={[
+              { label: 'All types', value: 'all' },
+              ...Object.entries(kbTypeConfig).map(([value, config]) => ({ label: config.label, value })),
+            ]}
+            bordered={false}
+            style={{ background: '#fff', borderRadius: 8, border: '1px solid #d9d9d9' }}
           />
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
           {loading && filtered.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center' }}>
-              <Spin />
+            <div style={{ padding: 48, textAlign: 'center' }}>
+              <Spin size="large" />
             </div>
           ) : filtered.length === 0 ? (
-            <Empty description="No knowledge bases found" style={{ marginTop: 24 }} />
+            <Empty description="No knowledge bases found" style={{ marginTop: 48 }} />
           ) : (
             filtered.map((kb) => {
               const isActive = selectedKB?.id === kb.id;
               const docCount = kb.documents?.length || 0;
               const failedCount = kb.documents?.filter((d: any) => d.status === 'failed').length || 0;
+              const processingCount = kb.documents?.filter((d: any) => d.status === 'processing').length || 0;
+              const typeConfig = kbTypeConfig[kb.type || 'LOCAL'] || kbTypeConfig.LOCAL;
 
               return (
                 <div
                   key={kb.id}
                   onClick={() => setSelectedKB(kb)}
                   style={{
-                    padding: '12px 16px',
+                    padding: '16px',
+                    marginBottom: '8px',
                     cursor: 'pointer',
-                    background: isActive ? '#e6f4ff' : 'transparent',
-                    borderLeft: isActive ? '3px solid #1890ff' : '3px solid transparent',
-                    borderBottom: '1px solid #f8f8f8',
-                    transition: 'all 0.2s',
+                    background: isActive ? '#f0f7ff' : '#ffffff',
+                    border: isActive ? '1px solid #91caff' : '1px solid #f0f0f0',
+                    borderRadius: '12px',
+                    transition: 'all 0.3s ease',
+                    boxShadow: isActive ? '0 2px 8px rgba(24, 144, 255, 0.15)' : 'none',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    {accessIcons[kb.accessLevel || 'PUBLIC']}
-                    <Text strong={isActive} style={{ flex: 1, fontSize: 14 }} ellipsis>
-                      {kb.name}
-                    </Text>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <div style={{ 
+                      width: 36, 
+                      height: 36, 
+                      borderRadius: '8px', 
+                      background: isActive ? '#1890ff' : '#fafafa', 
+                      display: 'flex', 
+                      alignItems: 'center', 
+                      justifyContent: 'center',
+                      color: isActive ? '#fff' : '#8c8c8c',
+                      fontSize: 18,
+                      transition: 'all 0.3s ease'
+                    }}>
+                      {isActive ? <BookOutlined /> : accessIcons[kb.accessLevel || 'PUBLIC']}
+                    </div>
+                    <div style={{ flex: 1, overflow: 'hidden' }}>
+                      <Text strong style={{ fontSize: 15, display: 'block', color: isActive ? '#1890ff' : 'inherit' }} ellipsis>
+                        {kb.name}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {docCount} documents
+                      </Text>
+                    </div>
                   </div>
-                  <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Tag color={accessColors[kb.accessLevel || 'PUBLIC']} style={{ border: 0 }}>
-                      {kb.accessLevel || 'PUBLIC'}
-                    </Tag>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {docCount} docs {failedCount > 0 && <span style={{ color: '#ff4d4f' }}>• {failedCount} err</span>}
-                    </Text>
+                  <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Space size={4} wrap>
+                      <Tag color={typeConfig.color} style={{ borderRadius: 4, margin: 0 }}>
+                        {typeConfig.label}
+                      </Tag>
+                      {processingCount > 0 && <Tag color="processing" style={{ borderRadius: 4, margin: 0 }}>{processingCount} processing</Tag>}
+                      {failedCount > 0 && <Tag color="error" style={{ borderRadius: 4, margin: 0 }}>{failedCount} err</Tag>}
+                    </Space>
                   </div>
                 </div>
               );
@@ -498,136 +676,198 @@ export const KnowledgeBases: React.FC = () => {
       );
     }
 
-    if (selectedKB?.type === 'WEB_CLIENT_EMBED' && selectedKB.embedMode !== 'server') {
-      // The WebClientDocumentUploader is provided by plugin-embed-web-client and
-      // registered in the app component registry. Fall back to a hint if the plugin is not active.
-      const WebClientUploader = app?.components?.['WebClientDocumentUploader'];
-      if (WebClientUploader) {
-        return <WebClientUploader knowledgeBaseId={selectedKB.id} onComplete={() => fetchDocuments(selectedKB.id)} />;
-      }
-      return (
-        <div style={{ padding: 48, textAlign: 'center' }}>
-          <Empty description="Enable the plugin-embed-web-client plugin to upload documents to this knowledge base." />
-        </div>
-      );
-    }
+    const documentColumns = [
+      {
+        title: 'Document',
+        dataIndex: 'filename',
+        key: 'filename',
+        render: (_: string, doc: any) => (
+          <Space>
+            <FileTextOutlined style={{ color: '#8c8c8c' }} />
+            <Tooltip title={doc.filename}>
+              <Text style={{ maxWidth: 360 }} ellipsis>
+                {doc.filename || 'Untitled'}
+              </Text>
+            </Tooltip>
+          </Space>
+        ),
+      },
+      {
+        title: 'Status',
+        dataIndex: 'status',
+        key: 'status',
+        width: 150,
+        render: (status: string, doc: any) => {
+          const cfg = statusConfig[status] || { color: 'default', label: status };
+          return (
+            <Space direction="vertical" size={2}>
+              <Tag color={cfg.color} style={{ margin: 0 }}>
+                {cfg.label}
+              </Tag>
+              {doc.error && status === 'failed' && (
+                <Tooltip title={doc.error}>
+                  <Text type="danger" style={{ fontSize: 12, maxWidth: 220 }} ellipsis>
+                    {doc.error}
+                  </Text>
+                </Tooltip>
+              )}
+            </Space>
+          );
+        },
+      },
+      {
+        title: 'Chunks',
+        dataIndex: 'chunkCount',
+        key: 'chunkCount',
+        width: 100,
+        render: (value: number) => value || 0,
+      },
+      {
+        title: 'Updated',
+        dataIndex: 'updatedAt',
+        key: 'updatedAt',
+        width: 190,
+        render: formatDate,
+      },
+      {
+        title: 'Actions',
+        key: 'actions',
+        width: 120,
+        render: (_: any, doc: any) => {
+          const isProcessing = doc.status === 'processing';
+          const fileDeleted = selectedKB.deleteSourceFile && !doc.fileId && !doc.textContent;
+          const reprocessTip = isProcessing ? 'Processing...' : fileDeleted ? 'Source file deleted' : 'Reprocess';
+
+          return (
+            <Space size={4}>
+              <Tooltip title={reprocessTip}>
+                <Button
+                  type="text"
+                  icon={<ReloadOutlined />}
+                  onClick={() => handleReprocess(doc.id)}
+                  disabled={isProcessing || fileDeleted}
+                />
+              </Tooltip>
+              <Popconfirm title="Delete document?" onConfirm={() => handleDeleteDocument(doc.id)}>
+                <Tooltip title="Delete">
+                  <Button type="text" danger icon={<DeleteOutlined />} />
+                </Tooltip>
+              </Popconfirm>
+            </Space>
+          );
+        },
+      },
+    ];
+
+    const WebClientUploader =
+      selectedKB?.type === 'WEB_CLIENT_EMBED' && selectedKB.embedMode !== 'server'
+        ? app?.components?.['WebClientDocumentUploader']
+        : null;
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ display: 'flex', gap: 16, marginBottom: 24 }}>
-          <Dragger
-            name="file"
-            multiple
-            showUploadList={false}
-            accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
-            customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
-            onChange={handleUploadChange}
-            style={{ flex: 1, padding: '24px 0', background: '#fafafa' }}
-          >
-            <p className="ant-upload-drag-icon" style={{ marginBottom: 8 }}>
-              <InboxOutlined />
-            </p>
-            <p className="ant-upload-text" style={{ margin: 0, marginBottom: 8 }}>
-              Drag files here or click to upload
-            </p>
-            <Space>
-              <Button type="primary" size="small" icon={<UploadOutlined />}>
-                Upload File
-              </Button>
-            </Space>
-          </Dragger>
-
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'center',
-              width: 240,
-              border: '1px dashed #d9d9d9',
-              borderRadius: 8,
-              background: '#fafafa',
-              padding: 16,
-              textAlign: 'center',
-            }}
-          >
-            <FileTextOutlined style={{ fontSize: 32, color: '#1890ff', marginBottom: 12 }} />
-            <Text style={{ marginBottom: 12 }}>Paste plain text content</Text>
-            <div>
-              <Button onClick={() => setTextModalVisible(true)} icon={<PlusOutlined />}>
-                Paste Text
-              </Button>
-            </div>
+        {selectedKB?.type === 'WEB_CLIENT_EMBED' && selectedKB.embedMode !== 'server' ? (
+          <div style={{ marginBottom: 24 }}>
+            {WebClientUploader ? (
+              <WebClientUploader knowledgeBaseId={selectedKB.id} onComplete={() => fetchDocuments(selectedKB.id)} />
+            ) : (
+              <Empty description="Enable the plugin-embed-web-client plugin to upload documents to this knowledge base." />
+            )}
           </div>
-        </div>
-
-        {docsLoading ? (
-          <div style={{ padding: 48, textAlign: 'center' }}>
-            <Spin />
-          </div>
-        ) : documents.length === 0 ? (
-          <Empty description="No documents yet" />
         ) : (
-          <Row gutter={[16, 16]}>
-            {documents.map((doc) => {
-              const cfg = statusConfig[doc.status] || { color: 'default', label: doc.status };
-              const isProcessing = doc.status === 'processing';
-              const fileDeleted = selectedKB.deleteSourceFile && !doc.fileId && !doc.textContent;
-              const reprocessTip = isProcessing ? 'Processing...' : fileDeleted ? 'Source file deleted' : 'Reprocess';
+          <Row gutter={24} style={{ marginBottom: 24 }}>
+            <Col xs={24} md={16}>
+              <Card 
+                hoverable 
+                bodyStyle={{ padding: 0 }} 
+                style={{ height: '100%', borderRadius: 12, overflow: 'hidden', border: '1px solid #e8e8e8' }}
+              >
+                <Dragger
+                  name="file"
+                  multiple
+                  showUploadList={false}
+                  accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
+                  customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
+                  onChange={handleUploadChange}
+                  style={{ padding: '32px 0', background: '#fafafa', border: 'none' }}
+                >
+                  <p className="ant-upload-drag-icon">
+                    <InboxOutlined style={{ color: '#1890ff', fontSize: 48 }} />
+                  </p>
+                  <Title level={5} style={{ margin: '16px 0 8px' }}>
+                    Click or drag file to this area to upload
+                  </Title>
+                  <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+                    Support for single or bulk upload. Select multiple documents to populate your knowledge base quickly.
+                  </Text>
+                  <Button type="primary" shape="round" icon={<UploadOutlined />}>
+                    Select Files
+                  </Button>
+                </Dragger>
+              </Card>
+            </Col>
 
-              return (
-                <Col span={8} key={doc.id}>
-                  <Card
-                    size="small"
-                    hoverable
-                    actions={[
-                      <Tooltip title={reprocessTip} key="reprocess">
-                        <Button
-                          type="text"
-                          icon={<ReloadOutlined />}
-                          onClick={() => handleReprocess(doc.id)}
-                          disabled={isProcessing || fileDeleted}
-                        />
-                      </Tooltip>,
-                      <Popconfirm title="Delete document?" onConfirm={() => handleDeleteDocument(doc.id)} key="delete">
-                        <Tooltip title="Delete">
-                          <Button type="text" danger icon={<DeleteOutlined />} />
-                        </Tooltip>
-                      </Popconfirm>,
-                    ]}
-                  >
-                    <Card.Meta
-                      avatar={<FileTextOutlined style={{ fontSize: 24, color: '#8c8c8c' }} />}
-                      title={
-                        <Tooltip title={doc.filename}>
-                          <Text ellipsis style={{ maxWidth: '100%' }}>
-                            {doc.filename}
-                          </Text>
-                        </Tooltip>
-                      }
-                      description={
-                        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-                          <Space style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                            <Tag color={cfg.color} style={{ margin: 0 }}>
-                              {cfg.label}
-                            </Tag>
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              {doc.chunkCount || 0} chunks
-                            </Text>
-                          </Space>
-                          {doc.error && doc.status === 'failed' && (
-                            <Text type="danger" style={{ fontSize: 12, display: 'block', marginTop: 4 }} ellipsis>
-                              {doc.error}
-                            </Text>
-                          )}
-                        </Space>
-                      }
-                    />
-                  </Card>
-                </Col>
-              );
-            })}
+            <Col xs={24} md={8}>
+              <Card 
+                hoverable 
+                style={{ height: '100%', borderRadius: 12, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', border: '1px solid #e8e8e8', background: '#fafafa', cursor: 'pointer' }}
+                onClick={() => setTextModalVisible(true)}
+              >
+                <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                  <FileTextOutlined style={{ fontSize: 48, color: '#52c41a', marginBottom: 16 }} />
+                  <Title level={5} style={{ margin: '0 0 8px' }}>Paste Plain Text</Title>
+                  <Text type="secondary" style={{ textAlign: 'center', marginBottom: 16, display: 'block' }}>
+                    Directly paste your text content to create a document.
+                  </Text>
+                  <Button shape="round" icon={<PlusOutlined />}>
+                    Paste Text
+                  </Button>
+                </div>
+              </Card>
+            </Col>
           </Row>
         )}
+
+        <Card 
+          title="Document List"
+          style={{ borderRadius: 12, border: '1px solid #e8e8e8', flex: 1, display: 'flex', flexDirection: 'column' }}
+          headStyle={{ borderBottom: '1px solid #f0f0f0', padding: '0 24px' }}
+          bodyStyle={{ padding: '24px', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          extra={
+            <Space>
+              <Select
+                size="middle"
+                value={docStatusFilter}
+                onChange={setDocStatusFilter}
+                options={statusFilters}
+                style={{ width: 140 }}
+              />
+              <Button icon={<ReloadOutlined />} onClick={() => fetchDocuments(selectedKB.id)}>
+                Refresh
+              </Button>
+            </Space>
+          }
+        >
+          <div style={{ marginBottom: 16 }}>
+            <Space wrap size={[0, 8]}>
+              <Tag icon={<FileTextOutlined />} color="blue" style={{ borderRadius: 4 }}>{documentStats.total} total</Tag>
+              <Tag icon={<CheckCircleOutlined />} color="success" style={{ borderRadius: 4 }}>{documentStats.success} ready</Tag>
+              <Tag icon={<SyncOutlined />} color="processing" style={{ borderRadius: 4 }}>{documentStats.processing} processing</Tag>
+              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 4 }}>{(documentStats.pending || 0) + (documentStats.pending_client || 0)} pending</Tag>
+              <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 4 }}>{documentStats.failed} failed</Tag>
+            </Space>
+          </div>
+          <Table
+            rowKey="id"
+            size="middle"
+            loading={docsLoading}
+            columns={documentColumns}
+            dataSource={filteredDocuments}
+            locale={{ emptyText: <Empty description="No documents match this view" /> }}
+            pagination={{ pageSize: 10, showSizeChanger: true }}
+            scroll={{ x: 760, y: 'calc(100vh - 460px)' }}
+          />
+        </Card>
       </div>
     );
   };
@@ -709,7 +949,11 @@ export const KnowledgeBases: React.FC = () => {
                 { label: 'Readonly', value: 'READONLY' },
                 { label: 'External (Linked)', value: 'EXTERNAL' },
                 { label: 'External RAG API', value: 'EXTERNAL_RAG' },
-                { label: 'Web Client Embedding', value: 'WEB_CLIENT_EMBED' },
+                {
+                  label: embedWebClientReady ? 'Web Client Embedding' : `Web Client Embedding (${embedWebClientStatus})`,
+                  value: 'WEB_CLIENT_EMBED',
+                  disabled: !embedWebClientReady && currentType !== 'WEB_CLIENT_EMBED',
+                },
               ]}
               onChange={setCT}
             />
@@ -740,6 +984,18 @@ export const KnowledgeBases: React.FC = () => {
       {currentType === 'WEB_CLIENT_EMBED' && (
         <>
           <Form.Item>
+            <Alert
+              type={embedWebClientReady ? 'info' : 'warning'}
+              showIcon
+              message={
+                embedWebClientReady
+                  ? 'Documents will be embedded using the configured ONNX model.'
+                  : 'Web Client Embedding is not ready.'
+              }
+              description={embedWebClientStatus}
+            />
+          </Form.Item>
+          <Form.Item>
             <div
               style={{
                 background: '#e6f4ff',
@@ -762,11 +1018,11 @@ export const KnowledgeBases: React.FC = () => {
               >
                 <Select
                   allowClear
+                  disabled={!embedWebClientReady}
                   placeholder="Default (from plugin settings)"
                   options={availableModels.map((m: any) => ({
                     label: `${m.modelId} (${m.dimensions ?? '?'}-dim) [${m.source}]`,
                     value: m.modelId,
-                    disabled: !m.baseFilesReady,
                   }))}
                 />
               </Form.Item>
@@ -807,8 +1063,17 @@ export const KnowledgeBases: React.FC = () => {
           <Text strong style={{ display: 'block', marginBottom: 16 }}>
             External RAG Configuration
           </Text>
+          <Form.Item name="ragProvider" label="RAG Provider" initialValue="openai-compatible">
+            <Select
+              options={[
+                { label: 'HTTP search API (backend embeds query)', value: 'external-http' },
+                { label: 'HTTP search API + custom embedding model', value: 'openai-compatible' },
+                { label: 'Legacy E5 HTTP (alias)', value: 'e5-http' },
+              ]}
+            />
+          </Form.Item>
           <Form.Item name="ragApiUrl" label="API URL" rules={[{ required: true, type: 'url' }]}>
-            <Input placeholder="https://api.example.com/rag/search" />
+            <Input placeholder="https://rag.example.com/search" />
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
@@ -822,6 +1087,45 @@ export const KnowledgeBases: React.FC = () => {
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item shouldUpdate={(prev, cur) => prev.ragProvider !== cur.ragProvider} noStyle>
+            {({ getFieldValue }) =>
+              ['openai-compatible', 'e5-http'].includes(getFieldValue('ragProvider')) ? (
+                <>
+                  <Row gutter={16}>
+                    <Col span={12}>
+                      <Form.Item
+                        name="ragEmbeddingLlmService"
+                        label="Embedding LLM Service"
+                        rules={[{ required: true }]}
+                      >
+                        <Select
+                          placeholder="Select embedding service"
+                          options={llmServices.map((svc: any) => ({ label: svc.title || svc.name, value: svc.name }))}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item name="ragEmbeddingModel" label="Embedding Model" rules={[{ required: true }]}>
+                        <Input placeholder="text-embedding-3-small or intfloat/multilingual-e5-base" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                  <Row gutter={16}>
+                    <Col span={12}>
+                      <Form.Item name="ragQueryPrefix" label="Query Prefix" initialValue="query: ">
+                        <Input placeholder="query: " />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item name="ragPassagePrefix" label="Passage Prefix" initialValue="passage: ">
+                        <Input placeholder="passage: " />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                </>
+              ) : null
+            }
+          </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="ragTopK" label="Top K">
@@ -862,66 +1166,96 @@ export const KnowledgeBases: React.FC = () => {
   );
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 56px)', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', height: 'calc(100vh - 56px)', overflow: 'hidden', background: '#f5f5f5' }}>
       {renderSidebar()}
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: '#fff', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '24px' }}>
         {selectedKB ? (
-          <>
+          <div style={{ background: '#fff', borderRadius: 12, display: 'flex', flexDirection: 'column', height: '100%', boxShadow: '0 4px 16px rgba(0,0,0,0.04)', border: '1px solid #f0f0f0' }}>
             <div style={{ padding: '24px 32px 16px', borderBottom: '1px solid #f0f0f0' }}>
-              <div
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}
-              >
-                <div>
-                  <Title level={4} style={{ margin: 0, marginBottom: 4 }}>
-                    {selectedKB.name}
-                  </Title>
-                  <Space>
-                    <Tag>{selectedKB.type || 'LOCAL'}</Tag>
-                    {selectedKB.vectorStore && <Tag icon={<SettingOutlined />}>{selectedKB.vectorStore.name}</Tag>}
-                  </Space>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ 
+                    width: 56, 
+                    height: 56, 
+                    borderRadius: '12px', 
+                    background: '#e6f4ff', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    color: '#1890ff',
+                    fontSize: 28
+                  }}>
+                    <BookOutlined />
+                  </div>
+                  <div>
+                    <Title level={3} style={{ margin: 0, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
+                      {selectedKB.name}
+                      <Space size={4}>
+                        <Tag color={selectedTypeConfig.color} style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}>{selectedTypeConfig.label}</Tag>
+                        <Tag color={accessColors[selectedKB.accessLevel || 'PUBLIC']} style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}>
+                          {selectedKB.accessLevel || 'PUBLIC'}
+                        </Tag>
+                        <Tag color={selectedKB.enabled === false ? 'default' : 'success'} style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}>
+                          {selectedKB.enabled === false ? 'Disabled' : 'Active'}
+                        </Tag>
+                      </Space>
+                    </Title>
+                    <Text type="secondary" style={{ fontSize: 14 }}>
+                      {selectedKB.description || 'Manage documents, search content, and configure settings for this knowledge base.'}
+                    </Text>
+                  </div>
                 </div>
-                <Popconfirm title="Delete this knowledge base?" onConfirm={() => handleDeleteKB(selectedKB.id)}>
-                  <Button danger ghost icon={<DeleteOutlined />}>
+                <Popconfirm title="Are you sure to delete this knowledge base? This action cannot be undone." onConfirm={() => handleDeleteKB(selectedKB.id)}>
+                  <Button danger shape="round" icon={<DeleteOutlined />}>
                     Delete
                   </Button>
                 </Popconfirm>
               </div>
-              <Text type="secondary" style={{ display: 'block', maxWidth: 800 }}>
-                {selectedKB.description || 'No description provided.'}
-              </Text>
             </div>
 
             <Tabs
               defaultActiveKey="documents"
-              style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 32px' }}
               className="kb-detail-tabs"
               items={[
                 {
                   key: 'documents',
-                  label: 'Documents',
+                  label: (
+                    <span style={{ fontSize: 15, padding: '8px 16px' }}>
+                      <FileTextOutlined /> Documents
+                    </span>
+                  ),
                   children: (
-                    <div style={{ padding: '24px 32px', overflowY: 'auto', height: '100%' }}>
+                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>
                       {renderDocumentsTab()}
                     </div>
                   ),
                 },
                 {
                   key: 'search',
-                  label: 'Search',
+                  label: (
+                    <span style={{ fontSize: 15, padding: '8px 16px' }}>
+                      <SearchOutlined /> Search
+                    </span>
+                  ),
                   children: (
-                    <div style={{ padding: '24px 32px', overflowY: 'auto', height: '100%' }}>{renderSearchTab()}</div>
+                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>{renderSearchTab()}</div>
                   ),
                 },
                 {
                   key: 'settings',
-                  label: 'Settings',
+                  label: (
+                    <span style={{ fontSize: 15, padding: '8px 16px' }}>
+                      <SettingOutlined /> Settings
+                    </span>
+                  ),
                   children: (
-                    <div style={{ padding: '24px 32px', overflowY: 'auto', height: '100%', maxWidth: 800 }}>
+                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%', maxWidth: 800 }}>
                       <Form form={settingsForm} layout="vertical" onFinish={handleUpdateSettings}>
                         {formFields(settingsForm, sType, sAccessLevel, setSAccessLevel, setSType)}
-                        <Form.Item>
-                          <Button type="primary" htmlType="submit">
+                        <Form.Item style={{ marginTop: 24 }}>
+                          <Button type="primary" htmlType="submit" size="large" shape="round">
                             Save Changes
                           </Button>
                         </Form.Item>
@@ -931,10 +1265,21 @@ export const KnowledgeBases: React.FC = () => {
                 },
               ]}
             />
-          </>
+          </div>
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Empty description="Select a knowledge base from the sidebar or create a new one" />
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', borderRadius: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.04)', border: '1px solid #f0f0f0' }}>
+            <Empty 
+              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              description={
+                <span style={{ color: '#8c8c8c', fontSize: 16 }}>
+                  Select a knowledge base from the sidebar or create a new one
+                </span>
+              } 
+            >
+              <Button type="primary" size="large" shape="round" icon={<PlusOutlined />} onClick={handleCreate} style={{ marginTop: 16 }}>
+                Create Knowledge Base
+              </Button>
+            </Empty>
           </div>
         )}
       </div>

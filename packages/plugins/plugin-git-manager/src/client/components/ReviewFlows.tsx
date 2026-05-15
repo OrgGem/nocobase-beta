@@ -22,6 +22,15 @@ const POST_LABELS: Record<string, string> = {
   disabled: 'Disabled',
 };
 
+const DEFAULT_INSTRUCTION = `Please review the code changes with a focus on:
+1. Best Practices & Style:
+   - C#/VB.NET: Follow standard naming conventions (PascalCase for methods/properties, camelCase for fields). Ensure proper use of async/await (avoid .Result/.Wait()). Use LINQ efficiently.
+   - JS/TS: Use strict equality (===), prefer const/let. Ensure TypeScript types are explicit and avoid 'any'.
+2. Performance: Watch out for N+1 queries, unnecessary loops, and memory leaks.
+3. Security: Identify potential SQL injections, XSS vulnerabilities, and improper data validation.
+4. Maintainability: Check for readability, SOLID principles, and DRY. Ensure meaningful naming.
+5. Error Handling: Verify that exceptions are properly caught, handled, and logged.`;
+
 export const ReviewFlows: React.FC = () => {
   const t = useT();
   const api = useAPIClient();
@@ -92,6 +101,7 @@ export const ReviewFlows: React.FC = () => {
       enabled: true,
       triggerMode: 'manual',
       postMode: 'manual',
+      instructions: DEFAULT_INSTRUCTION,
     });
     setOpen(true);
   };
@@ -259,7 +269,7 @@ export const ReviewFlows: React.FC = () => {
             <Input placeholder="^(feature|hotfix)/.*$" />
           </Form.Item>
           <Form.Item name="instructions" label={t('Additional Instructions (optional)')}>
-            <Input.TextArea rows={4} placeholder={t('Extra guidance appended to every review prompt')} />
+            <Input.TextArea rows={8} placeholder={t('Extra guidance appended to every review prompt')} />
           </Form.Item>
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />

@@ -96,6 +96,18 @@ export default defineCollection({
       defaultValue: false,
     },
     {
+      // Optional KB-level model override for WEB_CLIENT_EMBED.
+      type: 'string',
+      name: 'embedModelId',
+      length: 255,
+    },
+    {
+      // client | server. Client mode requires browser-side embedding; server mode uses plugin-embed-web-client.
+      type: 'string',
+      name: 'embedMode',
+      defaultValue: 'client',
+    },
+    {
       type: 'hasMany',
       name: 'documents',
       target: 'aiKnowledgeBaseDocuments',

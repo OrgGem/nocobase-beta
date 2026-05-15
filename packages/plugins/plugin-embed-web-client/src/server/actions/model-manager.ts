@@ -22,23 +22,17 @@ import { resolve, join, dirname } from 'path';
 import { existsSync, readdirSync, statSync, mkdirSync, rmSync, readFileSync } from 'fs';
 import type { Context, Next } from '@nocobase/actions';
 import { koaMulter as multer } from '@nocobase/utils';
-import { DTYPE_ONNX, REQUIRED_BASE_FILES } from '../../shared/constants';
+import { DTYPE_ONNX, REQUIRED_BASE_FILES, VALID_MODEL_ID_RE } from '../../shared/constants';
 import { safeJoin } from '../../shared/utils';
 import { createS3StorageFromConfigWithFileManager, modelFileMimeType } from '../utils/s3-storage';
 
-export const BUNDLED_MODELS_ROOT = resolve(__dirname, '../../public/models');
+export const BUNDLED_MODELS_ROOT = resolve(__dirname, '../../../public/models');
 export const STORAGE_MODELS_ROOT = resolve(process.cwd(), 'storage/plugin-embed-web-client/models');
 
 // Re-export for backward compatibility
 export { DTYPE_ONNX };
 
-/**
- * Strict model ID regex:
- *   - Only ASCII letters, digits, hyphens, underscores, dots
- *   - Max 128 chars per segment
- *   - Must be exactly "Org/ModelName"
- */
-export const VALID_MODEL_ID_RE = /^[a-zA-Z0-9._-]{1,128}\/[a-zA-Z0-9._-]{1,128}$/;
+export { VALID_MODEL_ID_RE };
 
 // Max upload file size: 2 GB (large ONNX models can be very big)
 const MAX_UPLOAD_SIZE_BYTES = 2 * 1024 * 1024 * 1024;

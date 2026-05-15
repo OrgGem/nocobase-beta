@@ -2,15 +2,15 @@ import { Migration } from '@nocobase/server';
 
 export default class AddInteractionSchemaMigration extends Migration {
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tableName = `${this.db.options.tablePrefix || ''}skillDefinitions`;
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tableName = `${(this as any).db.options.tablePrefix || ''}skillDefinitions`;
 
     try {
       const tableExists = await queryInterface.tableExists(tableName);
       if (!tableExists) return;
 
       const tableDesc = await queryInterface.describeTable(tableName);
-      const fieldRepo = this.db.getRepository('fields');
+      const fieldRepo = (this as any).db.getRepository('fields');
       const collectionName = 'skillDefinitions';
 
       const fieldMeta = await fieldRepo.findOne({
@@ -26,10 +26,10 @@ export default class AddInteractionSchemaMigration extends Migration {
             interface: 'textarea',
           },
         });
-        this.app.logger.info('[skill-hub] Restored NocoBase metadata for preexisting column interactionSchema');
+        (this as any).app.logger.info('[skill-hub] Restored NocoBase metadata for preexisting column interactionSchema');
       }
     } catch (error) {
-      this.app.logger.error(`[skill-hub] Failed to check interactionSchema field: ${error.message}`);
+      (this as any).app.logger.error(`[skill-hub] Failed to check interactionSchema field: ${error.message}`);
     }
   }
 }

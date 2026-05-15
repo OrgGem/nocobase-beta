@@ -10,6 +10,7 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
   const api = useAPIClient();
   const { instanceId, folderId, folderKey } = useCurrentInstance();
   const [data, setData] = useState<any>(null);
+  const [meta, setMeta] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const extraParamsRef = useRef(extraParams);
@@ -33,6 +34,7 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
         });
         const result = res?.data?.data ?? res?.data;
         setData(result);
+        setMeta(res?.data);
         return result;
       } catch (err: any) {
         setError(err);
@@ -49,5 +51,5 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
     run();
   }, [run, paramsKey]);
 
-  return { data, loading, error, refresh: run };
+  return { data, meta, loading, error, refresh: run };
 }

@@ -48,3 +48,15 @@ export const DEFAULT_DIMENSIONS = 384;
 export const DEFAULT_CHUNK_SIZE = 1000;
 export const DEFAULT_CHUNK_OVERLAP = 200;
 export const DEFAULT_BATCH_SIZE = 16;
+
+// Offline/private deployment: the browser always loads model files from the
+// NocoBase server route, which serves bundled or admin-uploaded files.
+export const OFFLINE_MODEL_SOURCE = 'server';
+
+/**
+ * Strict model ID regex:
+ *   - Only ASCII letters, digits, hyphens, underscores, dots
+ *   - Max 128 chars per segment
+ *   - Must be exactly "Org/ModelName"
+ */
+export const VALID_MODEL_ID_RE = /^[a-zA-Z0-9._-]{1,128}\/[a-zA-Z0-9._-]{1,128}$/;

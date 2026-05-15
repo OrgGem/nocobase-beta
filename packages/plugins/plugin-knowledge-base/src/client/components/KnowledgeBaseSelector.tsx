@@ -392,72 +392,96 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
   const showUploadArea = selectedKB && canUpload(selectedKB);
 
   return (
-    <div style={{ display: 'flex', height: '65vh', minHeight: 480 }}>
+    <div style={{ display: 'flex', height: '65vh', minHeight: 480, background: '#f5f5f5', borderRadius: 12, overflow: 'hidden' }}>
       {/* ====== LEFT SIDEBAR ====== */}
       <div
         style={{
-          width: 260,
+          width: 280,
           borderRight: '1px solid #f0f0f0',
-          overflowY: 'auto',
-          background: '#fafafa',
+          display: 'flex',
+          flexDirection: 'column',
+          background: '#ffffff',
+          boxShadow: '2px 0 8px 0 rgba(0,0,0,.02)',
+          zIndex: 1,
         }}
       >
-        <div style={{ padding: '14px 16px 8px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Text strong style={{ fontSize: 14 }}>
+        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
+          <Text strong style={{ fontSize: 15 }}>
             Knowledge Bases
           </Text>
           <Input.Search
-            placeholder="Search..."
-            size="small"
+            placeholder="Search bases..."
+            size="middle"
             allowClear
             onChange={(e) => setSearchText(e.target.value)}
+            style={{ borderRadius: 8 }}
           />
         </div>
-        {knowledgeBases
-          .filter((kb) => kb.name.toLowerCase().includes(searchText.toLowerCase()))
-          .map((kb) => {
-            const isActive = selectedKB?.id === kb.id;
-            const isChatSelected = chatSelectedIds.has(kb.id);
-            return (
-              <div
-                key={kb.id}
-                onClick={() => setSelectedKB(kb)}
-                style={{
-                  padding: '10px 16px',
-                  cursor: 'pointer',
-                  background: isActive ? '#e6f4ff' : 'transparent',
-                  borderLeft: isActive ? '3px solid #1890ff' : '3px solid transparent',
-                  transition: 'all 0.2s',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {accessIcons[kb.accessLevel || 'PUBLIC']}
-                  <Text strong={isActive} style={{ flex: 1, fontSize: 13 }} ellipsis>
-                    {kb.name}
-                  </Text>
-                  {isChatSelected && <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 14 }} />}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px' }}>
+          {knowledgeBases
+            .filter((kb) => kb.name.toLowerCase().includes(searchText.toLowerCase()))
+            .map((kb) => {
+              const isActive = selectedKB?.id === kb.id;
+              const isChatSelected = chatSelectedIds.has(kb.id);
+              return (
+                <div
+                  key={kb.id}
+                  onClick={() => setSelectedKB(kb)}
+                  style={{
+                    padding: '12px',
+                    marginBottom: '8px',
+                    cursor: 'pointer',
+                    background: isActive ? '#f0f7ff' : '#ffffff',
+                    border: isActive ? '1px solid #91caff' : '1px solid #f0f0f0',
+                    borderRadius: '10px',
+                    transition: 'all 0.3s ease',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    boxShadow: isActive ? '0 2px 8px rgba(24, 144, 255, 0.1)' : 'none',
+                  }}
+                >
+                  <div style={{ 
+                    width: 32, 
+                    height: 32, 
+                    borderRadius: '8px', 
+                    background: isActive ? '#1890ff' : '#fafafa', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center',
+                    color: isActive ? '#fff' : '#8c8c8c',
+                    fontSize: 16
+                  }}>
+                    {isActive ? <BookOutlined /> : accessIcons[kb.accessLevel || 'PUBLIC']}
+                  </div>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Text strong style={{ fontSize: 14, color: isActive ? '#1890ff' : 'inherit' }} ellipsis>
+                        {kb.name}
+                      </Text>
+                      {isChatSelected && <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 14 }} />}
+                    </div>
+                    <Tag
+                      color={accessColors[kb.accessLevel || 'PUBLIC']}
+                      style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: '4px 0 0 0', borderRadius: 4 }}
+                    >
+                      {kb.accessLevel || 'PUBLIC'}
+                    </Tag>
+                  </div>
                 </div>
-                <div style={{ marginTop: 4, display: 'flex', gap: 4 }}>
-                  <Tag
-                    color={accessColors[kb.accessLevel || 'PUBLIC']}
-                    style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px' }}
-                  >
-                    {kb.accessLevel || 'PUBLIC'}
-                  </Tag>
-                </div>
-              </div>
-            );
-          })}
+              );
+            })}
+        </div>
       </div>
 
       {/* ====== RIGHT CONTENT ====== */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '16px' }}>
         {selectedKB ? (
-          <>
+          <div style={{ background: '#fff', borderRadius: 12, display: 'flex', flexDirection: 'column', height: '100%', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', border: '1px solid #f0f0f0' }}>
             {/* Header */}
             <div
               style={{
-                padding: '12px 20px',
+                padding: '20px 24px',
                 borderBottom: '1px solid #f0f0f0',
                 display: 'flex',
                 justifyContent: 'space-between',
@@ -466,11 +490,11 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
               }}
             >
               <div>
-                <Title level={5} style={{ margin: 0 }}>
+                <Title level={4} style={{ margin: 0, marginBottom: 4 }}>
                   {selectedKB.name}
                 </Title>
                 {selectedKB.description && (
-                  <Text type="secondary" style={{ fontSize: 12 }}>
+                  <Text type="secondary" style={{ fontSize: 13 }}>
                     {selectedKB.description}
                   </Text>
                 )}
@@ -480,16 +504,18 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
                   type={chatSelectedIds.has(selectedKB.id) ? 'primary' : 'default'}
                   icon={chatSelectedIds.has(selectedKB.id) ? <CheckCircleOutlined /> : <BookOutlined />}
                   onClick={() => handleChatToggle(selectedKB)}
+                  shape="round"
+                  size="large"
                 >
-                  {chatSelectedIds.has(selectedKB.id) ? 'Selected' : 'Select for Chat'}
+                  {chatSelectedIds.has(selectedKB.id) ? 'Selected for Chat' : 'Select for Chat'}
                 </Button>
               </Space>
             </div>
 
             {/* Document Table */}
-            <div style={{ flex: 1, overflow: 'auto', padding: '12px 20px' }}>
+            <div style={{ flex: 1, overflow: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column' }}>
               {showUploadArea && (
-                <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 20 }}>
                   <Dragger
                     name="file"
                     multiple
@@ -497,28 +523,28 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
                     accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
                     customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
                     onChange={handleUploadChange}
-                    style={{ padding: '16px 0', background: '#fafafa' }}
+                    style={{ padding: '16px 0', background: '#fafafa', border: '1px dashed #d9d9d9', borderRadius: 8 }}
                   >
-                    <p className="ant-upload-drag-icon" style={{ marginBottom: 8 }}>
-                      <InboxOutlined />
-                    </p>
-                    <p className="ant-upload-text" style={{ fontSize: 13, margin: 0, marginBottom: 8 }}>
-                      Drag files here or
-                    </p>
-                    <Space>
-                      <Button type="primary" size="small" icon={<UploadOutlined />}>
-                        Upload File
-                      </Button>
-                      <Button
-                        size="small"
-                        icon={<PlusOutlined />}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setTextModalVisible(true);
-                        }}
-                      >
-                        Paste Text
-                      </Button>
+                    <Space direction="vertical" size={12}>
+                      <InboxOutlined style={{ fontSize: 32, color: '#1890ff' }} />
+                      <Text strong style={{ fontSize: 14 }}>
+                        Click or drag file to this area to upload
+                      </Text>
+                      <Space>
+                        <Button type="primary" shape="round" icon={<UploadOutlined />}>
+                          Upload File
+                        </Button>
+                        <Button
+                          shape="round"
+                          icon={<PlusOutlined />}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTextModalVisible(true);
+                          }}
+                        >
+                          Paste Text
+                        </Button>
+                      </Space>
                     </Space>
                   </Dragger>
                 </div>
@@ -528,16 +554,17 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
                 dataSource={documents}
                 columns={docColumns}
                 rowKey="id"
-                size="small"
+                size="middle"
                 loading={docsLoading}
                 pagination={{ pageSize: 8, size: 'small', showSizeChanger: false }}
                 locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No documents yet" /> }}
+                style={{ flex: 1 }}
               />
             </div>
-          </>
+          </div>
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Empty description="Select a knowledge base" />
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', borderRadius: 12, border: '1px solid #f0f0f0' }}>
+            <Empty description="Select a knowledge base from the list" />
           </div>
         )}
       </div>

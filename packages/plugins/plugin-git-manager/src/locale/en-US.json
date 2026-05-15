@@ -177,5 +177,12 @@
   "new": "new",
   "Reviewed SHA": "Reviewed SHA",
   "Latest SHA": "Latest SHA",
-  "All triggers": "All triggers"
+  "All triggers": "All triggers",
+  "Search commit title or message": "Search commit title or message",
+  "Primary Auto Flow": "Primary Auto Flow",
+  "Primary Auto Review Flow": "Primary Auto Review Flow",
+  "Only flows with automatic trigger modes are shown": "Only flows with automatic trigger modes are shown",
+  "Fallback": "Fallback",
+  "AI employee not found": "AI employee not found",
+  "Failed to open AI chat": "Failed to open AI chat"
 }

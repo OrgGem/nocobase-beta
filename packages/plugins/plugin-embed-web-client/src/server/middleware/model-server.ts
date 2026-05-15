@@ -27,7 +27,7 @@ import { createS3StorageFromConfigWithFileManager } from '../utils/s3-storage';
 const URL_PREFIX = '/embed-web-client/models/';
 
 const STORAGE_MODELS_ROOT = resolve(process.cwd(), 'storage/plugin-embed-web-client/models');
-const EMBEDDED_MODELS_ROOT = resolve(__dirname, '../../public/models');
+const EMBEDDED_MODELS_ROOT = resolve(__dirname, '../../../public/models');
 
 const MIME_MAP: Record<string, string> = {
   '.json': 'application/json',

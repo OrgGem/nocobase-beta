@@ -7,14 +7,38 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import type {
-  VectorStoreProviderFeature,
-  VectorStoreProvider,
-  VectorStoreService,
-  VectorStoreSearchOptions,
-  DocumentSegmentedWithScore,
-} from '@nocobase/plugin-ai/server';
-import type { VectorStoreProp } from '@nocobase/plugin-ai/server';
+export interface VectorStoreProp {
+  key: string;
+  value: any;
+}
+
+export interface DocumentSegmentedWithScore {
+  content: string;
+  metadata: any;
+  id?: string;
+  score: number;
+}
+
+export interface VectorStoreSearchOptions {
+  topK?: number;
+  score?: number | string;
+  filter?: any;
+}
+
+export interface VectorStoreService {
+  getVectorStore(): Promise<any>;
+  search(query: string, options?: VectorStoreSearchOptions): Promise<DocumentSegmentedWithScore[]>;
+}
+
+export interface VectorStoreProvider {
+  providerName: string;
+  createVectorStoreService(vectorStoreProps?: VectorStoreProp[]): Promise<VectorStoreService>;
+}
+
+export interface VectorStoreProviderFeature {
+  register(vsp: VectorStoreProvider): void;
+  createVectorStoreService(providerName: string, vectorStoreProps?: VectorStoreProp[]): Promise<VectorStoreService>;
+}
 import type PluginKnowledgeBaseServer from '../plugin';
 import type PluginAIServer from '@nocobase/plugin-ai';
 import { createEmbeddingsForVectorStore } from '../pipeline/embedding-factory';
@@ -25,7 +49,7 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
 
   constructor(
     private plugin: PluginKnowledgeBaseServer,
-    private aiPlugin: PluginAIServer,
+    private aiPlugin: any,
   ) {}
 
   register(vsp: VectorStoreProvider): void {
@@ -65,6 +89,11 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
     }
 
     const vectorStoreConfig = vectorStoreRecord.toJSON();
+    if (propsMap.get('embeddingProvider') === 'localEmbed') {
+      vectorStoreConfig.embeddingProvider = 'localEmbed';
+      vectorStoreConfig.localEmbedModelId = propsMap.get('localEmbedModelId') || vectorStoreConfig.localEmbedModelId;
+      vectorStoreConfig.localEmbedDtype = propsMap.get('localEmbedDtype') || vectorStoreConfig.localEmbedDtype || 'q8';
+    }
     const vectorDatabase = vectorStoreConfig.vectorDatabase;
 
     if (!vectorDatabase) {

@@ -95,14 +95,14 @@ export class SkillHubSubFeature {
     // 2. Init services
     const storagePath = resolve(process.cwd(), 'storage', 'plugin-skill-hub'); // Keep old storage path for backwards compatibility
     this.fileManager = new FileManager(storagePath);
-    this.sandboxRunner = new SandboxRunner(this.fileManager, this.app.logger, storagePath);
-    this.skillManager = new SkillManager(this.db);
-    this.workerEnvManager = new WorkerEnvManager(this.app, this.db, storagePath);
+    this.sandboxRunner = new SandboxRunner(this.fileManager, (this as any).app.logger, storagePath);
+    this.skillManager = new SkillManager((this as any).db);
+    this.workerEnvManager = new WorkerEnvManager((this as any).app, (this as any).db, storagePath);
     this.skillRepoService = new SkillRepositoryService(storagePath);
     this.mcpController = new McpController(this);
 
     // 3. Register REST actions
-    this.app.resourceManager.define({
+    (this as any).app.resourceManager.define({
       name: 'skillHub',
       actions: {
         download: this.handleDownload.bind(this),
@@ -119,7 +119,7 @@ export class SkillHubSubFeature {
 
 
     // 4.5. Register DB hooks for automatic storage physical cleanup
-    this.db.on('skillExecutions.afterDestroy', async (model, options) => {
+    (this as any).db.on('skillExecutions.afterDestroy', async (model, options) => {
       const execId = model.get('id');
       try {
         const dir = this.fileManager.getExecDir(String(execId));
@@ -127,29 +127,29 @@ export class SkillHubSubFeature {
           require('fs').rmSync(dir, { recursive: true, force: true });
         }
       } catch (err) {
-        this.app.logger.error(`[skill-hub] Failed to cleanup physical storage for execId ${execId}`, { error: err });
+        (this as any).app.logger.error(`[skill-hub] Failed to cleanup physical storage for execId ${execId}`, { error: err });
       }
     });
 
-    this.db.on('skillDefinitions.afterSave', async (model, options) => {
+    (this as any).db.on('skillDefinitions.afterSave', async (model, options) => {
       // If a zip file was uploaded, extract it and update the skill record
       if (model.changed('fileId') && model.get('fileId')) {
         try {
-          const attachment = await this.db.getRepository('attachments').findOne({
+          const attachment = await (this as any).db.getRepository('attachments').findOne({
             filter: { id: model.get('fileId') },
             transaction: options.transaction,
           });
 
           if (attachment) {
-            const fileManager = this.app.pm.get('@nocobase/plugin-file-manager') as any;
+            const fileManager = (this as any).app.pm.get('@nocobase/plugin-file-manager') as any;
             if (!fileManager) {
-              this.app.logger.warn('[skill-hub] plugin-file-manager not found, cannot extract skill package');
+              (this as any).app.logger.warn('[skill-hub] plugin-file-manager not found, cannot extract skill package');
               return;
             }
 
             const streamData = await fileManager.getFileStream(attachment);
             if (!streamData || !streamData.stream) {
-              this.app.logger.warn(`[skill-hub] Could not get file stream for attachment ${attachment.get('id')}`);
+              (this as any).app.logger.warn(`[skill-hub] Could not get file stream for attachment ${attachment.get('id')}`);
               return;
             }
 
@@ -179,54 +179,54 @@ export class SkillHubSubFeature {
               if (metadata.timeoutSeconds) updateValues.timeoutSeconds = metadata.timeoutSeconds;
               if (instructions) updateValues.instructions = instructions;
 
-              await this.db.getRepository('skillDefinitions').update({
+              await (this as any).db.getRepository('skillDefinitions').update({
                 filter: { id: model.get('id') },
                 values: updateValues,
                 transaction: options.transaction,
               });
               
               unlinkSync(tempZipPath);
-              this.app.logger.info(`[skill-hub] Successfully extracted zip and updated skill: ${skillName}`);
+              (this as any).app.logger.info(`[skill-hub] Successfully extracted zip and updated skill: ${skillName}`);
             }
           }
         } catch (err) {
-          this.app.logger.error(`[skill-hub] Failed to unpack skill zip`, { error: err });
+          (this as any).app.logger.error(`[skill-hub] Failed to unpack skill zip`, { error: err });
         }
       }
     });
 
     // 5. Subscribe PubSub — worker processes skill execution tasks
-    this.app.pubSubManager.subscribe('skill-hub.task', async (payload: any) => {
+    (this as any).app.pubSubManager.subscribe('skill-hub.task', async (payload: any) => {
       if (process.env.SKILL_HUB_SANDBOX === 'false') return;
       await this.onQueueTask(payload);
     });
 
     // 5b. Subscribe PubSub — worker processes init-env tasks
-    this.app.pubSubManager.subscribe('skill-hub.init-env', async (payload: any) => {
+    (this as any).app.pubSubManager.subscribe('skill-hub.init-env', async (payload: any) => {
       if (process.env.SKILL_HUB_SANDBOX === 'false') return;
       await this.workerEnvManager.executeInit(payload);
     });
 
     // 6. Register AI tools + subscriptions (deferred — after all plugins loaded)
-    this.app.on('afterStart', async () => {
+    (this as any).app.on('afterStart', async () => {
       this.registerAITools();
       this.startCleanupInterval();
       await this.subscribeInitEnvDone();
       // Ensure any newly added built-in skills are seeded automatically on upgrade/restart
       await this.skillManager.seedDefaults().catch((e) => {
-        this.app.logger.error(`[skill-hub] Failed to seed default skills: ${e.message}`);
+        (this as any).app.logger.error(`[skill-hub] Failed to seed default skills: ${e.message}`);
       });
     });
   }
 
   private async onQueueTask(message: { id: string }) {
-    this.app.logger.info(`[skill-hub] Worker received queue task: ${message.id}`);
-    const execution = await this.db.getRepository('skillExecutions').findOne({
+    (this as any).app.logger.info(`[skill-hub] Worker received queue task: ${message.id}`);
+    const execution = await (this as any).db.getRepository('skillExecutions').findOne({
       filter: { id: message.id },
       appends: ['skill'],
     });
     if (!execution) {
-      this.app.logger.warn(`[skill-hub] Task ${message.id} ignored: execution record not found.`);
+      (this as any).app.logger.warn(`[skill-hub] Task ${message.id} ignored: execution record not found.`);
       return;
     }
 
@@ -235,7 +235,7 @@ export class SkillHubSubFeature {
       this.sandboxRunner,
       this.fileManager,
       this.skillRepoService,
-      this.app,
+      (this as any).app,
     );
     await task.run();
   }
@@ -259,7 +259,7 @@ export class SkillHubSubFeature {
       }
     }
 
-    const execution = await this.db.getRepository('skillExecutions').create({
+    const execution = await (this as any).db.getRepository('skillExecutions').create({
       values: {
         skillId: skill.id,
         status: 'pending',
@@ -271,7 +271,7 @@ export class SkillHubSubFeature {
 
     const execId = String(execution.id);
 
-    this.app.logger.info(
+    (this as any).app.logger.info(
       `[skill-hub] Queued execution ${execId}: skill=${skill.get ? skill.get('name') : skill.name}, ` +
       `user=${userId || 'system'}`,
     );
@@ -317,10 +317,10 @@ export class SkillHubSubFeature {
       };
 
       // Subscribe progress and completion FIRST (before dispatching)
-      await this.app.pubSubManager.subscribe(progressChannel, progressCallback);
+      await (this as any).app.pubSubManager.subscribe(progressChannel, progressCallback);
       cleanups.push({ channel: progressChannel, callback: progressCallback });
 
-      await this.app.pubSubManager.subscribe(doneChannel, doneCallback);
+      await (this as any).app.pubSubManager.subscribe(doneChannel, doneCallback);
       cleanups.push({ channel: doneChannel, callback: doneCallback });
 
       // Handle user abort (cancel chat) → propagate to worker
@@ -329,9 +329,9 @@ export class SkillHubSubFeature {
         signal.addEventListener?.('abort', () => {
           clearTimeout(timeout);
           // Publish abort to worker via PubSub
-          this.app.pubSubManager.publish(abortChannel, { reason: 'user_cancel' }).catch(() => {});
+          (this as any).app.pubSubManager.publish(abortChannel, { reason: 'user_cancel' }).catch(() => {});
           // Also update the execution status
-          this.db.getRepository('skillExecutions').update({
+          (this as any).db.getRepository('skillExecutions').update({
             filter: { id: execId },
             values: { status: 'canceled' },
           }).catch(() => {});
@@ -340,7 +340,7 @@ export class SkillHubSubFeature {
       }
 
       // NOW Dispatch to worker via EventQueue
-      await this.app.pubSubManager.publish('skill-hub.task', { id: execId });
+      await (this as any).app.pubSubManager.publish('skill-hub.task', { id: execId });
 
       // Wait for completion
       result = await resultPromise;
@@ -348,7 +348,7 @@ export class SkillHubSubFeature {
       // Cleanup all PubSub subscriptions
       for (const { channel, callback } of cleanups) {
         try {
-          await this.app.pubSubManager.unsubscribe(channel, callback);
+          await (this as any).app.pubSubManager.unsubscribe(channel, callback);
         } catch {
           // ignore cleanup errors
         }
@@ -383,7 +383,7 @@ export class SkillHubSubFeature {
       ctx.throw(401, 'Unauthorized');
     }
 
-    const execution = await this.db.getRepository('skillExecutions').findOne({
+    const execution = await (this as any).db.getRepository('skillExecutions').findOne({
       filter: { id: execId },
     });
 
@@ -414,7 +414,7 @@ export class SkillHubSubFeature {
       ctx.throw(400, 'Missing skillId');
     }
 
-    const skill = await this.db.getRepository('skillDefinitions').findOne({
+    const skill = await (this as any).db.getRepository('skillDefinitions').findOne({
       filter: { id: skillId },
     });
     if (!skill) {
@@ -465,20 +465,20 @@ export class SkillHubSubFeature {
         if (data.status === 'succeeded' && data.whitelist) {
           values.packageWhitelist = stringifyJsonText(data.whitelist, { python: [], node: [], apt: [] });
         }
-        await this.db.getRepository('skillWorkerConfigs').update({
+        await (this as any).db.getRepository('skillWorkerConfigs').update({
           filter: {},
           values,
           forceUpdate: true,
         });
-        this.app.logger.info(`[skill-hub] Init env ${data.status}`);
+        (this as any).app.logger.info(`[skill-hub] Init env ${data.status}`);
       } catch (err) {
-        this.app.logger.warn('[skill-hub] Failed to update init env status:', err);
+        (this as any).app.logger.warn('[skill-hub] Failed to update init env status:', err);
       }
     };
     
     this.initEnvProgressCallback = async (data: any) => {
       try {
-        await this.db.getRepository('skillWorkerConfigs').update({
+        await (this as any).db.getRepository('skillWorkerConfigs').update({
           filter: {},
           values: {
             initProgressPercent: data.percent,
@@ -491,15 +491,15 @@ export class SkillHubSubFeature {
       }
     };
 
-    await this.app.pubSubManager.subscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
-    await this.app.pubSubManager.subscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
+    await (this as any).app.pubSubManager.subscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
+    await (this as any).app.pubSubManager.subscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
   }
 
   private registerAITools() {
     try {
-      const aiPlugin = this.app.pm.get('@nocobase/plugin-ai') as any;
+      const aiPlugin = (this as any).app.pm.get('@nocobase/plugin-ai') as any;
       if (!aiPlugin?.ai?.toolsManager) {
-        this.app.logger.warn('[skill-hub] plugin-ai not available, skip AI tool registration.');
+        (this as any).app.logger.warn('[skill-hub] plugin-ai not available, skip AI tool registration.');
         return;
       }
 
@@ -509,7 +509,7 @@ export class SkillHubSubFeature {
       // 2. Dynamic tools — each enabled skill becomes a separate AI tool.
       aiPlugin.ai.toolsManager.registerDynamicTools(async (register: { registerTools: (options: any) => void }) => {
         try {
-          const skills = await this.db.getRepository('skillDefinitions').find({
+          const skills = await (this as any).db.getRepository('skillDefinitions').find({
             filter: { enabled: true },
           });
 
@@ -539,11 +539,11 @@ export class SkillHubSubFeature {
               },
               invoke: async (toolCtx: any, args: any) => {
                 // Re-fetch skill to get latest version (hot-reload support)
-                const latestSkill = await this.db.getRepository('skillDefinitions').findOne({
+                const latestSkill = await (this as any).db.getRepository('skillDefinitions').findOne({
                   filter: { id: skill.get('id'), enabled: true },
                 });
                 if (!latestSkill) {
-                  return { error: `Skill "${skill.get('name')}" is no longer available` };
+                  return { status: 'error', content: `Skill "${skill.get('name')}" is no longer available` };
                 }
                 const result = await this.executeSkill(latestSkill, args, toolCtx);
                 return {
@@ -556,13 +556,13 @@ export class SkillHubSubFeature {
 
           register.registerTools(tools);
         } catch (err) {
-          this.app.logger.warn('[skill-hub] Failed to provide dynamic tools', err);
+          (this as any).app.logger.warn('[skill-hub] Failed to provide dynamic tools', err);
         }
       });
 
-      this.app.logger.info('[skill-hub] AI tools registered (dynamic provider + general tool).');
+      (this as any).app.logger.info('[skill-hub] AI tools registered (dynamic provider + general tool).');
     } catch (error) {
-      this.app.logger.warn('[skill-hub] Failed to register AI tools:', error);
+      (this as any).app.logger.warn('[skill-hub] Failed to register AI tools:', error);
     }
   }
 
@@ -573,27 +573,27 @@ export class SkillHubSubFeature {
     this.cleanupInterval = setInterval(async () => {
       // 1. Storage Retention Cleanup
       try {
-        const config = await this.db.getRepository('skillWorkerConfigs').findOne();
+        const config = await (this as any).db.getRepository('skillWorkerConfigs').findOne();
         const hours = config ? config.get('retentionHours') : 24;
         
         if (hours && hours > 0) {
           const MAX_AGE_MS = hours * 60 * 60 * 1000;
           const cutoff = new Date(Date.now() - MAX_AGE_MS);
-          const repo = this.db.getRepository('skillExecutions');
+          const repo = (this as any).db.getRepository('skillExecutions');
           
           const outdated = await repo.find({
-            where: { createdAt: { $lt: cutoff } }
+            filter: { createdAt: { $lt: cutoff } }
           });
           
           if (outdated.length > 0) {
             for (const record of outdated) {
               await record.destroy(); // Fires afterDestroy hook which removes physical folder
             }
-            this.app.logger.info(`[skill-hub] Auto-cleaned up ${outdated.length} expired execution records`);
+            (this as any).app.logger.info(`[skill-hub] Auto-cleaned up ${outdated.length} expired execution records`);
           }
         }
       } catch (err) {
-        this.app.logger.warn('[skill-hub] Auto Cleanup error:', err);
+        (this as any).app.logger.warn('[skill-hub] Auto Cleanup error:', err);
       }
 
       // 2. Cleanup rate limiter stale entries
@@ -605,12 +605,12 @@ export class SkillHubSubFeature {
     // Unsubscribe PubSub
     if (this.initEnvDoneCallback) {
       try {
-        await this.app.pubSubManager.unsubscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
+        await (this as any).app.pubSubManager.unsubscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
       } catch { /* ignore */ }
     }
     if (this.initEnvProgressCallback) {
       try {
-        await this.app.pubSubManager.unsubscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
+        await (this as any).app.pubSubManager.unsubscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
       } catch { /* ignore */ }
     }
 
@@ -624,7 +624,7 @@ export class SkillHubSubFeature {
   // --- Handlers ---
   private async handleClearStorage(ctx: any, next: () => Promise<any>) {
     const { type } = ctx.request.body || ctx.action.params.values;
-    const repo = this.db.getRepository('skillExecutions');
+    const repo = (this as any).db.getRepository('skillExecutions');
     let count = 0;
 
     if (type === 'all') {
@@ -634,11 +634,11 @@ export class SkillHubSubFeature {
       }
       count = results.length;
     } else if (type === 'expired') {
-      const config = await this.db.getRepository('skillWorkerConfigs').findOne();
+      const config = await (this as any).db.getRepository('skillWorkerConfigs').findOne();
       const hours = config ? config.get('retentionHours') : 24;
       if (hours > 0) {
         const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
-        const results = await repo.find({ where: { createdAt: { $lt: cutoff } }, fields: ['id'] });
+        const results = await repo.find({ filter: { createdAt: { $lt: cutoff } }, fields: ['id'] });
         for (const rec of results) {
           await rec.destroy();
         }
@@ -653,7 +653,7 @@ export class SkillHubSubFeature {
   private async handleListTemplates(ctx: any, next: () => Promise<any>) {
     // Dynamic Pull: discover templates from all active plugins in the system
     try {
-      const allPlugins = this.app.pm.getPlugins();
+      const allPlugins = (this as any).app.pm.getPlugins();
       for (const [, pluginInstance] of allPlugins) {
         if (typeof (pluginInstance as any).getSkillTemplates === 'function') {
           const pluginSkills = (pluginInstance as any).getSkillTemplates();
@@ -667,7 +667,7 @@ export class SkillHubSubFeature {
         }
       }
     } catch (e) {
-      this.app.logger.warn(`[skill-hub] Failed to discover some plugin skills: ${e.message}`);
+      (this as any).app.logger.warn(`[skill-hub] Failed to discover some plugin skills: ${e.message}`);
     }
 
     ctx.body = { data: Array.from(this.skillTemplates.values()) };
@@ -683,7 +683,7 @@ export class SkillHubSubFeature {
    */
   registerSkillTemplate(pluginName: string, skillDef: any) {
     this.skillTemplates.set(skillDef.name, this.hydrateSkillTemplate(pluginName, skillDef));
-    this.app.logger.info(`[skill-hub] Registered skill template "${skillDef.name}" from plugin "${pluginName}"`);
+    (this as any).app.logger.info(`[skill-hub] Registered skill template "${skillDef.name}" from plugin "${pluginName}"`);
   }
 
   resolveSkillTemplate(templateName: string) {
@@ -692,7 +692,7 @@ export class SkillHubSubFeature {
     if (cached) return cached;
 
     try {
-      const allPlugins = this.app.pm.getPlugins();
+      const allPlugins = (this as any).app.pm.getPlugins();
       for (const [, pluginInstance] of allPlugins) {
         if (typeof (pluginInstance as any).getSkillTemplates !== 'function') continue;
         const pluginSkills = (pluginInstance as any).getSkillTemplates();
@@ -705,7 +705,7 @@ export class SkillHubSubFeature {
         }
       }
     } catch (e: any) {
-      this.app.logger.warn(`[skill-hub] Failed to resolve plugin skill "${templateName}": ${e.message}`);
+      (this as any).app.logger.warn(`[skill-hub] Failed to resolve plugin skill "${templateName}": ${e.message}`);
     }
 
     return null;

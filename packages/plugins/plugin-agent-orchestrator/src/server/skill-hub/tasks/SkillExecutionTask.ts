@@ -64,13 +64,13 @@ export class SkillExecutionTask {
     const abortController = new TaskAbortController();
     const abortChannel = `skill-hub.abort.${execId}`;
     const abortCallback = async () => {
-      this.app.logger.info(`[skill-hub] Task ${execId}: received abort signal`);
+      (this as any).app.logger.info(`[skill-hub] Task ${execId}: received abort signal`);
       abortController.abort();
     };
 
     try {
       // Subscribe to abort channel before starting execution
-      await this.app.pubSubManager.subscribe(abortChannel, abortCallback);
+      await (this as any).app.pubSubManager.subscribe(abortChannel, abortCallback);
 
       // Render code template with input args
       const inputArgs = parseJsonText(this.execution.get('inputArgs'), {});
@@ -86,7 +86,7 @@ export class SkillExecutionTask {
 
       if (storageType === 'plugin') {
         const pluginSkillName = (skill.get ? skill.get('pluginSource') : skill.pluginSource) || skillName;
-        const orchestratorPlugin = this.app.pm.get('plugin-agent-orchestrator') as any;
+        const orchestratorPlugin = (this as any).app.pm.get('plugin-agent-orchestrator') as any;
         const skillHub = orchestratorPlugin?.skillHub;
         let pluginTemplate = typeof skillHub?.resolveSkillTemplate === 'function'
           ? skillHub.resolveSkillTemplate(pluginSkillName)
@@ -94,7 +94,7 @@ export class SkillExecutionTask {
 
         // Fallback: discover dynamically if not cached (e.g. executed in worker before UI was loaded)
         if (!pluginTemplate && skillHub) {
-          const allPlugins = this.app.pm.getPlugins();
+          const allPlugins = (this as any).app.pm.getPlugins();
           for (const [, pInstance] of allPlugins) {
             if (typeof (pInstance as any).getSkillTemplates === 'function') {
               const pluginSkills = (pInstance as any).getSkillTemplates();
@@ -150,7 +150,7 @@ export class SkillExecutionTask {
       // Load package whitelist for import validation
       let packageWhitelist: string[] = [];
       try {
-        const workerConfig = await this.app.db.getRepository('skillWorkerConfigs').findOne();
+        const workerConfig = await (this as any).app.db.getRepository('skillWorkerConfigs').findOne();
         if (workerConfig) {
           const wl = parseJsonText(
             workerConfig.get ? workerConfig.get('packageWhitelist') : workerConfig.packageWhitelist,
@@ -169,8 +169,8 @@ export class SkillExecutionTask {
 
       // In multi-node setups, local cache might be missing on this specific worker node. Re-download from S3 if needed.
       if (!require('fs').existsSync(this.skillRepoService.getSkillPath(skillName)) && fileId) {
-        const fmPlugin = this.app.pm.get('@nocobase/plugin-file-manager') as any;
-        const attachment = await this.app.db.getRepository('attachments').findOne({ filter: { id: fileId } });
+        const fmPlugin = (this as any).app.pm.get('@nocobase/plugin-file-manager') as any;
+        const attachment = await (this as any).app.db.getRepository('attachments').findOne({ filter: { id: fileId } });
         if (fmPlugin && attachment) {
           try {
             const streamData = await fmPlugin.getFileStream(attachment);
@@ -185,12 +185,12 @@ export class SkillExecutionTask {
               });
               await this.skillRepoService.extractSkillPackage(skillName, tempZipPath);
               require('fs').unlinkSync(tempZipPath);
-              this.app.logger.info(
+              (this as any).app.logger.info(
                 `[skill-hub] Task ${execId}: Auto-restored skill package ${skillName} from S3/Storage`,
               );
             }
           } catch (fetchErr) {
-            this.app.logger.warn(
+            (this as any).app.logger.warn(
               `[skill-hub] Task ${execId}: Failed to fetch skill package ${skillName} from storage`,
               { error: fetchErr },
             );
@@ -214,7 +214,7 @@ export class SkillExecutionTask {
         packageWhitelist,
         onProgress: (progress) => {
           // Worker → PubSub → Main Server → runtime.writer → SSE → Client
-          this.app.pubSubManager.publish(`skill-hub.progress.${execId}`, progress);
+          (this as any).app.pubSubManager.publish(`skill-hub.progress.${execId}`, progress);
         },
       });
 
@@ -244,7 +244,7 @@ export class SkillExecutionTask {
       });
 
       // Notify main server: task completed
-      await this.app.pubSubManager.publish(`skill-hub.done.${execId}`, {
+      await (this as any).app.pubSubManager.publish(`skill-hub.done.${execId}`, {
         status,
         stdout: result.stdout?.slice(0, 3000),
         stderr: result.stderr?.slice(0, 1000),
@@ -253,7 +253,7 @@ export class SkillExecutionTask {
       });
 
       // Log execution metrics
-      this.app.logger.info(
+      (this as any).app.logger.info(
         `[skill-hub] Execution ${execId} ${status}: ` +
           `skill=${skill.get ? skill.get('name') : skill.name}, ` +
           `language=${language}, ` +
@@ -269,18 +269,18 @@ export class SkillExecutionTask {
         stderr: errorMessage,
       });
 
-      await this.app.pubSubManager.publish(`skill-hub.done.${execId}`, {
+      await (this as any).app.pubSubManager.publish(`skill-hub.done.${execId}`, {
         status: 'failed',
         stderr: errorMessage,
         files: [],
         durationMs: 0,
       });
 
-      this.app.logger.error(`[skill-hub] Execution ${execId} error: ${errorMessage}`);
+      (this as any).app.logger.error(`[skill-hub] Execution ${execId} error: ${errorMessage}`);
     } finally {
       // Always cleanup abort subscription
       try {
-        await this.app.pubSubManager.unsubscribe(abortChannel, abortCallback);
+        await (this as any).app.pubSubManager.unsubscribe(abortChannel, abortCallback);
       } catch {
         // ignore cleanup errors
       }
@@ -334,6 +334,7 @@ export class SkillExecutionTask {
 
     const validator = new CodeValidator();
     validator.validate(skill.codeTemplate, language);
+    await this.validateGeneratedSkillPackages(name, language, skill.packages);
 
     const outputDir = this.fileManager.getOutputDir(execId);
     const outputRoot = resolve(outputDir);
@@ -397,7 +398,7 @@ export class SkillExecutionTask {
       values.interactionSchema = stringifyJsonText(skill.interactionSchema);
     }
 
-    const repo = this.app.db.getRepository('skillDefinitions');
+    const repo = (this as any).app.db.getRepository('skillDefinitions');
     const existing = await repo.findOne({ filter: { name } });
     if (existing) {
       if (manifest.overwrite === false) {
@@ -409,5 +410,34 @@ export class SkillExecutionTask {
 
     await repo.create({ values });
     return `[skill-hub] Installed generated skill "${name}" in Skill Hub.`;
+  }
+
+  private async validateGeneratedSkillPackages(name: string, language: 'python' | 'node', packages: any) {
+    if (!Array.isArray(packages) || packages.length === 0) return;
+    if (!packages.every((pkg) => typeof pkg === 'string' && pkg.trim())) {
+      throw new Error(`Generated skill "${name}" has invalid packages. Use an array of package names.`);
+    }
+
+    const workerConfig = await (this as any).app.db.getRepository('skillWorkerConfigs').findOne();
+    if (!workerConfig) return;
+
+    const whitelist = parseJsonText(
+      workerConfig.get ? workerConfig.get('packageWhitelist') : workerConfig.packageWhitelist,
+      null,
+    );
+    const allowed = whitelist?.[language];
+    if (!Array.isArray(allowed) || allowed.length === 0) return;
+
+    const allowedSet = new Set(allowed.map((pkg: string) => pkg.toLowerCase()));
+    const missing = packages
+      .map((pkg: string) => pkg.trim())
+      .filter((pkg: string) => !allowedSet.has(pkg.toLowerCase()));
+
+    if (missing.length > 0) {
+      throw new Error(
+        `Generated skill "${name}" requires ${language} package(s) not available in the Skill Hub worker environment: ` +
+          `${missing.join(', ')}. Add them to the worker environment and refresh/init Skill Hub before installing this skill.`,
+      );
+    }
   }
 }

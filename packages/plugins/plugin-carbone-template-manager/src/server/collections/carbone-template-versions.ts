@@ -23,6 +23,7 @@ export default defineCollection({
     { name: 'fileSize', type: 'bigInt' },
 
     { name: 'placeholderSchema', type: 'json', defaultValue: { d: [], warnings: [] } },
+    { name: 'description', type: 'text' },
     { name: 'changeNote', type: 'text' },
 
     // FK → built-in `attachments` collection from plugin-file-manager.

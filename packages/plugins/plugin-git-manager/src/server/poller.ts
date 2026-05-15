@@ -218,6 +218,11 @@ export async function pollOneRepo(
   });
   if (!flows?.length) return { scanned: 0, triggered: 0 };
 
+  const primaryFlowId = repo.get('autoReviewFlowId') as number | null;
+  const primaryFlow = primaryFlowId
+    ? flows.find((flow: any) => Number(flow.get('id')) === Number(primaryFlowId))
+    : null;
+
   // Need PAT to query GitLab
   const pat = repo.get('pat') as string;
   if (!pat) return { scanned: 0, triggered: 0 };
@@ -227,8 +232,12 @@ export async function pollOneRepo(
 
   let triggered = 0;
   for (const mr of mrs) {
-    // Pick first flow whose branchFilter matches this MR's source branch
-    const flow = flows.find((f: any) => branchMatches(f, mr.source_branch));
+    // Prefer the repository's configured primary auto-review flow, then fall
+    // back to the first matching auto-trigger flow.
+    const flow =
+      primaryFlow && branchMatches(primaryFlow, mr.source_branch)
+        ? primaryFlow
+        : flows.find((f: any) => branchMatches(f, mr.source_branch));
     if (!flow) continue;
 
     // Auto-poll only triggers for MRs that have NEVER been reviewed.

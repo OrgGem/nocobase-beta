@@ -20,11 +20,15 @@ type EmbedTextsFn = (texts: string[], modelId: string, dtype: string) => Promise
 const BATCH_SIZE = 16;
 
 export class LocalOnnxEmbeddings {
+  readonly modelName: string;
+
   constructor(
     private embedTextsFn: EmbedTextsFn,
     private modelId: string,
     private dtype: string,
-  ) {}
+  ) {
+    this.modelName = `${modelId}::${dtype}`;
+  }
 
   async embedDocuments(texts: string[]): Promise<number[][]> {
     if (!texts.length) return [];

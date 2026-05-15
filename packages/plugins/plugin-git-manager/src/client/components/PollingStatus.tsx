@@ -24,12 +24,26 @@ export const PollingStatus: React.FC = () => {
   const [status, setStatus] = useState<PollerStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [pollingId, setPollingId] = useState<number | 'all' | null>(null);
+  const [flows, setFlows] = useState<any[]>([]);
 
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await api.request({ url: 'gitManager:pollerStatus' });
+      const [{ data }, flowsRes] = await Promise.all([
+        api.request({ url: 'gitManager:pollerStatus' }),
+        api.request({
+          url: 'gitReviewFlows:list',
+          params: {
+            pageSize: 100,
+            filter: {
+              enabled: true,
+              triggerMode: { $in: ['onMergeRequestCreated', 'both'] },
+            },
+          },
+        }),
+      ]);
       setStatus(data?.data || null);
+      setFlows(flowsRes?.data?.data || []);
       await refreshRepos();
     } finally {
       setLoading(false);
@@ -162,6 +176,18 @@ export const PollingStatus: React.FC = () => {
             pagination={false}
             columns={[
               { title: t('Repository Name'), dataIndex: 'name' },
+              {
+                title: t('Primary Auto Flow'),
+                dataIndex: 'autoReviewFlowId',
+                width: 220,
+                render: (flowId: number | null, record: any) => {
+                  const flow = flows.find((item) => Number(item.id) === Number(flowId));
+                  const fallback = flows.find((item) => item.repositoryId === record.id || item.repositoryId == null);
+                  if (flow) return <Tag color="blue">{flow.name}</Tag>;
+                  if (fallback) return <Tag color="default">{t('Fallback')}: {fallback.name}</Tag>;
+                  return <Tag color="red">{t('No matching flow available')}</Tag>;
+                },
+              },
               {
                 title: t('Last Polled At'),
                 dataIndex: 'lastPolledAt',

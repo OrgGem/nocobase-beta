@@ -42,7 +42,7 @@ export class WorkerEnvManager {
   ) {}
 
   async getOrCreateConfig() {
-    const repo = this.db.getRepository('skillWorkerConfigs');
+    const repo = (this as any).db.getRepository('skillWorkerConfigs');
     let config = await repo.findOne();
     if (config) return config;
 
@@ -72,7 +72,7 @@ export class WorkerEnvManager {
       }),
     });
 
-    await this.app.pubSubManager.publish('skill-hub.init-env', {
+    await (this as any).app.pubSubManager.publish('skill-hub.init-env', {
       ...config,
       storagePath: this.storagePath,
       queuedAt: new Date().toISOString(),
@@ -89,17 +89,17 @@ export class WorkerEnvManager {
       apt: Array.from(new Set([...(DEFAULT_WHITELIST.apt || []), ...(customPackages.apt || [])])),
     };
 
-    await this.app.pubSubManager.publish('skill-hub.init-env.progress', {
+    await (this as any).app.pubSubManager.publish('skill-hub.init-env.progress', {
       percent: 25,
       log: 'Resolved sandbox package whitelist',
     });
 
-    await this.app.pubSubManager.publish('skill-hub.init-env.progress', {
+    await (this as any).app.pubSubManager.publish('skill-hub.init-env.progress', {
       percent: 75,
       log: 'Sandbox runtime uses the local worker environment',
     });
 
-    await this.app.pubSubManager.publish('skill-hub.init-env.done', {
+    await (this as any).app.pubSubManager.publish('skill-hub.init-env.done', {
       status: 'succeeded',
       log:
         'Sandbox environment is ready on this worker. Package installation is managed by the worker image/runtime; whitelist was refreshed.',

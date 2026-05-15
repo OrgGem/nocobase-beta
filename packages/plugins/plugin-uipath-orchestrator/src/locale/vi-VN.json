@@ -35,5 +35,7 @@
   "Connected": "Đã kết nối",
   "Failed": "Thất bại",
   "Saved": "Đã lưu",
-  "Deleted": "Đã xóa"
+  "Deleted": "Đã xóa",
+  "Queue item ID/key/reference": "ID/key/reference queue item",
+  "Resolved job keys": "Job key đã tìm"
 }

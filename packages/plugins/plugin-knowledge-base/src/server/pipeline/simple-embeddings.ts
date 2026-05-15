@@ -109,7 +109,14 @@ export class SimpleHTTPEmbeddings {
           status >= 500; // server error
 
         if (!isRetryable || attempt === maxRetries) {
-          throw err;
+          // Fix P2-3: Sanitize axios errors to prevent API key leakage in logs.
+          // err.config.headers contains 'Authorization: Bearer <key>' which would
+          // be serialized into error logs by default error handlers.
+          const status = err?.response?.status;
+          const errMsg = err?.response?.data?.error?.message || err?.message || String(err);
+          throw new Error(
+            `Embedding API error${status ? ` (HTTP ${status})` : ''}: ${String(errMsg).substring(0, 300)}`,
+          );
         }
 
         // Exponential backoff: 1s, 2s, 4s

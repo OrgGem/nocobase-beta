@@ -2,8 +2,8 @@ import { Migration } from '@nocobase/server';
 
 export default class AddProgressFieldsMigration extends Migration {
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tablePrefix = this.db.options.tablePrefix || '';
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tablePrefix = (this as any).db.options.tablePrefix || '';
     const tableName = `${tablePrefix}skillWorkerConfigs`;
 
     try {
@@ -14,7 +14,7 @@ export default class AddProgressFieldsMigration extends Migration {
 
       // Force NocoBase fields metadata to recognize the physical columns exists
       // so it won't crash trying to ADD COLUMN during db.sync()
-      const fieldRepo = this.db.getRepository('fields');
+      const fieldRepo = (this as any).db.getRepository('fields');
       const collectionName = 'skillWorkerConfigs';
 
       const fieldsToSync = [
@@ -40,11 +40,11 @@ export default class AddProgressFieldsMigration extends Migration {
                  interface: f.type,
               }
            });
-           this.app.logger.info(`[skill-hub] Restored NocoBase metadata for preexisting column ${f.name}`);
+           (this as any).app.logger.info(`[skill-hub] Restored NocoBase metadata for preexisting column ${f.name}`);
         }
       }
     } catch (error) {
-      this.app.logger.error(`[skill-hub] Failed to check progress fields: ${error.message}`);
+      (this as any).app.logger.error(`[skill-hub] Failed to check progress fields: ${error.message}`);
     }
   }
 }

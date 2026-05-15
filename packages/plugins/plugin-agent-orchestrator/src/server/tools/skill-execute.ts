@@ -42,8 +42,7 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
       },
     },
 
-    async invoke(args: Record<string, any>, options?: any) {
-      const ctx = options?.context;
+    async invoke(ctx: any, args: Record<string, any>, _id?: string) {
       plugin.app.logger.info(`[skill-execute] Tool invoked with action: ${args.action}, skillName: ${args.skillName}`);
       
       // Action: list available skills

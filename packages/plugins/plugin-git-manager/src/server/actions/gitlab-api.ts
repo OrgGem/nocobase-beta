@@ -1,6 +1,10 @@
 import { Context } from '@nocobase/actions';
 import { parseGitLabProject } from '../utils/gitlab-url';
 
+function getActionParams(ctx: Context) {
+  return { ...ctx.action.params, ...ctx.action.params?.values, ...((ctx as any).request?.body || {}) };
+}
+
 async function gitlabFetch(apiBase: string, endpoint: string, pat: string, params?: Record<string, any>) {
   const url = new URL(`${apiBase}${endpoint}`);
   if (params) {
@@ -33,7 +37,7 @@ async function gitlabFetch(apiBase: string, endpoint: string, pat: string, param
 
 async function getRepoApiContext(ctx: Context) {
   // Fix for POST requests where data might be in ctx.request.body
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const { repositoryId } = params;
   
   const repo = await ctx.db.getRepository('gitRepositories').findOne({
@@ -90,7 +94,7 @@ async function githubFetch(endpoint: string, pat: string, params?: Record<string
 export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx);
   // Merge params from query and body
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const {
     state = 'opened',
     search,
@@ -207,7 +211,7 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
 
 export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>) {
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx);
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const { mrIid } = params;
 
   if (!mrIid) {
@@ -321,7 +325,7 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
 
 export async function mergeRequestNotes(ctx: Context, next: () => Promise<void>) {
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx);
-  const params = { ...ctx.action.params, ...ctx.action.params?.values, ...( (ctx.request.body as any) || {} ) };
+  const params = getActionParams(ctx);
   const { mrIid, page = 1, perPage = 50 } = params;
 
   if (!mrIid) {

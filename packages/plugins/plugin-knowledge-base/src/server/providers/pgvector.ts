@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import type { VectorDatabaseProvider, VectorDatabaseProviderInfo } from '@nocobase/plugin-ai/server';
+import type { VectorDatabaseProvider, VectorDatabaseProviderInfo } from '../features/vector-database-provider-impl';
 import type { EmbeddingsInterface } from '@langchain/core/embeddings';
 
 export type PGVectorConnectParams = {
@@ -20,6 +20,17 @@ export type PGVectorConnectParams = {
 };
 
 export class PGVectorDatabaseProvider implements VectorDatabaseProvider<PGVectorConnectParams, any> {
+  /**
+   * Fix P1-4: Cache PGVectorStore instances by connection params hash.
+   * Prevents opening a new PG connection + running DDL on every search call.
+   * Key = hash(host:port:db:table), Value = PGVectorStore instance.
+   */
+  private vectorStoreCache = new Map<string, { store: any; embedId: string }>();
+
+  private getCacheKey(params: PGVectorConnectParams): string {
+    return `${params.host}:${params.port}:${params.database}:${params.tableName}`;
+  }
+
   validateConnectParams(connectParams: PGVectorConnectParams): void {
     const { host, port, username, password, database, tableName } = connectParams || {};
 
@@ -55,6 +66,7 @@ export class PGVectorDatabaseProvider implements VectorDatabaseProvider<PGVector
         user: connectParams.username,
         password: connectParams.password,
         database: connectParams.database,
+        connectionTimeoutMillis: 10_000,
       });
 
       await client.connect();
@@ -89,6 +101,16 @@ export class PGVectorDatabaseProvider implements VectorDatabaseProvider<PGVector
   async createVectorStore(embeddings: EmbeddingsInterface, connectParams: PGVectorConnectParams): Promise<any> {
     this.validateConnectParams(connectParams);
 
+    const cacheKey = this.getCacheKey(connectParams);
+    // Embeddings identity — use model name or class name as a proxy
+    const embedId = (embeddings as any).modelName || (embeddings as any).model || embeddings.constructor.name;
+
+    // Return cached instance if connection params and embedding model match
+    const cached = this.vectorStoreCache.get(cacheKey);
+    if (cached && cached.embedId === embedId) {
+      return cached.store;
+    }
+
     const { PGVectorStore } = await import('@langchain/community/vectorstores/pgvector');
 
     const config = {
@@ -109,6 +131,10 @@ export class PGVectorDatabaseProvider implements VectorDatabaseProvider<PGVector
     };
 
     const vectorStore = await PGVectorStore.initialize(embeddings, config);
+
+    // Cache the instance for reuse
+    this.vectorStoreCache.set(cacheKey, { store: vectorStore, embedId });
+
     return vectorStore;
   }
 }

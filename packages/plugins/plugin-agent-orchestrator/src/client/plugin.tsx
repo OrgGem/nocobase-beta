@@ -14,10 +14,10 @@ const sanitize = (name: string) =>
 
 export class PluginAgentOrchestratorClient extends Plugin {
   async load() {
-    this.app.use(InteractionSchemasProvider);
+    (this as any).app.use(InteractionSchemasProvider);
 
     // Register under the "AI" settings group for consistency with other AI plugins
-    this.app.pluginSettingsManager.add('ai.orchestrator', {
+    (this as any).app.pluginSettingsManager.add('ai.orchestrator', {
       title: 'Agent Orchestrator',
       icon: 'ApartmentOutlined',
       Component: OrchestratorSettings,
@@ -27,11 +27,11 @@ export class PluginAgentOrchestratorClient extends Plugin {
   }
 
   private async registerSkillUiCards() {
-    const toolsManager = this.app.aiManager?.toolsManager;
+    const toolsManager = (this as any).app.aiManager?.toolsManager;
     if (!toolsManager) return;
 
     try {
-      const { data } = await this.app.apiClient.request({
+      const { data } = await (this as any).app.apiClient.request({
         url: 'skillDefinitions:list',
         params: {
           filter: { enabled: true },

@@ -7,12 +7,27 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import type {
-  VectorDatabaseProviderFeature,
-  VectorDatabaseProviderInfo,
-  VectorDatabaseProvider,
-} from '@nocobase/plugin-ai/server';
 import type { EmbeddingsInterface } from '@langchain/core/embeddings';
+
+export interface VectorDatabaseProvider<T = any, R = any> {
+  validateConnectParams(connectParams: T): void;
+  testConnection(connectParams: T): Promise<{ success: boolean; error?: string }>;
+  createVectorStore(embeddings: EmbeddingsInterface, connectParams: T): Promise<R>;
+}
+
+export interface VectorDatabaseProviderFeature {
+  register<T, R>(providerInfo: VectorDatabaseProviderInfo<T, R>): void;
+  validateConnectParams<T>(providerName: string, connectParams: T): void;
+  testConnection<T>(providerName: string, connectParams: T): Promise<{ success: boolean; error?: string }>;
+  createVectorStore<T, R>(providerName: string, embeddings: EmbeddingsInterface, connectParams: T): Promise<R>;
+  listProviders(): VectorDatabaseProviderInfo<unknown, unknown>[];
+}
+
+export interface VectorDatabaseProviderInfo<T = any, R = any> {
+  name: string;
+  spec?: string;
+  provider: VectorDatabaseProvider<T, R>;
+}
 
 export class VectorDatabaseProviderImpl implements VectorDatabaseProviderFeature {
   private providers = new Map<string, VectorDatabaseProviderInfo<any, any>>();

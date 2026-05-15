@@ -12,14 +12,14 @@ const GitManagerSettings = React.lazy(() =>
 
 export class PluginGitManagerClient extends Plugin {
   async load() {
-    this.app.pluginSettingsManager.add('git-manager', {
-      title: this.t('Git Manager'),
+    (this as any).app.pluginSettingsManager.add('git-manager', {
+      title: (this as any).t('Git Manager'),
       icon: 'BranchesOutlined',
       Component: GitManagerSettings,
       aclSnippet: 'pm.plugin-git-manager',
     });
 
-    const aiManager = (this.app as any).aiManager;
+    const aiManager = ((this as any).app as any).aiManager;
     if (aiManager?.registerWorkContext) {
       aiManager.registerWorkContext('git-repository', GitRepositoryWorkContext);
       aiManager.registerWorkContext('git-merge-request', GitMergeRequestWorkContext);

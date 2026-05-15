@@ -8,6 +8,8 @@ interface Repository {
   localPath: string;
   defaultBranch: string;
   status: string;
+  autoReview?: boolean;
+  autoReviewFlowId?: number | null;
 }
 
 interface GitManagerContextType {

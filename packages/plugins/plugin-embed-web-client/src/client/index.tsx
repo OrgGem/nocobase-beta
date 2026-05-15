@@ -17,6 +17,7 @@ const { WebClientDocumentUploader } = lazy(
 );
 
 export class PluginEmbedWebClientClient extends Plugin {
+  declare app: any;
   async load() {
     // Admin settings: two tabs — model manager + embedding configuration
     this.app.pluginSettingsManager.add('embed-web-client', {

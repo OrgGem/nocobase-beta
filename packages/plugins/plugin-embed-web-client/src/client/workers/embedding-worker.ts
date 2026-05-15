@@ -32,18 +32,10 @@ export type WorkerMessage =
       modelId: string;
       dtype: string;
       preferWebGPU: boolean;
-      /** Where to fetch model files from: 'server' | 'cdn' | 'huggingface' */
-      modelSource: 'server' | 'cdn' | 'huggingface';
+      /** Private mode always fetches model files from the NocoBase server. */
+      modelSource: 'server';
       /** Origin of the NocoBase server — used when modelSource = 'server' */
       serverOrigin: string;
-      /**
-       * Full CDN URL pointing to the model folder.
-       * e.g. https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2
-       * Used when modelSource = 'cdn'.
-       */
-      cdnBaseUrl?: string;
-      /** Custom model file name to override default */
-      cdnModelFileName?: string;
     }
   | { type: 'load_model'; modelId: string; dtype: string; serverOrigin?: string }
   | {
@@ -90,10 +82,7 @@ async function loadModel(
   id: string,
   dtype: string,
   preferWebGPU: boolean,
-  modelSource: 'server' | 'cdn' | 'huggingface',
   serverOrigin: string,
-  cdnBaseUrl?: string,
-  cdnModelFileName?: string,
 ) {
   modelId = id;
   currentServerOrigin = serverOrigin;
@@ -101,34 +90,11 @@ async function loadModel(
   // Dynamically import @huggingface/transformers — not bundled into main thread
   const { pipeline, env } = await import('@huggingface/transformers');
 
-  if (modelSource === 'server') {
-    // Route ALL model file requests through the NocoBase server's local model cache.
-    // The server middleware at GET /embed-web-client/models/** serves files from:
-    //   storage/plugin-embed-web-client/models/** (or S3).
-    // Template ignores {revision} — we only serve "main" and the files are stored flat.
-    env.remoteHost = `${serverOrigin}/`;
-    env.remotePathTemplate = 'embed-web-client/models/{model}/';
-    env.allowRemoteModels = true; // "remote" = our own server, no HuggingFace needed
-    env.allowLocalModels = false;
-  } else if (modelSource === 'cdn' && cdnBaseUrl) {
-    // Fetch model files from admin-configured CDN.
-    // e.g. cdnBaseUrl = "https://cdn.jsdelivr.net/npm/@alvix/all-minilm-l6-v2@1.0.1/dist/Xenova/all-MiniLM-L6-v2"
-    try {
-      const url = new URL(cdnBaseUrl.trim().replace(/\/?$/, '/'));
-      env.remoteHost = url.origin + '/';
-      env.remotePathTemplate = url.pathname.replace(/^\/+/, '');
-      env.allowRemoteModels = true;
-      env.allowLocalModels = false;
-    } catch {
-      // Invalid URL — fall back to HuggingFace Hub
-      env.allowRemoteModels = true;
-      env.allowLocalModels = false;
-    }
-  } else {
-    // 'huggingface' or fallback: use HuggingFace Hub defaults (no env override needed)
-    env.allowRemoteModels = true;
-    env.allowLocalModels = false;
-  }
+  // Route ALL model file requests through this NocoBase server.
+  env.remoteHost = `${serverOrigin}/`;
+  env.remotePathTemplate = 'embed-web-client/models/{model}/';
+  env.allowRemoteModels = true;
+  env.allowLocalModels = false;
 
   // Attempt WebGPU if requested, fall back to WASM automatically
   const device = preferWebGPU ? 'webgpu' : 'wasm';
@@ -145,11 +111,7 @@ async function loadModel(
     },
   };
 
-  if (modelSource === 'cdn' && cdnModelFileName) {
-    pipeOptions.model_file_name = cdnModelFileName.replace(/\.onnx$/, '');
-  }
-
-  // Wrap pipeline() in a timeout so a stalled HuggingFace fetch doesn't hang forever
+  // Wrap pipeline() in a timeout so a stalled model fetch doesn't hang forever
   pipe = await Promise.race([
     pipeline('feature-extraction', id, pipeOptions),
     new Promise<never>((_resolve, reject) =>
@@ -244,7 +206,7 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
   switch (msg.type) {
     case 'init':
       try {
-        await loadModel(msg.modelId, msg.dtype, msg.preferWebGPU, msg.modelSource, msg.serverOrigin, msg.cdnBaseUrl, msg.cdnModelFileName);
+        await loadModel(msg.modelId, msg.dtype, msg.preferWebGPU, msg.serverOrigin);
       } catch (err: any) {
         send({ type: 'error', error: err?.message ?? 'Failed to load model' });
       }

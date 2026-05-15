@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, memo } from 'react';
-import { Table, Empty, Spin, Typography, Tag, Drawer, List, Button, Space, Select, theme } from 'antd';
+import { Table, Empty, Spin, Typography, Tag, Drawer, List, Button, Space, Select, Input, theme } from 'antd';
 import {
   BranchesOutlined,
   UserOutlined,
@@ -37,6 +37,7 @@ export const CommitHistory: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffFile, setDiffFile] = useState<string | null>(null);
+  const [searchKeyword, setSearchKeyword] = useState('');
 
   const loadHistory = useCallback(async () => {
     if (!selectedRepo) return;
@@ -48,6 +49,9 @@ export const CommitHistory: React.FC = () => {
       });
       const responseData = data?.data?.data || data?.data;
       setCommits(responseData?.all || []);
+    } catch (error) {
+      console.warn('Failed to load commit history:', error);
+      setCommits([]);
     } finally {
       setLoading(false);
     }
@@ -60,6 +64,12 @@ export const CommitHistory: React.FC = () => {
       setCommits([]);
     }
   }, [selectedRepo]);
+
+  const filteredCommits = commits.filter((commit) => {
+    const keyword = searchKeyword.trim().toLowerCase();
+    if (!keyword) return true;
+    return String(commit.message || commit.subject || commit.body || '').toLowerCase().includes(keyword);
+  });
 
   const openCommitDetail = async (commit: any) => {
     setSelectedCommit(commit);
@@ -174,14 +184,22 @@ export const CommitHistory: React.FC = () => {
           options={branchList.map((b) => ({ label: b, value: b }))}
           disabled
         />
-        <Text type="secondary">{commits.length} commits</Text>
+        <Input.Search
+          allowClear
+          size="small"
+          style={{ width: 280 }}
+          placeholder={t('Search commit title or message')}
+          value={searchKeyword}
+          onChange={(event) => setSearchKeyword(event.target.value)}
+        />
+        <Text type="secondary">{filteredCommits.length} commits</Text>
       </div>
 
       {loading ? (
         <Spin />
       ) : (
         <Table
-          dataSource={commits}
+          dataSource={filteredCommits}
           columns={columns}
           rowKey="hash"
           size="small"

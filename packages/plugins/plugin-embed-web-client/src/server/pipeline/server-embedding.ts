@@ -21,19 +21,15 @@
 
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
-import { pipeline, env } from '@huggingface/transformers';
 import type { Database } from '@nocobase/database';
 import { BUNDLED_MODELS_ROOT, STORAGE_MODELS_ROOT } from '../actions/model-manager';
 import {
   SAFE_IDENTIFIER_RE,
   DEFAULT_MODEL_ID,
   DEFAULT_DTYPE,
-  DEFAULT_DIMENSIONS,
-  DEFAULT_CHUNK_SIZE,
-  DEFAULT_CHUNK_OVERLAP,
-  DEFAULT_BATCH_SIZE,
 } from '../../shared/constants';
 import { validateDimensions } from '../../shared/utils';
+import { resolveEmbeddingProfile } from '../utils/embedding-profile';
 
 // Re-export for convenience
 export { BUNDLED_MODELS_ROOT, STORAGE_MODELS_ROOT };
@@ -92,9 +88,18 @@ export async function embedTexts(texts: string[], modelId: string, dtype: string
     const parentRoot = resolve(modelRoot, '..'); // e.g. public/models/Xenova/
     const grandParentRoot = resolve(parentRoot, '..'); // e.g. public/models/
 
+    const { env, pipeline } = await import('@huggingface/transformers');
+
     env.localModelPath = grandParentRoot + '/';
     env.allowLocalModels = true;
     env.allowRemoteModels = false;
+    
+    // Attempt to disable native node backend to prevent .node binary missing crashes
+    try {
+      if (env.backends && env.backends.onnx) {
+        env.backends.onnx.wasm.numThreads = 1;
+      }
+    } catch (e) {}
 
     const pipe = await pipeline('feature-extraction', modelId, {
       dtype: dtype as any,
@@ -152,15 +157,13 @@ export class ServerEmbeddingPipeline {
     if (!kb) throw new Error('Knowledge base not found');
 
     // Get model config — use KB-level override or plugin global config
-    const configRepo = this.db.getRepository('embedWebClientConfig');
-    const globalConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-
-    const modelId: string = kb.embedModelId ?? globalConfig?.modelId ?? DEFAULT_MODEL_ID;
-    const dtype: string = globalConfig?.dtype ?? DEFAULT_DTYPE;
-    const chunkSize: number = globalConfig?.chunkSize ?? DEFAULT_CHUNK_SIZE;
-    const chunkOverlap: number = globalConfig?.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP;
-    const batchSize: number = globalConfig?.batchSize ?? DEFAULT_BATCH_SIZE;
-    const expectedDimensions = validateDimensions(globalConfig?.dimensions ?? DEFAULT_DIMENSIONS);
+    const profile = await resolveEmbeddingProfile(this.db, String(kb.id));
+    const modelId: string = profile.modelId ?? DEFAULT_MODEL_ID;
+    const dtype: string = profile.dtype ?? DEFAULT_DTYPE;
+    const chunkSize: number = profile.chunkSize;
+    const chunkOverlap: number = profile.chunkOverlap;
+    const batchSize: number = profile.batchSize;
+    const expectedDimensions = validateDimensions(profile.dimensions);
 
     // Mark as processing
     await docRepo.update({ filter: { id: documentId }, values: { status: 'processing' } });
@@ -201,7 +204,7 @@ export class ServerEmbeddingPipeline {
       }
 
       // Store in PGVector via the storeVectors logic
-      await this.storeInPGVector(kb, doc, embedded, expectedDimensions);
+      await this.storeInPGVector(kb, doc, embedded, expectedDimensions, profile);
 
       await docRepo.update({
         filter: { id: documentId },
@@ -276,6 +279,7 @@ export class ServerEmbeddingPipeline {
     doc: any,
     chunks: Array<{ text: string; embedding: number[] }>,
     dimensions: number,
+    profile: { modelId: string; dtype: string; dimensions: number; signature: string },
   ): Promise<void> {
     const vectorDatabase = kb.vectorStore?.vectorDatabase;
     if (!vectorDatabase) throw new Error('No vector database configured');
@@ -329,6 +333,10 @@ export class ServerEmbeddingPipeline {
               knowledgeBaseId: kb.id,
               knowledgeBaseOuterId: kb.id,
               documentId: doc.id,
+              embeddingModelId: profile.modelId,
+              embeddingDtype: profile.dtype,
+              embeddingDimensions: profile.dimensions,
+              embeddingProfile: profile.signature,
               source: doc.filename ?? 'unknown',
               userId: doc.uploadedById ?? null,
               accessLevel: kb.accessLevel ?? 'PUBLIC',

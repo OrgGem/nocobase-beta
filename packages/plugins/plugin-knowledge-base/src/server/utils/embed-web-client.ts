@@ -5,7 +5,7 @@ const EMBED_PLUGIN_NAMES = ['plugin-embed-web-client', '@nocobase/plugin-embed-w
 export function getEmbedWebClientPlugin(plugin: PluginKnowledgeBaseServer): any | null {
   for (const name of EMBED_PLUGIN_NAMES) {
     try {
-      const instance = plugin.pm.get(name) as any;
+      const instance = (plugin as any).pm.get(name);
       if (instance) return instance;
     } catch {
       // Try the next registered name.
@@ -21,6 +21,14 @@ export function getServerEmbeddingPipeline(plugin: PluginKnowledgeBaseServer): a
     throw new Error('Server embedding requires plugin-embed-web-client to be installed and enabled');
   }
   return pipeline;
+}
+
+export async function resolveEmbedWebClientProfile(plugin: PluginKnowledgeBaseServer, knowledgeBaseId: string): Promise<any> {
+  const embedPlugin = getEmbedWebClientPlugin(plugin);
+  if (!embedPlugin?.resolveEmbeddingProfile) {
+    throw new Error('Web-client embedding search requires plugin-embed-web-client to be installed and enabled');
+  }
+  return embedPlugin.resolveEmbeddingProfile(knowledgeBaseId);
 }
 
 export function loadEmbedTexts(): any {

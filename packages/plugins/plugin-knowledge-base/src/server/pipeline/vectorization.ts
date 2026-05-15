@@ -50,23 +50,36 @@ export class VectorizationPipeline {
     });
 
     try {
-      // Brief delay to ensure FK writes (knowledgeBaseId, fileId) from the create
-      // handler are fully committed before we query with appends.
-      // Without this, appended relations (file, knowledgeBase) can return null
-      // when the vectorization trigger fires immediately after repo.update().
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      // 1. Load the document record with knowledge base info (with retry for FK propagation)
-      let docRecord = await docRepo.findOne({
-        filter: { id: documentId },
-        appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
-      });
+      // Fix P1-5: Replaced unreliable 500ms sleep with polling retry.
+      // Polls for FK relation visibility with exponential backoff (200ms → 5s ceiling).
+      // Faster on happy path, more reliable under replica lag.
+      const MAX_FK_WAIT_MS = 5000;
+      const FK_POLL_BASE_MS = 200;
+      let docRecord: any = null;
+      let waitedMs = 0;
+      let attempt = 0;
 
-      // Retry once if relations are missing — covers edge cases where the
-      // DB connection pool returns a stale read (common with replicas or
-      // heavy concurrent writes).
-      if (docRecord && (!docRecord.get('knowledgeBaseId') || !docRecord.knowledgeBase)) {
-        this.plugin.app.logger.warn(`[Vectorization] FK not yet visible for doc ${documentId}, retrying after 1s...`);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      while (waitedMs < MAX_FK_WAIT_MS) {
+        docRecord = await docRepo.findOne({
+          filter: { id: documentId },
+          appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
+        });
+
+        if (docRecord && docRecord.get('knowledgeBaseId') && docRecord.knowledgeBase) {
+          break; // FK relations are visible
+        }
+
+        attempt++;
+        const delayMs = Math.min(FK_POLL_BASE_MS * Math.pow(2, attempt - 1), 2000);
+        this.plugin.app.logger.debug(
+          `[Vectorization] FK not yet visible for doc ${documentId}, poll attempt ${attempt} (waiting ${delayMs}ms)...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        waitedMs += delayMs;
+      }
+
+      // Final attempt if we exhausted the wait
+      if (!docRecord || !docRecord.knowledgeBase) {
         docRecord = await docRepo.findOne({
           filter: { id: documentId },
           appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],

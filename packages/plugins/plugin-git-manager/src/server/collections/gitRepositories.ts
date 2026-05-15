@@ -58,6 +58,18 @@ export default defineCollection({
       uiSchema: { title: 'Auto Review', type: 'boolean', 'x-component': 'Checkbox' },
     },
     {
+      type: 'belongsTo',
+      name: 'autoReviewFlow',
+      target: 'gitReviewFlows',
+      foreignKey: 'autoReviewFlowId',
+      interface: 'm2o',
+      uiSchema: {
+        title: 'Primary Auto Review Flow',
+        'x-component': 'AssociationField',
+        'x-component-props': { fieldNames: { label: 'name', value: 'id' } },
+      },
+    },
+    {
       type: 'date',
       name: 'lastPolledAt',
       interface: 'datetime',

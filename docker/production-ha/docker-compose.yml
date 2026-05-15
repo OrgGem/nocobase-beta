@@ -11,6 +11,7 @@
 #   Data:
 #             postgres 16 (tuned)
 #             redis 7 (cache + pub/sub + job queue)
+#             qdrant (external RAG vector index)
 #
 #   Boot order:
 #     1. postgres + redis start and become healthy
@@ -58,6 +59,23 @@ x-nocobase-env: &nocobase-env
   NPM_REGISTRY_URL: "http://nginx-cache-registry/npm/"
   APT_MIRROR_URL: "http://nginx-cache-registry/ubuntu/"
   PYPI_INDEX_URL: "http://nginx-cache-registry/pypi-simple/"
+  # plugin-ai-browser — Playwright CDP Endpoint
+  AI_BROWSER_CDP_URL: ${AI_BROWSER_CDP_URL:-ws://browser:3000}
+  AI_BROWSER_LIVE_URL: ${AI_BROWSER_LIVE_URL:-/ai-browser-live/}
+  AI_BROWSER_SESSIONS_URL: ${AI_BROWSER_SESSIONS_URL:-http://browser:3000/sessions}
+  AI_BROWSER_SESSION_TTL_SECONDS: ${AI_BROWSER_SESSION_TTL_SECONDS:-1800}
+  # plugin-knowledge-base - default Qdrant vector database/store seed
+  KB_DEFAULT_VECTOR_DATABASE_PROVIDER: ${KB_DEFAULT_VECTOR_DATABASE_PROVIDER:-qdrant}
+  KB_DEFAULT_QDRANT_URL: ${KB_DEFAULT_QDRANT_URL:-http://qdrant:6333}
+  KB_DEFAULT_QDRANT_API_KEY: ${KB_DEFAULT_QDRANT_API_KEY:-}
+  KB_DEFAULT_QDRANT_COLLECTION: ${KB_DEFAULT_QDRANT_COLLECTION:-nocobase_knowledge_base}
+  KB_DEFAULT_VECTOR_DATABASE_NAME: ${KB_DEFAULT_VECTOR_DATABASE_NAME:-Default Qdrant}
+  KB_DEFAULT_VECTOR_STORE_NAME: ${KB_DEFAULT_VECTOR_STORE_NAME:-Default Qdrant Vector Store}
+  KB_DEFAULT_EMBEDDING_PROVIDER: ${KB_DEFAULT_EMBEDDING_PROVIDER:-llmService}
+  KB_DEFAULT_EMBEDDING_LLM_SERVICE: ${KB_DEFAULT_EMBEDDING_LLM_SERVICE:-}
+  KB_DEFAULT_EMBEDDING_MODEL: ${KB_DEFAULT_EMBEDDING_MODEL:-}
+  KB_DEFAULT_LOCAL_EMBED_MODEL_ID: ${KB_DEFAULT_LOCAL_EMBED_MODEL_ID:-}
+  KB_DEFAULT_LOCAL_EMBED_DTYPE: ${KB_DEFAULT_LOCAL_EMBED_DTYPE:-q8}
 
 x-nocobase-base: &nocobase-base
   image: nocobase/nocobase:${NOCOBASE_VERSION:-2.0.46-full}
@@ -97,6 +115,11 @@ volumes:
     driver: local
   carbone-renders:
     driver: local
+  browser-data:
+    driver: local
+  qdrant-data:
+    driver: local
+
 
 
 services:
@@ -213,6 +236,51 @@ services:
                     proxy_cache off;
                 }
 
+                location /ai-browser-live/ {
+                    proxy_pass http://browserless:3000/;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection "Upgrade";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_read_timeout 86400;
+                    proxy_send_timeout 86400;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
+                location /devtools/ {
+                    proxy_pass http://browserless:3000/devtools/;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection "Upgrade";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_read_timeout 86400;
+                    proxy_send_timeout 86400;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
+                location /sessions {
+                    proxy_pass http://browserless:3000/sessions;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection "Upgrade";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_read_timeout 86400;
+                    proxy_send_timeout 86400;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
                 location ~* ^/static/.+\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
                     proxy_pass http://nocobase;
                     proxy_http_version 1.1;
@@ -302,6 +370,7 @@ services:
       APP_ROLE: 'app'
       WORKER_MODE: '!'
       APP_PORT: 13000
+      APP_BIND: 0.0.0.0
       SKILL_HUB_SANDBOX: "false"
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:13000/api/app:getInfo']
@@ -377,6 +446,26 @@ services:
           memory: 2G
 
   # ============================================================================
+  # Qdrant - Lightweight vector database for the bundled external RAG service
+  # ============================================================================
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    container_name: qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - nocobase
+    ports:
+      - '${QDRANT_PORT:-127.0.0.1:6333}:6333'
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+
+
+  # ============================================================================
   # MinIO - S3 Compatible Object Storage
   # ============================================================================
   minio:
@@ -430,3 +519,42 @@ services:
       resources:
         limits:
           memory: 1G
+
+  # ============================================================================
+  # browserless — Headless Chrome Server
+  # Used by plugin-ai-browser (NocoBase AI Employee).
+  # NocoBase controls it via Playwright CDP at ws://browser:3000
+  # View live browser at http://<host>:3000/ (Debug Viewer)
+  # ============================================================================
+  browserless:
+    image: browserless/chrome:latest
+    container_name: browserless
+    restart: unless-stopped
+    environment:
+      # Browserless v2/current names
+      - CONCURRENT=10
+      - QUEUED=20
+      - TIMEOUT=1800000
+      - MAX_RECONNECT_TIME=1800000
+      - ENABLE_DEBUGGER=true
+      - LOG_LEVEL=info
+      # Browserless v1/legacy names kept for compatibility with browserless/chrome tags
+      - KEEP_ALIVE=true
+      - CONNECTION_TIMEOUT=1800000
+      - MAX_CONCURRENT_SESSIONS=10
+      - DEFAULT_BLOCK_ADS=true
+      - DEFAULT_STEALTH=true
+    ports:
+      # WebSocket CDP & Web Debug Viewer
+      - '${BROWSERLESS_PORT:-3000}:3000'
+    networks:
+      nocobase:
+        aliases:
+          - browser
+    shm_size: '2gb'
+    cap_add:
+      - SYS_ADMIN
+    deploy:
+      resources:
+        limits:
+          memory: 2G

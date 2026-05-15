@@ -330,46 +330,6 @@ doc.build(story)
 print('Generated: report.pdf')
 `;
 
-const SEED_PPTX = `import os, json
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.text import PP_ALIGN
-
-title = json.loads('''{{title}}''') if '{{title}}'.startswith('"') else '{{title}}'
-subtitle_raw = '''{{subtitle}}'''
-subtitle = json.loads(subtitle_raw) if subtitle_raw.startswith('"') else subtitle_raw if subtitle_raw != '{{' + 'subtitle}}' else ''
-slides_data = json.loads('''{{slides}}''')
-
-prs = Presentation()
-prs.slide_width = Inches(13.333)
-prs.slide_height = Inches(7.5)
-
-# Title slide
-slide = prs.slides.add_slide(prs.slide_layouts[0])
-slide.shapes.title.text = title
-if subtitle and slide.placeholders[1]:
-    slide.placeholders[1].text = subtitle
-
-# Content slides
-for s in slides_data:
-    slide = prs.slides.add_slide(prs.slide_layouts[1])
-    slide.shapes.title.text = s.get('title', '')
-    body = slide.placeholders[1].text_frame
-    body.clear()
-    for i, bullet in enumerate(s.get('bullets', [])):
-        if i == 0:
-            body.paragraphs[0].text = bullet
-        else:
-            p = body.add_paragraph()
-            p.text = bullet
-        body.paragraphs[-1].font.size = Pt(18)
-
-output_dir = os.environ.get('OUTPUT_DIR', '/output')
-filepath = os.path.join(output_dir, 'presentation.pptx')
-prs.save(filepath)
-print('Generated: presentation.pptx')
-`;
-
 const SEED_CHART = `import os, json
 import matplotlib
 matplotlib.use('Agg')

@@ -1,5 +1,6 @@
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
+import { DataTypes } from 'sequelize';
 import * as gitActions from './actions/git-actions';
 import * as gitlabApi from './actions/gitlab-api';
 import * as reviewActions from './actions/review';
@@ -8,8 +9,23 @@ import { recoverStuckReviews } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
 
-
 export class PluginGitManagerServer extends Plugin {
+  // @ts-ignore
+  declare app: any;
+  // @ts-ignore
+  declare db: any;
+  async beforeLoad() {
+    await (this as any).app.db.import({
+      directory: resolve(__dirname, 'collections'),
+    });
+
+    (this as any).app.db.addMigrations({
+      namespace: (this as any).name,
+      directory: resolve(__dirname, 'migrations'),
+      context: { plugin: this },
+    });
+  }
+
   async load() {
     // Ensure dayjs timezone + utc plugins are loaded globally to prevent 'm.startOf is not a function' errors
     const dayjsLib = require('dayjs');
@@ -18,11 +34,7 @@ export class PluginGitManagerServer extends Plugin {
     dayjsLib.extend(utcPlugin);
     dayjsLib.extend(timezonePlugin);
 
-    await this.db.import({
-      directory: resolve(__dirname, 'collections'),
-    });
-
-    this.app.resourceManager.define({
+    (this as any).app.resourceManager.define({
       name: 'gitManager',
       actions: {
         clone: gitActions.clone,
@@ -49,7 +61,7 @@ export class PluginGitManagerServer extends Plugin {
     });
 
     // Suppress noisy workflow pre-action/post-action warnings for custom resources
-    this.app.use(async (ctx, next) => {
+    (this as any).app.use(async (ctx, next) => {
       if (ctx.logger && ctx.logger.warn) {
         const originalWarn = ctx.logger.warn.bind(ctx.logger);
         ctx.logger.warn = (message: any, ...args: any[]) => {
@@ -67,25 +79,28 @@ export class PluginGitManagerServer extends Plugin {
       return next();
     });
 
-    registerGitReviewAiTools(this.app);
+    registerGitReviewAiTools((this as any).app);
 
-    this.app.on('afterStart', () => {
-      // Sweep any review left in `running` state from a previous process.
-      recoverStuckReviews(this.app).catch((err) =>
-        this.app.log?.error?.('plugin-git-manager: recoverStuckReviews error', err),
+    (this as any).app.on('afterStart', async () => {
+      await ensureAutoReviewFlowSchema((this as any).app).catch(
+        (err) => (this as any).app.log?.error?.('plugin-git-manager: ensure schema error', err),
       );
-      startPoller(this.app);
+      // Sweep any review left in `running` state from a previous process.
+      recoverStuckReviews((this as any).app).catch(
+        (err) => (this as any).app.log?.error?.('plugin-git-manager: recoverStuckReviews error', err),
+      );
+      startPoller((this as any).app);
     });
-    this.app.on('beforeStop', () => {
+    (this as any).app.on('beforeStop', () => {
       stopPoller();
     });
-    this.app.on('beforeDestroy', () => {
+    (this as any).app.on('beforeDestroy', () => {
       stopPoller();
     });
 
     // Read-only operations available to all plugin users
-    this.app.acl.registerSnippet({
-      name: `pm.${this.name}.read`,
+    (this as any).app.acl.registerSnippet({
+      name: `pm.${(this as any).name}.read`,
       actions: [
         'gitRepositories:list',
         'gitRepositories:get',
@@ -108,8 +123,8 @@ export class PluginGitManagerServer extends Plugin {
     });
 
     // Write operations require separate permission
-    this.app.acl.registerSnippet({
-      name: `pm.${this.name}.write`,
+    (this as any).app.acl.registerSnippet({
+      name: `pm.${(this as any).name}.write`,
       actions: [
         'gitRepositories:create',
         'gitRepositories:update',
@@ -133,11 +148,8 @@ export class PluginGitManagerServer extends Plugin {
     });
 
     // Prevent overwriting PAT with obfuscated value on updates
-    this.app.resourceManager.use(async (ctx, next) => {
-      if (
-        ctx.action?.resourceName === 'gitRepositories' &&
-        ['create', 'update'].includes(ctx.action?.actionName)
-      ) {
+    (this as any).app.resourceManager.use(async (ctx, next) => {
+      if (ctx.action?.resourceName === 'gitRepositories' && ['create', 'update'].includes(ctx.action?.actionName)) {
         if (ctx.action.params?.values?.pat === '••••••••') {
           delete ctx.action.params.values.pat;
         }
@@ -149,13 +161,19 @@ export class PluginGitManagerServer extends Plugin {
     });
 
     // Strip PAT from API responses — scoped to gitRepositories only
-    this.app.resourceManager.use(async (ctx, next) => {
+    (this as any).app.resourceManager.use(async (ctx, next) => {
       if (ctx.action?.resourceName !== 'gitRepositories') {
         return next();
       }
       await next();
       if (ctx.body) {
-        const items = Array.isArray(ctx.body) ? ctx.body : ctx.body?.data ? (Array.isArray(ctx.body.data) ? ctx.body.data : [ctx.body.data]) : [ctx.body];
+        const items = Array.isArray(ctx.body)
+          ? ctx.body
+          : ctx.body?.data
+            ? Array.isArray(ctx.body.data)
+              ? ctx.body.data
+              : [ctx.body.data]
+            : [ctx.body];
         items.forEach((item) => {
           if (item && typeof item === 'object') {
             if (item.pat) item.pat = '••••••••';
@@ -166,7 +184,9 @@ export class PluginGitManagerServer extends Plugin {
     });
   }
 
-  async install() {}
+  async install() {
+    await (this as any).app.db.getCollection('gitRepositories')?.sync();
+  }
 
   async beforeDisable() {
     stopPoller();
@@ -175,6 +195,22 @@ export class PluginGitManagerServer extends Plugin {
   async beforeUnload() {
     stopPoller();
   }
+}
+
+export async function ensureAutoReviewFlowSchema(app: any) {
+  const sequelize = app.db?.sequelize;
+  const queryInterface = sequelize?.getQueryInterface?.();
+  if (!queryInterface) return;
+
+  const tablePrefix = app.db.options?.tablePrefix || '';
+  const tableName = `${tablePrefix}gitRepositories`;
+  const tableInfo = await queryInterface.describeTable(tableName).catch(() => null);
+  if (!tableInfo || tableInfo.autoReviewFlowId) return;
+
+  await queryInterface.addColumn(tableName, 'autoReviewFlowId', {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  });
 }
 
 export default PluginGitManagerServer;

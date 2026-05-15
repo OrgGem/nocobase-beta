@@ -35,10 +35,18 @@ export class UiPathApiClient {
   private config: UiPathInstanceConfig;
 
   constructor(config: UiPathInstanceConfig) {
-    this.config = {
+    const normalizedConfig = {
       ...config,
-      apiBaseUrl: config.apiBaseUrl?.replace(/\/+$/, '') || this.buildApiBaseUrl(config),
-      tokenUrl: config.tokenUrl || this.buildTokenUrl(config),
+      baseUrl: config.baseUrl?.trim(),
+      apiBaseUrl: config.apiBaseUrl?.trim(),
+      tokenUrl: config.tokenUrl?.trim(),
+      clientId: config.clientId?.trim(),
+      scopes: config.scopes?.trim() || 'OR.Default',
+    };
+    this.config = {
+      ...normalizedConfig,
+      apiBaseUrl: normalizedConfig.apiBaseUrl?.replace(/\/+$/, '') || this.buildApiBaseUrl(normalizedConfig),
+      tokenUrl: normalizedConfig.tokenUrl || this.buildTokenUrl(normalizedConfig),
     };
   }
 
@@ -59,7 +67,13 @@ export class UiPathApiClient {
   private buildTokenUrl(config: UiPathInstanceConfig): string {
     const base = (config.baseUrl || DEFAULT_CLOUD_BASE_URL).replace(/\/+$/, '');
     if (config.deploymentType === 'onPrem') {
-      return `${base}/identity/connect/token`;
+      if (/\/identity\/connect\/token$/i.test(base)) return base;
+      if (/\/identity$/i.test(base)) return `${base}/connect/token`;
+
+      // The Base URL field is usually the Orchestrator URL. For standalone/on-prem
+      // deployments, Identity is a sibling of Orchestrator, not a child route.
+      const identityBase = base.replace(/\/orchestrator_?$/i, '');
+      return `${identityBase}/identity/connect/token`;
     }
     return `${base}/identity_/connect/token`;
   }
@@ -89,11 +103,38 @@ export class UiPathApiClient {
     try {
       return await (undiciFetch as any)(url, init);
     } catch (err: any) {
+      if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') {
+        throw err;
+      }
+
       // Normalize network errors into a standard Error with context
       const code = err?.code || err?.cause?.code || '';
       const message = err?.message || 'Network request failed';
-      throw new Error(`UiPath connection error [${code}]: ${message}`);
+      const sslHint = this.getSslErrorHint(code, message);
+      throw new Error(`UiPath connection error [${code}]: ${message}${sslHint}`);
     }
+  }
+
+  private getSslErrorHint(code: string, message: string): string {
+    const value = `${code} ${message}`.toUpperCase();
+    const sslCodes = [
+      'CERT_HAS_EXPIRED',
+      'DEPTH_ZERO_SELF_SIGNED_CERT',
+      'SELF_SIGNED_CERT_IN_CHAIN',
+      'UNABLE_TO_GET_ISSUER_CERT',
+      'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+      'ERR_TLS_CERT_ALTNAME_INVALID',
+    ];
+
+    if (!sslCodes.some((sslCode) => value.includes(sslCode))) {
+      return '';
+    }
+
+    if (this.config.ignoreSsl) {
+      return ' (Ignore SSL is enabled, but the TLS handshake still failed. Check protocol/cipher support and the server certificate chain.)';
+    }
+
+    return ' (This looks like a TLS/certificate validation error. Enable "Ignore SSL" for a quick on-prem test, or install/fix the Orchestrator certificate chain.)';
   }
 
   // ─── OAuth2 Token ──────────────────────────────────────────────────
@@ -147,7 +188,7 @@ export class UiPathApiClient {
         throw new Error(`UiPath OAuth token error ${res.status}: ${text}`);
       }
 
-      const data = await res.json() as any;
+      const data = (await res.json()) as any;
       const expiresIn = (data.expires_in || 3600) * 1000; // ms
 
       this.tokenCache = {
@@ -159,7 +200,9 @@ export class UiPathApiClient {
     } catch (err: any) {
       // Re-throw with better context for connection failures
       if (err?.name === 'AbortError' || err?.code === 'ABORT_ERR') {
-        throw new Error(`UiPath token request timed out after ${TOKEN_TIMEOUT_MS}ms. Check that the token URL is reachable: ${tokenUrl}`);
+        throw new Error(
+          `UiPath token request timed out after ${TOKEN_TIMEOUT_MS}ms. Check that the token URL is reachable: ${tokenUrl}`,
+        );
       }
       throw err;
     } finally {
@@ -324,7 +367,9 @@ export class UiPathApiClient {
   async testConnection(): Promise<{ status: string; latencyMs: number; message?: string }> {
     const start = Date.now();
     try {
-      // Test token acquisition + basic API call
+      // Test token acquisition first so auth/TLS errors are easier to distinguish
+      // from Orchestrator permission errors on the health endpoint.
+      await this.getAccessToken();
       await this.get('/odata/Folders', { query: { $top: 1 } });
       return { status: 'healthy', latencyMs: Date.now() - start };
     } catch (error: any) {

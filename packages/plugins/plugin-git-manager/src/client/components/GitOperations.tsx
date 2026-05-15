@@ -1,8 +1,7 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Button, Space, Card, Typography, Tag, Empty, message, Spin, Descriptions, List, Badge, theme } from 'antd';
 import {
   CloudDownloadOutlined,
-  CloudUploadOutlined,
   SyncOutlined,
   BranchesOutlined,
   CheckCircleOutlined,
@@ -37,6 +36,32 @@ export const GitOperations: React.FC = () => {
   const [statusData, setStatusData] = useState<any>(null);
   const [lastResult, setLastResult] = useState<{ action: string; success: boolean; message: string } | null>(null);
 
+  const loadStatus = useCallback(async () => {
+    if (!selectedRepo || selectedRepo.status !== 'connected') {
+      setStatusData(null);
+      return;
+    }
+    setActionLoading('status');
+    try {
+      const { data } = await api.request({
+        url: 'gitManager:status',
+        method: 'post',
+        params: { repositoryId: selectedRepo.id },
+      });
+      const responseData = data?.data?.data || data?.data;
+      setStatusData(responseData);
+    } catch (error) {
+      console.warn('Failed to load git status:', error);
+      setStatusData(null);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [api, selectedRepo]);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
   const execAction = useCallback(
     async (action: string) => {
       if (!selectedRepo) return;
@@ -50,10 +75,9 @@ export const GitOperations: React.FC = () => {
         });
         setLastResult({ action, success: true, message: t('{{action}} completed successfully', { action }) });
         message.success(t('{{action}} completed', { action }));
-        if (action === 'status') {
-          const responseData = data?.data?.data || data?.data;
-          setStatusData(responseData);
-        }
+        const responseData = data?.data?.data || data?.data;
+        if (action === 'status') setStatusData(responseData);
+        if (action === 'fetch' || action === 'pull') await loadStatus();
         await refreshRepos();
       } catch (err: any) {
         const msg = err?.response?.data?.errors?.[0]?.message || t('{{action}} failed', { action });
@@ -63,7 +87,7 @@ export const GitOperations: React.FC = () => {
         setActionLoading(null);
       }
     },
-    [api, selectedRepo, refreshRepos],
+    [api, selectedRepo, refreshRepos, loadStatus],
   );
 
   if (!selectedRepo) {
@@ -106,17 +130,9 @@ export const GitOperations: React.FC = () => {
         </Button>
         <Button
           size="large"
-          icon={<CloudUploadOutlined />}
-          loading={actionLoading === 'push'}
-          onClick={() => execAction('push')}
-        >
-          {t('Push')}
-        </Button>
-        <Button
-          size="large"
           icon={<BranchesOutlined />}
           loading={actionLoading === 'status'}
-          onClick={() => execAction('status')}
+          onClick={loadStatus}
         >
           {t('Status')}
         </Button>

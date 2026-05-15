@@ -37,6 +37,8 @@
   "Restart this job?": "Restart this job?",
   "Log level": "Log level",
   "Job Key": "Job Key",
+  "Queue item ID/key/reference": "Queue item ID/key/reference",
+  "Resolved job keys": "Resolved job keys",
   "Search message": "Search message",
   "Queue Definitions": "Queue Definitions",
   "Queue Items": "Queue Items",

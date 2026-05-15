@@ -43,6 +43,7 @@ import {
   ThunderboltOutlined,
   FolderOpenOutlined,
 } from '@ant-design/icons';
+import { mainDataSourceRequest } from '../api';
 
 const { Text, Title } = Typography;
 
@@ -102,10 +103,12 @@ const UploadModelModal: React.FC<UploadModelModalProps> = ({ open, onClose, onDo
     if (!vals.modelId || !vals.dtype) return;
     setLoadingFiles(true);
     try {
-      const res = await api.request({
-        url: 'embedWebClient:getModelFiles',
-        params: { modelId: vals.modelId, dtype: vals.dtype },
-      });
+      const res = await api.request(
+        mainDataSourceRequest({
+          url: 'embedWebClient:getModelFiles',
+          params: { modelId: vals.modelId, dtype: vals.dtype },
+        }),
+      );
       setFileStatuses(res?.data?.data?.files ?? []);
     } catch {
       /* ignore */
@@ -123,12 +126,14 @@ const UploadModelModal: React.FC<UploadModelModalProps> = ({ open, onClose, onDo
       formData.append('modelId', vals.modelId);
       formData.append('filePath', filePath);
       try {
-        await api.request({
-          url: 'embedWebClient:uploadModelFile',
-          method: 'post',
-          data: formData,
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
+        await api.request(
+          mainDataSourceRequest({
+            url: 'embedWebClient:uploadModelFile',
+            method: 'post',
+            data: formData,
+            headers: { 'Content-Type': 'multipart/form-data' },
+          }),
+        );
         message.success(`${filePath} ${t('uploaded')}`);
         await fetchFileStatus();
       } catch (err: any) {
@@ -238,7 +243,7 @@ export const ModelManager: React.FC = () => {
   const fetchModels = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.request({ url: 'embedWebClient:listModels' });
+      const res = await api.request(mainDataSourceRequest({ url: 'embedWebClient:listModels' }));
       let arr = res?.data?.data ?? res?.data;
       if (arr && !Array.isArray(arr) && Array.isArray(arr.data)) arr = arr.data;
       setModels(Array.isArray(arr) ? arr : []);
@@ -255,11 +260,13 @@ export const ModelManager: React.FC = () => {
 
   const handleDelete = async (modelId: string) => {
     try {
-      await api.request({
-        url: 'embedWebClient:deleteModel',
-        method: 'post',
-        data: { modelId },
-      });
+      await api.request(
+        mainDataSourceRequest({
+          url: 'embedWebClient:deleteModel',
+          method: 'post',
+          data: { modelId },
+        }),
+      );
       message.success(t('Model deleted'));
       fetchModels();
     } catch (err: any) {
@@ -356,11 +363,13 @@ export const ModelManager: React.FC = () => {
           const vals = (document.querySelector('input#modelId') as HTMLInputElement)?.value;
           if (vals) {
             try {
-              await api.request({
-                url: 'embedWebClient:createModelDirectory',
-                method: 'post',
-                data: { modelId: vals },
-              });
+              await api.request(
+                mainDataSourceRequest({
+                  url: 'embedWebClient:createModelDirectory',
+                  method: 'post',
+                  data: { modelId: vals },
+                }),
+              );
             } catch {
               /* ignore */
             }

@@ -91,7 +91,10 @@ function getAuthUrl(repoUrl: string, pat: string, username?: string): string {
   return url.toString();
 }
 
-function getGit(localPath: string): SimpleGit {
+function getGit(ctx: Context, localPath: string): SimpleGit {
+  if (!fs.existsSync(localPath)) {
+    ctx.throw(400, 'Repository directory does not exist. Please clone the repository first.');
+  }
   return simpleGit(localPath);
 }
 
@@ -170,7 +173,7 @@ export async function pull(ctx: Context, next: () => Promise<void>) {
   const repoUrl = (repo.get('repoUrl') as string || '').trim();
   const username = (repo.get('username') as string || '').trim();
 
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.pull(), username);
 
   ctx.body = { success: true, data: result };
@@ -184,7 +187,7 @@ export async function push(ctx: Context, next: () => Promise<void>) {
   const repoUrl = (repo.get('repoUrl') as string || '').trim();
   const username = (repo.get('username') as string || '').trim();
 
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.push(), username);
 
   ctx.body = { success: true, data: result };
@@ -198,7 +201,7 @@ export async function fetch(ctx: Context, next: () => Promise<void>) {
   const repoUrl = (repo.get('repoUrl') as string || '').trim();
   const username = (repo.get('username') as string || '').trim();
 
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.fetch(), username);
 
   ctx.body = { success: true, data: result };
@@ -210,7 +213,7 @@ export async function diff(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const { file, commitHash, compareHash } = ctx.action.params;
 
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   const args: string[] = [];
   if (commitHash && compareHash) {
     args.push(validateRef(commitHash), validateRef(compareHash));
@@ -230,7 +233,7 @@ export async function diff(ctx: Context, next: () => Promise<void>) {
 export async function status(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const result = await getGit(localPath).status();
+  const result = await getGit(ctx, localPath).status();
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -247,7 +250,7 @@ export async function log(ctx: Context, next: () => Promise<void>) {
     options.file = file;
   }
 
-  const result = await getGit(localPath).log(options);
+  const result = await getGit(ctx, localPath).log(options);
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -255,7 +258,7 @@ export async function log(ctx: Context, next: () => Promise<void>) {
 export async function branches(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const result = await getGit(localPath).branch();
+  const result = await getGit(ctx, localPath).branch();
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -265,7 +268,7 @@ export async function checkout(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const { branch } = ctx.action.params;
   validateBranch(branch);
-  await getGit(localPath).checkout(branch);
+  await getGit(ctx, localPath).checkout(branch);
   ctx.body = { success: true, message: `Switched to branch ${branch}` };
   await next();
 }
@@ -275,7 +278,7 @@ export async function fileTree(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const { ref = 'HEAD', treePath = '' } = ctx.action.params;
 
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   validateRef(ref);
   if (treePath && treePath.includes('..')) {
     ctx.throw(400, 'Invalid tree path');
@@ -324,7 +327,7 @@ export async function fileContent(ctx: Context, next: () => Promise<void>) {
   }
 
   validateRef(ref);
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   const content = await git.show([`${ref}:${filePath}`]);
   ctx.body = { success: true, data: { content, filePath, ref } };
   await next();
@@ -339,7 +342,7 @@ export async function commitDetail(ctx: Context, next: () => Promise<void>) {
     ctx.throw(400, 'commitHash is required');
   }
 
-  const git = getGit(localPath);
+  const git = getGit(ctx, localPath);
   validateRef(commitHash);
 
   // Use %x00 in format string to tell git to output null bytes, avoiding null bytes in args

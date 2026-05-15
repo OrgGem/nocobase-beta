@@ -154,6 +154,6 @@ export class CodeValidationError extends Error {
     public matchedPattern: string,
   ) {
     super(`Code validation failed: ${message}`);
-    this.name = 'CodeValidationError';
+    (this as any).name = 'CodeValidationError';
   }
 }

@@ -18,8 +18,10 @@ import {
   DEFAULT_CHUNK_SIZE,
   DEFAULT_CHUNK_OVERLAP,
   DEFAULT_BATCH_SIZE,
+  OFFLINE_MODEL_SOURCE,
 } from '../../shared/constants';
 import { validateDimensions } from '../../shared/utils';
+import { assertClientProfileMatches, resolveEmbeddingProfile } from '../utils/embedding-profile';
 
 function assertSafeIdentifier(name: string): void {
   if (!SAFE_IDENTIFIER_RE.test(name)) {
@@ -34,6 +36,8 @@ function assertSafeIdentifier(name: string): void {
  * what chunk size to use, and what vector dimensions to produce.
  */
 export async function getConfig(ctx: Context, next: Next) {
+  const knowledgeBaseId =
+    ctx.action.params?.knowledgeBaseId ?? ctx.action.params?.values?.knowledgeBaseId ?? ctx.request.query?.knowledgeBaseId;
   const repo = ctx.db.getRepository('embedWebClientConfig');
 
   let config = await repo.findOne({ filter: {}, sort: ['id'] });
@@ -49,10 +53,13 @@ export async function getConfig(ctx: Context, next: Next) {
         chunkOverlap: DEFAULT_CHUNK_OVERLAP,
         batchSize: DEFAULT_BATCH_SIZE,
         preferWebGPU: true,
-        modelSource: 'server',
+        modelSource: OFFLINE_MODEL_SOURCE,
+        storageMode: 'local',
       },
     });
   }
+
+  const profile = await resolveEmbeddingProfile(ctx.db, knowledgeBaseId ? String(knowledgeBaseId) : undefined);
 
   // Never expose S3 secret to the browser — mask it
   const safeConfig = config?.toJSON ? config.toJSON() : { ...(config ?? {}) };
@@ -60,7 +67,13 @@ export async function getConfig(ctx: Context, next: Next) {
     safeConfig.s3SecretAccessKey = '***';
   }
 
-  ctx.body = safeConfig;
+  ctx.body = {
+    ...safeConfig,
+    ...profile,
+    modelSource: OFFLINE_MODEL_SOURCE,
+    cdnBaseUrl: undefined,
+    cdnModelFileName: undefined,
+  };
   await next();
 }
 
@@ -70,12 +83,26 @@ export async function getConfig(ctx: Context, next: Next) {
  * Admin-only endpoint to update the plugin configuration.
  */
 export async function updateConfig(ctx: Context, next: Next) {
-  const values = ctx.action.params.values || {};
+  const values = {
+    ...(ctx.action.params.values || {}),
+    modelSource: OFFLINE_MODEL_SOURCE,
+    cdnBaseUrl: null,
+  };
   const repo = ctx.db.getRepository('embedWebClientConfig');
 
   // Validate dimensions if provided
   if (values.dimensions != null) {
     values.dimensions = validateDimensions(values.dimensions);
+  }
+  if (values.chunkSize != null || values.chunkOverlap != null) {
+    const chunkSize = Number(values.chunkSize ?? DEFAULT_CHUNK_SIZE);
+    const chunkOverlap = Number(values.chunkOverlap ?? DEFAULT_CHUNK_OVERLAP);
+    if (!Number.isFinite(chunkSize) || chunkSize < 100) {
+      ctx.throw(400, 'chunkSize must be at least 100');
+    }
+    if (!Number.isFinite(chunkOverlap) || chunkOverlap < 0 || chunkOverlap >= chunkSize) {
+      ctx.throw(400, 'chunkOverlap must be greater than or equal to 0 and less than chunkSize');
+    }
   }
 
   // If admin sends '***' for the secret, preserve the existing value
@@ -121,7 +148,7 @@ export async function updateConfig(ctx: Context, next: Next) {
  *   }>
  */
 export async function storeVectors(ctx: Context, next: Next) {
-  const { documentId, chunks } = ctx.action.params.values || {};
+  const { documentId, chunks, modelId, dtype, dimensions } = ctx.action.params.values || {};
 
   if (!documentId) {
     ctx.throw(400, 'documentId is required');
@@ -203,10 +230,15 @@ export async function storeVectors(ctx: Context, next: Next) {
   // 5. Validate table name against SQL injection
   assertSafeIdentifier(connectParams.tableName);
 
-  // 6. Validate vector dimensions against plugin config
-  const configRepo = ctx.db.getRepository('embedWebClientConfig');
-  const pluginConfig = await configRepo.findOne({ filter: {}, sort: ['id'] });
-  const expectedDimensions = validateDimensions(pluginConfig?.dimensions ?? DEFAULT_DIMENSIONS);
+  // 6. Validate the client used the same offline embedding profile the server
+  // will use for RAG query embeddings.
+  const expectedProfile = await resolveEmbeddingProfile(ctx.db, String(kb.id));
+  try {
+    assertClientProfileMatches(expectedProfile, { modelId, dtype, dimensions });
+  } catch (err: any) {
+    ctx.throw(400, err.message);
+  }
+  const expectedDimensions = validateDimensions(expectedProfile.dimensions);
 
   // Validate ALL chunks' embeddings before starting any DB transaction to prevent partial inserts
   for (let i = 0; i < chunks.length; i++) {
@@ -272,6 +304,10 @@ export async function storeVectors(ctx: Context, next: Next) {
             knowledgeBaseId: kb.id,
             knowledgeBaseOuterId: kb.id,
             documentId: doc.id,
+            embeddingModelId: expectedProfile.modelId,
+            embeddingDtype: expectedProfile.dtype,
+            embeddingDimensions: expectedProfile.dimensions,
+            embeddingProfile: expectedProfile.signature,
             source: doc.filename ?? doc.get('name') ?? 'unknown',
             userId: doc.get('uploadedById') ?? doc.get('uploaded_by_id') ?? null,
             accessLevel: kb.accessLevel ?? 'PUBLIC',

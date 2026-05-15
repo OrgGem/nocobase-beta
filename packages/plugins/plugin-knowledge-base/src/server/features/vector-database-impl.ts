@@ -7,7 +7,19 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import type { VectorDatabaseFeature, VectorDatabaseInfo } from '@nocobase/plugin-ai/server';
+export interface VectorDatabaseInfo {
+  id: string | number;
+  name: string;
+  databaseSpec: string;
+  provider: string;
+  connectProps: any;
+  enabled: boolean;
+}
+
+export interface VectorDatabaseFeature {
+  getVectorDatabaseInfo(id: string | number): Promise<VectorDatabaseInfo>;
+  listVectorDatabasesInfo(): Promise<VectorDatabaseInfo[]>;
+}
 import type PluginKnowledgeBaseServer from '../plugin';
 
 export class VectorDatabaseFeatureImpl implements VectorDatabaseFeature {

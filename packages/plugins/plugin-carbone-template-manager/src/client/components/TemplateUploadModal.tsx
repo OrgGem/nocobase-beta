@@ -11,10 +11,16 @@ interface Props {
   onClose: () => void;
   onSaved: () => void;
   /**
-   * Existing template — if provided we upload a NEW VERSION instead of a new
-   * template, and lock the metadata fields.
+   * Existing template. If provided we upload a new version and prefill the
+   * current version metadata so the next version gets its own snapshot.
    */
-  template?: { id: number; name: string; category?: string; defaultOutputFormat?: string } | null;
+  template?: {
+    id: number;
+    name: string;
+    description?: string;
+    category?: string;
+    defaultOutputFormat?: string;
+  } | null;
 }
 
 interface ParsedPreview {
@@ -52,6 +58,7 @@ export const TemplateUploadModal: React.FC<Props> = ({ open, onClose, onSaved, t
     if (template) {
       form.setFieldsValue({
         name: template.name,
+        description: template.description,
         category: template.category,
         defaultOutputFormat: template.defaultOutputFormat,
       });
@@ -160,8 +167,7 @@ export const TemplateUploadModal: React.FC<Props> = ({ open, onClose, onSaved, t
             <h4>{t('Detected placeholders')}</h4>
             <PlaceholderTree schema={preview.schema} />
             <div style={{ color: '#888', marginTop: 4, fontSize: 12 }}>
-              {t('MD5')}: <code>{preview.fileMd5}</code> · {t('Size')}:{' '}
-              {(preview.fileSize / 1024).toFixed(1)} KB
+              {t('MD5')}: <code>{preview.fileMd5}</code> · {t('Size')}: {(preview.fileSize / 1024).toFixed(1)} KB
             </div>
           </div>
         )}
@@ -185,10 +191,7 @@ export const TemplateUploadModal: React.FC<Props> = ({ open, onClose, onSaved, t
             </Form.Item>
           </Space>
           <Form.Item label={t('Change note')} name="changeNote">
-            <Input.TextArea
-              rows={2}
-              placeholder={template ? t('Why did you upload this version?') : ''}
-            />
+            <Input.TextArea rows={2} placeholder={template ? t('Why did you upload this version?') : ''} />
           </Form.Item>
         </Form>
       </Spin>

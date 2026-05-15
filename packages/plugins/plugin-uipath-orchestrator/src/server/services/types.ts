@@ -114,6 +114,7 @@ export interface UiPathQueueDefinition {
 
 export interface UiPathQueueItem {
   Id: number;
+  Key?: string;
   QueueDefinitionId: number;
   Status: string;
   ReviewStatus?: string;

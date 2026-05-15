@@ -1,5 +1,4 @@
 import type { Context } from '@nocobase/actions';
-import type PluginKnowledgeBaseServer from '../plugin';
 import { buildAccessibleKnowledgeBaseFilter } from '../utils/access';
 import { EXTERNAL_HTTP_RAG_PROVIDER, EXTERNAL_RAG_KB_TYPE } from '../providers/external-rag';
 import type { RagSearchResult } from '../providers/external-rag';
@@ -108,7 +107,7 @@ function dedupeResults(results: KnowledgeSearchResult[]): KnowledgeSearchResult[
 }
 
 export class KnowledgeSearchService {
-  constructor(private plugin: PluginKnowledgeBaseServer) {}
+  constructor(private plugin: any) {}
 
   async search(ctx: Context, query: string, options: KnowledgeSearchOptions = {}): Promise<KnowledgeSearchResult[]> {
     const trimmedQuery = query?.trim();
@@ -155,7 +154,7 @@ export class KnowledgeSearchService {
             });
             results.push(...this.toSearchResults(found, knowledgeBaseList));
           } catch (err) {
-            this.plugin.app.logger.error('[KB Search] Vector search failed:', err);
+            (this.plugin as any).app.logger.error('[KB Search] Vector search failed:', err);
           }
         }),
       );
@@ -166,7 +165,7 @@ export class KnowledgeSearchService {
         const providerName = kb.options?.ragProvider ?? EXTERNAL_HTTP_RAG_PROVIDER;
         const strategy = this.plugin.getRagSearchStrategy(providerName);
         if (!strategy) {
-          this.plugin.app.logger.warn(
+          (this.plugin as any).app.logger.warn(
             `[KB Search] No RAG strategy registered for provider "${providerName}" (KB: ${kb.name ?? kb.id})`,
           );
           return;
@@ -188,7 +187,7 @@ export class KnowledgeSearchService {
             })),
           );
         } catch (err) {
-          this.plugin.app.logger.error(
+          (this.plugin as any).app.logger.error(
             `[KB Search] External RAG search failed (${kb.name}, provider=${providerName}):`,
             err,
           );

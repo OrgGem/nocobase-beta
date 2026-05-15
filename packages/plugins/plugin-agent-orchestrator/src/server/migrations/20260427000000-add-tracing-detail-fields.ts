@@ -5,9 +5,9 @@ export default class AddTracingDetailFieldsMigration extends Migration {
   appVersion = '<=2.x';
 
   async up() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const DataTypes = this.db.sequelize.constructor['DataTypes'];
-    const tableName = `${this.db.options.tablePrefix || ''}orchestratorLogs`;
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const DataTypes = (this as any).db.sequelize.constructor['DataTypes'];
+    const tableName = `${(this as any).db.options.tablePrefix || ''}orchestratorLogs`;
 
     const tableExists = await queryInterface
       .describeTable(tableName)
@@ -31,8 +31,8 @@ export default class AddTracingDetailFieldsMigration extends Migration {
   }
 
   async down() {
-    const queryInterface = this.db.sequelize.getQueryInterface();
-    const tableName = `${this.db.options.tablePrefix || ''}orchestratorLogs`;
+    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const tableName = `${(this as any).db.options.tablePrefix || ''}orchestratorLogs`;
 
     for (const column of ['context', 'trace', 'messages']) {
       await queryInterface.removeColumn(tableName, column).catch(() => {});

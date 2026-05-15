@@ -17,22 +17,21 @@ const levelColors: Record<string, string> = {
 };
 
 const LOG_LEVELS = ['Trace', 'Info', 'Warn', 'Error', 'Fatal'];
-const escapeODataString = (value: string) => value.replace(/'/g, "''");
 
 export const LogExplorer: React.FC = () => {
   const t = useT();
   const [level, setLevel] = useState<string | undefined>();
   const [search, setSearch] = useState('');
   const [jobKey, setJobKey] = useState('');
+  const [queueItem, setQueueItem] = useState('');
 
-  const filterParts: string[] = [];
-  if (level) filterParts.push(`Level eq '${level}'`);
-  if (jobKey) filterParts.push(`JobKey eq '${escapeODataString(jobKey)}'`);
-  if (search) filterParts.push(`contains(Message, '${escapeODataString(search)}')`);
-
-  const { data, loading, refresh } = useUiPathRequest('uipathRobotLogs', 'list', {
-    filter: filterParts.join(' and ') || undefined,
+  const { data, meta, loading, refresh } = useUiPathRequest('uipathRobotLogs', 'search', {
+    level,
+    jobKey: jobKey || undefined,
+    message: search || undefined,
+    queueItem: queueItem || undefined,
     top: 100,
+    count: true,
     orderby: 'TimeStamp desc',
   });
 
@@ -74,11 +73,27 @@ export const LogExplorer: React.FC = () => {
           onChange={(e) => setJobKey(e.target.value)}
           allowClear
         />
+        <Input.Search
+          placeholder={t('Queue item ID/key/reference')}
+          style={{ width: 240 }}
+          value={queueItem}
+          onChange={(e) => setQueueItem(e.target.value)}
+          onSearch={(value) => setQueueItem(value)}
+          allowClear
+        />
         <Input.Search placeholder={t('Search message')} style={{ width: 250 }} onSearch={setSearch} allowClear />
         <Button onClick={() => refresh()} icon={<ReloadOutlined />}>
           {t('Refresh')}
         </Button>
       </Space>
+      {meta?.jobKeys?.length ? (
+        <Space style={{ marginBottom: 16 }} wrap>
+          <span>{t('Resolved job keys')}:</span>
+          {meta.jobKeys.map((key: string) => (
+            <Tag key={key}>{key}</Tag>
+          ))}
+        </Space>
+      ) : null}
 
       <Table
         dataSource={data || []}

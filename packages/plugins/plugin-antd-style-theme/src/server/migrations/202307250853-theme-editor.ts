@@ -13,6 +13,8 @@ import { uid } from '@nocobase/utils';
 import { compact, compactDark, dark, defaultTheme } from '../builtinThemes';
 
 export default class extends Migration {
+  declare app: any;
+  declare db: any;
   appVersion = '<0.14.0-alpha.8';
   async up() {
     const result = await this.app.version.satisfies('<0.14.0-alpha.8');

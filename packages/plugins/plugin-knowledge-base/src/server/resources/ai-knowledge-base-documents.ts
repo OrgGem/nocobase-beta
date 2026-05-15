@@ -124,41 +124,37 @@ export default {
       }
 
       // Check upload permission based on KB access level
-      if (values.knowledgeBaseId) {
-        const kbRepo = ctx.db.getRepository('aiKnowledgeBases');
-        const kb = await kbRepo.findOne({ filter: { id: values.knowledgeBaseId } });
+      const kbRepo = ctx.db.getRepository('aiKnowledgeBases');
+      const kb = await kbRepo.findOne({ filter: { id: values.knowledgeBaseId } });
 
-        if (!kb) {
-          ctx.throw(404, 'Knowledge base not found');
+      if (!kb) {
+        ctx.throw(404, 'Knowledge base not found');
+        return;
+      }
+
+      kbData = kb.toJSON();
+
+      // EXTERNAL_RAG KBs are managed by external services — no local document uploads
+      if (kbData.type === 'EXTERNAL_RAG') {
+        ctx.throw(400, 'Cannot upload documents to an external RAG knowledge base');
+        return;
+      }
+
+      if (kbData.accessLevel === 'BASIC' && !sameId(kbData.ownerId, userId)) {
+        ctx.throw(403, 'Only the owner can upload documents to a personal knowledge base');
+        return;
+      }
+
+      if (kbData.accessLevel === 'PUBLIC' && !isAdmin) {
+        ctx.throw(403, 'Only administrators can upload documents to a public knowledge base');
+        return;
+      }
+
+      if (kbData.accessLevel === 'SHARED') {
+        const canUpload = isAdmin || kbData.uploadRoles?.some((r: string) => roles.includes(r));
+        if (!canUpload) {
+          ctx.throw(403, 'You do not have permission to upload documents to this knowledge base');
           return;
-        }
-
-        if (kb) {
-          kbData = kb.toJSON();
-
-          // EXTERNAL_RAG KBs are managed by external services — no local document uploads
-          if (kbData.type === 'EXTERNAL_RAG') {
-            ctx.throw(400, 'Cannot upload documents to an external RAG knowledge base');
-            return;
-          }
-
-          if (kbData.accessLevel === 'BASIC' && !sameId(kbData.ownerId, userId)) {
-            ctx.throw(403, 'Only the owner can upload documents to a personal knowledge base');
-            return;
-          }
-
-          if (kbData.accessLevel === 'PUBLIC' && !isAdmin) {
-            ctx.throw(403, 'Only administrators can upload documents to a public knowledge base');
-            return;
-          }
-
-          if (kbData.accessLevel === 'SHARED') {
-            const canUpload = isAdmin || kbData.uploadRoles?.some((r: string) => roles.includes(r));
-            if (!canUpload) {
-              ctx.throw(403, 'You do not have permission to upload documents to this knowledge base');
-              return;
-            }
-          }
         }
       }
 

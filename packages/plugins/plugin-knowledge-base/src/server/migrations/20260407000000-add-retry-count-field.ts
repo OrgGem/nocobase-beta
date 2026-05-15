@@ -11,7 +11,7 @@ import { Migration } from '@nocobase/server';
 
 export default class AddRetryCountField extends Migration {
   on = 'afterLoad';
-  appVersion = '<1.0.0-alpha.1';
+  appVersion = '<=2.x';
 
   async up() {
     const queryInterface = (this as any).db.sequelize.getQueryInterface();

@@ -178,7 +178,7 @@ export async function getModelStatus(ctx: Context, next: Next) {
   const s3 = await createS3StorageFromConfigWithFileManager(config ?? {}, ctx.app);
 
   // Check bundled models first, then storage override
-  const BUNDLED_ROOT = resolve(__dirname, '../../public/models');
+  const BUNDLED_ROOT = resolve(__dirname, '../../../public/models');
   const checkBase = (root: string) => safeJoin(root, modelId);
 
   const fileStatuses = await Promise.all(

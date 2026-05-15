@@ -532,3 +532,80 @@ export const tweenOne: Omit<ThemeItem, 'id'> = {
   uid: 'tween_one',
   default: false,
 };
+
+/**
+ * Muse Dashboard — Theme inspired by Creative Tim's Muse Ant Design Dashboard
+ * Style: Clean white cards with generous border-radius, soft shadows, light gray-blue layout background.
+ */
+export const museDashboard: Omit<ThemeItem, 'id'> = {
+  config: {
+    name: 'Muse Dashboard',
+    token: {
+      colorPrimary: '#1890ff',
+      colorSuccess: '#52c41a',
+      colorWarning: '#faad14',
+      colorError: '#ff4d4f',
+      colorInfo: '#1890ff',
+
+      colorTextBase: 'rgba(0, 0, 0, 0.85)',
+      fontSize: 14,
+      fontFamily: `'Helvetica Neue', Arial, sans-serif`,
+
+      sizeStep: 4,
+      sizeUnit: 4,
+
+      colorBgBase: '#ffffff',
+      colorBgLayout: '#f0f2f5',
+      borderRadius: 6,
+      borderRadiusLG: 12,
+      borderRadiusSM: 4,
+
+      boxShadow: '0 20px 27px 0 rgba(0, 0, 0, 0.05)',
+
+      // NocoBase custom — header
+      colorBgHeader: '#ffffff',
+      colorTextHeaderMenu: 'rgba(0, 0, 0, 0.85)',
+      colorTextHeaderMenuHover: '#1890ff',
+      colorTextHeaderMenuActive: '#1890ff',
+      colorBgHeaderMenuHover: '#f0f2f5',
+      colorBgHeaderMenuActive: '#e6f7ff',
+
+      // NocoBase custom — sider
+      colorBgSider: '#ffffff',
+      colorTextSiderMenu: 'rgba(0, 0, 0, 0.85)',
+      colorTextSiderMenuHover: '#1890ff',
+      colorTextSiderMenuActive: '#1890ff',
+      colorBgSiderMenuHover: '#f0f2f5',
+      colorBgSiderMenuActive: '#e6f7ff',
+    },
+    components: {
+      Button: {
+        borderRadius: 6,
+        controlHeight: 40,
+      },
+      Card: {
+        headerBg: 'transparent',
+        borderRadiusLG: 12,
+      },
+      Menu: {
+        itemBg: 'transparent',
+        itemHoverBg: '#f0f2f5',
+        itemSelectedBg: '#ffffff',
+        itemSelectedColor: '#1890ff',
+        itemColor: 'rgba(0, 0, 0, 0.85)',
+        subMenuItemBg: 'transparent',
+        itemBorderRadius: 12,
+      },
+      Table: {
+        headerBg: 'transparent',
+        headerColor: 'rgba(0, 0, 0, 0.45)',
+        rowHoverBg: '#fafafa',
+      },
+    },
+  },
+  optional: true,
+  isBuiltIn: true,
+  uid: 'muse_dashboard',
+  default: false,
+};
+

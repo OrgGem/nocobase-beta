@@ -19,6 +19,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import { EmbeddingWorkerProvider, useEmbeddingWorker } from './EmbeddingWorkerProvider';
+import { mainDataSourceRequest } from '../api';
 
 const { Text } = Typography;
 const { Dragger } = Upload;
@@ -71,64 +72,88 @@ const WebClientDocumentUploaderInner: React.FC<WebClientDocumentUploaderProps> =
     async (entries: FileEntry[], files: Map<string, File>) => {
       setProcessing(true);
 
-      // Ensure the worker model is loaded before processing
-      await ensureReady();
+      try {
+        // Ensure the worker model is loaded before processing
+        await ensureReady();
 
-      for (const entry of entries) {
-        const file = files.get(entry.uid);
-        if (!file) continue;
+        for (const entry of entries) {
+          const file = files.get(entry.uid);
+          if (!file) continue;
 
-        try {
-          // 1. Read file content
-          updateEntry(entry.uid, { stage: 'reading', progress: 5 });
-          const text = await file.text();
+          try {
+            // 1. Read file content
+            updateEntry(entry.uid, { stage: 'reading', progress: 5 });
+            const text = await file.text();
 
-          // 2. Create document record on server (status: pending_client)
-          const docRes = await api.request({
-            url: 'aiKnowledgeBaseDoc:create',
-            method: 'post',
-            data: {
-              values: {
-                knowledgeBaseId,
-                filename: file.name,
-                textContent: text,
-                status: 'pending_client',
+            // 2. Create document record on server (status: pending_client)
+            const docRes = await api.request(
+              mainDataSourceRequest({
+                url: 'aiKnowledgeBaseDoc:create',
+                method: 'post',
+                data: {
+                  values: {
+                    knowledgeBaseId,
+                    filename: file.name,
+                    textContent: text,
+                    status: 'pending_client',
+                  },
+                },
+              }),
+            );
+            const documentId = docRes?.data?.data?.id;
+            if (!documentId) throw new Error(t('Failed to create document record'));
+
+            // 3. Chunk + embed in browser worker
+            updateEntry(entry.uid, { stage: 'embedding', progress: 10 });
+            const { chunks } = await processDocument({
+              documentId,
+              text,
+              metadata: { filename: file.name, knowledgeBaseId },
+              onProgress: (embedded, total) => {
+                const pct = total > 0 ? Math.round(10 + (embedded / total) * 75) : 10;
+                updateEntry(entry.uid, { stage: 'embedding', progress: pct });
               },
-            },
-          });
-          const documentId = docRes?.data?.data?.id;
-          if (!documentId) throw new Error(t('Failed to create document record'));
+            });
 
-          // 3. Chunk + embed in browser worker
-          updateEntry(entry.uid, { stage: 'embedding', progress: 10 });
-          const { chunks } = await processDocument({
-            documentId,
-            text,
-            metadata: { filename: file.name, knowledgeBaseId },
-            onProgress: (embedded, total) => {
-              const pct = total > 0 ? Math.round(10 + (embedded / total) * 75) : 10;
-              updateEntry(entry.uid, { stage: 'embedding', progress: pct });
-            },
-          });
+            // 4. Send vectors to server
+            updateEntry(entry.uid, { stage: 'saving', progress: 88 });
+            const activeConfigRes = config ? null : await api.request(
+              mainDataSourceRequest({
+                url: 'embedWebClient:getConfig',
+                params: { knowledgeBaseId },
+              }),
+            );
+            const activeConfig = config ?? activeConfigRes?.data?.data ?? activeConfigRes?.data;
+            await api.request(
+              mainDataSourceRequest({
+                url: 'embedWebClient:storeVectors',
+                method: 'post',
+                data: {
+                  documentId,
+                  chunks,
+                  modelId: activeConfig?.modelId,
+                  dtype: activeConfig?.dtype,
+                  dimensions: activeConfig?.dimensions,
+                },
+              }),
+            );
 
-          // 4. Send vectors to server
-          updateEntry(entry.uid, { stage: 'saving', progress: 88 });
-          await api.request({
-            url: 'embedWebClient:storeVectors',
-            method: 'post',
-            data: { documentId, chunks },
-          });
-
-          updateEntry(entry.uid, { stage: 'done', progress: 100, chunkCount: chunks.length });
-        } catch (err: any) {
-          updateEntry(entry.uid, { stage: 'error', progress: 0, error: err?.message ?? t('Unknown error') });
+            updateEntry(entry.uid, { stage: 'done', progress: 100, chunkCount: chunks.length });
+          } catch (err: any) {
+            updateEntry(entry.uid, { stage: 'error', progress: 0, error: err?.message ?? t('Unknown error') });
+          }
         }
+      } catch (err: any) {
+        const error = err?.message ?? t('Unknown error');
+        for (const entry of entries) {
+          updateEntry(entry.uid, { stage: 'error', progress: 0, error });
+        }
+      } finally {
+        setProcessing(false);
+        onComplete?.();
       }
-
-      setProcessing(false);
-      onComplete?.();
     },
-    [api, knowledgeBaseId, processDocument, updateEntry, onComplete, ensureReady, t],
+    [api, knowledgeBaseId, processDocument, updateEntry, onComplete, ensureReady, t, config],
   );
 
   // Serialize concurrent processQueue calls (M-3 fix)
@@ -294,7 +319,7 @@ const WebClientDocumentUploaderInner: React.FC<WebClientDocumentUploaderProps> =
  */
 export const WebClientDocumentUploader: React.FC<WebClientDocumentUploaderProps> = (props) => {
   return (
-    <EmbeddingWorkerProvider>
+    <EmbeddingWorkerProvider knowledgeBaseId={props.knowledgeBaseId}>
       <WebClientDocumentUploaderInner {...props} />
     </EmbeddingWorkerProvider>
   );

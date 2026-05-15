@@ -7,9 +7,31 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import type { KnowledgeBaseFeature } from '@nocobase/plugin-ai/server';
-import type { KnowledgeBaseGroup, KnowledgeBase as KBType } from '@nocobase/plugin-ai/server';
+export interface KnowledgeBase {
+  knowledgeBaseType: string;
+  knowledgeBaseOuterId: string;
+  name: string;
+  description: string;
+  vectorStoreProvider: string;
+  vectorStoreConfigId: string;
+  vectorStoreProps: { key: string; value: any }[];
+  enabled: boolean;
+}
+
+export interface KnowledgeBaseGroup {
+  vectorStoreConfig: {
+    vectorStoreProvider: string;
+    vectorStoreConfigId: string;
+  };
+  knowledgeBaseType: string;
+  knowledgeBaseList: KnowledgeBase[];
+}
+
+export interface KnowledgeBaseFeature {
+  getKnowledgeBaseGroup(knowledgeBaseIds: string[]): Promise<KnowledgeBaseGroup[]>;
+}
 import type PluginKnowledgeBaseServer from '../plugin';
+import { resolveEmbedWebClientProfile } from '../utils/embed-web-client';
 
 /**
  * Fix #1: Matches interface signature exactly — getKnowledgeBaseGroup(knowledgeBaseIds: string[])
@@ -53,7 +75,14 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
       const vectorStoreConfigId = vectorStore.id;
       const vectorStoreProvider = vectorStore.vectorDatabase?.provider ?? 'pgvector';
 
-      const groupKey = `${vectorStoreProvider}:${vectorStoreConfigId}`;
+      const webEmbedProfile =
+        kbData.type === 'WEB_CLIENT_EMBED'
+          ? await resolveEmbedWebClientProfile(this.plugin, String(kbData.id))
+          : null;
+
+      const groupKey = webEmbedProfile
+        ? `${vectorStoreProvider}:${vectorStoreConfigId}:${webEmbedProfile.signature}`
+        : `${vectorStoreProvider}:${vectorStoreConfigId}`;
       if (!groups.has(groupKey)) {
         groups.set(groupKey, {
           vectorStoreConfig: {
@@ -66,7 +95,7 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
       }
 
       const group = groups.get(groupKey)!;
-      const kbEntry: KBType = {
+      const kbEntry: KnowledgeBase = {
         knowledgeBaseType: kbData.type ?? 'LOCAL',
         knowledgeBaseOuterId: kbData.id,
         name: kbData.name,
@@ -78,6 +107,14 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
           // CRITICAL: vectorStoreConfigId must be in props — plugin-ai passes only
           // kb.vectorStoreProps to createVectorStoreService, not the top-level field
           { key: 'vectorStoreConfigId', value: vectorStoreConfigId },
+          ...(webEmbedProfile
+            ? [
+                { key: 'embeddingProvider', value: 'localEmbed' },
+                { key: 'localEmbedModelId', value: webEmbedProfile.modelId },
+                { key: 'localEmbedDtype', value: webEmbedProfile.dtype },
+                { key: 'embeddingProfile', value: webEmbedProfile.signature },
+              ]
+            : []),
           // Pass accessLevel for downstream vector filtering (Fix #2)
           { key: 'accessLevel', value: kbData.accessLevel ?? 'PUBLIC' },
           // Pass ownerId for BASIC KB per-user vector filtering
