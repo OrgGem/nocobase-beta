@@ -25,6 +25,7 @@ const POST_STATUS_COLOR: Record<string, string> = {
   pending_approval: 'orange',
   approved: 'cyan',
   posted: 'green',
+  post_failed: 'red',
   skipped: 'default',
   rejected: 'red',
 };
@@ -278,6 +279,7 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
             { value: 'pending_approval', label: t('pending_approval') },
             { value: 'approved', label: t('approved') },
             { value: 'posted', label: t('posted') },
+            { value: 'post_failed', label: t('post_failed') },
             { value: 'skipped', label: t('skipped') },
             { value: 'rejected', label: t('rejected') },
           ]}
@@ -395,7 +397,9 @@ const ReviewDetailView: React.FC<{
   const canApprove =
     review.status === 'completed' &&
     review.targetType === 'mr' &&
-    (review.postStatus === 'pending_approval' || review.postStatus === 'approved');
+    (review.postStatus === 'pending_approval' ||
+      review.postStatus === 'approved' ||
+      review.postStatus === 'post_failed');
 
   return (
     <div>
@@ -413,6 +417,15 @@ const ReviewDetailView: React.FC<{
           type="error"
           showIcon
           message={t('Review failed')}
+          description={<pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{review.error}</pre>}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {review.status === 'completed' && review.postStatus === 'post_failed' && review.error && (
+        <Alert
+          type="error"
+          showIcon
+          message={t('Post Failed')}
           description={<pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{review.error}</pre>}
           style={{ marginBottom: 16 }}
         />

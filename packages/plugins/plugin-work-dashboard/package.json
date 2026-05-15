@@ -1,0 +1,33 @@
+{
+  "name": "plugin-work-dashboard",
+  "displayName": "Work Dashboard",
+  "description": "Ready-made visualization templates for job, task, ticket, and workflow collections.",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/plugin-data-visualization": "2.x",
+    "plugin-visualization-templates": ">=0.1.0"
+  },
+  "devDependencies": {
+    "react": "^18.2.0"
+  }
+}

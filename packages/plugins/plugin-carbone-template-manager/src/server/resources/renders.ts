@@ -316,10 +316,18 @@ export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer
       .findOne({ filterByTk: log.templateId });
     if (!tpl) ctx.throw(404, 'template no longer exists');
 
+    // Use the carboneTemplateId and versionId from the log record — these
+    // reflect the exact template version that was used at the time of the
+    // original render.  Previously we used `tpl.carboneTemplateId` and
+    // `tpl.currentVersionId` which point to the *current* version and would
+    // produce a completely different file when the template had been updated.
+    const carboneTemplateId = log.carboneTemplateId || tpl.carboneTemplateId;
+    const versionId = log.versionId || tpl.currentVersionId;
+
     const outcome = await pipeline.render({
       templateId: tpl.id,
-      versionId: tpl.currentVersionId,
-      carboneTemplateId: tpl.carboneTemplateId,
+      versionId,
+      carboneTemplateId,
       data: log.inputData,
       format: log.format,
       bypassCache: true,
@@ -334,7 +342,9 @@ export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer
     const disposition = PREVIEWABLE_FORMATS.has(outcome.format) ? 'inline' : 'attachment';
     ctx.set('Content-Disposition', `${disposition}; filename="${replayFilename}"`);
     ctx.body = outcome.buffer;
-    await next();
+    // Intentionally NOT calling next() — the response is a raw binary stream
+    // and we must prevent NocoBase middleware from wrapping it in a JSON
+    // envelope, which would corrupt the output and show "strange data".
   }
 
   /**

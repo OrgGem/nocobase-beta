@@ -3,6 +3,17 @@ import type { Application } from '@nocobase/server';
 import { parseGitLabProject } from '../utils/gitlab-url';
 import { redactPat } from '../utils/redact';
 
+export const WORKER_JOB_GIT_REVIEW_PROCESS = 'git-review:process';
+const REVIEW_QUEUE_CHANNEL = 'plugin-git-manager.review';
+const REVIEW_QUEUE_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(process.env.GIT_REVIEW_QUEUE_CONCURRENCY || process.env.GIT_REVIEW_MAX_CONCURRENCY || '3', 10) || 3,
+);
+const REVIEW_QUEUE_TIMEOUT_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.GIT_REVIEW_QUEUE_TIMEOUT_MS || '', 10) || 10 * 60 * 1000,
+);
+
 interface TriggerArgs {
   flowId?: number | null;
   repositoryId: number;
@@ -14,6 +25,29 @@ interface TriggerArgs {
   extraInstructions?: string;
   triggeredBy?: 'manual' | 'poll';
   userId?: number | string | null;
+}
+
+interface ReviewFlowSnapshot {
+  id: number;
+  name?: string;
+  postMode?: string;
+  llmService?: string | null;
+  model?: string | null;
+  instructions?: string | null;
+}
+
+interface ReviewQueueMessage {
+  reviewId: number;
+  repositoryId: number;
+  targetType: 'mr' | 'commit' | 'branch';
+  mrIid?: number | null;
+  commitSha?: string | null;
+  branch?: string | null;
+  headSha?: string | null;
+  aiEmployeeUsername: string;
+  extraInstructions?: string;
+  userId?: number | string | null;
+  flowSnapshot?: ReviewFlowSnapshot;
 }
 
 function getActionParams(ctx: Context) {
@@ -29,8 +63,8 @@ function getActionParams(ctx: Context) {
  * Uses `app.lockManager` so the same code path covers both single-node
  * (in-memory `async-mutex`) and HA cluster (Redis-backed Redlock when
  * `plugin-cluster-manager` is active and `LOCK_ADAPTER_DEFAULT=redis`).
- * The locked region only does an upsert + setImmediate (a few ms), so a
- * 30s TTL is generous and auto-releases if the process crashes.
+ * The locked region only does an upsert + queue publish (a few ms), so a 30s
+ * TTL is generous and auto-releases if the process crashes.
  */
 function targetKey(args: TriggerArgs): string {
   if (args.targetType === 'mr') return `${args.repositoryId}:mr:${args.mrIid}`;
@@ -47,8 +81,8 @@ async function withTriggerLock<T>(app: Application, key: string, fn: () => Promi
 
 /**
  * Trigger an AI-driven code review for an MR / commit / branch.
- * The review record is upserted synchronously, then AIEmployee.invoke runs in
- * the background. The action returns immediately with the reviewId.
+ * The review record is upserted synchronously, then queued for an available
+ * git-review worker. The action returns immediately with the reviewId.
  */
 export async function triggerReview(ctx: Context, next: () => Promise<void>) {
   const params = getActionParams(ctx);
@@ -162,13 +196,12 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     latestSha: headSha || existingLatestSha || null,
     triggeredBy: args.triggeredBy || 'manual',
     status: 'pending',
-    // Stamp startedAt synchronously so `recoverStuckReviews` can sweep rows
-    // that get stuck in `pending` (process died before runReview ran).
-    // runReview's own update will refresh this on actual start.
-    startedAt: new Date(),
+    // `startedAt` is stamped by the queue worker when execution actually
+    // starts. Pending rows may be legitimately waiting in Redis.
+    startedAt: null,
     finishedAt: null,
     durationMs: null,
-    postStatus: flow.get('postMode') === 'disabled' ? 'skipped' : 'pending_approval',
+    postStatus: getInitialPostStatus(flow, args.targetType),
     error: null,
   };
 
@@ -193,26 +226,146 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     reviewId = review.get('id') as number;
   }
 
-  // Run in background — do not await
-  setImmediate(() =>
-    runReview(app, {
-      reviewId,
-      flow,
-      repo,
-      targetType: args.targetType,
-      mrIid: args.targetType === 'mr' ? args.mrIid! : null,
-      commitSha: args.targetType === 'commit' ? args.commitSha! : null,
-      branch: args.branch || undefined,
-      headSha,
-      aiEmployeeUsername,
-      extraInstructions: args.extraInstructions,
-      userId: args.userId ?? null,
-    }).catch((err) => {
-      app.log?.error?.('runReview background error', err);
-    }),
-  );
+  // Queue for background workers; the action returns as soon as the message is published.
+  await enqueueReview(app, {
+    reviewId,
+    repositoryId: args.repositoryId,
+    targetType: args.targetType,
+    mrIid: args.targetType === 'mr' ? args.mrIid : null,
+    commitSha: args.targetType === 'commit' ? args.commitSha : null,
+    branch: args.branch || undefined,
+    headSha,
+    aiEmployeeUsername,
+    extraInstructions: args.extraInstructions,
+    userId: args.userId ?? null,
+    flowSnapshot: createFlowSnapshot(flow),
+  });
 
   return reviewId;
+}
+
+export function registerReviewQueue(app: Application) {
+  app.eventQueue.subscribe(REVIEW_QUEUE_CHANNEL, {
+    concurrency: REVIEW_QUEUE_CONCURRENCY,
+    idle: () => isGitReviewWorker(app),
+    process: async (message: ReviewQueueMessage) => {
+      await processQueuedReview(app, message);
+    },
+  });
+}
+
+export function unregisterReviewQueue(app: Application) {
+  app.eventQueue.unsubscribe(REVIEW_QUEUE_CHANNEL);
+}
+
+function createFlowSnapshot(flow: any): ReviewFlowSnapshot {
+  return {
+    id: Number(flow.get('id')),
+    name: flow.get('name') as string,
+    postMode: flow.get('postMode') as string,
+    llmService: flow.get('llmService') as string | null,
+    model: flow.get('model') as string | null,
+    instructions: flow.get('instructions') as string | null,
+  };
+}
+
+function createFlowFromSnapshot(snapshot: ReviewFlowSnapshot | undefined, fallback?: any) {
+  return {
+    get(name: string) {
+      if (snapshot && Object.prototype.hasOwnProperty.call(snapshot, name)) {
+        return (snapshot as any)[name];
+      }
+      return fallback?.get?.(name);
+    },
+  };
+}
+
+function isGitReviewWorker(app: Application): boolean {
+  const workerMode = process.env.WORKER_MODE || '';
+  return (
+    app.serving(WORKER_JOB_GIT_REVIEW_PROCESS) ||
+    workerMode === 'worker' ||
+    workerMode === 'task' ||
+    process.env.APP_ROLE === 'worker'
+  );
+}
+
+async function enqueueReview(app: Application, message: ReviewQueueMessage) {
+  try {
+    await app.eventQueue.publish(REVIEW_QUEUE_CHANNEL, message, {
+      timeout: REVIEW_QUEUE_TIMEOUT_MS,
+      maxRetries: 1,
+    });
+  } catch (err: any) {
+    const safeMessage = redactPat(err?.message || String(err));
+    await app.db.getRepository('gitCodeReviews').update({
+      filterByTk: message.reviewId,
+      values: {
+        status: 'failed',
+        error: `Failed to enqueue review: ${safeMessage}`,
+        finishedAt: new Date(),
+      },
+    });
+    throw err;
+  }
+}
+
+async function failQueuedReview(app: Application, reviewId: number, err: any) {
+  const safeMessage = redactPat(err?.message || String(err));
+  await app.db.getRepository('gitCodeReviews').update({
+    filterByTk: reviewId,
+    values: {
+      status: 'failed',
+      error: safeMessage,
+      finishedAt: new Date(),
+    },
+  });
+}
+
+async function processQueuedReview(app: Application, message: ReviewQueueMessage) {
+  const db = app.db;
+  const reviewsRepo = db.getRepository('gitCodeReviews');
+  const review = await reviewsRepo.findOne({ filterByTk: message.reviewId });
+  if (!review) {
+    app.log?.warn?.(`git review queue: review ${message.reviewId} not found, skipping`);
+    return;
+  }
+
+  if (review.get('status') !== 'pending') {
+    app.log?.info?.(`git review queue: review ${message.reviewId} is ${review.get('status')}, skipping`);
+    return;
+  }
+
+  try {
+    const repo = await db.getRepository('gitRepositories').findOne({
+      filterByTk: message.repositoryId || review.get('repositoryId'),
+    });
+    if (!repo) throw new Error('Repository not found');
+
+    const storedFlow = await db.getRepository('gitReviewFlows').findOne({
+      filterByTk: message.flowSnapshot?.id || review.get('flowId'),
+    });
+    const flow = createFlowFromSnapshot(message.flowSnapshot, storedFlow);
+    const aiEmployeeUsername = message.aiEmployeeUsername || (flow.get('aiEmployeeUsername') as string);
+    if (!aiEmployeeUsername) throw new Error('Flow has no AI employee configured');
+
+    await runReview(app, {
+      reviewId: message.reviewId,
+      flow,
+      repo,
+      targetType: message.targetType || review.get('targetType'),
+      mrIid: message.targetType === 'mr' ? message.mrIid ?? Number(review.get('mrIid')) : null,
+      commitSha: message.targetType === 'commit' ? message.commitSha || (review.get('commitSha') as string) : null,
+      branch: message.branch || (review.get('branch') as string | undefined),
+      headSha: message.headSha || (review.get('headSha') as string | null),
+      aiEmployeeUsername,
+      extraInstructions: message.extraInstructions,
+      userId: message.userId ?? null,
+    });
+  } catch (err) {
+    app.log?.error?.('git review queue: failed before review execution', err);
+    await failQueuedReview(app, message.reviewId, err);
+  }
 }
 
 /**
@@ -248,6 +401,7 @@ export async function reviewApprovePost(ctx: Context, next: () => Promise<void>)
       postedNoteId: String(noteId),
       approvedBy: userId ? String(userId) : null,
       approvedAt: new Date(),
+      error: null,
     },
   });
 
@@ -432,9 +586,10 @@ async function runReview(app: Application, args: RunReviewArgs) {
     const finishedAt = new Date();
     const durationMs = finishedAt.getTime() - startedAt.getTime();
 
-    const postMode = args.flow.get('postMode') as string;
-    let postStatus = 'pending_approval';
+    const postMode = getFlowPostMode(args.flow);
+    let postStatus = getInitialPostStatus(args.flow, args.targetType);
     let postedNoteId: string | null = null;
+    let autoPostError: string | null = null;
 
     if (postMode === 'disabled') {
       postStatus = 'skipped';
@@ -443,6 +598,8 @@ async function runReview(app: Application, args: RunReviewArgs) {
         postedNoteId = String(await postNoteToGitLab(args.repo, args.mrIid, content));
         postStatus = 'posted';
       } catch (err: any) {
+        autoPostError = redactPat(err?.message || String(err));
+        postStatus = 'post_failed';
         app.log?.error?.('Auto-post review note failed', err);
       }
     }
@@ -461,11 +618,14 @@ async function runReview(app: Application, args: RunReviewArgs) {
         finishedAt,
         postStatus,
         postedNoteId,
+        error: autoPostError ? `Auto-post failed: ${autoPostError}` : null,
         metadata: {
           flowName: args.flow.get('name'),
           aiEmployeeUsername: args.aiEmployeeUsername,
           llmService,
           model,
+          postMode,
+          autoPostError,
         },
       },
     });
@@ -682,6 +842,30 @@ async function postNoteToGitLab(repo: any, mrIid: number, body: string): Promise
 const MAX_BRANCH_FILTER_LENGTH = 200;
 const loggedBadFilters = new Set<string>();
 
+type ReviewPostMode = 'auto' | 'manual' | 'disabled';
+
+function getFlowPostMode(flow: any): ReviewPostMode {
+  const rawValue = flow?.get?.('postMode');
+  const value = rawValue && typeof rawValue === 'object' && 'value' in rawValue ? rawValue.value : rawValue;
+  const normalized = String(value || 'manual')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  if (['auto', 'auto_post', 'autopost', 'auto_post_to_mr'].includes(normalized)) return 'auto';
+  if (['disabled', 'disable', 'do_not_post', 'dont_post', 'none', 'skip', 'skipped'].includes(normalized)) {
+    return 'disabled';
+  }
+  return 'manual';
+}
+
+function getInitialPostStatus(flow: any, targetType: string): string {
+  const postMode = getFlowPostMode(flow);
+  if (postMode === 'disabled') return 'skipped';
+  if (postMode === 'auto' && targetType !== 'mr') return 'skipped';
+  return 'pending_approval';
+}
+
 function warnInvalidBranchFilter(filter: string, reason: string) {
   if (loggedBadFilters.has(filter)) return;
   loggedBadFilters.add(filter);
@@ -721,11 +905,10 @@ function throwHttp(status: number, message: string): never {
 }
 
 /**
- * Reviews are launched via `setImmediate` and tracked entirely in process
- * memory. When the app restarts mid-run, the in-memory promise dies but the
- * DB record stays in `status='running'` indefinitely. On startup we sweep
- * any `running` review whose `startedAt` is older than the in-process
- * timeout (5 min) plus a safety margin and mark it as failed.
+ * Review execution is delegated to the distributed event queue. When a worker
+ * restarts mid-run, the DB record can stay in `status='running'` indefinitely.
+ * On startup we sweep any `running` review whose `startedAt` is older than the
+ * in-process timeout (5 min) plus a safety margin and mark it as failed.
  *
  * The cutoff is intentionally larger than the runtime timeout so concurrent
  * reviews running on a *different* node in an HA cluster aren't clobbered.
@@ -736,13 +919,11 @@ export async function recoverStuckReviews(app: Application): Promise<number> {
   try {
     const reviewsRepo = app.db.getRepository('gitCodeReviews');
     const cutoff = new Date(Date.now() - STUCK_REVIEW_CUTOFF_MS);
-    // Sweep both `running` (interrupted mid-execution) and `pending`
-    // (interrupted between record creation and runReview's first update).
-    // Both have `startedAt` stamped at trigger time so the cutoff applies
-    // consistently.
+    // Pending rows may be legitimately waiting in Redis, so only sweep reviews
+    // that were actually picked up by a worker.
     const stuck = await reviewsRepo.find({
       filter: {
-        status: { $in: ['running', 'pending'] },
+        status: 'running',
         startedAt: { $lt: cutoff },
       },
     });

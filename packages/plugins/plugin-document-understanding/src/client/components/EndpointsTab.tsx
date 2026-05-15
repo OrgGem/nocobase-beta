@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table,
   Button,
@@ -23,28 +23,65 @@ const KeyValueEditor: React.FC<{ value?: Record<string, string>; onChange?: (v: 
   value = {},
   onChange,
 }) => {
-  const entries = Object.entries(value);
+  const [rows, setRows] = useState<Array<{ id: string; key: string; value: string }>>([]);
+  const localChangeRef = useRef(false);
 
-  const update = (idx: number, key: string, val: string) => {
-    const arr = [...entries];
-    arr[idx] = [key, val];
-    onChange?.(Object.fromEntries(arr));
+  useEffect(() => {
+    if (localChangeRef.current) {
+      localChangeRef.current = false;
+      return;
+    }
+    setRows(
+      Object.entries(value || {}).map(([key, rowValue], index) => ({
+        id: `${key}_${index}`,
+        key,
+        value: String(rowValue ?? ''),
+      })),
+    );
+  }, [value]);
+
+  const emit = (nextRows: Array<{ id: string; key: string; value: string }>) => {
+    setRows(nextRows);
+    const nextValue = nextRows.reduce<Record<string, string>>((acc, row) => {
+      const key = row.key.trim();
+      if (key) {
+        acc[key] = row.value;
+      }
+      return acc;
+    }, {});
+    localChangeRef.current = true;
+    onChange?.(nextValue);
   };
 
-  const add = () => onChange?.({ ...value, '': '' });
+  const update = (idx: number, key: string, val: string) => {
+    const nextRows = [...rows];
+    nextRows[idx] = { ...nextRows[idx], key, value: val };
+    emit(nextRows);
+  };
+
+  const add = () => setRows([...rows, { id: `new_${Date.now()}_${Math.random()}`, key: '', value: '' }]);
 
   const remove = (idx: number) => {
-    const arr = [...entries];
-    arr.splice(idx, 1);
-    onChange?.(Object.fromEntries(arr));
+    const nextRows = rows.filter((_, rowIndex) => rowIndex !== idx);
+    emit(nextRows);
   };
 
   return (
     <div>
-      {entries.map(([k, v], i) => (
-        <Space key={i} style={{ display: 'flex', marginBottom: 4 }}>
-          <Input placeholder="Header name" value={k} onChange={(e) => update(i, e.target.value, v)} style={{ width: 180 }} />
-          <Input placeholder="Value" value={v} onChange={(e) => update(i, k, e.target.value)} style={{ width: 220 }} />
+      {rows.map((row, i) => (
+        <Space key={row.id} style={{ display: 'flex', marginBottom: 4 }}>
+          <Input
+            placeholder="Header name"
+            value={row.key}
+            onChange={(e) => update(i, e.target.value, row.value)}
+            style={{ width: 180 }}
+          />
+          <Input
+            placeholder="Value"
+            value={row.value}
+            onChange={(e) => update(i, row.key, e.target.value)}
+            style={{ width: 220 }}
+          />
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => remove(i)} />
         </Space>
       ))}
@@ -113,7 +150,7 @@ export const EndpointsTab = () => {
   const [form] = Form.useForm();
   const [editingId, setEditingId] = useState<number | null>(null);
 
-  const fetchEndpoints = async () => {
+  const fetchEndpoints = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.request({ url: 'docUnderstanding:listEndpoints' });
@@ -121,11 +158,11 @@ export const EndpointsTab = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api]);
 
   useEffect(() => {
     fetchEndpoints();
-  }, []);
+  }, [fetchEndpoints]);
 
   const openEdit = (record: any) => {
     setEditingId(record.id);
@@ -152,6 +189,7 @@ export const EndpointsTab = () => {
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
+      values.customHeaders = sanitizeHeaders(values.customHeaders);
       if (editingId) {
         await api.request({
           url: 'docUnderstanding:updateEndpoint',
@@ -172,6 +210,16 @@ export const EndpointsTab = () => {
     } catch {
       // validation error
     }
+  };
+
+  const sanitizeHeaders = (headers?: Record<string, string>) => {
+    return Object.entries(headers || {}).reduce<Record<string, string>>((acc, [key, value]) => {
+      const headerName = key.trim();
+      if (headerName) {
+        acc[headerName] = value;
+      }
+      return acc;
+    }, {});
   };
 
   const columns = [

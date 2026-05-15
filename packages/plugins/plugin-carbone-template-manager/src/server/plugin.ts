@@ -24,8 +24,6 @@ import { makeCarboneRenderInstructionClass } from './workflow/carbone-render-ins
  */
 export class PluginCarboneTemplateManagerServer extends Plugin {
   declare app: any;
-  declare db: any;
-  declare name: string;
 
   /** In-memory rate limiter shared across all render actions. */
   readonly rateLimiter = new RateLimiter();

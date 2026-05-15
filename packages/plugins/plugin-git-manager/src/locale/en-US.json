@@ -125,6 +125,8 @@
   "Posted": "Posted",
   "Pending Approval": "Pending Approval",
   "Approved": "Approved",
+  "Post Failed": "Post Failed",
+  "post_failed": "Post failed",
   "Rejected": "Rejected",
   "Skipped": "Skipped",
   "Running": "Running",

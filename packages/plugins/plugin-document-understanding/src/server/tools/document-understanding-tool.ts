@@ -1,6 +1,13 @@
 import { DocumentUnderstandingService } from '../services/DocumentUnderstandingService';
 import { PipelineDef, JobState } from '../types';
 
+function cloneJson<T>(value: T): T {
+  if (value === undefined || value === null) {
+    return value;
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
 /**
  * Build tool name from pipeline name.
  * Convention: doc_understanding.pipeline.<sanitized_name>
@@ -15,17 +22,18 @@ function buildToolName(pipelineName: string): string {
 }
 
 function buildSchema(pipeline: PipelineDef) {
-  const baseSchema = pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0 
-    ? pipeline.inputSchema
-    : {
-        type: 'object',
-        properties: {
-          input: {
-            type: 'object',
-            description: 'Dữ liệu đầu vào cho pipeline (JSON)',
+  const baseSchema =
+    pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0
+      ? cloneJson(pipeline.inputSchema)
+      : {
+          type: 'object',
+          properties: {
+            input: {
+              type: 'object',
+              description: 'Dữ liệu đầu vào cho pipeline (JSON)',
+            },
           },
-        },
-      };
+        };
 
   // Add file_urls to allow AI to pass uploaded files
   if (baseSchema.type === 'object' && baseSchema.properties) {
@@ -37,6 +45,36 @@ function buildSchema(pipeline: PipelineDef) {
   }
 
   return baseSchema;
+}
+
+function applySchemaDefaults(value: any, schema: any): any {
+  if (!schema || typeof schema !== 'object') {
+    return value;
+  }
+
+  if (value === undefined && Object.prototype.hasOwnProperty.call(schema, 'default')) {
+    return cloneJson(schema.default);
+  }
+
+  const isObjectSchema = schema.type === 'object' || schema.properties;
+  if (isObjectSchema) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+
+    for (const [key, propertySchema] of Object.entries(schema.properties || {})) {
+      const currentValue = source[key];
+      const nextValue = applySchemaDefaults(currentValue, propertySchema);
+      if (nextValue !== undefined) {
+        source[key] = nextValue;
+      }
+    }
+    return source;
+  }
+
+  if (Array.isArray(value) && schema.items) {
+    return value.map((item) => applySchemaDefaults(item, schema.items));
+  }
+
+  return value;
 }
 
 /**
@@ -85,10 +123,14 @@ function createToolForPipeline(service: DocumentUnderstandingService, pipeline: 
         }
 
         // Clean up args if using default schema
-        let input = pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0 ? args : args.input || args;
+        const hasInputSchema = pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0;
+        let input = hasInputSchema ? args : args.input || args;
         if (input === args) {
           input = { ...args };
           delete input.file_urls;
+        }
+        if (hasInputSchema) {
+          input = applySchemaDefaults(input, pipeline.inputSchema);
         }
 
         const { jobId } = await service.executePipeline(pipeline.id, input, files);
@@ -101,7 +143,7 @@ function createToolForPipeline(service: DocumentUnderstandingService, pipeline: 
           } else if (job.status === 'failed' || job.status === 'timeout') {
             return { status: job.status, error: job.error };
           }
-          await new Promise((r) => setTimeout(r, pollInterval));
+          await new Promise((resolve) => setTimeout(resolve, pollInterval));
         }
 
         return {

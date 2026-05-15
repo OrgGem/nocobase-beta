@@ -3,6 +3,8 @@ import models from './models';
 import { PluginSettings } from './components/PluginSettings';
 
 export class PluginDocumentUnderstandingClient extends Plugin {
+  declare app: any;
+
   async load() {
     this.flowEngine?.registerModels(models);
 

@@ -13,6 +13,7 @@ export class DocumentUnderstandingService {
   private pipelineExecutor!: PipelineExecutor;
   private jobManager!: AsyncJobManager;
   private initialized = false;
+  private static readonly HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
   constructor(app: Application, db: Database) {
     this.app = app;
@@ -22,7 +23,7 @@ export class DocumentUnderstandingService {
   async initialize(): Promise<void> {
     const configRepo = this.db.getRepository<any>('doc_understanding_config');
     let config = await configRepo.findOne();
-    
+
     // Create default config if not exists
     if (!config) {
       config = await configRepo.create({
@@ -33,7 +34,7 @@ export class DocumentUnderstandingService {
           defaultRetries: 2,
           pollInterval: 5000,
           pollTimeout: 300000,
-        }
+        },
       });
     }
 
@@ -46,9 +47,9 @@ export class DocumentUnderstandingService {
         const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
         await jobsRepo.update({
           filterByTk: jobId,
-          values: { status: 'failed', error, completedAt: new Date() }
+          values: { status: 'failed', error, completedAt: new Date() },
         });
-      }
+      },
     });
 
     this.pipelineExecutor = new PipelineExecutor(this.db, this.apiClient, this.jobManager);
@@ -66,7 +67,7 @@ export class DocumentUnderstandingService {
   async getConfig(): Promise<ServiceConfig> {
     const configRepo = this.db.getRepository<any>('doc_understanding_config');
     const conf = await configRepo.findOne();
-    if (!conf) throw new Error("Config not found");
+    if (!conf) throw new Error('Config not found');
     return conf;
   }
 
@@ -85,11 +86,42 @@ export class DocumentUnderstandingService {
   }
 
   async createEndpoint(data: Partial<EndpointDef>): Promise<EndpointDef> {
-    return this.db.getRepository<any>('doc_understanding_endpoints').create({ values: data });
+    return this.db.getRepository<any>('doc_understanding_endpoints').create({ values: this.normalizeEndpoint(data) });
   }
 
   async updateEndpoint(id: number, data: Partial<EndpointDef>): Promise<void> {
-    await this.db.getRepository<any>('doc_understanding_endpoints').update({ filterByTk: id, values: data });
+    await this.db.getRepository<any>('doc_understanding_endpoints').update({
+      filterByTk: id,
+      values: this.normalizeEndpoint(data),
+    });
+  }
+
+  private normalizeEndpoint(data: Partial<EndpointDef> = {}): Partial<EndpointDef> {
+    if (!Object.prototype.hasOwnProperty.call(data, 'customHeaders')) {
+      return data;
+    }
+    return {
+      ...data,
+      customHeaders: this.normalizeHeaders(data.customHeaders),
+    };
+  }
+
+  private normalizeHeaders(headers?: Record<string, any>): Record<string, string> {
+    const normalized: Record<string, string> = {};
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
+      return normalized;
+    }
+
+    for (const [rawName, rawValue] of Object.entries(headers)) {
+      const name = rawName.trim();
+      if (!name) continue;
+      if (!DocumentUnderstandingService.HEADER_NAME_RE.test(name)) {
+        throw new Error(`Invalid HTTP header name: ${rawName}`);
+      }
+      if (rawValue === undefined || rawValue === null) continue;
+      normalized[name] = String(rawValue);
+    }
+    return normalized;
   }
 
   async deleteEndpoint(id: number): Promise<void> {
@@ -98,7 +130,7 @@ export class DocumentUnderstandingService {
 
   async listPipelines(): Promise<PipelineDef[]> {
     return this.db.getRepository<any>('doc_understanding_pipelines').find({
-      appends: ['steps', 'steps.endpoint']
+      appends: ['steps', 'steps.endpoint'],
     });
   }
 
@@ -125,15 +157,20 @@ export class DocumentUnderstandingService {
     await this.db.getRepository<any>('doc_understanding_pipelines').destroy({ filterByTk: id });
   }
 
-  async executePipeline(pipelineId: number, input: Record<string, any>, files: FileInput[] = [], userId?: number): Promise<{ jobId: number }> {
-    if (!this.isReady()) throw new Error("Service not ready");
+  async executePipeline(
+    pipelineId: number,
+    input: Record<string, any>,
+    files: FileInput[] = [],
+    userId?: number,
+  ): Promise<{ jobId: number }> {
+    if (!this.isReady()) throw new Error('Service not ready');
     const job = await this.pipelineExecutor.execute(pipelineId, input, files, userId);
     return { jobId: job.id };
   }
 
   async getJobStatus(jobId: number): Promise<JobState> {
     const job = await this.db.getRepository<any>('doc_understanding_jobs').findOne({ filterByTk: jobId });
-    if (!job) throw new Error("Job not found");
+    if (!job) throw new Error('Job not found');
     return job;
   }
 
@@ -151,10 +188,7 @@ export class DocumentUnderstandingService {
       if (!signature) {
         throw new Error('Webhook signature missing');
       }
-      const expected = crypto
-        .createHmac('sha256', config.webhookSecret)
-        .update(JSON.stringify(payload))
-        .digest('hex');
+      const expected = crypto.createHmac('sha256', config.webhookSecret).update(JSON.stringify(payload)).digest('hex');
       const signatureHash = signature.startsWith('sha256=') ? signature.slice(7) : signature;
       if (!crypto.timingSafeEqual(Buffer.from(signatureHash, 'hex'), Buffer.from(expected, 'hex'))) {
         throw new Error('Webhook signature verification failed');
@@ -169,8 +203,9 @@ export class DocumentUnderstandingService {
     const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
     const PAGE_SIZE = 100;
     let offset = 0;
+    let hasMoreJobs = true;
 
-    while (true) {
+    while (hasMoreJobs) {
       const jobs = await jobsRepo.find({
         filter: { status: 'polling' },
         limit: PAGE_SIZE,
@@ -186,8 +221,10 @@ export class DocumentUnderstandingService {
         }
       }
 
-      if (jobs.length < PAGE_SIZE) break;
-      offset += PAGE_SIZE;
+      hasMoreJobs = jobs.length >= PAGE_SIZE;
+      if (hasMoreJobs) {
+        offset += PAGE_SIZE;
+      }
     }
 
     throw new Error(`Job not found for webhook task ${taskId}`);

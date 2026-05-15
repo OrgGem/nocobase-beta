@@ -136,6 +136,7 @@ export default defineCollection({
           { value: 'pending_approval', label: 'Pending Approval' },
           { value: 'approved', label: 'Approved' },
           { value: 'posted', label: 'Posted' },
+          { value: 'post_failed', label: 'Post Failed' },
           { value: 'skipped', label: 'Skipped' },
           { value: 'rejected', label: 'Rejected' },
         ],

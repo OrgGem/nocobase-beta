@@ -5,7 +5,7 @@ import * as gitActions from './actions/git-actions';
 import * as gitlabApi from './actions/gitlab-api';
 import * as reviewActions from './actions/review';
 import * as pollerActions from './actions/poller';
-import { recoverStuckReviews } from './actions/review';
+import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
 
@@ -79,6 +79,7 @@ export class PluginGitManagerServer extends Plugin {
       return next();
     });
 
+    registerReviewQueue((this as any).app);
     registerGitReviewAiTools((this as any).app);
 
     (this as any).app.on('afterStart', async () => {
@@ -92,9 +93,11 @@ export class PluginGitManagerServer extends Plugin {
       startPoller((this as any).app);
     });
     (this as any).app.on('beforeStop', () => {
+      unregisterReviewQueue((this as any).app);
       stopPoller();
     });
     (this as any).app.on('beforeDestroy', () => {
+      unregisterReviewQueue((this as any).app);
       stopPoller();
     });
 
@@ -189,10 +192,12 @@ export class PluginGitManagerServer extends Plugin {
   }
 
   async beforeDisable() {
+    unregisterReviewQueue((this as any).app);
     stopPoller();
   }
 
   async beforeUnload() {
+    unregisterReviewQueue((this as any).app);
     stopPoller();
   }
 }

@@ -125,6 +125,8 @@
   "Posted": "Đã đăng",
   "Pending Approval": "Chờ duyệt",
   "Approved": "Đã duyệt",
+  "Post Failed": "Đăng thất bại",
+  "post_failed": "Đăng thất bại",
   "Rejected": "Đã từ chối",
   "Skipped": "Đã bỏ qua",
   "Running": "Đang chạy",

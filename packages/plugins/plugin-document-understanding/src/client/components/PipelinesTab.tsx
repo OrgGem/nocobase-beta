@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Table,
   Button,
@@ -17,6 +17,7 @@ import {
   Tooltip,
   Empty,
   Badge,
+  Alert,
 } from 'antd';
 import {
   PlusOutlined,
@@ -25,11 +26,73 @@ import {
   ArrowUpOutlined,
   ArrowDownOutlined,
   ThunderboltOutlined,
+  PlayCircleOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
+
+const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
+  pending: { color: 'default', label: 'Pending' },
+  running: { color: 'processing', label: 'Running' },
+  polling: { color: 'processing', label: 'Polling' },
+  completed: { color: 'success', label: 'Completed' },
+  failed: { color: 'error', label: 'Failed' },
+  timeout: { color: 'error', label: 'Timeout' },
+};
+
+const extractResponseData = (res: any) => res?.data?.data ?? res?.data ?? res;
+
+const stringifyJson = (value: any) => JSON.stringify(value ?? {}, null, 2);
+
+const buildDefaultInputFromSchema = (schema: any): any => {
+  if (!schema || typeof schema !== 'object') {
+    return {};
+  }
+
+  if (Object.prototype.hasOwnProperty.call(schema, 'default')) {
+    return schema.default;
+  }
+
+  if (schema.type === 'object' || schema.properties) {
+    return Object.entries(schema.properties || {}).reduce<Record<string, any>>((acc, [key, propertySchema]: any) => {
+      const value = buildDefaultInputFromSchema(propertySchema);
+      if (value !== undefined) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+  }
+
+  if (schema.type === 'array') {
+    return [];
+  }
+
+  return undefined;
+};
+
+const mergeDefaults = (defaults: any, value: any): any => {
+  if (
+    defaults &&
+    value &&
+    typeof defaults === 'object' &&
+    typeof value === 'object' &&
+    !Array.isArray(defaults) &&
+    !Array.isArray(value)
+  ) {
+    return Object.entries(defaults).reduce(
+      (acc, [key, defaultValue]) => ({
+        ...acc,
+        [key]: mergeDefaults(defaultValue, acc[key]),
+      }),
+      { ...value },
+    );
+  }
+
+  return value === undefined ? defaults : value;
+};
 
 /* ─── JSON Editor ───────────────────────────────────────────────── */
 const JsonEditor: React.FC<{
@@ -158,7 +221,12 @@ const StepEditor: React.FC<{
           const ep = endpoints.find((e: any) => e.id === step.endpointId);
           const headerExtra = (
             <Space size={4} onClick={(e) => e.stopPropagation()}>
-              <Button size="small" disabled={index === 0} icon={<ArrowUpOutlined />} onClick={() => moveStep(index, -1)} />
+              <Button
+                size="small"
+                disabled={index === 0}
+                icon={<ArrowUpOutlined />}
+                onClick={() => moveStep(index, -1)}
+              />
               <Button
                 size="small"
                 disabled={index === steps.length - 1}
@@ -214,7 +282,9 @@ const StepEditor: React.FC<{
                   />
                 </div>
                 <div>
-                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4, marginTop: 12 }}>Output Alias</label>
+                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4, marginTop: 12 }}>
+                    Output Alias
+                  </label>
                   <Input
                     value={step.outputAlias}
                     onChange={(e) => updateStep(index, 'outputAlias', e.target.value)}
@@ -253,7 +323,7 @@ const StepEditor: React.FC<{
               <div style={{ marginTop: 12 }}>
                 <label style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
                   Input Mapping (JSON)
-                  <Tooltip title='Map endpoint input fields. Use $input.field, $step[alias].response.field, $files, or literal values.'>
+                  <Tooltip title="Map endpoint input fields. Use $input.field, $step[alias].response.field, $files, or literal values.">
                     <span style={{ fontWeight: 'normal', color: '#888', marginLeft: 6, cursor: 'help' }}>?</span>
                   </Tooltip>
                 </label>
@@ -300,6 +370,13 @@ export const PipelinesTab = () => {
   const [form] = Form.useForm();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [steps, setSteps] = useState<StepData[]>([]);
+  const [playgroundVisible, setPlaygroundVisible] = useState(false);
+  const [playgroundPipeline, setPlaygroundPipeline] = useState<any>(null);
+  const [playgroundInput, setPlaygroundInput] = useState('{}');
+  const [playgroundInputError, setPlaygroundInputError] = useState('');
+  const [playgroundJob, setPlaygroundJob] = useState<any>(null);
+  const [playgroundRunning, setPlaygroundRunning] = useState(false);
+  const playgroundTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -318,6 +395,14 @@ export const PipelinesTab = () => {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    return () => {
+      if (playgroundTimerRef.current) {
+        clearInterval(playgroundTimerRef.current);
+      }
+    };
+  }, []);
 
   const openAdd = () => {
     setEditingId(null);
@@ -362,6 +447,106 @@ export const PipelinesTab = () => {
     });
     message.success('Deleted');
     fetchData();
+  };
+
+  const stopPlaygroundPolling = useCallback(() => {
+    if (playgroundTimerRef.current) {
+      clearInterval(playgroundTimerRef.current);
+      playgroundTimerRef.current = null;
+    }
+  }, []);
+
+  const fetchPlaygroundJob = useCallback(
+    async (jobId: number) => {
+      const res = await api.request({
+        url: 'docUnderstanding:getJobStatus',
+        params: { filterByTk: jobId },
+      });
+      const job = extractResponseData(res);
+      setPlaygroundJob(job);
+
+      if (['completed', 'failed', 'timeout'].includes(job?.status)) {
+        stopPlaygroundPolling();
+        setPlaygroundRunning(false);
+      }
+      return job;
+    },
+    [api, stopPlaygroundPolling],
+  );
+
+  const startPlaygroundPolling = useCallback(
+    (jobId: number) => {
+      stopPlaygroundPolling();
+      playgroundTimerRef.current = setInterval(() => {
+        fetchPlaygroundJob(jobId).catch((err: any) => {
+          stopPlaygroundPolling();
+          setPlaygroundRunning(false);
+          message.error(err?.message || 'Failed to refresh test job');
+        });
+      }, 1500);
+    },
+    [fetchPlaygroundJob, stopPlaygroundPolling],
+  );
+
+  const openPlayground = (record: any) => {
+    stopPlaygroundPolling();
+    setPlaygroundPipeline(record);
+    setPlaygroundJob(null);
+    setPlaygroundRunning(false);
+    setPlaygroundInputError('');
+    setPlaygroundInput(stringifyJson(buildDefaultInputFromSchema(record.inputSchema)));
+    setPlaygroundVisible(true);
+  };
+
+  const closePlayground = () => {
+    stopPlaygroundPolling();
+    setPlaygroundVisible(false);
+    setPlaygroundPipeline(null);
+    setPlaygroundJob(null);
+    setPlaygroundRunning(false);
+  };
+
+  const runPlayground = async () => {
+    if (!playgroundPipeline) return;
+
+    let input: any;
+    try {
+      const parsedInput = playgroundInput.trim() ? JSON.parse(playgroundInput) : {};
+      input = mergeDefaults(buildDefaultInputFromSchema(playgroundPipeline.inputSchema), parsedInput);
+      setPlaygroundInputError('');
+    } catch {
+      setPlaygroundInputError('Invalid JSON input');
+      return;
+    }
+
+    stopPlaygroundPolling();
+    setPlaygroundRunning(true);
+    setPlaygroundJob(null);
+
+    try {
+      const res = await api.request({
+        url: 'docUnderstanding:executePipeline',
+        method: 'POST',
+        data: {
+          pipelineId: playgroundPipeline.id,
+          input,
+        },
+      });
+      const result = extractResponseData(res);
+      const jobId = result?.jobId;
+      if (!jobId) {
+        throw new Error('Pipeline did not return a job ID');
+      }
+
+      const job = await fetchPlaygroundJob(jobId);
+      if (!['completed', 'failed', 'timeout'].includes(job?.status)) {
+        startPlaygroundPolling(jobId);
+      }
+      message.success(`Test job #${jobId} started`);
+    } catch (err: any) {
+      setPlaygroundRunning(false);
+      message.error(err?.message || 'Failed to run pipeline test');
+    }
   };
 
   const handleSave = async () => {
@@ -467,9 +652,18 @@ export const PipelinesTab = () => {
     },
     {
       title: 'Action',
-      width: 120,
+      width: 190,
       render: (_: any, record: any) => (
         <Space>
+          <Button
+            type="link"
+            size="small"
+            icon={<PlayCircleOutlined />}
+            disabled={!record.enabled}
+            onClick={() => openPlayground(record)}
+          >
+            Test
+          </Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
             Edit
           </Button>
@@ -541,6 +735,136 @@ export const PipelinesTab = () => {
             </Panel>
           </Collapse>
         </Form>
+      </Modal>
+
+      <Modal
+        title={playgroundPipeline ? `Test Playground: ${playgroundPipeline.name}` : 'Test Playground'}
+        open={playgroundVisible}
+        onCancel={closePlayground}
+        width={860}
+        destroyOnClose
+        footer={[
+          <Button key="close" onClick={closePlayground}>
+            Close
+          </Button>,
+          playgroundJob?.id && (
+            <Button
+              key="refresh"
+              icon={<ReloadOutlined />}
+              disabled={playgroundRunning}
+              onClick={() => fetchPlaygroundJob(playgroundJob.id)}
+            >
+              Refresh
+            </Button>
+          ),
+          <Button
+            key="run"
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            loading={playgroundRunning}
+            onClick={runPlayground}
+          >
+            Run test
+          </Button>,
+        ].filter(Boolean)}
+      >
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16 }}>
+          <div>
+            <div style={{ fontWeight: 500, marginBottom: 6 }}>Input JSON</div>
+            <TextArea
+              rows={16}
+              value={playgroundInput}
+              onChange={(e) => {
+                setPlaygroundInput(e.target.value);
+                if (playgroundInputError) setPlaygroundInputError('');
+              }}
+              placeholder='{ "document_url": "https://..." }'
+              style={{ fontFamily: 'monospace', fontSize: 12 }}
+            />
+            {playgroundInputError && (
+              <Alert type="error" showIcon message={playgroundInputError} style={{ marginTop: 8 }} />
+            )}
+
+            <Collapse size="small" ghost style={{ marginTop: 12 }}>
+              <Panel header="Input Schema" key="schema">
+                <pre
+                  style={{
+                    background: '#f5f5f5',
+                    padding: 12,
+                    borderRadius: 6,
+                    fontSize: 12,
+                    maxHeight: 220,
+                    overflow: 'auto',
+                  }}
+                >
+                  {stringifyJson(playgroundPipeline?.inputSchema)}
+                </pre>
+              </Panel>
+            </Collapse>
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontWeight: 500 }}>Result</span>
+              {playgroundJob?.status && (
+                <Tag color={STATUS_CONFIG[playgroundJob.status]?.color || 'default'}>
+                  {STATUS_CONFIG[playgroundJob.status]?.label || playgroundJob.status}
+                </Tag>
+              )}
+            </div>
+
+            {!playgroundJob ? (
+              <Empty description="Run a test to see job output" imageStyle={{ height: 48 }} />
+            ) : (
+              <div>
+                <Space style={{ marginBottom: 8 }} wrap>
+                  <Tag>Job #{playgroundJob.id}</Tag>
+                  {playgroundJob.currentStep && <Tag>Step {playgroundJob.currentStep}</Tag>}
+                </Space>
+
+                {playgroundJob.error && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message="Pipeline error"
+                    description={<pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{playgroundJob.error}</pre>}
+                    style={{ marginBottom: 12 }}
+                  />
+                )}
+
+                <div style={{ fontWeight: 500, marginBottom: 4 }}>Final Result</div>
+                <pre
+                  style={{
+                    background: '#f0f5ff',
+                    padding: 12,
+                    borderRadius: 6,
+                    fontSize: 12,
+                    maxHeight: 220,
+                    overflow: 'auto',
+                  }}
+                >
+                  {playgroundJob.finalResult !== undefined && playgroundJob.finalResult !== null
+                    ? stringifyJson(playgroundJob.finalResult)
+                    : '(not yet available)'}
+                </pre>
+
+                <div style={{ fontWeight: 500, margin: '12px 0 4px' }}>Step Results</div>
+                <pre
+                  style={{
+                    background: '#f5f5f5',
+                    padding: 12,
+                    borderRadius: 6,
+                    fontSize: 12,
+                    maxHeight: 260,
+                    overflow: 'auto',
+                  }}
+                >
+                  {playgroundJob.stepResults ? stringifyJson(playgroundJob.stepResults) : '{}'}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
       </Modal>
     </div>
   );

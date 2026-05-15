@@ -19,6 +19,7 @@ export interface ApiCallOptions {
 export class ExternalApiClient {
   private config: ServiceConfig;
   private client: AxiosInstance;
+  private static readonly HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
   constructor(config: ServiceConfig) {
     this.config = config;
@@ -48,17 +49,35 @@ export class ExternalApiClient {
     return headers;
   }
 
+  private sanitizeHeaders(headers?: Record<string, any>): Record<string, string> {
+    const normalized: Record<string, string> = {};
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
+      return normalized;
+    }
+
+    for (const [rawName, rawValue] of Object.entries(headers)) {
+      const name = rawName.trim();
+      if (!name) continue;
+      if (!ExternalApiClient.HEADER_NAME_RE.test(name)) {
+        throw new Error(`Invalid HTTP header name: ${rawName}`);
+      }
+      if (rawValue === undefined || rawValue === null) continue;
+      normalized[name] = String(rawValue);
+    }
+    return normalized;
+  }
+
   async call(options: ApiCallOptions): Promise<{ status: number; data: any; headers: any }> {
     const { endpoint, body, files, overrideHeaders } = options;
 
     const url = endpoint.subpath;
     const method = endpoint.method.toLowerCase();
-    
+
     let requestData: any = body;
     let headers: Record<string, string> = {
-      ...this.buildAuthHeaders(),
-      ...(endpoint.customHeaders || {}),
-      ...(overrideHeaders || {}),
+      ...this.sanitizeHeaders(this.buildAuthHeaders()),
+      ...this.sanitizeHeaders(endpoint.customHeaders),
+      ...this.sanitizeHeaders(overrideHeaders),
     };
 
     if (endpoint.fileInputMode === 'multipart' && files && files.length > 0) {

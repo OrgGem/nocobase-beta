@@ -17,6 +17,7 @@ import path from 'path';
 const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
 const MAX_RAW_PARSE_UPLOAD_BYTES = 200 * 1024 * 1024;
+const OFFICE_PREVIEWER_PLUGIN_NAMES = ['file-previewer-office', '@nocobase/plugin-file-previewer-office'];
 
 export class PluginFilePreviewAuthServer extends Plugin {
   private cache: any;
@@ -30,6 +31,38 @@ export class PluginFilePreviewAuthServer extends Plugin {
     this.registerExcelParser();
     this.registerAIWorkContext();
     this.registerDownloadApi();
+
+    this.app.on('afterStart', async () => {
+      await this.disableBuiltinOfficePreviewer();
+    });
+  }
+
+  async afterEnable() {
+    await this.disableBuiltinOfficePreviewer();
+  }
+
+  /**
+   * Disable NocoBase's built-in Office previewer after plugins have loaded.
+   * This keeps this authenticated previewer as the active Office handler without causing a restart loop.
+   */
+  private async disableBuiltinOfficePreviewer() {
+    try {
+      const pluginRepo = this.db.getRepository('applicationPlugins');
+      if (!pluginRepo) return;
+
+      for (const name of OFFICE_PREVIEWER_PLUGIN_NAMES) {
+        const record = await pluginRepo.findOne({ filter: { name } });
+        if (record && record.get('enabled')) {
+          await pluginRepo.update({
+            filter: { name },
+            values: { enabled: false },
+          });
+          this.log.info(`[FilePreviewAuth] Disabled built-in plugin "${name}" to avoid previewer conflicts.`);
+        }
+      }
+    } catch (err: any) {
+      this.log.debug(`[FilePreviewAuth] Could not check file-previewer-office status: ${err?.message || err}`);
+    }
   }
 
   private registerDownloadApi() {
