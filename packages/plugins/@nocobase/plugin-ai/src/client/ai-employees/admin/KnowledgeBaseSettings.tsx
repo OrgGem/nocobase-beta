@@ -54,7 +54,7 @@ export const KnowledgeBaseSettings: React.FC = () => {
           knowledgeBase: {
             type: 'object',
             properties: {
-              knowledgeBaseIds: {
+              knowledgeBaseKeys: {
                 type: 'array',
                 title: '{{t("Knowledge Base")}}',
                 required: true,
@@ -66,13 +66,13 @@ export const KnowledgeBaseSettings: React.FC = () => {
                   showSearch: true,
                   fieldNames: {
                     label: 'name',
-                    value: 'id',
+                    value: 'key',
                   },
                   service: {
                     resource: 'aiKnowledgeBase',
                     action: 'list',
                     params: {
-                      fields: ['id', 'name'],
+                      fields: ['key', 'name'],
                       filter: {
                         enabled: true,
                       },

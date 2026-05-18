@@ -599,9 +599,7 @@ export class AIEmployee {
     if (this.isEnabledKnowledgeBase() && this.employee.knowledgeBasePrompt && userMessages?.length) {
       const lastUserMessage = userMessages.filter((x) => x.role === 'user').at(-1);
       if (lastUserMessage) {
-        this.protocol.knowledgeBaseSearch({ status: 'searching' });
         const docs = await this.retrieveKnowledgeBase(lastUserMessage);
-        this.protocol.knowledgeBaseSearch({ status: 'done' });
         const knowledgeBaseData = docs.map((x) => x.content).join('\n');
         const promptTemplate = ChatPromptTemplate.fromTemplate(this.employee.knowledgeBasePrompt);
         knowledgeBase = _.isEmpty(knowledgeBaseData)
@@ -648,8 +646,6 @@ If information is missing, clearly state it in the summary.</Important>`;
     }
     const { topK, score } = this.getAIEmployeeKnowledgeBaseConfig();
     const knowledgeBaseGroup = await this.getKnowledgeBaseGroup();
-    const searchPromises: Promise<DocumentSegmentedWithScore[]>[] = [];
-
     for (const entry of knowledgeBaseGroup) {
       const { vectorStoreConfig, knowledgeBaseType, knowledgeBaseList } = entry;
       if (!knowledgeBaseList || _.isEmpty(knowledgeBaseList)) {
@@ -657,68 +653,56 @@ If information is missing, clearly state it in the summary.</Important>`;
       }
 
       if (knowledgeBaseType === 'LOCAL') {
-        searchPromises.push(
-          (async () => {
-            const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
-              vectorStoreConfig.vectorStoreProvider,
-              [
-                {
-                  key: 'vectorStoreConfigId',
-                  value: vectorStoreConfig.vectorStoreConfigId,
-                },
-              ],
-            );
-            const knowledgeBaseOuterIds = knowledgeBaseList.map((x) => x.knowledgeBaseOuterId);
-            return vectorStoreService.search(queryString, {
-              topK,
-              score,
-              filter: {
-                knowledgeBaseOuterId: { in: knowledgeBaseOuterIds },
-              },
-            });
-          })(),
+        const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
+          vectorStoreConfig.vectorStoreProvider,
+          [
+            {
+              key: 'vectorStoreConfigKey',
+              value: vectorStoreConfig.vectorStoreConfigKey,
+            },
+          ],
         );
+        const knowledgeBaseOuterIds = knowledgeBaseList.map((x) => x.knowledgeBaseOuterId);
+        const result = await vectorStoreService.search(queryString, {
+          topK,
+          score,
+          filter: {
+            knowledgeBaseOuterId: { in: knowledgeBaseOuterIds },
+          },
+        });
+        queryResult = [...queryResult, ...result];
       } else if (knowledgeBaseType === 'READONLY') {
         for (const knowledgeBase of knowledgeBaseList) {
-          searchPromises.push(
-            (async () => {
-              const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
-                vectorStoreConfig.vectorStoreProvider,
-                [
-                  ...knowledgeBase.vectorStoreProps,
-                  {
-                    key: 'vectorStoreConfigId',
-                    value: vectorStoreConfig.vectorStoreConfigId,
-                  },
-                ],
-              );
-              return vectorStoreService.search(queryString, {
-                topK,
-                score,
-              });
-            })(),
+          const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
+            vectorStoreConfig.vectorStoreProvider,
+            [
+              ...knowledgeBase.vectorStoreProps,
+              {
+                key: 'vectorStoreConfigKey',
+                value: vectorStoreConfig.vectorStoreConfigKey,
+              },
+            ],
           );
+          const result = await vectorStoreService.search(queryString, {
+            topK,
+            score,
+          });
+          queryResult = [...queryResult, ...result];
         }
       } else if (knowledgeBaseType === 'EXTERNAL') {
         for (const knowledgeBase of knowledgeBaseList) {
-          searchPromises.push(
-            (async () => {
-              const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
-                vectorStoreConfig.vectorStoreProvider,
-                knowledgeBase.vectorStoreProps,
-              );
-              return vectorStoreService.search(queryString, {
-                topK,
-                score,
-              });
-            })(),
+          const vectorStoreService = await vectorStoreProvider.createVectorStoreService(
+            vectorStoreConfig.vectorStoreProvider,
+            knowledgeBase.vectorStoreProps,
           );
+          const result = await vectorStoreService.search(queryString, {
+            topK,
+            score,
+          });
+          queryResult = [...queryResult, ...result];
         }
       }
     }
-
-    const results = await Promise.all(searchPromises);
-    queryResult = results.flat();
     return queryResult;
   }
 
@@ -740,11 +724,11 @@ If information is missing, clearly state it in the summary.</Important>`;
   }
 
   async getKnowledgeBaseGroup(): Promise<KnowledgeBaseGroup[]> {
-    const { knowledgeBaseIds } = this.employee.knowledgeBase ?? {};
-    if (!knowledgeBaseIds || _.isEmpty(knowledgeBaseIds)) {
+    const { knowledgeBaseKeys } = this.employee.knowledgeBase ?? {};
+    if (!knowledgeBaseKeys || _.isEmpty(knowledgeBaseKeys)) {
       return [];
     }
-    return await this.plugin.features.knowledgeBase.getKnowledgeBaseGroup(knowledgeBaseIds);
+    return await this.plugin.features.knowledgeBase.getKnowledgeBaseGroup(knowledgeBaseKeys);
   }
 
   // === Tool calls ===
@@ -1373,10 +1357,6 @@ class ChatStreamProtocol {
 
   webSearch(content: { type: string; query: string }[]) {
     this.write({ type: 'web_search', body: content });
-  }
-
-  knowledgeBaseSearch(content: { status: string }) {
-    this.write({ type: 'knowledge_base', body: content });
   }
 
   reasoning(content: { status: string; content: string }) {
