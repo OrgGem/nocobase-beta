@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAPIClient, useApp } from '@nocobase/client';
+import { useAPIClient } from '@nocobase/client';
 import {
   Button,
   Modal,
@@ -31,7 +31,6 @@ import {
   InputNumber,
   List,
   Table,
-  Alert,
   Card,
   Layout,
   Divider,
@@ -54,7 +53,6 @@ import {
   SyncOutlined,
   BookOutlined,
 } from '@ant-design/icons';
-import { isEmbedWebClientPluginEnabled } from '../utils/embed-web-client';
 
 const { Text, Title } = Typography;
 const { Dragger } = Upload;
@@ -79,9 +77,9 @@ const accessColors: Record<string, string> = {
 };
 
 const accessLevelOptions = [
-  { label: '🔒 Basic (Personal)', value: 'BASIC' },
-  { label: '👥 Shared (Role-based)', value: 'SHARED' },
-  { label: '🌐 Public (System-wide)', value: 'PUBLIC' },
+  { label: 'Personal', value: 'BASIC' },
+  { label: 'Role-based shared', value: 'SHARED' },
+  { label: 'Common knowledge', value: 'PUBLIC' },
 ];
 
 const kbTypeConfig: Record<string, { color: string; label: string }> = {
@@ -89,7 +87,6 @@ const kbTypeConfig: Record<string, { color: string; label: string }> = {
   READONLY: { color: 'default', label: 'Readonly' },
   EXTERNAL: { color: 'purple', label: 'External' },
   EXTERNAL_RAG: { color: 'cyan', label: 'External RAG' },
-  WEB_CLIENT_EMBED: { color: 'green', label: 'Web Embed' },
 };
 
 const statusFilters = [
@@ -107,7 +104,7 @@ function getDocumentStats(docs: any[]) {
       stats[doc.status] = (stats[doc.status] || 0) + 1;
       return stats;
     },
-    { total: 0, pending: 0, pending_client: 0, processing: 0, success: 0, failed: 0 } as Record<string, number>,
+    { total: 0, pending: 0, processing: 0, success: 0, failed: 0 } as Record<string, number>,
   );
 }
 
@@ -120,7 +117,6 @@ function formatDate(value?: string) {
 
 export const KnowledgeBases: React.FC = () => {
   const api = useAPIClient();
-  const app = useApp();
   const [loading, setLoading] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
   const [selectedKB, setSelectedKB] = useState<any | null>(null);
@@ -139,9 +135,6 @@ export const KnowledgeBases: React.FC = () => {
   const [vectorStores, setVectorStores] = useState<any[]>([]);
   const [llmServices, setLlmServices] = useState<any[]>([]);
   const [roleOptions, setRoleOptions] = useState<any[]>([]);
-  const [availableModels, setAvailableModels] = useState<any[]>([]);
-  const [embedWebClientReady, setEmbedWebClientReady] = useState(false);
-  const [embedWebClientStatus, setEmbedWebClientStatus] = useState('Enable plugin-embed-web-client to use this mode.');
 
   // Forms
   const [textModalVisible, setTextModalVisible] = useState(false);
@@ -160,9 +153,6 @@ export const KnowledgeBases: React.FC = () => {
   const filteredDocuments = React.useMemo(() => {
     if (docStatusFilter === 'all') {
       return documents;
-    }
-    if (docStatusFilter === 'pending') {
-      return documents.filter((doc) => doc.status === 'pending' || doc.status === 'pending_client');
     }
     return documents.filter((doc) => doc.status === docStatusFilter);
   }, [docStatusFilter, documents]);
@@ -198,40 +188,10 @@ export const KnowledgeBases: React.FC = () => {
       setLlmServices(llmRes?.data?.data ?? []);
       const roleRes = await api.request({ url: 'roles:list' });
       setRoleOptions((roleRes?.data?.data ?? []).map((r: any) => ({ label: r.title || r.name, value: r.name })));
-      // Load available embedding models from plugin-embed-web-client only when the plugin is active and configured.
-      if (isEmbedWebClientPluginEnabled(app)) {
-        try {
-          const configRes = await api.request({ url: 'embedWebClient:getConfig' });
-          const config = configRes?.data?.data ?? {};
-          const modelRes = await api.request({ url: 'embedWebClient:listModels' });
-          const readyModels = (modelRes?.data?.data ?? []).filter((model: any) => model.baseFilesReady);
-          const configuredModelId = config.modelId;
-          const configuredModelReady =
-            config.modelSource && config.modelSource !== 'server'
-              ? Boolean(configuredModelId)
-              : readyModels.some((model: any) => model.modelId === configuredModelId);
-
-          setAvailableModels(readyModels);
-          setEmbedWebClientReady(Boolean(configuredModelId && configuredModelReady));
-          setEmbedWebClientStatus(
-            configuredModelId && configuredModelReady
-              ? `Ready: ${configuredModelId}`
-              : 'Configure and download a usable model in plugin-embed-web-client before using this mode.',
-          );
-        } catch {
-          setAvailableModels([]);
-          setEmbedWebClientReady(false);
-          setEmbedWebClientStatus('plugin-embed-web-client is active but its model configuration cannot be loaded.');
-        }
-      } else {
-        setAvailableModels([]);
-        setEmbedWebClientReady(false);
-        setEmbedWebClientStatus('Enable plugin-embed-web-client to use this mode.');
-      }
     } catch {
       // ignore
     }
-  }, [api, app]);
+  }, [api]);
 
   const fetchDocuments = useCallback(
     async (kbId: string) => {
@@ -265,9 +225,6 @@ export const KnowledgeBases: React.FC = () => {
       if (selectedKB.options) {
         Object.assign(formValues, selectedKB.options);
       }
-      // embedModelId / embedMode are top-level fields on the KB record
-      formValues.embedModelId = selectedKB.embedModelId ?? undefined;
-      formValues.embedMode = selectedKB.embedMode ?? 'client';
       settingsForm.setFieldsValue(formValues);
       setSAccessLevel(selectedKB.accessLevel);
       setSType(selectedKB.type || 'LOCAL');
@@ -304,8 +261,6 @@ export const KnowledgeBases: React.FC = () => {
         ragEmbeddingModel,
         ragQueryPrefix,
         ragPassagePrefix,
-        embedModelId,
-        embedMode,
         ...restValues
       } = formValues;
 
@@ -324,11 +279,6 @@ export const KnowledgeBases: React.FC = () => {
           ragPassagePrefix,
         };
       }
-      if (restValues.type === 'WEB_CLIENT_EMBED') {
-        values.embedModelId = embedModelId ?? null;
-        values.embedMode = embedMode ?? 'client';
-      }
-
       const res = await api.request({
         url: 'aiKnowledgeBase:create',
         method: 'post',
@@ -360,8 +310,6 @@ export const KnowledgeBases: React.FC = () => {
         ragEmbeddingModel,
         ragQueryPrefix,
         ragPassagePrefix,
-        embedModelId,
-        embedMode,
         ...restValues
       } = formValues;
 
@@ -380,11 +328,6 @@ export const KnowledgeBases: React.FC = () => {
           ragPassagePrefix,
         };
       }
-      if (restValues.type === 'WEB_CLIENT_EMBED') {
-        values.embedModelId = embedModelId ?? null;
-        values.embedMode = embedMode ?? 'client';
-      }
-
       await api.request({
         url: 'aiKnowledgeBase:update',
         method: 'post',
@@ -759,23 +702,9 @@ export const KnowledgeBases: React.FC = () => {
       },
     ];
 
-    const WebClientUploader =
-      selectedKB?.type === 'WEB_CLIENT_EMBED' && selectedKB.embedMode !== 'server'
-        ? app?.components?.['WebClientDocumentUploader']
-        : null;
-
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        {selectedKB?.type === 'WEB_CLIENT_EMBED' && selectedKB.embedMode !== 'server' ? (
-          <div style={{ marginBottom: 24 }}>
-            {WebClientUploader ? (
-              <WebClientUploader knowledgeBaseId={selectedKB.id} onComplete={() => fetchDocuments(selectedKB.id)} />
-            ) : (
-              <Empty description="Enable the plugin-embed-web-client plugin to upload documents to this knowledge base." />
-            )}
-          </div>
-        ) : (
-          <Row gutter={24} style={{ marginBottom: 24 }}>
+        <Row gutter={24} style={{ marginBottom: 24 }}>
             <Col xs={24} md={16}>
               <Card 
                 hoverable 
@@ -825,8 +754,7 @@ export const KnowledgeBases: React.FC = () => {
                 </div>
               </Card>
             </Col>
-          </Row>
-        )}
+        </Row>
 
         <Card 
           title="Document List"
@@ -853,7 +781,7 @@ export const KnowledgeBases: React.FC = () => {
               <Tag icon={<FileTextOutlined />} color="blue" style={{ borderRadius: 4 }}>{documentStats.total} total</Tag>
               <Tag icon={<CheckCircleOutlined />} color="success" style={{ borderRadius: 4 }}>{documentStats.success} ready</Tag>
               <Tag icon={<SyncOutlined />} color="processing" style={{ borderRadius: 4 }}>{documentStats.processing} processing</Tag>
-              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 4 }}>{(documentStats.pending || 0) + (documentStats.pending_client || 0)} pending</Tag>
+              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 4 }}>{documentStats.pending || 0} pending</Tag>
               <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 4 }}>{documentStats.failed} failed</Tag>
             </Space>
           </div>
@@ -929,7 +857,6 @@ export const KnowledgeBases: React.FC = () => {
   );
 
   const formFields = (
-    formObj: any,
     currentType: string,
     currentAccessLevel: string,
     setCA: (v: string) => void,
@@ -949,11 +876,6 @@ export const KnowledgeBases: React.FC = () => {
                 { label: 'Readonly', value: 'READONLY' },
                 { label: 'External (Linked)', value: 'EXTERNAL' },
                 { label: 'External RAG API', value: 'EXTERNAL_RAG' },
-                {
-                  label: embedWebClientReady ? 'Web Client Embedding' : `Web Client Embedding (${embedWebClientStatus})`,
-                  value: 'WEB_CLIENT_EMBED',
-                  disabled: !embedWebClientReady && currentType !== 'WEB_CLIENT_EMBED',
-                },
               ]}
               onChange={setCT}
             />
@@ -968,87 +890,14 @@ export const KnowledgeBases: React.FC = () => {
 
       {currentAccessLevel === 'SHARED' && (
         <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item name="allowedRoles" label="Allowed Roles (view)" rules={[{ required: true }]}>
-              <Select mode="multiple" options={roleOptions} />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
-            <Form.Item name="uploadRoles" label="Upload Roles (add docs)">
+          <Col span={24}>
+            <Form.Item name="allowedRoles" label="Allowed roles" rules={[{ required: true }]}>
               <Select mode="multiple" options={roleOptions} />
             </Form.Item>
           </Col>
         </Row>
       )}
 
-      {currentType === 'WEB_CLIENT_EMBED' && (
-        <>
-          <Form.Item>
-            <Alert
-              type={embedWebClientReady ? 'info' : 'warning'}
-              showIcon
-              message={
-                embedWebClientReady
-                  ? 'Documents will be embedded using the configured ONNX model.'
-                  : 'Web Client Embedding is not ready.'
-              }
-              description={embedWebClientStatus}
-            />
-          </Form.Item>
-          <Form.Item>
-            <div
-              style={{
-                background: '#e6f4ff',
-                border: '1px solid #91caff',
-                borderRadius: 6,
-                padding: '10px 14px',
-                color: '#0958d9',
-              }}
-            >
-              Documents will be embedded using a local ONNX model — no API cost, no internet required.
-            </div>
-          </Form.Item>
-
-          <Row gutter={16}>
-            <Col span={14}>
-              <Form.Item
-                name="embedModelId"
-                label="Embedding Model"
-                extra="Leave empty to use the plugin default model"
-              >
-                <Select
-                  allowClear
-                  disabled={!embedWebClientReady}
-                  placeholder="Default (from plugin settings)"
-                  options={availableModels.map((m: any) => ({
-                    label: `${m.modelId} (${m.dimensions ?? '?'}-dim) [${m.source}]`,
-                    value: m.modelId,
-                  }))}
-                />
-              </Form.Item>
-            </Col>
-            <Col span={10}>
-              <Form.Item
-                name="embedMode"
-                label="Embedding Mode"
-                initialValue="client"
-                extra={
-                  formObj.getFieldValue?.('embedMode') === 'server'
-                    ? 'Server computes embeddings (no browser download)'
-                    : 'Browser computes embeddings (model loads in tab)'
-                }
-              >
-                <Select
-                  options={[
-                    { label: '🖥️ In Browser (client)', value: 'client' },
-                    { label: '⚡ On Server (server)', value: 'server' },
-                  ]}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-        </>
-      )}
 
       {currentType !== 'EXTERNAL_RAG' ? (
         <Form.Item
@@ -1253,7 +1102,7 @@ export const KnowledgeBases: React.FC = () => {
                   children: (
                     <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%', maxWidth: 800 }}>
                       <Form form={settingsForm} layout="vertical" onFinish={handleUpdateSettings}>
-                        {formFields(settingsForm, sType, sAccessLevel, setSAccessLevel, setSType)}
+                        {formFields(sType, sAccessLevel, setSAccessLevel, setSType)}
                         <Form.Item style={{ marginTop: 24 }}>
                           <Button type="primary" htmlType="submit" size="large" shape="round">
                             Save Changes
@@ -1293,7 +1142,7 @@ export const KnowledgeBases: React.FC = () => {
         destroyOnClose
       >
         <Form form={createForm} layout="vertical">
-          {formFields(createForm, cType, cAccessLevel, setCAccessLevel, setCType)}
+          {formFields(cType, cAccessLevel, setCAccessLevel, setCType)}
         </Form>
       </Modal>
 

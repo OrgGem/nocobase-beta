@@ -15,6 +15,7 @@ import { RedisPubSubAdapter } from './adapters/redis-pubsub-adapter';
 import { RedisNodeRegistry } from './adapters/redis-node-registry';
 import { RedisLockAdapter } from './adapters/redis-lock-adapter';
 import { orchestratorActions } from './actions/orchestrator';
+import { pluginOperationsActions } from './actions/plugin-operations';
 import type { IOrchestratorAdapter } from './orchestrator/types';
 import { DockerAdapter } from './orchestrator/docker-adapter';
 import { K8sAdapter } from './orchestrator/k8s-adapter';
@@ -246,6 +247,12 @@ export class PluginClusterManagerServer extends Plugin {
       actions: packageManagerActions,
     });
 
+    // Plugin operations (force disable/remove application plugin records)
+    this.app.resourcer.define({
+      name: 'clusterManagerPlugins',
+      actions: pluginOperationsActions,
+    });
+
     // Install ACL cache middleware inside the ACL chain so cached permissions are not overwritten.
     const aclCacheMiddleware = createAclCacheMiddleware(this.app);
     (this.app as any).acl.use(aclCacheMiddleware, {
@@ -282,6 +289,7 @@ export class PluginClusterManagerServer extends Plugin {
         'workerOrchestrator:*',
         'orchestratorStacks:*',
         'workerPackages:*',
+        'clusterManagerPlugins:*',
       ],
     });
 
@@ -372,7 +380,7 @@ export class PluginClusterManagerServer extends Plugin {
             k8sNamespace: 'nocobase',
           });
         } else {
-          this.app.logger.info('[Orchestrator] No adapter configured — configurable via Worker Monitor UI');
+          this.app.logger.info('[Orchestrator] No adapter configured — configurable via Cluster Manager UI');
         }
       }
     } catch (err: any) {

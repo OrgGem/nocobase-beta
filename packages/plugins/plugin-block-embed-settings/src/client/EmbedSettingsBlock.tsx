@@ -1,12 +1,23 @@
 import React, { Component as ReactComponent } from 'react';
 import { useFieldSchema } from '@formily/react';
 import { useApp, SchemaComponentOptions } from '@nocobase/client';
-import { Empty, Result, Button, Typography } from 'antd';
-import { Outlet } from 'react-router-dom';
+import { Empty, Result, Button, Typography, Tabs } from 'antd';
 import { css } from '@emotion/css';
 import { useT } from './locale';
+import {
+  collectEmbeddablePluginTabs,
+  EmbedSettingsTabOption,
+  isRenderableSettingsComponent,
+} from './EmbedSettingsPluginSelect';
 
 const { Text } = Typography;
+
+type EmbedSettingsBlockProps = {
+  pluginName?: string;
+  enabledTabKeys?: string[];
+  dataSourceName?: string;
+  collectionName?: string;
+};
 
 class EmbedErrorBoundary extends ReactComponent<
   { children: React.ReactNode; pluginName: string },
@@ -29,11 +40,7 @@ class EmbedErrorBoundary extends ReactComponent<
           status="error"
           title={`Plugin "${this.props.pluginName}" render failed`}
           subTitle={this.state.error.message}
-          extra={
-            <Button onClick={() => this.setState({ error: null })}>
-              Retry
-            </Button>
-          }
+          extra={<Button onClick={() => this.setState({ error: null })}>Retry</Button>}
         />
       );
     }
@@ -41,28 +48,32 @@ class EmbedErrorBoundary extends ReactComponent<
   }
 }
 
-function isRenderableComponent(comp: any): boolean {
-  if (!comp) return false;
-  if (comp === Outlet) return false;
-  return true;
-}
-
-export const EmbedSettingsBlock = ({ pluginName: pluginNameProp }: { pluginName?: string } = {}) => {
+export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
+  pluginName: pluginNameProp,
+  enabledTabKeys: enabledTabKeysProp,
+  dataSourceName: dataSourceNameProp,
+  collectionName: collectionNameProp,
+} = {}) => {
   const fieldSchema = useFieldSchema();
   const app = useApp();
   const t = useT();
   const pluginName = pluginNameProp || fieldSchema?.['x-component-props']?.pluginName;
+  const enabledTabKeys = enabledTabKeysProp || fieldSchema?.['x-component-props']?.enabledTabKeys;
+  const dataSourceName = dataSourceNameProp || fieldSchema?.['x-component-props']?.dataSourceName;
+  const collectionName = collectionNameProp || fieldSchema?.['x-component-props']?.collectionName;
 
   if (!pluginName) {
     return (
-      <Empty description={
-        <>
-          <div>{t('Please select a plugin')}</div>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {t('Click the gear icon in the upper right corner to configure')}
-          </Text>
-        </>
-      } />
+      <Empty
+        description={
+          <>
+            <div>{t('Please select a plugin')}</div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {t('Click the gear icon in the upper right corner to configure')}
+            </Text>
+          </>
+        }
+      />
     );
   }
 
@@ -71,16 +82,32 @@ export const EmbedSettingsBlock = ({ pluginName: pluginNameProp }: { pluginName?
   }
 
   const setting = app.pluginSettingsManager.getSetting(pluginName);
+  const tabOptions = collectEmbeddablePluginTabs(app, pluginName);
+  const selectedTabKeys = Array.isArray(enabledTabKeys) ? enabledTabKeys : tabOptions.map((tab) => tab.value);
+  const enabledTabs = tabOptions.filter((tab) => selectedTabKeys.includes(tab.value));
+  const tabsToRender =
+    enabledTabs.length === 0 && Array.isArray(enabledTabKeys) && enabledTabKeys.length > 0 ? tabOptions : enabledTabs;
 
-  if (!isRenderableComponent(setting?.Component)) {
+  if (!isRenderableSettingsComponent(setting?.Component) && tabOptions.length === 0) {
     return <Empty description={t('This plugin has no embeddable settings page')} />;
   }
 
-  const Comp = setting.Component;
+  if (tabsToRender.length === 0) {
+    return <Empty description={t('No tabs enabled')} />;
+  }
+
+  const renderComponent = (tab: EmbedSettingsTabOption) => {
+    const Comp = tab.Component;
+    return (
+      <SchemaComponentOptions components={app.components}>
+        <Comp {...tab.componentProps} dataSourceName={dataSourceName} collectionName={collectionName} embedded />
+      </SchemaComponentOptions>
+    );
+  };
 
   return (
     <EmbedErrorBoundary pluginName={pluginName}>
-      <div 
+      <div
         className={css`
           min-height: 200px;
           /* Force override the inline styles (like max-width 800px and padding 16px) 
@@ -91,9 +118,17 @@ export const EmbedSettingsBlock = ({ pluginName: pluginNameProp }: { pluginName?
           }
         `}
       >
-        <SchemaComponentOptions components={app.components}>
-          <Comp />
-        </SchemaComponentOptions>
+        {tabsToRender.length === 1 ? (
+          renderComponent(tabsToRender[0])
+        ) : (
+          <Tabs
+            items={tabsToRender.map((tab) => ({
+              key: tab.value,
+              label: tab.label,
+              children: renderComponent(tab),
+            }))}
+          />
+        )}
       </div>
     </EmbedErrorBoundary>
   );

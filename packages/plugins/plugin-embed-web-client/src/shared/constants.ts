@@ -32,15 +32,6 @@ export const REQUIRED_BASE_FILES = [
   'special_tokens_map.json',
 ];
 
-// Knowledge base type identifier for web-client-embedded KBs
-export const WEB_CLIENT_EMBED_KB_TYPE = 'WEB_CLIENT_EMBED';
-
-// Maximum number of embedding chunks accepted in a single storeVectors request
-export const MAX_CHUNKS_PER_REQUEST = 500;
-
-// Valid SQL identifier: letters, digits, underscores; must start with letter or underscore
-export const SAFE_IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/;
-
 // Default model settings
 export const DEFAULT_MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
 export const DEFAULT_DTYPE = 'q8';

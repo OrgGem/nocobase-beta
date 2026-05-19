@@ -27,7 +27,7 @@ export default defineCollection({
       name: 'description',
     },
     {
-      // LOCAL | READONLY | EXTERNAL | EXTERNAL_RAG | WEB_CLIENT_EMBED
+      // LOCAL | READONLY | EXTERNAL | EXTERNAL_RAG
       type: 'string',
       name: 'type',
       defaultValue: 'LOCAL',
@@ -65,7 +65,7 @@ export default defineCollection({
       name: 'allowedRoles',
     },
     {
-      // Roles allowed to upload documents (for SHARED KBs)
+      // Legacy field. SHARED KBs now use allowedRoles for read/use/manage.
       type: 'array',
       name: 'uploadRoles',
     },
@@ -94,18 +94,6 @@ export default defineCollection({
       type: 'boolean',
       name: 'useDocpixie',
       defaultValue: false,
-    },
-    {
-      // Optional KB-level model override for WEB_CLIENT_EMBED.
-      type: 'string',
-      name: 'embedModelId',
-      length: 255,
-    },
-    {
-      // client | server. Client mode requires browser-side embedding; server mode uses plugin-embed-web-client.
-      type: 'string',
-      name: 'embedMode',
-      defaultValue: 'client',
     },
     {
       type: 'hasMany',

@@ -5,7 +5,8 @@ import { PlayCircleOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 
 const POLL_INTERVAL_MS = 3000;
-const MAX_POLL_COUNT = 100; // ~5 minutes max
+const STILL_RUNNING_AFTER_MS = 5 * 60 * 1000;
+const SLOW_POLL_INTERVAL_MS = 10000;
 
 export const BuildButton = () => {
   const [loading, setLoading] = useState(false);
@@ -14,11 +15,11 @@ export const BuildButton = () => {
   const { t } = useTranslation();
   const record = useCollectionRecordData();
   const { refresh } = useDataBlockRequest();
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopPolling = useCallback(() => {
     if (timerRef.current) {
-      clearInterval(timerRef.current);
+      clearTimeout(timerRef.current);
       timerRef.current = null;
     }
     setLoading(false);
@@ -36,14 +37,13 @@ export const BuildButton = () => {
       });
       message.success(t('Build started'));
 
-      // Poll until status leaves "building"
-      let pollCount = 0;
-      timerRef.current = setInterval(async () => {
-        pollCount++;
+      const startedAt = Date.now();
+      let stillRunningNotified = false;
+      const poll = async () => {
         try {
           const res = await api.resource('aiBuildGuideSpaces').get({ filterByTk: record.id });
           const status = res?.data?.data?.status;
-          if (status !== 'building' || pollCount >= MAX_POLL_COUNT) {
+          if (status !== 'building') {
             stopPolling();
             refresh?.();
             if (status === 'completed') {
@@ -51,12 +51,23 @@ export const BuildButton = () => {
             } else if (status === 'error') {
               message.error(t('Build failed'));
             }
+            return;
           }
+
+          const elapsed = Date.now() - startedAt;
+          if (elapsed >= STILL_RUNNING_AFTER_MS && !stillRunningNotified) {
+            stillRunningNotified = true;
+            message.info(t('Build is still running'));
+          }
+          const nextPollDelay = elapsed >= STILL_RUNNING_AFTER_MS ? SLOW_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+          timerRef.current = setTimeout(poll, nextPollDelay);
         } catch {
           stopPolling();
           refresh?.();
         }
-      }, POLL_INTERVAL_MS);
+      };
+
+      timerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
     } catch (err: any) {
       console.error(err);
       message.error(err?.response?.data?.error?.message || t('Build failed'));

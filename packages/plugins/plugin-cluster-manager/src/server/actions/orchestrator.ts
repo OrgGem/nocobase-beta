@@ -13,7 +13,7 @@ import type { IOrchestratorAdapter, StackConfig } from '../orchestrator/types';
 function getAdapter(ctx: Context): IOrchestratorAdapter {
   const plugin = ctx.app.pm.get('plugin-cluster-manager') as any;
   if (!plugin?.orchestrator) {
-    ctx.throw(503, 'Orchestrator adapter not configured. Configure it in Worker Monitor settings.');
+    ctx.throw(503, 'Orchestrator adapter not configured. Configure it in Cluster Manager settings.');
   }
   return plugin.orchestrator;
 }

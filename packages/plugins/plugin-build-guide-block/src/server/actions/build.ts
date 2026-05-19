@@ -1,5 +1,6 @@
 import { Context, Next } from '@nocobase/actions';
 import { Repository } from '@nocobase/database';
+import type { Application } from '@nocobase/server';
 import sanitizeHtml from 'sanitize-html';
 // @ts-ignore
 import { PluginAIServer } from '@nocobase/plugin-ai';
@@ -16,12 +17,92 @@ const MAX_SOURCE_CHARS = 90000;
 const MIN_CHAPTERS = 1;
 const MAX_CHAPTERS = 12;
 const DEFAULT_TARGET_CHAPTERS = 5;
+export const WORKER_JOB_BUILD_GUIDE_PROCESS = 'build-guide:process';
+
+const BUILD_GUIDE_QUEUE_CHANNEL = 'plugin-build-guide-block.build';
+const BUILD_GUIDE_QUEUE_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(process.env.BUILD_GUIDE_QUEUE_CONCURRENCY || process.env.BUILD_GUIDE_MAX_CONCURRENCY || '1', 10) || 1,
+);
+const BUILD_GUIDE_QUEUE_TIMEOUT_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.BUILD_GUIDE_QUEUE_TIMEOUT_MS || '', 10) || 30 * 60 * 1000,
+);
+const BUILD_TRIGGER_LOCK_TTL_MS = 30_000;
+const BUILD_RUN_LOCK_TTL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.BUILD_GUIDE_RUN_LOCK_TTL_MS || '', 10) || 24 * 60 * 60 * 1000,
+);
+const BUILD_HEARTBEAT_INTERVAL_MS = Math.max(
+  5_000,
+  Number.parseInt(process.env.BUILD_GUIDE_HEARTBEAT_MS || '', 10) || 30_000,
+);
+const BUILD_STALE_MS = Math.max(
+  BUILD_HEARTBEAT_INTERVAL_MS * 2,
+  Number.parseInt(process.env.BUILD_GUIDE_STALE_MS || '', 10) || 120_000,
+);
+
+const TEXT_EXTENSIONS = new Set([
+  '.txt',
+  '.md',
+  '.markdown',
+  '.csv',
+  '.tsv',
+  '.json',
+  '.xml',
+  '.html',
+  '.htm',
+  '.yaml',
+  '.yml',
+  '.log',
+  '.sql',
+  '.js',
+  '.jsx',
+  '.ts',
+  '.tsx',
+  '.css',
+  '.scss',
+  '.less',
+]);
+const TEXT_MIMETYPES = new Set([
+  'application/json',
+  'application/xml',
+  'application/yaml',
+  'application/x-yaml',
+  'application/javascript',
+  'application/typescript',
+  'image/svg+xml',
+]);
 
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: [
-    'div', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
-    'a', 'img', 'span', 'strong', 'em', 'code', 'pre', 'blockquote', 'br', 'hr',
+    'div',
+    'p',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'ul',
+    'ol',
+    'li',
+    'table',
+    'thead',
+    'tbody',
+    'tr',
+    'td',
+    'th',
+    'a',
+    'img',
+    'span',
+    'strong',
+    'em',
+    'code',
+    'pre',
+    'blockquote',
+    'br',
+    'hr',
   ],
   allowedAttributes: {
     a: ['href', 'target'],
@@ -49,13 +130,110 @@ type GuidePlan = {
   chapters: GuidePlanItem[];
 };
 
+type BuildGuideQueueMessage = {
+  spaceId: string;
+  runId: string;
+  userId?: number | string | null;
+  queuedAt?: string;
+};
+
+type BuildRunContext = {
+  spaceId: string;
+  runId: string;
+};
+
+class StaleBuildRunError extends Error {
+  constructor(spaceId: string, runId: string) {
+    super(`Build run ${runId} for space ${spaceId} is no longer current`);
+    this.name = 'StaleBuildRunError';
+  }
+}
+
 function clampChapterCount(value: unknown) {
   const count = Number(value);
   if (!Number.isFinite(count)) return DEFAULT_TARGET_CHAPTERS;
   return Math.max(MIN_CHAPTERS, Math.min(MAX_CHAPTERS, Math.round(count)));
 }
 
-async function fetchFileContent(app: any, file: any): Promise<string> {
+function resolveExtname(file: any) {
+  const explicit = file?.extname;
+  if (typeof explicit === 'string' && explicit) return explicit.toLowerCase();
+  const name = file?.filename || file?.name || '';
+  const index = String(name).lastIndexOf('.');
+  return index >= 0 ? String(name).slice(index).toLowerCase() : '';
+}
+
+function isTextDocument(file: any) {
+  const mimetype = String(file?.mimetype || '').toLowerCase();
+  if (mimetype.startsWith('text/')) return true;
+  if (TEXT_MIMETYPES.has(mimetype)) return true;
+  return TEXT_EXTENSIONS.has(resolveExtname(file));
+}
+
+function createParserContext(app: any) {
+  const headers: Record<string, string> = { 'x-timezone': '+00:00', 'x-locale': 'en-US' };
+  return {
+    app,
+    db: app.db,
+    log: app.log || app.logger || console,
+    logger: app.logger || app.log || console,
+    state: {},
+    auth: {},
+    req: { headers },
+    request: { headers },
+    get(name: string) {
+      return headers[String(name).toLowerCase()] || '';
+    },
+    getCurrentLocale() {
+      return 'en-US';
+    },
+    t(key: string) {
+      return key;
+    },
+    i18n: {
+      t(key: string) {
+        return key;
+      },
+    },
+  };
+}
+
+function extractParsedText(value: any): string {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value.map(extractParsedText).filter(Boolean).join('\n');
+  }
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.content === 'string') return value.content;
+    if (value.content) return extractParsedText(value.content);
+    if (value.message) return extractParsedText(value.message);
+  }
+  return '';
+}
+
+function getDocumentParserPlugin(app: any) {
+  return app.pm?.get?.('@nocobase/plugin-document-parser') || app.pm?.get?.('plugin-document-parser') || null;
+}
+
+function unsupportedDocumentMessage(file: any) {
+  const filename = file?.filename || file?.name || file?.id || 'document';
+  const type = file?.mimetype || resolveExtname(file) || 'unknown type';
+  return `[Unsupported document type: ${filename} (${type}). Install or enable plugin-document-parser/MarkItDown to extract this file.]`;
+}
+
+async function fetchTextFileContent(app: any, file: any): Promise<string> {
+  if (!isTextDocument(file)) {
+    return unsupportedDocumentMessage(file);
+  }
+
+  const docParserPlugin = getDocumentParserPlugin(app);
+  if (docParserPlugin?.fetchFileBuffer) {
+    const { buffer } = await docParserPlugin.fetchFileBuffer(createParserContext(app), file);
+    return buffer.toString('utf8');
+  }
+
   const fileManager = app.pm.get('file-manager') as PluginFileManagerServer;
   if (!fileManager) return '';
   const url = await fileManager.getFileURL(file);
@@ -76,6 +254,47 @@ async function fetchFileContent(app: any, file: any): Promise<string> {
     app.log.error(`Failed to read file content for document ${file.id}`, err);
     return `[Failed to read document: ${file.filename}]`;
   }
+}
+
+async function parseWithDocumentParser(app: any, file: any): Promise<string> {
+  const docParserPlugin = getDocumentParserPlugin(app);
+  if (!docParserPlugin) return '';
+
+  const parserCtx = createParserContext(app);
+  const defaultParser = async () => ({
+    placement: 'contentBlocks',
+    content: {
+      type: 'text',
+      text: await fetchTextFileContent(app, file),
+    },
+  });
+
+  try {
+    if (docParserPlugin.parseRouter?.route) {
+      const result = await docParserPlugin.parseRouter.route(parserCtx, file, defaultParser);
+      const text = extractParsedText(result?.content);
+      if (text && !text.startsWith('[Unsupported document type:')) {
+        return text;
+      }
+    }
+
+    if (docParserPlugin.internalParserRegistry?.parse) {
+      const result = await docParserPlugin.internalParserRegistry.parse(file, parserCtx);
+      if (result?.handled && result?.text?.trim()) {
+        return result.text;
+      }
+    }
+  } catch (err) {
+    app.log?.warn?.(`[plugin-build-guide-block] Document parser failed for ${file?.filename || file?.id}`, err);
+  }
+
+  return '';
+}
+
+async function fetchFileContent(app: any, file: any): Promise<string> {
+  const parsedText = await parseWithDocumentParser(app, file);
+  if (parsedText) return parsedText;
+  return fetchTextFileContent(app, file);
 }
 
 function toPlainText(value: unknown) {
@@ -250,7 +469,13 @@ ${documentsText.slice(0, MAX_SOURCE_CHARS)}`),
   return normalizePlan(toPlainText(response.content), title || 'User guide', targetCount);
 }
 
-async function buildPageMarkdown(provider: any, space: any, plan: GuidePlan, chapter: GuidePlanItem, documentsText: string) {
+async function buildPageMarkdown(
+  provider: any,
+  space: any,
+  plan: GuidePlan,
+  chapter: GuidePlanItem,
+  documentsText: string,
+) {
   const { title, systemPrompt } = space.get();
   const messages = [];
   if (systemPrompt) {
@@ -301,13 +526,83 @@ async function readDocuments(app: any, space: any) {
   return texts.join('\n');
 }
 
-async function runBuild(app: any, db: any, filterByTk: string) {
+function getSpaceModel(app: any) {
+  return app.db.getModel('aiBuildGuideSpaces');
+}
+
+async function updateSpaceForRun(app: any, run: BuildRunContext, values: Record<string, any>, optional = false) {
+  const SpaceModel = getSpaceModel(app);
+  const [affected] = await SpaceModel.update(values, {
+    where: {
+      id: run.spaceId,
+      buildRunId: run.runId,
+    },
+  });
+  if (!affected && !optional) {
+    throw new StaleBuildRunError(run.spaceId, run.runId);
+  }
+  return affected > 0;
+}
+
+async function claimBuildRun(app: any, run: BuildRunContext, workerId: string) {
+  const now = new Date();
+  const SpaceModel = getSpaceModel(app);
+  const [affected] = await SpaceModel.update(
+    {
+      buildPhase: 'running',
+      buildStartedAt: now,
+      buildHeartbeatAt: now,
+      buildWorkerId: workerId,
+    },
+    {
+      where: {
+        id: run.spaceId,
+        status: 'building',
+        buildPhase: 'queued',
+        buildRunId: run.runId,
+      },
+    },
+  );
+  return affected > 0;
+}
+
+function getBuildWorkerId(app: any) {
+  return [
+    process.env.HOSTNAME || process.env.COMPUTERNAME || 'worker',
+    app.name || 'app',
+    app.instanceId || '0',
+    process.pid,
+  ].join(':');
+}
+
+function startBuildHeartbeat(app: any, run: BuildRunContext) {
+  const timer = setInterval(() => {
+    updateSpaceForRun(
+      app,
+      run,
+      {
+        buildHeartbeatAt: new Date(),
+      },
+      true,
+    ).catch((error) => {
+      app.log?.warn?.(`[plugin-build-guide-block] Failed to update heartbeat for build ${run.runId}`, error);
+    });
+  }, BUILD_HEARTBEAT_INTERVAL_MS);
+
+  return () => clearInterval(timer);
+}
+
+async function runBuild(app: any, db: any, run: BuildRunContext) {
   const spaceRepo = db.getRepository('aiBuildGuideSpaces') as Repository;
   const pageRepo = db.getRepository('aiBuildGuidePages') as Repository;
-  const space = await spaceRepo.findById(filterByTk);
+  const space = await spaceRepo.findById(run.spaceId);
 
   if (!space) {
     throw new Error('Space not found');
+  }
+
+  if (space.get('buildRunId') !== run.runId) {
+    throw new StaleBuildRunError(run.spaceId, run.runId);
   }
 
   const { llmService, model } = space.get();
@@ -317,51 +612,42 @@ async function runBuild(app: any, db: any, filterByTk: string) {
 
   await pageRepo.destroy({
     filter: {
-      spaceId: filterByTk,
+      spaceId: run.spaceId,
     },
   });
 
-  await spaceRepo.update({
-    filterByTk,
-    values: {
-      buildPhase: 'reading',
-      buildLog: 'Reading source documents',
-      generatedHtml: null,
-      generatedMarkdown: null,
-      planJson: null,
-      pageCount: 0,
-    },
+  await updateSpaceForRun(app, run, {
+    buildPhase: 'reading',
+    buildLog: 'Reading source documents',
+    generatedHtml: null,
+    generatedMarkdown: null,
+    planJson: null,
+    pageCount: 0,
   });
 
   const documentsText = await readDocuments(app, space);
   const sourceHash = crypto.createHash('sha256').update(documentsText).digest('hex');
   const provider = await getLLMProvider(app, llmService, model);
 
-  await spaceRepo.update({
-    filterByTk,
-    values: {
-      buildPhase: 'planning',
-      buildLog: 'Creating guide breakdown plan',
-      sourceHash,
-    },
+  await updateSpaceForRun(app, run, {
+    buildPhase: 'planning',
+    buildLog: 'Creating guide breakdown plan',
+    sourceHash,
   });
 
   const plan = await buildPlan(provider, space, documentsText);
-  await spaceRepo.update({
-    filterByTk,
-    values: {
-      planJson: plan,
-      pageCount: plan.chapters.length,
-      buildPhase: 'building_pages',
-      buildLog: `Plan created with ${plan.chapters.length} chapters`,
-    },
+  await updateSpaceForRun(app, run, {
+    planJson: plan,
+    pageCount: plan.chapters.length,
+    buildPhase: 'building_pages',
+    buildLog: `Plan created with ${plan.chapters.length} chapters`,
   });
 
   const pageRecords = [];
   for (const [index, chapter] of plan.chapters.entries()) {
     const page = await pageRepo.create({
       values: {
-        spaceId: filterByTk,
+        spaceId: run.spaceId,
         sort: index + 1,
         title: chapter.title,
         slug: slugify(chapter.title, `chapter-${index + 1}`),
@@ -383,12 +669,9 @@ async function runBuild(app: any, db: any, filterByTk: string) {
         buildLog: 'Building chapter with LLM',
       },
     });
-    await spaceRepo.update({
-      filterByTk,
-      values: {
-        buildPhase: 'building_pages',
-        buildLog: `Building chapter ${index + 1}/${pageRecords.length}: ${chapter.title}`,
-      },
+    await updateSpaceForRun(app, run, {
+      buildPhase: 'building_pages',
+      buildLog: `Building chapter ${index + 1}/${pageRecords.length}: ${chapter.title}`,
     });
 
     try {
@@ -417,7 +700,7 @@ async function runBuild(app: any, db: any, filterByTk: string) {
 
   const completedPages = await pageRepo.find({
     filter: {
-      spaceId: filterByTk,
+      spaceId: run.spaceId,
       status: 'completed',
     },
     sort: ['sort'],
@@ -428,74 +711,255 @@ async function runBuild(app: any, db: any, filterByTk: string) {
     .join('\n\n---\n\n');
   const combinedHtml = await markdownToCleanHtml(combinedMarkdown);
 
-  await spaceRepo.update({
-    filterByTk,
+  await updateSpaceForRun(app, run, {
+    status: 'completed',
+    buildPhase: 'completed',
+    buildLog: `Built ${completedPages.length} chapters successfully`,
+    generatedMarkdown: combinedMarkdown,
+    generatedHtml: combinedHtml,
+    buildHeartbeatAt: new Date(),
+  });
+}
+
+function isBuildGuideWorker(app: Application) {
+  const workerMode = process.env.WORKER_MODE || '';
+  return (
+    app.serving(WORKER_JOB_BUILD_GUIDE_PROCESS) ||
+    workerMode === 'worker' ||
+    workerMode === 'task' ||
+    process.env.APP_ROLE === 'worker'
+  );
+}
+
+async function markBuildError(app: Application, spaceId: string, runId: string | undefined, error: any) {
+  const buildLog = error?.message || String(error);
+  let updated = false;
+  if (runId) {
+    updated = await updateSpaceForRun(
+      app,
+      { spaceId, runId },
+      {
+        status: 'error',
+        buildPhase: 'error',
+        buildLog,
+        buildHeartbeatAt: new Date(),
+      },
+      true,
+    );
+  } else {
+    await app.db.getRepository('aiBuildGuideSpaces').update({
+      filterByTk: spaceId,
+      values: {
+        status: 'error',
+        buildPhase: 'error',
+        buildLog,
+      },
+    });
+    updated = true;
+  }
+
+  if (!updated) {
+    return;
+  }
+
+  await app.db.getRepository('aiBuildGuidePages').update({
+    filter: {
+      spaceId,
+      status: 'building',
+    },
     values: {
-      status: 'completed',
-      buildPhase: 'completed',
-      buildLog: `Built ${completedPages.length} chapters successfully`,
-      generatedMarkdown: combinedMarkdown,
-      generatedHtml: combinedHtml,
+      status: 'error',
+      buildLog,
     },
   });
 }
 
+async function enqueueBuild(app: Application, message: BuildGuideQueueMessage) {
+  try {
+    await app.eventQueue.publish(BUILD_GUIDE_QUEUE_CHANNEL, message, {
+      timeout: BUILD_GUIDE_QUEUE_TIMEOUT_MS,
+      maxRetries: 0,
+    });
+  } catch (error) {
+    await markBuildError(app, message.spaceId, message.runId, error);
+    throw error;
+  }
+}
+
+async function processQueuedBuild(app: Application, message: BuildGuideQueueMessage) {
+  const spaceId = message?.spaceId;
+  const runId = message?.runId;
+  if (!spaceId || !runId) {
+    app.log?.warn?.('[plugin-build-guide-block] Build queue message missing spaceId or runId');
+    return;
+  }
+
+  await withBuildRunLock(app, spaceId, async () => {
+    const run = { spaceId, runId };
+    const workerId = getBuildWorkerId(app);
+    const claimed = await claimBuildRun(app, run, workerId);
+    if (!claimed) {
+      app.log?.info?.(`[plugin-build-guide-block] Build ${runId} for space "${spaceId}" was already claimed or stale`);
+      return;
+    }
+
+    const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
+    const space = await spaceRepo.findById(spaceId);
+    if (!space) {
+      app.log?.warn?.(`[plugin-build-guide-block] Build space "${spaceId}" not found; skipping queued build`);
+      return;
+    }
+
+    if (space.get('status') !== 'building') {
+      app.log?.info?.(
+        `[plugin-build-guide-block] Build space "${spaceId}" is ${space.get('status')}; skipping queued build`,
+      );
+      return;
+    }
+
+    const stopHeartbeat = startBuildHeartbeat(app, run);
+    try {
+      await runBuild(app, app.db, run);
+    } catch (error) {
+      if (error instanceof StaleBuildRunError) {
+        app.log?.info?.(`[plugin-build-guide-block] ${error.message}`);
+        return;
+      }
+      app.log?.error?.('Build Guide Worker Error', error);
+      await markBuildError(app, spaceId, runId, error);
+    } finally {
+      stopHeartbeat();
+    }
+  });
+}
+
+export function registerBuildGuideQueue(app: Application) {
+  app.eventQueue.subscribe(BUILD_GUIDE_QUEUE_CHANNEL, {
+    concurrency: BUILD_GUIDE_QUEUE_CONCURRENCY,
+    idle: () => isBuildGuideWorker(app),
+    process: async (message: BuildGuideQueueMessage) => {
+      await processQueuedBuild(app, message);
+    },
+  });
+}
+
+export function unregisterBuildGuideQueue(app: Application) {
+  app.eventQueue.unsubscribe(BUILD_GUIDE_QUEUE_CHANNEL);
+}
+
+async function withBuildTriggerLock<T>(app: Application, spaceId: string, fn: () => Promise<T>) {
+  return app.lockManager.runExclusive(`build-guide:trigger:${spaceId}`, fn, BUILD_TRIGGER_LOCK_TTL_MS);
+}
+
+async function withBuildRunLock<T>(app: Application, spaceId: string, fn: () => Promise<T>) {
+  return app.lockManager.runExclusive(`build-guide:run:${spaceId}`, fn, BUILD_RUN_LOCK_TTL_MS);
+}
+
+export async function recoverInterruptedBuilds(app: Application) {
+  const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
+  const pageRepo = app.db.getRepository('aiBuildGuidePages') as Repository;
+  const staleBefore = new Date(Date.now() - BUILD_STALE_MS);
+  const spaces = await spaceRepo.find({
+    filter: {
+      status: 'building',
+      $or: [{ buildHeartbeatAt: null }, { buildHeartbeatAt: { $lt: staleBefore } }],
+    },
+  });
+
+  for (const space of spaces) {
+    const spaceId = String(space.get('id'));
+    const runId = String(space.get('buildRunId') || crypto.randomUUID());
+    const SpaceModel = getSpaceModel(app);
+    const [affected] = await SpaceModel.update(
+      {
+        buildPhase: 'queued',
+        buildLog: 'Build re-queued after worker restart',
+        buildRunId: runId,
+        buildQueuedAt: new Date(),
+        buildStartedAt: null,
+        buildHeartbeatAt: null,
+        buildWorkerId: null,
+      },
+      {
+        where: {
+          id: spaceId,
+          status: 'building',
+          buildRunId: space.get('buildRunId') || null,
+        },
+      },
+    );
+
+    if (!affected) {
+      continue;
+    }
+
+    await pageRepo.update({
+      filter: {
+        spaceId,
+        status: 'building',
+      },
+      values: {
+        status: 'pending',
+        buildLog: 'Build re-queued after worker restart',
+      },
+    });
+    await enqueueBuild(app, {
+      spaceId,
+      runId,
+      queuedAt: new Date().toISOString(),
+    });
+  }
+
+  if (spaces.length) {
+    app.log?.info?.(`[plugin-build-guide-block] Re-queued ${spaces.length} interrupted build(s)`);
+  }
+}
+
 export async function build(ctx: Context, next: Next) {
   const { filterByTk } = ctx.action.params;
+  if (!filterByTk) {
+    ctx.throw(400, 'Space id is required');
+  }
+
+  const app = ctx.app as Application;
   const repository = ctx.db.getRepository('aiBuildGuideSpaces') as Repository;
 
-  const space = await repository.findById(filterByTk);
+  const body = await withBuildTriggerLock(app, String(filterByTk), async () => {
+    const runId = crypto.randomUUID();
+    const space = await repository.findById(filterByTk);
 
-  if (!space) {
-    ctx.throw(404, 'Space not found');
-  }
+    if (!space) {
+      ctx.throw(404, 'Space not found');
+    }
 
-  if (space.get('status') === 'building') {
-    ctx.throw(409, 'A build is already in progress for this space');
-  }
+    if (space.get('status') === 'building') {
+      ctx.throw(409, 'A build is already in progress for this space');
+    }
 
-  const app = ctx.app;
-  const db = ctx.db;
-
-  try {
     await repository.update({
       filterByTk,
       values: {
         status: 'building',
         buildPhase: 'queued',
         buildLog: 'Build queued',
+        buildRunId: runId,
+        buildQueuedAt: new Date(),
+        buildStartedAt: null,
+        buildHeartbeatAt: null,
+        buildWorkerId: null,
       },
     });
 
-    runBuild(app, db, filterByTk).catch(async (error) => {
-      app.log.error('Build Guide Background Error', error);
-      try {
-        await repository.update({
-          filterByTk,
-          values: {
-            status: 'error',
-            buildPhase: 'error',
-            buildLog: error.message || String(error),
-          },
-        });
-      } catch (updateErr) {
-        app.log.error('Failed to persist build error status', updateErr);
-      }
+    await enqueueBuild(app, {
+      spaceId: String(filterByTk),
+      runId,
+      userId: (ctx as any).state?.currentUser?.id ?? null,
+      queuedAt: new Date().toISOString(),
     });
 
-    ctx.body = { status: 'building' };
-  } catch (error: any) {
-    app.log.error('Build Guide Error', error);
-    await repository.update({
-      filterByTk,
-      values: {
-        status: 'error',
-        buildPhase: 'error',
-        buildLog: error.message || String(error),
-      },
-    });
-    ctx.throw(500, error.message || 'Error occurred during build');
-  }
+    return { status: 'building' };
+  });
 
+  ctx.body = body;
   await next();
 }

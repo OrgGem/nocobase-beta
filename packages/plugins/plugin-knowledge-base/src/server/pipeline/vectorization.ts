@@ -197,7 +197,7 @@ export class VectorizationPipeline {
       const vectorStore = knowledgeBase.vectorStore;
       const vectorDatabase = vectorStore.vectorDatabase;
 
-      // Create embedding model (LLM service or local ONNX based on vector store config)
+      // Create embedding model from the vector store's LLM service config.
       const embeddings = await createEmbeddingsForVectorStore(this.plugin, vectorStore);
 
       // Create vector store instance

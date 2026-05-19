@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useAPIClient, useApp } from '@nocobase/client';
+import { useAPIClient } from '@nocobase/client';
 import {
   Button,
   Modal,
@@ -39,13 +39,11 @@ import {
   CloseCircleOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import { isEmbedWebClientPluginEnabled } from '../utils/embed-web-client';
 
 const { Text, Title } = Typography;
 
 export const Infrastructure: React.FC = () => {
   const api = useAPIClient();
-  const app = useApp();
 
   // ----- Vector Databases State -----
   const [vectorDatabases, setVectorDatabases] = useState<any[]>([]);
@@ -65,11 +63,6 @@ export const Infrastructure: React.FC = () => {
   const [embeddingModels, setEmbeddingModels] = useState<any[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [vsForm] = Form.useForm();
-
-  // ----- Local Embed (plugin-embed-web-client) State -----
-  const [embedWebClientAvailable, setEmbedWebClientAvailable] = useState(false);
-  const [localEmbedModels, setLocalEmbedModels] = useState<any[]>([]);
-  const [embeddingProvider, setEmbeddingProvider] = useState<string>('llmService');
 
   // ----- Shared -----
   const [activeTab, setActiveTab] = useState('databases');
@@ -100,7 +93,7 @@ export const Infrastructure: React.FC = () => {
 
   const fetchLLMServices = async () => {
     try {
-      const res = await api.request({ url: 'ai:listLLMServices' });
+      const res = await api.request({ url: 'ai:listLLMServices', params: { model: 'EMBEDDING' } });
       setLlmServices(res?.data?.data ?? []);
     } catch {
       // ignore
@@ -113,7 +106,7 @@ export const Infrastructure: React.FC = () => {
     try {
       const res = await api.request({
         url: 'ai:listModels',
-        params: { llmService: llmServiceName },
+        params: { llmService: llmServiceName, model: 'EMBEDDING' },
       });
       setEmbeddingModels(res?.data?.data ?? []);
     } catch {
@@ -123,35 +116,10 @@ export const Infrastructure: React.FC = () => {
     }
   };
 
-  const checkEmbedWebClient = async () => {
-    if (!isEmbedWebClientPluginEnabled(app)) {
-      setEmbedWebClientAvailable(false);
-      setLocalEmbedModels([]);
-      return;
-    }
-
-    try {
-      const res = await api.request({ url: 'embedWebClient:getConfig' });
-      if (res?.data?.data) {
-        setEmbedWebClientAvailable(true);
-        try {
-          const modelsRes = await api.request({ url: 'embedWebClient:listModels' });
-          setLocalEmbedModels(modelsRes?.data?.data ?? []);
-        } catch {
-          /* models fetch failed */
-        }
-      }
-    } catch {
-      setEmbedWebClientAvailable(false);
-      setLocalEmbedModels([]);
-    }
-  };
-
   useEffect(() => {
     fetchVectorDatabases();
     fetchVectorStores();
     fetchLLMServices();
-    checkEmbedWebClient();
   }, []);
 
   // ==========================================
@@ -236,9 +204,7 @@ export const Infrastructure: React.FC = () => {
   const handleVsCreate = () => {
     setVsEditingRecord(null);
     setEmbeddingModels([]);
-    setEmbeddingProvider('llmService');
     vsForm.resetFields();
-    vsForm.setFieldsValue({ embeddingProvider: 'llmService' });
     setVsModalVisible(true);
   };
 
@@ -248,10 +214,6 @@ export const Infrastructure: React.FC = () => {
     if (formValues.embeddingModel && !Array.isArray(formValues.embeddingModel)) {
       formValues.embeddingModel = [formValues.embeddingModel];
     }
-    if (!formValues.embeddingProvider) {
-      formValues.embeddingProvider = 'llmService';
-    }
-    setEmbeddingProvider(formValues.embeddingProvider);
     vsForm.setFieldsValue(formValues);
     setVsModalVisible(true);
     if (record.llmService) {
@@ -436,43 +398,20 @@ export const Infrastructure: React.FC = () => {
                     </Space>
                     <Text strong ellipsis style={{ maxWidth: 160 }}>{vs.vectorDatabase?.name || 'Unknown'}</Text>
                   </div>
-                  {vs.embeddingProvider === 'localEmbed' ? (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Space size={8}>
-                          <ApiOutlined style={{ color: '#8c8c8c' }} />
-                          <Text type="secondary">Embed</Text>
-                        </Space>
-                        <Tag color="green" style={{ margin: 0, borderRadius: 4 }}>Local ONNX</Tag>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Space size={8}>
-                          <SettingOutlined style={{ color: '#8c8c8c' }} />
-                          <Text type="secondary">Model</Text>
-                        </Space>
-                        <Text strong ellipsis style={{ maxWidth: 160 }}>
-                          {vs.localEmbedModelId} <Text type="secondary" style={{ fontSize: 12 }}>({vs.localEmbedDtype || 'q8'})</Text>
-                        </Text>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Space size={8}>
-                          <ApiOutlined style={{ color: '#8c8c8c' }} />
-                          <Text type="secondary">LLM</Text>
-                        </Space>
-                        <Text strong ellipsis style={{ maxWidth: 160 }}>{llmServiceTitleMap[vs.llmService] || vs.llmService}</Text>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Space size={8}>
-                          <SettingOutlined style={{ color: '#8c8c8c' }} />
-                          <Text type="secondary">Model</Text>
-                        </Space>
-                        <Text strong ellipsis style={{ maxWidth: 160 }}>{vs.embeddingModel}</Text>
-                      </div>
-                    </>
-                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Space size={8}>
+                      <ApiOutlined style={{ color: '#8c8c8c' }} />
+                      <Text type="secondary">LLM</Text>
+                    </Space>
+                    <Text strong ellipsis style={{ maxWidth: 160 }}>{llmServiceTitleMap[vs.llmService] || vs.llmService}</Text>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Space size={8}>
+                      <SettingOutlined style={{ color: '#8c8c8c' }} />
+                      <Text type="secondary">Model</Text>
+                    </Space>
+                    <Text strong ellipsis style={{ maxWidth: 160 }}>{vs.embeddingModel}</Text>
+                  </div>
                 </div>
               </Card>
             </Col>
@@ -643,69 +582,29 @@ export const Infrastructure: React.FC = () => {
           <Form.Item name="vectorDatabaseId" label="Vector Database" rules={[{ required: true }]}>
             <Select options={vectorDatabases.map((vd) => ({ label: vd.name, value: vd.id }))} />
           </Form.Item>
-          <Form.Item name="embeddingProvider" label="Embedding Provider" initialValue="llmService">
+          <Form.Item name="llmService" label="LLM Service" rules={[{ required: true }]}>
             <Select
-              onChange={(val: string) => setEmbeddingProvider(val)}
-              options={[
-                { label: 'LLM Service (Remote API)', value: 'llmService' },
-                ...(embedWebClientAvailable
-                  ? [{ label: 'Local Embed (ONNX)', value: 'localEmbed' }]
-                  : []),
-              ]}
+              options={llmServices.map((svc) => ({ label: svc.title || svc.name, value: svc.name }))}
+              onChange={(val) => {
+                vsForm.setFieldValue('embeddingModel', undefined);
+                fetchEmbeddingModels(val);
+              }}
             />
           </Form.Item>
-          {embeddingProvider === 'llmService' && (
-            <>
-              <Form.Item name="llmService" label="LLM Service" rules={[{ required: true }]}>
-                <Select
-                  options={llmServices.map((svc) => ({ label: svc.title || svc.name, value: svc.name }))}
-                  onChange={(val) => {
-                    vsForm.setFieldValue('embeddingModel', undefined);
-                    fetchEmbeddingModels(val);
-                  }}
-                />
-              </Form.Item>
-              <Form.Item name="embeddingModel" label="Embedding Model" rules={[{ required: true }]}>
-                <Select
-                  showSearch
-                  allowClear
-                  mode="tags"
-                  maxCount={1}
-                  loading={modelsLoading}
-                  placeholder={modelsLoading ? 'Loading models...' : 'Type or select embedding model'}
-                  options={embeddingModels.map((m) => ({
-                    label: String(m.id || m.name || m),
-                    value: String(m.id || m.name || m),
-                  }))}
-                />
-              </Form.Item>
-            </>
-          )}
-          {embeddingProvider === 'localEmbed' && (
-            <>
-              <Form.Item name="localEmbedModelId" label="Local Embed Model" rules={[{ required: true }]}>
-                <Select
-                  showSearch
-                  allowClear
-                  placeholder="Select a downloaded ONNX model"
-                  options={localEmbedModels.map((m: any) => ({
-                    label: m.modelId || m.name || String(m),
-                    value: m.modelId || m.name || String(m),
-                  }))}
-                />
-              </Form.Item>
-              <Form.Item name="localEmbedDtype" label="Quantization (dtype)" initialValue="q8">
-                <Select
-                  options={[
-                    { label: 'Q4 (smallest, fastest)', value: 'q4' },
-                    { label: 'Q8 (balanced)', value: 'q8' },
-                    { label: 'FP16 (higher quality)', value: 'fp16' },
-                    { label: 'FP32 (full precision)', value: 'fp32' },
-                  ]}
-                />
-              </Form.Item>
-            </>
-          )}
+          <Form.Item name="embeddingModel" label="Embedding Model" rules={[{ required: true }]}>
+            <Select
+              showSearch
+              allowClear
+              mode="tags"
+              maxCount={1}
+              loading={modelsLoading}
+              placeholder={modelsLoading ? 'Loading models...' : 'Type or select embedding model'}
+              options={embeddingModels.map((m) => ({
+                label: String(m.id || m.name || m),
+                value: String(m.id || m.name || m),
+              }))}
+            />
+          </Form.Item>
         </Form>
       </Modal>
     </div>

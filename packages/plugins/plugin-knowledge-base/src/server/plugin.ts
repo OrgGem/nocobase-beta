@@ -40,7 +40,12 @@ import aiVectorDatabases from './resources/ai-vector-databases';
 import { addDocumentAction } from './actions/add-document';
 import * as sessionContextAdminActions from './actions/session-context-admin';
 import requestContext from './request-context';
-import { getServerEmbeddingPipeline } from './utils/embed-web-client';
+import { getCurrentRoles } from './utils/access';
+import {
+  enqueueKnowledgeBaseDocument,
+  registerKnowledgeBaseDocumentQueue,
+  unregisterKnowledgeBaseDocumentQueue,
+} from './queue/document-vectorization';
 
 export class PluginKnowledgeBaseServer extends Plugin {
   declare app: any;
@@ -184,6 +189,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     // 3. Initialize vectorization pipeline (with optional DocPixie extractor)
     this.docpixieExtractor = new DocPixieExtractor(this.db, () => this.getDocpixiePlugin());
     this.vectorizationPipeline = new VectorizationPipeline(this, this.docpixieExtractor);
+    registerKnowledgeBaseDocumentQueue(this);
 
     // 4. Define resources
     this.defineResources();
@@ -193,12 +199,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.app.resourceManager.use(async (ctx, next) => {
       const userId = ctx.auth?.user?.id ?? ctx.state?.currentUser?.id;
       if (userId) {
-        // Get user roles from context
-        const userRoles: string[] = ctx.state?.currentUser?.roles?.map((r: any) => r.name || r) ?? [];
-        // Fallback: check ctx.state.currentRole
-        if (userRoles.length === 0 && ctx.state?.currentRole) {
-          userRoles.push(ctx.state.currentRole);
-        }
+        const userRoles = getCurrentRoles(ctx);
         return requestContext.run({ userId, userRoles }, () => next());
       }
       await next();
@@ -268,6 +269,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
   async disable() {
     this.clearRetryTimer();
     this.clearSessionPruneTimer();
+    unregisterKnowledgeBaseDocumentQueue(this.app);
   }
 
   private clearRetryTimer() {
@@ -325,22 +327,19 @@ export class PluginKnowledgeBaseServer extends Plugin {
           const kbType = doc.knowledgeBase.type;
 
           try {
-            if (kbType === 'WEB_CLIENT_EMBED' && doc.knowledgeBase.embedMode === 'server') {
-              // Retry via embed-web-client server pipeline
+            if (kbType !== 'EXTERNAL_RAG') {
               await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
-              getServerEmbeddingPipeline(this)
-                .processDocument(doc.id)
-                .catch((err: any) => {
-                  this.app.logger.warn(`[KBRetry] Server embedding retry failed for doc ${doc.id}: ${err.message}`);
-                });
-            } else if (kbType !== 'WEB_CLIENT_EMBED') {
-              // Retry via vectorization pipeline (LOCAL and other types)
-              await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
-              this.vectorizationPipeline.processDocument(doc.id).catch((err: any) => {
-                this.app.logger.warn(`[KBRetry] Vectorization retry failed for doc ${doc.id}: ${err.message}`);
+              await enqueueKnowledgeBaseDocument(this, {
+                documentId: String(doc.id),
+                reason: 'retry',
+                requestedById: doc.uploadedById ?? null,
+              });
+            } else {
+              await docRepo.update({
+                filter: { id: doc.id },
+                values: { status: 'failed', error: 'External RAG knowledge bases do not process local documents' },
               });
             }
-            // WEB_CLIENT_EMBED with client mode: skip auto-retry (needs browser)
           } catch (err: any) {
             this.app.logger.warn(`[KBRetry] Failed to trigger retry for doc ${doc.id}: ${err.message}`);
           }
@@ -417,13 +416,9 @@ export class PluginKnowledgeBaseServer extends Plugin {
         });
       }
 
-      const embeddingProvider = process.env.KB_DEFAULT_EMBEDDING_PROVIDER || 'llmService';
       const llmService = process.env.KB_DEFAULT_EMBEDDING_LLM_SERVICE || '';
       const embeddingModel = process.env.KB_DEFAULT_EMBEDDING_MODEL || '';
-      const localEmbedModelId = process.env.KB_DEFAULT_LOCAL_EMBED_MODEL_ID || '';
-      const localEmbedDtype = process.env.KB_DEFAULT_LOCAL_EMBED_DTYPE || 'q8';
-      const canCreateVectorStore =
-        embeddingProvider === 'localEmbed' ? Boolean(localEmbedModelId) : Boolean(llmService && embeddingModel);
+      const canCreateVectorStore = Boolean(llmService && embeddingModel);
 
       if (!canCreateVectorStore) {
         this.app.logger.info(
@@ -441,16 +436,10 @@ export class PluginKnowledgeBaseServer extends Plugin {
       const values: Record<string, any> = {
         name: vectorStoreName,
         vectorDatabaseId: vectorDatabase.get('id'),
-        embeddingProvider,
         enabled: true,
+        llmService,
+        embeddingModel,
       };
-      if (embeddingProvider === 'localEmbed') {
-        values.localEmbedModelId = localEmbedModelId;
-        values.localEmbedDtype = localEmbedDtype;
-      } else {
-        values.llmService = llmService;
-        values.embeddingModel = embeddingModel;
-      }
 
       const vectorStore = await vectorStoreRepo.create({ values });
       await vectorStoreRepo.update({
@@ -576,12 +565,14 @@ export class PluginKnowledgeBaseServer extends Plugin {
     // Allow logged-in users to list/get knowledge bases (needed by AI Employee KB selector)
     this.app.acl.allow('aiKnowledgeBase', 'list', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'get', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'create', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'update', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'destroy', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'search', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'addDocument', 'loggedIn');
 
-    // Allow logged-in users to manage their own documents.
-    // Per-request authorization inside the resource handlers enforces actual ownership;
-    // these allow() calls only open the ACL gate so requests reach the handler.
+    // Open the ACL gate for logged-in users; row-level handlers enforce the
+    // three KB modes: personal owner, shared allowedRoles, and public admin-only writes.
     this.app.acl.allow('aiKnowledgeBaseDoc', 'list', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBaseDoc', 'create', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBaseDoc', 'destroy', 'loggedIn');
@@ -631,11 +622,13 @@ export class PluginKnowledgeBaseServer extends Plugin {
   async afterDisable() {
     this.clearRetryTimer();
     this.clearSessionPruneTimer();
+    unregisterKnowledgeBaseDocumentQueue(this.app);
   }
 
   async remove() {
     this.clearRetryTimer();
     this.clearSessionPruneTimer();
+    unregisterKnowledgeBaseDocumentQueue(this.app);
   }
 }
 

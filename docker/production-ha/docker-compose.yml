@@ -372,6 +372,8 @@ services:
       APP_PORT: 13000
       APP_BIND: 0.0.0.0
       SKILL_HUB_SANDBOX: "false"
+    ports:
+      - "13000:13000"
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:13000/api/app:getInfo']
       interval: 15s

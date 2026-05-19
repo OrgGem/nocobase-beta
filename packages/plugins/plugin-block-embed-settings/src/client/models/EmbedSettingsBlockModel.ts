@@ -2,12 +2,18 @@ import { BlockModel } from '@nocobase/client';
 import { escapeT } from '@nocobase/flow-engine';
 import React from 'react';
 import { EmbedSettingsBlock } from '../EmbedSettingsBlock';
+import {
+  decodeCollectionPath,
+  EmbedSettingsCollectionSelect,
+  encodeCollectionPath,
+} from '../EmbedSettingsCollectionSelect';
 import { EmbedSettingsPluginSelect } from '../EmbedSettingsPluginSelect';
+import { EmbedSettingsTabSelect } from '../EmbedSettingsTabSelect';
 
 export class EmbedSettingsBlockModel extends BlockModel {
   renderComponent() {
-    const { pluginName } = this.props;
-    return React.createElement(EmbedSettingsBlock, { pluginName });
+    const { pluginName, enabledTabKeys, dataSourceName, collectionName } = this.props;
+    return React.createElement(EmbedSettingsBlock, { pluginName, enabledTabKeys, dataSourceName, collectionName });
   }
 }
 
@@ -30,11 +36,30 @@ EmbedSettingsBlockModel.registerFlow({
             },
             required: true,
           },
+          enabledTabKeys: {
+            title: t('Enabled tabs'),
+            type: 'array',
+            'x-decorator': 'FormItem',
+            'x-component': EmbedSettingsTabSelect,
+          },
+          collectionPath: {
+            title: t('Collection'),
+            type: 'string',
+            'x-decorator': 'FormItem',
+            'x-component': EmbedSettingsCollectionSelect,
+            default: encodeCollectionPath(ctx.model.props.dataSourceName, ctx.model.props.collectionName),
+          },
         };
       },
       async handler(ctx, params) {
-        const { pluginName } = params;
-        ctx.model.setProps({ pluginName });
+        const { pluginName, enabledTabKeys, collectionPath } = params;
+        const { dataSourceName, collectionName } = decodeCollectionPath(collectionPath);
+        ctx.model.setProps({
+          pluginName,
+          enabledTabKeys: Array.isArray(enabledTabKeys) ? enabledTabKeys : undefined,
+          dataSourceName,
+          collectionName,
+        });
       },
     },
   },

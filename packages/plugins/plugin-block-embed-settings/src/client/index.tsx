@@ -6,7 +6,9 @@ import { EmbedSettingsManager } from './EmbedSettingsManager';
 import { NAMESPACE } from './locale';
 import { useEmbedSettingsPlugins, EmbedSettingsBlockInitializer } from './EmbedSettingsBlockInitializer';
 import { EmbedSettingsBlockModel } from './models/EmbedSettingsBlockModel';
+import { EmbedSettingsCollectionSelect } from './EmbedSettingsCollectionSelect';
 import { EmbedSettingsPluginSelect } from './EmbedSettingsPluginSelect';
+import { EmbedSettingsTabSelect } from './EmbedSettingsTabSelect';
 
 export class PluginBlockEmbedSettingsClient extends Plugin {
   async load() {
@@ -14,7 +16,9 @@ export class PluginBlockEmbedSettingsClient extends Plugin {
     this.app.addComponents({
       EmbedSettingsBlock,
       EmbedSettingsBlockInitializer,
+      EmbedSettingsCollectionSelect,
       EmbedSettingsPluginSelect,
+      EmbedSettingsTabSelect,
       RemoteSelect,
     });
 

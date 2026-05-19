@@ -8,14 +8,15 @@
  */
 
 import PluginKnowledgeBaseServer from '../plugin';
-import { getServerEmbeddingPipeline } from '../utils/embed-web-client';
+import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
+import { canManageKnowledgeBase, getAuthUserId } from '../utils/access';
 
 /**
  * API action: aiKnowledgeBase:addDocument
  *
  * Allows workflows to add documents to a knowledge base.
- * Accepts a file URL or text content, creates a document record,
- * and triggers the vectorization pipeline asynchronously.
+ * Accepts a file ID or text content, creates a document record,
+ * and queues the vectorization pipeline asynchronously.
  *
  * POST /api/aiKnowledgeBase:addDocument
  * Body: {
@@ -46,14 +47,12 @@ export async function addDocumentAction(ctx: any, next: any) {
     return;
   }
 
-  // Always derive userId from the authenticated session — never trust client-provided userId
-  const userId = ctx.auth?.user?.id;
+  const userId = getAuthUserId(ctx);
   if (!userId) {
     ctx.throw(401, 'Authentication required');
     return;
   }
 
-  // Validate knowledge base exists
   const knowledgeBase = await ctx.db.getRepository('aiKnowledgeBases').findOne({
     filter: { id: knowledgeBaseId },
     appends: ['vectorStore', 'vectorStore.vectorDatabase'],
@@ -64,7 +63,6 @@ export async function addDocumentAction(ctx: any, next: any) {
     return;
   }
 
-  // EXTERNAL_RAG KBs are managed by external services — documents cannot be added locally
   const kbData = knowledgeBase.toJSON ? knowledgeBase.toJSON() : knowledgeBase;
   if (kbData.type === 'EXTERNAL_RAG') {
     ctx.throw(
@@ -73,14 +71,12 @@ export async function addDocumentAction(ctx: any, next: any) {
     );
     return;
   }
-  if (kbData.type === 'WEB_CLIENT_EMBED' && kbData.embedMode !== 'server') {
-    ctx.throw(400, 'WEB_CLIENT_EMBED client mode requires browser upload via plugin-embed-web-client');
+  if (!canManageKnowledgeBase(ctx, kbData)) {
+    ctx.throw(403, 'You do not have permission to add documents to this knowledge base');
     return;
   }
 
   const docRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
-
-  // Create document record
   const docValues: any = {
     knowledgeBaseId,
     uploadedById: userId,
@@ -104,10 +100,11 @@ export async function addDocumentAction(ctx: any, next: any) {
   }
 
   const doc = await docRepo.create({ values: docValues });
+  const documentId = doc.get?.('id') ?? doc.id;
 
   if (fileId || knowledgeBaseId) {
     await docRepo.update({
-      filterByTk: doc.get?.('id') ?? doc.id,
+      filterByTk: documentId,
       values: {
         knowledgeBaseId,
         ...(fileId ? { fileId } : {}),
@@ -115,29 +112,17 @@ export async function addDocumentAction(ctx: any, next: any) {
     });
   }
 
-  // Trigger vectorization via class-reference plugin lookup (avoids fragile string matching)
-  try {
-    const plugin = ctx.app.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
-    if (kbData.type === 'WEB_CLIENT_EMBED') {
-      getServerEmbeddingPipeline(plugin)
-        .processDocument(doc.id)
-        .catch((err: any) => {
-          ctx.app.logger.error(`[addDocument] Server embedding failed for doc ${doc.id}:`, err);
-        });
-    } else if (plugin?.vectorizationPipeline) {
-      // Don't await — let it run in the background
-      plugin.vectorizationPipeline.processDocument(doc.id).catch((err: any) => {
-        ctx.app.logger.error(`[addDocument] Vectorization failed for doc ${doc.id}:`, err);
-      });
-    }
-  } catch (err: any) {
-    ctx.app.logger.error('[addDocument] Failed to trigger vectorization:', err);
-  }
+  const plugin = ctx.app.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+  await enqueueKnowledgeBaseDocument(plugin, {
+    documentId: String(documentId),
+    reason: 'addDocument',
+    requestedById: userId,
+  });
 
   ctx.body = {
     success: true,
-    documentId: doc.id,
-    message: 'Document added and vectorization triggered',
+    documentId,
+    message: 'Document added and queued for vectorization',
   };
 
   await next();

@@ -7,59 +7,54 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-/**
- * Shared factory for creating embeddings instances based on vector store config.
- * Used by both VectorStoreProviderImpl and VectorizationPipeline to avoid duplication.
- */
-
+import type { EmbeddingsInterface } from '@langchain/core/embeddings';
 import type PluginKnowledgeBaseServer from '../plugin';
-import { SimpleHTTPEmbeddings } from './simple-embeddings';
-import { LocalOnnxEmbeddings } from './local-onnx-embeddings';
-import { getEmbedWebClientPlugin, loadEmbedTexts } from '../utils/embed-web-client';
 
+/**
+ * Shared factory for creating embeddings from plugin-ai LLM services.
+ * Knowledge Base vectorization now uses only server-side embedding providers
+ * configured on the selected Vector Store.
+ */
 export async function createEmbeddingsForVectorStore(
   plugin: PluginKnowledgeBaseServer,
   vectorStoreConfig: any,
-): Promise<SimpleHTTPEmbeddings | LocalOnnxEmbeddings> {
-  const provider = vectorStoreConfig.embeddingProvider || 'llmService';
+): Promise<EmbeddingsInterface> {
+  const llmServiceName = vectorStoreConfig.llmService;
+  const embeddingModel = Array.isArray(vectorStoreConfig.embeddingModel)
+    ? vectorStoreConfig.embeddingModel[0]
+    : vectorStoreConfig.embeddingModel;
 
-  if (provider === 'localEmbed') {
-    return createLocalEmbeddings(plugin, vectorStoreConfig);
+  if (!llmServiceName) {
+    throw new Error(`Vector store "${vectorStoreConfig.name ?? vectorStoreConfig.id}" is missing llmService`);
+  }
+  if (!embeddingModel) {
+    throw new Error(`Vector store "${vectorStoreConfig.name ?? vectorStoreConfig.id}" is missing embeddingModel`);
   }
 
-  return createLlmServiceEmbeddings(plugin, vectorStoreConfig);
-}
-
-async function createLlmServiceEmbeddings(
-  plugin: PluginKnowledgeBaseServer,
-  vectorStoreConfig: any,
-): Promise<SimpleHTTPEmbeddings> {
   const llmServiceRecord = await plugin.db.getRepository('llmServices').findOne({
-    filter: { name: vectorStoreConfig.llmService },
+    filter: { name: llmServiceName },
   });
-
   if (!llmServiceRecord) {
-    throw new Error(`LLM service "${vectorStoreConfig.llmService}" not found`);
+    throw new Error(`LLM service "${llmServiceName}" not found`);
   }
 
-  const llmService = llmServiceRecord.toJSON();
-  const serviceOpts = plugin.app.environment.renderJsonTemplate(llmService.options || {});
-
-  return new SimpleHTTPEmbeddings({
-    baseURL: serviceOpts.baseURL || serviceOpts.baseUrl || '',
-    apiKey: serviceOpts.apiKey || '',
-    model: vectorStoreConfig.embeddingModel,
-  });
-}
-
-function createLocalEmbeddings(plugin: PluginKnowledgeBaseServer, vectorStoreConfig: any): LocalOnnxEmbeddings {
-  const embedPlugin = getEmbedWebClientPlugin(plugin);
-  if (!embedPlugin) {
-    throw new Error('Local embedding requires plugin-embed-web-client to be installed and enabled');
+  const llmService = llmServiceRecord.toJSON ? llmServiceRecord.toJSON() : llmServiceRecord;
+  if (llmService.enabled === false) {
+    throw new Error(`LLM service "${llmServiceName}" is disabled`);
   }
 
-  const modelId = vectorStoreConfig.localEmbedModelId || 'Xenova/all-MiniLM-L6-v2';
-  const dtype = vectorStoreConfig.localEmbedDtype || 'q8';
+  const providerMeta = plugin.aiPlugin?.aiManager?.llmProviders?.get(llmService.provider);
+  if (!providerMeta) {
+    throw new Error(`LLM service provider "${llmService.provider}" is not registered`);
+  }
+  if (!providerMeta.embedding) {
+    throw new Error(`LLM service provider "${llmService.provider}" does not support embeddings`);
+  }
 
-  return new LocalOnnxEmbeddings(loadEmbedTexts(), modelId, dtype);
+  const EmbeddingProvider = providerMeta.embedding;
+  return new EmbeddingProvider({
+    app: plugin.app,
+    serviceOptions: llmService.options,
+    modelOptions: { model: embeddingModel },
+  }).createEmbedding();
 }

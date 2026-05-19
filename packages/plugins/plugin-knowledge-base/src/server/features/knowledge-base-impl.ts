@@ -31,7 +31,6 @@ export interface KnowledgeBaseFeature {
   getKnowledgeBaseGroup(knowledgeBaseIds: string[]): Promise<KnowledgeBaseGroup[]>;
 }
 import type PluginKnowledgeBaseServer from '../plugin';
-import { resolveEmbedWebClientProfile } from '../utils/embed-web-client';
 
 /**
  * Fix #1: Matches interface signature exactly — getKnowledgeBaseGroup(knowledgeBaseIds: string[])
@@ -75,14 +74,7 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
       const vectorStoreConfigId = vectorStore.id;
       const vectorStoreProvider = vectorStore.vectorDatabase?.provider ?? 'pgvector';
 
-      const webEmbedProfile =
-        kbData.type === 'WEB_CLIENT_EMBED'
-          ? await resolveEmbedWebClientProfile(this.plugin, String(kbData.id))
-          : null;
-
-      const groupKey = webEmbedProfile
-        ? `${vectorStoreProvider}:${vectorStoreConfigId}:${webEmbedProfile.signature}`
-        : `${vectorStoreProvider}:${vectorStoreConfigId}`;
+      const groupKey = `${vectorStoreProvider}:${vectorStoreConfigId}`;
       if (!groups.has(groupKey)) {
         groups.set(groupKey, {
           vectorStoreConfig: {
@@ -107,19 +99,14 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
           // CRITICAL: vectorStoreConfigId must be in props — plugin-ai passes only
           // kb.vectorStoreProps to createVectorStoreService, not the top-level field
           { key: 'vectorStoreConfigId', value: vectorStoreConfigId },
-          ...(webEmbedProfile
-            ? [
-                { key: 'embeddingProvider', value: 'localEmbed' },
-                { key: 'localEmbedModelId', value: webEmbedProfile.modelId },
-                { key: 'localEmbedDtype', value: webEmbedProfile.dtype },
-                { key: 'embeddingProfile', value: webEmbedProfile.signature },
-              ]
-            : []),
           // Pass accessLevel for downstream vector filtering (Fix #2)
           { key: 'accessLevel', value: kbData.accessLevel ?? 'PUBLIC' },
           // Pass ownerId for BASIC KB per-user vector filtering
           ...(kbData.accessLevel === 'BASIC' && kbData.ownerId
             ? [{ key: 'ownerId', value: String(kbData.ownerId) }]
+            : []),
+          ...(kbData.accessLevel === 'SHARED'
+            ? [{ key: 'allowedRoles', value: Array.isArray(kbData.allowedRoles) ? kbData.allowedRoles : [] }]
             : []),
         ],
         enabled: kbData.enabled,

@@ -9,8 +9,15 @@
 
 import { Context } from '@nocobase/actions';
 import PluginKnowledgeBaseServer from '../plugin';
-import { getServerEmbeddingPipeline } from '../utils/embed-web-client';
-import { getAuthUserId, getCurrentRoles, isAdminRole, sameId } from '../utils/access';
+import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
+import {
+  buildAccessibleKnowledgeBaseFilter,
+  canManageKnowledgeBase,
+  canReadKnowledgeBase,
+  getAuthUserId,
+  getCurrentRoles,
+  isAdminRole,
+} from '../utils/access';
 
 /**
  * Helper: get plugin instance via class reference (avoids fragile string-based lookup).
@@ -30,7 +37,6 @@ async function checkKBAccess(
   ctx: Context,
   knowledgeBaseId: string,
 ): Promise<{ hasAccess: boolean; isAdmin: boolean; kbData?: any }> {
-  const userId = getAuthUserId(ctx);
   const roles = getCurrentRoles(ctx);
   const isAdmin = isAdminRole(roles);
 
@@ -45,12 +51,7 @@ async function checkKBAccess(
   }
 
   const kbData = kb.toJSON();
-  const hasAccess =
-    kbData.accessLevel === 'PUBLIC' ||
-    (kbData.accessLevel === 'BASIC' && sameId(kbData.ownerId, userId)) ||
-    (kbData.accessLevel === 'SHARED' && kbData.allowedRoles?.some((r: string) => roles.includes(r)));
-
-  return { hasAccess: !!hasAccess, isAdmin, kbData };
+  return { hasAccess: canReadKnowledgeBase(ctx, kbData), isAdmin, kbData };
 }
 
 export default {
@@ -61,7 +62,6 @@ export default {
     async list(ctx: Context, next: Function) {
       const { filter = {}, sort, page, pageSize } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
-      const userId = getAuthUserId(ctx);
       const roles = getCurrentRoles(ctx);
       const isAdmin = isAdminRole(roles);
 
@@ -80,14 +80,7 @@ export default {
         // Get all accessible KB IDs for this user
         const kbRepo = ctx.db.getRepository('aiKnowledgeBases');
         const accessibleKBs = await kbRepo.find({
-          filter: {
-            enabled: true,
-            $or: [
-              { accessLevel: 'PUBLIC' },
-              ...(userId ? [{ accessLevel: 'BASIC', ownerId: userId }] : []),
-              ...(roles.length ? [{ accessLevel: 'SHARED', 'allowedRoles.$anyOf': roles }] : []),
-            ],
-          },
+          filter: buildAccessibleKnowledgeBaseFilter(ctx),
           fields: ['id'],
         });
         const accessibleIds = accessibleKBs.map((kb: any) => kb.id || kb.get('id'));
@@ -115,8 +108,6 @@ export default {
       let kbData: any;
       // Always derive userId from the authenticated session — never trust client-provided userId
       const userId = getAuthUserId(ctx);
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
 
       if (!values.knowledgeBaseId) {
         ctx.throw(400, 'knowledgeBaseId is required');
@@ -140,22 +131,9 @@ export default {
         return;
       }
 
-      if (kbData.accessLevel === 'BASIC' && !sameId(kbData.ownerId, userId)) {
-        ctx.throw(403, 'Only the owner can upload documents to a personal knowledge base');
+      if (!canManageKnowledgeBase(ctx, kbData)) {
+        ctx.throw(403, 'You do not have permission to upload documents to this knowledge base');
         return;
-      }
-
-      if (kbData.accessLevel === 'PUBLIC' && !isAdmin) {
-        ctx.throw(403, 'Only administrators can upload documents to a public knowledge base');
-        return;
-      }
-
-      if (kbData.accessLevel === 'SHARED') {
-        const canUpload = isAdmin || kbData.uploadRoles?.some((r: string) => roles.includes(r));
-        if (!canUpload) {
-          ctx.throw(403, 'You do not have permission to upload documents to this knowledge base');
-          return;
-        }
       }
 
       // Always use server-side userId — never accept from client
@@ -181,26 +159,16 @@ export default {
         }
       }
 
-      // Trigger async processing via the right pipeline. Client-mode WEB_CLIENT_EMBED
-      // is completed by the browser calling embedWebClient:storeVectors.
       const plugin = getPlugin(ctx);
-      if (kbData?.type === 'WEB_CLIENT_EMBED') {
-        if (kbData.embedMode === 'server' && plugin) {
-          try {
-            getServerEmbeddingPipeline(plugin)
-              .processDocument(doc.id)
-              .catch((err: Error) => {
-                ctx.logger.error(`Server embedding failed for document ${doc.id}:`, err);
-              });
-          } catch (err: any) {
-            ctx.logger.error(`Failed to trigger server embedding for document ${doc.id}:`, err);
-          }
-        }
-      } else if (plugin?.vectorizationPipeline) {
-        plugin.vectorizationPipeline.processDocument(doc.id).catch((err: Error) => {
-          ctx.logger.error(`Vectorization failed for document ${doc.id}:`, err);
-        });
+      if (!plugin) {
+        ctx.throw(500, 'Knowledge Base plugin is not available');
+        return;
       }
+      await enqueueKnowledgeBaseDocument(plugin, {
+        documentId: String(doc.id),
+        reason: 'create',
+        requestedById: userId,
+      });
 
       ctx.body = doc;
       await next();
@@ -210,7 +178,6 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
-      const userId = getAuthUserId(ctx);
       const roles = getCurrentRoles(ctx);
       const isAdmin = isAdminRole(roles);
 
@@ -224,25 +191,9 @@ export default {
       const docData = doc.toJSON();
       if (docData.knowledgeBaseId && !isAdmin) {
         const { hasAccess, kbData } = await checkKBAccess(ctx, docData.knowledgeBaseId);
-        if (!hasAccess) {
+        if (!hasAccess || !canManageKnowledgeBase(ctx, kbData)) {
           ctx.throw(403, 'You do not have permission to delete this document');
           return;
-        }
-
-        // For PUBLIC KBs, only admins can delete. For SHARED KBs, only uploaders
-        // can delete their own docs (or users with uploadRoles).
-        if (kbData?.accessLevel === 'PUBLIC') {
-          ctx.throw(403, 'Only administrators can delete public knowledge base documents');
-          return;
-        }
-
-        if (kbData?.accessLevel === 'SHARED') {
-          const canUpload = kbData.uploadRoles?.some((r: string) => roles.includes(r));
-          const isUploader = sameId(docData.uploadedById, userId);
-          if (!canUpload && !isUploader) {
-            ctx.throw(403, 'You do not have permission to delete this document');
-            return;
-          }
         }
       }
 
@@ -266,20 +217,9 @@ export default {
           const docData = doc.toJSON();
           if (docData.knowledgeBaseId) {
             const { hasAccess, kbData } = await checkKBAccess(ctx, docData.knowledgeBaseId);
-            if (!hasAccess) {
+            if (!hasAccess || !canManageKnowledgeBase(ctx, kbData)) {
               ctx.throw(403, 'You do not have permission to reprocess this document');
               return;
-            }
-            if (kbData?.accessLevel === 'PUBLIC') {
-              ctx.throw(403, 'Only administrators can reprocess public knowledge base documents');
-              return;
-            }
-            if (kbData?.accessLevel === 'SHARED') {
-              const canUpload = kbData.uploadRoles?.some((r: string) => roles.includes(r));
-              if (!canUpload) {
-                ctx.throw(403, 'You do not have permission to reprocess this document');
-                return;
-              }
             }
           }
         }
@@ -290,36 +230,21 @@ export default {
         ctx.throw(404, 'Document not found');
         return;
       }
-      const kbData = doc.knowledgeBase?.toJSON ? doc.knowledgeBase.toJSON() : doc.knowledgeBase;
-      const nextStatus =
-        kbData?.type === 'WEB_CLIENT_EMBED' && kbData.embedMode !== 'server' ? 'pending_client' : 'pending';
-
-      // Reset status for the matching processing mode.
       await repo.update({
         filterByTk,
-        values: { status: nextStatus, error: null, chunkCount: 0, retryCount: 0 },
+        values: { status: 'pending', error: null, chunkCount: 0, retryCount: 0 },
       });
 
-      // Trigger re-processing via the matching pipeline.
       const plugin = getPlugin(ctx);
-      if (kbData?.type === 'WEB_CLIENT_EMBED') {
-        if (kbData.embedMode === 'server' && plugin) {
-          try {
-            getServerEmbeddingPipeline(plugin)
-              .processDocument(filterByTk)
-              .catch((err: Error) => {
-                ctx.logger.error(`Server embedding reprocess failed for document ${filterByTk}:`, err);
-              });
-          } catch (err: any) {
-            ctx.throw(400, err.message ?? 'Failed to trigger server embedding');
-            return;
-          }
-        }
-      } else if (plugin?.vectorizationPipeline) {
-        plugin.vectorizationPipeline.processDocument(filterByTk).catch((err: Error) => {
-          ctx.logger.error(`Re-vectorization failed for document ${filterByTk}:`, err);
-        });
+      if (!plugin) {
+        ctx.throw(500, 'Knowledge Base plugin is not available');
+        return;
       }
+      await enqueueKnowledgeBaseDocument(plugin, {
+        documentId: String(filterByTk),
+        reason: 'reprocess',
+        requestedById: getAuthUserId(ctx),
+      });
 
       ctx.body = { success: true };
       await next();

@@ -1,6 +1,6 @@
 import { InstallOptions, Plugin } from '@nocobase/server';
 import { resolve } from 'path';
-import { build } from './actions/build';
+import { build, recoverInterruptedBuilds, registerBuildGuideQueue, unregisterBuildGuideQueue } from './actions/build';
 import { getHtml } from './actions/getHtml';
 import { getMarkdown } from './actions/getMarkdown';
 import { searchBuildGuidesTool } from './tools';
@@ -16,6 +16,7 @@ export class PluginBuildGuideBlockServer extends Plugin {
     await this.db.import({
       directory: resolve(__dirname, 'collections'),
     });
+    await this.ensureSchema();
 
     this.app.resourceManager.registerActionHandlers({
       'aiBuildGuideSpaces:build': build,
@@ -39,29 +40,21 @@ export class PluginBuildGuideBlockServer extends Plugin {
       ],
     });
 
-    // Recover stale "building" status after server restart
+    registerBuildGuideQueue(this.app);
+
+    // Resume builds that were interrupted before their worker finished.
     this.app.on('afterStart', async () => {
       try {
-        const repo = this.db.getRepository('aiBuildGuideSpaces');
-        await repo.update({
-          filter: { status: 'building' },
-          values: {
-            status: 'error',
-            buildPhase: 'error',
-            buildLog: 'Build interrupted by server restart',
-          },
-        });
-        const pageRepo = this.db.getRepository('aiBuildGuidePages');
-        await pageRepo.update({
-          filter: { status: 'building' },
-          values: {
-            status: 'error',
-            buildLog: 'Build interrupted by server restart',
-          },
-        });
+        await recoverInterruptedBuilds(this.app);
       } catch (err) {
-        this.app.logger.warn('[plugin-build-guide-block] Failed to recover stale builds', err);
+        this.app.logger.warn('[plugin-build-guide-block] Failed to recover interrupted builds', err);
       }
+    });
+    this.app.on('beforeStop', () => {
+      unregisterBuildGuideQueue(this.app);
+    });
+    this.app.on('beforeDestroy', () => {
+      unregisterBuildGuideQueue(this.app);
     });
 
     this.registerAITools();
@@ -70,7 +63,9 @@ export class PluginBuildGuideBlockServer extends Plugin {
   private registerAITools() {
     const toolsManager = (this.app as any).aiManager?.toolsManager;
     if (!toolsManager) {
-      this.app.logger.warn('[plugin-build-guide-block] aiManager.toolsManager is not available; skipping tool registration');
+      this.app.logger.warn(
+        '[plugin-build-guide-block] aiManager.toolsManager is not available; skipping tool registration',
+      );
       return;
     }
 
@@ -155,9 +150,21 @@ export class PluginBuildGuideBlockServer extends Plugin {
 
   async afterEnable() {}
 
-  async afterDisable() {}
+  async beforeDisable() {
+    unregisterBuildGuideQueue(this.app);
+  }
 
-  async remove() {}
+  async afterDisable() {
+    unregisterBuildGuideQueue(this.app);
+  }
+
+  async beforeUnload() {
+    unregisterBuildGuideQueue(this.app);
+  }
+
+  async remove() {
+    unregisterBuildGuideQueue(this.app);
+  }
 }
 
 export default PluginBuildGuideBlockServer;

@@ -6,6 +6,7 @@ import { ClusterNodes } from './ClusterNodes';
 import { CacheMonitor } from './CacheMonitor';
 import { ContainerOrchestrator } from './ContainerOrchestrator';
 import { PackageInstaller } from './PackageInstaller';
+import { PluginOperations } from './PluginOperations';
 import { useT } from './utils';
 
 export function ClusterManagerLayout() {
@@ -44,6 +45,11 @@ export function ClusterManagerLayout() {
             key: 'packages',
             label: t('Packages'),
             children: <PackageInstaller />,
+          },
+          {
+            key: 'plugins',
+            label: t('Plugins'),
+            children: <PluginOperations />,
           },
         ]}
       />

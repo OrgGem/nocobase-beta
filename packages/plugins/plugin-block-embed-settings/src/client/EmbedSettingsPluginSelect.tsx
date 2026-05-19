@@ -4,6 +4,95 @@ import { useAPIClient, useApp, useCompile } from '@nocobase/client';
 import { Outlet } from 'react-router-dom';
 
 export type EmbedSettingsPluginOption = { value: string; label: string };
+export type EmbedSettingsTabOption = { value: string; label: string; Component: any; componentProps?: any };
+
+export function isRenderableSettingsComponent(comp: any): boolean {
+  if (!comp) return false;
+  if (comp === Outlet) return false;
+  return true;
+}
+
+function toLabel(value: any, fallback: string, compile?: (value: any) => string) {
+  const label = typeof compile === 'function' ? compile(value || fallback) : value || fallback;
+  return typeof label === 'string' ? label : fallback;
+}
+
+function collectRenderableSettingPages(
+  app: any,
+  setting: any,
+  compile?: (value: any) => string,
+  parentLabels: string[] = [],
+): EmbedSettingsTabOption[] {
+  if (!setting) {
+    return [];
+  }
+
+  const explicitTabs = collectExplicitEmbedTabs(setting, compile);
+  if (explicitTabs.length > 0) {
+    return explicitTabs;
+  }
+
+  const currentLabel = toLabel(setting.title, setting.name, compile);
+  const labels = currentLabel ? [...parentLabels, currentLabel] : parentLabels;
+  const children = Object.keys(setting.children || {})
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => setting.children[key])
+    .filter((child: any) => child?.name && app.pluginSettingsManager.has(child.name))
+    .sort((a: any, b: any) => (a.sort || 0) - (b.sort || 0));
+  const childTabs = children.flatMap((child: any) => collectRenderableSettingPages(app, child, compile, labels));
+
+  if (childTabs.length > 0) {
+    return childTabs;
+  }
+
+  if (isRenderableSettingsComponent(setting.Component)) {
+    return [
+      {
+        value: setting.name,
+        label: labels.length > 1 ? labels.slice(1).join(' / ') : currentLabel || setting.name,
+        Component: setting.Component,
+      },
+    ];
+  }
+
+  return [];
+}
+
+function collectExplicitEmbedTabs(setting: any, compile?: (value: any) => string): EmbedSettingsTabOption[] {
+  const tabs =
+    typeof setting?.embedSettings?.tabs === 'function'
+      ? setting.embedSettings.tabs(setting)
+      : setting?.embedSettings?.tabs;
+  if (!Array.isArray(tabs)) {
+    return [];
+  }
+
+  return tabs.reduce((result: EmbedSettingsTabOption[], tab: any, index: number) => {
+    const key = tab?.value || tab?.key || tab?.name || String(index + 1);
+    const Component = tab?.Component || tab?.component || setting.Component;
+    if (!key || !isRenderableSettingsComponent(Component)) {
+      return result;
+    }
+    result.push({
+      value: tab?.value || `${setting.name}.${key}`,
+      label: toLabel(tab?.title || tab?.label, key, compile),
+      Component,
+      componentProps: tab?.componentProps || tab?.props,
+    });
+    return result;
+  }, []);
+}
+
+export function collectEmbeddablePluginTabs(
+  app: any,
+  pluginName?: string,
+  compile?: (value: any) => string,
+): EmbedSettingsTabOption[] {
+  if (!pluginName || !app.pluginSettingsManager.has(pluginName)) return [];
+
+  const setting = app.pluginSettingsManager.getSetting(pluginName);
+  return collectRenderableSettingPages(app, setting, compile);
+}
 
 export function collectEmbeddablePlugins(app: any, compile?: (value: any) => string): EmbedSettingsPluginOption[] {
   const results: { value: string; label: string }[] = [];
@@ -11,12 +100,11 @@ export function collectEmbeddablePlugins(app: any, compile?: (value: any) => str
 
   for (const [key, setting] of Object.entries(settings || {})) {
     if (!app.pluginSettingsManager.has(key)) continue;
-    if (!setting.Component || setting.Component === Outlet) continue;
+    if (setting.topLevelName !== key) continue;
+    if (collectEmbeddablePluginTabs(app, key, compile).length === 0) continue;
     if (key.includes(':')) continue;
 
-    const rawLabel = setting.title || key;
-    const label = typeof compile === 'function' ? compile(rawLabel) : rawLabel;
-    results.push({ value: key, label: typeof label === 'string' ? label : key });
+    results.push({ value: key, label: toLabel(setting.title, key, compile) });
   }
 
   return results.sort((a, b) => a.label.localeCompare(b.label));

@@ -60,6 +60,26 @@ export default defineCollection({
       defaultValue: 'idle',
     },
     {
+      type: 'string',
+      name: 'buildRunId',
+    },
+    {
+      type: 'date',
+      name: 'buildQueuedAt',
+    },
+    {
+      type: 'date',
+      name: 'buildStartedAt',
+    },
+    {
+      type: 'date',
+      name: 'buildHeartbeatAt',
+    },
+    {
+      type: 'string',
+      name: 'buildWorkerId',
+    },
+    {
       type: 'integer',
       name: 'pageCount',
       defaultValue: 0,

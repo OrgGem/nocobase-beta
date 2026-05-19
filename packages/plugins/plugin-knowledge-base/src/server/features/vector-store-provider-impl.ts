@@ -89,11 +89,6 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
     }
 
     const vectorStoreConfig = vectorStoreRecord.toJSON();
-    if (propsMap.get('embeddingProvider') === 'localEmbed') {
-      vectorStoreConfig.embeddingProvider = 'localEmbed';
-      vectorStoreConfig.localEmbedModelId = propsMap.get('localEmbedModelId') || vectorStoreConfig.localEmbedModelId;
-      vectorStoreConfig.localEmbedDtype = propsMap.get('localEmbedDtype') || vectorStoreConfig.localEmbedDtype || 'q8';
-    }
     const vectorDatabase = vectorStoreConfig.vectorDatabase;
 
     if (!vectorDatabase) {
@@ -114,7 +109,9 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
     // Determine access context for per-user isolation or role-based access
     let accessLevel = propsMap.get('accessLevel') as string | undefined;
     let ownerId = propsMap.get('ownerId') as string | undefined;
-    let allowedRoles: string[] | undefined;
+    let allowedRoles = Array.isArray(propsMap.get('allowedRoles'))
+      ? (propsMap.get('allowedRoles') as string[]).map(String)
+      : undefined;
 
     // If not explicitly provided, check linked KBs for access restrictions
     if (!accessLevel) {
@@ -144,13 +141,27 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
           }
         }
         // Check if user has any of the allowed roles
-        const hasAccess = currentRoles.some((r: string) => allAllowedRoles.has(r)) || currentRoles.includes('root'); // root always has access
+        const hasAccess =
+          currentRoles.some((r: string) => allAllowedRoles.has(r)) ||
+          currentRoles.includes('root') ||
+          currentRoles.includes('admin');
         if (!hasAccess) {
           accessLevel = 'DENIED';
         } else {
           accessLevel = 'SHARED';
           allowedRoles = currentRoles;
         }
+      }
+    }
+
+    if (accessLevel === 'SHARED' && allowedRoles?.length) {
+      const currentRoles = getCurrentUserRoles();
+      const hasAccess =
+        currentRoles.some((role: string) => allowedRoles!.includes(role)) ||
+        currentRoles.includes('root') ||
+        currentRoles.includes('admin');
+      if (!hasAccess) {
+        accessLevel = 'DENIED';
       }
     }
 

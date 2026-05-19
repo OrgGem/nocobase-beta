@@ -59,7 +59,6 @@ type KnowledgeBaseItem = {
   accessLevel?: string;
   enabled: boolean;
   fileStorage?: string;
-  uploadRoles?: string[];
   allowedRoles?: string[];
   deleteSourceFile?: boolean;
 };
@@ -86,14 +85,12 @@ const accessIcons: Record<string, React.ReactNode> = {
   PUBLIC: <GlobalOutlined style={{ color: '#52c41a' }} />,
   SHARED: <TeamOutlined style={{ color: '#fa8c16' }} />,
   BASIC: <LockOutlined style={{ color: '#1890ff' }} />,
-  PRIVATE: <LockOutlined style={{ color: '#722ed1' }} />,
 };
 
 const accessColors: Record<string, string> = {
   PUBLIC: 'green',
   SHARED: 'orange',
   BASIC: 'blue',
-  PRIVATE: 'purple',
 };
 
 export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
@@ -190,7 +187,7 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
     if (kb.accessLevel === 'BASIC') return true; // Owner can always upload to their own KB
     if (kb.accessLevel === 'PUBLIC') return false; // Only admin can upload to PUBLIC
     if (kb.accessLevel === 'SHARED') {
-      return kb.uploadRoles?.some((r) => currentUserRoles.includes(r)) || false;
+      return kb.allowedRoles?.some((r) => currentUserRoles.includes(r)) || false;
     }
     return false;
   };

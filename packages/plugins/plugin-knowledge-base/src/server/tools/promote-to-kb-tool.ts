@@ -12,8 +12,8 @@
 
 import { z } from 'zod';
 import type { SessionContextService, ContextScope } from '../services/session-context';
-import { getAuthUserId, getCurrentRoles, isAdminRole, sameId } from '../utils/access';
-import { getServerEmbeddingPipeline } from '../utils/embed-web-client';
+import { canManageKnowledgeBase } from '../utils/access';
+import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
 import { resolveScope, resolveUserId } from '../utils/scope-resolver';
 
 export function createPromoteToKbToolProvider(
@@ -144,22 +144,11 @@ Args:
             values: { knowledgeBaseId: args.knowledgeBaseId },
           });
 
-          // Trigger vectorization asynchronously
-          try {
-            if (kbData.type === 'WEB_CLIENT_EMBED') {
-              getServerEmbeddingPipeline(pluginRef)
-                .processDocument(docId)
-                .catch(() => {
-                  // Non-critical: vectorization failure doesn't affect the document creation
-                });
-            } else if (pluginRef?.vectorizationPipeline) {
-              pluginRef.vectorizationPipeline.processDocument(docId).catch((err: any) => {
-                // Non-critical: vectorization failure doesn't affect the document creation
-              });
-            }
-          } catch {
-            // Vectorization trigger is best-effort
-          }
+          await enqueueKnowledgeBaseDocument(pluginRef, {
+            documentId: String(docId),
+            reason: 'promote-to-kb',
+            requestedById: resolveUserId(ctx),
+          });
 
           return {
             status: 'success' as const,
@@ -178,31 +167,12 @@ Args:
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function checkUploadPermission(ctx: any, kbData: any): string | null {
-  const userId = getAuthUserId(ctx);
-  const roles = getCurrentRoles(ctx);
-  const isAdmin = isAdminRole(roles);
-
   if (kbData.type === 'EXTERNAL_RAG') {
     return 'Cannot promote documents to an external RAG knowledge base.';
   }
 
-  if (kbData.type === 'WEB_CLIENT_EMBED' && kbData.embedMode !== 'server') {
-    return 'WEB_CLIENT_EMBED client mode requires browser-side upload; use a server-mode KB for promotion.';
-  }
-
-  if (isAdmin) return null;
-
-  if (kbData.accessLevel === 'BASIC') {
-    return sameId(kbData.ownerId, userId) ? null : 'Only the owner can promote documents to this personal KB.';
-  }
-
-  if (kbData.accessLevel === 'PUBLIC') {
-    return 'Only administrators can promote documents to a public KB.';
-  }
-
-  if (kbData.accessLevel === 'SHARED') {
-    const canUpload = kbData.uploadRoles?.some((role: string) => roles.includes(role));
-    return canUpload ? null : 'You do not have permission to promote documents to this shared KB.';
+  if (canManageKnowledgeBase(ctx, kbData)) {
+    return null;
   }
 
   return 'You do not have permission to promote documents to this KB.';

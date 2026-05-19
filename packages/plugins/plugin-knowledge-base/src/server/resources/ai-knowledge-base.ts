@@ -11,10 +11,12 @@ import { Context } from '@nocobase/actions';
 import PluginKnowledgeBaseServer from '../plugin';
 import {
   buildAccessibleKnowledgeBaseFilter,
+  canManageKnowledgeBase,
+  canReadKnowledgeBase,
   getAuthUserId,
   getCurrentRoles,
   isAdminRole,
-  sameId,
+  normalizeRoles,
 } from '../utils/access';
 
 /**
@@ -23,6 +25,41 @@ import {
  */
 function getPlugin(ctx: Context): PluginKnowledgeBaseServer {
   return ctx.app.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+}
+
+const SUPPORTED_KNOWLEDGE_BASE_TYPES = new Set(['LOCAL', 'READONLY', 'EXTERNAL', 'EXTERNAL_RAG']);
+const SUPPORTED_ACCESS_LEVELS = new Set(['BASIC', 'SHARED', 'PUBLIC']);
+const LEGACY_KNOWLEDGE_BASE_FIELDS = ['embed' + 'ModelId', 'embed' + 'Mode'];
+
+function normalizeKnowledgeBaseValues(ctx: Context, values: any, existing?: any) {
+  for (const field of LEGACY_KNOWLEDGE_BASE_FIELDS) {
+    delete values[field];
+  }
+  if (values.type && !SUPPORTED_KNOWLEDGE_BASE_TYPES.has(values.type)) {
+    ctx.throw(400, `Unsupported knowledge base type "${values.type}"`);
+  }
+  if (values.accessLevel && !SUPPORTED_ACCESS_LEVELS.has(values.accessLevel)) {
+    ctx.throw(400, `Unsupported knowledge base access level "${values.accessLevel}"`);
+  }
+
+  if (values.allowedRoles !== undefined) {
+    values.allowedRoles = normalizeRoles(values.allowedRoles);
+  }
+
+  // SHARED KBs use one role list for read/use/manage. Accept uploadRoles only
+  // as legacy input and normalize it into allowedRoles.
+  if (values.uploadRoles !== undefined && values.allowedRoles === undefined) {
+    values.allowedRoles = normalizeRoles(values.uploadRoles);
+  }
+  delete values.uploadRoles;
+
+  const effective = {
+    ...(existing?.toJSON ? existing.toJSON() : existing ?? {}),
+    ...values,
+  };
+  if (effective.accessLevel === 'SHARED' && normalizeRoles(effective.allowedRoles).length === 0) {
+    ctx.throw(400, 'allowedRoles is required for role-based knowledge bases');
+  }
 }
 
 /**
@@ -36,31 +73,7 @@ async function checkKBPermission(ctx: Context, filterByTk: string, _action: 'upd
     return true; // Let the action handle not-found naturally
   }
 
-  const data = record.toJSON();
-  const userId = getAuthUserId(ctx);
-  const roles = getCurrentRoles(ctx);
-  const isAdmin = isAdminRole(roles);
-
-  if (isAdmin) {
-    return true;
-  }
-
-  if (data.accessLevel === 'BASIC') {
-    // Only owner can update/destroy their own BASIC KB
-    return sameId(data.ownerId, userId);
-  }
-
-  if (data.accessLevel === 'PUBLIC') {
-    // Only admin/root can update/destroy PUBLIC KBs
-    return false;
-  }
-
-  if (data.accessLevel === 'SHARED') {
-    // Only admin/root can update/destroy SHARED KBs
-    return false;
-  }
-
-  return false;
+  return canManageKnowledgeBase(ctx, record.toJSON());
 }
 
 export default {
@@ -106,22 +119,9 @@ export default {
         return;
       }
 
-      const data = record.toJSON();
-      const userId = getAuthUserId(ctx);
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
-
-      // Check access
-      if (!isAdmin) {
-        const hasAccess =
-          data.accessLevel === 'PUBLIC' ||
-          (data.accessLevel === 'BASIC' && sameId(data.ownerId, userId)) ||
-          (data.accessLevel === 'SHARED' && data.allowedRoles?.some((r: string) => roles.includes(r)));
-
-        if (!hasAccess) {
-          ctx.throw(403, 'Access denied');
-          return;
-        }
+      if (!canReadKnowledgeBase(ctx, record.toJSON())) {
+        ctx.throw(403, 'Access denied');
+        return;
       }
 
       ctx.body = record;
@@ -143,8 +143,8 @@ export default {
         }
         values.accessLevel = 'BASIC';
         delete values.allowedRoles;
-        delete values.uploadRoles;
       }
+      normalizeKnowledgeBaseValues(ctx, values);
 
       // For BASIC KBs, automatically set the owner.
       if (values.accessLevel === 'BASIC') {
@@ -182,15 +182,14 @@ export default {
 
       const roles = getCurrentRoles(ctx);
       const isAdmin = isAdminRole(roles);
+      const existing = await repo.findOne({ filterByTk });
+      normalizeKnowledgeBaseValues(ctx, values, existing);
       if (!isAdmin) {
+        // Members may manage KB content/settings, but changing the row-level
+        // access policy remains an admin concern.
         delete values.ownerId;
         delete values.allowedRoles;
-        delete values.uploadRoles;
-        if (values.accessLevel && values.accessLevel !== 'BASIC') {
-          ctx.throw(403, 'Only administrators can change knowledge base access level');
-          return;
-        }
-        values.accessLevel = 'BASIC';
+        delete values.accessLevel;
       }
 
       ctx.body = await repo.update({
