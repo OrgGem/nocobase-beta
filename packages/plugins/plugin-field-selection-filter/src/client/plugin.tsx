@@ -6,6 +6,7 @@ import {
   removeNullCondition,
   SchemaSettingsDataScope,
   useCollection_deprecated,
+  useCollectionField,
   useCollectionManager_deprecated,
   useColumnSchema,
   useDesignable,
@@ -108,9 +109,11 @@ function useTableColumnSelectionContext() {
   const { getField } = useCollection_deprecated();
   const { fieldSchema: tableColumnFieldSchema, collectionField: tableColumnCollectionField } = useColumnSchema();
   const currentSchema = useFieldSchema();
+  const targetCollectionField = useCollectionField();
   const fieldSchema = tableColumnFieldSchema || currentSchema;
   const collectionField =
     tableColumnCollectionField ||
+    targetCollectionField ||
     getField(fieldSchema?.name) ||
     getCollectionJoinField(fieldSchema?.['x-collection-field']);
 
@@ -192,9 +195,32 @@ const fieldSelectionDataScopeSettingsItem = {
 
 export class PluginFieldSelectionFilterClient extends Plugin {
   async load() {
-    // @ts-ignore
+    // Register to component-specific settings for different field modes
+    // This allows it to show up under "Specific properties" in both Form and Table settings, like copy settings
+    this.app.schemaSettingsManager.addItem(
+      'fieldSettings:component:Select',
+      'fieldSelectionDataScope',
+      fieldSelectionDataScopeSettingsItem,
+    );
+    this.app.schemaSettingsManager.addItem(
+      'fieldSettings:component:Picker',
+      'fieldSelectionDataScope',
+      fieldSelectionDataScopeSettingsItem,
+    );
+    this.app.schemaSettingsManager.addItem(
+      'fieldSettings:component:CascadeSelect',
+      'fieldSelectionDataScope',
+      fieldSelectionDataScopeSettingsItem,
+    );
+
+    // Keep tableColumn and formItem for backward compatibility and extra entry points
     this.app.schemaSettingsManager.addItem(
       'fieldSettings:TableColumn',
+      'decoratorOptions.fieldSelectionDataScope',
+      fieldSelectionDataScopeSettingsItem,
+    );
+    this.app.schemaSettingsManager.addItem(
+      'fieldSettings:FormItem',
       'decoratorOptions.fieldSelectionDataScope',
       fieldSelectionDataScopeSettingsItem,
     );

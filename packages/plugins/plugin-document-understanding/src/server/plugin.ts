@@ -5,9 +5,6 @@ import { defineActions } from './actions';
 import { createDynamicPipelineToolsProvider } from './tools/document-understanding-tool';
 
 export class PluginDocumentUnderstandingServer extends Plugin {
-  declare app: any;
-  declare db: any;
-  declare name: string;
   public service!: DocumentUnderstandingService;
 
   async afterAdd() {}

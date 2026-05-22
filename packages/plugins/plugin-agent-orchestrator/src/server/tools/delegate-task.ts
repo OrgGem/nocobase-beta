@@ -18,6 +18,12 @@ import {
  * Used to prevent circular/recursive delegation chains.
  */
 const ORCHESTRATOR_DEPTH_KEY = '__orchestratorDepth';
+/**
+ * Context key for tracking the full delegation path.
+ * Used to detect and prevent circular delegation chains.
+ */
+const ORCHESTRATOR_PATH_KEY = '__orchestratorPath';
+
 
 /** Max sub-agents that the dispatch tool runs concurrently in one call. */
 const MAX_DISPATCH_CONCURRENCY = 5;
@@ -794,8 +800,31 @@ async function invokeDelegateTask(
   // Capturing the values once here keeps log/audit fields stable.
   const ctxSnapshot = captureCtxSnapshot(ctx);
 
-  // --- P1: Depth enforcement ---
+  // --- P1: Depth enforcement & Circular Delegation Detection ---
   const currentDepth: number = (ctx as any)[ORCHESTRATOR_DEPTH_KEY] ?? 0;
+  const currentPath: string[] = (ctx as any)[ORCHESTRATOR_PATH_KEY] ?? [leaderUsername];
+
+  if (currentPath.includes(subAgentUsername)) {
+    const loopChain = [...currentPath, subAgentUsername].join(' -> ');
+    await logDelegation(ctx, plugin, {
+      leaderUsername,
+      subAgentUsername,
+      toolName,
+      task,
+      context,
+      result: '',
+      status: 'error',
+      depth: currentDepth,
+      durationMs: 0,
+      error: `Circular delegation detected: ${loopChain}.`,
+      snapshot: ctxSnapshot,
+    });
+    return {
+      status: 'error' as const,
+      content: `Circular delegation detected: ${loopChain}. Execution aborted to prevent infinite reasoning loops.`,
+    };
+  }
+
   if (currentDepth >= maxDepth) {
     await logDelegation(ctx, plugin, {
       leaderUsername,
@@ -943,8 +972,7 @@ async function invokeDelegateTask(
       if (
         !employeeSkill ||
         isDelegateToolName(plugin, entryName) ||
-        employeeSkill.autoCall !== true ||
-        toolEntry.defaultPermission !== 'ALLOW'
+        employeeSkill.autoCall !== true
       ) {
         continue;
       }
@@ -955,9 +983,15 @@ async function invokeDelegateTask(
           description: toolEntry.definition.description || entryName,
           schema: (toolEntry.definition.schema || z.object({})) as any,
           func: async (toolArgs) => {
-            // Forward the invoke with depth tracking
+            // Forward the invoke with depth tracking, circular path tracking and identity overrides
             const invokeCtx = Object.create(ctx);
             (invokeCtx as any)[ORCHESTRATOR_DEPTH_KEY] = currentDepth + 1;
+            (invokeCtx as any)[ORCHESTRATOR_PATH_KEY] = [...currentPath, subAgentUsername];
+            (invokeCtx as any)._currentAIEmployee = subAgentUsername;
+            if (ctx.state) {
+              invokeCtx.state = Object.create(ctx.state);
+              invokeCtx.state.currentAIEmployee = subAgentUsername;
+            }
             const toolStartedAt = Date.now();
             const isSkillHubTool = entryName === 'skill_hub_execute' || entryName.startsWith('skill_hub_');
             const toolSpan = await spanService.create({
@@ -1183,9 +1217,22 @@ async function invokeDelegateTask(
       },
     });
 
+    const diagnosticTrace = trace
+      .filter((t) => t.type === 'tool_error' || t.type === 'error')
+      .map((t) => `[${t.toolName ? `Tool: ${t.toolName}` : 'Sub-agent'}] Error: ${t.content || t.title}`)
+      .join('\n');
+
+    const formattedError = [
+      `Sub-agent "${subAgentUsername}" failed execution: ${e.message}`,
+      diagnosticTrace ? `\nDiagnostic Details of internal failures:\n${diagnosticTrace}` : '',
+      `Suggestion: Review the tool parameters above or try dividing the task into simpler independent tasks.`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
     return {
       status: 'error' as const,
-      content: `Sub-agent "${subAgentUsername}" failed: ${e.message}`,
+      content: formattedError,
     };
   }
 }

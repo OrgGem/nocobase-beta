@@ -20,6 +20,7 @@ export interface EndpointDef {
   requestBodySchema?: any;
   responseSchema?: any;
   fileInputMode: 'none' | 'multipart' | 'base64';
+  fileFieldName?: string;
   maxFiles: number;
   executionMode: 'sync' | 'polling' | 'webhook';
   pollResultSubpath?: string;

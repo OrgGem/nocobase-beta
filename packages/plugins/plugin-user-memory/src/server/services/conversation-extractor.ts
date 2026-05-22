@@ -70,7 +70,7 @@ export class ConversationExtractor {
         sort: ['messageId'],
         limit: 100, // Cap messages per conversation to prevent memory issues
         filter: {
-          role: { $in: ['user', 'assistant'] }, // Only human and AI messages, skip tool calls
+          role: { $notIn: ['tool', 'system'] }, // Only human and AI messages, skip tool and system calls
         },
       });
 

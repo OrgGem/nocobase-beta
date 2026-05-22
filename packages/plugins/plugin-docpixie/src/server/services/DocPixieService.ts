@@ -184,12 +184,12 @@ function createTaskPlan(query: string, tasks: Omit<AgentTask, 'id' | 'status'>[]
 export class DocPixieService {
   private app: Application;
   private db: Database;
-  private logger: Logger;
+  private logger: any;
   private config: DocPixiePluginConfig | null = null;
   private llmProvider: ILLMProvider | null = null;
   private ocrProvider: IOCRProvider | null = null;
 
-  constructor(app: Application, db: Database, logger: Logger) {
+  constructor(app: Application, db: Database, logger: any) {
     this.app = app;
     this.db = db;
     this.logger = logger;
@@ -579,79 +579,139 @@ export class DocPixieService {
    * 8. **Response Synthesis** — Combine all task results into final answer
    */
   async query(input: DocPixieQueryInput): Promise<DocPixieQueryResult> {
-    this.ensureReady();
-
     const startTime = Date.now();
-    const strategy = input.strategy || this.config!.analysisStrategy;
+    const strategy = input.strategy || this.config?.analysisStrategy || 'hybrid';
+    const documentIds = input.documentIds || [];
+    const userId = input.userId;
 
-    this.logger.info('DocPixie: Query started', {
-      query: input.query.substring(0, 100),
-      strategy,
-      documentIds: input.documentIds,
-    });
+    try {
+      this.ensureReady();
 
-    // Reset cost tracking for this query
-    this.llmProvider!.resetCost();
+      this.logger.info('DocPixie: Query started', {
+        query: input.query.substring(0, 100),
+        strategy,
+        documentIds: input.documentIds,
+      });
 
-    // ──── Step 1: Load documents ────
-    const documents = await this.loadQueryDocuments(input.documentIds);
-    if (documents.length === 0) {
-      return this.createEmptyResult(input.query, startTime, 'No documents found');
-    }
+      // Reset cost tracking for this query
+      this.llmProvider!.resetCost();
 
-    // ──── Step 2: Context processing (if conversation history) ────
-    let processedQuery = input.query;
-    if (input.conversationHistory && input.conversationHistory.length > 0) {
-      processedQuery = await this.reformulateQuery(input.query, input.conversationHistory);
-    }
+      // ──── Step 1: Load documents ────
+      const documents = await this.loadQueryDocuments(input.documentIds);
+      if (documents.length === 0) {
+        const errResult = this.createEmptyResult(input.query, startTime, 'No documents found');
+        await this.logQuery({
+          query: input.query,
+          answer: errResult.answer,
+          documentIds,
+          strategy,
+          confidence: 0,
+          totalCost: 0,
+          processingTime: (Date.now() - startTime) / 1000,
+          status: 'error',
+          error: 'No documents found',
+          userId,
+        });
+        return errResult;
+      }
 
-    // ──── Step 3: Query classification ────
-    const needsDocuments = await this.classifyQuery(processedQuery);
-    if (!needsDocuments) {
-      // Direct answer without document analysis
-      const directAnswer = await this.getDirectAnswer(processedQuery);
-      return {
-        answer: directAnswer,
-        sourcePages: [],
-        confidence: 0.5,
+      // ──── Step 2: Context processing (if conversation history) ────
+      let processedQuery = input.query;
+      if (input.conversationHistory && input.conversationHistory.length > 0) {
+        processedQuery = await this.reformulateQuery(input.query, input.conversationHistory);
+      }
+
+      // ──── Step 3: Query classification ────
+      const needsDocuments = await this.classifyQuery(processedQuery);
+      if (!needsDocuments) {
+        // Direct answer without document analysis
+        const directAnswer = await this.getDirectAnswer(processedQuery);
+        const result: DocPixieQueryResult = {
+          answer: directAnswer,
+          sourcePages: [],
+          confidence: 0.5,
+          totalCost: this.llmProvider!.getTotalCost(),
+          processingTime: (Date.now() - startTime) / 1000,
+          tasksSummary: [],
+        };
+        await this.logQuery({
+          query: input.query,
+          answer: result.answer,
+          documentIds,
+          strategy,
+          confidence: result.confidence,
+          totalCost: result.totalCost,
+          processingTime: result.processingTime,
+          status: 'success',
+          userId,
+        });
+        return result;
+      }
+
+      // ──── Step 4: Task planning ────
+      const taskPlan = await this.createInitialPlan(processedQuery, documents);
+
+      // ──── Step 5-7: Adaptive task execution loop ────
+      const { taskResults, allSourcePages, analysisResults } = await this.executeAdaptivePlan(
+        taskPlan,
+        processedQuery,
+        documents,
+        strategy,
+        input.conversationHistory,
+      );
+
+      // ──── Step 8: Synthesize final answer ────
+      const answer = await this.synthesizeResponse(processedQuery, analysisResults);
+
+      const result: DocPixieQueryResult = {
+        answer,
+        sourcePages: allSourcePages,
+        confidence: this.calculateConfidence(taskResults),
         totalCost: this.llmProvider!.getTotalCost(),
         processingTime: (Date.now() - startTime) / 1000,
-        tasksSummary: [],
+        tasksSummary: taskResults,
       };
+
+      this.logger.info('DocPixie: Query completed', {
+        processingTime: result.processingTime,
+        totalCost: result.totalCost,
+        tasksCompleted: taskResults.filter((t) => t.status === 'completed').length,
+        totalIterations: taskPlan.currentIteration,
+      });
+
+      await this.logQuery({
+        query: input.query,
+        answer: result.answer,
+        documentIds,
+        strategy,
+        confidence: result.confidence,
+        totalCost: result.totalCost,
+        processingTime: result.processingTime,
+        status: 'success',
+        userId,
+      });
+
+      return result;
+    } catch (error: any) {
+      const processingTime = (Date.now() - startTime) / 1000;
+      const totalCost = this.llmProvider ? this.llmProvider.getTotalCost() : 0;
+      this.logger.error(`DocPixie: Query failed — query="${input.query}"`, error);
+
+      await this.logQuery({
+        query: input.query,
+        answer: `Error: ${error.message}`,
+        documentIds,
+        strategy,
+        confidence: 0,
+        totalCost,
+        processingTime,
+        status: 'error',
+        error: error.stack || error.message || String(error),
+        userId,
+      });
+
+      throw error;
     }
-
-    // ──── Step 4: Task planning ────
-    const taskPlan = await this.createInitialPlan(processedQuery, documents);
-
-    // ──── Step 5-7: Adaptive task execution loop ────
-    const { taskResults, allSourcePages, analysisResults } = await this.executeAdaptivePlan(
-      taskPlan,
-      processedQuery,
-      documents,
-      strategy,
-      input.conversationHistory,
-    );
-
-    // ──── Step 8: Synthesize final answer ────
-    const answer = await this.synthesizeResponse(processedQuery, analysisResults);
-
-    const result: DocPixieQueryResult = {
-      answer,
-      sourcePages: allSourcePages,
-      confidence: this.calculateConfidence(taskResults),
-      totalCost: this.llmProvider!.getTotalCost(),
-      processingTime: (Date.now() - startTime) / 1000,
-      tasksSummary: taskResults,
-    };
-
-    this.logger.info('DocPixie: Query completed', {
-      processingTime: result.processingTime,
-      totalCost: result.totalCost,
-      tasksCompleted: taskResults.filter((t) => t.status === 'completed').length,
-      totalIterations: taskPlan.currentIteration,
-    });
-
-    return result;
   }
 
   /**
@@ -682,7 +742,45 @@ export class DocPixieService {
       strategy: input.strategy,
       conversationHistory: input.conversationHistory,
       documentIds: scopedDocumentIds,
+      userId: input.userId,
     });
+  }
+
+  /**
+   * Log query results and metrics to the docpixie_logs collection.
+   */
+  private async logQuery(logData: {
+    query: string;
+    answer?: string;
+    documentIds: number[];
+    strategy: string;
+    confidence: number;
+    totalCost: number;
+    processingTime: number;
+    status: 'success' | 'error';
+    error?: string;
+    userId?: number;
+  }): Promise<void> {
+    try {
+      const logsRepo = this.db.getRepository('docpixie_logs');
+      await logsRepo.create({
+        values: {
+          query: logData.query,
+          answer: logData.answer,
+          documentIds: logData.documentIds,
+          strategy: logData.strategy,
+          confidence: logData.confidence,
+          totalCost: logData.totalCost,
+          processingTime: logData.processingTime,
+          status: logData.status,
+          error: logData.error,
+          userId: logData.userId,
+          createdAt: new Date(),
+        },
+      });
+    } catch (err) {
+      this.logger.warn('DocPixie: Failed to save query execution log to database', err);
+    }
   }
 
   // ═══════════════════════════════════════════

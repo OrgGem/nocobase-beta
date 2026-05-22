@@ -72,7 +72,43 @@ export const defineActions = (plugin: any) => {
       const pipelineId = values?.pipelineId;
       const input = values?.input || {};
       const userId = ctx.state?.currentUser?.id;
-      ctx.body = await service.executePipeline(pipelineId, input, [], userId);
+
+      const multipartFiles: any[] = [];
+      const filesObj = (ctx.request as any).files || (ctx.request as any).body?.files;
+      if (filesObj) {
+        const addFile = (key: string, file: any) => {
+          const filePath = file.path || file.filepath;
+          const fileName = file.name || file.originalFilename || 'file';
+          const mimeType = file.type || file.mimetype || 'application/octet-stream';
+          if (filePath) {
+            try {
+              const buffer = require('fs').readFileSync(filePath);
+              multipartFiles.push({
+                fieldName: key,
+                buffer,
+                filename: fileName,
+                mimeType,
+              });
+            } catch (err) {
+              console.error('Failed to read uploaded multipart file:', err);
+            }
+          }
+        };
+
+        if (typeof filesObj === 'object') {
+          for (const [key, value] of Object.entries(filesObj)) {
+            if (Array.isArray(value)) {
+              for (const f of value) {
+                addFile(key, f);
+              }
+            } else {
+              addFile(key, value);
+            }
+          }
+        }
+      }
+
+      ctx.body = await service.executePipeline(pipelineId, input, multipartFiles, userId);
       await next();
     },
 
@@ -91,8 +127,19 @@ export const defineActions = (plugin: any) => {
     async webhookCallback(ctx: Context, next: () => Promise<any>) {
       const signature = ctx.request.headers['x-webhook-signature'] as string;
       const { values } = ctx.action.params;
-      await service.handleWebhook(values || ctx.request.body, signature);
-      ctx.body = { received: true };
+      try {
+        await service.handleWebhook(values || ctx.request.body, signature);
+        ctx.body = { received: true };
+      } catch (err: any) {
+        console.error('Webhook callback error:', err.message);
+        if (err.message.includes('signature')) {
+          ctx.status = 401;
+          ctx.body = { error: err.message };
+        } else {
+          ctx.status = 400;
+          ctx.body = { error: err.message };
+        }
+      }
       await next();
     },
   };

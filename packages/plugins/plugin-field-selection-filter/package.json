@@ -3,7 +3,7 @@
   "name": "plugin-field-selection-filter",
   "displayName": "Plugin: Field selection filter",
   "description": "Adds a table column field setting to filter selectable association records with data-scope conditions.",
-  "version": "2.0.54",
+  "version": "1.0.1",
   "main": "dist/server/index.js",
   "peerDependencies": {
     "@formily/core": "2.x",

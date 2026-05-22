@@ -83,6 +83,29 @@ export class AsyncJobManager {
   }
 
   /**
+   * Transition pending and running jobs to failed state during startup.
+   */
+  async cleanupStuckJobs(): Promise<void> {
+    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
+    const stuckJobs = await jobsRepo.find({
+      filter: {
+        status: ['pending', 'running'],
+      },
+    });
+
+    for (const job of stuckJobs) {
+      await jobsRepo.update({
+        filterByTk: job.id,
+        values: {
+          status: 'failed',
+          error: 'Server restarted during execution',
+          completedAt: new Date(),
+        },
+      });
+    }
+  }
+
+  /**
    * Recover polling jobs that were in-flight when server restarted.
    * Call this during service initialization.
    */

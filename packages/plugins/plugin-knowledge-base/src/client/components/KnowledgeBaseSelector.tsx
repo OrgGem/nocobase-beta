@@ -148,7 +148,7 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
           setSelectedKB(kbs[0]);
         }
       } catch (err) {
-        console.error('Failed to fetch knowledge bases:', err);
+        message.error('Failed to load knowledge bases');
       } finally {
         setLoading(false);
       }

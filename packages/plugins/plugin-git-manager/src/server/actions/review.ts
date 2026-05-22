@@ -13,6 +13,13 @@ const REVIEW_QUEUE_TIMEOUT_MS = Math.max(
   60_000,
   Number.parseInt(process.env.GIT_REVIEW_QUEUE_TIMEOUT_MS || '', 10) || 10 * 60 * 1000,
 );
+const REVIEW_QUEUE_POLL_INTERVAL_MS = Math.max(
+  1000,
+  Number.parseInt(process.env.GIT_REVIEW_QUEUE_POLL_INTERVAL_MS || '', 10) || 5000,
+);
+const REVIEW_PROCESS_LOCK_TTL_MS = Math.max(REVIEW_QUEUE_TIMEOUT_MS + 60_000, 11 * 60 * 1000);
+const REVIEW_QUEUE_WAKE_CHANNEL = 'plugin-git-manager.review.wake';
+const REVIEW_QUEUE_REDIS_CONNECTION = 'plugin-git-manager.review.queue';
 
 interface TriggerArgs {
   flowId?: number | null;
@@ -50,6 +57,19 @@ interface ReviewQueueMessage {
   flowSnapshot?: ReviewFlowSnapshot;
 }
 
+interface QueuedReviewMetadata {
+  queuedAt?: string;
+  aiEmployeeUsername?: string;
+  extraInstructions?: string | null;
+  userId?: number | string | null;
+  flowSnapshot?: ReviewFlowSnapshot;
+}
+
+let reviewQueueTimer: NodeJS.Timeout | null = null;
+let reviewQueueKickTimer: NodeJS.Timeout | null = null;
+let reviewQueueProcessing = false;
+let reviewWakeHandler: ((message?: any) => Promise<void>) | null = null;
+
 function getActionParams(ctx: Context) {
   return { ...ctx.action.params, ...ctx.action.params?.values, ...((ctx as any).request?.body || {}) };
 }
@@ -86,15 +106,7 @@ async function withTriggerLock<T>(app: Application, key: string, fn: () => Promi
  */
 export async function triggerReview(ctx: Context, next: () => Promise<void>) {
   const params = getActionParams(ctx);
-  const {
-    flowId,
-    repositoryId,
-    targetType,
-    mrIid,
-    commitSha,
-    branch,
-    extraInstructions,
-  } = params;
+  const { flowId, repositoryId, targetType, mrIid, commitSha, branch, extraInstructions } = params;
 
   if (!repositoryId) ctx.throw(400, 'repositoryId is required');
   if (!targetType) ctx.throw(400, 'targetType is required');
@@ -197,12 +209,19 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     triggeredBy: args.triggeredBy || 'manual',
     status: 'pending',
     // `startedAt` is stamped by the queue worker when execution actually
-    // starts. Pending rows may be legitimately waiting in Redis.
+    // starts. Pending rows are durable queue items for worker polling.
     startedAt: null,
     finishedAt: null,
     durationMs: null,
     postStatus: getInitialPostStatus(flow, args.targetType),
     error: null,
+    metadata: {
+      queuedAt: new Date().toISOString(),
+      aiEmployeeUsername,
+      extraInstructions: args.extraInstructions || null,
+      userId: args.userId ?? null,
+      flowSnapshot: createFlowSnapshot(flow),
+    },
   };
 
   let reviewId: number;
@@ -252,10 +271,15 @@ export function registerReviewQueue(app: Application) {
       await processQueuedReview(app, message);
     },
   });
+  if (!isGitReviewWorker(app)) {
+    app.on('afterStart', () => clearLocalReviewMemoryQueue(app));
+  }
+  startReviewQueueProcessor(app);
 }
 
 export function unregisterReviewQueue(app: Application) {
   app.eventQueue.unsubscribe(REVIEW_QUEUE_CHANNEL);
+  stopReviewQueueProcessor(app);
 }
 
 function createFlowSnapshot(flow: any): ReviewFlowSnapshot {
@@ -290,12 +314,224 @@ function isGitReviewWorker(app: Application): boolean {
   );
 }
 
+function clearLocalReviewMemoryQueue(app: Application) {
+  const eventQueue = (app as any).eventQueue;
+  const adapter = eventQueue?.adapter;
+  const fullChannel = eventQueue?.getFullChannel?.(REVIEW_QUEUE_CHANNEL);
+  const queue = fullChannel ? adapter?.queues?.get?.(fullChannel) : null;
+  if (!queue?.length) return;
+
+  adapter.queues.set(fullChannel, []);
+  app.log?.warn?.(
+    `git review queue: cleared ${queue.length} stale local memory message(s) on non-worker node; pending DB rows will be picked up by workers`,
+  );
+}
+
+function getReviewQueueRedisKey(app: Application): string {
+  const appName = (app as any).name || process.env.APP_NAME || 'main';
+  return `${appName}:plugin-git-manager:review:queue`;
+}
+
+async function getReviewQueueRedis(app: Application): Promise<any | null> {
+  const manager = (app as any).redisConnectionManager;
+  if (!manager?.getConnectionSync) {
+    return null;
+  }
+
+  try {
+    const connectionString = process.env.QUEUE_ADAPTER_REDIS_URL || process.env.REDIS_URL;
+    return await manager.getConnectionSync(
+      REVIEW_QUEUE_REDIS_CONNECTION,
+      connectionString ? { connectionString } : undefined,
+    );
+  } catch (err: any) {
+    app.log?.debug?.(`git review queue: Redis queue unavailable, falling back to DB polling: ${err?.message || err}`);
+    return null;
+  }
+}
+
+async function enqueueReviewToRedis(app: Application, message: ReviewQueueMessage): Promise<boolean> {
+  const redis = await getReviewQueueRedis(app);
+  if (!redis) return false;
+
+  await redis.sendCommand(['RPUSH', getReviewQueueRedisKey(app), JSON.stringify(message)]);
+  app.log?.debug?.(`git review queue: enqueued review ${message.reviewId} to Redis`);
+  return true;
+}
+
+async function publishReviewQueueWake(app: Application, reviewId?: number) {
+  try {
+    await (app as any).pubSubManager?.publish?.(
+      REVIEW_QUEUE_WAKE_CHANNEL,
+      { reviewId },
+      { skipSelf: !isGitReviewWorker(app) },
+    );
+  } catch (err: any) {
+    app.log?.debug?.(`git review queue: wake publish skipped: ${err?.message || err}`);
+  }
+}
+
+function startReviewQueueProcessor(app: Application) {
+  if (!isGitReviewWorker(app)) {
+    app.log?.debug?.('plugin-git-manager: review queue processor disabled on non-worker node');
+    return;
+  }
+  if (reviewQueueTimer) return;
+
+  reviewWakeHandler = async () => {
+    scheduleReviewQueueTick(app, 0);
+  };
+
+  const subscribe = (app as any).pubSubManager?.subscribe?.(REVIEW_QUEUE_WAKE_CHANNEL, reviewWakeHandler);
+  if (subscribe?.catch) {
+    subscribe.catch((err: any) => app.log?.debug?.(`git review queue: wake subscribe skipped: ${err?.message || err}`));
+  }
+
+  reviewQueueTimer = setInterval(() => scheduleReviewQueueTick(app, 0), REVIEW_QUEUE_POLL_INTERVAL_MS);
+  (reviewQueueTimer as any).unref?.();
+  scheduleReviewQueueTick(app, 1000);
+  app.log?.info?.(`plugin-git-manager: review queue processor started (interval ${REVIEW_QUEUE_POLL_INTERVAL_MS}ms)`);
+}
+
+function stopReviewQueueProcessor(app: Application) {
+  if (reviewQueueTimer) {
+    clearInterval(reviewQueueTimer);
+    reviewQueueTimer = null;
+  }
+  if (reviewQueueKickTimer) {
+    clearTimeout(reviewQueueKickTimer);
+    reviewQueueKickTimer = null;
+  }
+  if (reviewWakeHandler) {
+    const unsubscribe = (app as any).pubSubManager?.unsubscribe?.(REVIEW_QUEUE_WAKE_CHANNEL, reviewWakeHandler);
+    if (unsubscribe?.catch) {
+      unsubscribe.catch(() => undefined);
+    }
+    reviewWakeHandler = null;
+  }
+  reviewQueueProcessing = false;
+}
+
+function scheduleReviewQueueTick(app: Application, delayMs: number) {
+  if (reviewQueueKickTimer) return;
+  reviewQueueKickTimer = setTimeout(() => {
+    reviewQueueKickTimer = null;
+    runReviewQueueTick(app).catch((err) => app.log?.error?.('git review queue: processor tick failed', err));
+  }, delayMs);
+  (reviewQueueKickTimer as any).unref?.();
+}
+
+async function runReviewQueueTick(app: Application) {
+  if (reviewQueueProcessing || !isGitReviewWorker(app)) return;
+
+  reviewQueueProcessing = true;
+  try {
+    const redisMessages = await drainRedisReviewQueue(app, REVIEW_QUEUE_CONCURRENCY);
+    await processReviewQueueMessages(app, redisMessages);
+
+    const remaining = Math.max(1, REVIEW_QUEUE_CONCURRENCY - redisMessages.length);
+    await processPendingReviews(app, remaining);
+  } finally {
+    reviewQueueProcessing = false;
+  }
+}
+
+async function drainRedisReviewQueue(app: Application, count: number): Promise<ReviewQueueMessage[]> {
+  const redis = await getReviewQueueRedis(app);
+  if (!redis) return [];
+
+  const key = getReviewQueueRedisKey(app);
+  const messages: ReviewQueueMessage[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const raw = await redis.sendCommand(['LPOP', key]);
+    if (!raw) break;
+    try {
+      messages.push(JSON.parse(String(raw)));
+    } catch (err: any) {
+      app.log?.warn?.(`git review queue: dropped invalid Redis message: ${err?.message || err}`);
+    }
+  }
+  return messages;
+}
+
+function getQueuedReviewMetadata(review: any): QueuedReviewMetadata {
+  const raw = review?.get?.('metadata');
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) || {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof raw === 'object' ? raw : {};
+}
+
+function toNullableNumber(value: any): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function createReviewQueueMessageFromReview(review: any): ReviewQueueMessage {
+  const metadata = getQueuedReviewMetadata(review);
+  const targetType = review.get('targetType') as 'mr' | 'commit' | 'branch';
+  return {
+    reviewId: Number(review.get('id')),
+    repositoryId: Number(review.get('repositoryId')),
+    targetType,
+    mrIid: targetType === 'mr' ? toNullableNumber(review.get('mrIid')) : null,
+    commitSha: targetType === 'commit' ? (review.get('commitSha') as string | null) : null,
+    branch: targetType === 'branch' ? (review.get('branch') as string | null) : null,
+    headSha: review.get('headSha') as string | null,
+    aiEmployeeUsername: metadata.aiEmployeeUsername || '',
+    extraInstructions: metadata.extraInstructions || undefined,
+    userId: metadata.userId ?? null,
+    flowSnapshot: metadata.flowSnapshot,
+  };
+}
+
+async function processPendingReviews(app: Application, count: number) {
+  const pending = await app.db.getRepository('gitCodeReviews').find({
+    filter: { status: 'pending' },
+    sort: ['createdAt'],
+    limit: count,
+  });
+  if (!pending?.length) return;
+  await processReviewQueueMessages(app, pending.map(createReviewQueueMessageFromReview));
+}
+
+async function processReviewQueueMessages(app: Application, messages: ReviewQueueMessage[]) {
+  if (!messages.length) return;
+  await Promise.all(messages.map((message) => processQueuedReview(app, message)));
+}
+
+async function withReviewProcessLock<T>(app: Application, reviewId: number, fn: () => Promise<T>): Promise<T> {
+  const lockKey = `git-review:process:${reviewId}`;
+  return app.lockManager.runExclusive(lockKey, fn, REVIEW_PROCESS_LOCK_TTL_MS);
+}
+
 async function enqueueReview(app: Application, message: ReviewQueueMessage) {
   try {
-    await app.eventQueue.publish(REVIEW_QUEUE_CHANNEL, message, {
-      timeout: REVIEW_QUEUE_TIMEOUT_MS,
-      maxRetries: 1,
-    });
+    const queuedInRedis = await enqueueReviewToRedis(app, message);
+    if (queuedInRedis) {
+      await publishReviewQueueWake(app, message.reviewId);
+      return;
+    }
+
+    await publishReviewQueueWake(app, message.reviewId);
+
+    if (isGitReviewWorker(app)) {
+      await app.eventQueue.publish(REVIEW_QUEUE_CHANNEL, message, {
+        timeout: REVIEW_QUEUE_TIMEOUT_MS,
+        maxRetries: 1,
+      });
+      return;
+    }
+
+    app.log?.warn?.(
+      `git review queue: Redis queue is unavailable; review ${message.reviewId} will remain pending until a worker DB poller picks it up`,
+    );
   } catch (err: any) {
     const safeMessage = redactPat(err?.message || String(err));
     await app.db.getRepository('gitCodeReviews').update({
@@ -323,49 +559,56 @@ async function failQueuedReview(app: Application, reviewId: number, err: any) {
 }
 
 async function processQueuedReview(app: Application, message: ReviewQueueMessage) {
-  const db = app.db;
-  const reviewsRepo = db.getRepository('gitCodeReviews');
-  const review = await reviewsRepo.findOne({ filterByTk: message.reviewId });
-  if (!review) {
-    app.log?.warn?.(`git review queue: review ${message.reviewId} not found, skipping`);
-    return;
-  }
+  await withReviewProcessLock(app, message.reviewId, async () => {
+    const db = app.db;
+    const reviewsRepo = db.getRepository('gitCodeReviews');
+    const review = await reviewsRepo.findOne({ filterByTk: message.reviewId });
+    if (!review) {
+      app.log?.warn?.(`git review queue: review ${message.reviewId} not found, skipping`);
+      return;
+    }
 
-  if (review.get('status') !== 'pending') {
-    app.log?.info?.(`git review queue: review ${message.reviewId} is ${review.get('status')}, skipping`);
-    return;
-  }
+    if (review.get('status') !== 'pending') {
+      app.log?.info?.(`git review queue: review ${message.reviewId} is ${review.get('status')}, skipping`);
+      return;
+    }
 
-  try {
-    const repo = await db.getRepository('gitRepositories').findOne({
-      filterByTk: message.repositoryId || review.get('repositoryId'),
-    });
-    if (!repo) throw new Error('Repository not found');
+    const metadata = getQueuedReviewMetadata(review);
+    const targetType = (message.targetType || review.get('targetType')) as 'mr' | 'commit' | 'branch';
 
-    const storedFlow = await db.getRepository('gitReviewFlows').findOne({
-      filterByTk: message.flowSnapshot?.id || review.get('flowId'),
-    });
-    const flow = createFlowFromSnapshot(message.flowSnapshot, storedFlow);
-    const aiEmployeeUsername = message.aiEmployeeUsername || (flow.get('aiEmployeeUsername') as string);
-    if (!aiEmployeeUsername) throw new Error('Flow has no AI employee configured');
+    try {
+      const repo = await db.getRepository('gitRepositories').findOne({
+        filterByTk: message.repositoryId || review.get('repositoryId'),
+      });
+      if (!repo) throw new Error('Repository not found');
 
-    await runReview(app, {
-      reviewId: message.reviewId,
-      flow,
-      repo,
-      targetType: message.targetType || review.get('targetType'),
-      mrIid: message.targetType === 'mr' ? message.mrIid ?? Number(review.get('mrIid')) : null,
-      commitSha: message.targetType === 'commit' ? message.commitSha || (review.get('commitSha') as string) : null,
-      branch: message.branch || (review.get('branch') as string | undefined),
-      headSha: message.headSha || (review.get('headSha') as string | null),
-      aiEmployeeUsername,
-      extraInstructions: message.extraInstructions,
-      userId: message.userId ?? null,
-    });
-  } catch (err) {
-    app.log?.error?.('git review queue: failed before review execution', err);
-    await failQueuedReview(app, message.reviewId, err);
-  }
+      const flowSnapshot = message.flowSnapshot || metadata.flowSnapshot;
+      const storedFlow = await db.getRepository('gitReviewFlows').findOne({
+        filterByTk: flowSnapshot?.id || review.get('flowId'),
+      });
+      const flow = createFlowFromSnapshot(flowSnapshot, storedFlow);
+      const aiEmployeeUsername =
+        message.aiEmployeeUsername || metadata.aiEmployeeUsername || (flow.get('aiEmployeeUsername') as string);
+      if (!aiEmployeeUsername) throw new Error('Flow has no AI employee configured');
+
+      await runReview(app, {
+        reviewId: message.reviewId,
+        flow,
+        repo,
+        targetType,
+        mrIid: targetType === 'mr' ? message.mrIid ?? toNullableNumber(review.get('mrIid')) : null,
+        commitSha: targetType === 'commit' ? message.commitSha || (review.get('commitSha') as string) : null,
+        branch: message.branch || (review.get('branch') as string | undefined),
+        headSha: message.headSha || (review.get('headSha') as string | null),
+        aiEmployeeUsername,
+        extraInstructions: message.extraInstructions ?? metadata.extraInstructions ?? undefined,
+        userId: message.userId ?? metadata.userId ?? null,
+      });
+    } catch (err) {
+      app.log?.error?.('git review queue: failed before review execution', err);
+      await failQueuedReview(app, message.reviewId, err);
+    }
+  });
 }
 
 /**
@@ -545,7 +788,8 @@ async function runReview(app: Application, args: RunReviewArgs) {
         // try next path
       }
     }
-    if (!AIEmployee) throw new Error('AIEmployee class not found — plugin-ai may not be installed or its exports changed');
+    if (!AIEmployee)
+      throw new Error('AIEmployee class not found — plugin-ai may not be installed or its exports changed');
 
     const llmService = args.flow.get('llmService') as string | null;
     const model = args.flow.get('model') as string | null;
@@ -573,7 +817,7 @@ async function runReview(app: Application, args: RunReviewArgs) {
           },
         ],
       }),
-      new Promise<never>((_, reject) =>
+      new Promise<never>((_resolve, reject) =>
         setTimeout(() => reject(new Error('AI review timed out after 5 minutes')), REVIEW_TIMEOUT_MS),
       ),
     ]);
@@ -664,20 +908,34 @@ function buildReviewPrompt(args: RunReviewArgs): string {
 
   if (args.targetType === 'mr') {
     lines.push(`Target: Merge Request !${args.mrIid}.`);
-    lines.push(`Use the \`git_get_merge_request\` tool with repositoryId=${args.repo.get('id')} and mrIid=${args.mrIid} to fetch the diff and metadata.`);
+    lines.push(
+      `Use the \`git_get_merge_request\` tool with repositoryId=${args.repo.get('id')} and mrIid=${
+        args.mrIid
+      } to fetch the diff and metadata.`,
+    );
     lines.push('Optionally call `git_get_merge_request_notes` to avoid duplicating prior comments.');
   } else if (args.targetType === 'commit') {
     lines.push(`Target: Commit ${args.commitSha}.`);
-    lines.push(`Use the \`git_get_commit\` tool with repositoryId=${args.repo.get('id')} and commitHash=${args.commitSha} to fetch the diff.`);
+    lines.push(
+      `Use the \`git_get_commit\` tool with repositoryId=${args.repo.get('id')} and commitHash=${
+        args.commitSha
+      } to fetch the diff.`,
+    );
   } else {
     lines.push(`Target: Branch ${args.branch}.`);
-    lines.push(`Use \`git_list_commits\`, \`git_get_diff\`, and \`git_get_file_content\` (with repositoryId=${args.repo.get('id')}) to inspect recent changes on this branch.`);
+    lines.push(
+      `Use \`git_list_commits\`, \`git_get_diff\`, and \`git_get_file_content\` (with repositoryId=${args.repo.get(
+        'id',
+      )}) to inspect recent changes on this branch.`,
+    );
   }
 
   lines.push('');
   lines.push('Produce a thorough but concise code review report in Markdown. Required sections:');
   lines.push('1. **Summary** — overall assessment.');
-  lines.push('2. **Findings** — issues grouped by severity (`Critical`, `High`, `Medium`, `Low`, `Info`). For each finding include the file path, line/range when possible, the problem, and a suggested fix.');
+  lines.push(
+    '2. **Findings** — issues grouped by severity (`Critical`, `High`, `Medium`, `Low`, `Info`). For each finding include the file path, line/range when possible, the problem, and a suggested fix.',
+  );
   lines.push('3. **Suggestions** — non-blocking improvements.');
   lines.push('4. **Verdict** — one of: `LGTM`, `Approve with comments`, `Request changes`, `Block`.');
   lines.push('');
@@ -755,12 +1013,12 @@ async function fetchMrHeadSha(repo: any, mrIid: number): Promise<string | null> 
   const pat = repo.get('pat') as string;
   if (!pat) return null;
   const isGitHub = repoUrl.includes('github.com');
-  
+
   try {
     if (isGitHub) {
       const { projectPath } = parseGitLabProject(repoUrl);
       const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls/${mrIid}`, {
-        headers: { 'Authorization': `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json' },
+        headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json' },
       });
       if (!response.ok) return null;
       const data = await response.json();
@@ -783,21 +1041,21 @@ async function postNoteToGitLab(repo: any, mrIid: number, body: string): Promise
   const repoUrl = repo.get('repoUrl') as string;
   const pat = repo.get('pat') as string;
   const isGitHub = repoUrl.includes('github.com');
-  
+
   if (isGitHub) {
     if (!pat) throw new Error('Repository has no PAT configured');
     const { projectPath } = parseGitLabProject(repoUrl);
-    
+
     const response = await fetch(`https://api.github.com/repos/${projectPath}/issues/${mrIid}/comments`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${pat}`,
+        Authorization: `Bearer ${pat}`,
         'Content-Type': 'application/json',
-        'Accept': 'application/vnd.github.v3+json',
+        Accept: 'application/vnd.github.v3+json',
       },
       body: JSON.stringify({ body }),
     });
-    
+
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       throw new Error(`GitHub note post failed ${response.status}: ${text}`);
@@ -814,7 +1072,7 @@ async function postNoteToGitLab(repo: any, mrIid: number, body: string): Promise
       headers: {
         'PRIVATE-TOKEN': pat,
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        Accept: 'application/json',
       },
       body: JSON.stringify({ body }),
     });
@@ -870,7 +1128,9 @@ function warnInvalidBranchFilter(filter: string, reason: string) {
   if (loggedBadFilters.has(filter)) return;
   loggedBadFilters.add(filter);
   console.warn(
-    `[plugin-git-manager] branchFilter rejected (${reason}): ${JSON.stringify(filter)}. Flow will not match any branch.`,
+    `[plugin-git-manager] branchFilter rejected (${reason}): ${JSON.stringify(
+      filter,
+    )}. Flow will not match any branch.`,
   );
 }
 
@@ -905,7 +1165,7 @@ function throwHttp(status: number, message: string): never {
 }
 
 /**
- * Review execution is delegated to the distributed event queue. When a worker
+ * Review execution is delegated to worker queue processing. When a worker
  * restarts mid-run, the DB record can stay in `status='running'` indefinitely.
  * On startup we sweep any `running` review whose `startedAt` is older than the
  * in-process timeout (5 min) plus a safety margin and mark it as failed.
@@ -919,8 +1179,8 @@ export async function recoverStuckReviews(app: Application): Promise<number> {
   try {
     const reviewsRepo = app.db.getRepository('gitCodeReviews');
     const cutoff = new Date(Date.now() - STUCK_REVIEW_CUTOFF_MS);
-    // Pending rows may be legitimately waiting in Redis, so only sweep reviews
-    // that were actually picked up by a worker.
+    // Pending rows are the durable queue source of truth and are picked up by
+    // worker DB polling, so only sweep reviews that were actually claimed.
     const stuck = await reviewsRepo.find({
       filter: {
         status: 'running',

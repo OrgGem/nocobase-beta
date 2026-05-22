@@ -150,6 +150,7 @@ export class PluginDocPixieServer extends Plugin {
             documentIds,
             strategy,
             conversationHistory,
+            userId: ctx.state?.currentUser?.id,
           });
           ctx.body = result;
           await next();
@@ -165,6 +166,27 @@ export class PluginDocPixieServer extends Plugin {
         updateConfig: async (ctx, next) => {
           const config = ctx.action.params.values || {};
           await this.service.updateConfig(config);
+          ctx.body = { ok: true };
+          await next();
+        },
+
+        // GET /api/docpixie:listLogs
+        listLogs: async (ctx, next) => {
+          const { limit, offset } = ctx.action.params;
+          const repo = this.db.getRepository('docpixie_logs');
+          ctx.body = await repo.find({
+            appends: ['user'],
+            sort: ['-createdAt'],
+            limit: limit || 100,
+            offset: offset || 0,
+          });
+          await next();
+        },
+
+        // POST /api/docpixie:clearLogs
+        clearLogs: async (ctx, next) => {
+          const repo = this.db.getRepository('docpixie_logs');
+          await repo.destroy({ filter: {} });
           ctx.body = { ok: true };
           await next();
         },
@@ -188,6 +210,8 @@ export class PluginDocPixieServer extends Plugin {
     this.app.acl.allow('docpixie', 'getDocument', 'loggedIn');
     this.app.acl.allow('docpixie', 'query', 'loggedIn');
     this.app.acl.allow('docpixie', 'getConfig', 'loggedIn');
+    this.app.acl.allow('docpixie', 'listLogs', 'loggedIn');
+    this.app.acl.allow('docpixie', 'clearLogs', 'loggedIn');
   }
 
   // ═══════════════════════════════════════════

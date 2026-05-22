@@ -11,6 +11,7 @@ export default {
     { type: 'json', name: 'requestBodySchema' },
     { type: 'json', name: 'responseSchema' },
     { type: 'string', name: 'fileInputMode', length: 20 },
+    { type: 'string', name: 'fileFieldName', length: 100, defaultValue: 'file' },
     { type: 'integer', name: 'maxFiles', defaultValue: 1 },
     { type: 'string', name: 'executionMode', length: 20 },
     { type: 'string', name: 'pollResultSubpath', length: 500 },

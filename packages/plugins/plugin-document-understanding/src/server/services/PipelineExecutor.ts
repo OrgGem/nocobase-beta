@@ -21,6 +21,143 @@ export class PipelineExecutor {
     this.jobManager = jobManager;
   }
 
+  private async resolveFile(urlOrPath: string, fieldName = 'file'): Promise<FileInput | null> {
+    if (!urlOrPath || typeof urlOrPath !== 'string') return null;
+
+    try {
+      // 1. Check if it is a local path (starts with /uploads/ or storage/uploads/ or process.cwd() + ...)
+      let isLocal = false;
+      let absolutePath = '';
+
+      if (urlOrPath.startsWith('/') || urlOrPath.startsWith('storage/') || urlOrPath.includes('/uploads/')) {
+        let cleanedPath = urlOrPath;
+        if (urlOrPath.startsWith('/')) {
+          cleanedPath = urlOrPath.slice(1);
+        }
+        
+        const pathOptions = [
+          require('path').resolve(process.cwd(), cleanedPath),
+          require('path').resolve(process.cwd(), 'storage', cleanedPath),
+          require('path').resolve(process.cwd(), 'storage/uploads', cleanedPath.replace(/^uploads\//, ''))
+        ];
+
+        for (const p of pathOptions) {
+          if (require('fs').existsSync(p) && require('fs').statSync(p).isFile()) {
+            isLocal = true;
+            absolutePath = p;
+            break;
+          }
+        }
+      }
+
+      if (isLocal) {
+        const fs = require('fs');
+        const path = require('path');
+        const buffer = fs.readFileSync(absolutePath);
+        const filename = path.basename(absolutePath);
+        
+        let mimeLookup = (filePath: string) => 'application/octet-stream';
+        try {
+          const mime = require('mime-types');
+          mimeLookup = (filePath: string) => mime.lookup(filePath) || 'application/octet-stream';
+        } catch (e) {
+          mimeLookup = (filePath: string) => {
+            const ext = path.extname(filePath).toLowerCase();
+            const map: Record<string, string> = {
+              '.pdf': 'application/pdf',
+              '.doc': 'application/msword',
+              '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              '.xls': 'application/vnd.ms-excel',
+              '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              '.png': 'image/png',
+              '.jpg': 'image/jpeg',
+              '.jpeg': 'image/jpeg',
+              '.txt': 'text/plain',
+              '.json': 'application/json',
+            };
+            return map[ext] || 'application/octet-stream';
+          };
+        }
+
+        const mimeType = mimeLookup(absolutePath);
+        
+        return {
+          fieldName,
+          buffer,
+          filename,
+          mimeType,
+        };
+      }
+
+      // 2. Otherwise assume it's a remote URL and download it using axios
+      if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+        const axios = require('axios');
+        const path = require('path');
+        
+        const response = await axios.get(urlOrPath, { responseType: 'arraybuffer' });
+        const buffer = Buffer.from(response.data);
+        
+        let filename = 'file';
+        const disposition = response.headers['content-disposition'];
+        if (disposition && disposition.includes('filename=')) {
+          const match = disposition.match(/filename="?([^";]+)"?/);
+          if (match && match[1]) {
+            filename = match[1];
+          }
+        } else {
+          try {
+            const urlObj = new URL(urlOrPath);
+            const base = path.basename(urlObj.pathname);
+            if (base && base.includes('.')) {
+              filename = base;
+            }
+          } catch (e) {}
+        }
+
+        const contentType = response.headers['content-type'] || 'application/octet-stream';
+        const mimeType = contentType.split(';')[0].trim();
+        
+        if (!filename.includes('.')) {
+          let mimeExtension = (mime: string) => '';
+          try {
+            const mimeLib = require('mime-types');
+            mimeExtension = (mime: string) => mimeLib.extension(mime) || '';
+          } catch (e) {
+            mimeExtension = (mime: string) => {
+              const map: Record<string, string> = {
+                'application/pdf': 'pdf',
+                'application/msword': 'doc',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                'application/vnd.ms-excel': 'xls',
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+                'image/png': 'png',
+                'image/jpeg': 'jpg',
+                'text/plain': 'txt',
+                'application/json': 'json',
+              };
+              return map[mime] || '';
+            };
+          }
+          const ext = mimeExtension(mimeType);
+          if (ext) {
+            filename = `${filename}.${ext}`;
+          }
+        }
+
+        return {
+          fieldName,
+          buffer,
+          filename,
+          mimeType,
+        };
+      }
+    } catch (err: any) {
+      console.error(`Failed to resolve file URL/path "${urlOrPath}":`, err.message);
+    }
+
+    return null;
+  }
+
   async execute(pipelineId: number, input: Record<string, any>, files: FileInput[] = [], userId?: number): Promise<JobState> {
     const pipelineRepo = this.db.getRepository<any>('doc_understanding_pipelines');
     const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
@@ -46,9 +183,71 @@ export class PipelineExecutor {
       },
     });
 
+    const resolvedFiles: FileInput[] = [];
+
+    const tryAddFile = async (urlOrPath: string, fieldName = 'file') => {
+      const resolved = await this.resolveFile(urlOrPath, fieldName);
+      if (resolved) {
+        resolvedFiles.push(resolved);
+      }
+    };
+
+    // 1. Process files argument
+    if (Array.isArray(files)) {
+      for (const f of files) {
+        if (f && typeof f === 'object') {
+          if ((f as any).buffer) {
+            resolvedFiles.push(f);
+          } else if ((f as any).url) {
+            await tryAddFile((f as any).url, (f as any).fieldName || 'file');
+          }
+        }
+      }
+    }
+
+    // 2. Scan input for common file URL keys
+    const urlFields = ['file_url', 'file_urls', 'file', 'files'];
+    for (const key of urlFields) {
+      const val = input[key];
+      if (!val) continue;
+
+      if (typeof val === 'string') {
+        if (val.startsWith('http://') || val.startsWith('https://') || val.startsWith('/') || val.startsWith('storage/')) {
+          await tryAddFile(val, 'file');
+        } else if (val.includes(',')) {
+          const urls = val.split(',').map(s => s.trim());
+          for (const u of urls) {
+            if (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('/') || u.startsWith('storage/')) {
+              await tryAddFile(u, 'file');
+            }
+          }
+        }
+      } else if (Array.isArray(val)) {
+        for (const item of val) {
+          if (typeof item === 'string') {
+            if (item.startsWith('http://') || item.startsWith('https://') || item.startsWith('/') || item.startsWith('storage/')) {
+              await tryAddFile(item, 'file');
+            }
+          } else if (item && typeof item === 'object' && item.url) {
+            await tryAddFile(item.url, 'file');
+          }
+        }
+      } else if (val && typeof val === 'object' && val.url) {
+        await tryAddFile(val.url, 'file');
+      }
+    }
+
+    if (resolvedFiles.length === 0 && files && files.length > 0) {
+      for (const f of files) {
+        if ((f as any).buffer) {
+          resolvedFiles.push(f);
+        }
+      }
+    }
+
     const context: ExecutionContext = {
       input,
-      files,
+      files: resolvedFiles,
       stepResults: {},
       jobId: job.id,
     };
@@ -59,7 +258,7 @@ export class PipelineExecutor {
     // Run steps (Synchronous part)
     this.runSteps(job, steps, context).catch(err => {
        console.error(`Background pipeline error for job ${job.id}`, err);
-    });
+     });
 
     return job;
   }
@@ -90,10 +289,16 @@ export class PipelineExecutor {
 
         while (retries >= 0 && !success) {
           try {
+            const fileFieldName = step.endpoint.fileFieldName || 'file';
+            const mappedFiles = context.files ? context.files.map(f => ({
+              ...f,
+              fieldName: fileFieldName
+            })) : [];
+
             const result = await this.apiClient.call({
               endpoint: step.endpoint,
               body: mappedBody,
-              files: context.files,
+              files: mappedFiles,
             });
 
             if (step.endpoint.executionMode === 'sync') {

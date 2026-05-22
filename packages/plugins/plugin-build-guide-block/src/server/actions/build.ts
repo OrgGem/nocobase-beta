@@ -28,6 +28,12 @@ const BUILD_GUIDE_QUEUE_TIMEOUT_MS = Math.max(
   60_000,
   Number.parseInt(process.env.BUILD_GUIDE_QUEUE_TIMEOUT_MS || '', 10) || 30 * 60 * 1000,
 );
+const BUILD_GUIDE_QUEUE_POLL_INTERVAL_MS = Math.max(
+  1000,
+  Number.parseInt(process.env.BUILD_GUIDE_QUEUE_POLL_INTERVAL_MS || '', 10) || 5000,
+);
+const BUILD_GUIDE_QUEUE_WAKE_CHANNEL = 'plugin-build-guide-block.build.wake';
+const BUILD_GUIDE_QUEUE_REDIS_CONNECTION = 'plugin-build-guide-block.build.queue';
 const BUILD_TRIGGER_LOCK_TTL_MS = 30_000;
 const BUILD_RUN_LOCK_TTL_MS = Math.max(
   60_000,
@@ -141,6 +147,11 @@ type BuildRunContext = {
   spaceId: string;
   runId: string;
 };
+
+let buildQueueTimer: NodeJS.Timeout | null = null;
+let buildQueueKickTimer: NodeJS.Timeout | null = null;
+let buildQueueProcessing = false;
+let buildQueueWakeHandler: ((message?: any) => Promise<void>) | null = null;
 
 class StaleBuildRunError extends Error {
   constructor(spaceId: string, runId: string) {
@@ -731,6 +742,193 @@ function isBuildGuideWorker(app: Application) {
   );
 }
 
+function clearLocalBuildMemoryQueue(app: Application) {
+  const eventQueue = (app as any).eventQueue;
+  const adapter = eventQueue?.adapter;
+  const fullChannel = eventQueue?.getFullChannel?.(BUILD_GUIDE_QUEUE_CHANNEL);
+  const queue = fullChannel ? adapter?.queues?.get?.(fullChannel) : null;
+  if (!queue?.length) return;
+
+  adapter.queues.set(fullChannel, []);
+  app.log?.warn?.(
+    `[plugin-build-guide-block] Cleared ${queue.length} stale local memory message(s) on non-worker node; queued DB builds will be picked up by workers`,
+  );
+}
+
+function getBuildQueueRedisKey(app: Application): string {
+  const appName = (app as any).name || process.env.APP_NAME || 'main';
+  return `${appName}:plugin-build-guide-block:build:queue`;
+}
+
+async function getBuildQueueRedis(app: Application): Promise<any | null> {
+  const manager = (app as any).redisConnectionManager;
+  if (!manager?.getConnectionSync) {
+    return null;
+  }
+
+  try {
+    const connectionString = process.env.QUEUE_ADAPTER_REDIS_URL || process.env.REDIS_URL;
+    return await manager.getConnectionSync(
+      BUILD_GUIDE_QUEUE_REDIS_CONNECTION,
+      connectionString ? { connectionString } : undefined,
+    );
+  } catch (error: any) {
+    app.log?.debug?.(
+      `[plugin-build-guide-block] Redis queue unavailable; DB polling fallback active: ${error?.message || error}`,
+    );
+    return null;
+  }
+}
+
+async function enqueueBuildToRedis(app: Application, message: BuildGuideQueueMessage): Promise<boolean> {
+  const redis = await getBuildQueueRedis(app);
+  if (!redis) return false;
+
+  try {
+    await redis.sendCommand(['RPUSH', getBuildQueueRedisKey(app), JSON.stringify(message)]);
+    app.log?.debug?.(
+      `[plugin-build-guide-block] Enqueued build ${message.runId} for space "${message.spaceId}" to Redis`,
+    );
+    return true;
+  } catch (error: any) {
+    app.log?.warn?.(`[plugin-build-guide-block] Failed to enqueue build to Redis; DB polling fallback active`, error);
+    return false;
+  }
+}
+
+async function publishBuildQueueWake(app: Application, message?: BuildGuideQueueMessage) {
+  try {
+    await (app as any).pubSubManager?.publish?.(
+      BUILD_GUIDE_QUEUE_WAKE_CHANNEL,
+      { spaceId: message?.spaceId, runId: message?.runId },
+      { skipSelf: !isBuildGuideWorker(app) },
+    );
+  } catch (error: any) {
+    app.log?.debug?.(`[plugin-build-guide-block] Wake publish skipped: ${error?.message || error}`);
+  }
+}
+
+function startBuildGuideQueueProcessor(app: Application) {
+  if (!isBuildGuideWorker(app)) {
+    app.log?.debug?.('[plugin-build-guide-block] Build queue processor disabled on non-worker node');
+    return;
+  }
+  if (buildQueueTimer) return;
+
+  buildQueueWakeHandler = async () => {
+    scheduleBuildQueueTick(app, 0);
+  };
+
+  const subscribe = (app as any).pubSubManager?.subscribe?.(BUILD_GUIDE_QUEUE_WAKE_CHANNEL, buildQueueWakeHandler);
+  if (subscribe?.catch) {
+    subscribe.catch((error: any) => {
+      app.log?.debug?.(`[plugin-build-guide-block] Wake subscribe skipped: ${error?.message || error}`);
+    });
+  }
+
+  buildQueueTimer = setInterval(() => scheduleBuildQueueTick(app, 0), BUILD_GUIDE_QUEUE_POLL_INTERVAL_MS);
+  (buildQueueTimer as any).unref?.();
+  scheduleBuildQueueTick(app, 1000);
+  app.log?.info?.(
+    `[plugin-build-guide-block] Build queue processor started (interval ${BUILD_GUIDE_QUEUE_POLL_INTERVAL_MS}ms)`,
+  );
+}
+
+function stopBuildGuideQueueProcessor(app: Application) {
+  if (buildQueueTimer) {
+    clearInterval(buildQueueTimer);
+    buildQueueTimer = null;
+  }
+  if (buildQueueKickTimer) {
+    clearTimeout(buildQueueKickTimer);
+    buildQueueKickTimer = null;
+  }
+  if (buildQueueWakeHandler) {
+    const unsubscribe = (app as any).pubSubManager?.unsubscribe?.(
+      BUILD_GUIDE_QUEUE_WAKE_CHANNEL,
+      buildQueueWakeHandler,
+    );
+    if (unsubscribe?.catch) {
+      unsubscribe.catch(() => undefined);
+    }
+    buildQueueWakeHandler = null;
+  }
+  buildQueueProcessing = false;
+}
+
+function scheduleBuildQueueTick(app: Application, delayMs: number) {
+  if (buildQueueKickTimer) return;
+  buildQueueKickTimer = setTimeout(() => {
+    buildQueueKickTimer = null;
+    runBuildQueueTick(app).catch((error) => {
+      app.log?.error?.('[plugin-build-guide-block] Build queue tick failed', error);
+    });
+  }, delayMs);
+  (buildQueueKickTimer as any).unref?.();
+}
+
+async function runBuildQueueTick(app: Application) {
+  if (buildQueueProcessing || !isBuildGuideWorker(app)) return;
+
+  buildQueueProcessing = true;
+  try {
+    const redisMessages = await drainRedisBuildQueue(app, BUILD_GUIDE_QUEUE_CONCURRENCY);
+    await processBuildQueueMessages(app, redisMessages);
+
+    const remaining = Math.max(1, BUILD_GUIDE_QUEUE_CONCURRENCY - redisMessages.length);
+    await processQueuedBuildsFromDb(app, remaining);
+  } finally {
+    buildQueueProcessing = false;
+  }
+}
+
+async function drainRedisBuildQueue(app: Application, count: number): Promise<BuildGuideQueueMessage[]> {
+  const redis = await getBuildQueueRedis(app);
+  if (!redis) return [];
+
+  const key = getBuildQueueRedisKey(app);
+  const messages: BuildGuideQueueMessage[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const raw = await redis.sendCommand(['LPOP', key]);
+    if (!raw) break;
+    try {
+      messages.push(JSON.parse(String(raw)));
+    } catch (error: any) {
+      app.log?.warn?.(`[plugin-build-guide-block] Dropped invalid Redis build message: ${error?.message || error}`);
+    }
+  }
+  return messages;
+}
+
+function createBuildQueueMessageFromSpace(space: any): BuildGuideQueueMessage | null {
+  const runId = space.get('buildRunId');
+  if (!runId) return null;
+  return {
+    spaceId: String(space.get('id')),
+    runId: String(runId),
+    queuedAt: space.get('buildQueuedAt') ? new Date(space.get('buildQueuedAt')).toISOString() : undefined,
+  };
+}
+
+async function processQueuedBuildsFromDb(app: Application, count: number) {
+  const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
+  const spaces = await spaceRepo.find({
+    filter: {
+      status: 'building',
+      buildPhase: 'queued',
+    },
+    sort: ['buildQueuedAt'],
+    limit: count,
+  });
+  const messages = spaces.map(createBuildQueueMessageFromSpace).filter(Boolean) as BuildGuideQueueMessage[];
+  await processBuildQueueMessages(app, messages);
+}
+
+async function processBuildQueueMessages(app: Application, messages: BuildGuideQueueMessage[]) {
+  if (!messages.length) return;
+  await Promise.all(messages.map((message) => processQueuedBuild(app, message)));
+}
+
 async function markBuildError(app: Application, spaceId: string, runId: string | undefined, error: any) {
   const buildLog = error?.message || String(error);
   let updated = false;
@@ -776,10 +974,25 @@ async function markBuildError(app: Application, spaceId: string, runId: string |
 
 async function enqueueBuild(app: Application, message: BuildGuideQueueMessage) {
   try {
-    await app.eventQueue.publish(BUILD_GUIDE_QUEUE_CHANNEL, message, {
-      timeout: BUILD_GUIDE_QUEUE_TIMEOUT_MS,
-      maxRetries: 0,
-    });
+    const queuedInRedis = await enqueueBuildToRedis(app, message);
+    if (queuedInRedis) {
+      await publishBuildQueueWake(app, message);
+      return;
+    }
+
+    await publishBuildQueueWake(app, message);
+
+    if (isBuildGuideWorker(app)) {
+      await app.eventQueue.publish(BUILD_GUIDE_QUEUE_CHANNEL, message, {
+        timeout: BUILD_GUIDE_QUEUE_TIMEOUT_MS,
+        maxRetries: 0,
+      });
+      return;
+    }
+
+    app.log?.warn?.(
+      `[plugin-build-guide-block] Redis queue is unavailable; build ${message.runId} for space "${message.spaceId}" will remain queued until a worker DB poller picks it up`,
+    );
   } catch (error) {
     await markBuildError(app, message.spaceId, message.runId, error);
     throw error;
@@ -841,10 +1054,15 @@ export function registerBuildGuideQueue(app: Application) {
       await processQueuedBuild(app, message);
     },
   });
+  if (!isBuildGuideWorker(app)) {
+    app.on('afterStart', () => clearLocalBuildMemoryQueue(app));
+  }
+  startBuildGuideQueueProcessor(app);
 }
 
 export function unregisterBuildGuideQueue(app: Application) {
   app.eventQueue.unsubscribe(BUILD_GUIDE_QUEUE_CHANNEL);
+  stopBuildGuideQueueProcessor(app);
 }
 
 async function withBuildTriggerLock<T>(app: Application, spaceId: string, fn: () => Promise<T>) {

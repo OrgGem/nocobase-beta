@@ -54,6 +54,9 @@ export class DocumentUnderstandingService {
 
     this.pipelineExecutor = new PipelineExecutor(this.db, this.apiClient, this.jobManager);
 
+    // Clean up stuck jobs (pending/running) that were in-flight when server restarted
+    await this.jobManager.cleanupStuckJobs();
+
     // Recover any polling jobs that were in-flight before server restart
     await this.jobManager.recoverPollingJobs();
 

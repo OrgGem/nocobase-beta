@@ -335,9 +335,14 @@ export const EndpointsTab = () => {
                     <Form.Item noStyle dependencies={['fileInputMode']}>
                       {() =>
                         form.getFieldValue('fileInputMode') !== 'none' ? (
-                          <Form.Item name="maxFiles" label="Max Files" initialValue={1}>
-                            <InputNumber min={1} max={20} style={{ width: 120 }} />
-                          </Form.Item>
+                          <>
+                            <Form.Item name="fileFieldName" label="File Field Name" initialValue="file">
+                              <Input placeholder="file" style={{ width: 200 }} />
+                            </Form.Item>
+                            <Form.Item name="maxFiles" label="Max Files" initialValue={1}>
+                              <InputNumber min={1} max={20} style={{ width: 120 }} />
+                            </Form.Item>
+                          </>
                         ) : null
                       }
                     </Form.Item>

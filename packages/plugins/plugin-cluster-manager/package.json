@@ -3,10 +3,13 @@
   "displayName": "Cluster Manager",
   "displayName.zh-CN": "Cluster Manager",
   "description": "Cluster node tracking, task orchestration, worker management, and package distribution",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "license": "Apache-2.0",
   "main": "./dist/server/index.js",
-  "keywords": ["Monitoring", "DevOps"],
+  "keywords": [
+    "Monitoring",
+    "DevOps"
+  ],
   "files": [
     "dist",
     "src",
@@ -31,7 +34,9 @@
     "uuid": "^9.0.1"
   },
   "nocobase": {
-    "supportedVersions": ["2.x"],
+    "supportedVersions": [
+      "2.x"
+    ],
     "editionLevel": 0
   }
 }

@@ -120,6 +120,8 @@ export interface DocPixieQueryInput {
   strategy?: AnalysisStrategy;
   /** Previous messages for multi-turn conversation */
   conversationHistory?: ConversationTurn[];
+  /** Optional user ID executing the query */
+  userId?: number;
 }
 
 /** A single turn in the conversation history */

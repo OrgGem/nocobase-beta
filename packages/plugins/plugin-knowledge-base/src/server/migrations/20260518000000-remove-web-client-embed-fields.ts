@@ -9,8 +9,26 @@ export default class RemoveWebClientEmbedFieldsMigration extends Migration {
     const queryInterface = db.sequelize.getQueryInterface();
     const tablePrefix = db.options?.tablePrefix || '';
 
-    const quoteTable = (tableName: string) => queryInterface.quoteTable(tableName);
-    const quoteIdentifier = (identifier: string) => queryInterface.quoteIdentifier(identifier);
+    const quoteTable = (tableName: string) => {
+      if (typeof queryInterface.quoteTable === 'function') {
+        return queryInterface.quoteTable(tableName);
+      }
+      if (queryInterface.queryGenerator && typeof queryInterface.queryGenerator.quoteTable === 'function') {
+        return queryInterface.queryGenerator.quoteTable(tableName);
+      }
+      return `"${tableName}"`;
+    };
+
+    const quoteIdentifier = (identifier: string) => {
+      if (typeof queryInterface.quoteIdentifier === 'function') {
+        return queryInterface.quoteIdentifier(identifier);
+      }
+      if (queryInterface.queryGenerator && typeof queryInterface.queryGenerator.quoteIdentifier === 'function') {
+        return queryInterface.queryGenerator.quoteIdentifier(identifier);
+      }
+      return `"${identifier}"`;
+    };
+
     const describeTable = (tableName: string) => queryInterface.describeTable(tableName).catch(() => null);
 
     const kbTable = `${tablePrefix}aiKnowledgeBases`;
