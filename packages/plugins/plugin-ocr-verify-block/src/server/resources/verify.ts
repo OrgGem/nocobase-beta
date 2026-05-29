@@ -198,7 +198,30 @@ export async function getPayload(ctx: Context, next: Next) {
 
   const { json } = await getRecord(ctx, input, acl);
   const mapping = await getMapping(ctx, input);
-  const ocrJson = json[input.jsonField];
+
+  const pdfAttachment = json[input.pdfField];
+  const firstPdf = Array.isArray(pdfAttachment) ? pdfAttachment[0] : pdfAttachment;
+  const attachmentId = firstPdf?.id;
+
+  let ocrStatus = 'no-ocr';
+  let ocrError = null;
+  let ocrRawData = null;
+
+  if (attachmentId) {
+    const ocrRecord = await ctx.db.getRepository('attachmentOcrResults').findOne({
+      filter: { attachmentId },
+    });
+    if (ocrRecord) {
+      ocrStatus = ocrRecord.get('status') || 'no-ocr';
+      ocrError = ocrRecord.get('error') || null;
+      ocrRawData = ocrRecord.get('data') || null;
+    }
+  }
+
+  let ocrJson = json[input.jsonField];
+  if (!ocrJson && ocrRawData) {
+    ocrJson = ocrRawData;
+  }
   const items = normalizeOcrJson(ocrJson, mapping);
 
   ctx.body = {
@@ -210,6 +233,9 @@ export async function getPayload(ctx: Context, next: Next) {
     statusField: input.statusField,
     status: input.statusField ? json[input.statusField] : undefined,
     pdfUrl: getAttachmentUrl(json[input.pdfField]),
+    attachmentId,
+    ocrStatus,
+    ocrError,
     data: ocrJson,
     items,
     mapping,

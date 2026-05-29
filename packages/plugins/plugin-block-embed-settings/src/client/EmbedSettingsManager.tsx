@@ -1,7 +1,7 @@
-import React, { useMemo } from 'react';
-import { Table, Button, Switch, Empty, Space, Popconfirm, Typography } from 'antd';
+import React, { useMemo, useState } from 'react';
+import { Table, Button, Switch, Empty, Space, Popconfirm, Typography, Card, message } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient, useApp, useCompile, useRequest } from '@nocobase/client';
+import { useAPIClient, useApp, useCompile, useRequest, useSystemSettings } from '@nocobase/client';
 import { useT } from './locale';
 import { collectEmbeddablePlugins, normalizeAllowedRecords } from './EmbedSettingsPluginSelect';
 
@@ -12,6 +12,10 @@ export const EmbedSettingsManager: React.FC = () => {
   const api = useAPIClient();
   const app = useApp();
   const compile = useCompile();
+
+  const systemSettings = useSystemSettings();
+  const showHelp = systemSettings?.data?.data?.options?.showHelp !== false;
+  const [savingSettings, setSavingSettings] = useState(false);
 
   const { data, loading, refresh } = useRequest<any>({
     resource: 'embedAllowedPlugins',
@@ -48,6 +52,40 @@ export const EmbedSettingsManager: React.FC = () => {
     refresh();
   };
 
+  const handleToggleHelp = async (checked: boolean) => {
+    setSavingSettings(true);
+    try {
+      const options = {
+        ...systemSettings?.data?.data?.options,
+        showHelp: checked,
+      };
+
+      await api.request({
+        url: 'systemSettings:put',
+        method: 'post',
+        data: {
+          options,
+        },
+      });
+
+      if (systemSettings?.mutate) {
+        systemSettings.mutate({
+          data: {
+            ...systemSettings.data?.data,
+            options,
+          },
+        });
+      }
+
+      message.success(t('Saved successfully'));
+    } catch (error) {
+      console.error(error);
+      message.error(t('Save failed'));
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   const columns = [
     {
       title: t('Plugin name'),
@@ -82,6 +120,13 @@ export const EmbedSettingsManager: React.FC = () => {
 
   return (
     <div style={{ padding: 24 }}>
+      <Card title={t('Header Settings')} style={{ marginBottom: 24 }}>
+        <Space size="middle" align="center">
+          <span>{t('Show help button in header')}</span>
+          <Switch checked={showHelp} loading={savingSettings} onChange={handleToggleHelp} />
+        </Space>
+      </Card>
+
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Title level={5} style={{ margin: 0 }}>
           {t('Allowed plugins for embedding')}
@@ -92,12 +137,7 @@ export const EmbedSettingsManager: React.FC = () => {
         <div style={{ marginBottom: 16 }}>
           <Space wrap>
             {availablePlugins.map((p) => (
-              <Button
-                key={p.value}
-                size="small"
-                icon={<PlusOutlined />}
-                onClick={() => handleAdd(p.value, p.label)}
-              >
+              <Button key={p.value} size="small" icon={<PlusOutlined />} onClick={() => handleAdd(p.value, p.label)}>
                 {p.label}
               </Button>
             ))}

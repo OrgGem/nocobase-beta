@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Space, Switch, Tabs, message } from 'antd';
 import { useAPIClient } from '@nocobase/client';
 import { CategoriesManager } from './CategoriesManager';
+import { OcrMonitorDashboard } from './OcrMonitorDashboard';
 
 export const SettingsPage = () => {
   const api = useAPIClient();
@@ -60,7 +61,11 @@ export const SettingsPage = () => {
                 <Form.Item label="Callback URL" name="callbackUrl">
                   <Input />
                 </Form.Item>
-                <Form.Item label="Callback API key" name="callbackApiKey" extra="Leave empty to keep the existing key. Sent as X-API-Key.">
+                <Form.Item
+                  label="Callback API key"
+                  name="callbackApiKey"
+                  extra="Leave empty to keep the existing key. Sent as X-API-Key."
+                >
                   <Input.Password />
                 </Form.Item>
                 <Form.Item label="Callback timeout (ms)" name="callbackTimeoutMs">
@@ -108,6 +113,11 @@ export const SettingsPage = () => {
               <CategoriesManager />
             </Card>
           ),
+        },
+        {
+          key: 'monitor',
+          label: 'OCR Monitor',
+          children: <OcrMonitorDashboard />,
         },
       ]}
     />

@@ -19,5 +19,9 @@
   "Enabled": "启用",
   "Actions": "操作",
   "Confirm remove?": "确认移除？",
-  "No plugins registered yet": "暂无已注册的插件"
+  "No plugins registered yet": "暂无已注册的插件",
+  "Header Settings": "页眉设置",
+  "Show help button in header": "在顶部页眉中显示帮助按钮",
+  "Saved successfully": "保存成功",
+  "Save failed": "保存失败"
 }

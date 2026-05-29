@@ -48,3 +48,11 @@ openspec/
 # Plugin build artifacts
 *.tgz
 .agent/
+.mcp.json
+.clinerules/
+.cursor/
+.kiro/
+.windsurf/
+.code-graph-index/
+.kilocode/
+.gkt/

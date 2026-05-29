@@ -19,5 +19,9 @@
   "Enabled": "Bật",
   "Actions": "Thao tác",
   "Confirm remove?": "Xác nhận xóa?",
-  "No plugins registered yet": "Chưa có plugin nào được đăng ký"
+  "No plugins registered yet": "Chưa có plugin nào được đăng ký",
+  "Header Settings": "Cài đặt thanh đầu trang",
+  "Show help button in header": "Hiển thị nút trợ giúp trên thanh đầu trang",
+  "Saved successfully": "Lưu thành công",
+  "Save failed": "Lưu thất bại"
 }

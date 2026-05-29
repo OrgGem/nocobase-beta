@@ -1,15 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Tag, Button, Space, Row, Col, Statistic, Tabs, Spin, Popconfirm, message } from 'antd';
-import {
-  ReloadOutlined,
-  DatabaseOutlined,
-  DeleteOutlined,
-} from '@ant-design/icons';
+import { ReloadOutlined, DatabaseOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { AclCacheManager } from './AclCacheManager';
 import { RedisMonitor } from './RedisMonitor';
 import { LockMonitor } from './LockMonitor';
 import { EventQueueMonitor } from './EventQueueMonitor';
+import { NginxCacheManager } from './NginxCacheManager';
 import { useT } from './utils';
 
 export function CacheMonitor() {
@@ -91,32 +88,29 @@ export function CacheMonitor() {
             <Spin spinning={loading}>
               <Space direction="vertical" style={{ width: '100%' }} size="middle">
                 <Space>
-                  <Button icon={<ReloadOutlined />} onClick={fetchData}>{t('Refresh')}</Button>
+                  <Button icon={<ReloadOutlined />} onClick={fetchData}>
+                    {t('Refresh')}
+                  </Button>
                   <Popconfirm
                     title={t('Flush all caches?')}
                     description={t('This will clear all cached data across all stores.')}
                     onConfirm={handleFlushAll}
                   >
-                    <Button danger icon={<DeleteOutlined />}>{t('Flush All')}</Button>
+                    <Button danger icon={<DeleteOutlined />}>
+                      {t('Flush All')}
+                    </Button>
                   </Popconfirm>
                 </Space>
 
                 <Row gutter={16}>
                   <Col span={8}>
                     <Card size="small">
-                      <Statistic
-                        title={t('Cache Stores')}
-                        value={stores.length}
-                        prefix={<DatabaseOutlined />}
-                      />
+                      <Statistic title={t('Cache Stores')} value={stores.length} prefix={<DatabaseOutlined />} />
                     </Card>
                   </Col>
                   <Col span={8}>
                     <Card size="small">
-                      <Statistic
-                        title={t('Named Caches')}
-                        value={caches.length}
-                      />
+                      <Statistic title={t('Named Caches')} value={caches.length} />
                     </Card>
                   </Col>
                   <Col span={8}>
@@ -131,23 +125,11 @@ export function CacheMonitor() {
                 </Row>
 
                 <Card title={t('Registered Stores')} size="small">
-                  <Table
-                    dataSource={stores}
-                    columns={storeColumns}
-                    rowKey="name"
-                    size="small"
-                    pagination={false}
-                  />
+                  <Table dataSource={stores} columns={storeColumns} rowKey="name" size="small" pagination={false} />
                 </Card>
 
                 <Card title={t('Named Caches')} size="small">
-                  <Table
-                    dataSource={caches}
-                    columns={cacheColumns}
-                    rowKey="name"
-                    size="small"
-                    pagination={false}
-                  />
+                  <Table dataSource={caches} columns={cacheColumns} rowKey="name" size="small" pagination={false} />
                 </Card>
               </Space>
             </Spin>
@@ -172,6 +154,11 @@ export function CacheMonitor() {
           key: 'queue',
           label: t('Event Queue'),
           children: <EventQueueMonitor />,
+        },
+        {
+          key: 'nginx',
+          label: t('Nginx Cache'),
+          children: <NginxCacheManager />,
         },
       ]}
     />

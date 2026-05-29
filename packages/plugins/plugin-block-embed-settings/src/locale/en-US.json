@@ -19,5 +19,9 @@
   "Enabled": "Enabled",
   "Actions": "Actions",
   "Confirm remove?": "Confirm remove?",
-  "No plugins registered yet": "No plugins registered yet"
+  "No plugins registered yet": "No plugins registered yet",
+  "Header Settings": "Header Settings",
+  "Show help button in header": "Show help button in header",
+  "Saved successfully": "Saved successfully",
+  "Save failed": "Save failed"
 }

@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Empty, Input, List, Space, Splitter, Tag, message } from 'antd';
-import { CheckOutlined, CloseOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, Button, Empty, Input, List, Space, Splitter, Tag, message, Typography, Spin } from 'antd';
+import { CheckOutlined, CloseOutlined, SaveOutlined, SyncOutlined } from '@ant-design/icons';
 import { useAPIClient, useRecord, useCollection_deprecated } from '@nocobase/client';
 import { NormalizedOcrItem } from '../../shared/types';
 import { PdfJsViewer } from '../components/PdfJsViewer';
+
+const { Text, Title } = Typography;
 
 type Props = {
   children?: React.ReactNode;
@@ -25,6 +27,12 @@ export const OcrVerifyBlock = (props: Props) => {
   const [items, setItems] = useState<NormalizedOcrItem[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [settings, setSettings] = useState<any>({});
+
+  // Trạng thái OCR mới phục vụ giám sát và Polling
+  const [ocrStatus, setOcrStatus] = useState<string>('no-ocr');
+  const [ocrError, setOcrError] = useState<string | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
+  const [pollingLoading, setPollingLoading] = useState(false);
 
   const collectionName = props.collection || collection?.name || record?.__collectionName;
   const recordId = props.recordId || record?.id;
@@ -57,6 +65,8 @@ export const OcrVerifyBlock = (props: Props) => {
       const data = payloadRes?.data?.data || payloadRes?.data;
       setPayload(data);
       setItems(data?.items || []);
+      setOcrStatus(data?.ocrStatus || 'no-ocr');
+      setOcrError(data?.ocrError || null);
       setSelectedId((data?.items?.[0]?.id || data?.items?.[0]?.key || '') as string);
     } catch (err: any) {
       message.error(err?.message || 'Failed to load OCR verify payload');
@@ -68,6 +78,60 @@ export const OcrVerifyBlock = (props: Props) => {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const attachmentId = payload?.attachmentId;
+
+  // Cơ chế Polling thông minh tự động kiểm tra trạng thái OCR
+  useEffect(() => {
+    if (!attachmentId || ocrStatus !== 'pending-ocr') {
+      setIsPolling(false);
+      return;
+    }
+
+    setIsPolling(true);
+
+    const poll = async () => {
+      try {
+        const res = await api.resource('filePreviewAuth').getOcrStatus({
+          params: { attachmentId },
+        });
+        const status = res?.data?.data?.status || 'no-ocr';
+        const error = res?.data?.data?.error || null;
+        if (status !== 'pending-ocr') {
+          setIsPolling(false);
+          setOcrStatus(status);
+          setOcrError(error);
+          message.success('OCR extraction complete! Reloading...');
+          refresh();
+        }
+      } catch (err: any) {
+        // Bỏ qua lỗi kết nối trong khi polling để đảm bảo tính liên tục
+      }
+    };
+
+    const timer = setInterval(poll, 3000);
+
+    return () => {
+      clearInterval(timer);
+    };
+  }, [api, attachmentId, ocrStatus, refresh]);
+
+  const handleRetryOcr = async () => {
+    if (!attachmentId) return;
+    setPollingLoading(true);
+    try {
+      await api.resource('filePreviewAuth').runOcr({
+        values: { attachmentId },
+      });
+      message.success('OCR job enqueued successfully');
+      setOcrStatus('pending-ocr');
+      setOcrError(null);
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to trigger OCR');
+    } finally {
+      setPollingLoading(false);
+    }
+  };
 
   const updateItem = (target: NormalizedOcrItem, value: string) => {
     setItems((prev) =>
@@ -103,6 +167,91 @@ export const OcrVerifyBlock = (props: Props) => {
 
   if (!collectionName || !recordId) {
     return <Alert type="warning" message="No current record is available for this OCR Verify block" />;
+  }
+
+  // Chế độ đang Polling nhận diện chữ
+  if (isPolling) {
+    return (
+      <div
+        style={{
+          padding: '64px 32px',
+          textAlign: 'center',
+          background: '#fff',
+          borderRadius: '8px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+          border: '1px solid #f0f0f0',
+        }}
+      >
+        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <Spin indicator={<SyncOutlined spin style={{ fontSize: 48, color: '#1890ff' }} />} />
+          <Title level={4} style={{ margin: '16px 0 8px' }}>
+            Document OCR Extraction in Progress
+          </Title>
+          <Text type="secondary" style={{ maxWidth: '500px', display: 'inline-block' }}>
+            Tesseract is currently parsing and extracting bounding coordinates from your document. Please wait a moment,
+            this page will automatically refresh once the process is complete.
+          </Text>
+        </Space>
+      </div>
+    );
+  }
+
+  // Chế độ nhận diện thất bại
+  if (ocrStatus === 'failed') {
+    return (
+      <div
+        style={{
+          padding: '32px',
+          background: '#fff',
+          borderRadius: '8px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+          border: '1px solid #f0f0f0',
+        }}
+      >
+        <Alert
+          type="error"
+          showIcon
+          message="OCR Processing Failed"
+          description={ocrError || 'An unexpected error occurred during OCR text extraction.'}
+          style={{ marginBottom: 24 }}
+        />
+        <Space>
+          <Button type="primary" icon={<SyncOutlined />} loading={pollingLoading} onClick={handleRetryOcr}>
+            Retry OCR Extraction
+          </Button>
+          <Button onClick={refresh}>Refresh Status</Button>
+        </Space>
+      </div>
+    );
+  }
+
+  // Chế độ chưa từng nhận diện và không có dữ liệu
+  if (ocrStatus === 'no-ocr' && !items.length) {
+    return (
+      <div
+        style={{
+          padding: '32px',
+          background: '#fff',
+          borderRadius: '8px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+          border: '1px solid #f0f0f0',
+        }}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="No OCR Data Available"
+          description="This document has not been processed through the OCR text extraction engine yet."
+          style={{ marginBottom: 24 }}
+        />
+        <Space>
+          <Button type="primary" icon={<SyncOutlined />} loading={pollingLoading} onClick={handleRetryOcr}>
+            Run OCR Extraction
+          </Button>
+          <Button onClick={refresh}>Refresh Status</Button>
+        </Space>
+      </div>
+    );
   }
 
   return (
