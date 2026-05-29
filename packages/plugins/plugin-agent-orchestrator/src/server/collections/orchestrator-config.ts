@@ -47,6 +47,13 @@ export default defineCollection({
         'Max LangGraph reasoning steps (tool-call + LLM-step iterations) per delegation. Lower = safer; higher = more complex multi-step tasks. Default 50.',
     },
     {
+      name: 'harnessTag',
+      type: 'string',
+      length: 100,
+      defaultValue: 'default',
+      comment: 'Harness profile tag used by the orchestrator controller and approval flow.',
+    },
+    {
       name: 'llmService',
       type: 'string',
       comment: 'Optional overridden LLM provider for the sub-agent',

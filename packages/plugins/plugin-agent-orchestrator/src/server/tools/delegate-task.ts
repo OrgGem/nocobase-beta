@@ -24,7 +24,6 @@ const ORCHESTRATOR_DEPTH_KEY = '__orchestratorDepth';
  */
 const ORCHESTRATOR_PATH_KEY = '__orchestratorPath';
 
-
 /** Max sub-agents that the dispatch tool runs concurrently in one call. */
 const MAX_DISPATCH_CONCURRENCY = 5;
 /** Hard cap on tasks per dispatch call to keep output bounded. */
@@ -65,10 +64,7 @@ function buildDispatchToolName(leaderUsername: string) {
 }
 
 function createRootRunId(seed = '') {
-  const hash = createHash('sha1')
-    .update(`${Date.now()}::${Math.random()}::${seed}`)
-    .digest('hex')
-    .slice(0, 10);
+  const hash = createHash('sha1').update(`${Date.now()}::${Math.random()}::${seed}`).digest('hex').slice(0, 10);
   return `run_${Date.now()}_${hash}`;
 }
 
@@ -148,7 +144,7 @@ function createDelegateToolOptions(
   return {
     scope: 'CUSTOM',
     execution: 'backend',
-    defaultPermission: 'ALLOW',
+    defaultPermission: 'ASK',
     silence: false,
     introduction: {
       title: `[${leaderUsername}] ${subAgentEmployee.nickname || subAgentUsername}${legacyAlias ? ' (legacy)' : ''}`,
@@ -295,7 +291,7 @@ function createDispatchToolOptions(
   return {
     scope: 'CUSTOM',
     execution: 'backend',
-    defaultPermission: 'ALLOW',
+    defaultPermission: 'ASK',
     silence: false,
     introduction: {
       title: `[${leaderUsername}] Dispatch sub-agents`,
@@ -794,13 +790,9 @@ async function invokeDelegateTask(
   } = options;
 
   // --- Snapshot ctx fields up-front ---
-  // Long-running agent execution (up to `timeout` ms) outlives the parent HTTP
-  // request, so middleware may have cleared `ctx.auth`, `ctx.state`, or even
-  // disposed the underlying socket by the time we finalize the log row.
-  // Capturing the values once here keeps log/audit fields stable.
   const ctxSnapshot = captureCtxSnapshot(ctx);
 
-  // --- P1: Depth enforcement & Circular Delegation Detection ---
+  // --- Depth enforcement & Circular Delegation Detection ---
   const currentDepth: number = (ctx as any)[ORCHESTRATOR_DEPTH_KEY] ?? 0;
   const currentPath: string[] = (ctx as any)[ORCHESTRATOR_PATH_KEY] ?? [leaderUsername];
 
@@ -845,396 +837,33 @@ async function invokeDelegateTask(
     };
   }
 
-  const spanService = new ExecutionSpanService(plugin);
   const upstreamTraceContext = getOrchestratorTraceContext(ctx);
   const rootRunId =
     providedRootRunId || upstreamTraceContext?.rootRunId || createRootRunId(`${leaderUsername}:${subAgentUsername}`);
   const parentSpanId = providedParentSpanId || upstreamTraceContext?.spanId || upstreamTraceContext?.parentSpanId;
-  const startTime = Date.now();
-  const trace: TraceEvent[] = [
-    {
-      type: 'start',
-      at: nowIso(),
-      title: `Delegation started: ${leaderUsername} -> ${subAgentUsername}`,
-      content: task,
-    },
-  ];
-  const executionSpan = await spanService.create({
-    rootRunId,
-    parentSpanId,
-    type: 'sub_agent',
-    status: 'running',
-    leaderUsername,
-    employeeUsername: subAgentUsername,
-    title: `Delegation: ${leaderUsername} -> ${subAgentUsername}`,
-    input: { task, context },
-    metadata: {
-      depth: currentDepth,
-      maxDepth,
-      toolName,
-      recursionLimit,
-      llmOverride: llmService && model ? { llmService, model } : undefined,
-    },
-    userId: ctxSnapshot.userId,
-  });
-  const executionSpanId = executionSpan?.id ? String(executionSpan.id) : undefined;
-  const logRecord = await logDelegation(ctx, plugin, {
+  const agentLoopRunId = upstreamTraceContext?.agentLoopRunId;
+  const agentLoopStepId = upstreamTraceContext?.agentLoopStepId;
+
+  return plugin.agentLoopService.harness.runSubAgent(ctx, {
     leaderUsername,
     subAgentUsername,
-    toolName,
+    subAgentEmployee,
     task,
     context,
-    result: '',
-    status: 'running',
-    depth: currentDepth,
-    durationMs: 0,
-    trace,
-    snapshot: ctxSnapshot,
+    currentDepth,
+    currentPath,
+    maxDepth,
+    timeout,
+    toolCallId,
+    toolName,
+    llmService,
+    model,
+    recursionLimit,
+    rootRunId,
+    parentSpanId,
+    agentLoopRunId,
+    agentLoopStepId,
   });
-  if (executionSpanId && logRecord?.id) {
-    await spanService.update(executionSpanId, { orchestratorLogId: logRecord.id });
-  }
-
-  try {
-    const aiPlugin = ctx.app.pm.get('ai') as PluginAIServer;
-    if (!aiPlugin) {
-      throw new Error('Plugin AI is not installed or enabled');
-    }
-
-    // --- Step 1: Resolve LLM model from sub-agent's employee config ---
-    let modelSettings = hasModelSettings(subAgentEmployee.modelSettings) ? subAgentEmployee.modelSettings : undefined;
-
-    // Override with orchestrator config if provided
-    if (llmService && model) {
-      modelSettings = { llmService, model };
-    }
-
-    if (!hasModelSettings(modelSettings)) {
-      // Fallback to leader's LLM model if sub-agent doesn't have one
-      const leaderEmployee = await plugin.db.getRepository('aiEmployees').findOne({
-        filter: { username: leaderUsername },
-      });
-
-      // The leader's model might be empty in the DB if it relies on the dynamic system default.
-      // In that case, we extract the dynamic `model` passed from the frontend request.
-      const dynamicModel = ctx.action?.params?.values?.model;
-      modelSettings = hasModelSettings(leaderEmployee?.modelSettings)
-        ? leaderEmployee.modelSettings
-        : hasModelSettings(dynamicModel)
-          ? dynamicModel
-          : undefined;
-
-      if (!hasModelSettings(modelSettings)) {
-        throw new Error(
-          `Sub-agent "${subAgentUsername}" has no LLM model configured (and leader fallback failed). Please configure a model in the Orchestrator Config or AI Employee settings.`,
-        );
-      }
-    }
-
-    const { provider } = await aiPlugin.aiManager.getLLMService({
-      llmService: modelSettings.llmService,
-      model: modelSettings.model,
-    });
-    const chatModel = provider.createModel();
-
-    // --- Step 2: Resolve tools via CORE toolsManager ---
-    // Uses app.aiManager.toolsManager (same as AIEmployee.getToolsMap at ai-employee.ts:1286)
-    // NOT plugin-ai's local toolManager (which has a different grouped format).
-    const coreToolsManager = ctx.app.aiManager.toolsManager;
-    const allTools: ToolsEntry[] = await coreToolsManager.listTools();
-
-    // skillSettings.skills is { name: string, autoCall: boolean }[]
-    // (verified at ai-employee.ts:1028-1029)
-    const employeeSkills: EmployeeSkillConfig[] = (subAgentEmployee.skillSettings?.skills ?? [])
-      .map((s: any) =>
-        typeof s === 'string'
-          ? { name: s, autoCall: false }
-          : { name: s?.name, autoCall: s?.autoCall === true },
-      )
-      .filter((s: EmployeeSkillConfig) => Boolean(s.name));
-    const employeeSkillMap = new Map(employeeSkills.map((skill) => [skill.name, skill]));
-
-    const langchainTools: DynamicStructuredTool[] = [];
-
-    for (const toolEntry of allTools) {
-      const entryName = toolEntry.definition.name;
-      if (!entryName) continue;
-      const employeeSkill = employeeSkillMap.get(entryName);
-
-      // Only include tools that the sub-agent employee is configured to use.
-      // Also skip our own orchestration tools to prevent circular delegation
-      // (belt-and-suspenders with the depth check above).
-      //
-      // Headless sub-agent execution has no human confirmation surface, so we
-      // require both the employee assignment and the tool definition to be
-      // explicitly auto-callable. This prevents ASK/interactionSchema Skill Hub
-      // tools from being executed silently by a delegated sub-agent.
-      if (
-        !employeeSkill ||
-        isDelegateToolName(plugin, entryName) ||
-        employeeSkill.autoCall !== true
-      ) {
-        continue;
-      }
-
-      langchainTools.push(
-        new DynamicStructuredTool({
-          name: entryName.replace(/[^a-zA-Z0-9_-]/g, '_'),
-          description: toolEntry.definition.description || entryName,
-          schema: (toolEntry.definition.schema || z.object({})) as any,
-          func: async (toolArgs) => {
-            // Forward the invoke with depth tracking, circular path tracking and identity overrides
-            const invokeCtx = Object.create(ctx);
-            (invokeCtx as any)[ORCHESTRATOR_DEPTH_KEY] = currentDepth + 1;
-            (invokeCtx as any)[ORCHESTRATOR_PATH_KEY] = [...currentPath, subAgentUsername];
-            (invokeCtx as any)._currentAIEmployee = subAgentUsername;
-            if (ctx.state) {
-              invokeCtx.state = Object.create(ctx.state);
-              invokeCtx.state.currentAIEmployee = subAgentUsername;
-            }
-            const toolStartedAt = Date.now();
-            const isSkillHubTool = entryName === 'skill_hub_execute' || entryName.startsWith('skill_hub_');
-            const toolSpan = await spanService.create({
-              rootRunId,
-              parentSpanId: executionSpanId,
-              type: isSkillHubTool ? 'skill' : 'tool',
-              status: 'running',
-              leaderUsername,
-              employeeUsername: subAgentUsername,
-              toolName: toolEntry.definition.name,
-              title: isSkillHubTool ? `Skill: ${toolEntry.definition.name}` : `Tool: ${toolEntry.definition.name}`,
-              input: toolArgs,
-              metadata: {
-                depth: currentDepth + 1,
-                toolCallId: `orch-${toolCallId}`,
-                defaultPermission: toolEntry.defaultPermission,
-              },
-              userId: ctxSnapshot.userId,
-            });
-            const toolSpanId = toolSpan?.id ? String(toolSpan.id) : undefined;
-            setOrchestratorTraceContext(invokeCtx, {
-              rootRunId,
-              spanId: toolSpanId,
-              parentSpanId: executionSpanId,
-              toolCallId: `orch-${toolCallId}`,
-              leaderUsername,
-              employeeUsername: subAgentUsername,
-              toolName: toolEntry.definition.name,
-            });
-
-            trace.push({
-              type: 'tool_call',
-              at: nowIso(),
-              title: `Calling tool: ${toolEntry.definition.name}`,
-              toolName: toolEntry.definition.name,
-              args: toolArgs,
-            });
-
-            try {
-              const res = await toolEntry.invoke(invokeCtx, toolArgs, `orch-${toolCallId}`);
-              const output = truncateText(res?.content ?? res?.result ?? res, 50000);
-              trace.push({
-                type: 'tool_result',
-                at: nowIso(),
-                title: `Tool finished: ${toolEntry.definition.name}`,
-                toolName: toolEntry.definition.name,
-                status: res?.status || 'success',
-                content: truncateText(output, 2000),
-              });
-              if (res?.status === 'error') {
-                await spanService.finish(toolSpanId, 'error', toolStartedAt, {
-                  output,
-                  error: truncateText(res.content || output, 10000),
-                });
-                throw new Error(`Tool <${toolEntry.definition.name}> failed: ${res.content}`);
-              }
-              await spanService.finish(toolSpanId, 'success', toolStartedAt, {
-                output,
-                skillExecutionId: res?.result?.execId || res?.execId,
-              });
-              return typeof res?.content === 'string' ? res.content : JSON.stringify(res);
-            } catch (e: any) {
-              trace.push({
-                type: 'tool_error',
-                at: nowIso(),
-                title: `Tool failed: ${toolEntry.definition.name}`,
-                toolName: toolEntry.definition.name,
-                status: 'error',
-                content: e.message,
-              });
-              await spanService.finish(toolSpanId, 'error', toolStartedAt, {
-                error: truncateText(e.message, 10000),
-              });
-              throw e;
-            }
-          },
-        }),
-      );
-    }
-
-    // --- Step 3: Build the agent ---
-    const abortController = new AbortController();
-    const executor = createReactAgent({
-      llm: chatModel,
-      tools: langchainTools,
-    });
-
-    // --- Step 4: Construct messages ---
-    let systemPrompt =
-      subAgentEmployee.chatSettings?.systemPrompt ||
-      subAgentEmployee.bio ||
-      `You are an AI assistant named "${subAgentEmployee.nickname || subAgentUsername}". ${
-        subAgentEmployee.about || ''
-      }`;
-
-    // --- Step 4b: Inject shared context from Knowledge Base (soft dependency) ---
-    // If plugin-knowledge-base is installed, inject the session context summary
-    // so the sub-agent is aware of findings from previous agents in this run.
-    try {
-      const kbPlugin = ctx.app.pm.get('plugin-knowledge-base') as any;
-      if (kbPlugin?.sessionContext) {
-        const sessionId =
-          ctx.action?.params?.values?.sessionId ||
-          ctx.action?.params?.sessionId ||
-          ctx.state?.sessionId;
-
-        const contextSummary = await kbPlugin.sessionContext.buildSummary(
-          { rootRunId, ...(sessionId ? { sessionId } : {}) },
-          6000,
-        );
-        if (contextSummary) {
-          systemPrompt += `\n\n<shared_context>\nThe following context was shared by other agents in this workflow. Use it to avoid redundant work:\n${contextSummary}\n</shared_context>`;
-        }
-      }
-    } catch (e: any) {
-      // Graceful fallback — never block delegation due to context injection failure.
-      ctx.app.log?.debug?.(`[AgentOrchestrator] Shared context injection skipped: ${e.message}`);
-    }
-
-    const combinedTask = context ? `Task: ${task}\n\nContext Provided:\n${context}` : `Task: ${task}`;
-
-    // --- Step 5: Execute with timeout + abort ---
-    // P3 FIX: AbortController signal cancels the in-flight stream on timeout,
-    // preventing continued token consumption after the timeout fires.
-    const effectiveRecursionLimit =
-      Number.isFinite(recursionLimit) && (recursionLimit as number) > 0 ? (recursionLimit as number) : 50;
-    const invokePromise = executeAgent(
-      executor,
-      systemPrompt,
-      combinedTask,
-      abortController.signal,
-      effectiveRecursionLimit,
-    );
-
-    const timeoutHandle = createTimeout(timeout, subAgentUsername, abortController);
-    let result: AgentExecutionResult;
-    try {
-      result = (await Promise.race([invokePromise, timeoutHandle.promise])) as AgentExecutionResult;
-    } finally {
-      // Always release the timer so it doesn't keep the event loop alive.
-      timeoutHandle.cancel();
-    }
-
-    const content = result.content || 'Sub-agent completed the task but produced no output.';
-    trace.push({
-      type: 'finish',
-      at: nowIso(),
-      title: `Delegation finished: ${subAgentUsername}`,
-      status: 'success',
-      content: truncateText(content, 2000),
-    });
-
-    // Log successful execution for tracing
-    await logDelegation(ctx, plugin, {
-      id: logRecord?.id,
-      leaderUsername,
-      subAgentUsername,
-      toolName,
-      task,
-      context,
-      result: content,
-      status: 'success',
-      depth: currentDepth,
-      durationMs: Date.now() - startTime,
-      trace,
-      messages: result.messages,
-      snapshot: ctxSnapshot,
-    });
-    await spanService.finish(executionSpanId, 'success', startTime, {
-      output: content,
-      metadata: {
-        depth: currentDepth,
-        maxDepth,
-        toolName,
-        recursionLimit,
-        messages: result.messages,
-        traceCount: trace.length,
-      },
-    });
-
-    return {
-      status: 'success' as const,
-      content,
-    };
-  } catch (e) {
-    plugin.app.log.error(`[AgentOrchestrator] Sub-agent ${subAgentUsername} failed`, e);
-
-    // Log failed execution for tracing
-    await logDelegation(ctx, plugin, {
-      id: logRecord?.id,
-      leaderUsername,
-      subAgentUsername,
-      toolName,
-      task,
-      context,
-      result: '',
-      status: 'error',
-      depth: currentDepth,
-      durationMs: Date.now() - startTime,
-      error: e.message,
-      trace: [
-        ...trace,
-        {
-          type: 'error',
-          at: nowIso(),
-          title: `Delegation failed: ${subAgentUsername}`,
-          status: 'error',
-          content: e.message,
-        },
-      ],
-      snapshot: ctxSnapshot,
-    }).catch((logErr) => {
-      plugin.app.log.warn('[AgentOrchestrator] Failed to save error log for delegation', logErr);
-    });
-    await spanService.finish(executionSpanId, 'error', startTime, {
-      error: truncateText(e.message, 10000),
-      metadata: {
-        depth: currentDepth,
-        maxDepth,
-        toolName,
-        recursionLimit,
-        traceCount: trace.length + 1,
-      },
-    });
-
-    const diagnosticTrace = trace
-      .filter((t) => t.type === 'tool_error' || t.type === 'error')
-      .map((t) => `[${t.toolName ? `Tool: ${t.toolName}` : 'Sub-agent'}] Error: ${t.content || t.title}`)
-      .join('\n');
-
-    const formattedError = [
-      `Sub-agent "${subAgentUsername}" failed execution: ${e.message}`,
-      diagnosticTrace ? `\nDiagnostic Details of internal failures:\n${diagnosticTrace}` : '',
-      `Suggestion: Review the tool parameters above or try dividing the task into simpler independent tasks.`,
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    return {
-      status: 'error' as const,
-      content: formattedError,
-    };
-  }
 }
 
 /**
@@ -1267,15 +896,12 @@ async function logDelegation(
       return;
     }
 
-    // Prefer the early snapshot captured in invokeDelegateTask — by the time
-    // the agent finishes, ctx may already be disposed. Fall back to ctx for
-    // call sites that don't pass a snapshot (e.g. authz-failure short-circuit).
     let userId: number | undefined = data.snapshot?.userId;
     if (userId == null) {
       try {
         userId = ctx.auth?.user?.id || ctx.state?.currentUser?.id;
       } catch {
-        // ctx lifecycle ended — proceed without userId
+        // ctx lifecycle ended
       }
     }
 
@@ -1314,92 +940,4 @@ async function logDelegation(
   } catch (e) {
     plugin.app.log.warn('[AgentOrchestrator] Failed to log delegation event', e);
   }
-}
-
-/**
- * Execute the agent and extract the final AI message content.
- * Uses executor.invoke to get the final state cleanly, avoiding chunk parsing issues.
- * Accepts an AbortSignal so the execution can be cancelled on timeout.
- */
-async function executeAgent(
-  executor: any,
-  systemPrompt: string,
-  task: string,
-  signal?: AbortSignal,
-  recursionLimit = 50,
-): Promise<AgentExecutionResult> {
-  const config: any = { recursionLimit };
-  if (signal) {
-    config.signal = signal;
-  }
-
-  const finalState = await executor.invoke(
-    {
-      messages: [new SystemMessage(systemPrompt), new HumanMessage(task)],
-    },
-    config,
-  );
-
-  // finalState.messages contains the entire conversation history of this delegation
-  const messages = finalState?.messages || [];
-
-  // Find the last AI message in the chain
-  const lastAIMessage = [...messages].reverse().find((m) => m.getType() === 'ai');
-
-  if (!lastAIMessage || !lastAIMessage.content) {
-    return { content: '', messages: serializeMessages(messages) };
-  }
-
-  let content = '';
-  if (typeof lastAIMessage.content === 'string') {
-    content = lastAIMessage.content;
-  } else if (Array.isArray(lastAIMessage.content)) {
-    content = lastAIMessage.content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
-  } else {
-    content = String(lastAIMessage.content);
-  }
-
-  return { content, messages: serializeMessages(messages) };
-}
-
-function serializeMessages(messages: any[]) {
-  return (messages || []).map((message, index) => {
-    const type = typeof message.getType === 'function' ? message.getType() : message.type;
-    return {
-      index,
-      type,
-      name: message.name,
-      content: truncateText(message.content, 10000),
-      toolCalls: message.tool_calls || message.toolCalls || [],
-      toolCallId: message.tool_call_id,
-      additionalKwargs: message.additional_kwargs,
-      responseMetadata: message.response_metadata,
-    };
-  });
-}
-
-/**
- * Schedule a rejection-on-timeout that also aborts the in-flight stream.
- * Returns the promise plus a `cancel()` so callers can release the timer
- * when the race resolves successfully (otherwise the handle keeps the event
- * loop alive until `ms` elapses).
- */
-function createTimeout(
-  ms: number,
-  agentName: string,
-  abortController?: AbortController,
-): { promise: Promise<never>; cancel: () => void } {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const promise = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      abortController?.abort();
-      reject(new Error(`Sub-agent "${agentName}" timed out after ${ms / 1000}s`));
-    }, ms);
-  });
-  return {
-    promise,
-    cancel: () => {
-      if (timer) clearTimeout(timer);
-    },
-  };
 }

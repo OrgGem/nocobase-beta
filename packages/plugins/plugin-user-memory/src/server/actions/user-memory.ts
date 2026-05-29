@@ -129,7 +129,7 @@ export async function getSyncLogs(ctx: Context, next: Next) {
 
   const repo = ctx.db.getRepository('userMemorySyncLogs');
   const [rows, count] = await repo.findAndCount({
-    filter: { userId },
+    filter: { 'user.id': userId },
     sort: ['-createdAt'],
     limit: pageSize,
     offset: (page - 1) * pageSize,

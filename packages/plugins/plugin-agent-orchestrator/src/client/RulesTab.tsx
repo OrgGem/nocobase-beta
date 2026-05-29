@@ -40,6 +40,12 @@ const sanitizeToolPart = (value: string) => (value || '').replace(/[^a-zA-Z0-9_-
 const expectedDelegateToolName = (leader: string, sub: string) =>
   `delegate_${sanitizeToolPart(leader)}_to_${sanitizeToolPart(sub)}`;
 const expectedDispatchToolName = (leader: string) => `dispatch_subagents_${sanitizeToolPart(leader)}`;
+const controllerToolNames = [
+  'orchestrator_plan_goal',
+  'orchestrator_execute_plan',
+  'orchestrator_status',
+  'orchestrator_cancel',
+];
 
 export const RulesTab: React.FC = () => {
   const api = useAPIClient();
@@ -58,11 +64,26 @@ export const RulesTab: React.FC = () => {
     url: 'ai:listAllEnabledModels',
   });
 
+  const { data: harnessProfilesData, loading: harnessLoading } = useRequest({
+    url: 'agentHarnessProfiles:list',
+    params: {
+      filter: { enabled: true },
+      sort: ['tag'],
+      pageSize: 100,
+    },
+  });
+
   const llmServices = React.useMemo(() => {
     const raw = (llmServicesData as any)?.data ?? llmServicesData;
     if (Array.isArray(raw)) return raw;
     return Array.isArray(raw?.data) ? raw.data : [];
   }, [llmServicesData]);
+
+  const harnessProfiles = React.useMemo(() => {
+    const raw = (harnessProfilesData as any)?.data ?? harnessProfilesData;
+    if (Array.isArray(raw)) return raw;
+    return Array.isArray(raw?.data) ? raw.data : [];
+  }, [harnessProfilesData]);
 
   // P3 FIX: Use shared context instead of duplicate API call
   const { employeeMap, skillsMap, refresh: refreshEmployees } = useAIEmployees();
@@ -71,7 +92,7 @@ export const RulesTab: React.FC = () => {
     return Array.isArray(rows) ? rows : [];
   }, [data]);
 
-  const handleAddSkillToEmployee = async (employeeUsername: string, toolName: string) => {
+  const handleAddSkillsToEmployee = async (employeeUsername: string, toolNames: string[]) => {
     try {
       // Re-fetch the leader to merge its current skills (skillsMap may be stale).
       const leaderResp = await api.request({
@@ -84,23 +105,29 @@ export const RulesTab: React.FC = () => {
         return;
       }
       const existing = Array.isArray(leader.skillSettings?.skills) ? leader.skillSettings.skills : [];
-      if (existing.some((s: any) => (typeof s === 'string' ? s : s?.name) === toolName)) {
-        message.info('Skill already present.');
+      const existingNames = new Set(existing.map((s: any) => (typeof s === 'string' ? s : s?.name)));
+      const missing = toolNames.filter((toolName) => !existingNames.has(toolName));
+      if (!missing.length) {
+        message.info('Skills already present.');
         await refreshEmployees();
         return;
       }
-      const nextSkills = [...existing, { name: toolName, autoCall: false }];
+      const nextSkills = [...existing, ...missing.map((name) => ({ name, autoCall: false }))];
       await api.request({
         url: 'aiEmployees:update',
         method: 'put',
         params: { filterByTk: employeeUsername },
         data: { skillSettings: { ...(leader.skillSettings || {}), skills: nextSkills } },
       });
-      message.success(`Added "${toolName}" to ${employeeUsername}'s skills.`);
+      message.success(`Added ${missing.length} skill${missing.length > 1 ? 's' : ''} to ${employeeUsername}.`);
       await refreshEmployees();
     } catch (e: any) {
       message.error(`Auto-assign failed: ${e?.message || 'unknown error'}`);
     }
+  };
+
+  const handleAddSkillToEmployee = async (employeeUsername: string, toolName: string) => {
+    await handleAddSkillsToEmployee(employeeUsername, [toolName]);
   };
 
   const handleAutoAssignSkill = async (record: any) => {
@@ -154,7 +181,7 @@ export const RulesTab: React.FC = () => {
       form.setFieldsValue(record);
     } else {
       form.resetFields();
-      form.setFieldsValue({ enabled: true, maxDepth: 1, timeout: 120000, recursionLimit: 50 });
+      form.setFieldsValue({ enabled: true, maxDepth: 1, timeout: 120000, recursionLimit: 50, harnessTag: 'default' });
     }
     setVisible(true);
   };
@@ -228,6 +255,13 @@ export const RulesTab: React.FC = () => {
       dataIndex: 'subAgentUsername',
       key: 'subAgentUsername',
       render: (username: string) => <Tag color="green">{employeeMap.get(username) || username}</Tag>,
+    },
+    {
+      title: 'Harness',
+      dataIndex: 'harnessTag',
+      key: 'harnessTag',
+      width: 120,
+      render: (tag: string) => <Tag color="purple">{tag || 'default'}</Tag>,
     },
     {
       title: 'Max Depth',
@@ -366,6 +400,17 @@ export const RulesTab: React.FC = () => {
       .filter(Boolean) as Array<{ leaderUsername: string; toolName: string; count: number }>;
   }, [groupedRules, skillsMap]);
 
+  const missingControllerSkills = React.useMemo(() => {
+    return groupedRules
+      .map((group) => {
+        const leaderSkills = skillsMap.get(group.leaderUsername);
+        if (!leaderSkills) return null;
+        const missing = controllerToolNames.filter((toolName) => !leaderSkills.has(toolName));
+        return missing.length ? { leaderUsername: group.leaderUsername, missing } : null;
+      })
+      .filter(Boolean) as Array<{ leaderUsername: string; missing: string[] }>;
+  }, [groupedRules, skillsMap]);
+
   return (
     <div>
       <Alert
@@ -393,6 +438,39 @@ export const RulesTab: React.FC = () => {
               <Text code>delegate_&lt;leader&gt;_to_&lt;sub&gt;</Text> tool to its skillSettings, so the LLM cannot
               actually call these sub-agents. Use the <b>Auto-add</b> button in the Skill column to fix.
             </Text>
+          }
+        />
+      )}
+
+      {missingControllerSkills.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`${missingControllerSkills.length} leader${
+            missingControllerSkills.length > 1 ? 's' : ''
+          } missing orchestrator controller tools`}
+          description={
+            <Space direction="vertical" size={6}>
+              <Text type="secondary">
+                Leaders need the orchestrator controller tools to create an approval-first plan and execute it after
+                the user accepts the card.
+              </Text>
+              {missingControllerSkills.map(({ leaderUsername, missing }) => (
+                <Space key={leaderUsername} size={8} wrap>
+                  <Tag color="blue">{employeeMap.get(leaderUsername) || leaderUsername}</Tag>
+                  <Text type="secondary">{missing.length} missing</Text>
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<ThunderboltOutlined />}
+                    onClick={() => handleAddSkillsToEmployee(leaderUsername, missing)}
+                  >
+                    Auto-add
+                  </Button>
+                </Space>
+              ))}
+            </Space>
           }
         />
       )}
@@ -558,6 +636,25 @@ export const RulesTab: React.FC = () => {
             tooltip="Max LangGraph reasoning steps per delegation. Higher = more complex multi-step tasks; lower = stricter cap on token usage. Default 50."
           >
             <InputNumber min={5} max={200} step={5} style={{ width: '100%' }} />
+          </Form.Item>
+
+          <Form.Item
+            name="harnessTag"
+            label="Harness Profile"
+            tooltip="Profile tag used by plan approval, controller limits, and orchestration policy."
+          >
+            <Select
+              loading={harnessLoading}
+              options={[
+                { label: 'default', value: 'default' },
+                ...harnessProfiles
+                  .filter((profile: any) => profile.tag !== 'default')
+                  .map((profile: any) => ({
+                    label: profile.title ? `${profile.tag} - ${profile.title}` : profile.tag,
+                    value: profile.tag,
+                  })),
+              ]}
+            />
           </Form.Item>
 
           <Form.Item

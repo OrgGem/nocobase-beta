@@ -1,6 +1,9 @@
 /**
  * This file is part of the NocoBase (R) project.
  * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
  * Authors: NocoBase Team.
  *
  * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
@@ -10,6 +13,7 @@
 export interface KnowledgeBase {
   knowledgeBaseType: string;
   knowledgeBaseOuterId: string;
+  key?: string;
   name: string;
   description: string;
   vectorStoreProvider: string;
@@ -28,6 +32,7 @@ export interface KnowledgeBaseGroup {
 }
 
 export interface KnowledgeBaseFeature {
+  getKnowledgeBase(knowledgeBaseIds: string[]): Promise<KnowledgeBase[]>;
   getKnowledgeBaseGroup(knowledgeBaseIds: string[]): Promise<KnowledgeBaseGroup[]>;
 }
 import type PluginKnowledgeBaseServer from '../plugin';
@@ -43,6 +48,55 @@ import type PluginKnowledgeBaseServer from '../plugin';
  */
 export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
   constructor(private plugin: PluginKnowledgeBaseServer) {}
+
+  async getKnowledgeBase(knowledgeBaseIds: string[]): Promise<KnowledgeBase[]> {
+    if (!knowledgeBaseIds || knowledgeBaseIds.length === 0) {
+      return [];
+    }
+
+    const repo = this.plugin.db.getRepository('aiKnowledgeBases');
+
+    const knowledgeBases = await repo.find({
+      filter: {
+        id: { $in: knowledgeBaseIds },
+        enabled: true,
+      },
+      appends: ['vectorStore', 'vectorStore.vectorDatabase'],
+    });
+
+    const results: KnowledgeBase[] = [];
+
+    for (const kb of knowledgeBases) {
+      const kbData = kb.toJSON();
+      const vectorStore = kbData.vectorStore;
+      const vectorStoreConfigId = vectorStore?.id ?? '';
+      const vectorStoreProvider = vectorStore?.vectorDatabase?.provider ?? 'pgvector';
+
+      results.push({
+        knowledgeBaseType: kbData.type ?? 'LOCAL',
+        knowledgeBaseOuterId: kbData.id,
+        key: String(kbData.id),
+        name: kbData.name,
+        description: kbData.description ?? '',
+        vectorStoreProvider,
+        vectorStoreConfigId,
+        vectorStoreProps: [
+          ...(kbData.options?.vectorStoreProps ?? []),
+          { key: 'vectorStoreConfigId', value: vectorStoreConfigId },
+          { key: 'accessLevel', value: kbData.accessLevel ?? 'PUBLIC' },
+          ...(kbData.accessLevel === 'BASIC' && kbData.ownerId
+            ? [{ key: 'ownerId', value: String(kbData.ownerId) }]
+            : []),
+          ...(kbData.accessLevel === 'SHARED'
+            ? [{ key: 'allowedRoles', value: Array.isArray(kbData.allowedRoles) ? kbData.allowedRoles : [] }]
+            : []),
+        ],
+        enabled: kbData.enabled,
+      });
+    }
+
+    return results;
+  }
 
   async getKnowledgeBaseGroup(knowledgeBaseIds: string[]): Promise<KnowledgeBaseGroup[]> {
     if (!knowledgeBaseIds || knowledgeBaseIds.length === 0) {
@@ -90,6 +144,7 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
       const kbEntry: KnowledgeBase = {
         knowledgeBaseType: kbData.type ?? 'LOCAL',
         knowledgeBaseOuterId: kbData.id,
+        key: String(kbData.id),
         name: kbData.name,
         description: kbData.description ?? '',
         vectorStoreProvider,

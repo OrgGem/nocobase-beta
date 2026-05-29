@@ -2,14 +2,19 @@ import { Plugin } from '@nocobase/server';
 import path from 'path';
 import { createDelegateToolsProvider } from './tools/delegate-task';
 import { createExternalRagSearchTool } from './tools/external-rag-search';
+import { createOrchestratorPlanTools } from './tools/orchestrator-plan';
 import { registerTracingResource } from './resources/tracing';
+import { registerAgentLoopResource } from './resources/agent-loop';
 import SkillHubSubFeature from './skill-hub/plugin';
+import { AgentLoopService } from './services/AgentLoopService';
 
 export class PluginAgentOrchestratorServer extends Plugin {
   skillHub: SkillHubSubFeature;
+  agentLoopService: AgentLoopService;
 
   async afterAdd() {
     this.skillHub = new SkillHubSubFeature(this);
+    this.agentLoopService = new AgentLoopService(this);
   }
 
   async beforeLoad() {
@@ -32,9 +37,15 @@ export class PluginAgentOrchestratorServer extends Plugin {
       actions: [
         'orchestratorConfig:*',
         'orchestratorTracing:*',
+        'agentLoops:*',
+        'agentLoopRuns:*',
+        'agentLoopSteps:*',
+        'agentLoopEvents:*',
+        'agentHarnessProfiles:*',
         'agentExecutionSpans:*',
         'skillDefinitions:*',
         'skillExecutions:*',
+        'skillLoopConfigs:*',
         'skillHub:*',
         'skillWorkerConfigs:*',
       ],
@@ -45,8 +56,12 @@ export class PluginAgentOrchestratorServer extends Plugin {
     // Uses createReactAgent (LangGraph public API) instead of private AIEmployee class.
     // Tools are registered via app.aiManager.toolsManager (public API from @nocobase/ai core).
     const toolsManager = (this as any).app.aiManager.toolsManager;
+    toolsManager.registerTools(createOrchestratorPlanTools(this, this.agentLoopService));
     toolsManager.registerTools(createExternalRagSearchTool(this));
     toolsManager.registerDynamicTools(createDelegateToolsProvider(this));
+
+    // --- Register Agent Loop Resource ---
+    registerAgentLoopResource(this, this.agentLoopService);
 
     // --- Register Tracing Resource (Phase 5) ---
     // Custom read-only resource for the Swarm Tracing admin page.

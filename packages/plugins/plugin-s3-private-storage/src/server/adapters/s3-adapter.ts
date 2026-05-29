@@ -9,7 +9,7 @@
 
 import { Readable } from 'stream';
 import path from 'path';
-import { IStorageAdapter, FileEntry, PutStreamOptions } from './types';
+import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult } from './types';
 
 /**
  * S3 storage adapter implementing IStorageAdapter.
@@ -59,60 +59,114 @@ export class S3Adapter implements IStorageAdapter {
     return mimeMap[ext] || 'application/octet-stream';
   }
 
-  async list(remotePath: string): Promise<FileEntry[]> {
+  async list(remotePath: string, options?: ListOptions): Promise<FileEntry[] | ListResult> {
     const { ListObjectsV2Command } = this.sdk;
     const prefix = this.normalizePrefix(remotePath);
     const entries: FileEntry[] = [];
-    let continuationToken: string | undefined;
 
-    do {
-      const response = await this.client.send(new ListObjectsV2Command({
-        Bucket: this.bucket,
-        Prefix: prefix,
-        Delimiter: '/',
-        MaxKeys: 1000,
-        ContinuationToken: continuationToken,
-      }));
+    // Fallback to recursive retrieval if search query is provided to ensure global search coverage
+    if (options?.search) {
+      let continuationToken: string | undefined;
+      do {
+        const response = await this.client.send(new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          Delimiter: '/',
+          MaxKeys: 1000,
+          ContinuationToken: continuationToken,
+        }));
 
-      if (response.CommonPrefixes) {
-        for (const cp of response.CommonPrefixes) {
-          if (cp.Prefix) {
-            const name = cp.Prefix.replace(prefix, '').replace(/\/$/, '');
-            if (name) {
-              entries.push({
-                name, path: '/' + cp.Prefix.replace(/\/$/, ''),
-                type: 'directory', size: 0, modifiedAt: 0,
-              });
+        if (response.CommonPrefixes) {
+          for (const cp of response.CommonPrefixes) {
+            if (cp.Prefix) {
+              const name = cp.Prefix.replace(prefix, '').replace(/\/$/, '');
+              if (name) {
+                entries.push({
+                  name, path: '/' + cp.Prefix.replace(/\/$/, ''),
+                  type: 'directory', size: 0, modifiedAt: 0,
+                });
+              }
             }
           }
         }
-      }
 
-      if (response.Contents) {
-        for (const obj of response.Contents) {
-          if (obj.Key && obj.Key !== prefix) {
-            const name = obj.Key.replace(prefix, '');
-            if (!name.includes('/')) {
-              entries.push({
-                name, path: '/' + obj.Key,
-                type: 'file', size: obj.Size || 0,
-                modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
-                mimetype: this.guessMime(name),
-              });
+        if (response.Contents) {
+          for (const obj of response.Contents) {
+            if (obj.Key && obj.Key !== prefix) {
+              const name = obj.Key.replace(prefix, '');
+              if (!name.includes('/')) {
+                entries.push({
+                  name, path: '/' + obj.Key,
+                  type: 'file', size: obj.Size || 0,
+                  modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
+                  mimetype: this.guessMime(name),
+                });
+              }
             }
           }
         }
-      }
 
-      continuationToken = response.NextContinuationToken;
-    } while (continuationToken);
+        continuationToken = response.NextContinuationToken;
+      } while (continuationToken);
+
+      entries.sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      return entries;
+    }
+
+    // Native single-page list
+    const limit = options?.limit || 100;
+    const response = await this.client.send(new ListObjectsV2Command({
+      Bucket: this.bucket,
+      Prefix: prefix,
+      Delimiter: '/',
+      MaxKeys: limit,
+      ContinuationToken: options?.continuationToken,
+    }));
+
+    if (response.CommonPrefixes) {
+      for (const cp of response.CommonPrefixes) {
+        if (cp.Prefix) {
+          const name = cp.Prefix.replace(prefix, '').replace(/\/$/, '');
+          if (name) {
+            entries.push({
+              name, path: '/' + cp.Prefix.replace(/\/$/, ''),
+              type: 'directory', size: 0, modifiedAt: 0,
+            });
+          }
+        }
+      }
+    }
+
+    if (response.Contents) {
+      for (const obj of response.Contents) {
+        if (obj.Key && obj.Key !== prefix) {
+          const name = obj.Key.replace(prefix, '');
+          if (!name.includes('/')) {
+            entries.push({
+              name, path: '/' + obj.Key,
+              type: 'file', size: obj.Size || 0,
+              modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
+              mimetype: this.guessMime(name),
+            });
+          }
+        }
+      }
+    }
 
     entries.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
 
-    return entries;
+    return {
+      entries,
+      nextContinuationToken: response.NextContinuationToken,
+      hasMore: response.IsTruncated,
+    };
   }
 
   async stat(remotePath: string): Promise<FileEntry> {

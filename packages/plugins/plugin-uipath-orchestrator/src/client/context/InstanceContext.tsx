@@ -1,16 +1,32 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useRequest } from '@nocobase/client';
+
+interface UiPathInstanceRecord {
+  id: number;
+  isDefault?: boolean;
+  defaultFolderId?: number | null;
+  defaultFolderKey?: string | null;
+  [key: string]: unknown;
+}
+
+interface UiPathFolderRecord {
+  folderId: number;
+  folderKey?: string | null;
+  [key: string]: unknown;
+}
 
 interface InstanceContextType {
   instanceId: number | null;
   setInstanceId: (id: number | null) => void;
-  instances: any[];
+  instances: UiPathInstanceRecord[];
   loading: boolean;
+  refreshInstances: () => void;
   folderId: number | null;
   folderKey: string | null;
   setFolder: (folderId: number | null, folderKey: string | null) => void;
-  folders: any[];
+  folders: UiPathFolderRecord[];
   foldersLoading: boolean;
+  refreshFolders: () => void;
 }
 
 const InstanceContext = createContext<InstanceContextType>({
@@ -18,11 +34,13 @@ const InstanceContext = createContext<InstanceContextType>({
   setInstanceId: () => {},
   instances: [],
   loading: false,
+  refreshInstances: () => {},
   folderId: null,
   folderKey: null,
   setFolder: () => {},
   folders: [],
   foldersLoading: false,
+  refreshFolders: () => {},
 });
 
 export const useCurrentInstance = () => useContext(InstanceContext);
@@ -33,23 +51,38 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [folderKey, setFolderKey] = useState<string | null>(null);
 
   // Fetch instances
-  const { data: instData, loading } = useRequest<any>({
+  const {
+    data: instData,
+    loading,
+    refresh: refreshInstances,
+  } = useRequest<any>({
     resource: 'uipathInstances',
     action: 'list',
     params: { pageSize: 100, filter: { enabled: true } },
   });
-  const instances = instData?.data || [];
+  const instances = useMemo(() => (Array.isArray(instData?.data) ? instData.data : []), [instData?.data]);
 
   // Auto-select default instance
   useEffect(() => {
-    if (instances.length > 0 && instanceId === null) {
-      const defaultInst = instances.find((i: any) => i.isDefault);
+    if (instances.length === 0) {
+      if (instanceId !== null) {
+        setInstanceId(null);
+      }
+      return;
+    }
+
+    if (instanceId === null || !instances.some((i: UiPathInstanceRecord) => i.id === instanceId)) {
+      const defaultInst = instances.find((i: UiPathInstanceRecord) => i.isDefault);
       setInstanceId(defaultInst ? defaultInst.id : instances[0].id);
     }
   }, [instances, instanceId]);
 
   // Fetch cached folders for current instance
-  const { data: folderData, loading: foldersLoading } = useRequest<any>(
+  const {
+    data: folderData,
+    loading: foldersLoading,
+    refresh: refreshFolders,
+  } = useRequest<any>(
     {
       resource: 'uipathFoldersCache',
       action: 'list',
@@ -57,12 +90,12 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     },
     { ready: !!instanceId, refreshDeps: [instanceId] },
   );
-  const folders = folderData?.data || [];
+  const folders = useMemo(() => (Array.isArray(folderData?.data) ? folderData.data : []), [folderData?.data]);
 
   // Auto-select default folder from instance config
   useEffect(() => {
     if (instanceId && instances.length > 0) {
-      const inst = instances.find((i: any) => i.id === instanceId);
+      const inst = instances.find((i: UiPathInstanceRecord) => i.id === instanceId);
       if (inst) {
         setFolderId(inst.defaultFolderId || null);
         setFolderKey(inst.defaultFolderKey || null);
@@ -78,8 +111,17 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   return (
     <InstanceContext.Provider
       value={{
-        instanceId, setInstanceId, instances, loading,
-        folderId, folderKey, setFolder, folders, foldersLoading,
+        instanceId,
+        setInstanceId,
+        instances,
+        loading,
+        refreshInstances,
+        folderId,
+        folderKey,
+        setFolder,
+        folders,
+        foldersLoading,
+        refreshFolders,
       }}
     >
       {children}

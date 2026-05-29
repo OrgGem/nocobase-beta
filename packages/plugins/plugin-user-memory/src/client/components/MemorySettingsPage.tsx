@@ -26,6 +26,7 @@ import {
   Divider,
   Modal,
   Tabs,
+  Select,
 } from 'antd';
 import { useAPIClient, useCurrentUserContext } from '@nocobase/client';
 import {
@@ -48,6 +49,8 @@ const MemorySettingsPage: React.FC = () => {
   const [selectedProfile, setSelectedProfile] = useState<any>(null);
   const [myProfile, setMyProfile] = useState<any>(null);
   const [syncLogs, setSyncLogs] = useState<any[]>([]);
+  const [llmServices, setLlmServices] = useState<any[]>([]);
+  const [selectedService, setSelectedService] = useState<string | undefined>(undefined);
   const [form] = Form.useForm();
 
   // Determine if current user is admin
@@ -64,10 +67,21 @@ const MemorySettingsPage: React.FC = () => {
       const { data } = await api.request({ url: 'userMemoryAdmin:getSettings' });
       setSettings(data?.data || {});
       form.setFieldsValue(data?.data || {});
+      setSelectedService(data?.data?.llmService);
     } catch (e) {
       // Non-admin users will get 403, silently ignore
     }
   }, [api, form, isAdmin]);
+
+  // Load available LLM services and their models
+  const loadLlmServices = useCallback(async () => {
+    try {
+      const res = await api.request({ url: 'ai:listAllEnabledModels' });
+      setLlmServices(res?.data?.data || []);
+    } catch (e) {
+      console.warn('Failed to load LLM services:', e);
+    }
+  }, [api]);
 
   // Load my profile
   const loadMyProfile = useCallback(async () => {
@@ -105,7 +119,10 @@ const MemorySettingsPage: React.FC = () => {
     loadMyProfile();
     loadProfiles();
     loadSyncLogs();
-  }, [loadSettings, loadMyProfile, loadProfiles, loadSyncLogs]);
+    if (isAdmin) {
+      loadLlmServices();
+    }
+  }, [loadSettings, loadMyProfile, loadProfiles, loadSyncLogs, loadLlmServices, isAdmin]);
 
   // Save settings
   const handleSaveSettings = async (values: any) => {
@@ -248,6 +265,15 @@ const MemorySettingsPage: React.FC = () => {
     { title: 'Summary', dataIndex: 'changeSummary', key: 'changeSummary', ellipsis: true },
   ];
 
+  const modelOptions = useMemo(() => {
+    const serviceObj = llmServices.find((s) => s.llmService === selectedService);
+    if (!serviceObj) return [];
+    return (serviceObj.enabledModels || []).map((m: any) => ({
+      value: m.value,
+      label: m.label || m.value,
+    }));
+  }, [selectedService, llmServices]);
+
   // Build tab items (modern Ant Design 5.x API — no deprecated TabPane)
   const tabItems = useMemo(() => {
     const items: any[] = [
@@ -332,10 +358,30 @@ const MemorySettingsPage: React.FC = () => {
                   <Input placeholder="0 0 3 * * *" />
                 </Form.Item>
                 <Form.Item name="llmService" label="LLM Service (for synthesis)">
-                  <Input placeholder="Leave empty for default" />
+                  <Select
+                    placeholder="Select LLM Service (or empty for default)"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    options={llmServices.map((svc) => ({
+                      value: svc.llmService,
+                      label: svc.llmServiceTitle || svc.llmService,
+                    }))}
+                    onChange={(val) => {
+                      setSelectedService(val);
+                      form.setFieldValue('llmModel', undefined);
+                    }}
+                  />
                 </Form.Item>
                 <Form.Item name="llmModel" label="LLM Model">
-                  <Input placeholder="Leave empty for default" />
+                  <Select
+                    placeholder="Select LLM Model (or empty for default)"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    options={modelOptions}
+                    disabled={!selectedService}
+                  />
                 </Form.Item>
                 <Form.Item name="maxTokens" label="Max Tokens (memory budget)">
                   <InputNumber min={100} max={4000} />
@@ -413,6 +459,9 @@ const MemorySettingsPage: React.FC = () => {
     loadSyncLogs,
     profileColumns,
     logColumns,
+    llmServices,
+    selectedService,
+    modelOptions,
   ]);
 
   return (

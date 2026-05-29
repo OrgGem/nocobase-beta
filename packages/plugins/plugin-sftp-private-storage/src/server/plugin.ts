@@ -8,7 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/server';
-import PluginFileManagerServer from '@nocobase/plugin-file-manager';
+import { col } from 'sequelize';
 import { STORAGE_TYPE_SFTP_PRIVATE } from '../constants';
 import { SftpConnectionManager, SftpConfig } from './sftp-connection-manager';
 import SftpPrivateStorage from './storages/sftp-private';
@@ -17,7 +17,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
   connectionManager: SftpConnectionManager;
 
   async afterAdd() {
-    this.app.pm.get(PluginFileManagerServer);
+    this.app.pm.get('file-manager') || this.app.pm.get('@nocobase/plugin-file-manager');
   }
 
   async beforeLoad() {}
@@ -25,11 +25,12 @@ export class PluginSftpPrivateStorageServer extends Plugin {
   async load() {
     this.connectionManager = new SftpConnectionManager(this.log);
 
-    const fileManagerPlugin = this.app.pm.get(PluginFileManagerServer) as PluginFileManagerServer;
+    const fileManagerPlugin = (this.app.pm.get('file-manager') ||
+      this.app.pm.get('@nocobase/plugin-file-manager')) as any;
     fileManagerPlugin.registerStorageType(STORAGE_TYPE_SFTP_PRIVATE, SftpPrivateStorage);
 
-    this.app.resourceManager.registerActionHandler('attachments:stream', this.streamAction.bind(this));
-    this.app.acl.allow('attachments', 'stream', 'loggedIn');
+    this.app.resourceManager.registerActionHandler('attachments:sftpStream', this.streamAction.bind(this));
+    this.app.acl.allow('attachments', 'sftpStream', 'loggedIn');
 
     // Register ACL snippet for admin management of SFTP configs
     this.app.acl.registerSnippet({
@@ -65,7 +66,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     });
 
     // Connection manager manages connections dynamically when requested via getConfigByName
-  }  /**
+  } /**
    * Get the connection manager (public API for other plugins)
    */
   getConnectionManager(): SftpConnectionManager {
@@ -86,9 +87,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     let sftpConfig: SftpConfig | null = null;
 
     if (config) {
-      const parsed = this.app.environment
-        ? this.app.environment.renderJsonTemplate(config.toJSON())
-        : config.toJSON();
+      const parsed = this.app.environment ? this.app.environment.renderJsonTemplate(config.toJSON()) : config.toJSON();
 
       sftpConfig = {
         id: config.get('id'),
@@ -167,8 +166,6 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     ctx.body = result;
   }
 
-
-
   private getParentCollections(fileCollectionName: string) {
     const parents: Array<{
       collectionName: string;
@@ -229,7 +226,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
             filter: { [parent.otherKey]: attachmentId },
           });
           if (links.length > 0) {
-            const parentIds = links.map(l => l.get(parent['foreignKey'])).filter(Boolean);
+            const parentIds = links.map((l) => l.get(parent['foreignKey'])).filter(Boolean);
             if (parentIds.length > 0) {
               let dataScopeFilter = canView.params?.filter || {};
               if (ctx && ctx.app.environment) {
@@ -243,11 +240,8 @@ export class PluginSftpPrivateStorageServer extends Plugin {
               const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
               const count = await parentCollection.repository.count({
                 filter: {
-                  $and: [
-                    { [pk]: { $in: parentIds } },
-                    dataScopeFilter
-                  ]
-                }
+                  $and: [{ [pk]: { $in: parentIds } }, dataScopeFilter],
+                },
               });
               if (count > 0) return true;
             } else {
@@ -277,6 +271,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     const isRoot = currentRoles.includes('root');
 
     const repository = ctx.db.getRepository(collection);
+    let recordCollection = repository.collection;
     let record = await repository.findOne({
       filterByTk,
     });
@@ -284,17 +279,18 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     // Fallback for old URLs generated before the 'collection' parameter was added
     if (!record && collection === 'attachments') {
       const allCollections = Array.from(ctx.db.collections.values());
-      const fileCollections = allCollections.filter(
-        (c: any) => c.options?.template === 'file' || c.name === 'aiFiles'
-      );
-      
+      const fileCollections = allCollections.filter((c: any) => c.options?.template === 'file' || c.name === 'aiFiles');
+
       for (const col of fileCollections as any[]) {
         if (col.name === 'attachments') continue;
         const repo = ctx.db.getRepository(col.name);
         if (repo) {
           try {
             record = await repo.findOne({ filterByTk });
-            if (record) break;
+            if (record) {
+              recordCollection = repo.collection;
+              break;
+            }
           } catch (e) {
             // ignore format errors if filterByTk is incompatible with the collection
           }
@@ -303,7 +299,9 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     }
 
     if (!record) {
-      ctx.logger.error(`[sftp-private-storage] Attachment not found. filterByTk=${filterByTk}, collection=${collection}`);
+      ctx.logger.error(
+        `[sftp-private-storage] Attachment not found. filterByTk=${filterByTk}, collection=${collection}`,
+      );
       ctx.throw(404, 'Attachment not found');
       return;
     }
@@ -328,14 +326,25 @@ export class PluginSftpPrivateStorageServer extends Plugin {
         return;
       }
     }
+    const fileManagerPlugin = (this.app.pm.get('file-manager') ||
+      this.app.pm.get('@nocobase/plugin-file-manager')) as any;
 
-    const fileManagerPlugin = this.app.pm.get(PluginFileManagerServer) as PluginFileManagerServer;
+    const recordObj = typeof record.toJSON === 'function' ? record.toJSON() : { ...record };
+    const storageId = await this.resolveStorageId(record, recordObj, fileManagerPlugin, recordCollection);
+    if (storageId === undefined || storageId === null || storageId === '') {
+      ctx.throw(500, 'Attachment storageId not found');
+      return;
+    }
+    recordObj.storageId = storageId;
+    this.copyFileFieldsFromRecord(record, recordObj);
+    await this.ensureFileFields(record, recordObj, recordCollection);
+    this.copyFileFieldsFromRecord(record, recordObj);
 
     try {
-      const { stream, contentType } = await fileManagerPlugin.getFileStream(record);
+      const { stream, contentType } = await fileManagerPlugin.getFileStream(recordObj);
       ctx.set('Content-Type', contentType || 'application/octet-stream');
 
-      const filename = encodeURIComponent(record.get('filename') || 'file');
+      const filename = encodeURIComponent(recordObj.filename || record.get('filename') || 'file');
       if (mode === 'attachment') {
         ctx.set('Content-Disposition', `attachment; filename="${filename}"`);
       } else {
@@ -356,6 +365,147 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     }
   }
 
+  private async resolveStorageId(record: any, recordObj: any, fileManagerPlugin: any, recordCollection?: any) {
+    const rawStorageId =
+      getRecordStorageId(record) ??
+      recordObj?.storageId ??
+      recordObj?.storage_id ??
+      recordObj?.storage?.id ??
+      recordObj?.storage?.filterByTk;
+
+    const matchedCacheKey = findStorageCacheKey(fileManagerPlugin?.storagesCache, rawStorageId);
+    if (matchedCacheKey !== undefined && matchedCacheKey !== null) {
+      return matchedCacheKey;
+    }
+
+    const dbStorageId = await this.resolveStorageIdFromRecordTable(record, recordCollection);
+    const matchedDbCacheKey = findStorageCacheKey(fileManagerPlugin?.storagesCache, dbStorageId);
+    if (matchedDbCacheKey !== undefined && matchedDbCacheKey !== null) {
+      return matchedDbCacheKey;
+    }
+
+    const storageId = dbStorageId ?? rawStorageId;
+    if (storageId === undefined || storageId === null || storageId === '') {
+      return storageId;
+    }
+
+    const storageRepo = this.db.getRepository('storages');
+    const storage = await storageRepo.findOne({ filterByTk: storageId });
+    if (!storage) {
+      return storageId;
+    }
+
+    const parsedStorage =
+      typeof fileManagerPlugin?.parseStorage === 'function'
+        ? fileManagerPlugin.parseStorage(storage)
+        : storage.toJSON();
+    fileManagerPlugin?.storagesCache?.set?.(storage.get('id'), parsedStorage);
+    return storage.get('id');
+  }
+
+  private async resolveStorageIdFromRecordTable(record: any, recordCollection?: any) {
+    const collection = recordCollection || record?.constructor?.collection;
+    if (!collection?.model) {
+      return undefined;
+    }
+
+    const primaryKey = collection.model.primaryKeyAttribute || 'id';
+    const recordId = record.get?.(primaryKey) ?? record.get?.('id') ?? record[primaryKey] ?? record.id;
+    if (recordId === undefined || recordId === null || recordId === '') {
+      return undefined;
+    }
+
+    let columns: Record<string, unknown>;
+    try {
+      columns = await this.db.sequelize.getQueryInterface().describeTable(collection.getTableNameWithSchema());
+    } catch (error) {
+      this.log.warn(
+        `[sftp-private-storage] Failed to inspect table "${collection.name}" for storageId:`,
+        error.message,
+      );
+      return undefined;
+    }
+
+    const rawAttributes = collection.model.rawAttributes || {};
+    const storageColumn = findExistingColumn(columns, [
+      rawAttributes.storageId?.field,
+      rawAttributes.storage_id?.field,
+      'storageId',
+      'storage_id',
+      'storageid',
+    ]);
+    if (!storageColumn) {
+      return undefined;
+    }
+
+    const result = await collection.model.findOne({
+      attributes: [[col(storageColumn), 'storageId']],
+      where: { [primaryKey]: recordId },
+      raw: true,
+    });
+
+    return result?.['storageId'];
+  }
+
+  private async ensureFileFields(record: any, recordObj: any, recordCollection?: any) {
+    const fileFields = ['key', 'filename', 'path', 'mimetype', 'title', 'extname', 'url'];
+    const needsFileKey = !hasText(recordObj.key) && !hasText(recordObj.filename) && !hasText(recordObj.url);
+    const missingFields = fileFields.filter((field) => isMissingFileValue(recordObj[field]));
+    if (!needsFileKey && missingFields.length === 0) {
+      return;
+    }
+
+    const fileData = await this.resolveFileFieldsFromRecordTable(record, fileFields, recordCollection);
+    for (const field of fileFields) {
+      if (!isMissingFileValue(fileData[field])) {
+        recordObj[field] = fileData[field];
+      }
+    }
+  }
+
+  private copyFileFieldsFromRecord(record: any, recordObj: any) {
+    for (const field of ['key', 'filename', 'path', 'mimetype', 'title', 'extname', 'url']) {
+      if (!isMissingFileValue(recordObj[field])) {
+        continue;
+      }
+
+      const value = record.get?.(field) ?? record.getDataValue?.(field) ?? record[field];
+      if (!isMissingFileValue(value)) {
+        recordObj[field] = value;
+      }
+    }
+  }
+
+  private async resolveFileFieldsFromRecordTable(record: any, fields: string[], recordCollection?: any) {
+    const collection = recordCollection || record?.constructor?.collection;
+    if (!collection?.model) {
+      return {};
+    }
+
+    const primaryKey = collection.model.primaryKeyAttribute || 'id';
+    const recordId = record.get?.(primaryKey) ?? record.get?.('id') ?? record[primaryKey] ?? record.id;
+    if (recordId === undefined || recordId === null || recordId === '') {
+      return {};
+    }
+
+    const rawAttributes = collection.model.rawAttributes || {};
+    const attributes = fields
+      .filter((field) => rawAttributes[field])
+      .map((field) => [col(rawAttributes[field].field || field), field]);
+
+    if (attributes.length === 0) {
+      return {};
+    }
+
+    const result = await collection.model.findOne({
+      attributes,
+      where: { [primaryKey]: recordId },
+      raw: true,
+    });
+
+    return result || {};
+  }
+
   async disable() {
     if (this.connectionManager) {
       await this.connectionManager.destroy();
@@ -367,6 +517,74 @@ export class PluginSftpPrivateStorageServer extends Plugin {
       await this.connectionManager.destroy();
     }
   }
+}
+
+function getRecordStorageId(record: any) {
+  if (!record) return undefined;
+  return (
+    record.get?.('storageId') ??
+    record.get?.('storage_id') ??
+    record.getDataValue?.('storageId') ??
+    record.getDataValue?.('storage_id') ??
+    record.storageId ??
+    record.storage_id ??
+    record.get?.('storage')?.id ??
+    record.storage?.id
+  );
+}
+
+function findStorageCacheKey(cache: Map<any, any> | undefined, storageId: any) {
+  if (!cache || storageId === undefined || storageId === null || storageId === '') {
+    return undefined;
+  }
+
+  if (cache.has(storageId)) {
+    return storageId;
+  }
+
+  const strId = String(storageId);
+  if (cache.has(strId)) {
+    return strId;
+  }
+
+  const numericId = Number(storageId);
+  if (Number.isFinite(numericId) && cache.has(numericId)) {
+    return numericId;
+  }
+
+  for (const key of cache.keys()) {
+    if (String(key) === strId) {
+      return key;
+    }
+  }
+
+  return undefined;
+}
+
+function findExistingColumn(columns: Record<string, unknown>, candidates: Array<string | undefined>) {
+  const columnNames = Object.keys(columns || {});
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (Object.prototype.hasOwnProperty.call(columns, candidate)) {
+      return candidate;
+    }
+
+    const matchedColumn = columnNames.find((columnName) => columnName.toLowerCase() === candidate.toLowerCase());
+    if (matchedColumn) {
+      return matchedColumn;
+    }
+  }
+
+  return undefined;
+}
+
+function hasText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isMissingFileValue(value: unknown) {
+  return value === undefined || value === null || value === '';
 }
 
 export default PluginSftpPrivateStorageServer;

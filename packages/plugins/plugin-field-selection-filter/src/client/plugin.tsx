@@ -13,6 +13,7 @@ import {
   useFormBlockContext,
   useLocalVariables,
   useRecord,
+  useSchemaSettings,
   useVariables,
   VariableInput,
 } from '@nocobase/client';
@@ -110,7 +111,18 @@ function useTableColumnSelectionContext() {
   const { fieldSchema: tableColumnFieldSchema, collectionField: tableColumnCollectionField } = useColumnSchema();
   const currentSchema = useFieldSchema();
   const targetCollectionField = useCollectionField();
-  const fieldSchema = tableColumnFieldSchema || currentSchema;
+  
+  // Try to get column/field schema from SchemaSettings context to avoid context loss in Portals/Dropdown menus
+  const schemaSettings = useSchemaSettings();
+  const parentSchema = schemaSettings?.fieldSchema;
+  const tableColumnFieldSchemaFromSettings = parentSchema?.reduceProperties((buf, s) => {
+    if (s['x-component'] === 'CollectionField') {
+      return s;
+    }
+    return buf;
+  }, null);
+
+  const fieldSchema = tableColumnFieldSchema || tableColumnFieldSchemaFromSettings || currentSchema;
   const collectionField =
     tableColumnCollectionField ||
     targetCollectionField ||

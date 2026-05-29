@@ -1,13 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useAPIClient } from '@nocobase/client';
 import { parseJsonText } from '../utils/jsonFields';
-
-export type InteractionSchema = {
-  type: 'form' | 'select' | 'confirm';
-  prompt: string;
-  options?: { label: string; value: string | number }[];
-  fields?: Record<string, { type?: string; title?: string; required?: boolean; enum?: any[] }>;
-};
+import { InteractionSchema } from './loopTemplates';
 
 const Ctx = createContext<Map<string, InteractionSchema>>(new Map());
 
@@ -23,28 +17,74 @@ const sanitize = (name: string) =>
 export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const api = useAPIClient();
   const [map, setMap] = useState<Map<string, InteractionSchema>>(new Map());
+  const [version, setVersion] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setVersion((current) => current + 1);
+    window.addEventListener('skill-hub-loop-settings-changed', refresh);
+    return () => window.removeEventListener('skill-hub-loop-settings-changed', refresh);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .request({
+    const extractList = (data: any) => {
+      const value = data?.data?.data ?? data?.data ?? data ?? [];
+      return Array.isArray(value) ? value : [];
+    };
+    const schemaFromLoopConfig = (config: any): InteractionSchema | null => {
+      const schema = parseJsonText<InteractionSchema | null>(config.schema, null);
+      if (schema) {
+        return config.prompt && !schema.prompt ? { ...schema, prompt: config.prompt } : schema;
+      }
+      if (config.prompt) {
+        return {
+          type: 'confirm',
+          prompt: config.prompt,
+        };
+      }
+      return null;
+    };
+
+    Promise.all([
+      api.request({
         url: 'skillDefinitions:list',
         params: {
           filter: { enabled: true },
-          fields: ['name', 'autoCall', 'interactionSchema'],
-          pageSize: 200,
+          fields: ['id', 'name', 'autoCall', 'interactionSchema'],
+          pageSize: 500,
         },
-      })
-      .then(({ data }) => {
+      }),
+      api.request({
+        url: 'skillLoopConfigs:list',
+        params: {
+          filter: { enabled: true },
+          fields: ['skillId', 'enabled', 'schema', 'prompt', 'templateKey'],
+          pageSize: 500,
+        },
+      }).catch(() => ({ data: [] })),
+    ])
+      .then(([skillsResponse, loopConfigsResponse]) => {
         if (cancelled) return;
         const next = new Map<string, InteractionSchema>();
-        const list = data?.data ?? [];
-        for (const s of list) {
+        const skills = extractList(skillsResponse.data);
+        const loopConfigs = extractList(loopConfigsResponse.data);
+        const skillsById = new Map(skills.map((skill: any) => [String(skill.id), skill]));
+
+        for (const s of skills) {
           if (s.autoCall) continue;
           const schema = parseJsonText<InteractionSchema | null>(s.interactionSchema, null);
           if (!schema) continue;
           next.set(sanitize(s.name), schema);
         }
+
+        for (const config of loopConfigs) {
+          const skill = skillsById.get(String(config.skillId));
+          if (!skill?.name) continue;
+          const schema = schemaFromLoopConfig(config);
+          if (!schema) continue;
+          next.set(sanitize(skill.name), schema);
+        }
+
         setMap(next);
       })
       .catch(() => {
@@ -53,7 +93,7 @@ export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }
     return () => {
       cancelled = true;
     };
-  }, [api]);
+  }, [api, version]);
 
   return <Ctx.Provider value={map}>{children}</Ctx.Provider>;
 };

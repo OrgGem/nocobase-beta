@@ -6,11 +6,13 @@ import React, { useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, Switch, Space, message, Tag, Popconfirm } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined } from '@ant-design/icons';
 import { useRequest, useAPIClient } from '@nocobase/client';
+import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
 export const InstanceManager: React.FC = () => {
   const t = useT();
   const api = useAPIClient();
+  const { refreshInstances } = useCurrentInstance();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [testing, setTesting] = useState<number | null>(null);
@@ -22,7 +24,7 @@ export const InstanceManager: React.FC = () => {
     params: { pageSize: 100 },
   });
 
-  const instances = data?.data || [];
+  const instances = Array.isArray(data?.data) ? data.data : [];
   const isMaskedSecret = (value: any) =>
     typeof value === 'string' && (value === '********' || value.includes('•') || value.includes('封'));
 
@@ -44,6 +46,7 @@ export const InstanceManager: React.FC = () => {
       form.resetFields();
       setEditing(null);
       refresh();
+      refreshInstances();
     } catch (err: any) {
       message.error(err.message);
     }
@@ -53,6 +56,7 @@ export const InstanceManager: React.FC = () => {
     await api.resource('uipathInstances').destroy({ filterByTk: id });
     message.success(t('Deleted'));
     refresh();
+    refreshInstances();
   };
 
   const handleTest = async (id: number) => {
@@ -72,6 +76,7 @@ export const InstanceManager: React.FC = () => {
   };
 
   const deploymentType = Form.useWatch('deploymentType', form);
+  const esEnabled = Form.useWatch('esEnabled', form);
 
   const columns = [
     { title: t('Name'), dataIndex: 'name' },
@@ -143,7 +148,13 @@ export const InstanceManager: React.FC = () => {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ deploymentType: 'cloud', scopes: 'OR.Default', enabled: true, pollEnabled: true }}
+          initialValues={{
+            deploymentType: 'cloud',
+            scopes: 'OR.Default',
+            esIndex: 'default-robotlogs-*',
+            enabled: true,
+            pollEnabled: true,
+          }}
         >
           <Form.Item name="name" label={t('Name')} rules={[{ required: true }]}>
             <Input />
@@ -185,6 +196,25 @@ export const InstanceManager: React.FC = () => {
           <Form.Item name="scopes" label={t('Scopes')}>
             <Input />
           </Form.Item>
+          <Form.Item name="esEnabled" label={t('Elasticsearch')} valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          {esEnabled ? (
+            <>
+              <Form.Item name="esNodes" label={t('Elasticsearch nodes')}>
+                <Input.TextArea rows={2} placeholder="https://elasticsearch.company.com:9200" />
+              </Form.Item>
+              <Form.Item name="esIndex" label={t('Elasticsearch index')}>
+                <Input />
+              </Form.Item>
+              <Form.Item name="esUsername" label={t('Elasticsearch username')}>
+                <Input />
+              </Form.Item>
+              <Form.Item name="esPassword" label={t('Elasticsearch password')}>
+                <Input.Password />
+              </Form.Item>
+            </>
+          ) : null}
           <Form.Item name="webhookSecret" label={t('Webhook Secret')}>
             <Input.Password />
           </Form.Item>

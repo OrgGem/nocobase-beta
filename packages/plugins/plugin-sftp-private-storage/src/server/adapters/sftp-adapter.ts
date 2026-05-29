@@ -9,7 +9,7 @@
 
 import { Readable } from 'stream';
 import path from 'path';
-import { IStorageAdapter, FileEntry, PutStreamOptions } from './types';
+import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult } from './types';
 
 // Use inline type instead of cross-plugin import.
 // The actual SftpConnectionManager is injected at runtime from plugin-sftp-private-storage.
@@ -106,11 +106,11 @@ export class SftpAdapter implements IStorageAdapter {
     return map[ext];
   }
 
-  async list(remotePath: string): Promise<FileEntry[]> {
+  async list(remotePath: string, options?: ListOptions): Promise<FileEntry[] | ListResult> {
     const normalizedPath = this.resolveStoragePath(remotePath || '/');
     const rawEntries = await this.connectionManager.listFiles(this.configId, normalizedPath);
 
-    const entries: FileEntry[] = rawEntries.map((entry) => ({
+    let entries: FileEntry[] = rawEntries.map((entry) => ({
       name: entry.name,
       path: this.toAdapterPath(entry.path),
       type: entry.type === 'directory' || entry.type === 'link' ? 'directory' as const : 'file' as const,
@@ -119,11 +119,33 @@ export class SftpAdapter implements IStorageAdapter {
       mimetype: entry.type === 'file' ? this.guessMime(entry.name) : undefined,
     }));
 
+    // Apply filtering if options are provided
+    if (options?.type) {
+      entries = entries.filter((entry) => entry.type === options.type);
+    }
+    if (options?.search) {
+      const searchLower = options.search.toLowerCase();
+      entries = entries.filter((entry) => entry.name.toLowerCase().includes(searchLower));
+    }
+
     // Sort: directories first, then files, alphabetically within each group
     entries.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+
+    // If pagination options are specified, slice and return ListResult
+    if (options && (options.limit !== undefined || options.offset !== undefined)) {
+      const limit = options.limit || 100;
+      const offset = options.offset || 0;
+      const sliced = entries.slice(offset, offset + limit);
+
+      return {
+        entries: sliced,
+        total: entries.length,
+        hasMore: offset + limit < entries.length,
+      };
+    }
 
     return entries;
   }

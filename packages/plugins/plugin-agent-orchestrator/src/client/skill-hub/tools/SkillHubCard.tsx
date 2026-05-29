@@ -7,17 +7,48 @@ export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions 
   const schemas = useInteractionSchemas();
   const [form] = Form.useForm();
 
-  const skillKey = toolCall.name.replace(/^skill_hub_/, '');
+  const sanitize = (name: string) =>
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_|_$/g, '');
+  const isGenericExecutor = toolCall.name === 'skill_hub_execute';
+  const rawArgs = (toolCall.args as Record<string, any>) || {};
+  const skillKey = isGenericExecutor ? sanitize(rawArgs.skillName || '') : toolCall.name.replace(/^skill_hub_/, '');
   const schema = schemas.get(skillKey);
 
   const interrupted = toolCall.invokeStatus === 'init' || toolCall.invokeStatus === 'interrupted';
-  if (!schema || !interrupted) {
+  if (!interrupted) {
     return null;
+  }
+
+  if (!schema) {
+    return (
+      <Card size="small" style={{ marginTop: 8 }}>
+        <Typography.Paragraph style={{ marginBottom: 12 }}>
+          Review this Skill Hub tool call before execution.
+        </Typography.Paragraph>
+        <Space>
+          <Button type="primary" onClick={() => decisions.approve()}>
+            Run
+          </Button>
+          <Button onClick={() => decisions.reject('user_cancel')}>Cancel</Button>
+        </Space>
+      </Card>
+    );
   }
 
   const onSubmit = async () => {
     const values = await form.validateFields();
-    const args = schema.type === 'select' ? values : { ...(toolCall.args as any), ...values };
+    const args = isGenericExecutor
+      ? {
+          ...rawArgs,
+          input: schema.type === 'select' ? values : { ...(rawArgs.input || {}), ...values },
+        }
+      : schema.type === 'select'
+        ? values
+        : { ...rawArgs, ...values };
     await decisions.edit(args);
   };
 
@@ -39,7 +70,7 @@ export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions 
         <Form
           form={form}
           layout="vertical"
-          initialValues={(toolCall.args as Record<string, any>) || {}}
+          initialValues={(isGenericExecutor ? rawArgs.input : rawArgs) || {}}
           style={{ marginBottom: 8 }}
         >
           {schema.type === 'select' && (

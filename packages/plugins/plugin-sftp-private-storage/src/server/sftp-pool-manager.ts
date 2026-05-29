@@ -1,5 +1,5 @@
-import SftpClient from 'ssh2-sftp-client';
-import genericPool, { Pool } from 'generic-pool';
+import type SftpClient from 'ssh2-sftp-client';
+import type { Pool } from 'generic-pool';
 import crypto from 'crypto';
 
 export interface SftpPoolOptions {
@@ -43,7 +43,14 @@ class SftpPoolManager {
     if (!this.pools.has(hash)) {
       const factory = {
         create: async (): Promise<SftpClient> => {
-          const client = new SftpClient();
+          let SftpClientClass;
+          try {
+            SftpClientClass = require('ssh2-sftp-client');
+          } catch (e) {
+            throw new Error('ssh2-sftp-client module is not installed. Please run `npm install ssh2-sftp-client` first.');
+          }
+          const SftpClientCtor = SftpClientClass.default || SftpClientClass;
+          const client = new SftpClientCtor();
           const connectOptions: any = {
             host: config.host,
             port: config.port || 22,
@@ -85,7 +92,14 @@ class SftpPoolManager {
         testOnBorrow: true,
       };
 
-      const pool = genericPool.createPool(factory, poolOpts);
+      let genericPoolClass;
+      try {
+        genericPoolClass = require('generic-pool');
+      } catch (e) {
+        throw new Error('generic-pool module is not installed. Please run `npm install generic-pool` first.');
+      }
+      const genericPoolLib = genericPoolClass.default || genericPoolClass;
+      const pool = genericPoolLib.createPool(factory, poolOpts);
       this.pools.set(hash, pool);
     }
 

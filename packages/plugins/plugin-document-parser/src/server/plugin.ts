@@ -176,8 +176,25 @@ export class PluginDocumentParserServer extends Plugin {
     // This bypasses any HTTP auth layer (e.g. plugin-file-preview-auth) that
     // would cause a plain axios request to fail with 401/403.
     if (attachment.storageId) {
+      const rawStorageId = attachment.storageId;
+      let matchedKey = null;
+      if (rawStorageId) {
+        const strId = String(rawStorageId);
+        for (const key of fileManager.storagesCache.keys()) {
+          if (String(key) === strId) {
+            matchedKey = key;
+            break;
+          }
+        }
+      }
+
+      const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
+      if (matchedKey !== null) {
+        attachmentObj.storageId = matchedKey;
+      }
+
       try {
-        const { stream } = await fileManager.getFileStream(attachment);
+        const { stream } = await fileManager.getFileStream(attachmentObj);
         const chunks: Uint8Array[] = [];
         for await (const chunk of stream) {
           chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
@@ -186,7 +203,7 @@ export class PluginDocumentParserServer extends Plugin {
         // Resolve the URL separately for callers that need it (best-effort)
         let url = '';
         try {
-          url = decodeURIComponent(await fileManager.getFileURL(attachment));
+          url = decodeURIComponent(await fileManager.getFileURL(attachmentObj));
         } catch {
           // URL is informational only — don't fail if it can't be resolved
         }

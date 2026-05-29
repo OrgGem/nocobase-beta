@@ -8,10 +8,9 @@ export default {
     { name: 'name', type: 'string', length: 200 },
     { name: 'instanceId', type: 'bigInt' },
     { name: 'instance', type: 'belongsTo', target: 'uipathInstances', foreignKey: 'instanceId' },
-    // Scope: jobs | queues | logs | robots | sessions | licenses
+    // Scope currently evaluated by polling snapshots: jobs | sessions
     { name: 'scope', type: 'string', length: 30, defaultValue: 'jobs' },
-    // Metric: failedJobsCount | pendingJobsAge | queueBacklog | queueSlaBreached |
-    //         robotDisconnected | errorLogSpike | licenseUsage
+    // Metric path, e.g. jobsStats.Faulted or sessionsStats.Disconnected
     { name: 'metric', type: 'string', length: 50 },
     { name: 'operator', type: 'string', length: 5 },
     { name: 'threshold', type: 'float' },

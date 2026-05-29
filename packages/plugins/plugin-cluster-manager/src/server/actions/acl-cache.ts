@@ -108,8 +108,8 @@ export function createAclCacheMiddleware(app: any) {
     // This is safe because we read ctx.permission AFTER next() completes —
     // no monkey-patching of shared singletons.
     try {
-      const result = ctx.permission?.can;
-      const valueToCache = result ? JSON.stringify(result) : '__DENIED__';
+      const result = ctx.permission?.can as any;
+      const valueToCache = JSON.stringify(result !== undefined && result !== null ? result : true);
       cache.set(cacheKey, valueToCache, ACL_CACHE_TTL).catch(() => {});
     } catch {
       // Ignore cache write errors

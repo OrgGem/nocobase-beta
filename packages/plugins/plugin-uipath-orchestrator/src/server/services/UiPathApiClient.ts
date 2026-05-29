@@ -55,9 +55,7 @@ export class UiPathApiClient {
   private buildApiBaseUrl(config: UiPathInstanceConfig): string {
     const base = (config.baseUrl || '').replace(/\/+$/, '');
     if (config.deploymentType === 'onPrem') {
-      if (!base) return '';
-      if (/\/orchestrator_?$/i.test(base)) return base;
-      return `${base}/orchestrator`;
+      return base;
     }
     // Cloud: https://cloud.uipath.com/{accountLogicalName}/{tenantLogicalName}/orchestrator_
     const cloudBase = (config.baseUrl || DEFAULT_CLOUD_BASE_URL).replace(/\/+$/, '');
@@ -276,6 +274,9 @@ export class UiPathApiClient {
       Accept: 'application/json',
       ...this.buildFolderHeaders(folder),
     };
+    if (this.config.deploymentType === 'onPrem' && this.config.tenantName) {
+      headers['X-UIPATH-TenantName'] = this.config.tenantName;
+    }
     if (body) {
       headers['Content-Type'] = 'application/json';
     }

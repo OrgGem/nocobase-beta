@@ -8,8 +8,19 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DownloadOutlined, LeftOutlined, RightOutlined, CopyOutlined } from '@ant-design/icons';
-import { Modal, Button, Spin, Alert, Space, message } from 'antd';
+import {
+  DownloadOutlined,
+  LeftOutlined,
+  RightOutlined,
+  CopyOutlined,
+  SyncOutlined,
+  ClockCircleOutlined,
+  CheckCircleOutlined,
+  ScanOutlined,
+  ThunderboltOutlined,
+  EyeOutlined,
+} from '@ant-design/icons';
+import { Modal, Button, Spin, Alert, Space, message, Tabs, Tag } from 'antd';
 import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype, useComponent } from '@nocobase/client';
 // @ts-ignore
 import { filePreviewTypes } from '@nocobase/plugin-file-manager/client';
@@ -48,11 +59,64 @@ const PPTX_MIME_TYPES = [
   'application/vnd.ms-powerpoint',
 ];
 const PPTX_EXTS = ['pptx', 'ppt'];
+const IMAGE_PLACEHOLDER_ICON_MAP: Record<string, string> = {
+  png: 'png-200-200.png',
+  jpg: 'jpeg-200-200.png',
+  jpeg: 'jpeg-200-200.png',
+  gif: 'gif-200-200.png',
+  webp: 'png-200-200.png',
+  bmp: 'png-200-200.png',
+  svg: 'svg-200-200.png',
+};
+const MIME_IMAGE_PLACEHOLDER_ICON_MAP: Record<string, string> = {
+  'image/png': IMAGE_PLACEHOLDER_ICON_MAP.png,
+  'image/jpeg': IMAGE_PLACEHOLDER_ICON_MAP.jpeg,
+  'image/jpg': IMAGE_PLACEHOLDER_ICON_MAP.jpeg,
+  'image/gif': IMAGE_PLACEHOLDER_ICON_MAP.gif,
+  'image/webp': IMAGE_PLACEHOLDER_ICON_MAP.webp,
+  'image/bmp': IMAGE_PLACEHOLDER_ICON_MAP.bmp,
+  'image/svg+xml': IMAGE_PLACEHOLDER_ICON_MAP.svg,
+};
 
 // ─── Utility functions ──────────────────────────────────────────────
 
+function getPreviewFileRecord(file: any) {
+  if (!file || typeof file === 'string') {
+    return file;
+  }
+
+  const response = file.response;
+  if (!response || typeof response !== 'object') {
+    return file;
+  }
+
+  return {
+    ...response,
+    ...file,
+    id: file.id ?? response.id,
+    uid: file.uid ?? response.uid,
+    url: file.url ?? response.url,
+    preview: file.preview || response.preview,
+    filename: file.filename ?? response.filename,
+    name: file.name ?? response.name,
+    title: file.title ?? response.title,
+    extname: file.extname ?? response.extname,
+    mimetype: file.mimetype ?? response.mimetype,
+    size: file.size ?? response.size,
+    path: file.path ?? response.path,
+    storageId: file.storageId ?? response.storageId,
+    storageType: file.storageType ?? response.storageType ?? file.storage?.type ?? response.storage?.type,
+    storageName: file.storageName ?? response.storageName ?? file.storage?.name ?? response.storage?.name,
+    storage: file.storage ?? response.storage,
+    collectionName: file.collectionName ?? response.collectionName,
+    lastModified: file.lastModified ?? response.lastModified,
+  };
+}
+
 const getFileExt = (file: any): string => {
-  const value = typeof file === 'string' ? file : file?.extname || file?.name || file?.filename || file?.url || '';
+  const record = getPreviewFileRecord(file);
+  const value =
+    typeof record === 'string' ? record : record?.extname || record?.name || record?.filename || record?.url || '';
   const clean = value.split('?')[0].split('#')[0];
   const index = clean.lastIndexOf('.');
   return index !== -1
@@ -64,83 +128,240 @@ const getFileExt = (file: any): string => {
 };
 
 const resolveFileUrl = (file: any): string => {
-  const url = typeof file === 'string' ? file : file?.url;
+  const record = getPreviewFileRecord(file);
+  const url = typeof record === 'string' ? record : record?.url || record?.preview || record?.path;
   if (!url) {
     return '';
   }
   return url.startsWith('https://') || url.startsWith('http://') ? url : `${location.origin}/${url.replace(/^\//, '')}`;
 };
 
+const getFileDependencyKey = (file: any): string => {
+  if (typeof file === 'string') return file;
+  const record = getPreviewFileRecord(file);
+  if (!record) return '';
+  return [
+    record.id,
+    record.uid,
+    record.url,
+    record.preview,
+    record.path,
+    record.storageId,
+    record.storageType,
+    record.storageName,
+    record.collectionName,
+    record.lastModified,
+    record.size,
+  ]
+    .filter((value) => value != null && value !== '')
+    .join(':');
+};
+
 const isPdfFile = (file: any): boolean => {
-  if (file?.mimetype && PDF_MIME_TYPES.includes(file.mimetype)) return true;
+  const record = getPreviewFileRecord(file);
+  if (record?.mimetype && PDF_MIME_TYPES.includes(record.mimetype)) return true;
   const ext = getFileExt(file);
   return !!ext && PDF_EXTS.includes(ext);
 };
 
 const isImageFile = (file: any): boolean => {
-  if (file?.mimetype && IMAGE_MIME_TYPES.includes(file.mimetype)) return true;
-  if (file?.mimetype && matchMimetype(file, 'image/*')) return true;
+  const record = getPreviewFileRecord(file);
+  if (record?.mimetype && IMAGE_MIME_TYPES.includes(record.mimetype)) return true;
+  if (record?.mimetype && matchMimetype(record, 'image/*')) return true;
   const ext = getFileExt(file);
   return !!ext && IMAGE_EXTS.includes(ext);
 };
 
 const isTextFile = (file: any): boolean => {
-  if (file?.mimetype && TEXT_MIME_TYPES.includes(file.mimetype)) return true;
+  const record = getPreviewFileRecord(file);
+  if (record?.mimetype && TEXT_MIME_TYPES.includes(record.mimetype)) return true;
   const ext = getFileExt(file);
   return !!ext && TEXT_EXTS.includes(ext);
 };
 
 const isDocxFile = (file: any): boolean => {
-  if (file?.mimetype && DOCX_MIME_TYPES.includes(file.mimetype)) return true;
+  const record = getPreviewFileRecord(file);
+  if (record?.mimetype && DOCX_MIME_TYPES.includes(record.mimetype)) return true;
   const ext = getFileExt(file);
   return !!ext && DOCX_EXTS.includes(ext);
 };
 
 const isXlsxFile = (file: any): boolean => {
-  if (file?.mimetype && XLSX_MIME_TYPES.includes(file.mimetype)) return true;
+  const record = getPreviewFileRecord(file);
+  if (record?.mimetype && XLSX_MIME_TYPES.includes(record.mimetype)) return true;
   const ext = getFileExt(file);
   return !!ext && XLSX_EXTS.includes(ext);
 };
 
 const isPptxFile = (file: any): boolean => {
-  if (file?.mimetype && PPTX_MIME_TYPES.includes(file.mimetype)) return true;
+  const record = getPreviewFileRecord(file);
+  if (record?.mimetype && PPTX_MIME_TYPES.includes(record.mimetype)) return true;
   const ext = getFileExt(file);
   return !!ext && PPTX_EXTS.includes(ext);
 };
 
 const isPreviewableFile = (file: any): boolean => {
-  return isPdfFile(file) || isImageFile(file) || isTextFile(file) || isDocxFile(file) || isXlsxFile(file) || isPptxFile(file);
+  return (
+    isPdfFile(file) || isImageFile(file) || isTextFile(file) || isDocxFile(file) || isXlsxFile(file) || isPptxFile(file)
+  );
 };
 
 const getFileDisplayName = (file: any): string => {
-  if (!file) return 'download';
-  if (file.title && file.extname) return `${file.title}${file.extname}`;
-  return file.filename || file.name || file.title || 'download';
+  const record = getPreviewFileRecord(file);
+  if (!record) return 'download';
+  if (record.title && record.extname) return `${record.title}${record.extname}`;
+  return record.filename || record.name || record.title || 'download';
 };
 
 const loadedBlobCache = new Map<string, Promise<Blob>>();
 
-function getBlobCacheKey(url: string, token: string): string {
-  return `${token ? 'auth' : 'anon'}:${token || ''}:${url}`;
+function getBlobCacheKey(file: any, token: string, downloadUrl: string): string {
+  return `${token ? 'auth' : 'anon'}:${token || ''}:${getFileDependencyKey(file) || downloadUrl}`;
 }
 
 function normalizeFileForServer(file: any) {
+  const record = getPreviewFileRecord(file);
   return {
-    id: file?.id,
-    uid: file?.uid,
-    url: file?.url,
-    preview: file?.preview,
-    filename: file?.filename || file?.name,
-    name: file?.name || file?.filename,
-    title: file?.title,
-    extname: file?.extname,
-    mimetype: file?.mimetype,
-    size: file?.size,
-    path: file?.path,
-    storageId: file?.storageId,
-    collectionName: file?.collectionName,
-    lastModified: file?.lastModified,
+    id: record?.id,
+    uid: record?.uid,
+    url: record?.url,
+    preview: record?.preview,
+    filename: record?.filename || record?.name,
+    name: record?.name || record?.filename,
+    title: record?.title,
+    extname: record?.extname,
+    mimetype: record?.mimetype,
+    size: record?.size,
+    path: record?.path,
+    storageId: record?.storageId ?? record?.storage_id ?? record?.storage?.id,
+    storage_id: record?.storage_id,
+    storageType: record?.storageType || record?.storage?.type,
+    storageName: record?.storageName || record?.storage?.name,
+    storage: record?.storage,
+    collectionName: record?.collectionName,
+    lastModified: record?.lastModified,
   };
+}
+
+function isInternalAuthenticatedDownloadUrl(url: string): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url, location.origin);
+    if (parsed.origin !== location.origin) {
+      return false;
+    }
+    return [
+      '/api/filePreviewAuth:download',
+      '/api/extStorage:download',
+      '/api/skillHub:download',
+      '/api/worker-monitor',
+      '/api/carboneTemplates:download',
+      '/api/attachments:stream',
+      '/api/attachments:sftpStream',
+    ].some(
+      (path) =>
+        parsed.pathname === path || parsed.pathname.startsWith(`${path}/`) || parsed.pathname.startsWith(`${path}:`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getPublicAssetUrl(path: string): string {
+  const publicPath =
+    typeof window === 'undefined'
+      ? '/'
+      : window['__nocobase_dev_public_path__'] || window['__nocobase_public_path__'] || '/';
+  return `${publicPath.replace(/\/?$/, '/')}${path.replace(/^\//, '')}`;
+}
+
+function getImageThumbnailPlaceholderUrl(file: any): string {
+  const record = getPreviewFileRecord(file);
+  const ext = getFileExt(record);
+  const mimetype = typeof record?.mimetype === 'string' ? record.mimetype.toLowerCase() : '';
+  const icon = IMAGE_PLACEHOLDER_ICON_MAP[ext] || MIME_IMAGE_PLACEHOLDER_ICON_MAP[mimetype] || 'unknown-200-200.png';
+  return getPublicAssetUrl(`file-placeholder/${icon}`);
+}
+
+function getSafeImageThumbnailUrl(file: any): string {
+  const record = getPreviewFileRecord(file);
+  const thumbnailUrl = [record?.preview, record?.url].find((url) => typeof url === 'string' && url);
+  if (thumbnailUrl && !isInternalAuthenticatedDownloadUrl(thumbnailUrl)) {
+    return thumbnailUrl;
+  }
+  return getImageThumbnailPlaceholderUrl(record);
+}
+
+function isS3PrivateFile(file: any): boolean {
+  const normalized = normalizeFileForServer(typeof file === 'string' ? { url: file } : file || {});
+  const storageType = normalized.storageType || normalized.storage?.type;
+  return storageType === 's3-private' || storageType === 'aws-s3-private';
+}
+
+function isAttachmentStreamCandidate(file: any, sourceUrl: string): boolean {
+  const normalized = normalizeFileForServer(typeof file === 'string' ? { url: file } : file || {});
+  const collection = normalized.collectionName || 'attachments';
+  const id = normalized.id || normalized.uid;
+  if (id == null) {
+    return false;
+  }
+
+  if (isS3PrivateFile(file)) {
+    return true;
+  }
+
+  return collection === 'attachments' && !sourceUrl;
+}
+
+function buildAttachmentStreamUrl(file: any, mode: 'inline' | 'attachment'): string {
+  const normalized = normalizeFileForServer(typeof file === 'string' ? { url: file } : file || {});
+  const id = normalized.id || normalized.uid;
+  if (id == null) {
+    return '';
+  }
+
+  const params = new URLSearchParams({
+    filterByTk: String(id),
+    mode,
+    collection: normalized.collectionName || 'attachments',
+  });
+  return `/api/attachments:stream?${params.toString()}`;
+}
+
+function buildAuthenticatedDownloadUrl(file: any, mode: 'inline' | 'attachment' = 'inline'): string {
+  const normalized = normalizeFileForServer(typeof file === 'string' ? { url: file } : file || {});
+  const sourceUrl = resolveFileUrl(file);
+  if (sourceUrl && isInternalAuthenticatedDownloadUrl(sourceUrl)) {
+    return sourceUrl;
+  }
+
+  if (isAttachmentStreamCandidate(file, sourceUrl)) {
+    return buildAttachmentStreamUrl(file, mode);
+  }
+
+  const id = normalized.id || normalized.uid;
+  if (id != null) {
+    const collection = normalized.collectionName || 'attachments';
+    const params = new URLSearchParams();
+    params.set('id', String(id));
+    params.set('collection', collection);
+    if (sourceUrl) {
+      params.set('url', sourceUrl);
+    }
+    const storageId = normalized.storageId || normalized.storage_id || normalized.storage?.id;
+    if (storageId != null && storageId !== '') {
+      params.set('storageId', String(storageId));
+    }
+    if (normalized.filename || normalized.name) {
+      params.set('filename', normalized.filename || normalized.name);
+    }
+    if (normalized.mimetype) {
+      params.set('mimetype', normalized.mimetype);
+    }
+    return `/api/filePreviewAuth:download?${params.toString()}`;
+  }
+
+  return sourceUrl || '';
 }
 
 // ─── fetchFileAsBlob: fetch with Bearer auth ────────────────────────
@@ -161,15 +382,15 @@ async function fetchFileAsBlob(url: string, token: string): Promise<Blob> {
   return response.blob();
 }
 
-async function getLoadedFileBlob(file: any, token: string): Promise<Blob> {
-  const url = resolveFileUrl(file);
-  if (!url) {
+async function getLoadedFileBlob(file: any, token: string, mode: 'inline' | 'attachment' = 'inline'): Promise<Blob> {
+  const downloadUrl = buildAuthenticatedDownloadUrl(file, mode);
+  if (!downloadUrl || downloadUrl.endsWith('?')) {
     throw new Error('No file URL');
   }
-  const cacheKey = getBlobCacheKey(url, token);
+  const cacheKey = getBlobCacheKey(file, token, downloadUrl);
   let pending = loadedBlobCache.get(cacheKey);
   if (!pending) {
-    pending = fetchFileAsBlob(url, token).catch((err) => {
+    pending = fetchFileAsBlob(downloadUrl, token).catch((err) => {
       loadedBlobCache.delete(cacheKey);
       throw err;
     });
@@ -181,9 +402,7 @@ async function getLoadedFileBlob(file: any, token: string): Promise<Blob> {
 // ─── Authenticated download helper ─────────────────────────────────
 
 async function downloadFileWithAuth(file: any, token: string): Promise<void> {
-  const url = resolveFileUrl(file);
-  if (!url) return;
-  const blob = await getLoadedFileBlob(file, token);
+  const blob = await getLoadedFileBlob(file, token, 'attachment');
   const fileName = getFileDisplayName(file);
   const a = document.createElement('a');
   const objectUrl = URL.createObjectURL(blob);
@@ -203,11 +422,18 @@ function useBlobUrl(file: any, token: string) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const fileDependencyKey = getFileDependencyKey(file);
 
   useEffect(() => {
     let cancelled = false;
-    const url = resolveFileUrl(file);
-    if (!url) {
+    const currentFile = fileRef.current;
+    const hasSource = !!(
+      resolveFileUrl(currentFile) ||
+      (typeof currentFile !== 'string' && (currentFile?.id || currentFile?.uid))
+    );
+    if (!hasSource) {
       setLoading(false);
       setError('No file URL');
       return;
@@ -216,7 +442,7 @@ function useBlobUrl(file: any, token: string) {
     setLoading(true);
     setError(null);
 
-    getLoadedFileBlob(file, token)
+    getLoadedFileBlob(currentFile, token)
       .then((blob) => {
         if (cancelled) return;
         const objectUrl = URL.createObjectURL(blob);
@@ -237,7 +463,7 @@ function useBlobUrl(file: any, token: string) {
         blobUrlRef.current = null;
       }
     };
-  }, [typeof file === 'string' ? file : file?.url, token]);
+  }, [fileDependencyKey, token]);
 
   return { blobUrl, loading, error };
 }
@@ -248,11 +474,18 @@ function useTextContent(file: any, token: string) {
   const [text, setText] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const fileDependencyKey = getFileDependencyKey(file);
 
   useEffect(() => {
     let cancelled = false;
-    const url = resolveFileUrl(file);
-    if (!url) {
+    const currentFile = fileRef.current;
+    const hasSource = !!(
+      resolveFileUrl(currentFile) ||
+      (typeof currentFile !== 'string' && (currentFile?.id || currentFile?.uid))
+    );
+    if (!hasSource) {
       setLoading(false);
       setError('No file URL');
       return;
@@ -261,7 +494,7 @@ function useTextContent(file: any, token: string) {
     setLoading(true);
     setError(null);
 
-    getLoadedFileBlob(file, token)
+    getLoadedFileBlob(currentFile, token)
       .then((blob) => blob.text())
       .then((content) => {
         if (cancelled) return;
@@ -277,7 +510,7 @@ function useTextContent(file: any, token: string) {
     return () => {
       cancelled = true;
     };
-  }, [typeof file === 'string' ? file : file?.url, token]);
+  }, [fileDependencyKey, token]);
 
   return { text, loading, error };
 }
@@ -296,12 +529,61 @@ function ErrorMessage({ message: msg }: { message: string }) {
   return <div style={{ padding: 20, textAlign: 'center', color: '#ff4d4f' }}>{msg}</div>;
 }
 
-function PreviewModalTitle({ file, title }: { file: any; title: string }) {
+function PreviewModalTitle({
+  file,
+  title,
+  ocrStatus,
+  isOcrSupported,
+}: {
+  file: any;
+  title: string;
+  ocrStatus?: string;
+  isOcrSupported?: boolean;
+}) {
+  const t = useT();
+  const renderOcrTag = () => {
+    if (!isOcrSupported || !ocrStatus) return null;
+    switch (ocrStatus) {
+      case 'pending-ocr':
+        return (
+          <Tag color="processing" icon={<SyncOutlined spin />}>
+            {t('OCR Pending')}
+          </Tag>
+        );
+      case 'waiting-verify':
+        return (
+          <Tag color="warning" icon={<ClockCircleOutlined />}>
+            {t('Waiting Verify')}
+          </Tag>
+        );
+      case 'verified':
+      case 'accepted':
+        return (
+          <Tag color="success" icon={<CheckCircleOutlined />}>
+            {t('OCR Verified')}
+          </Tag>
+        );
+      case 'rejected':
+        return <Tag color="error">{t('OCR Rejected')}</Tag>;
+      case 'failed':
+        return <Tag color="error">{t('OCR Failed')}</Tag>;
+      case 'no-ocr':
+      default:
+        return <Tag color="default">{t('No OCR')}</Tag>;
+    }
+  };
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingRight: 40 }}>
-      <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={title}>
-        {title}
-      </span>
+      <Space size={8} style={{ minWidth: 0, overflow: 'hidden' }}>
+        <span
+          style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}
+          title={title}
+        >
+          {title}
+        </span>
+        {renderOcrTag()}
+      </Space>
       <AIFilePreviewAction file={file} />
     </div>
   );
@@ -371,13 +653,20 @@ function AuthDocxInlinePreviewer({ file }: any) {
   const t = useT();
   const token = apiClient.auth?.token || '';
   const containerRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const fileDependencyKey = getFileDependencyKey(file);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const url = resolveFileUrl(file);
-    if (!url || !containerRef.current) {
+    const currentFile = fileRef.current;
+    const hasSource = !!(
+      resolveFileUrl(currentFile) ||
+      (typeof currentFile !== 'string' && (currentFile?.id || currentFile?.uid))
+    );
+    if (!hasSource || !containerRef.current) {
       setLoading(false);
       setError('No file URL');
       return;
@@ -388,7 +677,7 @@ function AuthDocxInlinePreviewer({ file }: any) {
 
     (async () => {
       try {
-        const blob = await getLoadedFileBlob(file, token);
+        const blob = await getLoadedFileBlob(currentFile, token);
         if (cancelled) return;
         // Dynamic import for code-splitting (bundled, no CDN needed)
         // @ts-ignore
@@ -422,7 +711,7 @@ function AuthDocxInlinePreviewer({ file }: any) {
     return () => {
       cancelled = true;
     };
-  }, [typeof file === 'string' ? file : file?.url, token]);
+  }, [fileDependencyKey, token]);
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -446,6 +735,9 @@ function AuthXlsxInlinePreviewer({ file }: any) {
   const t = useT();
   const token = apiClient.auth?.token || '';
   const containerRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const fileDependencyKey = getFileDependencyKey(file);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sheetNames, setSheetNames] = useState<string[]>([]);
@@ -454,8 +746,12 @@ function AuthXlsxInlinePreviewer({ file }: any) {
 
   useEffect(() => {
     let cancelled = false;
-    const url = resolveFileUrl(file);
-    if (!url) {
+    const currentFile = fileRef.current;
+    const hasSource = !!(
+      resolveFileUrl(currentFile) ||
+      (typeof currentFile !== 'string' && (currentFile?.id || currentFile?.uid))
+    );
+    if (!hasSource) {
       setLoading(false);
       setError('No file URL');
       return;
@@ -466,7 +762,7 @@ function AuthXlsxInlinePreviewer({ file }: any) {
 
     (async () => {
       try {
-        const blob = await getLoadedFileBlob(file, token);
+        const blob = await getLoadedFileBlob(currentFile, token);
         if (cancelled) return;
         // Dynamic import for code-splitting (bundled, no CDN needed)
         // @ts-ignore
@@ -496,7 +792,7 @@ function AuthXlsxInlinePreviewer({ file }: any) {
     return () => {
       cancelled = true;
     };
-  }, [typeof file === 'string' ? file : file?.url, token]);
+  }, [fileDependencyKey, token]);
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -586,13 +882,20 @@ function AuthPptxInlinePreviewer({ file }: any) {
   const token = apiClient.auth?.token || '';
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [arrayBuffer, setArrayBuffer] = useState<ArrayBuffer | null>(null);
+  const [fileBlob, setFileBlob] = useState<Blob | null>(null);
   const [PptxPreviewer, setPptxPreviewer] = useState<any>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const fileDependencyKey = getFileDependencyKey(file);
 
   useEffect(() => {
     let cancelled = false;
-    const url = resolveFileUrl(file);
-    if (!url) {
+    const currentFile = fileRef.current;
+    const hasSource = !!(
+      resolveFileUrl(currentFile) ||
+      (typeof currentFile !== 'string' && (currentFile?.id || currentFile?.uid))
+    );
+    if (!hasSource) {
       setLoading(false);
       setError('No file URL');
       return;
@@ -604,14 +907,12 @@ function AuthPptxInlinePreviewer({ file }: any) {
     (async () => {
       try {
         const [blob, module] = await Promise.all([
-          getLoadedFileBlob(file, token),
+          getLoadedFileBlob(currentFile, token),
           // @ts-ignore
-          import('react-pptx-preview-kit')
+          import('react-pptx-preview-kit'),
         ]);
         if (cancelled) return;
-        const buffer = await blob.arrayBuffer();
-        if (cancelled) return;
-        setArrayBuffer(buffer);
+        setFileBlob(blob);
         setPptxPreviewer(() => module.PptxPreview);
         setLoading(false);
       } catch (err: any) {
@@ -624,7 +925,7 @@ function AuthPptxInlinePreviewer({ file }: any) {
     return () => {
       cancelled = true;
     };
-  }, [typeof file === 'string' ? file : file?.url, token]);
+  }, [fileDependencyKey, token]);
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -632,7 +933,7 @@ function AuthPptxInlinePreviewer({ file }: any) {
       {error && <ErrorMessage message={t('Failed to load file preview')} />}
       {!loading && !error && PptxPreviewer && (
         <div style={{ width: '100%', height: '100%', overflow: 'auto' }}>
-           <PptxPreviewer file={arrayBuffer} />
+          <PptxPreviewer file={fileBlob} />
         </div>
       )}
     </div>
@@ -650,6 +951,7 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
     const { open, onOpenChange, onClose, file, index, list, onSwitchIndex, onDownload: _originalOnDownload } = props;
     const apiClient = useAPIClient();
     const t = useT();
+    const [previewMode, setPreviewMode] = useState<'visual' | 'raw'>('visual');
 
     // Override onDownload with authenticated version
     const authOnDownload = useCallback(
@@ -673,7 +975,6 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
     const title = getFileDisplayName(file);
     const canPrev = typeof index === 'number' && !!onSwitchIndex && index > 0;
     const canNext = typeof index === 'number' && !!onSwitchIndex && index < list.length - 1;
-    const [previewMode, setPreviewMode] = useState<'visual' | 'raw'>('visual');
 
     return (
       <Modal
@@ -687,7 +988,7 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<any>) => {
         footer={
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
             <div key="left-actions">
-              <Button onClick={() => setPreviewMode(prev => prev === 'visual' ? 'raw' : 'visual')}>
+              <Button onClick={() => setPreviewMode((prev) => (prev === 'visual' ? 'raw' : 'visual'))}>
                 {previewMode === 'visual' ? t('View Raw Parsed Text') : t('View Visual Preview')}
               </Button>
             </div>
@@ -802,15 +1103,18 @@ function AuthRawTextPreviewer({ file }: any) {
 
   const handleCopy = () => {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(content).then(() => {
-        message.success(t('Copied to clipboard'));
-      }).catch((err) => {
-        message.error(t('Failed to copy'));
-        console.error('Copy error', err);
-      });
+      navigator.clipboard
+        .writeText(content)
+        .then(() => {
+          message.success(t('Copied to clipboard'));
+        })
+        .catch((err) => {
+          message.error(t('Failed to copy'));
+          console.error('Copy error', err);
+        });
     } else {
       // Fallback
-      const textArea = document.createElement("textarea");
+      const textArea = document.createElement('textarea');
       textArea.value = content;
       document.body.appendChild(textArea);
       textArea.select();
@@ -843,7 +1147,7 @@ function AuthRawTextPreviewer({ file }: any) {
           alignItems: 'center',
           gap: '6px',
           boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
-          fontSize: '13px'
+          fontSize: '13px',
         }}
         title={t('Copy')}
       >
@@ -888,6 +1192,114 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
   const file = list[index];
   const [downloading, setDownloading] = useState(false);
   const [previewMode, setPreviewMode] = useState<'visual' | 'raw'>('visual');
+  const [activeTab, setActiveTab] = useState<'preview' | 'ocr'>('preview');
+
+  // OCR state
+  const [ocrStatus, setOcrStatus] = useState<string>('no-ocr');
+  const [ocrResultId, setOcrResultId] = useState<string | number | null>(null);
+  const [ocrError, setOcrError] = useState<string | null>(null);
+
+  const isOcrSupported = useMemo(() => {
+    if (!file) return false;
+    return isPdfFile(file) || isImageFile(file);
+  }, [file]);
+
+  const OcrVerifyBlock = useComponent('OcrVerifyBlock');
+
+  const loadOcrStatus = useCallback(async () => {
+    if (!file?.id) return null;
+    const res = await apiClient.request({
+      url: 'filePreviewAuth:getOcrStatus',
+      method: 'post',
+      data: {
+        attachmentId: file.id,
+      },
+    });
+    const record = res?.data?.data;
+    if (record) {
+      setOcrResultId(record.id || null);
+      setOcrStatus(record.status || 'no-ocr');
+      setOcrError(record.error || null);
+    }
+    return record;
+  }, [apiClient, file?.id]);
+
+  // Load / Sync initial OCR status from the separate OCR result collection.
+  useEffect(() => {
+    if (!file?.id) return;
+    let cancelled = false;
+    setOcrResultId(null);
+    setOcrStatus('no-ocr');
+    setOcrError(null);
+
+    loadOcrStatus()
+      .then(() => {
+        if (cancelled) return;
+      })
+      .catch(console.error);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [file?.id, loadOcrStatus]);
+
+  // Polling for OCR job completion when ocrStatus is 'pending-ocr'
+  useEffect(() => {
+    if (ocrStatus !== 'pending-ocr' || !file?.id) return;
+    let timer: any = null;
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const record = await loadOcrStatus();
+        if (cancelled) return;
+        if (record) {
+          if (record.status !== 'pending-ocr') {
+            if (record.status === 'failed') {
+              message.error(record.error || t('OCR processing failed'));
+            } else {
+              message.success(t('OCR processing completed!'));
+            }
+          } else {
+            timer = setTimeout(poll, 3000);
+          }
+        }
+      } catch (err) {
+        console.error('Polling error', err);
+        timer = setTimeout(poll, 3000);
+      }
+    };
+
+    timer = setTimeout(poll, 3000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [ocrStatus, file?.id, loadOcrStatus, t]);
+
+  const handleRunOcr = async () => {
+    if (!file?.id) return;
+    try {
+      setOcrStatus('pending-ocr');
+      const res = await apiClient.request({
+        url: 'filePreviewAuth:runOcr',
+        method: 'post',
+        data: {
+          attachmentId: file.id,
+        },
+      });
+      const record = res?.data?.data;
+      if (record) {
+        setOcrResultId(record.id || null);
+        setOcrStatus(record.status || 'pending-ocr');
+        setOcrError(record.error || null);
+      }
+      message.info(t('OCR process started in the background.'));
+    } catch (err: any) {
+      message.error(err?.message || t('Failed to start OCR process.'));
+      setOcrStatus('no-ocr');
+    }
+  };
 
   const onDownload = useCallback(
     async (e: any) => {
@@ -909,6 +1321,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
   const onClose = useCallback(() => {
     onSwitchIndex(null);
     setPreviewMode('visual');
+    setActiveTab('preview');
   }, [onSwitchIndex]);
 
   // Determine which inline previewer to use (null for non-previewable)
@@ -924,17 +1337,157 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
 
   const canPreview = PreviewerComponent != null || previewMode === 'raw';
 
+  const tabItems = [
+    {
+      key: 'preview',
+      label: (
+        <span>
+          <EyeOutlined /> {t('Visual Preview')}
+        </span>
+      ),
+      children: (
+        <div
+          style={{
+            height: '70vh',
+            width: '100%',
+            overflow: 'auto',
+            background: '#f5f5f5',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          {PreviewerComponent ? <PreviewerComponent file={file} /> : null}
+        </div>
+      ),
+    },
+    {
+      key: 'ocr',
+      label: (
+        <span>
+          <ScanOutlined /> {t('OCR & Verify')}
+        </span>
+      ),
+      children: (
+        <div style={{ height: '70vh', width: '100%', display: 'flex', flexDirection: 'column' }}>
+          {ocrStatus === 'no-ocr' && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                height: '100%',
+                padding: '40px',
+                background: '#fafafa',
+                borderRadius: '8px',
+              }}
+            >
+              <ScanOutlined style={{ fontSize: '64px', color: '#1890ff', marginBottom: '20px' }} />
+              <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '10px' }}>
+                {t('Word-level Song ngữ (English & Vietnamese) OCR')}
+              </h3>
+              <p style={{ color: '#8c8c8c', maxWidth: '480px', textAlign: 'center', marginBottom: '24px' }}>
+                {t(
+                  'Chưa có dữ liệu OCR cấp độ Từ (Word-level) cho tệp này. Hãy chạy nhận dạng Tesseract-OCR để bắt đầu đối soát và verify toạ độ.',
+                )}
+              </p>
+              <Button type="primary" size="large" icon={<ThunderboltOutlined />} onClick={handleRunOcr}>
+                {t('Run Tesseract OCR')}
+              </Button>
+            </div>
+          )}
+          {ocrStatus === 'pending-ocr' && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                height: '100%',
+                padding: '40px',
+              }}
+            >
+              <Spin size="large" tip={t('Analyzing layout structure and running song ngữ OCR...')} />
+              <p style={{ color: '#8c8c8c', marginTop: '20px', fontSize: '13px', textAlign: 'center' }}>
+                {t(
+                  'Extracting word-level coordinates via Tesseract-OCR. This will automatically refresh when complete.',
+                )}
+              </p>
+            </div>
+          )}
+          {ocrStatus === 'failed' && (
+            <div style={{ padding: '40px' }}>
+              <Alert
+                type="error"
+                showIcon
+                message={t('OCR processing failed')}
+                description={ocrError || t('Please try running OCR again.')}
+                style={{ marginBottom: 24 }}
+              />
+              <Button type="primary" icon={<ThunderboltOutlined />} onClick={handleRunOcr}>
+                {t('Run Tesseract OCR')}
+              </Button>
+            </div>
+          )}
+          {['waiting-verify', 'verified', 'accepted', 'rejected'].includes(ocrStatus) && (
+            <div style={{ flex: 1, height: '100%', overflow: 'hidden' }}>
+              {OcrVerifyBlock && ocrResultId ? (
+                <OcrVerifyBlock
+                  collection="attachmentOcrResults"
+                  recordId={ocrResultId}
+                  pdfField="attachment"
+                  jsonField="data"
+                  statusField="status"
+                />
+              ) : OcrVerifyBlock ? (
+                <div style={{ padding: '20px' }}>
+                  <Alert
+                    type="error"
+                    message={t('OCR result record not found')}
+                    description={t('Please try running OCR again.')}
+                    showIcon
+                  />
+                </div>
+              ) : (
+                <div style={{ padding: '20px' }}>
+                  <Alert
+                    type="error"
+                    message={t('Plugin OCR Verify Block is not enabled')}
+                    description={t(
+                      'Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout.',
+                    )}
+                    showIcon
+                  />
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ),
+    },
+  ];
+
   return (
     <Modal
       open={index != null}
-      title={<PreviewModalTitle file={file} title={file?.title || file?.filename || file?.name || 'File'} />}
+      title={
+        <PreviewModalTitle
+          file={file}
+          title={file?.title || file?.filename || file?.name || 'File'}
+          ocrStatus={ocrStatus}
+          isOcrSupported={isOcrSupported}
+        />
+      }
       onCancel={onClose}
       footer={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
           <div key="left-actions">
-            <Button onClick={() => setPreviewMode(prev => prev === 'visual' ? 'raw' : 'visual')}>
-              {previewMode === 'visual' ? t('View Raw Parsed Text') : t('View Visual Preview')}
-            </Button>
+            {!isOcrSupported && (
+              <Button onClick={() => setPreviewMode((prev) => (prev === 'visual' ? 'raw' : 'visual'))}>
+                {previewMode === 'visual' ? t('View Raw Parsed Text') : t('View Visual Preview')}
+              </Button>
+            )}
           </div>
           <Space>
             <Button key="download" onClick={onDownload} loading={downloading}>
@@ -949,33 +1502,42 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
       width={canPreview ? '90%' : 520}
       centered={true}
     >
-      <div
-        style={{
-          maxWidth: '100%',
-          maxHeight: canPreview ? 'calc(100vh - 256px)' : 'auto',
-          height: canPreview ? '70vh' : 'auto',
-          width: '100%',
-          background: 'white',
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'center',
-          alignItems: 'center',
-          overflowY: 'auto',
-        }}
-      >
-        {previewMode === 'raw' ? (
-          <AuthRawTextPreviewer file={file} />
-        ) : PreviewerComponent ? (
-          <PreviewerComponent file={file} />
-        ) : (
-          <Alert
-            type="info"
-            style={{ width: '100%' }}
-            description={t('This file type cannot be previewed. Click Download to save the file.')}
-            showIcon
-          />
-        )}
-      </div>
+      {isOcrSupported ? (
+        <Tabs
+          activeKey={activeTab}
+          onChange={(key: any) => setActiveTab(key)}
+          items={tabItems}
+          style={{ width: '100%', height: '100%' }}
+        />
+      ) : (
+        <div
+          style={{
+            maxWidth: '100%',
+            maxHeight: canPreview ? 'calc(100vh - 256px)' : 'auto',
+            height: canPreview ? '70vh' : 'auto',
+            width: '100%',
+            background: 'white',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: 'center',
+            alignItems: 'center',
+            overflowY: 'auto',
+          }}
+        >
+          {previewMode === 'raw' ? (
+            <AuthRawTextPreviewer file={file} />
+          ) : PreviewerComponent ? (
+            <PreviewerComponent file={file} />
+          ) : (
+            <Alert
+              type="info"
+              style={{ width: '100%' }}
+              description={t('This file type cannot be previewed. Click Download to save the file.')}
+              showIcon
+            />
+          )}
+        </div>
+      )}
     </Modal>
   );
 }
@@ -1016,6 +1578,7 @@ function AuthDownloadPreviewer({ file }: any) {
 
 export class PluginFilePreviewAuthClient extends Plugin {
   async load() {
+    this.patchUploadPreviewBase64Fallback();
     registerFilePreviewAIWorkContext(this.app);
 
     // ────────────────────────────────────────────────────────────────
@@ -1057,7 +1620,7 @@ export class PluginFilePreviewAuthClient extends Plugin {
     filePreviewTypes.add({
       match: isImageFile,
       getThumbnailURL(file: any) {
-        return file?.url || file?.preview || null;
+        return getSafeImageThumbnailUrl(file);
       },
       Previewer: wrapWithAuthModalPreviewer(AuthImageInlinePreviewer),
     });
@@ -1085,6 +1648,47 @@ export class PluginFilePreviewAuthClient extends Plugin {
       match: isPptxFile,
       Previewer: wrapWithAuthModalPreviewer(AuthPptxInlinePreviewer),
     });
+  }
+
+  private patchUploadPreviewBase64Fallback() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const fileReaderProto = window.FileReader?.prototype as any;
+    if (!fileReaderProto || fileReaderProto.__filePreviewAuthBase64FallbackPatched) {
+      return;
+    }
+
+    const originalReadAsDataURL = fileReaderProto.readAsDataURL;
+    if (typeof originalReadAsDataURL !== 'function') {
+      return;
+    }
+
+    Object.defineProperty(fileReaderProto, '__filePreviewAuthBase64FallbackPatched', {
+      value: true,
+      configurable: true,
+    });
+
+    fileReaderProto.readAsDataURL = function readAsDataURLWithEmptyFallback(blob: Blob | null | undefined) {
+      if (blob != null) {
+        return originalReadAsDataURL.call(this, blob);
+      }
+
+      setTimeout(() => {
+        try {
+          Object.defineProperty(this, 'result', {
+            value: '',
+            configurable: true,
+          });
+        } catch {
+          // Ignore readonly result assignment failures; the caller will still continue via onload.
+        }
+
+        this.onload?.(new ProgressEvent('load'));
+        this.onloadend?.(new ProgressEvent('loadend'));
+      }, 0);
+    };
   }
 }
 

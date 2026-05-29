@@ -46,6 +46,7 @@ export class MemorySyncJob {
         const result = await this.syncUser(userId, 'scheduled', maxConvPerSync, settings);
         if (result === 'processed') processed++;
         else if (result === 'skipped') skipped++;
+        else if (result === 'error') errors++;
       } catch (error: any) {
         errors++;
         logger.error(`[UserMemory] Sync failed for user ${userId}:`, error.message);

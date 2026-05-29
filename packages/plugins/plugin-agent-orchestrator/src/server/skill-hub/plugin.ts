@@ -11,6 +11,7 @@ import { McpController } from './mcp/McpController';
 import { SkillRepositoryService } from '../services/SkillRepositoryService';
 import { gitListSkills, gitSyncSkills } from './actions/git-import';
 import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fields';
+import { getOrchestratorTraceContext } from '../services/ExecutionSpanService';
 
 /**
  * Simple in-memory rate limiter per user.
@@ -47,9 +48,7 @@ class RateLimiter {
   /** Get remaining executions for a user */
   remaining(userId: string): number {
     const now = Date.now();
-    const executions = (this.userExecutions.get(userId) || []).filter(
-      (t) => now - t < this.windowMs,
-    );
+    const executions = (this.userExecutions.get(userId) || []).filter((t) => now - t < this.windowMs);
     return Math.max(0, this.maxExecutions - executions.length);
   }
 
@@ -85,9 +84,15 @@ export class SkillHubSubFeature {
 
   constructor(private plugin: any) {}
 
-  get app() { return this.plugin.app; }
-  get db() { return this.plugin.db; }
-  get name() { return this.plugin.name; }
+  get app() {
+    return this.plugin.app;
+  }
+  get db() {
+    return this.plugin.db;
+  }
+  get name() {
+    return this.plugin.name;
+  }
 
   async load() {
     // 1. Collections and migrations are now handled by parent orchestrator plugin
@@ -117,7 +122,6 @@ export class SkillHubSubFeature {
       },
     });
 
-
     // 4.5. Register DB hooks for automatic storage physical cleanup
     (this as any).db.on('skillExecutions.afterDestroy', async (model, options) => {
       const execId = model.get('id');
@@ -127,7 +131,9 @@ export class SkillHubSubFeature {
           require('fs').rmSync(dir, { recursive: true, force: true });
         }
       } catch (err) {
-        (this as any).app.logger.error(`[skill-hub] Failed to cleanup physical storage for execId ${execId}`, { error: err });
+        (this as any).app.logger.error(`[skill-hub] Failed to cleanup physical storage for execId ${execId}`, {
+          error: err,
+        });
       }
     });
 
@@ -147,35 +153,62 @@ export class SkillHubSubFeature {
               return;
             }
 
-            const streamData = await fileManager.getFileStream(attachment);
+            const rawStorageId = attachment.get('storageId') || attachment.storageId;
+            let matchedKey = null;
+            if (rawStorageId) {
+              const strId = String(rawStorageId);
+              for (const key of fileManager.storagesCache.keys()) {
+                if (String(key) === strId) {
+                  matchedKey = key;
+                  break;
+                }
+              }
+            }
+
+            const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
+            if (matchedKey !== null) {
+              attachmentObj.storageId = matchedKey;
+            }
+
+            const streamData = await fileManager.getFileStream(attachmentObj);
             if (!streamData || !streamData.stream) {
-              (this as any).app.logger.warn(`[skill-hub] Could not get file stream for attachment ${attachment.get('id')}`);
+              (this as any).app.logger.warn(
+                `[skill-hub] Could not get file stream for attachment ${attachment.get('id')}`,
+              );
               return;
             }
 
             const tempZipPath = resolve(os.tmpdir(), `skill_${Date.now()}_${model.get('id')}.zip`);
 
-            await new Promise((resolvePipe, rejectPipe) => {
+            await new Promise((resolve, reject) => {
               const writeStream = createWriteStream(tempZipPath);
               streamData.stream.pipe(writeStream);
-              writeStream.on('finish', resolvePipe);
-              writeStream.on('error', rejectPipe);
-              streamData.stream.on('error', rejectPipe);
+              writeStream.on('finish', resolve);
+              writeStream.on('error', reject);
+              streamData.stream.on('error', reject);
             });
 
             if (require('fs').existsSync(tempZipPath)) {
               const skillName = model.get('name');
-              const { metadata, instructions } = await this.skillRepoService.extractSkillPackage(skillName, tempZipPath);
+              const { metadata, instructions } = await this.skillRepoService.extractSkillPackage(
+                skillName,
+                tempZipPath,
+              );
               const code = this.skillRepoService.getSkillCode(skillName);
 
-              const updateValues: any = { storageType: attachment.get('storageId') ? `storage-${attachment.get('storageId')}` : 'local' };
+              const updateValues: any = {
+                storageType: attachment.get('storageId') ? `storage-${attachment.get('storageId')}` : 'local',
+              };
               if (code) updateValues.codeTemplate = code;
               if (metadata.description) updateValues.description = metadata.description;
               if (metadata.title) updateValues.title = metadata.title;
               if (metadata.language) updateValues.language = metadata.language;
-              if (metadata.inputSchema) updateValues.inputSchema = stringifyJsonText(parseJsonLike(metadata.inputSchema, null));
-              if (metadata.interactionSchema) updateValues.interactionSchema = stringifyJsonText(parseJsonLike(metadata.interactionSchema, null));
-              if (metadata.packages) updateValues.packages = stringifyJsonText(parseJsonLike(metadata.packages, []), []);
+              if (metadata.inputSchema)
+                updateValues.inputSchema = stringifyJsonText(parseJsonLike(metadata.inputSchema, null));
+              if (metadata.interactionSchema)
+                updateValues.interactionSchema = stringifyJsonText(parseJsonLike(metadata.interactionSchema, null));
+              if (metadata.packages)
+                updateValues.packages = stringifyJsonText(parseJsonLike(metadata.packages, []), []);
               if (metadata.timeoutSeconds) updateValues.timeoutSeconds = metadata.timeoutSeconds;
               if (instructions) updateValues.instructions = instructions;
 
@@ -184,7 +217,7 @@ export class SkillHubSubFeature {
                 values: updateValues,
                 transaction: options.transaction,
               });
-              
+
               unlinkSync(tempZipPath);
               (this as any).app.logger.info(`[skill-hub] Successfully extracted zip and updated skill: ${skillName}`);
             }
@@ -254,17 +287,24 @@ export class SkillHubSubFeature {
         const remaining = this.rateLimiter.remaining(String(userId));
         throw new Error(
           `Rate limit exceeded. You can execute up to ${this.rateLimiter['maxExecutions']} ` +
-          `skills per minute. Remaining: ${remaining}. Please wait and try again.`,
+            `skills per minute. Remaining: ${remaining}. Please wait and try again.`,
         );
       }
     }
 
+    const traceContext = getOrchestratorTraceContext(ctx);
     const execution = await (this as any).db.getRepository('skillExecutions').create({
       values: {
         skillId: skill.id,
         status: 'pending',
         inputArgs: stringifyJsonText(inputArgs, {}),
         sessionId: ctx?.state?.sessionId,
+        orchestratorRootRunId: traceContext?.rootRunId,
+        orchestratorSpanId: traceContext?.spanId,
+        orchestratorParentSpanId: traceContext?.parentSpanId,
+        orchestratorToolCallId: traceContext?.toolCallId,
+        agentLoopRunId: traceContext?.agentLoopRunId,
+        agentLoopStepId: traceContext?.agentLoopStepId,
         triggeredById: ctx?.state?.currentUser?.id,
       },
     });
@@ -273,7 +313,7 @@ export class SkillHubSubFeature {
 
     (this as any).app.logger.info(
       `[skill-hub] Queued execution ${execId}: skill=${skill.get ? skill.get('name') : skill.name}, ` +
-      `user=${userId || 'system'}`,
+        `user=${userId || 'system'}`,
     );
 
     // Track PubSub subscriptions for cleanup
@@ -300,7 +340,7 @@ export class SkillHubSubFeature {
     try {
       let resolvePromise: any;
       let rejectPromise: any;
-      
+
       const resultPromise = new Promise<any>((resolve, reject) => {
         resolvePromise = resolve;
         rejectPromise = reject;
@@ -331,10 +371,13 @@ export class SkillHubSubFeature {
           // Publish abort to worker via PubSub
           (this as any).app.pubSubManager.publish(abortChannel, { reason: 'user_cancel' }).catch(() => {});
           // Also update the execution status
-          (this as any).db.getRepository('skillExecutions').update({
-            filter: { id: execId },
-            values: { status: 'canceled' },
-          }).catch(() => {});
+          (this as any).db
+            .getRepository('skillExecutions')
+            .update({
+              filter: { id: execId },
+              values: { status: 'canceled' },
+            })
+            .catch(() => {});
           rejectPromise(new Error('Canceled by user'));
         });
       }
@@ -364,7 +407,13 @@ export class SkillHubSubFeature {
       };
     });
 
-    return { ...result, files: filesWithUrls, execId };
+    return {
+      ...result,
+      files: filesWithUrls,
+      execId,
+      agentLoopRunId: traceContext?.agentLoopRunId,
+      agentLoopStepId: traceContext?.agentLoopStepId,
+    };
   }
 
   private async handleDownload(ctx: any, next: any) {
@@ -437,15 +486,17 @@ export class SkillHubSubFeature {
       node: [],
     });
     const message = await this.workerEnvManager.initEnvironment(
-      config.get ? {
-        npmRegistryUrl: config.get('npmRegistryUrl'),
-        npmAuthToken: config.get('npmAuthToken'),
-        pypiIndexUrl: config.get('pypiIndexUrl'),
-        pypiTrustedHost: config.get('pypiTrustedHost'),
-        aptMirrorUrl: config.get('aptMirrorUrl'),
-        aptGpgKeyUrl: config.get('aptGpgKeyUrl'),
-        customPackages,
-      } : config,
+      config.get
+        ? {
+            npmRegistryUrl: config.get('npmRegistryUrl'),
+            npmAuthToken: config.get('npmAuthToken'),
+            pypiIndexUrl: config.get('pypiIndexUrl'),
+            pypiTrustedHost: config.get('pypiTrustedHost'),
+            aptMirrorUrl: config.get('aptMirrorUrl'),
+            aptGpgKeyUrl: config.get('aptGpgKeyUrl'),
+            customPackages,
+          }
+        : config,
     );
     ctx.body = { message };
     await next();
@@ -475,7 +526,7 @@ export class SkillHubSubFeature {
         (this as any).app.logger.warn('[skill-hub] Failed to update init env status:', err);
       }
     };
-    
+
     this.initEnvProgressCallback = async (data: any) => {
       try {
         await (this as any).db.getRepository('skillWorkerConfigs').update({
@@ -493,6 +544,59 @@ export class SkillHubSubFeature {
 
     await (this as any).app.pubSubManager.subscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
     await (this as any).app.pubSubManager.subscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
+  }
+
+  private getSkillRecordId(skill: any) {
+    return String(skill.get ? skill.get('id') : skill.id);
+  }
+
+  private resolveLoopInteractionSchema(loopConfig: any) {
+    if (!loopConfig) return null;
+
+    const schema = parseJsonText(loopConfig.get ? loopConfig.get('schema') : loopConfig.schema, null);
+    const prompt = loopConfig.get ? loopConfig.get('prompt') : loopConfig.prompt;
+
+    if (schema && typeof schema === 'object') {
+      return prompt && !schema.prompt ? { ...schema, prompt } : schema;
+    }
+
+    if (prompt) {
+      return {
+        type: 'confirm',
+        prompt,
+      };
+    }
+
+    return null;
+  }
+
+  private async getLoopConfigsBySkillId(skillIds: Array<string | number>) {
+    const ids = Array.from(new Set(skillIds.map((id) => String(id)).filter(Boolean)));
+    const configsBySkillId = new Map<string, any>();
+    if (!ids.length) return configsBySkillId;
+
+    try {
+      const configs = await (this as any).db.getRepository('skillLoopConfigs').find({
+        filter: {
+          enabled: true,
+          skillId: {
+            $in: ids,
+          },
+        },
+        sort: ['-updatedAt'],
+      });
+
+      for (const config of configs || []) {
+        const skillId = String(config.get ? config.get('skillId') : config.skillId);
+        if (!configsBySkillId.has(skillId)) {
+          configsBySkillId.set(skillId, config);
+        }
+      }
+    } catch (err) {
+      (this as any).app.logger.warn('[skill-hub] Failed to load loop configs', err);
+    }
+
+    return configsBySkillId;
   }
 
   private registerAITools() {
@@ -515,44 +619,61 @@ export class SkillHubSubFeature {
 
           if (!skills || skills.length === 0) return;
 
-          const tools = await Promise.all(skills.map(async (skill: any) => {
-            const sanitizedToolName = skill.get('name').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-            const autoCall = !!skill.get('autoCall');
-            const interactionSchema = parseJsonText(skill.get('interactionSchema'), null);
-            const fullDescription = await this.getSkillDescriptionForAI(skill);
-            const baseDescription = `${fullDescription || skill.get('description')}\nLanguage: ${skill.get('language')}`;
-            const description = !autoCall && interactionSchema
-              ? `${baseDescription}\n\nIMPORTANT: This skill requires human confirmation. Pass best-effort args; the user will adjust them in UI before execution.`
-              : baseDescription;
-            return {
-              scope: 'CUSTOM' as const,
-              execution: 'backend' as const,
-              defaultPermission: (autoCall ? 'ALLOW' : 'ASK') as 'ALLOW' | 'ASK',
-              introduction: {
-                title: `Skill Hub: ${skill.get('title')}`,
-                about: skill.get('description') || `Thực thi kỹ năng ${skill.get('title')}`,
-              },
-              definition: {
-                name: `skill_hub_${sanitizedToolName}`,
-                description,
-                schema: parseJsonText(skill.get('inputSchema'), { type: 'object', properties: {} }),
-              },
-              invoke: async (toolCtx: any, args: any) => {
-                // Re-fetch skill to get latest version (hot-reload support)
-                const latestSkill = await (this as any).db.getRepository('skillDefinitions').findOne({
-                  filter: { id: skill.get('id'), enabled: true },
-                });
-                if (!latestSkill) {
-                  return { status: 'error', content: `Skill "${skill.get('name')}" is no longer available` };
-                }
-                const result = await this.executeSkill(latestSkill, args, toolCtx);
-                return {
-                  status: result.status === 'succeeded' ? 'success' : 'error',
-                  result: result, // Attach raw result
-                };
-              },
-            };
-          }));
+          const loopConfigsBySkillId = await this.getLoopConfigsBySkillId(
+            skills.map((skill: any) => this.getSkillRecordId(skill)),
+          );
+
+          const tools = await Promise.all(
+            skills.map(async (skill: any) => {
+              const sanitizedToolName = skill
+                .get('name')
+                .toLowerCase()
+                .replace(/[^a-z0-9_]/g, '_')
+                .replace(/_+/g, '_')
+                .replace(/^_|_$/g, '');
+              const autoCall = !!skill.get('autoCall');
+              const loopConfig = loopConfigsBySkillId.get(this.getSkillRecordId(skill));
+              const loopInteractionSchema = this.resolveLoopInteractionSchema(loopConfig);
+              const skillInteractionSchema = parseJsonText(skill.get('interactionSchema'), null);
+              const interactionSchema = loopInteractionSchema || skillInteractionSchema;
+              const requiresHumanReview = !!interactionSchema;
+              const fullDescription = await this.getSkillDescriptionForAI(skill);
+              const baseDescription = `${fullDescription || skill.get('description')}\nLanguage: ${skill.get(
+                'language',
+              )}`;
+              const description = requiresHumanReview
+                ? `${baseDescription}\n\nIMPORTANT: This skill is bound to a Skill Hub human-in-the-loop review template. Pass best-effort args; the user can approve, edit, or reject them before execution.`
+                : baseDescription;
+              return {
+                scope: 'CUSTOM' as const,
+                execution: 'backend' as const,
+                defaultPermission: (requiresHumanReview ? 'ASK' : autoCall ? 'ALLOW' : 'ASK') as 'ALLOW' | 'ASK',
+                introduction: {
+                  title: `Skill Hub: ${skill.get('title')}`,
+                  about: skill.get('description') || `Thực thi kỹ năng ${skill.get('title')}`,
+                },
+                definition: {
+                  name: `skill_hub_${sanitizedToolName}`,
+                  description,
+                  schema: parseJsonText(skill.get('inputSchema'), { type: 'object', properties: {} }),
+                },
+                invoke: async (toolCtx: any, args: any) => {
+                  // Re-fetch skill to get latest version (hot-reload support)
+                  const latestSkill = await (this as any).db.getRepository('skillDefinitions').findOne({
+                    filter: { id: skill.get('id'), enabled: true },
+                  });
+                  if (!latestSkill) {
+                    return { status: 'error', content: `Skill "${skill.get('name')}" is no longer available` };
+                  }
+                  const result = await this.executeSkill(latestSkill, args, toolCtx);
+                  return {
+                    status: result.status === 'succeeded' ? 'success' : 'error',
+                    result: result, // Attach raw result
+                  };
+                },
+              };
+            }),
+          );
 
           register.registerTools(tools);
         } catch (err) {
@@ -575,16 +696,16 @@ export class SkillHubSubFeature {
       try {
         const config = await (this as any).db.getRepository('skillWorkerConfigs').findOne();
         const hours = config ? config.get('retentionHours') : 24;
-        
+
         if (hours && hours > 0) {
           const MAX_AGE_MS = hours * 60 * 60 * 1000;
           const cutoff = new Date(Date.now() - MAX_AGE_MS);
           const repo = (this as any).db.getRepository('skillExecutions');
-          
+
           const outdated = await repo.find({
-            filter: { createdAt: { $lt: cutoff } }
+            filter: { createdAt: { $lt: cutoff } },
           });
-          
+
           if (outdated.length > 0) {
             for (const record of outdated) {
               await record.destroy(); // Fires afterDestroy hook which removes physical folder
@@ -606,12 +727,16 @@ export class SkillHubSubFeature {
     if (this.initEnvDoneCallback) {
       try {
         await (this as any).app.pubSubManager.unsubscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     if (this.initEnvProgressCallback) {
       try {
         await (this as any).app.pubSubManager.unsubscribe('skill-hub.init-env.progress', this.initEnvProgressCallback);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
 
     // Clear cleanup interval
@@ -676,14 +801,14 @@ export class SkillHubSubFeature {
 
   // ─── Extension API: other plugins register/unregister skills ───
 
-
-
   /**
    * Register a skill template into memory for UI importing.
    */
   registerSkillTemplate(pluginName: string, skillDef: any) {
     this.skillTemplates.set(skillDef.name, this.hydrateSkillTemplate(pluginName, skillDef));
-    (this as any).app.logger.info(`[skill-hub] Registered skill template "${skillDef.name}" from plugin "${pluginName}"`);
+    (this as any).app.logger.info(
+      `[skill-hub] Registered skill template "${skillDef.name}" from plugin "${pluginName}"`,
+    );
   }
 
   resolveSkillTemplate(templateName: string) {
@@ -715,9 +840,13 @@ export class SkillHubSubFeature {
     const description = skill.get ? skill.get('description') : skill.description;
     const instructions = await this.getSkillInstructions(skill);
     const maxInlineInstructionChars = 24000;
-    const inlineInstructions = instructions && instructions.length > maxInlineInstructionChars
-      ? `${instructions.slice(0, maxInlineInstructionChars)}\n\n[Instructions truncated in tool description. Call skill_hub_execute with action="describe" and this skillName to load the complete workflow.]`
-      : instructions;
+    const inlineInstructions =
+      instructions && instructions.length > maxInlineInstructionChars
+        ? `${instructions.slice(
+            0,
+            maxInlineInstructionChars,
+          )}\n\n[Instructions truncated in tool description. Call skill_hub_execute with action="describe" and this skillName to load the complete workflow.]`
+        : instructions;
     return [description, inlineInstructions ? `Instructions:\n${inlineInstructions}` : ''].filter(Boolean).join('\n\n');
   }
 
@@ -728,8 +857,8 @@ export class SkillHubSubFeature {
     const storageType = skill.get ? skill.get('storageType') : skill.storageType;
     if (storageType !== 'plugin') return '';
 
-    const templateName = (skill.get ? skill.get('pluginSource') : skill.pluginSource) ||
-      (skill.get ? skill.get('name') : skill.name);
+    const templateName =
+      (skill.get ? skill.get('pluginSource') : skill.pluginSource) || (skill.get ? skill.get('name') : skill.name);
     const template = this.resolveSkillTemplate(templateName);
     return template?.instructions || '';
   }
@@ -760,8 +889,6 @@ export class SkillHubSubFeature {
       pluginName,
     };
   }
-
-
 
   async install() {
     await this.skillManager.seedDefaults();

@@ -1,10 +1,21 @@
 import React from 'react';
 import { Tabs } from 'antd';
-import { ApartmentOutlined, BarChartOutlined, CodeOutlined, HistoryOutlined, MonitorOutlined } from '@ant-design/icons';
+import {
+  ApartmentOutlined,
+  BarChartOutlined,
+  CheckCircleOutlined,
+  CodeOutlined,
+  HistoryOutlined,
+  MonitorOutlined,
+  ProfileOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
 import { RulesTab } from './RulesTab';
 import { TracingTab } from './TracingTab';
+import { AgentRunsTab } from './AgentRunsTab';
+import { HarnessProfilesTab } from './HarnessProfilesTab';
 import { AIEmployeesProvider } from './AIEmployeesContext';
-import { SkillManager, ExecutionHistory, SkillMetrics } from './skill-hub';
+import { SkillManager, ExecutionHistory, SkillMetrics, LoopSettings } from './skill-hub';
 
 const OrchestratorSettings: React.FC = () => {
   return (
@@ -32,6 +43,24 @@ const OrchestratorSettings: React.FC = () => {
               children: <TracingTab />,
             },
             {
+              key: 'agent-runs',
+              label: (
+                <span>
+                  <ProfileOutlined /> Agent Runs
+                </span>
+              ),
+              children: <AgentRunsTab />,
+            },
+            {
+              key: 'harness-profiles',
+              label: (
+                <span>
+                  <SettingOutlined /> Harness Profiles
+                </span>
+              ),
+              children: <HarnessProfilesTab />,
+            },
+            {
               key: 'skill-definitions',
               label: (
                 <span>
@@ -48,6 +77,15 @@ const OrchestratorSettings: React.FC = () => {
                 </span>
               ),
               children: <ExecutionHistory />,
+            },
+            {
+              key: 'skill-loop-settings',
+              label: (
+                <span>
+                  <CheckCircleOutlined /> Skill Review Settings
+                </span>
+              ),
+              children: <LoopSettings />,
             },
             {
               key: 'skill-metrics',

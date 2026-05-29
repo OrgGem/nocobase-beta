@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Empty, Input, List, Space, Splitter, Tag, message } from 'antd';
 import { CheckOutlined, CloseOutlined, SaveOutlined } from '@ant-design/icons';
 import { useAPIClient, useRecord, useCollection_deprecated } from '@nocobase/client';
@@ -6,6 +6,7 @@ import { NormalizedOcrItem } from '../../shared/types';
 import { PdfJsViewer } from '../components/PdfJsViewer';
 
 type Props = {
+  children?: React.ReactNode;
   sourceMode?: 'currentRecord' | 'manualRecord';
   collection?: string;
   recordId?: string | number;
@@ -32,16 +33,19 @@ export const OcrVerifyBlock = (props: Props) => {
     [items, selectedId],
   );
 
-  const requestBase = {
-    collection: collectionName,
-    recordId,
-    pdfField: props.pdfField,
-    jsonField: props.jsonField,
-    statusField: props.statusField,
-    mappingProfileName: props.mappingProfileName || 'default',
-  };
+  const requestBase = useMemo(
+    () => ({
+      collection: collectionName,
+      recordId,
+      pdfField: props.pdfField,
+      jsonField: props.jsonField,
+      statusField: props.statusField,
+      mappingProfileName: props.mappingProfileName || 'default',
+    }),
+    [collectionName, props.jsonField, props.mappingProfileName, props.pdfField, props.statusField, recordId],
+  );
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     if (!collectionName || !recordId || !props.pdfField || !props.jsonField) return;
     setLoading(true);
     try {
@@ -59,14 +63,16 @@ export const OcrVerifyBlock = (props: Props) => {
     } finally {
       setLoading(false);
     }
-  }
+  }, [api, collectionName, props.jsonField, props.pdfField, recordId, requestBase]);
 
   useEffect(() => {
     refresh();
-  }, [collectionName, recordId, props.pdfField, props.jsonField, props.statusField, props.mappingProfileName]);
+  }, [refresh]);
 
   const updateItem = (target: NormalizedOcrItem, value: string) => {
-    setItems((prev) => prev.map((item) => (String(item.id || item.key) === String(target.id || target.key) ? { ...item, value } : item)));
+    setItems((prev) =>
+      prev.map((item) => (String(item.id || item.key) === String(target.id || target.key) ? { ...item, value } : item)),
+    );
   };
 
   const submit = async (action: 'saveDraft' | 'accept' | 'reject') => {
@@ -81,7 +87,9 @@ export const OcrVerifyBlock = (props: Props) => {
       const data = res?.data?.data || res?.data;
       setPayload((prev) => ({ ...prev, data: data?.data }));
       setItems(data?.items || items);
-      message.success(action === 'saveDraft' ? 'Draft saved' : `Record ${action === 'accept' ? 'accepted' : 'rejected'}`);
+      message.success(
+        action === 'saveDraft' ? 'Draft saved' : `Record ${action === 'accept' ? 'accepted' : 'rejected'}`,
+      );
     } catch (err: any) {
       message.error(err?.message || `Failed to ${action}`);
     } finally {
@@ -134,7 +142,11 @@ export const OcrVerifyBlock = (props: Props) => {
                       <Space style={{ marginBottom: 6 }}>
                         <strong>{item.key}</strong>
                         {item.page && <Tag>p.{item.page}</Tag>}
-                        {item.confidence != null && <Tag color={item.confidence < 0.8 ? 'orange' : 'green'}>{Math.round(item.confidence * 100)}%</Tag>}
+                        {item.confidence != null && (
+                          <Tag color={item.confidence < 0.8 ? 'orange' : 'green'}>
+                            {Math.round(item.confidence * 100)}%
+                          </Tag>
+                        )}
                       </Space>
                       <Input value={item.value} onChange={(event) => updateItem(item, event.target.value)} />
                     </div>

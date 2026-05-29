@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import SftpClient from 'ssh2-sftp-client';
+import type SftpClient from 'ssh2-sftp-client';
 import { Readable } from 'stream';
 import { sftpPoolManager } from './sftp-pool-manager';
 
@@ -85,7 +85,28 @@ export class SftpConnectionManager {
   }
 
   private getConfigOptions(configId: string | number) {
-    const config = this.configs.get(configId);
+    if (configId === undefined || configId === null) {
+      throw new Error(`[sftp-private] Invalid config ID: ${configId}`);
+    }
+    let config = this.configs.get(configId);
+    if (!config) {
+      const strId = String(configId);
+      config = this.configs.get(strId);
+      if (!config) {
+        const numId = Number(configId);
+        if (!isNaN(numId)) {
+          config = this.configs.get(numId);
+        }
+      }
+      if (!config) {
+        for (const [k, v] of this.configs.entries()) {
+          if (String(k) === strId) {
+            config = v;
+            break;
+          }
+        }
+      }
+    }
     if (!config) {
       throw new Error(`[sftp-private] No config found for ID: ${configId}`);
     }

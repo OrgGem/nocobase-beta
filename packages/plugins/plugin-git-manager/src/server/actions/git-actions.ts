@@ -2,24 +2,27 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { Context } from '@nocobase/actions';
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawnSync } from 'child_process';
 import { redactPat, redactError } from '../utils/redact';
 
 // Disallow leading `-` to prevent argument-injection (e.g. `--upload-pack=...`)
 // when refs are passed as positional args to git.
-const REF_PATTERN = /^(?!-)[a-zA-Z0-9._\-\/]+$/;
+const REF_PATTERN = /^(?!-)[a-zA-Z0-9._/-]+$/;
 
 // Per-repo mutex to prevent PAT race conditions in withAuth
 const repoLocks = new Map<string, Promise<any>>();
+const GIT_BINARY = process.env.GIT_BINARY_PATH || process.env.GIT_EXECUTABLE || 'git';
+let gitAvailabilityChecked = false;
 
 function acquireLock(key: string): { promise: Promise<void>; release: () => void } {
   const prev = repoLocks.get(key) || Promise.resolve();
-  let release: () => void;
+  let release = () => {};
   const next = new Promise<void>((resolve) => {
     release = resolve;
   });
   const promise = prev.then(() => {});
   repoLocks.set(key, next);
-  return { promise, release: release! };
+  return { promise, release };
 }
 
 function validateRef(ref: string): string {
@@ -48,7 +51,14 @@ function validateRepoUrl(repoUrl: string): void {
   }
 }
 
-async function withAuth(git: ReturnType<typeof simpleGit>, localPath: string, repoUrl: string, pat: string, fn: () => Promise<any>, username?: string) {
+async function withAuth(
+  git: ReturnType<typeof simpleGit>,
+  localPath: string,
+  repoUrl: string,
+  pat: string,
+  fn: () => Promise<any>,
+  username?: string,
+) {
   // Lock by local working tree — that's what `git.remote('set-url', ...)`
   // mutates. Two repo records sharing a `repoUrl` but cloned to different
   // paths can run in parallel safely; conversely, two repos pointed at the
@@ -75,7 +85,7 @@ async function withAuth(git: ReturnType<typeof simpleGit>, localPath: string, re
         // Log but don't throw — the original operation already completed
         console.error(
           `[plugin-git-manager] CRITICAL: failed to remove PAT from remote URL for ${redactPat(repoUrl)}. ` +
-          `Manual cleanup of .git/config may be required.`,
+            `Manual cleanup of .git/config may be required.`,
           redactError(cleanupErr),
         );
       }
@@ -91,11 +101,35 @@ function getAuthUrl(repoUrl: string, pat: string, username?: string): string {
   return url.toString();
 }
 
+function getGitMissingMessage() {
+  return `Git executable "${GIT_BINARY}" was not found on the server. Install git in the app/worker container, or set GIT_BINARY_PATH to the absolute git binary path.`;
+}
+
+function assertGitAvailable(ctx: Context) {
+  if (gitAvailabilityChecked) return;
+
+  const check = spawnSync(GIT_BINARY, ['--version'], { stdio: 'ignore' });
+  if (check.error || check.status !== 0) {
+    ctx.throw(503, getGitMissingMessage());
+  }
+  gitAvailabilityChecked = true;
+}
+
+function isMissingGitError(error: any) {
+  const message = error?.message || String(error);
+  return error?.code === 'ENOENT' || /spawn .*git.*ENOENT/i.test(message);
+}
+
+function createGit(baseDir?: string): SimpleGit {
+  return simpleGit({ baseDir, binary: GIT_BINARY } as any);
+}
+
 function getGit(ctx: Context, localPath: string): SimpleGit {
   if (!fs.existsSync(localPath)) {
     ctx.throw(400, 'Repository directory does not exist. Please clone the repository first.');
   }
-  return simpleGit(localPath);
+  assertGitAvailable(ctx);
+  return createGit(localPath);
 }
 
 async function getRepo(ctx: Context) {
@@ -113,11 +147,11 @@ async function getRepo(ctx: Context) {
 function validateLocalPath(localPath: string): string {
   const basePath = process.env.GIT_REPOS_BASE_PATH || path.join(process.cwd(), 'storage', 'git-repos');
   const resolved = path.resolve(basePath, localPath);
-  
+
   // Ensure the resolved path is strictly inside the basePath.
   // We add path.sep to prevent partial matches like /storage/git-repo-hack matching /storage/git-repo
   const strictBasePath = path.resolve(basePath) + path.sep;
-  
+
   if (!resolved.startsWith(strictBasePath) && resolved !== path.resolve(basePath)) {
     throw new Error('Invalid local path: path traversal detected or path is outside the allowed base directory');
   }
@@ -127,9 +161,9 @@ function validateLocalPath(localPath: string): string {
 export async function clone(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const repoUrl = (repo.get('repoUrl') as string || '').trim();
-  const pat = (repo.get('pat') as string || '').trim();
-  const username = (repo.get('username') as string || '').trim();
+  const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
+  const pat = ((repo.get('pat') as string) || '').trim();
+  const username = ((repo.get('username') as string) || '').trim();
   const defaultBranch = ((repo.get('defaultBranch') as string) || 'main').trim() || 'main';
 
   validateRepoUrl(repoUrl);
@@ -146,10 +180,11 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
   }
 
   const authUrl = getAuthUrl(repoUrl, pat, username);
+  assertGitAvailable(ctx);
   try {
-    await simpleGit().clone(authUrl, localPath, ['--branch', defaultBranch]);
+    await createGit().clone(authUrl, localPath, ['--branch', defaultBranch]);
     // Remove PAT from the cloned repo's remote URL
-    await simpleGit(localPath).remote(['set-url', 'origin', repoUrl]);
+    await createGit(localPath).remote(['set-url', 'origin', repoUrl]);
     await ctx.db.getRepository('gitRepositories').update({
       filterByTk: repo.get('id'),
       values: { status: 'connected' },
@@ -161,6 +196,9 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
       values: { status: 'error' },
     });
     // Redact embedded PAT before the error reaches the client / log
+    if (isMissingGitError(err)) {
+      ctx.throw(503, getGitMissingMessage());
+    }
     throw redactError(err);
   }
   await next();
@@ -169,9 +207,9 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
 export async function pull(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = (repo.get('pat') as string || '').trim();
-  const repoUrl = (repo.get('repoUrl') as string || '').trim();
-  const username = (repo.get('username') as string || '').trim();
+  const pat = ((repo.get('pat') as string) || '').trim();
+  const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
+  const username = ((repo.get('username') as string) || '').trim();
 
   const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.pull(), username);
@@ -183,9 +221,9 @@ export async function pull(ctx: Context, next: () => Promise<void>) {
 export async function push(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = (repo.get('pat') as string || '').trim();
-  const repoUrl = (repo.get('repoUrl') as string || '').trim();
-  const username = (repo.get('username') as string || '').trim();
+  const pat = ((repo.get('pat') as string) || '').trim();
+  const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
+  const username = ((repo.get('username') as string) || '').trim();
 
   const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.push(), username);
@@ -197,9 +235,9 @@ export async function push(ctx: Context, next: () => Promise<void>) {
 export async function fetch(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = (repo.get('pat') as string || '').trim();
-  const repoUrl = (repo.get('repoUrl') as string || '').trim();
-  const username = (repo.get('username') as string || '').trim();
+  const pat = ((repo.get('pat') as string) || '').trim();
+  const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
+  const username = ((repo.get('username') as string) || '').trim();
 
   const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.fetch(), username);
@@ -287,22 +325,28 @@ export async function fileTree(ctx: Context, next: () => Promise<void>) {
   const detailArgs = ['ls-tree', '-l', ref];
   if (treePath) detailArgs.push(treePath + '/');
   const detailedResult = await git.raw(detailArgs);
-  const items = detailedResult.trim().split('\n').filter(Boolean).map((line) => {
-    // format: <mode> <type> <hash> <size>\t<name>
-    const match = line.match(/^(\d+)\s+(blob|tree)\s+([a-f0-9]+)\s+(-|\d+)\t(.+)$/);
-    if (!match) return null;
-    const fullPath = match[5];
-    // Extract just the filename from the full path when using treePath prefix
-    const name = fullPath.includes('/') ? fullPath.split('/').pop()! : fullPath;
-    return {
-      mode: match[1],
-      type: match[2] as 'blob' | 'tree',
-      hash: match[3],
-      size: match[4] === '-' ? 0 : parseInt(match[4], 10),
-      name,
-      path: treePath ? `${treePath}/${name}` : name,
-    };
-  }).filter(Boolean);
+  const items = detailedResult
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      // format: <mode> <type> <hash> <size>\t<name>
+      const match = line.match(/^(\d+)\s+(blob|tree)\s+([a-f0-9]+)\s+(-|\d+)\t(.+)$/);
+      if (!match) return null;
+      const fullPath = match[5];
+      // Extract just the filename from the full path when using treePath prefix
+      const parts = fullPath.split('/');
+      const name = fullPath.includes('/') ? parts[parts.length - 1] : fullPath;
+      return {
+        mode: match[1],
+        type: match[2] as 'blob' | 'tree',
+        hash: match[3],
+        size: match[4] === '-' ? 0 : parseInt(match[4], 10),
+        name,
+        path: treePath ? `${treePath}/${name}` : name,
+      };
+    })
+    .filter(Boolean);
 
   // Sort: directories first, then files, both alphabetical
   items.sort((a, b) => {
@@ -360,10 +404,14 @@ export async function commitDetail(ctx: Context, next: () => Promise<void>) {
   ]);
 
   const parts = show.split(DELIM_OUT);
-  const files = diffResult.trim().split('\n').filter(Boolean).map((line) => {
-    const [statusCode, ...fileParts] = line.split('\t');
-    return { status: statusCode, file: fileParts.join('\t') };
-  });
+  const files = diffResult
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const [statusCode, ...fileParts] = line.split('\t');
+      return { status: statusCode, file: fileParts.join('\t') };
+    });
 
   ctx.body = {
     success: true,
