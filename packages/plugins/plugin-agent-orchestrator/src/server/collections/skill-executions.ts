@@ -81,6 +81,18 @@ export default {
       allowNull: true,
     },
     {
+      name: 'agentLoopRunId',
+      type: 'string',
+      length: 100,
+      allowNull: true,
+    },
+    {
+      name: 'agentLoopStepId',
+      type: 'string',
+      length: 100,
+      allowNull: true,
+    },
+    {
       name: 'triggeredBy',
       type: 'belongsTo',
       target: 'users',

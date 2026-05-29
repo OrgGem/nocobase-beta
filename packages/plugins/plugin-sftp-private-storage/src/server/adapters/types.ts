@@ -37,6 +37,21 @@ export interface PutStreamOptions {
   mimetype?: string;
 }
 
+export interface ListOptions {
+  limit?: number;
+  offset?: number;
+  continuationToken?: string;
+  search?: string;
+  type?: 'file' | 'directory';
+}
+
+export interface ListResult {
+  entries: FileEntry[];
+  nextContinuationToken?: string;
+  hasMore?: boolean;
+  total?: number;
+}
+
 /**
  * Unified storage adapter interface.
  * All storage backends (S3, SFTP, etc.) implement this interface
@@ -50,7 +65,7 @@ export interface IStorageAdapter {
    * List files and folders at the given path.
    * Returns entries sorted: directories first, then files, both alphabetically.
    */
-  list(remotePath: string): Promise<FileEntry[]>;
+  list(remotePath: string, options?: ListOptions): Promise<FileEntry[] | ListResult>;
 
   /**
    * Get metadata for a single file or directory.

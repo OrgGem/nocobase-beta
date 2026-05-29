@@ -12,11 +12,7 @@ import { FileTextOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Dropdown, Space, Tooltip, message } from 'antd';
 import type { MenuProps } from 'antd';
 import type { Application } from '@nocobase/client';
-import {
-  useChatBoxActions,
-  useAIConfigRepository,
-  type AIEmployee,
-} from '@nocobase/plugin-ai/client';
+import { useChatBoxActions, useAIConfigRepository, type AIEmployee } from '@nocobase/plugin-ai/client';
 import { useT } from './locale';
 
 export const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
@@ -47,7 +43,12 @@ function normalizePreviewFile(file: any) {
     mimetype: file?.mimetype,
     size: file?.size,
     path: file?.path,
-    storageId: file?.storageId,
+    storageId: file?.storageId ?? file?.storage_id ?? file?.storage?.id,
+    storage_id: file?.storage_id,
+    storageType: file?.storageType || file?.storage?.type,
+    storageName: file?.storageName || file?.storage?.name,
+    storage: file?.storage,
+    collectionName: file?.collectionName,
   };
 }
 
@@ -127,15 +128,12 @@ const AIFilePreviewActionInner: React.FC<{ file: any }> = ({ file }) => {
       .then((list) => {
         if (!cancelled) {
           setEmployees([...(list || [])]);
+          setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setEmployees([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
           setLoading(false);
         }
       });

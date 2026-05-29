@@ -2,11 +2,29 @@
  * Log Explorer — robot logs with level/time/process/jobKey filters
  */
 
-import React, { useState } from 'react';
-import { Table, Tag, Space, Input, Select, Button } from 'antd';
+import React, { useState, useEffect } from 'react';
+import {
+  Alert,
+  Table,
+  Tag,
+  Space,
+  Input,
+  Select,
+  Button,
+  Drawer,
+  Spin,
+  List,
+  Empty,
+  Tabs,
+  Descriptions,
+  message,
+} from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useUiPathRequest } from '../hooks/useUiPathRequest';
+import { useAPIClient } from '@nocobase/client';
+import { useCurrentInstance } from '../context/InstanceContext';
+import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
+import { QueueItemTracePanel } from './QueueItemTracePanel';
 
 const levelColors: Record<string, string> = {
   Error: 'red',
@@ -20,12 +38,49 @@ const LOG_LEVELS = ['Trace', 'Info', 'Warn', 'Error', 'Fatal'];
 
 export const LogExplorer: React.FC = () => {
   const t = useT();
+  const api = useAPIClient();
+  const { instanceId, folderId, folderKey } = useCurrentInstance();
+
   const [level, setLevel] = useState<string | undefined>();
   const [search, setSearch] = useState('');
   const [jobKey, setJobKey] = useState('');
   const [queueItem, setQueueItem] = useState('');
 
-  const { data, meta, loading, refresh } = useUiPathRequest('uipathRobotLogs', 'search', {
+  const [tracingLog, setTracingLog] = useState<any>(null);
+  const [traceData, setTraceData] = useState<any>(null);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [selectedQueueItem, setSelectedQueueItem] = useState<any>(null);
+
+  useEffect(() => {
+    if (!tracingLog) {
+      setTraceData(null);
+      setSelectedQueueItem(null);
+      return;
+    }
+    setTraceLoading(true);
+    api
+      .request({
+        url: 'uipathRobotLogs:traceQueueItem',
+        params: {
+          instanceId,
+          folderId,
+          folderKey,
+          logId: tracingLog.Id,
+          timeStamp: tracingLog.TimeStamp,
+          jobKey: tracingLog.JobKey,
+        },
+      })
+      .then((res) => {
+        setTraceData(res.data);
+        setTraceLoading(false);
+      })
+      .catch((err) => {
+        message.error(err.message);
+        setTraceLoading(false);
+      });
+  }, [tracingLog, instanceId, folderId, folderKey, api]);
+
+  const { data, meta, loading, error, refresh } = useUiPathRequest('uipathRobotLogs', 'search', {
     level,
     jobKey: jobKey || undefined,
     message: search || undefined,
@@ -34,6 +89,11 @@ export const LogExplorer: React.FC = () => {
     count: true,
     orderby: 'TimeStamp desc',
   });
+  const logs = toUiPathArray(data);
+  const jobKeys =
+    meta && typeof meta === 'object' && Array.isArray((meta as { jobKeys?: unknown }).jobKeys)
+      ? (meta as { jobKeys: string[] }).jobKeys
+      : [];
 
   const columns = [
     {
@@ -53,10 +113,22 @@ export const LogExplorer: React.FC = () => {
     { title: t('Machine'), dataIndex: 'MachineName', width: 140, ellipsis: true },
     { title: t('Message'), dataIndex: 'Message', ellipsis: true },
     { title: t('Job Key'), dataIndex: 'JobKey', width: 120, ellipsis: true },
+    {
+      title: t('Actions'),
+      width: 120,
+      render: (_: any, rec: any) => (
+        <Button size="small" onClick={() => setTracingLog(rec)}>
+          {t('Trace Queue')}
+        </Button>
+      ),
+    },
   ];
 
   return (
     <div>
+      {error ? (
+        <Alert type="error" showIcon message={t('Failed')} description={error.message} style={{ marginBottom: 16 }} />
+      ) : null}
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder={t('Log level')}
@@ -86,17 +158,17 @@ export const LogExplorer: React.FC = () => {
           {t('Refresh')}
         </Button>
       </Space>
-      {meta?.jobKeys?.length ? (
+      {jobKeys.length ? (
         <Space style={{ marginBottom: 16 }} wrap>
           <span>{t('Resolved job keys')}:</span>
-          {meta.jobKeys.map((key: string) => (
+          {jobKeys.map((key: string) => (
             <Tag key={key}>{key}</Tag>
           ))}
         </Space>
       ) : null}
 
       <Table
-        dataSource={data || []}
+        dataSource={logs}
         columns={columns}
         rowKey="Id"
         loading={loading}
@@ -104,6 +176,83 @@ export const LogExplorer: React.FC = () => {
         pagination={{ pageSize: 100 }}
         scroll={{ x: 1200 }}
       />
+
+      <Drawer
+        title={t('Trace Queue Item from Log')}
+        open={!!tracingLog}
+        onClose={() => {
+          setTracingLog(null);
+          setSelectedQueueItem(null);
+        }}
+        width={650}
+      >
+        {traceLoading ? (
+          <div style={{ padding: 24, textAlign: 'center' }}>
+            <Spin size="large" />
+          </div>
+        ) : traceData?.queueItems?.length > 0 ? (
+          <div>
+            <h4 style={{ marginBottom: 16 }}>{t('Correlated Queue Items at Log Timestamp')}</h4>
+            <List
+              dataSource={traceData.queueItems}
+              renderItem={(item: any) => (
+                <List.Item
+                  actions={[
+                    <Button key="trace" type="link" onClick={() => setSelectedQueueItem(item)}>
+                      {t('Detail & TraceLogs')}
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={`Queue Item ID: ${item.Id}`}
+                    description={
+                      <Space>
+                        <Tag color={item.Status === 'Failed' ? 'red' : item.Status === 'Successful' ? 'green' : 'blue'}>
+                          {item.Status}
+                        </Tag>
+                        {item.Reference && <span>Ref: {item.Reference}</span>}
+                        <span>Start: {new Date(item.StartProcessing).toLocaleTimeString()}</span>
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+
+            {selectedQueueItem && (
+              <div style={{ marginTop: 24, borderTop: '1px solid #f0f0f0', paddingTop: 24 }}>
+                <Tabs
+                  items={[
+                    {
+                      key: 'info',
+                      label: t('Queue Item Info'),
+                      children: (
+                        <Descriptions column={1} bordered size="small">
+                          <Descriptions.Item label="ID">{selectedQueueItem.Id}</Descriptions.Item>
+                          <Descriptions.Item label="Status">{selectedQueueItem.Status}</Descriptions.Item>
+                          <Descriptions.Item label="Reference">{selectedQueueItem.Reference || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="Specific Content">
+                            <pre style={{ maxHeight: 150, overflow: 'auto', fontSize: 11 }}>
+                              {JSON.stringify(selectedQueueItem.SpecificContent, null, 2)}
+                            </pre>
+                          </Descriptions.Item>
+                        </Descriptions>
+                      ),
+                    },
+                    {
+                      key: 'trace',
+                      label: t('Chronological Trace Logs'),
+                      children: <QueueItemTracePanel itemId={selectedQueueItem.Id} />,
+                    },
+                  ]}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <Empty description={t('No active queue item found at this timestamp')} />
+        )}
+      </Drawer>
     </div>
   );
 };

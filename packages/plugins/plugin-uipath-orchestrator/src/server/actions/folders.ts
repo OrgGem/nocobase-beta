@@ -103,6 +103,7 @@ export function createFolderActions(plugin: PluginUiPathOrchestratorServer) {
             defaultFolderPath: folderPath || null,
           },
         });
+        plugin.invalidateClientCache(Number(instanceId));
         ctx.body = { success: true };
       } catch (error) {
         handleError(ctx, error);

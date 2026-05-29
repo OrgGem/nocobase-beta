@@ -3,11 +3,11 @@
  */
 
 import React, { useState } from 'react';
-import { Table, Tag, Button, Space, Input, Select, Drawer, Descriptions, Popconfirm, message } from 'antd';
-import { PlayCircleOutlined, StopOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { Alert, Table, Tag, Button, Space, Input, Select, Drawer, Descriptions, Popconfirm, message } from 'antd';
+import { StopOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useCurrentInstance } from '../context/InstanceContext';
-import { useUiPathRequest } from '../hooks/useUiPathRequest';
+import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
 
 const stateColors: Record<string, string> = {
@@ -34,12 +34,13 @@ export const JobManager: React.FC = () => {
   if (stateFilter) filterParts.push(`State eq '${stateFilter}'`);
   if (search) filterParts.push(`contains(ReleaseName, '${escapeODataString(search)}')`);
 
-  const { data, loading, refresh } = useUiPathRequest('uipathJobs', 'list', {
+  const { data, loading, error, refresh } = useUiPathRequest('uipathJobs', 'list', {
     filter: filterParts.join(' and ') || undefined,
     top: 50,
     count: true,
     orderby: 'CreationTime desc',
   });
+  const jobs = toUiPathArray(data);
 
   const handleAction = async (action: string, jobId: number) => {
     try {
@@ -101,6 +102,9 @@ export const JobManager: React.FC = () => {
 
   return (
     <div>
+      {error ? (
+        <Alert type="error" showIcon message={t('Failed')} description={error.message} style={{ marginBottom: 16 }} />
+      ) : null}
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder={t('Filter by state')}
@@ -117,7 +121,7 @@ export const JobManager: React.FC = () => {
       </Space>
 
       <Table
-        dataSource={data || []}
+        dataSource={jobs}
         columns={columns}
         rowKey="Id"
         loading={loading}

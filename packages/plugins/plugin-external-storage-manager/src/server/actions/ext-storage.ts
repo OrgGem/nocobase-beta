@@ -10,7 +10,7 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { IStorageAdapter, FileEntry } from '../adapters/types';
+import { IStorageAdapter, FileEntry, ListOptions, ListResult } from '../adapters/types';
 import { koaMulter as multer } from '@nocobase/utils';
 import { STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
 
@@ -269,29 +269,54 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     const type = payload.type;
     const search = String(payload.search || payload.q || '').toLowerCase();
 
+    const options: ListOptions = {
+      limit,
+      offset,
+      continuationToken: payload.continuationToken,
+      search,
+      type,
+    };
+
     try {
-      let files = (await adapter.list(remotePath)).map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
-      if (type === 'file' || type === 'directory') {
-        files = files.filter((entry) => entry.type === type);
+      const filesOrResult = await adapter.list(remotePath, options);
+      let pageData: FileEntry[];
+      let meta: any = {
+        directoryId: directory.get('id'),
+        directoryName: directory.get('name'),
+        currentPath: subPath,
+        rootPath: directory.get('rootPath'),
+      };
+
+      if (Array.isArray(filesOrResult)) {
+        let files = filesOrResult.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+        if (type === 'file' || type === 'directory') {
+          files = files.filter((entry) => entry.type === type);
+        }
+        if (search) {
+          files = files.filter((entry) => entry.name.toLowerCase().includes(search));
+        }
+        const sorted = sortEntries(files, payload.sort || 'name', payload.order || 'asc');
+        pageData = sorted.slice(offset, offset + limit);
+        meta.total = sorted.length;
+        meta.limit = limit;
+        meta.offset = offset;
+        meta.hasMore = offset + limit < sorted.length;
+        meta.nextOffset = offset + limit < sorted.length ? offset + limit : null;
+      } else {
+        pageData = filesOrResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+        meta.limit = limit;
+        meta.offset = offset;
+        meta.continuationToken = payload.continuationToken;
+        meta.nextContinuationToken = filesOrResult.nextContinuationToken;
+        meta.hasMore = filesOrResult.hasMore ?? !!filesOrResult.nextContinuationToken;
+        if (filesOrResult.total !== undefined) {
+          meta.total = filesOrResult.total;
+        }
       }
-      if (search) {
-        files = files.filter((entry) => entry.name.toLowerCase().includes(search));
-      }
-      const sorted = sortEntries(files, payload.sort || 'name', payload.order || 'asc');
-      const pageData = sorted.slice(offset, offset + limit);
+
       ctx.body = {
         data: pageData,
-        meta: {
-          directoryId: directory.get('id'),
-          directoryName: directory.get('name'),
-          currentPath: subPath,
-          rootPath: directory.get('rootPath'),
-          total: sorted.length,
-          limit,
-          offset,
-          hasMore: offset + limit < sorted.length,
-          nextOffset: offset + limit < sorted.length ? offset + limit : null,
-        },
+        meta,
       };
     } catch (error: any) {
       ctx.logger?.error?.(`[ext-storage] List failed for path "${remotePath}":`, error);

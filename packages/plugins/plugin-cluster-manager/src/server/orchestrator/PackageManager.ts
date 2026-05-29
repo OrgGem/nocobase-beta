@@ -5,7 +5,7 @@ import path from 'path';
 import Application from '@nocobase/server';
 
 /** Allow only safe package name characters: letters, digits, dash, underscore, dot, @, /, [, ] */
-const SAFE_PKG_RE = /^[a-zA-Z0-9_\-\.@\/\[\]]+$/;
+const SAFE_PKG_RE = /^(?:[a-zA-Z0-9_.@/-]|\[|\])+$/;
 const INSTALL_CHANNEL = 'cluster-manager.install-packages';
 
 type TargetRole = 'app' | 'worker' | 'sandbox' | 'all';
@@ -15,6 +15,11 @@ interface InstallPayload {
   targetRole: TargetRole;
   packages: { apt?: string[]; npm?: string[]; python?: string[] };
   registryConfig?: { aptMirrorUrl?: string; npmRegistryUrl?: string; pypiIndexUrl?: string; pypiTrustedHost?: string };
+}
+
+interface AptOsInfo {
+  id: string;
+  codename: string;
 }
 
 function sanitizePkg(name: string): string {
@@ -81,10 +86,44 @@ function formatCommand(command: string, args: string[]): string {
     .join(' ');
 }
 
+function parseOsRelease(content: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const line of content.split('\n')) {
+    const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (!match) continue;
+
+    values[match[1]] = match[2].replace(/^"|"$/g, '');
+  }
+  return values;
+}
+
+function normalizeMirrorUrl(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+function isInternalCacheMirror(url: URL): boolean {
+  return url.hostname === 'nginx-cache-registry';
+}
+
+function resolveAptMirrorForOs(aptMirrorUrl: string, osInfo: AptOsInfo, logs: string[]): string {
+  const url = new URL(normalizeMirrorUrl(aptMirrorUrl));
+  const original = url.toString();
+
+  if (isInternalCacheMirror(url) && osInfo.id === 'debian' && url.pathname === '/ubuntu/') {
+    url.pathname = '/debian/';
+  } else if (isInternalCacheMirror(url) && osInfo.id === 'ubuntu' && url.pathname === '/debian/') {
+    url.pathname = '/ubuntu/';
+  }
+
+  const resolved = url.toString();
+  if (resolved !== original) {
+    logs.push(`Adjusted APT mirror for ${osInfo.id}: ${redactUrl(resolved)}`);
+  }
+  return resolved;
+}
+
 export class PackageManager {
-  constructor(
-    private app: Application,
-  ) {}
+  constructor(private app: Application) {}
 
   /**
    * Called from REST action when admin clicks "Install Packages".
@@ -107,9 +146,7 @@ export class PackageManager {
     // Filter by role
     const currentRole = getCurrentRole();
     const roleMatches =
-      targetRole === 'all' ||
-      targetRole === currentRole ||
-      (targetRole === 'worker' && currentRole === 'sandbox');
+      targetRole === 'all' || targetRole === currentRole || (targetRole === 'worker' && currentRole === 'sandbox');
 
     if (!roleMatches) {
       return; // Skip if role doesn't match
@@ -138,7 +175,7 @@ export class PackageManager {
         if (registryConfig.aptMirrorUrl) {
           const aptMirrorUrl = sanitizeHttpUrl(registryConfig.aptMirrorUrl, 'APT mirror URL');
           logs.push(`Applying APT mirror: ${redactUrl(aptMirrorUrl)}`);
-          await this.configureAptMirror(aptMirrorUrl);
+          await this.configureAptMirror(aptMirrorUrl, logs);
         }
 
         await this.updateInstallStatus('running', 20, 'Installing APT packages...', logs);
@@ -241,7 +278,13 @@ export class PackageManager {
   /**
    * Run a command without a shell so registry URLs and package names are not re-parsed as shell syntax.
    */
-  private async runCommand(command: string, args: string[], label: string, logs: string[], timeoutMs = 1200000): Promise<void> {
+  private async runCommand(
+    command: string,
+    args: string[],
+    label: string,
+    logs: string[],
+    timeoutMs = 1200000,
+  ): Promise<void> {
     logs.push(`RUNNING: ${formatCommand(command, args)}`);
     logs.push(`${label}`);
 
@@ -250,12 +293,12 @@ export class PackageManager {
       let stdout = '';
       let stderr = '';
       let settled = false;
-      let timer: NodeJS.Timeout;
+      const state: { timer?: NodeJS.Timeout } = {};
 
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (state.timer) clearTimeout(state.timer);
         if (stdout) logs.push(stdout.slice(0, 500));
         if (stderr) logs.push(`WARN: ${stderr.slice(0, 300)}`);
         if (error) {
@@ -266,7 +309,7 @@ export class PackageManager {
         }
       };
 
-      timer = setTimeout(() => {
+      state.timer = setTimeout(() => {
         child.kill('SIGTERM');
         finish(new Error(`${command} timed out after ${timeoutMs}ms`));
       }, timeoutMs);
@@ -324,16 +367,16 @@ export class PackageManager {
       const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
       let stdout = '';
       let settled = false;
-      let timer: NodeJS.Timeout;
+      const state: { timer?: NodeJS.Timeout } = {};
 
       const finish = (ok: boolean) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (state.timer) clearTimeout(state.timer);
         resolve(ok);
       };
 
-      timer = setTimeout(() => {
+      state.timer = setTimeout(() => {
         child.kill('SIGTERM');
         finish(false);
       }, timeoutMs);
@@ -346,7 +389,31 @@ export class PackageManager {
     });
   }
 
-  private async configureAptMirror(aptMirrorUrl: string): Promise<void> {
+  private async getAptOsInfo(): Promise<AptOsInfo> {
+    const values = parseOsRelease(await fsp.readFile('/etc/os-release', 'utf8'));
+    const id = (values.ID || '').toLowerCase();
+    const codename = values.VERSION_CODENAME || values.UBUNTU_CODENAME;
+
+    if (!id || !codename) {
+      throw new Error('Cannot detect OS ID/version codename from /etc/os-release for APT mirror configuration.');
+    }
+    return { id, codename };
+  }
+
+  private buildAptSources(aptMirrorUrl: string, osInfo: AptOsInfo): string {
+    const mirror = normalizeMirrorUrl(aptMirrorUrl);
+    if (osInfo.id === 'ubuntu') {
+      return `deb ${mirror} ${osInfo.codename} main universe restricted multiverse\n`;
+    }
+    if (osInfo.id === 'debian') {
+      return `deb ${mirror} ${osInfo.codename} main contrib non-free non-free-firmware\n`;
+    }
+    return `deb ${mirror} ${osInfo.codename} main\n`;
+  }
+
+  private async configureAptMirror(aptMirrorUrl: string, logs: string[]): Promise<void> {
+    const osInfo = await this.getAptOsInfo();
+    const resolvedMirrorUrl = resolveAptMirrorForOs(aptMirrorUrl, osInfo, logs);
     const backupDir = '/etc/apt/sources.list.d.bak';
     await fsp.mkdir(backupDir, { recursive: true });
 
@@ -362,7 +429,7 @@ export class PackageManager {
       // sources.list.d may not exist in minimal images.
     }
 
-    await fsp.writeFile('/etc/apt/sources.list', `deb ${aptMirrorUrl} bookworm main\n`, 'utf8');
+    await fsp.writeFile('/etc/apt/sources.list', this.buildAptSources(resolvedMirrorUrl, osInfo), 'utf8');
   }
 
   private async moveIfExists(from: string, to: string): Promise<void> {

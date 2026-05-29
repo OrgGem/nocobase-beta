@@ -28,6 +28,12 @@ export interface CarboneRenderResult {
   mimeType: string;
 }
 
+export interface CarboneTemplateDownloadResult {
+  buffer: Buffer;
+  filename?: string;
+  mimeType: string;
+}
+
 /**
  * Thin wrapper around the Carbone.io REST API.
  *
@@ -78,15 +84,24 @@ export class CarboneClient {
     await this.withRetry(() => this.http.delete(`/template/${templateId}`));
   }
 
+  async downloadTemplate(templateId: string): Promise<CarboneTemplateDownloadResult> {
+    const { data, headers } = await this.withRetry(() =>
+      this.http.get(`/template/${templateId}`, { responseType: 'arraybuffer' }),
+    );
+    return {
+      buffer: Buffer.from(data as ArrayBuffer),
+      filename: this.parseFilename(headers['content-disposition']),
+      mimeType: (headers['content-type'] as string) ?? 'application/octet-stream',
+    };
+  }
+
   /**
    * Check whether Carbone still has a templateId. The community edition LRU
    * may evict entries; callers use this to decide whether to re-upload.
    */
   async templateExists(templateId: string): Promise<boolean> {
     try {
-      await this.withRetry(() =>
-        this.http.get(`/template/${templateId}`, { responseType: 'arraybuffer' }),
-      );
+      await this.downloadTemplate(templateId);
       return true;
     } catch (err: any) {
       const status = err?.response?.status;
@@ -124,7 +139,7 @@ export class CarboneClient {
         const status = err?.response?.status;
         const retriable = !status || status >= 500;
         if (!retriable || attempt === this.cfg.maxRetries) break;
-        await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
       }
     }
     throw lastErr;

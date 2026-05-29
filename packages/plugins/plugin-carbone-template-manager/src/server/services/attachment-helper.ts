@@ -25,7 +25,24 @@ export async function readAttachmentBuffer(
   const attachment = await app.db.getRepository('attachments').findOne({ filterByTk: attachmentId });
   if (!attachment) throw new Error(`attachment ${attachmentId} not found`);
 
-  const { stream } = await fileManager.getFileStream(attachment);
+  let matchedKey = null;
+  const rawStorageId = attachment.get('storageId') || attachment.storageId;
+  if (rawStorageId) {
+    const strId = String(rawStorageId);
+    for (const key of fileManager.storagesCache.keys()) {
+      if (String(key) === strId) {
+        matchedKey = key;
+        break;
+      }
+    }
+  }
+
+  const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
+  if (matchedKey !== null) {
+    attachmentObj.storageId = matchedKey;
+  }
+
+  const { stream } = await fileManager.getFileStream(attachmentObj);
   const chunks: Uint8Array[] = [];
   for await (const chunk of stream) {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);

@@ -1,7 +1,8 @@
 import { Plugin } from '@nocobase/client';
 import React from 'react';
 
-import { type DashboardTabKey, VisualizationTemplatesManager } from './VisualizationTemplatesManager';
+import { type DashboardTabKey, VisualizationTemplatesManager } from './work-monitor/VisualizationTemplatesManager';
+import './work-monitor/templates';
 import { namespace } from './locale';
 
 const tabPages: { key: DashboardTabKey; title: string }[] = [

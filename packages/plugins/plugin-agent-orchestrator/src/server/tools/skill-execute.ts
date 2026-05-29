@@ -8,7 +8,8 @@ export function createSkillExecuteTool(plugin: any) {
 
     introduction: {
       title: 'Skill Hub - Universal Skill Executor',
-      about: 'A universal gateway to execute predefined specialized skills (data processing, complex calculations, file generation, etc.) inside a secure Python/Node.js sandbox.',
+      about:
+        'A universal gateway to execute predefined specialized skills (data processing, complex calculations, file generation, etc.) inside a secure Python/Node.js sandbox.',
     },
 
     definition: {
@@ -44,7 +45,7 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
 
     async invoke(ctx: any, args: Record<string, any>, _id?: string) {
       plugin.app.logger.info(`[skill-execute] Tool invoked with action: ${args.action}, skillName: ${args.skillName}`);
-      
+
       // Action: list available skills
       if (args.action === 'list') {
         const skills = await plugin.db.getRepository('skillDefinitions').find({
@@ -85,9 +86,10 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
           };
         }
 
-        const instructions = typeof plugin.getSkillInstructions === 'function'
-          ? await plugin.getSkillInstructions(skill)
-          : skill.get('instructions');
+        const instructions =
+          typeof plugin.getSkillInstructions === 'function'
+            ? await plugin.getSkillInstructions(skill)
+            : skill.get('instructions');
 
         return {
           status: 'success',
@@ -136,6 +138,8 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
               stderr: result.stderr,
               files: result.files,
               execId: result.execId,
+              agentLoopRunId: result.agentLoopRunId,
+              agentLoopStepId: result.agentLoopStepId,
               durationMs: result.durationMs,
             }),
           };

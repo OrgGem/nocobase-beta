@@ -13,6 +13,8 @@ import { ExcelParserHandler } from './excel-parser-handler';
 import { readFile, unlink } from 'fs/promises';
 import os from 'os';
 import path from 'path';
+import { col } from 'sequelize';
+import { TesseractWorker } from './ocr/tesseract-worker';
 
 const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
@@ -21,24 +23,49 @@ const OFFICE_PREVIEWER_PLUGIN_NAMES = ['file-previewer-office', '@nocobase/plugi
 
 export class PluginFilePreviewAuthServer extends Plugin {
   private cache: any;
+  private ocrWorker: TesseractWorker;
 
   async beforeLoad() {
     await this.db.import({ directory: path.resolve(__dirname, 'collections') });
   }
 
   async load() {
+    await this.syncOcrResultCollection();
     this.cache = await this.app.cacheManager.createCache({ name: 'file-preview-auth' });
+    this.ocrWorker = new TesseractWorker(this.app);
     this.registerExcelParser();
     this.registerAIWorkContext();
     this.registerDownloadApi();
 
     this.app.on('afterStart', async () => {
       await this.disableBuiltinOfficePreviewer();
+      if (this.ocrWorker) {
+        await this.ocrWorker.start();
+      }
     });
   }
 
   async afterEnable() {
     await this.disableBuiltinOfficePreviewer();
+  }
+
+  async beforeDisable() {
+    if (this.ocrWorker) {
+      this.ocrWorker.stop();
+    }
+  }
+
+  async beforeDestroy() {
+    if (this.ocrWorker) {
+      this.ocrWorker.stop();
+    }
+  }
+
+  private async syncOcrResultCollection() {
+    const collection = this.db.getCollection('attachmentOcrResults');
+    if (collection) {
+      await collection.sync();
+    }
   }
 
   /**
@@ -76,14 +103,17 @@ export class PluginFilePreviewAuthServer extends Plugin {
           // NocoBase strips non-standard query parameters from ctx.action.params, so we check ctx.request.query and ctx.request.body
           const reqQuery = ctx.request.query || {};
           const reqBody = ctx.request.body || {};
-          
-          const fileInput = uploaded?.attachment || values.file || params.file || reqQuery.file || reqBody.file || params;
+
+          const fileInput =
+            uploaded?.attachment || values.file || params.file || reqQuery.file || reqBody.file || params;
           const attachment = uploaded
             ? await this.resolveAttachment(ctx, fileInput).catch(() => fileInput)
             : await this.resolveAttachment(ctx, fileInput);
           this.assertAuthenticated(ctx);
 
-          const cacheKey = `markitdown_parsed_text:${attachment.id || attachment.key || attachment.url || attachment.path || uploaded?.cacheKey}`;
+          const cacheKey = `markitdown_parsed_text:${
+            attachment.id || attachment.key || attachment.url || attachment.path || uploaded?.cacheKey
+          }`;
           let text = await this.cache.get(cacheKey);
 
           if (text == null) {
@@ -106,26 +136,56 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
         download: async (ctx: any, next: any) => {
           const params = ctx.action.params || {};
+          const values = params.values || {};
           const reqQuery = ctx.request.query || {};
           const reqBody = ctx.request.body || {};
-          
-          let rawUrl = params.url || reqQuery.url || reqBody.url;
-          if (!rawUrl) {
-            ctx.throw(400, 'url is required');
-          }
-          
-          let url = rawUrl;
-          try {
-            url = decodeURIComponent(rawUrl);
-          } catch (e) {
-            // ignore
+
+          let fileInput = values.file || params.file || reqQuery.file || reqBody.file || {};
+          if (typeof fileInput === 'string') {
+            try {
+              fileInput = JSON.parse(fileInput);
+            } catch {
+              fileInput = { url: fileInput };
+            }
           }
 
-          const collection = params.collection || reqQuery.collection || reqBody.collection;
-          const storageIdInput = params.storageId || reqQuery.storageId || reqBody.storageId;
+          const rawUrl =
+            values.url ||
+            params.url ||
+            reqQuery.url ||
+            reqBody.url ||
+            fileInput.url ||
+            fileInput.preview ||
+            fileInput.path;
+          const requestedId = values.id || params.id || reqQuery.id || reqBody.id || fileInput.id || fileInput.uid;
+          if (!rawUrl && !requestedId) {
+            ctx.throw(400, 'url or id is required');
+          }
+
+          let url = rawUrl || '';
+          if (rawUrl) {
+            try {
+              url = decodeURIComponent(rawUrl);
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          const collection =
+            values.collection ||
+            values.collectionName ||
+            params.collection ||
+            params.collectionName ||
+            reqQuery.collection ||
+            reqQuery.collectionName ||
+            reqBody.collection ||
+            reqBody.collectionName ||
+            fileInput.collectionName;
+          const storageIdInput =
+            values.storageId || params.storageId || reqQuery.storageId || reqBody.storageId || fileInput.storageId;
           let storageId = storageIdInput;
 
-          const fileManager = this.pm.get('@nocobase/plugin-file-manager') as any;
+          const fileManager = (this.pm.get('@nocobase/plugin-file-manager') || this.pm.get('file-manager')) as any;
           if (!fileManager) {
             ctx.throw(500, 'File manager plugin not found');
           }
@@ -143,31 +203,116 @@ export class PluginFilePreviewAuthServer extends Plugin {
           }
 
           let attachment = null;
+          let attachmentCollection = collection;
           let isVirtual = false;
           // Prioritize aiFiles since chat attachments are mostly aiFiles
           const collectionsToTry = Array.from(new Set([collection, 'aiFiles', 'attachments'].filter(Boolean)));
-          
-          for (const colName of collectionsToTry) {
-            const repo = this.db.getRepository(colName);
-            if (repo) {
-              if (filterByTk) {
-                attachment = await repo.findOne({ filterByTk });
-              }
-              if (!attachment) {
-                attachment = await repo.findOne({ filter: { url } });
-              }
-              if (attachment) {
-                // To prevent finding a record in 'attachments' when it actually belongs to 'aiFiles' 
-                // and having permissions fail, if we found it in the wrong collection, we shouldn't break yet if url doesn't match?
-                // Actually, just break.
-                break;
+
+          this.log.debug(
+            `[FilePreviewAuth] Download input ${safeDebugJson({
+              requestedId: toDebugValue(requestedId),
+              collection,
+              hasRawUrl: Boolean(rawUrl),
+              urlPath: getDebugUrlPath(url),
+              filterByTk: toDebugValue(filterByTk),
+              storageIdInput: toDebugValue(storageIdInput),
+              parsedStorageId: toDebugValue(storageId),
+              fileInputKeys: getObjectKeys(fileInput),
+              storageCache: summarizeStorageCache(fileManager.storagesCache),
+            })}`,
+          );
+
+          if (requestedId || fileInput?.id || fileInput?.uid) {
+            try {
+              attachment = await this.resolveAttachment(ctx, {
+                ...fileInput,
+                id: requestedId || fileInput.id,
+                uid: fileInput.uid,
+                url,
+                preview: fileInput.preview,
+                path: fileInput.path,
+                storageId,
+                collectionName: collection,
+                filename:
+                  values.filename || params.filename || reqQuery.filename || reqBody.filename || fileInput.filename,
+                mimetype:
+                  values.mimetype || params.mimetype || reqQuery.mimetype || reqBody.mimetype || fileInput.mimetype,
+              });
+              attachmentCollection =
+                attachment?.constructor?.collection?.name ||
+                collection ||
+                fileInput.collectionName ||
+                attachmentCollection;
+            } catch {
+              attachment = null;
+            }
+          }
+
+          if (!attachment && url) {
+            try {
+              attachment = await this.resolveAttachment(ctx, {
+                ...fileInput,
+                url,
+                preview: fileInput.preview,
+                path: fileInput.path,
+                storageId,
+                collectionName: collection,
+                filename:
+                  values.filename || params.filename || reqQuery.filename || reqBody.filename || fileInput.filename,
+                mimetype:
+                  values.mimetype || params.mimetype || reqQuery.mimetype || reqBody.mimetype || fileInput.mimetype,
+              });
+              attachmentCollection =
+                attachment?.constructor?.collection?.name ||
+                collection ||
+                fileInput.collectionName ||
+                attachmentCollection;
+            } catch {
+              attachment = null;
+            }
+          }
+
+          if (!attachment) {
+            for (const colName of collectionsToTry) {
+              const repo = this.db.getRepository(colName);
+              if (repo) {
+                if (filterByTk) {
+                  attachment = await repo.findOne({ filterByTk });
+                }
+                if (!attachment && requestedId) {
+                  attachment = await repo.findOne({ filterByTk: requestedId });
+                }
+                if (!attachment && url) {
+                  attachment = await repo.findOne({ filter: { url } });
+                }
+                if (attachment) {
+                  attachmentCollection = colName;
+                  // To prevent finding a record in 'attachments' when it actually belongs to 'aiFiles'
+                  // and having permissions fail, if we found it in the wrong collection, we shouldn't break yet if url doesn't match?
+                  // Actually, just break.
+                  break;
+                }
               }
             }
           }
 
           // Fallback: If DB query fails but we have storageId, construct virtual attachment
           if (!attachment && storageId) {
-            attachment = { url, storageId, filename: reqQuery.filename || 'file' };
+            attachment = {
+              ...fileInput,
+              url,
+              storageId,
+              collectionName: collection || fileInput.collectionName,
+              filename:
+                values.filename ||
+                params.filename ||
+                reqQuery.filename ||
+                reqBody.filename ||
+                fileInput.filename ||
+                'file',
+              mimetype:
+                values.mimetype || params.mimetype || reqQuery.mimetype || reqBody.mimetype || fileInput.mimetype,
+            };
             isVirtual = true;
           }
 
@@ -175,26 +320,53 @@ export class PluginFilePreviewAuthServer extends Plugin {
             ctx.throw(404, 'Attachment not found for this URL');
           }
 
+          this.log.debug(
+            `[FilePreviewAuth] Attachment resolved ${safeDebugJson({
+              ...summarizeAttachmentForLog(attachment, attachmentCollection),
+              isVirtual,
+              requestedCollection: collection,
+            })}`,
+          );
+
           if (!isVirtual) {
             await this.assertCanAccessAttachment(ctx, attachment);
           }
 
           try {
-            const storageModel = fileManager.storagesCache.get(attachment.storageId);
+            const attachmentObj = await this.prepareAttachmentForFileManager(
+              attachment,
+              fileManager,
+              attachmentCollection,
+            );
+
+            const storageModel = getStorageFromCache(fileManager.storagesCache, attachmentObj.storageId);
+            this.log.debug(
+              `[FilePreviewAuth] Attachment prepared for stream ${safeDebugJson({
+                ...summarizeAttachmentForLog(attachmentObj, attachmentCollection),
+                storageModel: summarizeStorageForLog(storageModel),
+                storageCache: summarizeStorageCache(fileManager.storagesCache),
+              })}`,
+            );
             // S3 Private Bucket Handler
-            if (storageModel && (storageModel.type === 's3' || storageModel.type === 'aws-s3')) {
+            if (
+              storageModel &&
+              (storageModel.type === 's3' || storageModel.type === 'aws-s3' || storageModel.type === 's3-private')
+            ) {
               const StorageTypeClass = fileManager.storageTypes.get(storageModel.type);
               const storageInstance = new StorageTypeClass(storageModel);
-              if (storageInstance.client) {
+              const s3Client =
+                storageInstance.client ||
+                (typeof storageInstance.getS3Client === 'function' ? storageInstance.getS3Client() : null);
+              if (s3Client) {
                 const { GetObjectCommand } = require('@aws-sdk/client-s3');
-                const key = storageInstance.getFileKey(attachment);
+                const key = storageInstance.getFileKey(attachmentObj);
                 const getCommand = new GetObjectCommand({
                   Bucket: storageModel.options.bucket,
                   Key: key,
                 });
-                const response = await storageInstance.client.send(getCommand);
-                ctx.type = response.ContentType || attachment.mimetype || 'application/octet-stream';
-                ctx.attachment(attachment.filename);
+                const response = await s3Client.send(getCommand);
+                ctx.type = response.ContentType || attachmentObj.mimetype || 'application/octet-stream';
+                ctx.attachment(attachmentObj.filename);
                 // The AWS SDK Body is a readable stream in Node.js
                 ctx.body = response.Body;
                 await next();
@@ -203,10 +375,11 @@ export class PluginFilePreviewAuthServer extends Plugin {
             }
 
             // Local storage / Other storage fallback
-            const { stream, contentType } = await fileManager.getFileStream(attachment);
-            ctx.type = contentType || attachment.mimetype || 'application/octet-stream';
-            ctx.attachment(attachment.filename);
+            const { stream, contentType } = await fileManager.getFileStream(attachmentObj);
+            ctx.type = contentType || attachmentObj.mimetype || 'application/octet-stream';
+            ctx.attachment(attachmentObj.filename);
             ctx.body = stream;
+            // S3 Private Bucket Handler
           } catch (err) {
             this.log.error(`[FilePreviewAuth] Error fetching stream for URL ${url}: ${err.message}`);
             ctx.throw(500, 'Failed to fetch the file from storage');
@@ -214,10 +387,146 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
           await next();
         },
+
+        runOcr: async (ctx: any, next: any) => {
+          const params = ctx.action.params || {};
+          const reqBody = ctx.request.body || {};
+          const values = params.values || {};
+          const attachmentId = values.attachmentId || reqBody.attachmentId;
+
+          if (!attachmentId) {
+            ctx.throw(400, 'attachmentId is required');
+          }
+
+          this.assertAuthenticated(ctx);
+
+          const repo = ctx.db.getRepository('attachments');
+          const attachment = await repo.findOne({ filterByTk: attachmentId });
+          if (!attachment) {
+            ctx.throw(404, 'Attachment not found');
+          }
+
+          await this.assertCanAccessAttachment(ctx, attachment);
+
+          // Cập nhật trạng thái sang pending-ocr
+          const ocrRecord = await this.upsertOcrResult(attachmentId, {
+            status: 'pending-ocr',
+            error: null,
+          });
+
+          // Đẩy job vào worker xử lý nền
+          await this.ocrWorker.enqueue(attachmentId);
+
+          ctx.body = {
+            ok: true,
+            data: this.serializeOcrResult(ocrRecord, attachmentId),
+          };
+          await next();
+        },
+        getOcrStatus: async (ctx: any, next: any) => {
+          const params = ctx.action.params || {};
+          const reqQuery = ctx.request.query || {};
+          const reqBody = ctx.request.body || {};
+          const values = params.values || {};
+          const attachmentId =
+            values.attachmentId || params.attachmentId || reqQuery.attachmentId || reqBody.attachmentId;
+
+          if (!attachmentId) {
+            ctx.throw(400, 'attachmentId is required');
+          }
+
+          this.assertAuthenticated(ctx);
+
+          const repo = ctx.db.getRepository('attachments');
+          const attachment = await repo.findOne({ filterByTk: attachmentId });
+          if (!attachment) {
+            ctx.throw(404, 'Attachment not found');
+          }
+
+          await this.assertCanAccessAttachment(ctx, attachment);
+
+          const ocrRecord = await this.getOcrResultByAttachmentId(attachmentId);
+          ctx.body = {
+            data: this.serializeOcrResult(ocrRecord, attachmentId),
+          };
+          await next();
+        },
       },
     });
-    this.app.acl.allow('filePreviewAuth', ['download', 'getContent'], 'loggedIn');
-    this.log.info('[FilePreviewAuth] Registered /api/filePreviewAuth:download endpoint');
+    this.app.acl.allow('filePreviewAuth', ['download', 'getContent', 'runOcr', 'getOcrStatus'], 'loggedIn');
+    this.app.acl.allow('attachmentOcrResults', ['get', 'list', 'create', 'update'], 'loggedIn');
+    this.log.info('[FilePreviewAuth] Registered /api/filePreviewAuth:download & runOcr endpoints');
+  }
+
+  private async getOcrResultByAttachmentId(attachmentId: number | string) {
+    const repo = this.db.getRepository('attachmentOcrResults');
+    if (!repo) {
+      return null;
+    }
+
+    return repo.findOne({
+      filter: {
+        attachmentId,
+      },
+      appends: ['attachment'],
+    });
+  }
+
+  private async upsertOcrResult(attachmentId: number | string, values: Record<string, any>) {
+    const repo = this.db.getRepository('attachmentOcrResults');
+    if (!repo) {
+      throw new Error('attachmentOcrResults repository not found');
+    }
+
+    const existing = await repo.findOne({
+      filter: {
+        attachmentId,
+      },
+    });
+    const nextValues = {
+      attachmentId,
+      ...values,
+    };
+
+    if (existing) {
+      await repo.update({
+        filterByTk: existing.get('id'),
+        values: nextValues,
+      });
+      return repo.findOne({
+        filterByTk: existing.get('id'),
+        appends: ['attachment'],
+      });
+    }
+
+    const created = await repo.create({
+      values: nextValues,
+    });
+
+    return repo.findOne({
+      filterByTk: created.get('id'),
+      appends: ['attachment'],
+    });
+  }
+
+  private serializeOcrResult(record: any, attachmentId: number | string) {
+    if (!record) {
+      return {
+        attachmentId,
+        status: 'no-ocr',
+        data: null,
+        error: null,
+      };
+    }
+
+    const json = typeof record.toJSON === 'function' ? record.toJSON() : record;
+    return {
+      id: json.id,
+      attachmentId: json.attachmentId ?? attachmentId,
+      status: json.status || 'no-ocr',
+      data: json.data || null,
+      error: json.error || null,
+    };
   }
 
   private registerAIWorkContext() {
@@ -250,11 +559,7 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
   private async resolveAttachment(ctx: any, input: any) {
     const file = input?.file || input || {};
-    const collectionNames = [
-      file.collectionName,
-      'attachments',
-      'aiFiles',
-    ].filter(Boolean);
+    const collectionNames = [file.collectionName, 'attachments', 'aiFiles'].filter(Boolean);
 
     const ids = [file.id, file.uid].filter((value) => isLikelyRecordId(value));
     for (const collectionName of collectionNames) {
@@ -276,12 +581,119 @@ export class PluginFilePreviewAuthServer extends Plugin {
       }
     }
 
+    // Try finding by filename since dynamic virtual url columns may not be searchable in DB
+    for (const collectionName of collectionNames) {
+      if (!ctx.db.getCollection(collectionName)) continue;
+      const repo = ctx.db.getRepository(collectionName);
+      for (const urlCandidate of urlCandidates) {
+        const cleanUrl = urlCandidate.split('?')[0];
+        const filename = path.basename(cleanUrl);
+        if (filename && filename !== 'file' && filename.includes('.')) {
+          const filter: any = { filename };
+          if (file.storageId) {
+            filter.storageId = file.storageId;
+          }
+          const record = await repo.findOne({ filter });
+          if (record) return record;
+        }
+      }
+    }
+
     // Fallback for files from plugin-external-storage (which might not exist in attachments collection)
     if ((file.storageId || file.url?.includes('extStorage:download')) && (file.url || file.path || file.key)) {
       return file;
     }
 
     ctx.throw(404, 'Attachment not found for this preview file');
+  }
+
+  private getParentCollections(fileCollectionName: string) {
+    const parents: Array<{
+      collectionName: string;
+      throughTable: string;
+      otherKey: string;
+      foreignKey?: string;
+    }> = [];
+
+    for (const collection of this.db.collections.values()) {
+      if (collection.name === fileCollectionName) continue;
+
+      for (const field of collection.fields.values()) {
+        const options = field.options || {};
+        if (field.type === 'belongsToMany' && options.target === fileCollectionName && options.through) {
+          parents.push({
+            collectionName: collection.name,
+            throughTable: options.through,
+            otherKey: options.otherKey || 'attachmentId',
+            foreignKey: options.foreignKey || `${collection.model.name.toLowerCase()}Id`,
+          });
+        }
+      }
+    }
+
+    return parents;
+  }
+
+  private async checkParentCollectionAccess(
+    attachmentId: number | string,
+    fileCollectionName: string,
+    currentRoles: string[],
+    ctx?: any,
+  ): Promise<boolean> {
+    const parents = this.getParentCollections(fileCollectionName);
+
+    if (parents.length === 0) {
+      const canView = this.app.acl.can({
+        roles: currentRoles,
+        resource: fileCollectionName,
+        action: 'view',
+      });
+      return !!canView;
+    }
+
+    for (const parent of parents) {
+      const canView = this.app.acl.can({
+        roles: currentRoles,
+        resource: parent.collectionName,
+        action: 'view',
+      });
+
+      if (!canView) continue;
+
+      try {
+        const throughCollection = this.db.getCollection(parent.throughTable);
+        if (throughCollection) {
+          const links = await throughCollection.repository.find({
+            filter: { [parent.otherKey]: attachmentId },
+          });
+          if (links.length > 0) {
+            const parentIds = links.map((l) => l.get(parent['foreignKey'])).filter(Boolean);
+            if (parentIds.length > 0) {
+              let dataScopeFilter = canView.params?.filter || {};
+              if (ctx && ctx.app.environment) {
+                dataScopeFilter = ctx.app.environment.renderJsonTemplate(dataScopeFilter, {
+                  $user: ctx.state.currentUser?.toJSON ? ctx.state.currentUser.toJSON() : ctx.state.currentUser,
+                  $nRole: ctx.state.currentRole,
+                });
+              }
+
+              const parentCollection = this.db.getCollection(parent.collectionName);
+              const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
+              const count = await parentCollection.repository.count({
+                filter: {
+                  $and: [{ [pk]: { $in: parentIds } }, dataScopeFilter],
+                },
+              });
+              if (count > 0) return true;
+            }
+          }
+        }
+      } catch (error) {
+        this.log.warn(`[FilePreviewAuth] Failed to query through table "${parent.throughTable}":`, error.message);
+      }
+    }
+
+    return false;
   }
 
   private async assertCanAccessAttachment(ctx: any, attachment: any) {
@@ -294,10 +706,25 @@ export class PluginFilePreviewAuthServer extends Plugin {
     const isAdmin =
       currentRoles.includes('root') ||
       currentRoles.includes('admin') ||
-      userRoles.some((role: any) => role === 'root' || role === 'admin' || role?.name === 'root' || role?.name === 'admin');
+      userRoles.some(
+        (role: any) => role === 'root' || role === 'admin' || role?.name === 'root' || role?.name === 'admin',
+      );
 
-    if (!isOwner && !isAdmin) {
-      ctx.throw(403, 'Permission denied: you cannot view other users\' files');
+    if (isOwner || isAdmin) {
+      return;
+    }
+
+    // Delegate to parent collection ACL checks
+    const attachmentId = getAttachmentValue(attachment, 'id');
+    if (!attachmentId) {
+      ctx.throw(403, 'Permission denied: virtual attachment cannot be accessed');
+    }
+
+    const collectionName =
+      attachment.constructor?.collection?.name || getAttachmentValue(attachment, 'collectionName') || 'attachments';
+    const hasParentAccess = await this.checkParentCollectionAccess(attachmentId, collectionName, currentRoles, ctx);
+    if (!hasParentAccess) {
+      ctx.throw(403, 'Permission denied: you do not have permission to access this attachment');
     }
   }
 
@@ -309,7 +736,9 @@ export class PluginFilePreviewAuthServer extends Plugin {
     return currentUser;
   }
 
-  private async consumeUploadedParseFile(ctx: any): Promise<{ buffer: Buffer; attachment: any; cacheKey: string } | null> {
+  private async consumeUploadedParseFile(
+    ctx: any,
+  ): Promise<{ buffer: Buffer; attachment: any; cacheKey: string } | null> {
     if (!ctx.request?.is?.('multipart/*')) {
       return null;
     }
@@ -359,7 +788,13 @@ export class PluginFilePreviewAuthServer extends Plugin {
       buffer,
       attachment,
       cacheKey: [
-        attachment.id || attachment.uid || attachment.url || attachment.path || file.originalname || attachment.filename || 'file',
+        attachment.id ||
+          attachment.uid ||
+          attachment.url ||
+          attachment.path ||
+          file.originalname ||
+          attachment.filename ||
+          'file',
         attachment.lastModified || '',
         file.size || buffer.length,
       ].join(':'),
@@ -381,7 +816,9 @@ export class PluginFilePreviewAuthServer extends Plugin {
         this.log.warn(`[FilePreviewAuth] MarkItDown parser failed: ${err}`);
       }
     } else {
-      this.log.warn('[FilePreviewAuth] plugin-markitdown-parser not found; uploaded raw text parsing fallback will be used');
+      this.log.warn(
+        '[FilePreviewAuth] plugin-markitdown-parser not found; uploaded raw text parsing fallback will be used',
+      );
     }
 
     if (isPlainTextAttachment(attachment)) {
@@ -407,7 +844,8 @@ export class PluginFilePreviewAuthServer extends Plugin {
   }
 
   private async extractAttachmentText(ctx: any, attachment: any): Promise<string> {
-    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') || this.pm.get('plugin-document-parser')) as any;
+    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') ||
+      this.pm.get('plugin-document-parser')) as any;
     if (docParserPlugin?.internalParserRegistry) {
       try {
         const result = await docParserPlugin.internalParserRegistry.parse(attachment, ctx);
@@ -431,12 +869,267 @@ export class PluginFilePreviewAuthServer extends Plugin {
     if (!fileManager?.getFileStream) {
       return '';
     }
-    const { stream } = await fileManager.getFileStream(attachment);
+    const attachmentObj = await this.prepareAttachmentForFileManager(attachment, fileManager);
+
+    const { stream } = await fileManager.getFileStream(attachmentObj);
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     return Buffer.concat(chunks as any[]).toString('utf-8');
+  }
+
+  private async prepareAttachmentForFileManager(attachment: any, fileManager: any, recordCollection?: any) {
+    const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
+    const collection = this.resolveCollection(
+      recordCollection || attachmentObj.collectionName || attachment.collectionName,
+    );
+    const storageId = await this.resolveStorageId(attachment, attachmentObj, fileManager, collection);
+    if (!isMissingFileValue(storageId)) {
+      attachmentObj.storageId = storageId;
+    }
+
+    this.copyFileFieldsFromRecord(attachment, attachmentObj);
+    await this.ensureFileFields(attachment, attachmentObj, collection);
+    this.copyFileFieldsFromRecord(attachment, attachmentObj);
+
+    // Extract filename and path relative to storage.baseUrl if they are missing/invalid in the attachment object
+    if (attachmentObj.storageId && attachmentObj.url) {
+      const storageModel = getStorageFromCache(fileManager.storagesCache, attachmentObj.storageId);
+      if (storageModel) {
+        const baseUrl = storageModel.baseUrl || '';
+        let relativeUrl = attachmentObj.url.split('?')[0];
+        if (baseUrl && relativeUrl.includes(baseUrl)) {
+          relativeUrl = relativeUrl.substring(relativeUrl.indexOf(baseUrl) + baseUrl.length);
+        }
+        relativeUrl = relativeUrl.replace(/^\/|\/$/g, '');
+        if (relativeUrl) {
+          const parts = relativeUrl.split('/');
+          const filename = parts.pop();
+          const filePath = parts.join('/');
+          if (filename && (!attachmentObj.filename || attachmentObj.filename === 'file')) {
+            attachmentObj.filename = filename;
+          }
+          if (filePath && !attachmentObj.path) {
+            attachmentObj.path = filePath;
+          }
+        }
+      }
+    }
+
+    return attachmentObj;
+  }
+
+  private resolveCollection(recordCollection: any) {
+    if (!recordCollection) {
+      return undefined;
+    }
+    if (typeof recordCollection === 'string') {
+      return this.db.getCollection(recordCollection);
+    }
+    return recordCollection;
+  }
+
+  private async resolveStorageId(record: any, recordObj: any, fileManager: any, recordCollection?: any) {
+    const collectionName = recordCollection?.name || recordObj?.collectionName || record?.collectionName;
+    const rawStorageId =
+      getRecordStorageId(record) ??
+      recordObj?.storageId ??
+      recordObj?.storage_id ??
+      recordObj?.storage?.id ??
+      recordObj?.storage?.filterByTk;
+
+    const matchedCacheKey = findStorageCacheKey(fileManager?.storagesCache, rawStorageId);
+    if (!isMissingFileValue(matchedCacheKey)) {
+      this.log.debug(
+        `[FilePreviewAuth] storageId resolved from cache ${safeDebugJson({
+          collection: collectionName,
+          record: summarizeAttachmentForLog(recordObj, collectionName),
+          rawStorageId: toDebugValue(rawStorageId),
+          matchedCacheKey: toDebugValue(matchedCacheKey),
+        })}`,
+      );
+      return matchedCacheKey;
+    }
+
+    const storageName = recordObj?.storage?.name || recordObj?.storageName;
+    if (storageName && fileManager?.storagesCache) {
+      for (const [key, storage] of fileManager.storagesCache.entries()) {
+        if (storage?.name === storageName) {
+          this.log.debug(
+            `[FilePreviewAuth] storageId resolved by storage name ${safeDebugJson({
+              collection: collectionName,
+              storageName,
+              matchedCacheKey: toDebugValue(key),
+              storage: summarizeStorageForLog(storage),
+            })}`,
+          );
+          return key;
+        }
+      }
+    }
+
+    const dbStorageId = await this.resolveStorageIdFromRecordTable(record, recordCollection);
+    const matchedDbCacheKey = findStorageCacheKey(fileManager?.storagesCache, dbStorageId);
+    if (!isMissingFileValue(matchedDbCacheKey)) {
+      this.log.debug(
+        `[FilePreviewAuth] storageId resolved from DB column and cache ${safeDebugJson({
+          collection: collectionName,
+          dbStorageId: toDebugValue(dbStorageId),
+          matchedCacheKey: toDebugValue(matchedDbCacheKey),
+        })}`,
+      );
+      return matchedDbCacheKey;
+    }
+
+    const storageId = !isMissingFileValue(dbStorageId) ? dbStorageId : rawStorageId;
+    if (isMissingFileValue(storageId)) {
+      const defaultStorageKey = findDefaultStorageCacheKey(fileManager?.storagesCache);
+      this.log.debug(
+        `[FilePreviewAuth] storageId missing; using default storage fallback ${safeDebugJson({
+          collection: collectionName,
+          defaultStorageKey: toDebugValue(defaultStorageKey),
+          storageCache: summarizeStorageCache(fileManager?.storagesCache),
+        })}`,
+      );
+      return defaultStorageKey;
+    }
+
+    const storageRepo = this.db.getRepository('storages');
+    const storage = await storageRepo.findOne({ filterByTk: storageId });
+    if (!storage) {
+      this.log.debug(
+        `[FilePreviewAuth] storageId not found in storages table; returning raw value ${safeDebugJson({
+          collection: collectionName,
+          storageId: toDebugValue(storageId),
+        })}`,
+      );
+      return storageId;
+    }
+
+    const parsedStorage =
+      typeof fileManager?.parseStorage === 'function' ? fileManager.parseStorage(storage) : storage.toJSON();
+    fileManager?.storagesCache?.set?.(storage.get('id'), parsedStorage);
+    this.log.debug(
+      `[FilePreviewAuth] storageId resolved from storages table ${safeDebugJson({
+        collection: collectionName,
+        requestedStorageId: toDebugValue(storageId),
+        resolvedStorageId: toDebugValue(storage.get('id')),
+        storage: summarizeStorageForLog(parsedStorage),
+      })}`,
+    );
+    return storage.get('id');
+  }
+
+  private async resolveStorageIdFromRecordTable(record: any, recordCollection?: any) {
+    const collection = recordCollection || record?.constructor?.collection;
+    if (!collection?.model) {
+      return undefined;
+    }
+
+    const primaryKey = collection.model.primaryKeyAttribute || 'id';
+    const recordId = record.get?.(primaryKey) ?? record.get?.('id') ?? record[primaryKey] ?? record.id;
+    if (isMissingFileValue(recordId)) {
+      return undefined;
+    }
+
+    let columns: Record<string, unknown>;
+    try {
+      columns = await this.db.sequelize.getQueryInterface().describeTable(collection.getTableNameWithSchema());
+    } catch (error) {
+      this.log.warn(`[FilePreviewAuth] Failed to inspect table "${collection.name}" for storageId:`, error.message);
+      return undefined;
+    }
+
+    const rawAttributes = collection.model.rawAttributes || {};
+    const storageColumn = findExistingColumn(columns, [
+      rawAttributes.storageId?.field,
+      rawAttributes.storage_id?.field,
+      'storageId',
+      'storage_id',
+      'storageid',
+    ]);
+    if (!storageColumn) {
+      return undefined;
+    }
+
+    const result = await collection.model.findOne({
+      attributes: [[col(storageColumn), 'storageId']],
+      where: { [primaryKey]: recordId },
+      raw: true,
+    });
+
+    this.log.debug(
+      `[FilePreviewAuth] storageId DB lookup ${safeDebugJson({
+        collection: collection.name,
+        table: String(collection.getTableNameWithSchema()),
+        primaryKey,
+        recordId: toDebugValue(recordId),
+        storageColumn,
+        dbStorageId: toDebugValue(result?.['storageId']),
+      })}`,
+    );
+
+    return result?.['storageId'];
+  }
+
+  private async ensureFileFields(record: any, recordObj: any, recordCollection?: any) {
+    const fileFields = ['key', 'filename', 'path', 'mimetype', 'title', 'extname', 'url'];
+    const needsFileKey = !hasText(recordObj.key) && !hasText(recordObj.filename) && !hasText(recordObj.url);
+    const missingFields = fileFields.filter((field) => isMissingFileValue(recordObj[field]));
+    if (!needsFileKey && missingFields.length === 0) {
+      return;
+    }
+
+    const fileData = await this.resolveFileFieldsFromRecordTable(record, fileFields, recordCollection);
+    for (const field of fileFields) {
+      if (!isMissingFileValue(fileData[field])) {
+        recordObj[field] = fileData[field];
+      }
+    }
+  }
+
+  private copyFileFieldsFromRecord(record: any, recordObj: any) {
+    for (const field of ['key', 'filename', 'path', 'mimetype', 'title', 'extname', 'url']) {
+      if (!isMissingFileValue(recordObj[field])) {
+        continue;
+      }
+
+      const value = record.get?.(field) ?? record.getDataValue?.(field) ?? record[field];
+      if (!isMissingFileValue(value)) {
+        recordObj[field] = value;
+      }
+    }
+  }
+
+  private async resolveFileFieldsFromRecordTable(record: any, fields: string[], recordCollection?: any) {
+    const collection = recordCollection || record?.constructor?.collection;
+    if (!collection?.model) {
+      return {};
+    }
+
+    const primaryKey = collection.model.primaryKeyAttribute || 'id';
+    const recordId = record.get?.(primaryKey) ?? record.get?.('id') ?? record[primaryKey] ?? record.id;
+    if (isMissingFileValue(recordId)) {
+      return {};
+    }
+
+    const rawAttributes = collection.model.rawAttributes || {};
+    const attributes = fields
+      .filter((field) => rawAttributes[field])
+      .map((field) => [col(rawAttributes[field].field || field), field]);
+
+    if (attributes.length === 0) {
+      return {};
+    }
+
+    const result = await collection.model.findOne({
+      attributes,
+      where: { [primaryKey]: recordId },
+      raw: true,
+    });
+
+    return result || {};
   }
 
   private formatAttachmentWorkContext(attachment: any, text: string): string {
@@ -467,7 +1160,8 @@ export class PluginFilePreviewAuthServer extends Plugin {
    * Silent no-op when plugin-document-parser is not loaded.
    */
   private registerExcelParser() {
-    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') || this.pm.get('plugin-document-parser')) as any;
+    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') ||
+      this.pm.get('plugin-document-parser')) as any;
     if (!docParserPlugin?.internalParserRegistry) {
       this.log.debug('[FilePreviewAuth] plugin-document-parser not found — Excel parser registration skipped');
       return;
@@ -485,10 +1179,202 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
 export default PluginFilePreviewAuthServer;
 
+function safeDebugJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_key, item) => (typeof item === 'bigint' ? item.toString() : item));
+  } catch (error) {
+    return JSON.stringify({ error: 'failed_to_serialize_debug_payload' });
+  }
+}
+
+function toDebugValue(value: unknown) {
+  if (value === undefined || value === null || value === '') {
+    return value;
+  }
+  return String(value);
+}
+
+function getObjectKeys(value: unknown): string[] {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+  return Object.keys(value);
+}
+
+function getDebugUrlPath(url: string) {
+  if (!url) {
+    return '';
+  }
+  try {
+    return new URL(url, 'http://local').pathname;
+  } catch {
+    return 'unparseable';
+  }
+}
+
+function summarizeAttachmentForLog(attachment: any, collectionName?: any) {
+  return {
+    id: toDebugValue(getAttachmentValue(attachment, 'id')),
+    uid: toDebugValue(getAttachmentValue(attachment, 'uid')),
+    collectionName: String(collectionName || getAttachmentValue(attachment, 'collectionName') || ''),
+    storageId: toDebugValue(getAttachmentValue(attachment, 'storageId')),
+    storageIdColumn: toDebugValue(getAttachmentValue(attachment, 'storage_id')),
+    storageName: getAttachmentValue(attachment, 'storage')?.name || getAttachmentValue(attachment, 'storageName'),
+    fieldsPresent: {
+      key: hasText(getAttachmentValue(attachment, 'key')),
+      filename: hasText(getAttachmentValue(attachment, 'filename')),
+      path: hasText(getAttachmentValue(attachment, 'path')),
+      url: hasText(getAttachmentValue(attachment, 'url')),
+      preview: hasText(getAttachmentValue(attachment, 'preview')),
+      mimetype: hasText(getAttachmentValue(attachment, 'mimetype')),
+      title: hasText(getAttachmentValue(attachment, 'title')),
+      extname: hasText(getAttachmentValue(attachment, 'extname')),
+    },
+  };
+}
+
+function summarizeStorageForLog(storage: any) {
+  if (!storage) {
+    return null;
+  }
+  return {
+    id: toDebugValue(storage.id),
+    name: storage.name,
+    type: storage.type,
+    default: Boolean(storage.default),
+    public: Boolean(storage.options?.public),
+    paranoid: Boolean(storage.paranoid),
+    hasBucket: hasText(storage.options?.bucket),
+    hasEndpoint: hasText(storage.options?.endpoint),
+  };
+}
+
+function summarizeStorageCache(cache: Map<any, any> | undefined) {
+  if (!cache) {
+    return { size: 0, storages: [] };
+  }
+
+  return {
+    size: cache.size,
+    storages: Array.from(cache.entries())
+      .slice(0, 20)
+      .map(([key, storage]) => ({
+        cacheKey: toDebugValue(key),
+        ...summarizeStorageForLog(storage),
+      })),
+  };
+}
+
+function getStorageFromCache(cache: Map<any, any>, storageId: any) {
+  if (storageId === undefined || storageId === null) return undefined;
+  let res = cache.get(storageId);
+  if (res) return res;
+  const strId = String(storageId);
+  res = cache.get(strId);
+  if (res) return res;
+  const numId = Number(storageId);
+  if (!isNaN(numId)) {
+    res = cache.get(numId);
+    if (res) return res;
+  }
+  for (const [k, v] of cache.entries()) {
+    if (String(k) === strId) {
+      return v;
+    }
+  }
+  return undefined;
+}
+
 function getAttachmentValue(attachment: any, key: string) {
   if (!attachment) return undefined;
   if (typeof attachment.get === 'function') return attachment.get(key);
   return attachment[key];
+}
+
+function getRecordStorageId(record: any) {
+  if (!record) return undefined;
+  return (
+    record.get?.('storageId') ??
+    record.get?.('storage_id') ??
+    record.getDataValue?.('storageId') ??
+    record.getDataValue?.('storage_id') ??
+    record.storageId ??
+    record.storage_id ??
+    record.get?.('storage')?.id ??
+    record.storage?.id
+  );
+}
+
+function findStorageCacheKey(cache: Map<any, any> | undefined, storageId: any) {
+  if (!cache || isMissingFileValue(storageId)) {
+    return undefined;
+  }
+
+  if (cache.has(storageId)) {
+    return storageId;
+  }
+
+  const strId = String(storageId);
+  if (cache.has(strId)) {
+    return strId;
+  }
+
+  const numericId = Number(storageId);
+  if (Number.isFinite(numericId) && cache.has(numericId)) {
+    return numericId;
+  }
+
+  for (const key of cache.keys()) {
+    if (String(key) === strId) {
+      return key;
+    }
+  }
+
+  return undefined;
+}
+
+function findDefaultStorageCacheKey(cache: Map<any, any> | undefined) {
+  if (!cache) {
+    return undefined;
+  }
+
+  for (const [key, storage] of cache.entries()) {
+    if (storage?.default) {
+      return key;
+    }
+  }
+
+  if (cache.size === 1) {
+    return cache.keys().next().value;
+  }
+
+  return undefined;
+}
+
+function findExistingColumn(columns: Record<string, unknown>, candidates: Array<string | undefined>) {
+  const columnNames = Object.keys(columns || {});
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (Object.prototype.hasOwnProperty.call(columns, candidate)) {
+      return candidate;
+    }
+
+    const matchedColumn = columnNames.find((columnName) => columnName.toLowerCase() === candidate.toLowerCase());
+    if (matchedColumn) {
+      return matchedColumn;
+    }
+  }
+
+  return undefined;
+}
+
+function hasText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isMissingFileValue(value: unknown) {
+  return value === undefined || value === null || value === '';
 }
 
 function getAttachmentDisplayName(attachment: any): string {

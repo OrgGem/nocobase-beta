@@ -16,6 +16,7 @@ export interface PreviewFile {
   id?: string | number;
   uid?: string;
   url?: string;
+  preview?: string;
   filename?: string;
   name?: string;
   title?: string;
@@ -23,6 +24,17 @@ export interface PreviewFile {
   mimetype?: string;
   size?: number;
   path?: string;
+  storageId?: string | number;
+  storage_id?: string | number;
+  storageType?: string;
+  storageName?: string;
+  storage?: {
+    id?: string | number;
+    type?: string;
+    name?: string;
+    [key: string]: any;
+  };
+  collectionName?: string;
   [key: string]: any;
 }
 
@@ -32,13 +44,14 @@ export interface PreviewFile {
 
 function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
   const file = list?.[index];
-  
+
   if (!file) return null;
 
   const url = typeof file === 'string' ? file : file?.url;
-  const resolvedUrl = url && (url.startsWith('https://') || url.startsWith('http://')) 
-    ? url 
-    : `${window.location.origin}/${(url || '').replace(/^\//, '')}`;
+  const resolvedUrl =
+    url && (url.startsWith('https://') || url.startsWith('http://'))
+      ? url
+      : `${window.location.origin}/${(url || '').replace(/^\//, '')}`;
 
   return (
     <Modal
@@ -63,10 +76,7 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
           flexDirection: 'column',
         }}
       >
-        <iframe
-          src={resolvedUrl}
-          style={{ width: '100%', height: '100%', border: 'none', flex: 1 }}
-        />
+        <iframe src={resolvedUrl} style={{ width: '100%', height: '100%', border: 'none', flex: 1 }} />
       </div>
     </Modal>
   );
@@ -130,13 +140,14 @@ function getDisplayNameCandidates(displayName: string): string[] {
 }
 
 function isKnownFileUrl(url?: string): boolean {
-  return !!url && (
-    url.includes('/api/attachments/') ||
-    url.includes('/api/files/download/') ||
-    url.includes('/api/worker-monitor/') ||
-    url.includes('/api/skillHub:download') ||
-    url.includes('/storage/uploads/') ||
-    url.includes('amazonaws.com')
+  return (
+    !!url &&
+    (url.includes('/api/attachments/') ||
+      url.includes('/api/files/download/') ||
+      url.includes('/api/worker-monitor/') ||
+      url.includes('/api/skillHub:download') ||
+      url.includes('/storage/uploads/') ||
+      url.includes('amazonaws.com'))
   );
 }
 
@@ -173,12 +184,20 @@ function attToPreviewFile(att: any): PreviewFile {
     id: att.id,
     uid: att.uid,
     url: att.url,
+    preview: att.preview,
     filename: att.filename || att.name,
     name: att.name || att.filename,
     title: att.title,
     extname: att.extname,
     mimetype: att.mimetype,
     size: att.size,
+    path: att.path,
+    storageId: att.storageId || att.storage_id || att.storage?.id,
+    storage_id: att.storage_id,
+    storageType: att.storageType || att.storage?.type,
+    storageName: att.storageName || att.storage?.name,
+    storage: att.storage,
+    collectionName: att.collectionName || 'aiFiles',
   };
 }
 
@@ -201,13 +220,10 @@ function findFileByDisplayName(displayName: string, messages: any[], pendingAtta
       if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
         return attToPreviewFile(att);
       }
-      
+
       // Relaxed match for NocoBase hashed file names
       for (const name of displayNames) {
-        if (
-          (attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) ||
-          (att.title && name.includes(att.title))
-        ) {
+        if ((attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) || (att.title && name.includes(att.title))) {
           return attToPreviewFile(att);
         }
       }
@@ -216,22 +232,19 @@ function findFileByDisplayName(displayName: string, messages: any[], pendingAtta
 
   // Search pending (not yet sent) attachments
   for (const att of pendingAttachments || []) {
-      const attName = att.filename || att.name || '';
-      const attTitleExt = `${att.title || ''}${att.extname || ''}`;
-      if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
+    const attName = att.filename || att.name || '';
+    const attTitleExt = `${att.title || ''}${att.extname || ''}`;
+    if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
+      return attToPreviewFile(att);
+    }
+
+    // Relaxed match for NocoBase hashed file names (e.g. report.docx-c2ywti.docx)
+    for (const name of displayNames) {
+      if ((attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) || (att.title && name.includes(att.title))) {
         return attToPreviewFile(att);
       }
-      
-      // Relaxed match for NocoBase hashed file names (e.g. report.docx-c2ywti.docx)
-      for (const name of displayNames) {
-        if (
-          (attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) ||
-          (att.title && name.includes(att.title))
-        ) {
-          return attToPreviewFile(att);
-        }
-      }
     }
+  }
 
   return null;
 }
@@ -329,36 +342,43 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       };
 
       const links = document.querySelectorAll<HTMLAnchorElement>('a[href*="/api/attachments"]');
-      links.forEach(link => {
+      links.forEach((link) => {
         const href = link.getAttribute('href');
         if (href && !href.includes('/api/filePreviewAuth:download')) {
-           link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
+          link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
         }
       });
 
       // Also rewrite ai-attachment-link anchors
       const aiLinks = document.querySelectorAll<HTMLAnchorElement>('a.ai-attachment-link');
-      aiLinks.forEach(link => {
+      aiLinks.forEach((link) => {
         const href = link.getAttribute('href');
-        if (href && !href.includes('/api/filePreviewAuth:download') && !href.includes('skillHub:download') && !href.includes('worker-monitor')) {
-           link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
+        if (
+          href &&
+          !href.includes('/api/filePreviewAuth:download') &&
+          !href.includes('skillHub:download') &&
+          !href.includes('worker-monitor')
+        ) {
+          link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
         }
       });
-      
+
       // Also rewrite image tags so thumbnails don't 404
       const imgs = document.querySelectorAll<HTMLImageElement>('img[src*="/api/attachments"]');
-      imgs.forEach(img => {
+      imgs.forEach((img) => {
         const src = img.getAttribute('src');
         if (src && !src.includes('/api/filePreviewAuth:download')) {
-           img.setAttribute('src', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(src)}`));
+          img.setAttribute('src', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(src)}`));
         }
       });
 
       // Auto-style raw markdown links for Skill Hub and Worker Monitor as interactive file attachments
-      const rawFileLinks = document.querySelectorAll<HTMLAnchorElement>('.nb-markdown a[href*="skillHub:download"], .nb-markdown a[href*="worker-monitor"]');
-      rawFileLinks.forEach(link => {
+      const rawFileLinks = document.querySelectorAll<HTMLAnchorElement>(
+        '.nb-markdown a[href*="skillHub:download"], .nb-markdown a[href*="worker-monitor"]',
+      );
+      rawFileLinks.forEach((link) => {
         if (!link.classList.contains('ai-attachment-link')) {
-           link.classList.add('ai-attachment-link');
+          link.classList.add('ai-attachment-link');
         }
       });
     };
@@ -382,7 +402,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       }
     };
-    
+
     const handleChange = (e: Event) => {
       const target = e.target as HTMLInputElement;
       if (!target || !target.closest) return;
@@ -405,8 +425,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-
-
   // Intercept antd upload origin files via Zustand state store as duplicate safety net
   useEffect(() => {
     if (!pendingAttachmentsRef.current?.length) return;
@@ -427,13 +445,21 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     const checkInterval = setInterval(() => {
       // Isolate strictly to AI module components! (AI Chat outputs Ant Design X attachments)
       const aiContainers = document.querySelectorAll('.ant-x-sender, .ant-x-attachments, .ant-x-message');
-      
+
       const cards: Element[] = [];
-      aiContainers.forEach(container => {
-        container.querySelectorAll('div[class*="attachment-list-card"]:not([class*="attachment-list-card-"])').forEach(c => cards.push(c));
-        container.querySelectorAll('a').forEach(a => {
+      aiContainers.forEach((container) => {
+        container
+          .querySelectorAll('div[class*="attachment-list-card"]:not([class*="attachment-list-card-"])')
+          .forEach((c) => cards.push(c));
+        container.querySelectorAll('a').forEach((a) => {
           const href = (a as HTMLAnchorElement).href;
-          if (href && (href.includes('/api/attachments/') || href.includes('/api/files/download/') || href.includes('/api/worker-monitor/') || href.includes('/api/skillHub:download'))) {
+          if (
+            href &&
+            (href.includes('/api/attachments/') ||
+              href.includes('/api/files/download/') ||
+              href.includes('/api/worker-monitor/') ||
+              href.includes('/api/skillHub:download'))
+          ) {
             cards.push(a);
             if (!a.classList.contains('ai-attachment-link')) {
               a.classList.add('ai-attachment-link');
@@ -443,7 +469,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       });
 
-      cards.forEach(card => {
+      cards.forEach((card) => {
         const el = card as HTMLElement;
         const displayName = getDisplayNameFromCard(el);
         let fallbackUrl = '';
@@ -457,15 +483,21 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         }
 
         // Resolve real file name from data store
-        const file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
-                     findFileByUrl(fallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
+        const file =
+          findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) ||
+          findFileByUrl(fallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
         const realName = file?.filename || file?.name || file?.title;
         const normalizedDisplayName = extractFilenameFromText(displayName);
 
         // Strict RAM cache check
-        const cacheHitName = realName && AppRamCache.has(realName) ? realName 
-                           : (displayName && AppRamCache.has(displayName) ? displayName 
-                           : (normalizedDisplayName && AppRamCache.has(normalizedDisplayName) ? normalizedDisplayName : null));
+        const cacheHitName =
+          realName && AppRamCache.has(realName)
+            ? realName
+            : displayName && AppRamCache.has(displayName)
+              ? displayName
+              : normalizedDisplayName && AppRamCache.has(normalizedDisplayName)
+                ? normalizedDisplayName
+                : null;
 
         const isAIGenerated = isKnownFileUrl(fallbackUrl);
 
@@ -570,7 +602,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       // Find closest Anchor (A), FileCard, or Ant Tag (from chat input attachments)
       let fallbackUrl = '';
       let displayName = '';
-      
+
       const anchorNode = el.closest('a');
       const cardEl = el.closest('.ant-attachment-list-card') as HTMLElement;
       const antTagBtn = el.closest('.ant-tag');
@@ -600,29 +632,30 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       // Decode original url if it's already a proxied url
       let originalFallbackUrl = fallbackUrl;
       if (fallbackUrl && fallbackUrl.includes('/api/filePreviewAuth:download?url=')) {
-         try {
-            const urlObj = new URL(fallbackUrl, window.location.origin);
-            originalFallbackUrl = decodeURIComponent(urlObj.searchParams.get('url') || fallbackUrl);
-         } catch {
-            // ignore
-         }
+        try {
+          const urlObj = new URL(fallbackUrl, window.location.origin);
+          originalFallbackUrl = decodeURIComponent(urlObj.searchParams.get('url') || fallbackUrl);
+        } catch {
+          // ignore
+        }
       }
 
-      let file = findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) || 
-                   findFileByUrl(originalFallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
+      let file =
+        findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) ||
+        findFileByUrl(originalFallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
 
       const normalizedDisplayName = extractFilenameFromText(displayName);
       const isAIGenerated = isKnownFileUrl(originalFallbackUrl);
 
       // If we clicked a completely unrelated anchor tag in the admin panel and it's not a known file, abort immediately
       if (!file && !isAIGenerated && anchorNode && !cardEl) {
-         return;
+        return;
       }
 
       if (!file && isAIGenerated) {
         const extname =
           normalizedDisplayName.match(/\.([a-z0-9]+)$/i)?.[1] ||
-          originalFallbackUrl.match(/\.([a-z0-9]+)(?:[\?#]|$)/i)?.[1];
+          originalFallbackUrl.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1];
         file = {
           id: originalFallbackUrl,
           uid: originalFallbackUrl,
@@ -641,14 +674,18 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
 
       // Convert to secure proxy URL for everything EXCEPT natively secured endpoints that don't belong to the attachments table
       const proxyTargetUrl = file.url || originalFallbackUrl;
-      const shouldUseProxy = proxyTargetUrl && !proxyTargetUrl.includes('skillHub:download') && !proxyTargetUrl.includes('worker-monitor') && !proxyTargetUrl.includes('filePreviewAuth:download');
-      
+      const shouldUseProxy =
+        proxyTargetUrl &&
+        !proxyTargetUrl.includes('skillHub:download') &&
+        !proxyTargetUrl.includes('worker-monitor') &&
+        !proxyTargetUrl.includes('filePreviewAuth:download');
+
       let secureUrl = proxyTargetUrl;
       if (shouldUseProxy) {
         secureUrl = `/api/filePreviewAuth:download?url=${encodeURIComponent(proxyTargetUrl)}`;
-        const collectionName = (file as any).collectionName || (isAIGenerated ? 'aiFiles' : '');
+        const collectionName = (file as any).collectionName || 'aiFiles';
         const storageId = (file as any).storage_id || (file as any).storageId;
-        
+
         if (collectionName) {
           secureUrl += `&collection=${encodeURIComponent(collectionName)}`;
         }
@@ -656,8 +693,12 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
           secureUrl += `&storageId=${encodeURIComponent(storageId)}`;
         }
       }
-      
-      file = { ...file, url: secureUrl };
+
+      file = {
+        ...file,
+        url: secureUrl,
+        collectionName: (file as any).collectionName || 'aiFiles',
+      };
 
       setSessionId(currentSessionIdRef.current || '');
       setPreviewFile(file);

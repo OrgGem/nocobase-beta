@@ -8,6 +8,8 @@ export type OrchestratorTraceContext = {
   leaderUsername?: string;
   employeeUsername?: string;
   toolName?: string;
+  agentLoopRunId?: string;
+  agentLoopStepId?: string;
 };
 
 type SpanValues = {

@@ -33,6 +33,21 @@ export class PluginClusterManagerServer extends Plugin {
   }
 
   async load() {
+    // Fix NocoBase core strategy resource permission check crash:
+    // Attachments collection has "createdBy: true" options but lacks explicit 'createdById' metadata field registration.
+    // When non-root roles upload attachments, core ACL merges 'own' filters (createdById) and calls checkFilterParams,
+    // which throws a NoPermissionError because getField('createdById') returns undefined.
+    // Registering 'createdById' explicitly as a metadata field on the attachments collection prevents this check from crashing.
+    this.db.extendCollection({
+      name: 'attachments',
+      fields: [
+        {
+          type: 'bigInt',
+          name: 'createdById',
+        },
+      ],
+    });
+
     this.nodeRegistry = new RedisNodeRegistry(this.app);
 
     (this.app as any).on('afterStart', () => {

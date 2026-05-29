@@ -7,9 +7,6 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { S3Client, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
-import crypto from 'crypto';
 import path from 'path';
 import { Readable, Transform, TransformCallback } from 'stream';
 import { StorageType, cloudFilenameGetter } from '@nocobase/plugin-file-manager';
@@ -30,11 +27,9 @@ class CountingStream extends Transform {
 
 export default class S3PrivateStorage extends StorageType {
   static filenameKey = 'key';
-  
+
   // @ts-ignore
   declare storage: any;
-  // @ts-ignore
-  declare getFileKey: any;
 
   static defaults() {
     return {
@@ -52,6 +47,12 @@ export default class S3PrivateStorage extends StorageType {
   }
 
   getS3Client() {
+    let S3ClientClass;
+    try {
+      S3ClientClass = require('@aws-sdk/client-s3').S3Client;
+    } catch (e) {
+      throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
+    }
     const { accessKeyId, secretAccessKey, region, endpoint, ...otherOptions } = this.storage.options;
     const clientConfig: any = {
       region,
@@ -67,7 +68,7 @@ export default class S3PrivateStorage extends StorageType {
       clientConfig.forcePathStyle = true;
     }
 
-    return new S3Client(clientConfig);
+    return new S3ClientClass(clientConfig);
   }
 
   /**
@@ -113,7 +114,16 @@ export default class S3PrivateStorage extends StorageType {
           const counter = new CountingStream();
           const uploadStream = file.stream.pipe(counter);
 
-          const upload = new Upload({
+          let UploadClass;
+          try {
+            UploadClass = require('@aws-sdk/lib-storage').Upload;
+          } catch (e) {
+            throw new Error(
+              '@aws-sdk/lib-storage module is not installed. Please run `npm install @aws-sdk/lib-storage` first.',
+            );
+          }
+
+          const upload = new UploadClass({
             client: s3,
             params: {
               Bucket: bucket,
@@ -150,8 +160,16 @@ export default class S3PrivateStorage extends StorageType {
       _removeFile: (req: any, file: any, cb: Function) => {
         (async () => {
           try {
+            let DeleteObjectCommandClass;
+            try {
+              DeleteObjectCommandClass = require('@aws-sdk/client-s3').DeleteObjectCommand;
+            } catch (e) {
+              throw new Error(
+                '@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.',
+              );
+            }
             await s3.send(
-              new DeleteObjectCommand({
+              new DeleteObjectCommandClass({
                 Bucket: bucket,
                 Key: file.key,
               }),
@@ -172,11 +190,18 @@ export default class S3PrivateStorage extends StorageType {
     const s3 = this.getS3Client();
     const bucket = this.storage.options.bucket;
 
+    let DeleteObjectCommandClass;
+    try {
+      DeleteObjectCommandClass = require('@aws-sdk/client-s3').DeleteObjectCommand;
+    } catch (e) {
+      throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
+    }
+
     const deleted = [];
     for (const record of records) {
       // @ts-ignore
       const key = this.getFileKey(record);
-      const deleteCommand = new DeleteObjectCommand({
+      const deleteCommand = new DeleteObjectCommandClass({
         Bucket: bucket,
         Key: key,
       });
@@ -197,24 +222,58 @@ export default class S3PrivateStorage extends StorageType {
    */
   async getFileStream(file) {
     const s3 = this.getS3Client();
+    const key = this.getFileKey(file);
 
-    const command = new GetObjectCommand({
+    let GetObjectCommandClass;
+    try {
+      GetObjectCommandClass = require('@aws-sdk/client-s3').GetObjectCommand;
+    } catch (e) {
+      throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
+    }
+
+    const command = new GetObjectCommandClass({
       Bucket: this.storage.options.bucket,
-      // @ts-ignore
-      Key: this.getFileKey(file),
+      Key: key,
     });
 
     const response = await s3.send(command);
 
     if (!response.Body) {
-      // @ts-ignore
-      throw new Error(`Failed to get file stream for: ${this.getFileKey(file)}`);
+      throw new Error(`Failed to get file stream for: ${key}`);
     }
 
     return {
       stream: response.Body as unknown as Readable,
       contentType: response.ContentType,
     };
+  }
+
+  getFileKey(file) {
+    const key = file?.key || file?.Key;
+    if (typeof key === 'string' && key.trim()) {
+      return key.replace(/^\/+/, '');
+    }
+
+    const filename = file?.filename || file?.name;
+    if (typeof filename === 'string' && filename.trim()) {
+      return path.posix.join(String(file?.path || '').replace(/^\/+|\/+$/g, ''), filename).replace(/^\/+/, '');
+    }
+
+    if (typeof file?.title === 'string' && file.title.trim() && typeof file?.extname === 'string' && file.extname) {
+      return path.posix
+        .join(String(file?.path || '').replace(/^\/+|\/+$/g, ''), `${file.title}${file.extname}`)
+        .replace(/^\/+/, '');
+    }
+
+    if (typeof file?.url === 'string' && file.url.trim()) {
+      try {
+        return new URL(file.url).pathname.replace(/^\/+/, '');
+      } catch (error) {
+        return file.url.replace(/^\/+/, '');
+      }
+    }
+
+    throw new Error('S3 object key not found on attachment');
   }
 
   /**

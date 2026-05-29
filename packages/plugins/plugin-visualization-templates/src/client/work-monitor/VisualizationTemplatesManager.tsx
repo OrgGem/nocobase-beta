@@ -35,9 +35,9 @@ import {
   useDataSourceHeaders,
   useDataSourceManager,
 } from '@nocobase/client';
-import { namespace } from './locale';
-import { defaultVisualizationRoles, getVisualizationTemplateRegistry, VisualizationTemplate } from './registry';
-import { inferFieldMapping } from './schema';
+import { namespace } from '../locale';
+import { defaultVisualizationRoles, getVisualizationTemplateRegistry, VisualizationTemplate } from '../registry';
+import { inferFieldMapping } from '../schema';
 
 type DashboardConfig = {
   dataSource?: string;

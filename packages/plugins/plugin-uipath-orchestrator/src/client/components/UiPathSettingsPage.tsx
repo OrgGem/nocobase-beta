@@ -1,5 +1,5 @@
 import React from 'react';
-import { Tabs, Select, Space, Typography, TreeSelect, Badge } from 'antd';
+import { Alert, Tabs, Select, Space, Typography, TreeSelect } from 'antd';
 import { InstanceProvider, useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
@@ -15,11 +15,29 @@ import { FolderUserPanel } from './FolderUserPanel';
 import { AlertManager } from './AlertManager';
 import { InstanceManager } from './InstanceManager';
 
+class UiPathTabErrorBoundary extends React.Component<
+  React.PropsWithChildren<{ title: string }>,
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return <Alert type="error" showIcon message={this.props.title} description={this.state.error.message} />;
+    }
+
+    return this.props.children;
+  }
+}
+
 // ─── Instance + Folder Selector (Header Bar) ────────────────────────
 
 const HeaderBar: React.FC = () => {
-  const { instanceId, setInstanceId, instances, loading, folderId, setFolder, folders } =
-    useCurrentInstance();
+  const { instanceId, setInstanceId, instances, loading, folderId, setFolder, folders } = useCurrentInstance();
   const t = useT();
 
   return (
@@ -44,7 +62,11 @@ const HeaderBar: React.FC = () => {
           <Typography.Text strong>{t('Folder')}:</Typography.Text>
           <TreeSelect
             value={folderId}
-            onChange={(val: number) => {
+            onChange={(val?: number) => {
+              if (val == null) {
+                setFolder(null, null);
+                return;
+              }
               const f = folders.find((f: any) => f.folderId === val);
               setFolder(val, f?.folderKey || null);
             }}
@@ -90,18 +112,21 @@ function buildFolderTree(folders: any[]): any[] {
 
 const UiPathSettingsContent: React.FC = () => {
   const t = useT();
+  const tab = (title: string, children: React.ReactNode) => (
+    <UiPathTabErrorBoundary title={title}>{children}</UiPathTabErrorBoundary>
+  );
 
   const items = [
-    { key: 'overview', label: t('Overview'), children: <OverviewDashboard /> },
-    { key: 'jobs', label: t('Jobs'), children: <JobManager /> },
-    { key: 'logs', label: t('Robot Logs'), children: <LogExplorer /> },
-    { key: 'queues', label: t('Queues'), children: <QueueManager /> },
-    { key: 'processes', label: t('Processes'), children: <ProcessManager /> },
-    { key: 'assets', label: t('Assets'), children: <AssetManager /> },
-    { key: 'robots', label: t('Robots & Sessions'), children: <RobotSessionPanel /> },
-    { key: 'folders', label: t('Users & Folders'), children: <FolderUserPanel /> },
-    { key: 'alerts', label: t('Alerts'), children: <AlertManager /> },
-    { key: 'instances', label: t('Instances'), children: <InstanceManager /> },
+    { key: 'overview', label: t('Overview'), children: tab(t('Overview'), <OverviewDashboard />) },
+    { key: 'jobs', label: t('Jobs'), children: tab(t('Jobs'), <JobManager />) },
+    { key: 'logs', label: t('Robot Logs'), children: tab(t('Robot Logs'), <LogExplorer />) },
+    { key: 'queues', label: t('Queues'), children: tab(t('Queues'), <QueueManager />) },
+    { key: 'processes', label: t('Processes'), children: tab(t('Processes'), <ProcessManager />) },
+    { key: 'assets', label: t('Assets'), children: tab(t('Assets'), <AssetManager />) },
+    { key: 'robots', label: t('Robots & Sessions'), children: tab(t('Robots & Sessions'), <RobotSessionPanel />) },
+    { key: 'folders', label: t('Users & Folders'), children: tab(t('Users & Folders'), <FolderUserPanel />) },
+    { key: 'alerts', label: t('Alerts'), children: tab(t('Alerts'), <AlertManager />) },
+    { key: 'instances', label: t('Instances'), children: tab(t('Instances'), <InstanceManager />) },
   ];
 
   return (

@@ -17,14 +17,20 @@ export function handleError(ctx: Context, error: any) {
  */
 export function extractFolderContext(params: any): FolderContext | undefined {
   const { folderId, folderKey, folderPath } = params;
-  if (folderId || folderKey || folderPath) {
-    return {
-      folderId: folderId ? Number(folderId) : undefined,
-      folderKey,
-      folderPath,
-    };
+  const hasFolderOverride =
+    Object.prototype.hasOwnProperty.call(params, 'folderId') ||
+    Object.prototype.hasOwnProperty.call(params, 'folderKey') ||
+    Object.prototype.hasOwnProperty.call(params, 'folderPath');
+
+  if (!hasFolderOverride) {
+    return undefined;
   }
-  return undefined;
+
+  return {
+    folderId: folderId === undefined || folderId === null || folderId === '' ? undefined : Number(folderId),
+    folderKey: folderKey || undefined,
+    folderPath: folderPath || undefined,
+  };
 }
 
 /**

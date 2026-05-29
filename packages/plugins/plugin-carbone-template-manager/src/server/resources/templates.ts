@@ -136,9 +136,9 @@ export function makeTemplateActions(plugin: PluginCarboneTemplateManagerServer) 
   }
 
   /**
-   * Stream the backup file of a template's current version (or a specific
-   * version if `?versionId=` is provided). Used by the "Download original"
-   * button in the template manager.
+   * Stream the template file from Carbone by the version's `carboneTemplateId`
+   * (or a specific version if `?versionId=` is provided). The file-manager
+   * backup is only a fallback for evicted Carbone community entries.
    */
   async function download(ctx: Context, next: Next) {
     const { filterByTk } = ctx.action.params;
@@ -153,16 +153,46 @@ export function makeTemplateActions(plugin: PluginCarboneTemplateManagerServer) 
     if (!targetVersionId) ctx.throw(404, 'no version to download');
 
     const ver = await plugin.db.getRepository(COLLECTION.versions).findOne({ filterByTk: targetVersionId });
-    if (!ver?.fileBackupId) ctx.throw(404, 'backup file not available');
+    const carboneTemplateId = ver?.carboneTemplateId ?? tpl.carboneTemplateId;
+    if (!ver || !carboneTemplateId) ctx.throw(404, 'template version has no Carbone id');
 
-    const { buffer, attachment } = await readAttachmentBuffer(plugin.app, ver.fileBackupId);
-    ctx.set('Content-Type', attachment.mimetype || 'application/octet-stream');
+    let buffer: Buffer | null = null;
+    let contentType = ver.mimeType || tpl.mimeType || 'application/octet-stream';
+    let filename = ver.originalFileName || tpl.originalFileName || 'template';
+
+    const client = await plugin.getCarboneClient();
+    if (client) {
+      try {
+        const remote = await client.downloadTemplate(carboneTemplateId);
+        buffer = remote.buffer;
+        contentType = remote.mimeType || contentType;
+        filename = remote.filename || filename;
+      } catch (err: any) {
+        const status = err?.response?.status;
+        if (status !== 404 && status !== 410) {
+          throw err;
+        }
+        plugin.app.logger.warn(
+          `[carbone-template-manager] Carbone template ${carboneTemplateId} is unavailable; falling back to backup attachment`,
+        );
+      }
+    }
+
+    if (!buffer) {
+      if (!ver.fileBackupId) ctx.throw(404, 'template not available in Carbone and backup file is missing');
+      const backup = await readAttachmentBuffer(plugin.app, ver.fileBackupId);
+      buffer = backup.buffer;
+      contentType = backup.attachment.mimetype || contentType;
+      filename = backup.attachment.filename || filename;
+    }
+
+    ctx.set('Content-Type', contentType);
     ctx.set(
       'Content-Disposition',
-      `attachment; filename="${encodeURIComponent(attachment.filename || ver.originalFileName || 'template')}"`,
+      `attachment; filename="${encodeURIComponent(filename)}"`,
     );
+    (ctx as any).withoutDataWrapping = true;
     ctx.body = buffer;
-    await next();
   }
 
   return { parsePlaceholders, upload, download };

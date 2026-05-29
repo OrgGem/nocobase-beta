@@ -36,6 +36,11 @@
   "Failed": "Thất bại",
   "Saved": "Đã lưu",
   "Deleted": "Đã xóa",
+  "Elasticsearch": "Elasticsearch",
+  "Elasticsearch nodes": "Elasticsearch nodes",
+  "Elasticsearch index": "Elasticsearch index",
+  "Elasticsearch username": "Elasticsearch username",
+  "Elasticsearch password": "Elasticsearch password",
   "Queue item ID/key/reference": "ID/key/reference queue item",
   "Resolved job keys": "Job key đã tìm"
 }

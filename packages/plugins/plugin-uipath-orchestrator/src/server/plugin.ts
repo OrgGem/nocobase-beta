@@ -40,8 +40,12 @@ const MAX_SNAPSHOT_HISTORY = 60; // ~30 min at 30s interval
 
 export class PluginUiPathOrchestratorServer extends Plugin {
   declare app: any;
-  get db(): any { return super.db; }
-  get name(): string { return super.name; }
+  get db(): any {
+    return super.db;
+  }
+  get name(): string {
+    return this.options.name;
+  }
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private clientCache = new Map<number, UiPathApiClient>();
 

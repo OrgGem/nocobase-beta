@@ -1,6 +1,12 @@
 import { Context, Next } from '@nocobase/actions';
 import { COLLECTION } from '../../shared/constants';
-import { NormalizedOcrItem, OcrMappingProfile, VerifyAction, VerifyActionInput, VerifyPayloadInput } from '../../shared/types';
+import {
+  NormalizedOcrItem,
+  OcrMappingProfile,
+  VerifyAction,
+  VerifyActionInput,
+  VerifyPayloadInput,
+} from '../../shared/types';
 import { applyOcrItemChanges, normalizeOcrJson } from '../services/json-mapping';
 import { ensureDefaultMapping, ensureSettings } from './settings';
 
@@ -16,7 +22,12 @@ function getAttachmentUrl(value: any): string | null {
   const first = Array.isArray(value) ? value[0] : value;
   if (!first) return null;
   if (typeof first === 'string') return first;
-  return first.url || first.preview || first.thumbnail || first.path || null;
+  const url = first.url || first.preview || first.thumbnail || first.path;
+  if (url) return url;
+  if (first.id != null) {
+    return `/api/filePreviewAuth:download?id=${encodeURIComponent(String(first.id))}&collection=attachments`;
+  }
+  return null;
 }
 
 function assertSafeFieldName(ctx: Context, fieldName: string | undefined, label: string) {
@@ -110,7 +121,10 @@ function aclFilter(acl: any) {
   return acl?.params?.filter ? { ...acl.params.filter } : undefined;
 }
 
-async function getMapping(ctx: Context, input: VerifyPayloadInput): Promise<OcrMappingProfile & { id?: any; name?: string }> {
+async function getMapping(
+  ctx: Context,
+  input: VerifyPayloadInput,
+): Promise<OcrMappingProfile & { id?: any; name?: string }> {
   const repo = ctx.db.getRepository(COLLECTION.mappingProfiles);
   let row: any = null;
   if (input.mappingProfileId) row = await repo.findOne({ filterByTk: input.mappingProfileId });
@@ -297,13 +311,16 @@ export async function testCallback(ctx: Context, next: Next) {
   const settings = modelToJson(await ensureSettings(ctx.db));
   const values = getValues(ctx);
   const callbackUrl = values.callbackUrl || settings.callbackUrl;
-  const callbackApiKey =
-    values.callbackApiKey || (callbackUrl === settings.callbackUrl ? settings.callbackApiKey : '');
-  const result = await invokeCallback(ctx, { ...settings, ...values, callbackUrl, callbackApiKey }, {
-    event: 'ocr.verify.test',
-    ok: true,
-    sentAt: new Date().toISOString(),
-  });
+  const callbackApiKey = values.callbackApiKey || (callbackUrl === settings.callbackUrl ? settings.callbackApiKey : '');
+  const result = await invokeCallback(
+    ctx,
+    { ...settings, ...values, callbackUrl, callbackApiKey },
+    {
+      event: 'ocr.verify.test',
+      ok: true,
+      sentAt: new Date().toISOString(),
+    },
+  );
   ctx.body = { ok: result.callbackStatus !== 'error', ...result };
   await next();
 }

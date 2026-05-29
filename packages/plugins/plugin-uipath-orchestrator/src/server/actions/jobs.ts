@@ -102,16 +102,21 @@ export function createJobActions(plugin: PluginUiPathOrchestratorServer) {
 
     stop: async (ctx: Context, next: Next) => {
       try {
-        const { instanceId, values } = ctx.action.params;
+        const { instanceId, filterByTk, values = {} } = ctx.action.params;
         const client = await plugin.getApiClient(instanceId);
         const folder = extractFolderContext(ctx.action.params);
+        const jobIds = Array.isArray(values.jobIds) ? values.jobIds : [values.jobId ?? filterByTk].filter(Boolean);
+
+        if (!jobIds.length) {
+          throw new Error('Job ID is required');
+        }
 
         // Soft stop: POST /odata/Jobs/UiPath.Server.Configuration.OData.StopJobs
         // Body: { jobIds: [id1, id2], strategy: 'SoftStop' }
         const result = await client.post(
           '/odata/Jobs/UiPath.Server.Configuration.OData.StopJobs',
           {
-            jobIds: Array.isArray(values.jobIds) ? values.jobIds : [values.jobId],
+            jobIds: jobIds.map(Number),
             strategy: values.strategy || 'SoftStop',
           },
           { folder },
@@ -120,7 +125,7 @@ export function createJobActions(plugin: PluginUiPathOrchestratorServer) {
         await plugin.auditLog(ctx, {
           action: 'stop_job',
           resourceType: 'job',
-          resourceId: String(values.jobIds || values.jobId),
+          resourceId: jobIds.join(','),
           instanceId: Number(instanceId),
           folder,
           details: { strategy: values.strategy || 'SoftStop' },

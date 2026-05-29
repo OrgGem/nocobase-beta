@@ -172,8 +172,25 @@ export class SkillExecutionTask {
         const fmPlugin = (this as any).app.pm.get('@nocobase/plugin-file-manager') as any;
         const attachment = await (this as any).app.db.getRepository('attachments').findOne({ filter: { id: fileId } });
         if (fmPlugin && attachment) {
+          const rawStorageId = attachment.get('storageId') || attachment.storageId;
+          let matchedKey = null;
+          if (rawStorageId) {
+            const strId = String(rawStorageId);
+            for (const key of fmPlugin.storagesCache.keys()) {
+              if (String(key) === strId) {
+                matchedKey = key;
+                break;
+              }
+            }
+          }
+
+          const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
+          if (matchedKey !== null) {
+            attachmentObj.storageId = matchedKey;
+          }
+
           try {
-            const streamData = await fmPlugin.getFileStream(attachment);
+            const streamData = await fmPlugin.getFileStream(attachmentObj);
             if (streamData?.stream) {
               const tempZipPath = require('path').resolve(require('os').tmpdir(), `skill_${Date.now()}_exec.zip`);
               await new Promise((resolve, reject) => {

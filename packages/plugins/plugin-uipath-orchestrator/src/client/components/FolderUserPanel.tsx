@@ -3,31 +3,72 @@
  */
 
 import React from 'react';
-import { Table, Card, Button, Space, message } from 'antd';
+import { Alert, Table, Card, Button, message, Tag } from 'antd';
 import { SyncOutlined } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
 import { useCurrentInstance } from '../context/InstanceContext';
-import { useUiPathRequest } from '../hooks/useUiPathRequest';
+import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
+
+type FolderRow = {
+  folderId: number;
+  folderKey?: string | null;
+  displayName?: string;
+  fullyQualifiedName?: string;
+  lastSyncedAt?: string;
+};
 
 export const FolderUserPanel: React.FC = () => {
   const t = useT();
   const api = useAPIClient();
-  const { instanceId, folders, foldersLoading } = useCurrentInstance();
-  const { data: users, loading: uLoading } = useUiPathRequest('uipathUsers', 'list');
+  const { instanceId, instances, setFolder, folders, foldersLoading, refreshFolders, refreshInstances } =
+    useCurrentInstance();
+  const { data: users, loading: uLoading, error: usersError } = useUiPathRequest('uipathUsers', 'list');
+  const userRows = toUiPathArray(users);
+  const currentInstance = instances.find((instance) => instance.id === instanceId);
 
   const handleSyncFolders = async () => {
+    if (!instanceId) return;
     try {
       await api.request({ url: 'uipathFolders:sync', params: { instanceId } });
       message.success(t('Folders synced'));
-      window.location.reload();
-    } catch (err: any) { message.error(err.message); }
+      refreshFolders();
+    } catch (err: any) {
+      message.error(err.message);
+    }
+  };
+
+  const handleSetDefaultFolder = async (folder: FolderRow) => {
+    if (!instanceId) return;
+    try {
+      await api.request({
+        url: 'uipathFolders:setDefault',
+        params: {
+          instanceId,
+          folderId: folder.folderId,
+          folderKey: folder.folderKey,
+          folderPath: folder.fullyQualifiedName,
+        },
+      });
+      setFolder(folder.folderId, folder.folderKey || null);
+      refreshInstances();
+      message.success(t('Saved'));
+    } catch (err: any) {
+      message.error(err.message);
+    }
   };
 
   return (
     <div>
-      <Card title={t('Folders')} size="small" style={{ marginBottom: 16 }}
-        extra={<Button icon={<SyncOutlined />} onClick={handleSyncFolders} size="small">{t('Sync')}</Button>}
+      <Card
+        title={t('Folders')}
+        size="small"
+        style={{ marginBottom: 16 }}
+        extra={
+          <Button icon={<SyncOutlined />} onClick={handleSyncFolders} size="small">
+            {t('Sync')}
+          </Button>
+        }
       >
         <Table
           dataSource={folders || []}
@@ -39,13 +80,39 @@ export const FolderUserPanel: React.FC = () => {
             { title: t('Name'), dataIndex: 'displayName' },
             { title: t('Path'), dataIndex: 'fullyQualifiedName', ellipsis: true },
             { title: t('Key'), dataIndex: 'folderKey', width: 200 },
-            { title: t('Synced'), dataIndex: 'lastSyncedAt', width: 180, render: (v: string) => v ? new Date(v).toLocaleString() : '-' },
+            {
+              title: t('Default'),
+              width: 120,
+              render: (_: unknown, row: FolderRow) =>
+                String(currentInstance?.defaultFolderId || '') === String(row.folderId) ? (
+                  <Tag color="green">{t('Default')}</Tag>
+                ) : (
+                  <Button size="small" onClick={() => handleSetDefaultFolder(row)}>
+                    {t('Default')}
+                  </Button>
+                ),
+            },
+            {
+              title: t('Synced'),
+              dataIndex: 'lastSyncedAt',
+              width: 180,
+              render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
+            },
           ]}
         />
       </Card>
       <Card title={t('Users')} size="small">
+        {usersError ? (
+          <Alert
+            type="error"
+            showIcon
+            message={t('Failed')}
+            description={usersError.message}
+            style={{ marginBottom: 16 }}
+          />
+        ) : null}
         <Table
-          dataSource={users || []}
+          dataSource={userRows}
           rowKey="Id"
           loading={uLoading}
           size="small"

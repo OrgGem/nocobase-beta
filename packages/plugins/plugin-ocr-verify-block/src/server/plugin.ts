@@ -7,19 +7,33 @@ import { ensureDefaultMapping, ensureSettings, getDefaultMapping, getSettings, s
 export class PluginOcrVerifyBlockServer extends Plugin {
   declare app: any;
 
+  private async syncCollections() {
+    for (const name of Object.values(COLLECTION)) {
+      const col = this.db.getCollection(name);
+      if (col) {
+        await col.sync();
+      }
+    }
+  }
+
   async install() {
+    await this.syncCollections();
     await ensureSettings(this.db);
     await ensureDefaultMapping(this.db);
   }
 
   async beforeLoad() {
-    await this.db.import({ directory: resolve(__dirname, 'collections') });
+    await this.importCollections(resolve(__dirname, 'collections'));
   }
 
   async load() {
-    if (this.db.getCollection(COLLECTION.categories)) {
-      await this.db.getCollection(COLLECTION.categories).sync();
-    }
+    await this.syncCollections();
+
+    this.app.resourcer.define({
+      name: 'ocrVerify',
+    });
+
+    this.app.acl.allow('ocrVerify', '*', 'loggedIn');
 
     this.app.resourcer.registerActionHandlers({
       [`${COLLECTION.settings}:get`]: getSettings,

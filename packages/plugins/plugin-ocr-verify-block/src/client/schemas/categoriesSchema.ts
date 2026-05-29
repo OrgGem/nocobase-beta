@@ -1,14 +1,16 @@
 import { ISchema } from '@formily/react';
+import { ocrVerifyCategoriesCollection } from '../collections/ocrVerifyCategories';
 
 export const categoriesSchema: ISchema = {
   type: 'object',
   properties: {
     block: {
       type: 'void',
-      'x-decorator': 'DataBlockProvider',
+      'x-decorator': 'TableBlockProvider',
       'x-decorator-props': {
-        collection: 'ocrVerifyCategories',
+        collection: ocrVerifyCategoriesCollection,
         action: 'list',
+        rowKey: 'id',
       },
       properties: {
         actions: {

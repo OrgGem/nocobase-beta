@@ -32,7 +32,14 @@ export function PluginOperations() {
     setLoading(true);
     try {
       const res = await api.request({ url: 'clusterManagerPlugins:list' });
-      setPlugins(res?.data?.data || []);
+      const data = Array.isArray(res?.data?.data?.data)
+        ? res.data.data.data
+        : Array.isArray(res?.data?.data)
+        ? res.data.data
+        : Array.isArray(res?.data)
+        ? res.data
+        : [];
+      setPlugins(data);
     } catch (err: any) {
       message.error(getErrorMessage(err, t('Failed to load plugins')));
     } finally {
@@ -46,8 +53,9 @@ export function PluginOperations() {
 
   const filteredPlugins = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    if (!keyword) return plugins;
-    return plugins.filter((plugin) =>
+    const list = Array.isArray(plugins) ? plugins : [];
+    if (!keyword) return list;
+    return list.filter((plugin) =>
       [plugin.name, plugin.packageName, plugin.displayName, plugin.description]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(keyword)),
@@ -63,7 +71,7 @@ export function PluginOperations() {
         method: 'post',
         data: { name: record.name },
       });
-      message.success(res?.data?.message || t('Plugin force disabled'));
+      message.success(res?.data?.data?.message || res?.data?.message || t('Plugin force disabled'));
       await fetchData();
     } catch (err: any) {
       message.error(getErrorMessage(err, t('Failed to force disable plugin')));
@@ -81,7 +89,7 @@ export function PluginOperations() {
         method: 'post',
         data: { name: record.name },
       });
-      message.success(res?.data?.message || t('Plugin force removed'));
+      message.success(res?.data?.data?.message || res?.data?.message || t('Plugin force removed'));
       await fetchData();
     } catch (err: any) {
       message.error(getErrorMessage(err, t('Failed to force remove plugin')));

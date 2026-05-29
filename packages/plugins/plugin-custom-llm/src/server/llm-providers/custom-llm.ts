@@ -1481,7 +1481,24 @@ export class CustomLLMProvider extends LLMProvider {
 
     // Internal API stream URL (e.g. s3-private-storage proxy) — read directly via fileManager
     if (url.includes('/api/attachments:stream')) {
-      const { stream } = await fileManager.getFileStream(attachment);
+      const rawStorageId = attachment.storageId || (typeof attachment.get === 'function' ? attachment.get('storageId') : attachment.storageId);
+      let matchedKey = null;
+      if (rawStorageId) {
+        const strId = String(rawStorageId);
+        for (const key of fileManager.storagesCache.keys()) {
+          if (String(key) === strId) {
+            matchedKey = key;
+            break;
+          }
+        }
+      }
+
+      const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
+      if (matchedKey !== null) {
+        attachmentObj.storageId = matchedKey;
+      }
+
+      const { stream } = await fileManager.getFileStream(attachmentObj);
       const chunks: Buffer[] = [];
       for await (const chunk of stream) {
         chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);

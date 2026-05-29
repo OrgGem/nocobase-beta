@@ -57,8 +57,9 @@ x-nocobase-env: &nocobase-env
   TZ: ${TZ:-UTC}
   APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
   NPM_REGISTRY_URL: "http://nginx-cache-registry/npm/"
-  APT_MIRROR_URL: "http://nginx-cache-registry/ubuntu/"
+  APT_MIRROR_URL: "http://nginx-cache-registry/debian/"
   PYPI_INDEX_URL: "http://nginx-cache-registry/pypi-simple/"
+  GIT_BINARY_PATH: ${GIT_BINARY_PATH:-git}
   # plugin-ai-browser — Playwright CDP Endpoint
   AI_BROWSER_CDP_URL: ${AI_BROWSER_CDP_URL:-ws://browser:3000}
   AI_BROWSER_LIVE_URL: ${AI_BROWSER_LIVE_URL:-/ai-browser-live/}
@@ -119,6 +120,9 @@ volumes:
     driver: local
   qdrant-data:
     driver: local
+  dbgate-data:
+    driver: local
+
 
 
 
@@ -352,10 +356,18 @@ services:
   app-1:
     <<: *nocobase-base
     container_name: app-1
-    command: 
+    command:
       - /bin/sh
       - -c
       - |
+        if ! command -v git >/dev/null; then
+          echo "Installing git..."
+          if command -v apt-get >/dev/null; then
+            apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+          elif command -v apk >/dev/null; then
+            apk add --no-cache git
+          fi
+        fi
         if [ ! -d /app/nocobase ]; then mkdir /app/nocobase; fi
         if [ ! -f /app/nocobase/package.json ]; then
           echo "Extracting NocoBase source..."
@@ -560,3 +572,17 @@ services:
       resources:
         limits:
           memory: 2G
+
+  # ============================================================================
+  # DbGate - Web-based Database Client
+  # ============================================================================
+  dbgate:
+    image: dbgate/dbgate:latest
+    container_name: dbgate
+    restart: unless-stopped
+    ports:
+      - '${DBGATE_PORT:-1863}:3000'
+    volumes:
+      - dbgate-data:/root/.dbgate
+    networks:
+      - nocobase

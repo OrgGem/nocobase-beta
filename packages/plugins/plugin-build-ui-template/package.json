@@ -1,0 +1,44 @@
+{
+  "name": "plugin-build-ui-template",
+  "displayName": "Build UI Template",
+  "displayName.vi-VN": "Khối tạo giao diện",
+  "displayName.zh-CN": "构建UI模板",
+  "description": "Generate standard UI Block and Popup templates using AI, saving directly to plugin-ui-templates.",
+  "description.vi-VN": "Tạo block và popup template bằng AI, lưu trực tiếp vào plugin-ui-templates.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ai",
+    "ui",
+    "templates",
+    "nocobase-plugin"
+  ],
+  "main": "dist/server/index.js",
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
+  "dependencies": {},
+  "devDependencies": {},
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/plugin-ui-templates": "2.x",
+    "@nocobase/plugin-flow-engine": "2.x",
+    "@langchain/core": "*",
+    "axios": "*"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
+}

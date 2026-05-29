@@ -1,15 +1,18 @@
-import { Plugin, lazy } from '@nocobase/client';
+import { Plugin, lazy, type DataSource } from '@nocobase/client';
 import { NAMESPACE } from '../shared/constants';
 import { OcrVerifyBlockProvider } from './block/OcrVerifyBlockProvider';
 import { OcrVerifyBlockInitializer } from './block/OcrVerifyBlockInitializer';
 import { OcrVerifyBlock } from './block/OcrVerifyBlock';
 import { ocrVerifyBlockSettings } from './block/schemaSettings';
+import { ocrVerifyCategoriesCollection } from './collections/ocrVerifyCategories';
 
 const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'SettingsPage');
 
-export class PluginOcrVerifyBlockClient extends Plugin {
-  declare app: any;
+function addOcrVerifyCategoriesCollection(dataSource: DataSource) {
+  dataSource.collectionManager.addCollections([ocrVerifyCategoriesCollection]);
+}
 
+export class PluginOcrVerifyBlockClient extends Plugin {
   async load() {
     this.app.addComponents({
       OcrVerifyBlockInitializer,
@@ -17,6 +20,13 @@ export class PluginOcrVerifyBlockClient extends Plugin {
     });
     this.app.use(OcrVerifyBlockProvider);
     this.app.schemaSettingsManager.add(ocrVerifyBlockSettings);
+
+    const mainDataSource = this.app.dataSourceManager.getDataSource('main');
+    if (mainDataSource) {
+      const registerCategoriesCollection = () => addOcrVerifyCategoriesCollection(mainDataSource);
+      registerCategoriesCollection();
+      mainDataSource.addReloadCallback(registerCategoriesCollection);
+    }
 
     this.app.pluginSettingsManager.add(NAMESPACE, {
       title: 'OCR Verify Block',
