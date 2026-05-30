@@ -5,6 +5,7 @@ import { useFieldSchema } from '@formily/react';
 import { useT } from './locale';
 import { DrawioBridge, buildDrawioEmbedUrl } from './lib/drawioBridge';
 import { registerActiveHandle, setActiveBlockUid } from './lib/activeRegistry';
+import { notifyDiagramXmlUpdated, subscribeDiagramXmlUpdated } from './diagramEvents';
 
 type Props = {
   diagramId?: string;
@@ -87,11 +88,12 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
           data: { xml, thumbnailSvg },
         });
         xmlRef.current = xml;
+        notifyDiagramXmlUpdated({ diagramId, xml, sourceBlockUid: blockUid });
       } catch (err: any) {
         message.error(err?.message || t('Save failed'));
       }
     },
-    [api, diagramId, message, readonly, t],
+    [api, blockUid, diagramId, message, readonly, t],
   );
 
   useEffect(() => {
@@ -168,16 +170,31 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
     };
   }, [diagramId, blockUid, diagramTitle, persistXml]);
 
+  useEffect(() => {
+    if (!diagramId) return;
+
+    return subscribeDiagramXmlUpdated((event) => {
+      if (event.diagramId !== diagramId || event.sourceBlockUid === blockUid) {
+        return;
+      }
+      if (event.xml === xmlRef.current) {
+        return;
+      }
+      xmlRef.current = event.xml;
+      bridgeRef.current?.load(event.xml);
+    });
+  }, [blockUid, diagramId]);
+
   const handleInteraction = useCallback(() => {
     setActiveBlockUid(blockUid);
   }, [blockUid]);
 
   useEffect(() => {
-    if (iframeReady && bridgeRef.current && initialXml) {
+    if (iframeReady && bridgeRef.current && xmlData !== undefined) {
       bridgeRef.current.load(initialXml);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialXml, iframeReady]);
+  }, [initialXml, iframeReady, xmlData]);
 
   if (!diagramId) {
     return (

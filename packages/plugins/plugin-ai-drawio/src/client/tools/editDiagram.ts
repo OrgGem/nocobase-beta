@@ -1,7 +1,11 @@
 import type { ToolsOptions } from '@nocobase/client';
-import { getActiveHandle } from '../lib/activeRegistry';
+import { getActiveHandle, getAllHandles } from '../lib/activeRegistry';
 import { applyDiagramOperations, DiagramOperation, wrapWithMxFile } from '../lib/xml-utils';
 import type { ToolResult } from './types';
+
+function getMountedHandle() {
+  return getActiveHandle() || getAllHandles()[0] || null;
+}
 
 async function invoke(_app: any, params: { operations?: DiagramOperation[] }): Promise<ToolResult> {
   const operations = params?.operations || [];
@@ -9,7 +13,7 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
     return { status: 'error', content: 'edit_diagram called without operations.' };
   }
 
-  const handle = getActiveHandle();
+  const handle = getMountedHandle();
   if (!handle) {
     return {
       status: 'error',

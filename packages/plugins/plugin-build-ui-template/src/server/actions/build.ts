@@ -193,7 +193,7 @@ async function runBuildQueueTick(app: Application) {
     // Keep updating heartbeat during the build
     const heartbeatTimer = setInterval(() => {
       spaceRepo.update({
-        where: { id: run.spaceId, buildRunId: run.runId },
+        filter: { id: run.spaceId, buildRunId: run.runId },
         values: { buildHeartbeatAt: new Date() },
       }).catch(() => undefined);
     }, 10000);
@@ -305,7 +305,7 @@ async function executeBuild(app: Application, run: BuildRunContext) {
   messages.push(new HumanMessage(prompt));
 
   const response = await provider.chatModel.invoke(messages);
-  const rawText = toPlainText(response.content);
+  const rawText = stripThink(toPlainText(response.content));
 
   await updateSpace(app, run, 'saving', 'Parsing and storing the new FlowModel...');
 
@@ -440,6 +440,10 @@ function toPlainText(value: unknown) {
     return (value as any).text || (value as any).content || JSON.stringify(value);
   }
   return String(value);
+}
+
+function stripThink(text: string) {
+  return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim();
 }
 
 function stripFence(text: string) {

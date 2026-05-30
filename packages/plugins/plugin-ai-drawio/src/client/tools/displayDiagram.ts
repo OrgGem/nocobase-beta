@@ -1,11 +1,15 @@
 import type { ToolsOptions } from '@nocobase/client';
 import { createAndOpenDiagram } from '../autoOpenDiagram';
-import { getActiveHandle } from '../lib/activeRegistry';
+import { getActiveHandle, getAllHandles } from '../lib/activeRegistry';
 import { isMxCellXmlComplete, wrapWithMxFile } from '../lib/xml-utils';
 import { resetPartialXml, setPartialXml } from './sharedState';
 import { DrawioDiagramCard } from '../components/DrawioDiagramCard';
 import { setDiagramResult } from '../components/diagramResultStore';
 import type { ToolResult } from './types';
+
+function getMountedHandle() {
+  return getActiveHandle() || getAllHandles()[0] || null;
+}
 
 async function invoke(app: any, params: { xml?: string; title?: string; description?: string }): Promise<ToolResult> {
   const xml = params?.xml || '';
@@ -32,7 +36,7 @@ async function invoke(app: any, params: { xml?: string; title?: string; descript
   const fullXml = wrapWithMxFile(xml);
 
   try {
-    const existingHandle = getActiveHandle();
+    const existingHandle = getMountedHandle();
 
     if (existingHandle) {
       // Drawio block is already open on the page — apply directly

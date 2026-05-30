@@ -328,6 +328,10 @@ function toPlainText(value: unknown) {
   return JSON.stringify(value);
 }
 
+function stripThink(text: string) {
+  return text.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim();
+}
+
 function stripFence(text: string) {
   return text
     .replace(/^```(?:json|markdown|md|html)?\s*/i, '')
@@ -398,7 +402,7 @@ function createFallbackPlan(guideTitle: string, targetChapterCount: number): Gui
 
 function normalizePlan(rawText: string, guideTitle: string, targetChapterCount: number): GuidePlan {
   const targetCount = clampChapterCount(targetChapterCount);
-  const cleanText = stripFence(rawText);
+  const cleanText = stripFence(stripThink(rawText));
   const jsonStart = cleanText.indexOf('{');
   const jsonEnd = cleanText.lastIndexOf('}');
   const jsonText = jsonStart >= 0 && jsonEnd > jsonStart ? cleanText.slice(jsonStart, jsonEnd + 1) : cleanText;
@@ -514,7 +518,7 @@ Source documents:
 ${documentsText.slice(0, MAX_SOURCE_CHARS)}`),
   );
   const response = await provider.chatModel.invoke(messages);
-  return stripFence(toPlainText(response.content));
+  return stripFence(stripThink(toPlainText(response.content)));
 }
 
 async function markdownToCleanHtml(markdown: string) {

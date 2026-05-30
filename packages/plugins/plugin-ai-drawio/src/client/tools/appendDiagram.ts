@@ -1,8 +1,12 @@
 import type { ToolsOptions } from '@nocobase/client';
-import { getActiveHandle } from '../lib/activeRegistry';
+import { getActiveHandle, getAllHandles } from '../lib/activeRegistry';
 import { isMxCellXmlComplete, wrapWithMxFile } from '../lib/xml-utils';
 import { appendPartialXml, getPartialXml, resetPartialXml } from './sharedState';
 import type { ToolResult } from './types';
+
+function getMountedHandle() {
+  return getActiveHandle() || getAllHandles()[0] || null;
+}
 
 async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> {
   const xml = params?.xml || '';
@@ -41,7 +45,7 @@ async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> 
     };
   }
 
-  const handle = getActiveHandle();
+  const handle = getMountedHandle();
   if (!handle) {
     resetPartialXml();
     return {
@@ -64,7 +68,4 @@ async function invoke(_app: any, params: { xml?: string }): Promise<ToolResult> 
   }
 }
 
-export const appendDiagramTool: [string, ToolsOptions] = [
-  'drawio-append_diagram',
-  { invoke },
-];
+export const appendDiagramTool: [string, ToolsOptions] = ['drawio-append_diagram', { invoke }];

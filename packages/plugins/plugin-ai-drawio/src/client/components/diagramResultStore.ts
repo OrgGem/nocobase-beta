@@ -19,15 +19,26 @@ export type DiagramResult = {
 
 // Keyed by diagram title for easy lookup from the card component
 const storeByTitle = new Map<string, DiagramResult>();
+const listeners = new Set<(result: DiagramResult) => void>();
 
 export function setDiagramResult(result: DiagramResult) {
   if (result.title) {
     storeByTitle.set(result.title, result);
   }
+  for (const listener of Array.from(listeners)) {
+    listener(result);
+  }
 }
 
 export function getDiagramResultByTitle(title: string): DiagramResult | undefined {
   return storeByTitle.get(title);
+}
+
+export function subscribeDiagramResult(listener: (result: DiagramResult) => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function clearDiagramResults() {

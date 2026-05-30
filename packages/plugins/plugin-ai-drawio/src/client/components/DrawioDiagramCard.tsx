@@ -3,7 +3,7 @@ import { Button, Drawer, Space, Typography, Card, Tag, message as antMessage } f
 import { ApartmentOutlined, FullscreenOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import type { ToolsUIProperties } from '@nocobase/client';
 import { DrawioBlock } from '../DrawioBlock';
-import { getDiagramResultByTitle } from './diagramResultStore';
+import { getDiagramResultByTitle, subscribeDiagramResult } from './diagramResultStore';
 
 const { Text } = Typography;
 
@@ -22,6 +22,8 @@ const { Text } = Typography;
  */
 export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [openDiagramId, setOpenDiagramId] = useState<string>();
+  const [openDiagramTitle, setOpenDiagramTitle] = useState<string>();
 
   const args = toolCall.args as any;
   const diagramTitle: string = args?.title || 'Drawio Diagram';
@@ -51,12 +53,27 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
       antMessage.warning('Diagram is still being created. Please try again in a moment.');
       return;
     }
+    const stored = getDiagramResultByTitle(diagramTitle);
+    setOpenDiagramId(diagramId);
+    setOpenDiagramTitle(stored?.title || diagramTitle);
     setDrawerOpen(true);
-  }, [getDiagramId]);
+  }, [diagramTitle, getDiagramId]);
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
   }, []);
+
+  useEffect(() => {
+    return subscribeDiagramResult((result) => {
+      if (result.title !== diagramTitle) {
+        return;
+      }
+      if (drawerOpen) {
+        setOpenDiagramId(result.diagramId);
+        setOpenDiagramTitle(result.title || diagramTitle);
+      }
+    });
+  }, [diagramTitle, drawerOpen]);
 
   // For "done" status tools that were applied directly, show minimal card
   if (toolCall.invokeStatus === 'done' && isAppliedDirectly()) {
@@ -73,9 +90,7 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
       >
         <Space>
           <ApartmentOutlined style={{ color: '#52c41a', fontSize: 16 }} />
-          <Text style={{ fontSize: 13 }}>
-            {diagramTitle}
-          </Text>
+          <Text style={{ fontSize: 13 }}>{diagramTitle}</Text>
           <Tag color="green" icon={<CheckCircleOutlined />}>
             Applied
           </Tag>
@@ -127,13 +142,11 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
         open={drawerOpen}
         onClose={closeDrawer}
         width="100%"
-        title={diagramTitle}
+        title={openDiagramTitle || diagramTitle}
         destroyOnClose
         styles={{ body: { padding: 0 } }}
       >
-        {drawerOpen && (
-          <DrawioBlock diagramId={getDiagramId()!} height="calc(100vh - 56px)" />
-        )}
+        {drawerOpen && openDiagramId && <DrawioBlock diagramId={openDiagramId} height="calc(100vh - 56px)" />}
       </Drawer>
     </>
   );

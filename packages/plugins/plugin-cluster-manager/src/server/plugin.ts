@@ -22,6 +22,8 @@ import { K8sAdapter } from './orchestrator/k8s-adapter';
 import { LeaderElection } from './orchestrator/leader-election';
 import { packageManagerActions } from './actions/package-manager';
 import { PackageManager } from './orchestrator/PackageManager';
+import { createListMetaCacheMiddleware } from './middlewares/listMetaCacheMiddleware';
+import { registerCacheHooks } from './hooks/cacheInvalidationHooks';
 
 export class PluginClusterManagerServer extends Plugin {
   public nodeRegistry: RedisNodeRegistry;
@@ -55,7 +57,12 @@ export class PluginClusterManagerServer extends Plugin {
 
       // Automatically install packages on boot for worker nodes
       const mode = process.env.WORKER_MODE || 'main';
-      const isWorker = mode === 'worker' || mode === 'task' || mode === '*' || process.env.APP_ROLE === 'worker' || process.env.APP_ROLE === 'sandbox';
+      const isWorker =
+        mode === 'worker' ||
+        mode === 'task' ||
+        mode === '*' ||
+        process.env.APP_ROLE === 'worker' ||
+        process.env.APP_ROLE === 'sandbox';
       if (isWorker) {
         setTimeout(async () => {
           try {
@@ -68,29 +75,31 @@ export class PluginClusterManagerServer extends Plugin {
             }
             if (config) {
               this.app.logger.info('[ClusterManager] Auto-installing configured packages on worker boot...');
-              
+
               const { packagesFromConfig } = require('../shared/packages');
-              
+
               const configured = packagesFromConfig({
                 aptPackages: config.get('aptPackages'),
                 pythonPackages: config.get('pythonPackages'),
                 npmPackages: config.get('npmPackages'),
               });
-              
+
               let custom = { python: [], node: [], npm: [] };
               try {
                 const customRaw = config.get('customPackages');
                 if (customRaw) custom = typeof customRaw === 'string' ? JSON.parse(customRaw) : customRaw;
-              } catch {}
-              
+              } catch (err) {
+                // ignore
+              }
+
               const unique = (arr: any[]) => Array.from(new Set(arr.filter(Boolean)));
-              
+
               const packages = {
                 apt: unique([...(configured.apt || [])]),
                 npm: unique([...(configured.npm || []), ...(custom.node || []), ...(custom.npm || [])]),
                 python: unique([...(configured.python || []), ...(custom.python || [])]),
               };
-              
+
               const pm = new PackageManager(this.app);
               await pm.executeInstall({
                 targetRole: 'all', // executeInstall will filter internally based on current role
@@ -99,7 +108,7 @@ export class PluginClusterManagerServer extends Plugin {
                   aptMirrorUrl: config.get('aptMirrorUrl'),
                   npmRegistryUrl: config.get('npmRegistryUrl'),
                   pypiIndexUrl: config.get('pypiIndexUrl'),
-                }
+                },
               });
             }
           } catch (err: any) {
@@ -136,7 +145,7 @@ export class PluginClusterManagerServer extends Plugin {
     if (lockMgr && lockMgr.registry && !lockMgr.registry.get('redis') && !lockMgr.adapters.get('redis')) {
       lockMgr.registerAdapter('redis', {
         Adapter: RedisLockAdapter,
-        options: { app: this.app }
+        options: { app: this.app },
       });
       this.app.logger.info('[ClusterManager] Polyfilled RedisLockAdapter as an active distributed lock provider');
     }
@@ -145,7 +154,7 @@ export class PluginClusterManagerServer extends Plugin {
     const pubSub = (this.app as any).pubSubManager;
     if (pubSub) {
       const myNodeId = getLocalNodeId(this.app);
-      
+
       // ── Log request handler: ONLY the targeted node receives this via dynamic channel ──
       pubSub.subscribe(`cluster-manager:log-request:${myNodeId}`, async (msg: string) => {
         try {
@@ -156,9 +165,7 @@ export class PluginClusterManagerServer extends Plugin {
 
           const logData = await readLocalLogs(this.app, lines || 200);
           const responseKey = `cluster-manager:log-response:${requestId}`;
-          await redis.sendCommand([
-            'SET', responseKey, JSON.stringify(logData), 'EX', '30',
-          ]);
+          await redis.sendCommand(['SET', responseKey, JSON.stringify(logData), 'EX', '30']);
           this.app.logger.debug(`[ClusterManager] Served log request ${requestId} for ${targetNodeId}`);
         } catch (err: any) {
           this.app.logger.error(`[ClusterManager] Error handling log request: ${err.message}`);
@@ -180,14 +187,18 @@ export class PluginClusterManagerServer extends Plugin {
         try {
           let target = msg;
           let mode = 'hard';
-          
+          let targetNodeId = '';
+
           if (msg.startsWith('{')) {
             const parsed = JSON.parse(msg);
-            target = parsed.hostname;
+            target = parsed.hostname || parsed.target || '';
+            targetNodeId = parsed.targetNodeId || '';
             mode = parsed.mode || 'hard';
           }
 
-          if (target === os.hostname() || target === '*') {
+          const myNodeId = getLocalNodeId(this.app);
+          const shouldRestart = targetNodeId ? targetNodeId === myNodeId : target === os.hostname() || target === '*';
+          if (shouldRestart) {
             this.app.logger.warn(`[ClusterManager] Received ${mode} restart command for node ${os.hostname()}...`);
             setTimeout(async () => {
               try {
@@ -199,7 +210,9 @@ export class PluginClusterManagerServer extends Plugin {
                   await this.app.stop();
                   process.exit(1);
                 }
-              } catch (e: any) {}
+              } catch (e: any) {
+                // ignore
+              }
             }, 1000); // 1-second delay so HTTP API can gracefully respond first
           }
         } catch (err) {
@@ -275,6 +288,16 @@ export class PluginClusterManagerServer extends Plugin {
       before: 'core',
       after: 'allow-manager',
     });
+
+    // Install collections:listMeta resource cache middleware after setCurrentRole
+    const listMetaCacheMiddleware = createListMetaCacheMiddleware(this.app);
+    this.app.resourcer.use(listMetaCacheMiddleware, {
+      tag: 'listMetaCache',
+      after: 'setCurrentRole',
+    });
+
+    // Register DB hooks for invalidating cache versions
+    registerCacheHooks(this.app);
 
     // Lightweight healthcheck endpoint avoiding workflow pre-action and resourcer spam
     this.app.use(async (ctx: any, next: any) => {

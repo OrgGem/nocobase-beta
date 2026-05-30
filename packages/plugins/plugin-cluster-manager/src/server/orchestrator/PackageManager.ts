@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
 import { getRedisClient } from '../utils/redis';
+import { getLocalNodeId } from '../utils/node';
 import { promises as fsp } from 'fs';
 import path from 'path';
 import Application from '@nocobase/server';
@@ -451,21 +452,24 @@ export class PackageManager {
       const redisClient = getRedisClient(this.app);
       const podName = process.env.POD_NAME || require('os').hostname();
       if (redisClient) {
-        const key = `orchestrator:pkg-status:${podName}`;
-        await redisClient.sendCommand([
-          'SET',
-          key,
-          JSON.stringify({
-            initStatus,
-            initProgressPercent,
-            initProgressLog,
-            lastInitAt: new Date(),
-            lastInitLog: logs.join('\n'),
-            ...extraValues,
-          }),
-          'EX',
-          '86400', // expire after 1 day
-        ]);
+        const statusPayload = JSON.stringify({
+          initStatus,
+          initProgressPercent,
+          initProgressLog,
+          lastInitAt: new Date(),
+          lastInitLog: logs.join('\n'),
+          ...extraValues,
+        });
+        const keys = [`orchestrator:pkg-status:${podName}`, `cluster-manager:pkg-status:${getLocalNodeId(this.app)}`];
+        for (const key of keys) {
+          await redisClient.sendCommand([
+            'SET',
+            key,
+            statusPayload,
+            'EX',
+            '86400', // expire after 1 day
+          ]);
+        }
       }
 
       // We can also keep the global DB record as a fallback/historical record
