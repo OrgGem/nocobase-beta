@@ -2,7 +2,13 @@ import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import { COLLECTION, NAMESPACE } from '../shared/constants';
 import { accept, getPayload, reject, saveDraft, testCallback } from './resources/verify';
-import { ensureDefaultMapping, ensureSettings, getDefaultMapping, getSettings, saveSettings } from './resources/settings';
+import {
+  ensureDefaultMapping,
+  ensureSettings,
+  getDefaultMapping,
+  getSettings,
+  saveSettings,
+} from './resources/settings';
 
 export class PluginOcrVerifyBlockServer extends Plugin {
   declare app: any;
@@ -23,7 +29,7 @@ export class PluginOcrVerifyBlockServer extends Plugin {
   }
 
   async beforeLoad() {
-    await this.importCollections(resolve(__dirname, 'collections'));
+    await this.db.import({ directory: resolve(__dirname, 'collections') });
   }
 
   async load() {
@@ -31,6 +37,12 @@ export class PluginOcrVerifyBlockServer extends Plugin {
 
     this.app.resourcer.define({
       name: 'ocrVerify',
+      actions: {
+        getPayload,
+        saveDraft,
+        accept,
+        reject,
+      },
     });
 
     this.app.acl.allow('ocrVerify', '*', 'loggedIn');
@@ -40,10 +52,6 @@ export class PluginOcrVerifyBlockServer extends Plugin {
       [`${COLLECTION.settings}:save`]: saveSettings,
       [`${COLLECTION.settings}:testCallback`]: testCallback,
       [`${COLLECTION.mappingProfiles}:default`]: getDefaultMapping,
-      'ocrVerify:getPayload': getPayload,
-      'ocrVerify:saveDraft': saveDraft,
-      'ocrVerify:accept': accept,
-      'ocrVerify:reject': reject,
     });
 
     this.app.acl.registerSnippet({

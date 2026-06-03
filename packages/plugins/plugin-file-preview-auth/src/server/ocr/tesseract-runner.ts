@@ -33,7 +33,10 @@ export class TesseractRunner {
    * Run Tesseract OCR on a file (PDF or Image).
    * Generates word-level coordinates and text.
    */
-  async runOcr(filePath: string, attachmentId: number): Promise<{ pages: Array<{ page_number: number; items: OcrWordItem[] }> }> {
+  async runOcr(
+    filePath: string,
+    attachmentId: number | string,
+  ): Promise<{ pages: Array<{ page_number: number; items: OcrWordItem[] }> }> {
     if (!existsSync(filePath)) {
       throw new Error(`File not found: ${filePath}`);
     }
@@ -85,7 +88,9 @@ export class TesseractRunner {
 
       // 2. Cơ chế Fallback dữ liệu Mock nếu Tesseract chưa được cài đặt trên hệ thống
       if (!tesseractAvailable || pages.length === 0) {
-        this.log.info('[TesseractOCR] Tesseract is not available on this host. Generating high-fidelity mock OCR Word data for testing.');
+        this.log.info(
+          '[TesseractOCR] Tesseract is not available on this host. Generating high-fidelity mock OCR Word data for testing.',
+        );
         return this.generateMockOcrData();
       }
 
@@ -129,11 +134,11 @@ export class TesseractRunner {
     if (lines.length < 2) return items;
 
     const headers = lines[0].split('\t').map((h) => h.trim());
-    
+
     // Pass 1: Tìm kích thước trang ảnh gốc ở level = 1
     let pageWidth = 1;
     let pageHeight = 1;
-    
+
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
@@ -282,7 +287,7 @@ export class TesseractRunner {
               rect: { x: 415 / pw, y: 50 / ph, width: 25 / pw, height: 18 / ph, unit: 'normalized' },
               status: 'pending',
             },
-            
+
             // Dòng 2: Họ và tên
             {
               id: 'mock_w5',

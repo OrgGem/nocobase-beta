@@ -12,6 +12,9 @@ import {
   getOrchestratorTraceContext,
   setOrchestratorTraceContext,
 } from '../services/ExecutionSpanService';
+import { captureCtxSnapshot, normalizeEmployeeUsername, trimText as truncateText, nowIso } from '../utils/ctx-utils';
+import { logDelegation as sharedLogDelegation } from '../utils/logging';
+import { CtxSnapshot, TraceEvent } from '../types';
 
 /**
  * Maximum delegation depth key stored in ctx metadata.
@@ -30,16 +33,6 @@ const MAX_DISPATCH_CONCURRENCY = 5;
 const MAX_DISPATCH_TASKS = 20;
 /** OpenAI/Anthropic tool-name limit. Names exceeding this are silently rejected by providers. */
 const MAX_TOOL_NAME_LENGTH = 64;
-
-type TraceEvent = {
-  type: string;
-  at: string;
-  title: string;
-  content?: string;
-  toolName?: string;
-  args?: any;
-  status?: string;
-};
 
 type AgentExecutionResult = {
   content: string;
@@ -437,31 +430,6 @@ function createDispatchToolOptions(
   };
 }
 
-type CtxSnapshot = {
-  userId?: number;
-};
-
-/**
- * Read the few ctx fields we depend on once, before kicking off the long-running
- * sub-agent. Avoids "ctx is destroyed" or stale-state issues when we later
- * write the orchestratorLogs row from inside the agent's execution promise.
- */
-function captureCtxSnapshot(ctx: Context): CtxSnapshot {
-  let userId: number | undefined;
-  try {
-    userId = (ctx as any).auth?.user?.id || (ctx as any).state?.currentUser?.id;
-  } catch {
-    // ctx already disposed — nothing to capture.
-  }
-  return { userId };
-}
-
-function normalizeEmployeeUsername(raw: any) {
-  if (!raw) return null;
-  if (typeof raw === 'string') return raw;
-  return raw.username || raw.aiEmployeeUsername || raw.name || null;
-}
-
 async function resolveCallingEmployee(ctx: Context, plugin: any) {
   const values = (ctx as any).action?.params?.values || {};
   const raw =
@@ -486,15 +454,6 @@ async function resolveCallingEmployee(ctx: Context, plugin: any) {
     plugin.app.log.warn(`[AgentOrchestrator] Failed to resolve AI employee for session "${sessionId}"`, e);
     return null;
   }
-}
-
-function truncateText(value: any, maxLen: number) {
-  const text = typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value);
-  return text.length > maxLen ? `${text.slice(0, maxLen)}\n...[truncated]` : text;
-}
-
-function nowIso() {
-  return new Date().toISOString();
 }
 
 function hasModelSettings(value: any): value is { llmService: string; model: string } {
@@ -889,55 +848,14 @@ async function logDelegation(
     snapshot?: CtxSnapshot;
   },
 ) {
-  try {
-    const logsRepo = plugin.db.getRepository('orchestratorLogs');
-    if (!logsRepo) {
-      plugin.app.log.warn('[AgentOrchestrator] orchestratorLogs repository not found — skipping log');
-      return;
+  // Capture userId from snapshot or ctx
+  let userId: number | string | undefined = data.snapshot?.userId;
+  if (userId == null) {
+    try {
+      userId = (ctx as any).auth?.user?.id || (ctx as any).state?.currentUser?.id;
+    } catch {
+      // ctx lifecycle ended
     }
-
-    let userId: number | undefined = data.snapshot?.userId;
-    if (userId == null) {
-      try {
-        userId = ctx.auth?.user?.id || ctx.state?.currentUser?.id;
-      } catch {
-        // ctx lifecycle ended
-      }
-    }
-
-    const values = {
-      leaderUsername: data.leaderUsername,
-      subAgentUsername: data.subAgentUsername,
-      toolName: data.toolName,
-      task: truncateText(data.task, 10000),
-      context: truncateText(data.context || '', 10000),
-      result: truncateText(data.result || '', 50000),
-      status: data.status,
-      depth: data.depth,
-      durationMs: data.durationMs,
-      error: truncateText(data.error || '', 10000),
-      trace: data.trace || [],
-      messages: data.messages || [],
-      userId,
-      updatedAt: new Date(),
-    };
-
-    if (data.id) {
-      await logsRepo.update({
-        filterByTk: data.id,
-        values,
-      });
-      return { id: data.id };
-    }
-
-    const record = await logsRepo.create({
-      values: {
-        ...values,
-        createdAt: new Date(),
-      },
-    });
-    return record?.toJSON?.() || record;
-  } catch (e) {
-    plugin.app.log.warn('[AgentOrchestrator] Failed to log delegation event', e);
   }
+  return sharedLogDelegation(ctx, plugin, { ...data, userId });
 }

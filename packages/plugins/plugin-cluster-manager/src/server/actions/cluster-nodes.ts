@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import { RedisNodeRegistry } from '../adapters/redis-node-registry';
 import { getRedis } from '../utils/redis';
 import { getLocalNodeId } from '../utils/node';
-import { packagesFromConfig, type WorkerPackageMap } from '../../shared/packages';
+import { packagesFromConfig, type CustomPackageMap, type WorkerPackageMap } from '../../shared/packages';
 
 const LOG_RESPONSE_KEY_PREFIX = 'cluster-manager:log-response:';
 const LEGACY_MULTI_APP_PLUGINS = ['multi-app-manager', 'multi-app-share-collection'];
@@ -78,6 +78,37 @@ function normalizePackageMap(packages?: WorkerPackageMap): NormalizedPackages {
   };
 }
 
+function parseCustomPackages(value: unknown): CustomPackageMap {
+  if (!value) {
+    return { python: [], node: [], npm: [] };
+  }
+
+  let customValue = value;
+  if (typeof customValue === 'string') {
+    try {
+      customValue = JSON.parse(customValue);
+    } catch {
+      return { python: [], node: [], npm: [] };
+    }
+  }
+
+  if (!customValue || typeof customValue !== 'object' || Array.isArray(customValue)) {
+    return { python: [], node: [], npm: [] };
+  }
+
+  const custom = customValue as {
+    python?: unknown;
+    node?: unknown;
+    npm?: unknown;
+  };
+
+  return {
+    python: normalizeList(custom.python),
+    node: normalizeList(custom.node),
+    npm: normalizeList(custom.npm),
+  };
+}
+
 function parsePackageWhitelist(status?: PackageStatus | null): NormalizedPackages {
   if (!status?.packageWhitelist) {
     return { apt: [], npm: [], python: [] };
@@ -102,10 +133,14 @@ function parsePackageWhitelist(status?: PackageStatus | null): NormalizedPackage
     node?: string[];
     python?: string[];
   };
+  const npmPackages = [
+    ...(Array.isArray(whitelist.npm) ? whitelist.npm : []),
+    ...(Array.isArray(whitelist.node) ? whitelist.node : []),
+  ];
 
   return {
     apt: normalizeList(whitelist.apt),
-    npm: normalizeList(whitelist.npm || whitelist.node),
+    npm: normalizeList(npmPackages),
     python: normalizeList(whitelist.python),
   };
 }
@@ -120,6 +155,10 @@ function diffPackages(expected: NormalizedPackages, installed: NormalizedPackage
 
 function hasMissingPackages(packages: NormalizedPackages): boolean {
   return packages.apt.length > 0 || packages.npm.length > 0 || packages.python.length > 0;
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function getNodeRole(node: ClusterNodeRecord): 'app' | 'worker' | 'sandbox' {
@@ -158,13 +197,18 @@ async function getExpectedPackages(ctx: Context): Promise<NormalizedPackages> {
     return normalizePackageMap(packagesFromConfig({}));
   }
 
-  return normalizePackageMap(
-    packagesFromConfig({
-      aptPackages: config.get('aptPackages'),
-      pythonPackages: config.get('pythonPackages'),
-      npmPackages: config.get('npmPackages'),
-    }),
-  );
+  const configured = packagesFromConfig({
+    aptPackages: config.get('aptPackages'),
+    pythonPackages: config.get('pythonPackages'),
+    npmPackages: config.get('npmPackages'),
+  });
+  const custom = parseCustomPackages(config.get('customPackages'));
+
+  return normalizePackageMap({
+    apt: configured.apt,
+    npm: [...(configured.npm || []), ...(custom.node || []), ...(custom.npm || [])],
+    python: [...(configured.python || []), ...(custom.python || [])],
+  });
 }
 
 async function readPackageStatus(ctx: Context, node: ClusterNodeRecord): Promise<PackageStatus | null> {
@@ -700,36 +744,57 @@ export const clusterActions = {
       return String(a.name || a.id).localeCompare(String(b.name || b.id));
     });
 
-    const published = [];
-    for (let index = 0; index < sortedNodes.length; index += 1) {
-      const node = sortedNodes[index];
-      await pubSub.publish(
-        'cluster-manager:restart',
-        JSON.stringify({
-          targetNodeId: node.id,
-          hostname: node.hostname,
-          mode,
-        }),
-      );
-      published.push({
-        id: node.id,
-        name: node.name,
-        hostname: node.hostname,
-        role: getNodeRole(node),
-        mode,
-        order: index + 1,
-      });
+    const restartId = crypto.randomBytes(8).toString('hex');
+    const startedAt = Date.now();
+    const logger = ctx.app.logger;
+    const published = sortedNodes.map((node, index) => ({
+      id: node.id,
+      name: node.name,
+      hostname: node.hostname,
+      role: getNodeRole(node),
+      mode,
+      order: index + 1,
+      scheduledDelayMs: index * delayMs,
+      scheduledAt: new Date(startedAt + index * delayMs).toISOString(),
+    }));
 
-      if (index < sortedNodes.length - 1) {
-        await sleep(delayMs);
-      }
-    }
+    sortedNodes.forEach((node, index) => {
+      setTimeout(() => {
+        try {
+          const publishResult = pubSub.publish(
+            'cluster-manager:restart',
+            JSON.stringify({
+              restartId,
+              targetNodeId: node.id,
+              hostname: node.hostname,
+              mode,
+            }),
+          );
+          Promise.resolve(publishResult).catch((error) => {
+            logger.error(
+              `[ClusterManager] Failed to publish rolling restart ${restartId} for ${
+                node.id || node.hostname
+              }: ${getErrorMessage(error)}`,
+            );
+          });
+        } catch (error) {
+          logger.error(
+            `[ClusterManager] Failed to schedule rolling restart ${restartId} for ${
+              node.id || node.hostname
+            }: ${getErrorMessage(error)}`,
+          );
+        }
+      }, index * delayMs);
+    });
 
     ctx.body = {
       success: true,
+      restartId,
       mode,
       role,
       delayMs,
+      scheduled: true,
+      estimatedDurationMs: Math.max(0, (sortedNodes.length - 1) * delayMs),
       published,
     };
     await next();

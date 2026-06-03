@@ -20,7 +20,7 @@
    - AI provider/tool: section 13
    - Mobile/public route: section 14, 15
    - Sync/cache/runtime state: section 16
-   - Cluster/runtime ops plugin such as `plugin-cluster-manager`: sections 2, 8, 9, and 16, plus lifecycle wiring around `afterStart` and `beforeStop`
+   - Cluster/runtime ops plugin such as `plugin-cluster-manager` (under `packages/plugins/`): sections 2, 8, 9, and 16, plus lifecycle wiring around `afterStart` and `beforeStop`
 5. Before editing complex plugins, check **Plugins To Inspect Carefully Before Editing**.
 
 ## Quick Rules
@@ -36,7 +36,7 @@
 
 ## `plugin-cluster-manager` Architecture Mapping
 
-Use this as the reference when editing `packages/plugins/plugin-cluster-manager`:
+Use this as the reference when editing `packages/plugins/plugin-cluster-manager` (note: this plugin lives under `packages/plugins/` directly, not `packages/plugins/@nocobase/`):
 
 - Client entry: `src/client/index.tsx` registers a plugin settings page. `ClusterManagerLayout` owns the tabbed admin UI and each tab calls server resource actions.
 - Server entry: `src/index.ts` exports the server package through `src/server/index.ts`, which exports `src/server/plugin.ts`.
@@ -52,19 +52,19 @@ Use this as the reference when editing `packages/plugins/plugin-cluster-manager`
 ### Schema Initializers & `type: 'item'` Trap
 In NocoBase 2.x, when registering custom blocks via `this.app.schemaInitializerManager.addItem('page:addBlock', ...)`, **DO NOT include `type: 'item'`** in the configuration object if you want it to appear as a standard clickable menu item in the "Add block" dropdown. 
 
-When `type: 'item'` is present, the internal `SchemaInitializerChild` component renderer wraps the item in a Context Provider but fails to attach the `onClick` handler expected by the Ant Design `Menu` structure, causing the item to be silently skipped during UI rendering (even if it exists in the registry).
+> **Caveat**: This behavior is based on empirical observation, not documented in the core source. Some existing plugins (e.g., `plugin-action-bulk-edit`) do include `type: 'item'` in their initializer items. If an item does not render in the menu, try removing `type: 'item'` as a debugging step.
 
-**Incorrect (will not render in menu):**
+**Incorrect (may not render in menu):**
 \`\`\`typescript
 this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.myBlock', {
-  type: 'item', // <--- Remove this!
+  type: 'item', // <--- Try removing this if item is invisible
   name: 'myBlock',
   title: 'My Block',
   Component: 'MyBlockInitializer',
 });
 \`\`\`
 
-**Correct:**
+**Safer:**
 \`\`\`typescript
 this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.myBlock', {
   name: 'myBlock',

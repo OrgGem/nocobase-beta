@@ -24,15 +24,10 @@ export class PluginNextAppClient extends Plugin {
   nextAppRouter?: RouterManager;
   nextAppPath = '/apps';
 
-  async afterAdd() {
-    // Set up sub-router synchronously with default path.
-    // If a configured path is found in load(), setupRouter() is called again.
-    this.setupRouter();
-  }
-
   async beforeLoad() {}
 
   async load() {
+    this.setupRouter();
     this.addComponents();
     this.addSettings();
     this.addPermissionsSettingsUI();
@@ -40,12 +35,13 @@ export class PluginNextAppClient extends Plugin {
 
   /**
    * Create (or recreate) the sub-router with the given path segment.
-   * Synchronous — safe to call from afterAdd().
    */
   setupRouter(pathSegment = 'apps') {
     this.nextAppPath = `/${pathSegment.replace(/^\//, '')}`;
     const segment = this.nextAppPath.replace(/^\//, '');
-    const basename = `${this.router.getBasename()}${segment}`;
+    const base = this.router.getBasename() || '/';
+    const cleanBase = base.endsWith('/') ? base : `${base}/`;
+    const basename = `${cleanBase}${segment}`;
 
     this.nextAppRouter = createRouterManager({ type: 'browser', basename }, this.app);
 
@@ -54,7 +50,7 @@ export class PluginNextAppClient extends Plugin {
     // Re-register the catch-all in the main app router (remove old one first if exists)
     this.app.router.add('next-app', {
       path: `${this.nextAppPath}/*`,
-      Component: 'NextApp',
+      Component: NextApp,
     });
 
     console.log(`[plugin-next-app] Router set up at ${this.nextAppPath}`);

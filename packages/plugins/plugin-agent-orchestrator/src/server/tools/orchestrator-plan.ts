@@ -1,5 +1,13 @@
 import { z } from 'zod';
 import { AgentLoopPlanStepInput, AgentLoopService } from '../services/AgentLoopService';
+import {
+  currentUserId,
+  resolveSessionId,
+  resolveMessageId,
+  normalizeEmployeeUsername,
+  resolveLeaderUsername,
+  valuesFromCtx,
+} from '../utils/ctx-utils';
 
 const stepSchema = z.object({
   id: z.string().optional(),
@@ -34,52 +42,6 @@ function toolResult(status: 'success' | 'error', payload: any) {
   };
 }
 
-function valuesFromCtx(ctx: any) {
-  return ctx?.action?.params?.values || ctx?.request?.body || {};
-}
-
-function currentUserId(ctx: any) {
-  return ctx?.state?.currentUser?.id || ctx?.auth?.user?.id;
-}
-
-function resolveSessionId(ctx: any, args: any) {
-  const values = valuesFromCtx(ctx);
-  return args?.sessionId || values.sessionId || ctx?.action?.params?.sessionId || ctx?.state?.sessionId;
-}
-
-function resolveMessageId(ctx: any, args: any) {
-  const values = valuesFromCtx(ctx);
-  return args?.messageId || values.messageId || ctx?.action?.params?.messageId;
-}
-
-function normalizeEmployeeUsername(raw: any) {
-  if (!raw) return null;
-  if (typeof raw === 'string') return raw;
-  return raw.username || raw.aiEmployeeUsername || raw.name || null;
-}
-
-async function resolveLeaderUsername(ctx: any, plugin: any, args: any) {
-  const values = valuesFromCtx(ctx);
-  const direct = normalizeEmployeeUsername(
-    args?.leaderUsername ||
-      ctx?._currentAIEmployee ||
-      ctx?.state?.currentAIEmployee ||
-      ctx?.runtime?.context?.currentAIEmployee ||
-      values.aiEmployee,
-  );
-  if (direct) return direct;
-
-  const sessionId = resolveSessionId(ctx, args);
-  if (!sessionId) return undefined;
-  try {
-    const repo = ctx?.db?.getRepository?.('aiConversations') || plugin.db.getRepository('aiConversations');
-    const conversation = await repo.findOne({ filter: { sessionId } });
-    return normalizeEmployeeUsername(conversation?.aiEmployeeUsername || conversation?.get?.('aiEmployeeUsername'));
-  } catch {
-    return undefined;
-  }
-}
-
 function summarizePlan(steps: any[]) {
   return (steps || []).map((step) => ({
     id: step.id,
@@ -100,7 +62,12 @@ function inferTargetAgent(args: any) {
   return subAgentStep?.target;
 }
 
-async function resolveHarnessTag(plugin: any, leaderUsername: string | undefined, targetAgent: string | undefined, args: any) {
+async function resolveHarnessTag(
+  plugin: any,
+  leaderUsername: string | undefined,
+  targetAgent: string | undefined,
+  args: any,
+) {
   const direct = String(args?.harnessTag || args?.metadata?.harnessTag || '').trim();
   if (direct) return direct;
   if (!leaderUsername || !targetAgent) return 'default';
@@ -139,10 +106,17 @@ export function createOrchestratorPlanTools(plugin: any, service: AgentLoopServi
             .union([z.string(), z.number()])
             .optional()
             .describe('Existing run id to revise after the user requested plan changes. Omit for a new run.'),
-          leaderUsername: z.string().optional().describe('Leader AI employee username. Usually omit; inferred from chat.'),
+          leaderUsername: z
+            .string()
+            .optional()
+            .describe('Leader AI employee username. Usually omit; inferred from chat.'),
           sessionId: z.string().optional(),
           messageId: z.string().optional(),
-          harnessTag: z.string().optional().default('default').describe('Harness profile tag, for example default, safe, or file-heavy.'),
+          harnessTag: z
+            .string()
+            .optional()
+            .default('default')
+            .describe('Harness profile tag, for example default, safe, or file-heavy.'),
           targetAgent: z.string().optional().describe('Optional sub-agent username for generated fallback plans.'),
           plannerModel: z.string().optional(),
           policy: policySchema,
@@ -150,7 +124,9 @@ export function createOrchestratorPlanTools(plugin: any, service: AgentLoopServi
           plan: z
             .array(stepSchema)
             .optional()
-            .describe('Draft plan steps. Tool/sub_agent steps should include target. Dependencies must reference planKey values.'),
+            .describe(
+              'Draft plan steps. Tool/sub_agent steps should include target. Dependencies must reference planKey values.',
+            ),
         }),
       },
       invoke: async (ctx: any, args: any) => {

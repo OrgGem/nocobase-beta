@@ -5,40 +5,15 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { ExecutionSpanService, setOrchestratorTraceContext } from './ExecutionSpanService';
 import { AgentRegistryService } from './AgentRegistryService';
+import { TokenTracker, extractTokenUsage } from './TokenTracker';
+import { ContextAggregator } from './ContextAggregator';
+import { getCircuitBreaker } from './CircuitBreaker';
+import { toPlain, asObject, trimText, nowIso } from '../utils/ctx-utils';
+import { logDelegation as sharedLogDelegation } from '../utils/logging';
+import { TraceEvent } from '../types';
 
 const ORCHESTRATOR_DEPTH_KEY = '__orchestratorDepth';
 const ORCHESTRATOR_PATH_KEY = '__orchestratorPath';
-
-function toPlain(record: any) {
-  return record?.toJSON?.() || record;
-}
-
-function asObject(value: any) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-function trimText(value: any, max = 50000) {
-  let text = '';
-  if (typeof value === 'string') {
-    text = value;
-  } else if (value != null) {
-    try {
-      text = JSON.stringify(value);
-    } catch {
-      text = String(value);
-    }
-  }
-  return text.length > max ? `${text.slice(0, max)}\n...[truncated]` : text;
-}
 
 function sanitizeToolPart(value: string) {
   return (value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -48,28 +23,18 @@ function buildDelegateToolName(leaderUsername: string, subAgentUsername: string)
   return `delegate_${sanitizeToolPart(leaderUsername)}_to_${sanitizeToolPart(subAgentUsername)}`;
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-type TraceEvent = {
-  type: string;
-  at: string;
-  title: string;
-  content?: string;
-  toolName?: string;
-  args?: any;
-  status?: string;
-};
-
 export class AgentHarness {
   private readonly spanService: ExecutionSpanService;
+  private readonly tokenTracker: TokenTracker;
+  private readonly contextAggregator: ContextAggregator;
 
   constructor(
     private readonly plugin: any,
-    private readonly registryService: AgentRegistryService
+    private readonly registryService: AgentRegistryService,
   ) {
     this.spanService = new ExecutionSpanService(plugin);
+    this.tokenTracker = new TokenTracker(plugin);
+    this.contextAggregator = new ContextAggregator(plugin);
   }
 
   get db() {
@@ -80,11 +45,7 @@ export class AgentHarness {
     return this.plugin.app;
   }
 
-  async executeStep(
-    run: any,
-    step: any,
-    options: { userId?: string | number; ctx?: any } = {}
-  ): Promise<any> {
+  async executeStep(run: any, step: any, options: { userId?: string | number; ctx?: any } = {}): Promise<any> {
     const harnessTag = asObject(run.metadata).harnessTag || asObject(step.metadata).harnessTag || 'default';
     const profile = await this.registryService.getHarnessProfile(harnessTag);
     const settings = asObject(profile?.settings);
@@ -124,7 +85,7 @@ export class AgentHarness {
     run: any,
     step: any,
     settings: any,
-    options: { userId?: string | number; ctx?: any }
+    options: { userId?: string | number; ctx?: any },
   ) {
     const target = step.target || asObject(step.metadata).subAgentUsername || step.input?.subAgentUsername;
     if (!target) {
@@ -147,10 +108,30 @@ export class AgentHarness {
         agentLoopRunId: String(run.id),
         agentLoopStepId: String(step.id),
       },
-      20000
+      20000,
     );
 
-    return this.invokeNamedTool(run, step, toolName, { task, context }, settings, options);
+    const circuitBreaker = getCircuitBreaker({ appLog: this.app });
+
+    // ── Circuit breaker check before invoking sub-agent ──────────────
+    if (!circuitBreaker.isAllowed(target)) {
+      const state = circuitBreaker.getState(target);
+      throw new Error(
+        `Sub-agent "${target}" circuit is open (${state?.failures || 0} failures). Retry after the recovery timeout.`,
+      );
+    }
+
+    try {
+      const result = await this.invokeNamedTool(run, step, toolName, { task, context }, settings, options);
+      circuitBreaker.recordSuccess(target);
+      return result;
+    } catch (e: any) {
+      // Don't count approval pauses as circuit failures
+      if (e?.message !== 'requires_approval') {
+        circuitBreaker.recordFailure(target);
+      }
+      throw e;
+    }
   }
 
   private async invokeNamedTool(
@@ -159,7 +140,7 @@ export class AgentHarness {
     toolName: string,
     args: any,
     settings: any,
-    options: { userId?: string | number; ctx?: any }
+    options: { userId?: string | number; ctx?: any },
   ) {
     if (String(toolName).startsWith('orchestrator_')) {
       throw new Error(`Tool step "${step.planKey}" cannot call internal orchestrator control tool "${toolName}".`);
@@ -185,7 +166,12 @@ export class AgentHarness {
     const isDelegationTool = await this.registryService.isRegisteredDelegationTool(toolName);
     const isStepAlreadyApproved = step?.approval?.approved === true;
 
-    if (!isDelegationTool && !isStepAlreadyApproved && (tool.defaultPermission === 'ASK' || (settings.requireApprovalRiskLevel && tool.riskLevel && tool.riskLevel >= settings.requireApprovalRiskLevel))) {
+    if (
+      !isDelegationTool &&
+      !isStepAlreadyApproved &&
+      (tool.defaultPermission === 'ASK' ||
+        (settings.requireApprovalRiskLevel && tool.riskLevel && tool.riskLevel >= settings.requireApprovalRiskLevel))
+    ) {
       throw new Error('requires_approval');
     }
 
@@ -245,7 +231,7 @@ export class AgentHarness {
       parentSpanId?: string;
       agentLoopRunId?: string;
       agentLoopStepId?: string;
-    }
+    },
   ) {
     const {
       leaderUsername,
@@ -324,7 +310,7 @@ export class AgentHarness {
       const modelSettings = await this.registryService.resolveModelSettings(
         subAgentUsername,
         leaderUsername,
-        llmService && model ? { llmService, model } : undefined
+        llmService && model ? { llmService, model } : undefined,
       );
 
       if (!modelSettings) {
@@ -342,7 +328,7 @@ export class AgentHarness {
 
       const employeeSkills = (subAgentEmployee.skillSettings?.skills ?? [])
         .map((s: any) =>
-          typeof s === 'string' ? { name: s, autoCall: false } : { name: s?.name, autoCall: s?.autoCall === true }
+          typeof s === 'string' ? { name: s, autoCall: false } : { name: s?.name, autoCall: s?.autoCall === true },
         )
         .filter((s: any) => Boolean(s.name));
       const employeeSkillMap = new Map<string, any>(employeeSkills.map((s: any) => [s.name, s]));
@@ -354,11 +340,7 @@ export class AgentHarness {
         if (!entryName) continue;
         const employeeSkill = employeeSkillMap.get(entryName);
 
-        if (
-          !employeeSkill ||
-          employeeSkill.autoCall !== true ||
-          toolEntry.defaultPermission !== 'ALLOW'
-        ) {
+        if (!employeeSkill || employeeSkill.autoCall !== true || toolEntry.defaultPermission !== 'ALLOW') {
           continue;
         }
 
@@ -456,14 +438,14 @@ export class AgentHarness {
                 throw e;
               }
             },
-          })
+          }),
         );
       }
 
       const abortController = new AbortController();
       const executor = createReactAgent({
         llm: chatModel,
-        tools: langchainTools,
+        tools: langchainTools as any,
       });
 
       let systemPrompt =
@@ -480,20 +462,31 @@ export class AgentHarness {
             ctx.action?.params?.values?.sessionId || ctx.action?.params?.sessionId || ctx.state?.sessionId;
           const contextSummary = await kbPlugin.sessionContext.buildSummary(
             { rootRunId, ...(sessionId ? { sessionId } : {}) },
-            6000
+            6000,
           );
           if (contextSummary) {
             systemPrompt += `\n\n<shared_context>\nThe following context was shared by other agents in this workflow:\n${contextSummary}\n</shared_context>`;
           }
         }
-      } catch {}
+      } catch (e) {
+        // ignore — kb integration is best-effort
+      }
+
+      // ── Step context enrichment ────────────────────────────────────
+      if (agentLoopRunId) {
+        try {
+          systemPrompt = await this.contextAggregator.enrichSystemPrompt(systemPrompt, agentLoopRunId, agentLoopStepId);
+        } catch {
+          // Best-effort: context enrichment failure should not break execution
+        }
+      }
 
       const combinedTask = context ? `Task: ${task}\n\nContext:\n${context}` : `Task: ${task}`;
       const effectiveLimit = recursionLimit && recursionLimit > 0 ? recursionLimit : 50;
 
       let timeoutId: any;
       const timeoutMs = Number(timeout) > 0 ? Number(timeout) : 120000;
-      const timeoutPromise = new Promise<never>((_, reject) => {
+      const timeoutPromise = new Promise<never>((_resolve, reject) => {
         timeoutId = setTimeout(() => {
           abortController.abort();
           reject(new Error(`Sub-agent execution timed out after ${timeoutMs}ms.`));
@@ -502,9 +495,9 @@ export class AgentHarness {
 
       const invokePromise = executor.invoke(
         {
-          messages: [new SystemMessage(systemPrompt), new HumanMessage(combinedTask)],
+          messages: [new SystemMessage(systemPrompt), new HumanMessage(combinedTask)] as any,
         },
-        { recursionLimit: effectiveLimit, signal: abortController.signal }
+        { recursionLimit: effectiveLimit, signal: abortController.signal },
       );
 
       let finalState: any;
@@ -514,15 +507,22 @@ export class AgentHarness {
         if (timeoutId) clearTimeout(timeoutId);
       }
 
+      // ── Token tracking ────────────────────────────────────────────────
+      const tokenUsage = extractTokenUsage(finalState);
+      if (tokenUsage) {
+        await this.tokenTracker.trackSpan(executionSpanId, tokenUsage, agentLoopRunId);
+      }
+
       const messages = finalState?.messages || [];
       const lastAIMessage = [...messages].reverse().find((m) => m.getType() === 'ai');
       let content = '';
       if (lastAIMessage) {
-        content = typeof lastAIMessage.content === 'string'
-          ? lastAIMessage.content
-          : Array.isArray(lastAIMessage.content)
-          ? lastAIMessage.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
-          : String(lastAIMessage.content);
+        content =
+          typeof lastAIMessage.content === 'string'
+            ? lastAIMessage.content
+            : Array.isArray(lastAIMessage.content)
+              ? lastAIMessage.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
+              : String(lastAIMessage.content);
       }
 
       trace.push({
@@ -618,46 +618,8 @@ export class AgentHarness {
       durationMs: number;
       error?: string;
       trace?: TraceEvent[];
-    }
+    },
   ) {
-    try {
-      const logsRepo = this.db.getRepository('orchestratorLogs');
-      if (!logsRepo) return null;
-
-      const userId = ctx?.auth?.user?.id || ctx?.state?.currentUser?.id;
-      const values = {
-        leaderUsername: data.leaderUsername,
-        subAgentUsername: data.subAgentUsername,
-        toolName: data.toolName,
-        task: trimText(data.task, 10000),
-        context: trimText(data.context || '', 10000),
-        result: trimText(data.result || '', 50000),
-        status: data.status,
-        depth: data.depth,
-        durationMs: data.durationMs,
-        error: trimText(data.error || '', 10000),
-        trace: data.trace || [],
-        userId,
-        updatedAt: new Date(),
-      };
-
-      if (data.id) {
-        await logsRepo.update({
-          filterByTk: data.id,
-          values,
-        });
-        return { id: data.id };
-      }
-
-      const record = await logsRepo.create({
-        values: {
-          ...values,
-          createdAt: new Date(),
-        },
-      });
-      return toPlain(record);
-    } catch {
-      return null;
-    }
+    return sharedLogDelegation(ctx, this.plugin, data);
   }
 }

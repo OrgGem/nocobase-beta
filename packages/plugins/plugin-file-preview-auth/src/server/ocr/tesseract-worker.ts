@@ -52,7 +52,7 @@ export class TesseractWorker {
   /**
    * Enqueue a new OCR job.
    */
-  async enqueue(attachmentId: number) {
+  async enqueue(attachmentId: number | string) {
     const redis = await this.getRedisClient();
     if (redis) {
       try {
@@ -125,7 +125,7 @@ export class TesseractWorker {
     }, 5000);
   }
 
-  private async processJob(attachmentId: number) {
+  private async processJob(attachmentId: number | string) {
     this.log.info(`[TesseractWorker] Processing OCR Job for attachment ID ${attachmentId}`);
     const repo = this.db.getRepository('attachments');
     const ocrRepo = this.db.getRepository('attachmentOcrResults');
@@ -186,7 +186,7 @@ export class TesseractWorker {
     }
   }
 
-  private async updateOcrResult(attachmentId: number, values: Record<string, any>) {
+  private async updateOcrResult(attachmentId: number | string, values: Record<string, any>) {
     const repo = this.db.getRepository('attachmentOcrResults');
     if (!repo) return null;
 

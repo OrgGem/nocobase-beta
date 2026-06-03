@@ -47,6 +47,20 @@ export default defineCollection({
         'Max LangGraph reasoning steps (tool-call + LLM-step iterations) per delegation. Lower = safer; higher = more complex multi-step tasks. Default 50.',
     },
     {
+      name: 'budgetMaxTokens',
+      type: 'integer',
+      defaultValue: 0,
+      allowNull: true,
+      comment: 'Maximum tokens allowed per sub-agent invocation (0 = unlimited)',
+    },
+    {
+      name: 'budgetMaxCost',
+      type: 'float',
+      defaultValue: 0,
+      allowNull: true,
+      comment: 'Maximum cost in USD allowed per sub-agent invocation (0 = unlimited)',
+    },
+    {
       name: 'harnessTag',
       type: 'string',
       length: 100,

@@ -5,9 +5,15 @@
 import type { Context } from '@nocobase/actions';
 import type { FolderContext } from '../services/types';
 
+/**
+ * Normalize and apply error status + body from a caught exception.
+ * Prioritises an explicit `statusCode` property (set by UiPathApiClient),
+ * then falls back to HTTP-level inference from the message.
+ */
 export function handleError(ctx: Context, error: any) {
   const message = error?.message || 'Unknown error';
-  ctx.status = 400;
+  const statusCode = Number(error?.statusCode);
+  ctx.status = Number.isFinite(statusCode) && statusCode >= 400 && statusCode < 600 ? statusCode : 400;
   ctx.body = { errors: [{ message }] };
 }
 

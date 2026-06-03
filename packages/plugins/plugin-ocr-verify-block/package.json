@@ -3,7 +3,7 @@
   "displayName": "OCR Verify Block",
   "displayName.vi-VN": "OCR Verify Block",
   "description": "Verify OCR JSON data against PDF attachments with PDF.js, editable OCR fields, accept/reject actions, history, callback, API, and future Skill Hub integration.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "main": "dist/server/index.js",
   "files": [
     "dist",

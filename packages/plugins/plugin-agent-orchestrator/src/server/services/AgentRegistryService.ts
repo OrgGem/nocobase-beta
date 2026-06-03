@@ -1,25 +1,4 @@
-function toPlain(record: any) {
-  return record?.toJSON?.() || record;
-}
-
-function asObject(value: any) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-function normalizeEmployeeUsername(raw: any) {
-  if (!raw) return null;
-  if (typeof raw === 'string') return raw;
-  return raw.username || raw.aiEmployeeUsername || raw.name || null;
-}
+import { toPlain, asObject, normalizeEmployeeUsername } from '../utils/ctx-utils';
 
 export class AgentRegistryService {
   constructor(private readonly plugin: any) {}
@@ -74,11 +53,7 @@ export class AgentRegistryService {
     }
   }
 
-  async resolveModelSettings(
-    subAgentUsername: string,
-    leaderUsername?: string,
-    dynamicValues?: any
-  ) {
+  async resolveModelSettings(subAgentUsername: string, leaderUsername?: string, dynamicValues?: any) {
     const subAgent = await this.getAIEmployee(subAgentUsername);
     if (!subAgent) {
       throw new Error(`Sub-agent "${subAgentUsername}" was not found.`);
@@ -88,9 +63,7 @@ export class AgentRegistryService {
       return Boolean(val?.llmService && val?.model);
     };
 
-    let modelSettings = hasModelSettings(dynamicValues)
-      ? dynamicValues
-      : undefined;
+    let modelSettings = hasModelSettings(dynamicValues) ? dynamicValues : undefined;
 
     if (!modelSettings) {
       if (hasModelSettings(subAgent.modelSettings)) {
@@ -108,8 +81,44 @@ export class AgentRegistryService {
     return modelSettings;
   }
 
+  /**
+   * Find alternative sub-agents for the same leader, excluding a specific one.
+   * Used by the smart retry feature to route around a failing sub-agent.
+   */
+  async findAlternativeSubAgents(
+    leaderUsername: string,
+    excludeSubAgentUsername: string,
+  ): Promise<{ username: string; label: string }[]> {
+    try {
+      const repo = this.db.getRepository('orchestratorConfig');
+      if (!repo) return [];
+      const configs = await repo.find({
+        filter: {
+          leaderUsername,
+          enabled: true,
+          subAgentUsername: { $ne: excludeSubAgentUsername },
+        },
+      });
+      if (!configs || configs.length === 0) return [];
+
+      // Enrich with AI employee display names
+      const result: { username: string; label: string }[] = [];
+      for (const config of configs) {
+        const plain = toPlain(config);
+        const employee = await this.getAIEmployee(plain.subAgentUsername);
+        result.push({
+          username: plain.subAgentUsername,
+          label: employee?.nickname || employee?.username || plain.subAgentUsername,
+        });
+      }
+      return result;
+    } catch {
+      return [];
+    }
+  }
+
   async isRegisteredDelegationTool(toolName: string): Promise<boolean> {
-    if (!toolName || (typeof toolName !== 'string')) return false;
+    if (!toolName || typeof toolName !== 'string') return false;
     if (!toolName.startsWith('delegate_') && !toolName.startsWith('dispatch_subagents_')) {
       return false;
     }

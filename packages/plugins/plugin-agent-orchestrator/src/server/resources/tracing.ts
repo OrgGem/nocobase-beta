@@ -1,8 +1,6 @@
 import { Plugin } from '@nocobase/server';
 
-function toPlain(row: any) {
-  return row?.toJSON?.() || row;
-}
+import { toPlain } from '../utils/ctx-utils';
 
 function normalizeSpanFilter(filter: any = {}) {
   const next = { ...filter };
@@ -68,8 +66,7 @@ function buildSpanTree(rows: any[]) {
   const sortTree = (items: any[]) => {
     items.sort(
       (a, b) =>
-        new Date(a.startedAt || a.createdAt || 0).getTime() -
-        new Date(b.startedAt || b.createdAt || 0).getTime(),
+        new Date(a.startedAt || a.createdAt || 0).getTime() - new Date(b.startedAt || b.createdAt || 0).getTime(),
     );
     for (const item of items) sortTree(item.children || []);
   };
@@ -82,8 +79,7 @@ function flattenSpanTimeline(rows: any[]) {
     .map(toPlain)
     .sort(
       (a, b) =>
-        new Date(a.startedAt || a.createdAt || 0).getTime() -
-        new Date(b.startedAt || b.createdAt || 0).getTime(),
+        new Date(a.startedAt || a.createdAt || 0).getTime() - new Date(b.startedAt || b.createdAt || 0).getTime(),
     )
     .map((row) => {
       const input = row.input || {};

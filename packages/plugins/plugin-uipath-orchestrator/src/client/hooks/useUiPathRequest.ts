@@ -85,6 +85,8 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
   const [error, setError] = useState<Error | null>(null);
   const extraParamsRef = useRef(extraParams);
   extraParamsRef.current = extraParams;
+  const abortRef = useRef<AbortController | null>(null);
+  const seqRef = useRef(0);
 
   const run = useCallback(
     async (overrideParams: RequestParams = {}) => {
@@ -94,6 +96,12 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
         setError(null);
         return undefined;
       }
+
+      // Cancel any in-flight request
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const seq = ++seqRef.current;
 
       setLoading(true);
       setError(null);
@@ -107,19 +115,31 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
             ...extraParamsRef.current,
             ...overrideParams,
           },
+          signal: controller.signal,
         });
+        // Stale response guard — discard if a newer request has started
+        if (seq !== seqRef.current) return undefined;
+
         const { data: result, meta: responseMeta } = normalizePayload(res?.data);
         setData(result);
         setMeta(responseMeta);
         return result;
       } catch (err: unknown) {
+        // AbortError means a newer request superseded this one — ignore silently
+        if ((err as any)?.name === 'AbortError' || (err as any)?.code === 'ABORT_ERR') {
+          return undefined;
+        }
+        if (seq !== seqRef.current) return undefined;
+
         const nextError = new Error(getErrorMessage(err));
         setError(nextError);
         setData(null);
         setMeta(null);
         return undefined;
       } finally {
-        setLoading(false);
+        if (seq === seqRef.current) {
+          setLoading(false);
+        }
       }
     },
     [api, instanceId, folderId, folderKey, resource, action],

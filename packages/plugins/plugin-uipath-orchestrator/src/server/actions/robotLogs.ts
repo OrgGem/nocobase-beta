@@ -8,6 +8,7 @@
 import type { Context, Next } from '@nocobase/actions';
 import type { PluginUiPathOrchestratorServer } from '../plugin';
 import { handleError, extractFolderContext, extractODataFilter } from './shared';
+import { fetch as undiciFetch } from 'undici';
 
 const MAX_RESOLVED_JOB_KEYS = 10;
 const DEFAULT_ES_INDEX = 'default-robotlogs-*';
@@ -194,7 +195,7 @@ async function searchEsLogs(plugin: PluginUiPathOrchestratorServer, config: EsCo
     )}`;
   }
 
-  const response = await fetch(`${node}/${config.index}/_search`, {
+  const response = await undiciFetch(`${node}/${config.index}/_search`, {
     method: 'POST',
     headers,
     body: JSON.stringify(buildEsSearchBody(params)),

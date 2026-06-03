@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { AgentLoopPlanStepInput, AgentLoopService } from '../services/AgentLoopService';
 import { getOrchestratorTraceContext, setOrchestratorTraceContext } from '../services/ExecutionSpanService';
+import {
+  currentUserId,
+  resolveSessionId,
+  resolveMessageId,
+  normalizeEmployeeUsername,
+  resolveLeaderUsername,
+  valuesFromCtx,
+} from '../utils/ctx-utils';
 
 const stepSchema = z.object({
   id: z.string().optional(),
@@ -32,52 +40,6 @@ function toolResult(status: 'success' | 'error', payload: any) {
     status,
     content: typeof payload === 'string' ? payload : JSON.stringify(payload),
   };
-}
-
-function valuesFromCtx(ctx: any) {
-  return ctx?.action?.params?.values || {};
-}
-
-function currentUserId(ctx: any) {
-  return ctx?.state?.currentUser?.id || ctx?.auth?.user?.id;
-}
-
-function resolveSessionId(ctx: any, args: any) {
-  const values = valuesFromCtx(ctx);
-  return args?.sessionId || values.sessionId || ctx?.action?.params?.sessionId || ctx?.state?.sessionId;
-}
-
-function resolveMessageId(ctx: any, args: any) {
-  const values = valuesFromCtx(ctx);
-  return args?.messageId || values.messageId || ctx?.action?.params?.messageId;
-}
-
-function normalizeEmployeeUsername(raw: any) {
-  if (!raw) return null;
-  if (typeof raw === 'string') return raw;
-  return raw.username || raw.aiEmployeeUsername || raw.name || null;
-}
-
-async function resolveLeaderUsername(ctx: any, plugin: any, args: any) {
-  const values = valuesFromCtx(ctx);
-  const direct = normalizeEmployeeUsername(
-    args?.leaderUsername ||
-      ctx?._currentAIEmployee ||
-      ctx?.state?.currentAIEmployee ||
-      ctx?.runtime?.context?.currentAIEmployee ||
-      values.aiEmployee,
-  );
-  if (direct) return direct;
-
-  const sessionId = resolveSessionId(ctx, args);
-  if (!sessionId) return undefined;
-  try {
-    const repo = ctx?.db?.getRepository?.('aiConversations') || plugin.db.getRepository('aiConversations');
-    const conversation = await repo.findOne({ filter: { sessionId } });
-    return normalizeEmployeeUsername(conversation?.aiEmployeeUsername || conversation?.get?.('aiEmployeeUsername'));
-  } catch {
-    return undefined;
-  }
 }
 
 function setLoopTraceContext(ctx: any, snapshot: any, step?: any) {
@@ -139,7 +101,7 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
             metadata: args.metadata,
             plan: planFromArgs(args.plan),
           });
-          setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+          setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           return toolResult('success', snapshot);
         } catch (error: any) {
           return toolResult('error', error?.message || String(error));
@@ -152,12 +114,11 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
       defaultPermission: 'ALLOW' as const,
       introduction: {
         title: 'Agent Loop - Status',
-        about: 'Read the current run, steps, and next executable step.',
+        about: 'Read the current run, steps, and next executable steps.',
       },
       definition: {
         name: 'agent_loop_status',
-        description:
-          'Fetch an agent loop run. Call this before executing the next step so subsequent skill/tool calls can be linked to the current loop step.',
+        description: 'Fetch an agent loop run. Call this to check which steps are ready for execution.',
         schema: z.object({
           runId: z.union([z.string(), z.number()]),
         }),
@@ -165,7 +126,7 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
       invoke: async (ctx: any, args: any) => {
         try {
           const snapshot = await service.getRunSnapshot(args.runId);
-          setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+          setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           return toolResult('success', snapshot);
         } catch (error: any) {
           return toolResult('error', error?.message || String(error));
@@ -212,18 +173,18 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
               agentExecutionSpanId: args.agentExecutionSpanId,
               metadata: args.metadata,
             });
-            setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+            setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           } else if (args.status === 'failed') {
             snapshot = await service.failStep(args.stepId, args.error || 'Step failed.', {
               userId: currentUserId(ctx),
               metadata: args.metadata,
             });
-            setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+            setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           } else {
             snapshot = await service.skipStep(args.stepId, args.reason || 'Skipped.', {
               userId: currentUserId(ctx),
             });
-            setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+            setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           }
           return toolResult('success', snapshot);
         } catch (error: any) {
@@ -258,7 +219,7 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
             userId: currentUserId(ctx),
           });
           const snapshot = await service.getRunSnapshot(args.runId);
-          setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+          setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           return toolResult('success', snapshot);
         } catch (error: any) {
           return toolResult('error', error?.message || String(error));
@@ -289,7 +250,7 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
             reason: args.reason,
             userId: currentUserId(ctx),
           });
-          setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+          setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           return toolResult('success', snapshot);
         } catch (error: any) {
           return toolResult('error', error?.message || String(error));
@@ -324,7 +285,7 @@ export function createAgentLoopTools(plugin: any, service: AgentLoopService) {
             userId: currentUserId(ctx),
             ctx,
           });
-          setLoopTraceContext(ctx, snapshot, snapshot.nextStep);
+          setLoopTraceContext(ctx, snapshot, snapshot.nextSteps?.[0]);
           return toolResult('success', snapshot);
         } catch (error: any) {
           return toolResult('error', error?.message || String(error));

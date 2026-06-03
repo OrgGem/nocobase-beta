@@ -5,6 +5,7 @@ import { createExternalRagSearchTool } from './tools/external-rag-search';
 import { createOrchestratorPlanTools } from './tools/orchestrator-plan';
 import { registerTracingResource } from './resources/tracing';
 import { registerAgentLoopResource } from './resources/agent-loop';
+import { getRunEventBus } from './services/RunEventBus';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { AgentLoopService } from './services/AgentLoopService';
 
@@ -41,6 +42,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
         'agentLoopRuns:*',
         'agentLoopSteps:*',
         'agentLoopEvents:*',
+        'agentLoopEventsStream:*',
         'agentHarnessProfiles:*',
         'agentExecutionSpans:*',
         'skillDefinitions:*',
@@ -62,6 +64,57 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
     // --- Register Agent Loop Resource ---
     registerAgentLoopResource(this, this.agentLoopService);
+
+    // --- Register SSE Event Stream Resource (Phase 6) ---
+    (this as any).app.resource({
+      name: 'agentLoopEventsStream',
+      actions: {
+        async stream(ctx, next) {
+          const runId = ctx.action.params?.runId || ctx.query?.runId || ctx.request.query?.runId;
+          if (!runId) {
+            ctx.throw(400, 'runId query parameter is required.');
+            return;
+          }
+
+          ctx.type = 'text/event-stream';
+          ctx.set('Cache-Control', 'no-cache');
+          ctx.set('Connection', 'keep-alive');
+          ctx.set('X-Accel-Buffering', 'no');
+
+          const unsubscribe = getRunEventBus().subscribe(runId, (event: any) => {
+            try {
+              ctx.res.write(`data: ${JSON.stringify(event)}\n\n`);
+            } catch {
+              unsubscribe();
+            }
+          });
+
+          const keepalive = setInterval(() => {
+            try {
+              ctx.res.write(': keepalive\n\n');
+            } catch {
+              clearInterval(keepalive);
+              unsubscribe();
+            }
+          }, 15000);
+
+          ctx.req.on('close', () => {
+            clearInterval(keepalive);
+            unsubscribe();
+          });
+
+          ctx.req.on('error', () => {
+            clearInterval(keepalive);
+            unsubscribe();
+          });
+
+          ctx.res.writeHead(200);
+          ctx.res.write(': connected\n\n');
+
+          await next();
+        },
+      },
+    });
 
     // --- Register Tracing Resource (Phase 5) ---
     // Custom read-only resource for the Swarm Tracing admin page.

@@ -18,6 +18,7 @@
     "README.md"
   ],
   "peerDependencies": {
+    "@aws-sdk/client-s3": "*",
     "@nocobase/client": "2.x",
     "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x",

@@ -30,6 +30,19 @@ function getAttachmentUrl(value: any): string | null {
   return null;
 }
 
+function normalizeAttachmentId(value: unknown): string | number | null {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^\d+$/.test(trimmed) ? trimmed : null;
+  }
+
+  return null;
+}
+
 function assertSafeFieldName(ctx: Context, fieldName: string | undefined, label: string) {
   if (!fieldName) return;
   if (fieldName.includes('.') || fieldName.includes('[') || fieldName.includes(']') || fieldName === '__proto__') {
@@ -201,14 +214,15 @@ export async function getPayload(ctx: Context, next: Next) {
 
   const pdfAttachment = json[input.pdfField];
   const firstPdf = Array.isArray(pdfAttachment) ? pdfAttachment[0] : pdfAttachment;
-  const attachmentId = firstPdf?.id;
+  const attachmentId = normalizeAttachmentId(firstPdf?.attachmentId ?? firstPdf?.id ?? firstPdf?.uid);
 
   let ocrStatus = 'no-ocr';
   let ocrError = null;
   let ocrRawData = null;
 
-  if (attachmentId) {
-    const ocrRecord = await ctx.db.getRepository('attachmentOcrResults').findOne({
+  const ocrResultRepo = ctx.db.getRepository('attachmentOcrResults');
+  if (attachmentId && ocrResultRepo) {
+    const ocrRecord = await ocrResultRepo.findOne({
       filter: { attachmentId },
     });
     if (ocrRecord) {
@@ -255,7 +269,7 @@ async function runAction(ctx: Context, action: VerifyAction) {
   assertFieldAcl(ctx, readAcl, [input.pdfField, input.jsonField, input.statusField].filter(Boolean), 'get');
   assertFieldAcl(ctx, updateAcl, [input.jsonField, input.statusField].filter(Boolean), 'update');
 
-  const { repo, json } = await getRecord(ctx, input, updateAcl);
+  const { record, json } = await getRecord(ctx, input, updateAcl);
   const beforeJson = cloneJson(json[input.jsonField]);
   const afterJson = cloneJson(input.data ?? beforeJson ?? {});
   const changedItems = input.items?.length ? applyOcrItemChanges(afterJson, mapping, input.items) : [];
@@ -266,10 +280,7 @@ async function runAction(ctx: Context, action: VerifyAction) {
   if (action === 'reject') status = input.status || settings.rejectStatus || 'rejected';
   if (status && input.statusField) values[input.statusField] = status;
 
-  await repo.update({
-    filterByTk: input.recordId,
-    filter: aclFilter(updateAcl),
-    values,
+  await record.update(values, {
     fields: Object.keys(values),
     context: ctx,
   });

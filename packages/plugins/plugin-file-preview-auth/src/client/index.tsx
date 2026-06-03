@@ -113,6 +113,50 @@ function getPreviewFileRecord(file: any) {
   };
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object';
+}
+
+export function normalizeOcrAttachmentId(value: unknown): string | number | null {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^\d+$/.test(trimmed) ? trimmed : null;
+  }
+
+  return null;
+}
+
+export function getOcrAttachmentId(file: unknown): string | number | null {
+  const inputRecord = isObjectRecord(file) ? file : {};
+  const responseRecord = isObjectRecord(inputRecord.response) ? inputRecord.response : {};
+  const previewRecord = getPreviewFileRecord(file);
+  const normalizedPreviewRecord = isObjectRecord(previewRecord) ? previewRecord : {};
+  const candidates = [
+    normalizedPreviewRecord.attachmentId,
+    normalizedPreviewRecord.id,
+    responseRecord.attachmentId,
+    responseRecord.id,
+    inputRecord.attachmentId,
+    inputRecord.id,
+    normalizedPreviewRecord.uid,
+    responseRecord.uid,
+    inputRecord.uid,
+  ];
+
+  for (const candidate of candidates) {
+    const attachmentId = normalizeOcrAttachmentId(candidate);
+    if (attachmentId != null) {
+      return attachmentId;
+    }
+  }
+
+  return null;
+}
+
 const getFileExt = (file: any): string => {
   const record = getPreviewFileRecord(file);
   const value =
@@ -205,6 +249,40 @@ const isPreviewableFile = (file: any): boolean => {
     isPdfFile(file) || isImageFile(file) || isTextFile(file) || isDocxFile(file) || isXlsxFile(file) || isPptxFile(file)
   );
 };
+
+export function isOcrCompleteStatus(status?: string): boolean {
+  return ['waiting-verify', 'success', 'verified', 'accepted', 'rejected'].includes(status || '');
+}
+
+type OcrStatusRecord = {
+  id?: string | number | null;
+  attachmentId?: string | number | null;
+  status?: string;
+  error?: string | null;
+};
+
+function isOcrStatusRecord(value: unknown): value is OcrStatusRecord {
+  if (!isObjectRecord(value)) return false;
+  return (
+    typeof value.status === 'string' ||
+    normalizeOcrAttachmentId(value.attachmentId) != null ||
+    normalizeOcrAttachmentId(value.id) != null
+  );
+}
+
+export function extractOcrStatusRecord(response: unknown): OcrStatusRecord | null {
+  let current = response;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (isOcrStatusRecord(current)) {
+      return current;
+    }
+    if (!isObjectRecord(current)) {
+      return null;
+    }
+    current = current.data;
+  }
+  return null;
+}
 
 const getFileDisplayName = (file: any): string => {
   const record = getPreviewFileRecord(file);
@@ -551,6 +629,7 @@ function PreviewModalTitle({
           </Tag>
         );
       case 'waiting-verify':
+      case 'success':
         return (
           <Tag color="warning" icon={<ClockCircleOutlined />}>
             {t('Waiting Verify')}
@@ -1198,35 +1277,44 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
   const [ocrStatus, setOcrStatus] = useState<string>('no-ocr');
   const [ocrResultId, setOcrResultId] = useState<string | number | null>(null);
   const [ocrError, setOcrError] = useState<string | null>(null);
+  const ocrAttachmentId = useMemo(() => getOcrAttachmentId(file), [file]);
 
   const isOcrSupported = useMemo(() => {
-    if (!file) return false;
+    if (!file || !ocrAttachmentId) return false;
     return isPdfFile(file) || isImageFile(file);
-  }, [file]);
+  }, [file, ocrAttachmentId]);
 
   const OcrVerifyBlock = useComponent('OcrVerifyBlock');
 
-  const loadOcrStatus = useCallback(async () => {
-    if (!file?.id) return null;
-    const res = await apiClient.request({
-      url: 'filePreviewAuth:getOcrStatus',
-      method: 'post',
-      data: {
-        attachmentId: file.id,
-      },
-    });
-    const record = res?.data?.data;
-    if (record) {
-      setOcrResultId(record.id || null);
-      setOcrStatus(record.status || 'no-ocr');
-      setOcrError(record.error || null);
-    }
-    return record;
-  }, [apiClient, file?.id]);
+  const applyOcrRecord = useCallback((record: OcrStatusRecord | null) => {
+    if (!record) return;
+    setOcrResultId(record.id || null);
+    setOcrStatus(record.status || 'no-ocr');
+    setOcrError(record.error || null);
+  }, []);
+
+  const loadOcrStatus = useCallback(
+    async ({ updateState = true }: { updateState?: boolean } = {}) => {
+      if (!ocrAttachmentId) return null;
+      const res = await apiClient.request({
+        url: 'filePreviewAuth:getOcrStatus',
+        method: 'post',
+        data: {
+          attachmentId: ocrAttachmentId,
+        },
+      });
+      const record = extractOcrStatusRecord(res);
+      if (record && updateState) {
+        applyOcrRecord(record);
+      }
+      return record;
+    },
+    [apiClient, applyOcrRecord, ocrAttachmentId],
+  );
 
   // Load / Sync initial OCR status from the separate OCR result collection.
   useEffect(() => {
-    if (!file?.id) return;
+    if (!ocrAttachmentId) return;
     let cancelled = false;
     setOcrResultId(null);
     setOcrStatus('no-ocr');
@@ -1241,28 +1329,54 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
     return () => {
       cancelled = true;
     };
-  }, [file?.id, loadOcrStatus]);
+  }, [ocrAttachmentId, loadOcrStatus]);
 
   // Polling for OCR job completion when ocrStatus is 'pending-ocr'
   useEffect(() => {
-    if (ocrStatus !== 'pending-ocr' || !file?.id) return;
+    if (ocrStatus !== 'pending-ocr' || !ocrAttachmentId) return;
     let timer: any = null;
     let cancelled = false;
+    let noOcrPollCount = 0;
 
     const poll = async () => {
       try {
-        const record = await loadOcrStatus();
+        const record = await loadOcrStatus({ updateState: false });
         if (cancelled) return;
         if (record) {
-          if (record.status !== 'pending-ocr') {
-            if (record.status === 'failed') {
-              message.error(record.error || t('OCR processing failed'));
-            } else {
-              message.success(t('OCR processing completed!'));
-            }
-          } else {
+          const status = record.status || 'no-ocr';
+          if (status === 'pending-ocr') {
+            applyOcrRecord(record);
             timer = setTimeout(poll, 3000);
+            return;
           }
+
+          if (isOcrCompleteStatus(status)) {
+            applyOcrRecord(record);
+            setActiveTab('ocr');
+            message.success(t('OCR processing completed!'));
+            return;
+          }
+
+          if (status === 'failed') {
+            applyOcrRecord(record);
+            message.error(record.error || t('OCR processing failed'));
+            return;
+          }
+
+          if (status === 'no-ocr' && noOcrPollCount < 3) {
+            noOcrPollCount += 1;
+            timer = setTimeout(poll, 3000);
+            return;
+          }
+
+          applyOcrRecord(record);
+        } else if (noOcrPollCount < 3) {
+          noOcrPollCount += 1;
+          timer = setTimeout(poll, 3000);
+        } else {
+          setOcrResultId(null);
+          setOcrStatus('no-ocr');
+          setOcrError(null);
         }
       } catch (err) {
         console.error('Polling error', err);
@@ -1275,24 +1389,22 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [ocrStatus, file?.id, loadOcrStatus, t]);
+  }, [applyOcrRecord, ocrStatus, ocrAttachmentId, loadOcrStatus, t]);
 
   const handleRunOcr = async () => {
-    if (!file?.id) return;
+    if (!ocrAttachmentId) return;
     try {
       setOcrStatus('pending-ocr');
       const res = await apiClient.request({
         url: 'filePreviewAuth:runOcr',
         method: 'post',
         data: {
-          attachmentId: file.id,
+          attachmentId: ocrAttachmentId,
         },
       });
-      const record = res?.data?.data;
+      const record = extractOcrStatusRecord(res);
       if (record) {
-        setOcrResultId(record.id || null);
-        setOcrStatus(record.status || 'pending-ocr');
-        setOcrError(record.error || null);
+        applyOcrRecord({ ...record, status: record.status || 'pending-ocr' });
       }
       message.info(t('OCR process started in the background.'));
     } catch (err: any) {
@@ -1430,7 +1542,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
               </Button>
             </div>
           )}
-          {['waiting-verify', 'verified', 'accepted', 'rejected'].includes(ocrStatus) && (
+          {isOcrCompleteStatus(ocrStatus) && (
             <div style={{ flex: 1, height: '100%', overflow: 'hidden' }}>
               {OcrVerifyBlock && ocrResultId ? (
                 <OcrVerifyBlock

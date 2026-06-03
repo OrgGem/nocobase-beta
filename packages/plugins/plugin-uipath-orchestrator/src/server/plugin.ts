@@ -31,7 +31,6 @@ import {
   createSessionActions,
 } from './actions/usersRobots';
 import { createCustomApiActions } from './actions/customApi';
-import { createWebhookActions } from './actions/webhooks';
 import { createUiPathTools } from './tools/uipath-tools';
 import { UiPathWebhookVerifier } from './services/UiPathWebhookVerifier';
 
@@ -151,10 +150,12 @@ export class PluginUiPathOrchestratorServer extends Plugin {
   // ─── Webhook Event Handler ─────────────────────────────────────────
 
   onWebhookEvent(instanceId: number, eventType: string, _payload: any) {
+    // Log event type for debugging and monitoring
+    this.app.logger.info(`[plugin-uipath] Webhook event: ${eventType} for instance ${instanceId}`);
+    this.app.logger.debug(`[plugin-uipath] Webhook payload: ${JSON.stringify(_payload).slice(0, 500)}`);
     // Invalidate relevant cache on webhook event
     const cacheKey = `uipath-dashboard:${instanceId}`;
     this.app.cache.del(cacheKey).catch(() => {});
-    this.app.logger.info(`[plugin-uipath] Webhook event: ${eventType} for instance ${instanceId}`);
   }
 
   // ─── Plugin Lifecycle ──────────────────────────────────────────────
@@ -179,7 +180,6 @@ export class PluginUiPathOrchestratorServer extends Plugin {
     this.app.resourceManager.define({ name: 'uipathMachines', actions: createMachineActions(this) });
     this.app.resourceManager.define({ name: 'uipathSessions', actions: createSessionActions(this) });
     this.app.resourceManager.define({ name: 'uipathCustomApi', actions: createCustomApiActions(this) });
-    this.app.resourceManager.define({ name: 'uipathWebhooks', actions: createWebhookActions(this) });
     this.registerWebhookRawBodyMiddleware();
 
     // ACL
@@ -204,7 +204,6 @@ export class PluginUiPathOrchestratorServer extends Plugin {
         'uipathMachines:*',
         'uipathSessions:*',
         'uipathCustomApi:*',
-        'uipathWebhooks:*',
       ],
     });
     this.app.acl.allow('uipathWebhooks', 'receive', 'public');
@@ -311,7 +310,7 @@ export class PluginUiPathOrchestratorServer extends Plugin {
           }
 
           const eventType = UiPathWebhookVerifier.parseEventType(payload);
-          await this.db.getRepository('uipathWebhookEvents').create({
+          const event = await this.db.getRepository('uipathWebhookEvents').create({
             values: {
               instanceId: Number(instanceId),
               eventType,
@@ -324,6 +323,13 @@ export class PluginUiPathOrchestratorServer extends Plugin {
           });
 
           this.onWebhookEvent(Number(instanceId), eventType, payload);
+
+          // Mark as processed after successful handling
+          await this.db.getRepository('uipathWebhookEvents').update({
+            filter: { id: event.get('id') },
+            values: { status: 'processed', processedAt: new Date() },
+          });
+
           ctx.body = { received: true, eventType };
         } catch (error: any) {
           ctx.status = error?.statusCode || (error?.name === 'SyntaxError' ? 400 : 500);

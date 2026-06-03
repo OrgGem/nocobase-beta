@@ -265,6 +265,8 @@ export class PluginNextAppServer extends Plugin {
         appends: ['nextAppRoutes'],
       });
 
+      const nextAppRoutesId = roles.flatMap((x) => x.get('nextAppRoutes')).map((item) => item.id);
+
       const { appPath, ...otherFilter } = filter || {};
       const actualFilter: any = { ...otherFilter };
 

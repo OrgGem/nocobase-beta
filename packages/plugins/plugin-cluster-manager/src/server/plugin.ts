@@ -24,6 +24,7 @@ import { packageManagerActions } from './actions/package-manager';
 import { PackageManager } from './orchestrator/PackageManager';
 import { createListMetaCacheMiddleware } from './middlewares/listMetaCacheMiddleware';
 import { registerCacheHooks } from './hooks/cacheInvalidationHooks';
+import { collectLocalDoctorSnapshot, doctorActions } from './actions/doctor';
 
 export class PluginClusterManagerServer extends Plugin {
   public nodeRegistry: RedisNodeRegistry;
@@ -171,6 +172,50 @@ export class PluginClusterManagerServer extends Plugin {
           this.app.logger.error(`[ClusterManager] Error handling log request: ${err.message}`);
         }
       });
+
+      pubSub.subscribe(`cluster-manager:doctor-collect:${myNodeId}`, async (msg: string) => {
+        const redis = getRedisClient(this.app);
+        let requestId = '';
+        try {
+          const parsed = typeof msg === 'string' ? JSON.parse(msg) : msg;
+          requestId = parsed.requestId;
+          if (!redis || !requestId) return;
+
+          const snapshot = await collectLocalDoctorSnapshot(this.app, {
+            runId: parsed.runId,
+            sinceMs: parsed.sinceMs,
+            untilMs: parsed.untilMs,
+            maxLines: parsed.maxLines,
+          });
+          await redis.sendCommand([
+            'SET',
+            `cluster-manager:doctor-response:${requestId}`,
+            JSON.stringify(snapshot),
+            'EX',
+            '90',
+          ]);
+          this.app.logger.debug(`[ClusterManager] Served doctor snapshot request ${requestId}`);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          this.app.logger.error(`[ClusterManager] Error handling doctor snapshot request: ${message}`);
+          if (redis && requestId) {
+            const fallback = {
+              nodeId: getLocalNodeId(this.app),
+              collectedAt: new Date().toISOString(),
+              error: message,
+            };
+            await redis
+              .sendCommand([
+                'SET',
+                `cluster-manager:doctor-response:${requestId}`,
+                JSON.stringify(fallback),
+                'EX',
+                '90',
+              ])
+              .catch(() => {});
+          }
+        }
+      });
       // Package installation handler. PubSub delivers this to every node, and PackageManager
       // filters by the requested target role before executing anything locally.
       pubSub.subscribe('cluster-manager.install-packages', async (payload: any) => {
@@ -251,6 +296,12 @@ export class PluginClusterManagerServer extends Plugin {
       actions: clusterActions,
     });
 
+    // Time-boxed diagnostic sessions and report download
+    this.app.resourcer.define({
+      name: 'clusterManagerDoctor',
+      actions: doctorActions,
+    });
+
     // Event queue monitoring
     this.app.resourcer.define({
       name: 'clusterManagerQueue',
@@ -321,6 +372,7 @@ export class PluginClusterManagerServer extends Plugin {
         'clusterManagerRedis:*',
         'clusterManagerAclCache:*',
         'clusterManagerCluster:*',
+        'clusterManagerDoctor:*',
         'clusterManagerQueue:*',
         'clusterManagerLock:*',
         'clusterManagerCacheMgr:*',

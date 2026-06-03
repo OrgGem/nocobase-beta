@@ -392,10 +392,14 @@ export class PluginFilePreviewAuthServer extends Plugin {
           const params = ctx.action.params || {};
           const reqBody = ctx.request.body || {};
           const values = params.values || {};
-          const attachmentId = values.attachmentId || reqBody.attachmentId;
+          const rawAttachmentId = values.attachmentId || reqBody.attachmentId;
 
-          if (!attachmentId) {
+          if (!rawAttachmentId) {
             ctx.throw(400, 'attachmentId is required');
+          }
+          const attachmentId = normalizeOcrAttachmentId(rawAttachmentId);
+          if (!attachmentId) {
+            ctx.throw(400, 'attachmentId must be a numeric attachment record id');
           }
 
           this.assertAuthenticated(ctx);
@@ -428,11 +432,15 @@ export class PluginFilePreviewAuthServer extends Plugin {
           const reqQuery = ctx.request.query || {};
           const reqBody = ctx.request.body || {};
           const values = params.values || {};
-          const attachmentId =
+          const rawAttachmentId =
             values.attachmentId || params.attachmentId || reqQuery.attachmentId || reqBody.attachmentId;
 
-          if (!attachmentId) {
+          if (!rawAttachmentId) {
             ctx.throw(400, 'attachmentId is required');
+          }
+          const attachmentId = normalizeOcrAttachmentId(rawAttachmentId);
+          if (!attachmentId) {
+            ctx.throw(400, 'attachmentId must be a numeric attachment record id');
           }
 
           this.assertAuthenticated(ctx);
@@ -1388,6 +1396,19 @@ function isLikelyRecordId(value: any): boolean {
   if (value === undefined || value === null || value === '') return false;
   const text = String(value);
   return !text.includes('/') && !text.startsWith('http://') && !text.startsWith('https://');
+}
+
+function normalizeOcrAttachmentId(value: unknown): string | number | null {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value > 0 ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return /^\d+$/.test(trimmed) ? trimmed : null;
+  }
+
+  return null;
 }
 
 function getUrlCandidates(value: any): string[] {

@@ -310,7 +310,7 @@ export default {
       collectionName: 'nextAppRoutes',
       parentKey: null,
       reverseKey: null,
-      scopeKey: ['parentId', 'configId'],
+      scopeKey: 'parentId',
       uiSchema: {
         type: 'number',
         'x-component': 'InputNumber',

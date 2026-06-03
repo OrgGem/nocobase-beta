@@ -1,17 +1,6 @@
 import { Plugin } from '@nocobase/server';
 import { AgentLoopService } from '../services/AgentLoopService';
-
-function toPlain(record: any) {
-  return record?.toJSON?.() || record;
-}
-
-function currentUserId(ctx: any) {
-  return ctx?.state?.currentUser?.id || ctx?.auth?.user?.id;
-}
-
-function values(ctx: any) {
-  return ctx.request?.body || ctx.action?.params?.values || {};
-}
+import { toPlain, currentUserId, valuesFromCtx as values } from '../utils/ctx-utils';
 
 function formatRunRow(raw: any) {
   const row = toPlain(raw);
@@ -175,6 +164,26 @@ export function registerAgentLoopResource(plugin: Plugin, service: AgentLoopServ
           data: await service.retryStep(body.stepId, {
             userId: currentUserId(ctx),
           }),
+        };
+        await next();
+      },
+
+      async stepFeedback(ctx, next) {
+        const body = values(ctx);
+        if (!body.stepId || !body.rating) {
+          ctx.throw(400, 'stepId and rating are required');
+          return;
+        }
+        if (!['positive', 'negative'].includes(body.rating)) {
+          ctx.throw(400, 'rating must be "positive" or "negative"');
+          return;
+        }
+        ctx.body = {
+          data: await service.stepFeedback(
+            body.stepId,
+            { rating: body.rating, comment: body.comment, category: body.category },
+            { userId: currentUserId(ctx) },
+          ),
         };
         await next();
       },

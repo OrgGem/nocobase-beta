@@ -9,7 +9,7 @@ export const HelpVisibilityProvider: React.FC<React.PropsWithChildren<{}>> = (pr
     <>
       {!showHelp && (
         <style>{`
-          div:has([data-testid="help-button"]) {
+          div:has(> [data-testid="help-button"]) {
             display: none !important;
           }
         `}</style>

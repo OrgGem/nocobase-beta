@@ -1,35 +1,12 @@
 import { AgentLoopPlanStepInput } from './AgentLoopService';
 
-function normalizeStepType(value: any) {
-  return ['reasoning', 'skill', 'tool', 'sub_agent', 'verification'].includes(value) ? value : 'tool';
-}
-
-function normalizePlanKey(step: any, index: number) {
-  return String(step.planKey || step.key || step.id || `step_${index + 1}`);
-}
-
-function asArray(value: any): any[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asObject(value: any) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
+import { normalizeStepType, normalizePlanKey, asArray, asObject } from '../utils/ctx-utils';
 
 export class AgentPlannerService {
   buildPlan(
     goal: string,
     plan: AgentLoopPlanStepInput[] | undefined,
-    options: { targetAgent?: string; harnessTag?: string; metadata?: any }
+    options: { targetAgent?: string; harnessTag?: string; metadata?: any },
   ): AgentLoopPlanStepInput[] {
     if (Array.isArray(plan) && plan.length > 0) {
       return plan.map((step, index) => ({

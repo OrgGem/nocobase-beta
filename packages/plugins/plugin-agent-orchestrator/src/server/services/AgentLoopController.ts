@@ -4,7 +4,10 @@ import { AgentPlanValidator } from './AgentPlanValidator';
 import { AgentLoopRepository } from './AgentLoopRepository';
 import { AgentHarness } from './AgentHarness';
 import { AgentLoopPolicy, AgentLoopPlanStepInput, AgentLoopRunStatus, AgentLoopStepStatus } from './AgentLoopService';
+import { TokenTracker } from './TokenTracker';
+import { getCircuitBreaker } from './CircuitBreaker';
 import { createHash } from 'crypto';
+import { asObject, asArray, trimText, normalizeStepType, normalizePlanKey } from '../utils/ctx-utils';
 
 const DEFAULT_POLICY: AgentLoopPolicy = {
   maxIterations: 20,
@@ -12,6 +15,11 @@ const DEFAULT_POLICY: AgentLoopPolicy = {
   allowReplan: true,
   requireVerification: true,
   stopOnApprovalRequired: true,
+  maxContextTokens: 4000,
+  contextSummaryStrategy: 'last_n',
+  includeToolResults: false,
+  includeStepOutputs: true,
+  maxConcurrency: 5,
 };
 
 const TERMINAL_RUN_STATUSES = new Set<AgentLoopRunStatus>(['succeeded', 'failed', 'rejected', 'canceled']);
@@ -34,46 +42,12 @@ function normalizePolicy(policy?: Partial<AgentLoopPolicy>): AgentLoopPolicy {
   next.allowReplan = next.allowReplan !== false;
   next.requireVerification = next.requireVerification !== false;
   next.stopOnApprovalRequired = next.stopOnApprovalRequired !== false;
+  next.maxContextTokens = next.maxContextTokens || DEFAULT_POLICY.maxContextTokens;
+  next.contextSummaryStrategy = next.contextSummaryStrategy || DEFAULT_POLICY.contextSummaryStrategy;
+  next.includeToolResults = next.includeToolResults !== false;
+  next.includeStepOutputs = next.includeStepOutputs !== false;
+  next.maxConcurrency = Math.max(1, Number(next.maxConcurrency || DEFAULT_POLICY.maxConcurrency));
   return next;
-}
-
-function asArray(value: any): any[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function asObject(value: any) {
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-    } catch {
-      return {};
-    }
-  }
-  return {};
-}
-
-function trimText(value: any, max = 50000) {
-  let text = '';
-  if (typeof value === 'string') {
-    text = value;
-  } else if (value != null) {
-    try {
-      text = JSON.stringify(value);
-    } catch {
-      text = String(value);
-    }
-  }
-  return text.length > max ? `${text.slice(0, max)}\n...[truncated]` : text;
-}
-
-function normalizeStepType(value: any) {
-  return ['reasoning', 'skill', 'tool', 'sub_agent', 'verification'].includes(value) ? value : 'tool';
-}
-
-function normalizePlanKey(step: AgentLoopPlanStepInput, index: number) {
-  return String(step.planKey || step.key || step.id || `step_${index + 1}`);
 }
 
 export class AgentLoopController {
@@ -82,7 +56,8 @@ export class AgentLoopController {
     private readonly plannerService: AgentPlannerService,
     private readonly validator: AgentPlanValidator,
     private readonly repository: AgentLoopRepository,
-    private readonly harness: AgentHarness
+    private readonly harness: AgentHarness,
+    private readonly tokenTracker: TokenTracker | null = null,
   ) {}
 
   async createRun(options: {
@@ -165,7 +140,8 @@ export class AgentLoopController {
         goal: options.goal,
         userId: options.userId,
         metadata: options.metadata,
-        planSource: options.planSource || (Array.isArray(options.plan) && options.plan.length ? 'provided' : 'template'),
+        planSource:
+          options.planSource || (Array.isArray(options.plan) && options.plan.length ? 'provided' : 'template'),
         plannerModel: options.plannerModel,
         harnessTag,
         harnessProfileId: harnessProfile?.id,
@@ -241,7 +217,7 @@ export class AgentLoopController {
       harnessTag?: string;
       harnessProfileId?: string | number;
       harnessSettings?: any;
-    } = {}
+    } = {},
   ) {
     this.validator.validate(plan);
     const run = await this.repository.requireRun(runId);
@@ -298,7 +274,7 @@ export class AgentLoopController {
 
   async approvePlanAndExecute(
     runId: string | number,
-    options: { userId?: string | number; ctx?: any; reason?: string } = {}
+    options: { userId?: string | number; ctx?: any; reason?: string } = {},
   ) {
     const run = await this.repository.requireRun(runId);
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
@@ -409,7 +385,7 @@ export class AgentLoopController {
       mode?: 'append' | 'replace_pending';
       reason?: string;
       markRunning?: boolean;
-    } = {}
+    } = {},
   ) {
     if (!Array.isArray(plan) || plan.length === 0) {
       throw new Error('Plan must include at least one step.');
@@ -485,7 +461,7 @@ export class AgentLoopController {
   async replan(
     runId: string | number,
     plan: AgentLoopPlanStepInput[],
-    options: { reason?: string; mode?: 'append' | 'replace_pending'; userId?: string | number } = {}
+    options: { reason?: string; mode?: 'append' | 'replace_pending'; userId?: string | number } = {},
   ) {
     if (!Array.isArray(plan) || plan.length === 0) {
       throw new Error('Plan must include at least one step.');
@@ -519,7 +495,7 @@ export class AgentLoopController {
 
   async startStep(
     stepId: string | number,
-    options: { userId?: string | number; agentExecutionSpanId?: string | number } = {}
+    options: { userId?: string | number; agentExecutionSpanId?: string | number } = {},
   ) {
     const step = await this.repository.requireStep(stepId);
     const run = await this.repository.requireRun(step.runId);
@@ -548,7 +524,6 @@ export class AgentLoopController {
 
     await this.repository.updateRun(run.id, {
       status: 'running',
-      currentStepId: step.id,
       updatedAt: now(),
     });
 
@@ -589,7 +564,7 @@ export class AgentLoopController {
       skillExecutionId?: string | number;
       agentExecutionSpanId?: string | number;
       metadata?: any;
-    } = {}
+    } = {},
   ) {
     const step = await this.repository.requireStep(stepId);
     const run = await this.repository.requireRun(step.runId);
@@ -599,9 +574,6 @@ export class AgentLoopController {
 
     if (step.status !== 'running') {
       throw new Error(`Step ${step.id} cannot complete from status "${step.status}".`);
-    }
-    if (!run.currentStepId || String(run.currentStepId) !== String(step.id)) {
-      throw new Error(`Step ${step.id} is not the current running step for run ${run.id}.`);
     }
 
     await this.repository.updateStep(step.id, {
@@ -617,7 +589,6 @@ export class AgentLoopController {
 
     await this.repository.updateRun(run.id, {
       status: 'running',
-      currentStepId: null,
       updatedAt: now(),
     });
 
@@ -644,9 +615,6 @@ export class AgentLoopController {
     if (step.status !== 'running') {
       throw new Error(`Step ${step.id} cannot fail from status "${step.status}".`);
     }
-    if (!run.currentStepId || String(run.currentStepId) !== String(step.id)) {
-      throw new Error(`Step ${step.id} is not the current running step for run ${run.id}.`);
-    }
 
     const policy = normalizePolicy(run.policy);
 
@@ -660,7 +628,6 @@ export class AgentLoopController {
 
     await this.repository.updateRun(run.id, {
       status: 'running',
-      currentStepId: null,
       updatedAt: now(),
     });
 
@@ -680,7 +647,7 @@ export class AgentLoopController {
     return this.getRunSnapshot(run.id);
   }
 
-  async skipStep(stepId: string | number, reason = 'Skipped', options: { userId?: string | number} = {}) {
+  async skipStep(stepId: string | number, reason = 'Skipped', options: { userId?: string | number } = {}) {
     const step = await this.repository.requireStep(stepId);
     const run = await this.repository.requireRun(step.runId);
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
@@ -689,11 +656,6 @@ export class AgentLoopController {
 
     if (!['pending', 'running', 'failed'].includes(step.status)) {
       throw new Error(`Step ${step.id} cannot skip from status "${step.status}".`);
-    }
-    if (step.status === 'running') {
-      if (!run.currentStepId || String(run.currentStepId) !== String(step.id)) {
-        throw new Error(`Step ${step.id} is not the current running step for run ${run.id}.`);
-      }
     }
 
     await this.repository.updateStep(step.id, {
@@ -719,7 +681,7 @@ export class AgentLoopController {
   async requestApproval(
     stepId: string | number,
     approval: any,
-    options: { userId?: string | number; reason?: string } = {}
+    options: { userId?: string | number; reason?: string } = {},
   ) {
     const step = await this.repository.requireStep(stepId);
     const run = await this.repository.requireRun(step.runId);
@@ -729,11 +691,6 @@ export class AgentLoopController {
 
     if (!['pending', 'running'].includes(step.status)) {
       throw new Error(`Step ${step.id} cannot request approval for status "${step.status}".`);
-    }
-    if (step.status === 'running') {
-      if (!run.currentStepId || String(run.currentStepId) !== String(step.id)) {
-        throw new Error(`Step ${step.id} is not the current running step for run ${run.id}.`);
-      }
     }
 
     await this.repository.updateStep(step.id, {
@@ -770,7 +727,7 @@ export class AgentLoopController {
       editedInput?: any;
       userId?: string | number;
       ctx?: any;
-    }
+    },
   ) {
     const run = await this.repository.requireRun(runId);
     const stepId = options.stepId || run.currentStepId;
@@ -783,9 +740,6 @@ export class AgentLoopController {
     }
     if (run.status !== 'waiting_user' || step.status !== 'waiting_user') {
       throw new Error('Run is not waiting for user approval.');
-    }
-    if (run.currentStepId && String(run.currentStepId) !== String(step.id)) {
-      throw new Error(`Step ${step.id} is not the current waiting step for run ${run.id}.`);
     }
 
     if (options.approved) {
@@ -853,12 +807,45 @@ export class AgentLoopController {
       throw new Error(`Step ${step.id} reached maxAttempts=${step.maxAttempts}.`);
     }
 
-    await this.repository.updateStep(step.id, {
+    // ── Smart retry routing (Phase 8b) ─────────────────────────────────
+    // For sub_agent steps, check circuit breaker state on the target.
+    // If the circuit is open or has multiple failures, route to an alternative.
+    let routedTarget: string | undefined;
+    let routeReason: string | undefined;
+    if (step.type === 'sub_agent' && run.leaderUsername) {
+      const target = step.target || '';
+      if (target) {
+        const circuitBreaker = getCircuitBreaker();
+        const state = circuitBreaker.getState(target);
+        const attempt = Number(step.attempt || 0);
+
+        // Route away if: circuit is open, or 2+ failures and at least 1 retry already attempted
+        const shouldRoute = state?.state === 'open' || (state && state.failures >= 2 && attempt >= 1);
+
+        if (shouldRoute) {
+          const alternatives = await this.registryService.findAlternativeSubAgents(run.leaderUsername, target);
+          if (alternatives.length > 0) {
+            const chosen = alternatives[0]; // pick first alternative
+            routedTarget = chosen.username;
+            routeReason =
+              `Sub-agent "${target}" has ${state?.failures || 0} failure(s) (circuit: ${state?.state || 'closed'}). ` +
+              `Routing retry to alternative "${routedTarget}".`;
+          }
+        }
+      }
+    }
+
+    const updateValues: any = {
       status: 'pending',
       error: '',
       endedAt: null,
       updatedAt: now(),
-    });
+    };
+    if (routedTarget) {
+      updateValues.target = routedTarget;
+    }
+
+    await this.repository.updateStep(step.id, updateValues);
 
     await this.repository.updateRun(run.id, {
       status: 'running',
@@ -869,9 +856,13 @@ export class AgentLoopController {
       runId: run.id,
       stepId: step.id,
       type: 'step_retry',
-      title: `Retry queued: ${step.title || step.planKey}`,
+      title: routedTarget
+        ? `Retry routed: ${step.title || step.planKey} → ${routedTarget}`
+        : `Retry queued: ${step.title || step.planKey}`,
+      content: routeReason || '',
       status: 'pending',
       userId: options.userId,
+      payload: routedTarget ? { originalTarget: step.target, routedTarget, reason: routeReason } : undefined,
     });
 
     return this.getRunSnapshot(run.id);
@@ -885,7 +876,7 @@ export class AgentLoopController {
       summary?: string;
       evidence?: any;
       userId?: string | number;
-    } = {}
+    } = {},
   ) {
     const run = await this.repository.requireRun(runId);
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
@@ -924,6 +915,40 @@ export class AgentLoopController {
       status,
       userId: options.userId,
       payload: { evidence: options.evidence },
+    });
+
+    return this.getRunSnapshot(run.id);
+  }
+
+  async stepFeedback(
+    stepId: string | number,
+    feedback: { rating: 'positive' | 'negative'; comment?: string; category?: string },
+    options: { userId?: string | number } = {},
+  ) {
+    const step = await this.repository.requireStep(stepId);
+    const run = await this.repository.requireRun(step.runId);
+
+    if (step.status !== 'succeeded' && step.status !== 'failed') {
+      throw new Error(`Cannot provide feedback for step ${step.id} in status "${step.status}".`);
+    }
+
+    await this.repository.createEvent({
+      runId: run.id,
+      stepId: step.id,
+      type: 'step_feedback',
+      title: `Feedback: ${feedback.rating === 'positive' ? '👍' : '👎'} ${step.title || step.planKey}`,
+      content: feedback.comment || '',
+      status: step.status,
+      userId: options.userId,
+      payload: {
+        rating: feedback.rating,
+        comment: feedback.comment || '',
+        category: feedback.category || '',
+        stepType: step.type,
+        stepPlanKey: step.planKey,
+        stepTarget: step.target || '',
+        attempt: step.attempt || 0,
+      },
     });
 
     return this.getRunSnapshot(run.id);
@@ -982,49 +1007,96 @@ export class AgentLoopController {
         1,
         Math.min(
           ORCHESTRATOR_CONTROLLER_MAX_STEPS,
-          Number(harnessSettings.maxControllerSteps || ORCHESTRATOR_CONTROLLER_MAX_STEPS)
-        )
+          Number(harnessSettings.maxControllerSteps || ORCHESTRATOR_CONTROLLER_MAX_STEPS),
+        ),
       );
 
       const policy = normalizePolicy(snapshot.run.policy);
+      const maxConcurrency = policy.maxConcurrency;
 
-      while (snapshot.nextStep && iterations < maxControllerSteps) {
-        iterations += 1;
-        const nextStep = snapshot.nextStep;
-        snapshot = await this.startStep(nextStep.id, { userId: options.userId });
-        const runningStep = snapshot.steps.find((step: any) => String(step.id) === String(nextStep.id)) || nextStep;
+      while (snapshot.nextSteps && snapshot.nextSteps.length > 0 && iterations < maxControllerSteps) {
+        const batch = snapshot.nextSteps.slice(0, maxConcurrency);
+        iterations += batch.length;
 
-        try {
-          const output = await this.harness.executeStep(snapshot.run, runningStep, options);
-          snapshot = await this.completeStep(runningStep.id, output, {
-            userId: options.userId,
-            metadata: { controller: 'agent-loop-service' },
-          });
-        } catch (error: any) {
-          if (error?.message === 'requires_approval') {
-            // Pause the execution and request approval
-            snapshot = await this.requestApproval(runningStep.id, {
-              prompt: `Execution of step "${runningStep.title}" requires permission.`,
-            }, {
+        // Budget check before batch
+        if (this.tokenTracker) {
+          const budgetCheck = await this.tokenTracker.checkBudget(runId);
+          if (!budgetCheck.allowed) {
+            return this.finishRun(runId, budgetCheck.reason, {
+              status: 'failed' as const,
+              summary: budgetCheck.reason,
               userId: options.userId,
-              reason: 'Dynamic tool approval required by policy.',
             });
-            break;
           }
+        }
 
-          snapshot = await this.failStep(runningStep.id, error?.message || String(error), {
-            userId: options.userId,
-            metadata: { controller: 'agent-loop-service' },
-          });
-          const failedStep = snapshot.steps.find((step: any) => String(step.id) === String(runningStep.id));
-          if (!failedStep || Number(failedStep.attempt || 0) >= Number(failedStep.maxAttempts || policy.maxStepAttempts)) {
-            break;
+        // Start all steps concurrently
+        await Promise.all(batch.map((step: any) => this.startStep(step.id, { userId: options.userId })));
+
+        // Refresh snapshot to get updated step states
+        snapshot = await this.getRunSnapshot(runId);
+        const runningSteps = batch.map(
+          (step: any) => snapshot.steps.find((s: any) => String(s.id) === String(step.id)) || step,
+        );
+
+        // Execute all steps concurrently via harness
+        const results = await Promise.allSettled(
+          runningSteps.map((step: any) => this.harness.executeStep(snapshot.run, step, options)),
+        );
+
+        // Process results — failures need individual backoff before retry
+        for (let i = 0; i < results.length; i++) {
+          const runningStep = runningSteps[i];
+          const result = results[i];
+
+          if (result.status === 'fulfilled') {
+            snapshot = await this.completeStep(runningStep.id, result.value, {
+              userId: options.userId,
+              metadata: { controller: 'agent-loop-service' },
+            });
+          } else {
+            const error = result.reason;
+            if (error?.message === 'requires_approval') {
+              snapshot = await this.requestApproval(
+                runningStep.id,
+                { prompt: `Execution of step "${runningStep.title}" requires permission.` },
+                { userId: options.userId, reason: 'Dynamic tool approval required by policy.' },
+              );
+              // Stop processing more results; remaining steps are left pending
+              break;
+            }
+
+            snapshot = await this.failStep(runningStep.id, error?.message || String(error), {
+              userId: options.userId,
+              metadata: { controller: 'agent-loop-service' },
+            });
+            const failedStep = snapshot.steps.find((s: any) => String(s.id) === String(runningStep.id));
+            if (
+              failedStep &&
+              Number(failedStep.attempt || 0) < Number(failedStep.maxAttempts || policy.maxStepAttempts)
+            ) {
+              // Exponential backoff before retry
+              const attempt = Number(failedStep.attempt || 1);
+              const baseDelay = 1000;
+              const maxDelay = 60000;
+              const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+              await new Promise((resolve) => setTimeout(resolve, delay));
+              // Step remains pending for retry (failStep resets status back)
+            }
           }
+        }
+
+        // Re-evaluate the plan — newly unblocked steps become eligible
+        snapshot = await this.getRunSnapshot(runId);
+
+        // If we broke for approval, exit loop
+        if (snapshot.run.status === 'waiting_user') {
+          break;
         }
       }
 
       snapshot = await this.getRunSnapshot(runId);
-      if (iterations >= maxControllerSteps && snapshot.nextStep) {
+      if (iterations >= maxControllerSteps && snapshot.nextSteps && snapshot.nextSteps.length > 0) {
         return this.finishRun(runId, `Agent loop stopped after ${maxControllerSteps} controller steps.`, {
           status: 'failed',
           summary: 'Controller iteration limit reached.',
@@ -1039,7 +1111,9 @@ export class AgentLoopController {
 
       const steps = snapshot.steps || [];
       const failed = steps.filter((step: any) => step.status === 'failed');
-      const unfinished = steps.filter((step: any) => !TERMINAL_STEP_STATUSES.has(step.status) && step.status !== 'failed');
+      const unfinished = steps.filter(
+        (step: any) => !TERMINAL_STEP_STATUSES.has(step.status) && step.status !== 'failed',
+      );
       if (failed.length || unfinished.length) {
         return this.finishRun(
           runId,
@@ -1049,9 +1123,12 @@ export class AgentLoopController {
           {
             status: 'failed',
             summary: failed[0]?.error || 'No executable step is available.',
-            evidence: { failedStepIds: failed.map((step: any) => step.id), unfinishedStepIds: unfinished.map((step: any) => step.id) },
+            evidence: {
+              failedStepIds: failed.map((step: any) => step.id),
+              unfinishedStepIds: unfinished.map((step: any) => step.id),
+            },
             userId: options.userId,
-          }
+          },
         );
       }
 
@@ -1074,11 +1151,12 @@ export class AgentLoopController {
   async getRunSnapshot(runId: string | number) {
     const run = await this.repository.requireRun(runId);
     const steps = await this.repository.getSteps(run.id);
-    const nextStep = this.pickNextStep(steps, run.policy);
+    const nextSteps = this.pickNextSteps(steps, run.policy);
+    const runningStepIds = steps.filter((s) => s.status === 'running').map((s) => s.id);
     return {
-      run,
+      run: { ...run, runningStepIds },
       steps,
-      nextStep,
+      nextSteps,
     };
   }
 
@@ -1095,7 +1173,7 @@ export class AgentLoopController {
     };
   }
 
-  pickNextStep(steps: any[], runPolicy?: any) {
+  pickNextSteps(steps: any[], runPolicy?: any) {
     const byPlanKey = new Map(steps.map((step) => [String(step.planKey), step]));
     const policy = normalizePolicy(runPolicy);
 
@@ -1103,26 +1181,23 @@ export class AgentLoopController {
       .filter(
         (step) =>
           step.status === 'pending' ||
-          (step.status === 'failed' &&
-            Number(step.attempt || 0) < Number(step.maxAttempts || policy.maxStepAttempts))
+          (step.status === 'failed' && Number(step.attempt || 0) < Number(step.maxAttempts || policy.maxStepAttempts)),
       )
       .sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
 
+    const ready: any[] = [];
     for (const step of candidates) {
       const dependencies = asArray(step.dependsOn).map(String);
       const allowSkipped =
         step.dependencyPolicy === 'allow_skipped' || step.metadata?.dependencyPolicy === 'allow_skipped';
-      const ready = dependencies.every((key) => {
+      const allDepsReady = dependencies.every((key) => {
         const dependency = byPlanKey.get(key);
         return dependency?.status === 'succeeded' || (allowSkipped && dependency?.status === 'skipped');
       });
-      if (ready) {
-        return {
-          ...step,
-          retryable: step.status === 'failed',
-        };
+      if (allDepsReady) {
+        ready.push(step);
       }
     }
-    return null;
+    return ready;
   }
 }

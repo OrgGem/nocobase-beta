@@ -1,20 +1,20 @@
 # NocoBase plugin setup architecture
 
-This document summarizes how plugins under `packages/plugins/@nocobase` register themselves, configure client/server behavior, and extend each other through `src/client/index.ts(x)`, `src/server/server.ts`, and `src/server/plugin.ts`, with additional notes on related files that directly affect these entrypoints.
+This document summarizes how plugins under `packages/plugins/@nocobase` register themselves, configure client/server behavior, and extend each other through `src/client/index.ts(x)`, `src/server/plugin.ts`, and `src/index.ts`, with additional notes on related files that directly affect these entrypoints.
 
 ## Scope And How To Read
 
-- Scope covered: all 106 plugin directories under `packages/plugins/@nocobase`.
-- Primary files: `src/client/index.ts`, `src/client/index.tsx`, `src/server/server.ts`, `src/server/plugin.ts`, `src/index.ts`.
+- Scope covered: all 107 plugin directories under `packages/plugins/@nocobase`.
+- Primary files: `src/client/index.ts`, `src/client/index.tsx`, `src/server/plugin.ts`, `src/index.ts`.
 - Core files cross-checked: `packages/core/client/src/application/Plugin.ts`, `packages/core/client/src/application/PluginManager.ts`, `packages/core/server/src/plugin.ts`, `packages/core/server/src/plugin-manager/plugin-manager.ts`.
-- Representative files reviewed in depth: `plugin-action-bulk-edit/src/client/index.tsx`, `plugin-acl/src/server/server.ts`, `plugin-ai/src/client/index.tsx`, `plugin-ai/src/server/plugin.ts`, `plugin-data-source-main/src/server/server.ts`, `plugin-workflow/src/client/index.tsx`, `plugin-workflow/src/server/plugin.ts`, `plugin-file-manager/src/server/server.ts`, `plugin-block-template/src/client/index.tsx`, `plugin-users/src/server/server.ts`, `plugin-public-forms/src/server/plugin.ts`, `plugin-workflow-mailer/src/client/index.ts`.
+- Representative files reviewed in depth: `plugin-action-bulk-edit/src/client/index.tsx`, `plugin-acl/src/server/server.ts`, `plugin-ai/src/client/index.tsx`, `plugin-ai/src/server/plugin.ts`, `plugin-data-source-main/src/server/server.ts`, `plugin-workflow/src/client/index.tsx`, `plugin-workflow/src/server/plugin.ts`, `plugin-file-manager/src/server/plugin.ts`, `plugin-block-template/src/client/index.tsx`, `plugin-users/src/server/server.ts`, `plugin-public-forms/src/server/plugin.ts`, `plugin-workflow-mailer/src/client/index.ts`.
 - The inventory notes below are based on static scans of lifecycle hooks, `extends Plugin`, common registration calls, and peer dependencies. For runtime behavior changes, inspect the imported modules involved in that plugin.
 
 ## Plugin Lifecycle
 
 Client plugins extend `Plugin` from `@nocobase/client`. The constructor receives `options` and `app`. The base lifecycle hooks are `afterAdd()`, `beforeLoad()`, and `load()`. `PluginManager.add()` creates an instance, registers aliases by `name` and `packageName`, then calls `afterAdd()`. During client application startup, the manager calls `beforeLoad()` for all plugins first, then calls `load()` for each plugin and dispatches `plugin:<name>:loaded`.
 
-Server plugins extend `Plugin` from `@nocobase/server`. In addition to `afterAdd()`, `beforeLoad()`, and `load()`, server plugins also support `install()`, `upgrade()`, `beforeEnable()`, `afterEnable()`, `beforeDisable()`, `afterDisable()`, `beforeRemove()`, `afterRemove()`, and `handleSyncMessage()`. Server `PluginManager.load()` only runs enabled plugins: it calls `beforeLoad()`, then `loadCollections()`, `loadAI()`, and `load()`. `install()` runs after `db.sync()` during install/enable flows. Therefore, DB schema, model, migration, and event-hook registration typically belongs in `beforeLoad()`, while resource/action/ACL/middleware registration and service wiring typically belongs in `load()`.
+Server plugins extend `Plugin` from `@nocobase/server`. In addition to `afterAdd()`, `beforeLoad()`, and `load()`, server plugins also support `install()`, `upgrade()`, `beforeEnable()`, `afterEnable()`, `beforeDisable()`, `afterDisable()`, `beforeRemove()`, `afterRemove()`, and `handleSyncMessage()`. Server `PluginManager.load()` only runs enabled plugins: it calls `beforeLoad()`, then `loadCollections()` (auto-imports collections from `server/collections/`), `loadAI()` (auto-loads AI tools from `ai/` directory), and `load()`. `install()` runs after `db.sync()` during install/enable flows. Therefore, DB schema, model, migration, and event-hook registration typically belongs in `beforeLoad()`, while resource/action/ACL/middleware registration and service wiring typically belongs in `load()`.
 
 `src/index.ts` is the server-package entrypoint for most plugins. It usually exports from `./server` with `export * from './server'` and `export { default } from './server'`, or points to `./server/plugin`. The client package is exposed through the `@nocobase/plugin-xxx/client` alias into `src/client`.
 
@@ -36,7 +36,8 @@ UI-only plugins usually have no server logic, or their server class only contain
 Server plugins commonly use the following registration surfaces:
 
 - Database: `db.registerModels`, `db.registerRepositories`, `db.registerOperators`, `db.addMigrations`, `db.on(...)`, automatic collection import through `loadCollections()`.
-- Resource/action: `app.resourceManager.define`, `app.resourcer.define`, `registerActionHandler(s)`.
+- Resource/action: `app.resourceManager.define`, registerActionHandler(s). Note: `app.resourcer` is deprecated; use `app.resourceManager` instead.
+- Data source hooks: `app.dataSourceManager.afterAddDataSource(callback)`, `app.dataSourceManager.beforeAddDataSource(callback)` — register per-data-source resources, actions, ACL, or middleware when a new data source is added.
 - ACL: `acl.registerSnippet`, `acl.allow`, `acl.use`, fixed params, and permission-checking middleware.
 - Middleware: `resourceManager.use`, `dataSource.resourceManager.use`, Koa/application middleware, or data-source ACL middleware.
 - Events/sync: `app.on`, `db.on`, `sendSyncMessage`, `handleSyncMessage`, cache invalidation events.
@@ -104,6 +105,7 @@ Important notes:
 
 - The server constructor is `new Plugin(app, options)`, while the client constructor is `new Plugin(options, app)`. Do not override the constructor unless necessary.
 - `options.name` and `options.packageName` are used by the plugin manager as aliases for `pm.get(...)`.
+- Server `loadCollections()` automatically imports collection definitions from `server/collections/`. Server `loadAI()` automatically loads tools from the `ai/` directory using `ToolsLoader`.
 - If another plugin needs to extend your plugin, expose public methods or registries on the plugin class, following patterns such as `workflow.registerInstruction(...)`, `fileManager.registerStorageType(...)`, or `notification.registerChannelType(...)`.
 
 ### 2. Register Client Plugin Settings, Routes, And Components
@@ -112,7 +114,7 @@ Use this pattern for `plugin-api-doc`, `plugin-auth`, `plugin-ai`, `plugin-local
 
 ```tsx
 import { Plugin, lazy } from '@nocobase/client';
-import { tval } from '@nocobase/utils/client';
+import { tval } from '@nocobase/utils/client'; // deprecated: use tExpr from @nocobase/flow-engine instead
 
 const { ExampleSettingsPage } = lazy(() => import('./ExampleSettingsPage'), 'ExampleSettingsPage');
 const NAMESPACE = '@nocobase/plugin-example';
@@ -443,13 +445,14 @@ async function createExample(ctx, next) {
 
 export default class PluginExampleServer extends Plugin {
   async beforeLoad() {
-    this.app.resourcer.define({
+    this.app.resourceManager.define({
       name: 'examples',
       only: ['list', 'get', 'create', 'update', 'destroy'],
       actions: {
         create: createExample,
       },
     });
+    // Note: app.resourcer is deprecated — use app.resourceManager instead
 
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.configuration`,
@@ -461,7 +464,7 @@ export default class PluginExampleServer extends Plugin {
     this.app.acl.allow('examples', 'publicGet', 'public');
     this.app.acl.allow('examples', 'listMine', 'loggedIn');
 
-    this.app.resourcer.use(
+    this.app.resourceManager.use(
       async (ctx, next) => {
         if (ctx.action.resourceName === 'examples' && ctx.action.actionName === 'listMine') {
           ctx.action.mergeParams({
@@ -479,6 +482,7 @@ export default class PluginExampleServer extends Plugin {
 Important notes:
 
 - `registerSnippet` serves UI permissions/settings; `acl.allow` grants runtime access for public/loggedIn/system actors.
+- `app.resourcer` is deprecated; use `app.resourceManager` instead for resource definitions and middleware.
 - Data-filtering middleware should run after `auth` and before `acl`, following the `plugin-api-keys` pattern.
 - Action names should follow `resource:action`; audit and workflow integrations often depend on that naming.
 
@@ -828,7 +832,7 @@ Important notes:
 
 ```tsx
 import { Plugin } from '@nocobase/client';
-import { tval } from '@nocobase/utils/client';
+import { tval } from '@nocobase/utils/client'; // deprecated: use tExpr from @nocobase/flow-engine instead
 
 const NAMESPACE = '@nocobase/plugin-example';
 
@@ -851,6 +855,7 @@ Important notes:
 
 - `this.t(...)` automatically uses the namespace from `options.packageName`.
 - For configuration objects stored in schemas, use the `{{t("Text", { ns: "..." })}}` template or `tval(...)`.
+- `tval` from `@nocobase/utils/client` is deprecated; use `tExpr` from `@nocobase/flow-engine` for new code.
 - If a plugin provides settings or menus, keep the locale namespace consistent with the package name.
 
 ### 18. Pattern Selection Checklist By Plugin Type

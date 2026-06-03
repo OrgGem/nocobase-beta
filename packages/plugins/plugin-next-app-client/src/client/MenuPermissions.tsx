@@ -10,7 +10,7 @@
 import { css } from '@emotion/css';
 import { createForm, Form, onFormValuesChange } from '@formily/core';
 import { uid } from '@formily/shared';
-import { SchemaComponent, useAPIClient, useCompile, useRequest } from '@nocobase/client';
+import { SchemaComponent, useAPIClient, useCompile, useRequest, UseRequestResult } from '@nocobase/client';
 import { RolesManagerContext } from '@nocobase/plugin-acl/client';
 import { useMemoizedFn } from 'ahooks';
 import { Checkbox, message, Spin, Table, TableProps } from 'antd';
@@ -280,7 +280,13 @@ export const NextAppAllRoutesProvider: React.FC<{ active: boolean }> = ({ active
     {
       ready: active,
     },
-  );
+  ) as unknown as UseRequestResult<{
+    data?: Array<{
+      id: number;
+      title: string;
+      path: string;
+    }>;
+  }>;
 
   const apps = useMemo(() => data?.data || [], [data]);
   const { t } = useTranslation();

@@ -20,7 +20,6 @@ import type {
   ODataQuery,
   UiPathRequestOptions,
   TokenCacheEntry,
-  ODataResponse,
 } from './types';
 import { fetch as undiciFetch, Agent } from 'undici';
 
@@ -109,7 +108,9 @@ export class UiPathApiClient {
       const code = err?.code || err?.cause?.code || '';
       const message = err?.message || 'Network request failed';
       const sslHint = this.getSslErrorHint(code, message);
-      throw new Error(`UiPath connection error [${code}]: ${message}${sslHint}`);
+      const networkError = new Error(`UiPath connection error [${code}]: ${message}${sslHint}`);
+      (networkError as any).statusCode = 503;
+      throw networkError;
     }
   }
 
@@ -274,7 +275,7 @@ export class UiPathApiClient {
       Accept: 'application/json',
       ...this.buildFolderHeaders(folder),
     };
-    if (this.config.deploymentType === 'onPrem' && this.config.tenantName) {
+    if (this.config.tenantName) {
       headers['X-UIPATH-TenantName'] = this.config.tenantName;
     }
     if (body) {
@@ -319,7 +320,9 @@ export class UiPathApiClient {
 
       if (!retryRes.ok) {
         const text = await retryRes.text().catch(() => '');
-        throw new Error(`UiPath API error ${retryRes.status}: ${text}`);
+        const err = new Error(`UiPath API error ${retryRes.status}: ${text}`);
+        (err as any).statusCode = retryRes.status;
+        throw err;
       }
 
       return this.parseResponse<T>(retryRes);
@@ -327,7 +330,9 @@ export class UiPathApiClient {
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`UiPath API error ${res.status}: ${text}`);
+      const err = new Error(`UiPath API error ${res.status}: ${text}`);
+      (err as any).statusCode = res.status;
+      throw err;
     }
 
     return this.parseResponse<T>(res);

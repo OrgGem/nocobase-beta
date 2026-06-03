@@ -1,3 +1,5 @@
+import { toPlain } from '../utils/ctx-utils';
+
 export const ORCHESTRATOR_TRACE_CONTEXT_KEY = '__orchestratorTraceContext';
 
 export type OrchestratorTraceContext = {
@@ -32,10 +34,6 @@ type SpanValues = {
   metadata?: any;
   userId?: string | number;
 };
-
-function toPlain(record: any) {
-  return record?.toJSON?.() || record;
-}
 
 export class ExecutionSpanService {
   constructor(private readonly plugin: any) {}

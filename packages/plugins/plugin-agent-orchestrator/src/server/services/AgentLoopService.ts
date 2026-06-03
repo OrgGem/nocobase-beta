@@ -4,6 +4,7 @@ import { AgentPlanValidator } from './AgentPlanValidator';
 import { AgentLoopRepository } from './AgentLoopRepository';
 import { AgentHarness } from './AgentHarness';
 import { AgentLoopController } from './AgentLoopController';
+import { TokenTracker } from './TokenTracker';
 
 export type AgentLoopRunStatus =
   | 'planning'
@@ -26,6 +27,11 @@ export type AgentLoopPolicy = {
   allowReplan: boolean;
   requireVerification: boolean;
   stopOnApprovalRequired: boolean;
+  maxContextTokens?: number;
+  contextSummaryStrategy?: 'last_n' | 'all';
+  includeToolResults?: boolean;
+  includeStepOutputs?: boolean;
+  maxConcurrency?: number;
 };
 
 export type AgentLoopPlanStepInput = {
@@ -58,12 +64,14 @@ export class AgentLoopService {
     this.validator = new AgentPlanValidator();
     this.repository = new AgentLoopRepository(plugin);
     this.harness = new AgentHarness(plugin, this.registryService);
+    const tokenTracker = new TokenTracker(plugin);
     this.controller = new AgentLoopController(
       this.registryService,
       this.plannerService,
       this.validator,
       this.repository,
-      this.harness
+      this.harness,
+      tokenTracker,
     );
   }
 
@@ -133,6 +141,10 @@ export class AgentLoopService {
 
   async retryStep(stepId: any, options: any = {}) {
     return this.controller.retryStep(stepId, options);
+  }
+
+  async stepFeedback(stepId: any, feedback: any, options: any = {}) {
+    return this.controller.stepFeedback(stepId, feedback, options);
   }
 
   async finishRun(runId: any, finalAnswer: any, options: any = {}) {

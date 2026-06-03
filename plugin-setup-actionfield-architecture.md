@@ -46,7 +46,7 @@ Client plugin thao tac chu yeu qua `this.app`:
 | `flowEngine.registerModels(...)` | Dang ky flow model |
 | `flowEngine.registerActions(...)` | Dang ky flow action runtime |
 
-`Application.addFieldInterfaces()` chi la shortcut den `dataSourceManager.collectionFieldInterfaceManager.addFieldInterfaces()`. Plugin moi nen uu tien `this.app.dataSourceManager.addFieldInterfaces(...)`.
+`this.app.addFieldInterfaces()` chi la shortcut den `this.app.dataSourceManager.collectionFieldInterfaceManager.addFieldInterfaces()`. Plugin moi nen uu tien `this.app.addFieldInterfaces(...)` hoac `this.app.dataSourceManager.addFieldInterfaces(...)`.
 
 `SchemaInitializerManager` va `SchemaSettingsManager` co hang doi tam khi add item truoc luc initializer/settings ton tai. Vi vay plugin co the chen item vao cac menu core nhu `table:configureActions`, `table:configureItemActions`, `details:configureActions`, `gantt:configureActions`, `map:configureActions`.
 
@@ -347,7 +347,7 @@ Dung pattern nay khi chi them behavior/UI vao field co san, khong tao field inte
 Diem can giu khi lam plugin tuong tu:
 
 - `addScopes({ TextCopyButton })` neu schema luu expression nhu `{{TextCopyButton}}`.
-- Uu tien `useColumnSchema()` khi field nam trong table column; fallback `useFieldSchema()`.
+- Uu tien `useColumnSchema()` (import tu `@nocobase/client`) khi field nam trong table column; fallback `useFieldSchema()`.
 - Khi settings thay doi, patch persisted schema bang `x-uid` va cap nhat runtime props neu can.
 - Prototype patch chi nen dung khi khong co extension point sach hon.
 - Luon bao ve prototype patch bang flag/Symbol de idempotent khi plugin reload.
@@ -480,7 +480,7 @@ Dung custom table block khi behavior nam o composition/rendering cua block, khon
 - Schema dung `x-use-component-props` thi hook phai duoc dang ky bang `addScopes` hoac provider `SchemaComponentOptions`.
 - Schema dung component string thi component phai duoc dang ky bang `addComponents` hoac provider `SchemaComponentOptions`.
 - Import/export dac thu phai co server `BaseInterface` vi services goi `toValue`/`toString` theo field interface.
-- Multi data source nen dung `app.dataSourceManager.beforeAddDataSource/afterAddDataSource`, khong chi thao tac `this.db`.
+- Multi data source ben server nen dung `this.app.dataSourceManager.beforeAddDataSource(callback)` / `afterAddDataSource(callback)` de register resource/action/ACL handler cho tung data source, khong chi thao tac `this.db` (main database).
 - Giu deprecated settings/initializer name neu schema cu da tung luu ten do.
 - Mo rong field/component co san thi uu tien `schemaSettingsManager.addItem(...)` va `registerFlow(...)` tren model co san.
 - Prototype patch phai idempotent bang flag/Symbol va nen la lua chon cuoi.

@@ -111,14 +111,14 @@ const FILENAME_IN_TEXT_RE = new RegExp(
   'gi',
 );
 
-function stripFilenameNoise(value: string): string {
+export function stripFilenameNoise(value: string): string {
   return value
     .trim()
     .replace(/^[\s"'`(<[{]+/, '')
     .replace(/[\s"'`)>}\].,;:!?]+$/, '');
 }
 
-function extractFilenameFromText(value: string): string {
+export function extractFilenameFromText(value: string): string {
   const text = stripFilenameNoise(value);
   if (!text) return '';
 
@@ -131,7 +131,7 @@ function extractFilenameFromText(value: string): string {
   return text;
 }
 
-function getDisplayNameCandidates(displayName: string): string[] {
+export function getDisplayNameCandidates(displayName: string): string[] {
   const candidates = [displayName, extractFilenameFromText(displayName)]
     .map((value) => stripFilenameNoise(value))
     .filter(Boolean);
@@ -139,7 +139,7 @@ function getDisplayNameCandidates(displayName: string): string[] {
   return Array.from(new Set(candidates));
 }
 
-function isKnownFileUrl(url?: string): boolean {
+export function isKnownFileUrl(url?: string): boolean {
   return (
     !!url &&
     (url.includes('/api/attachments/') ||

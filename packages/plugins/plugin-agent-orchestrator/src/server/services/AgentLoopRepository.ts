@@ -1,20 +1,5 @@
-function toPlain(record: any) {
-  return record?.toJSON?.() || record;
-}
-
-function trimText(value: any, max = 50000) {
-  let text = '';
-  if (typeof value === 'string') {
-    text = value;
-  } else if (value != null) {
-    try {
-      text = JSON.stringify(value);
-    } catch {
-      text = String(value);
-    }
-  }
-  return text.length > max ? `${text.slice(0, max)}\n...[truncated]` : text;
-}
+import { toPlain, trimText } from '../utils/ctx-utils';
+import { getRunEventBus } from './RunEventBus';
 
 export class AgentLoopRepository {
   constructor(private readonly plugin: any) {}
@@ -99,7 +84,10 @@ export class AgentLoopRepository {
         createdAt: new Date(),
       },
     });
-    return toPlain(record);
+    const event = toPlain(record);
+    // Push event to SSE subscribers
+    getRunEventBus().emit(values.runId, event);
+    return event;
   }
 
   async getEvents(runId: string | number) {
@@ -172,13 +160,9 @@ export class AgentLoopRepository {
       {
         where: {
           id: runId,
-          [Op.or]: [
-            { lockedBy: null },
-            { lockedUntil: { [Op.lt]: now.toISOString() } },
-            { lockedBy: lockName }
-          ]
-        }
-      }
+          [Op.or]: [{ lockedBy: null }, { lockedUntil: { [Op.lt]: now.toISOString() } }, { lockedBy: lockName }],
+        },
+      },
     );
 
     const affectedCount = Array.isArray(result) ? result[0] : Number(result || 0);

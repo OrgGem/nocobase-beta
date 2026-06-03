@@ -40,7 +40,8 @@ export default defineCollection({
       type: 'string',
       length: 30,
       defaultValue: 'planning',
-      comment: 'planning, waiting_plan_approval, approved, running, waiting_user, needs_replan, succeeded, failed, rejected, canceled',
+      comment:
+        'planning, waiting_plan_approval, approved, running, waiting_user, needs_replan, succeeded, failed, rejected, canceled',
     },
     {
       name: 'currentStepId',
@@ -112,6 +113,42 @@ export default defineCollection({
     {
       name: 'summary',
       type: 'text',
+    },
+    {
+      name: 'totalInputTokens',
+      type: 'integer',
+      defaultValue: 0,
+      comment: 'Accumulated input/prompt tokens across all spans in this run',
+    },
+    {
+      name: 'totalOutputTokens',
+      type: 'integer',
+      defaultValue: 0,
+      comment: 'Accumulated output/completion tokens across all spans in this run',
+    },
+    {
+      name: 'totalTokens',
+      type: 'integer',
+      defaultValue: 0,
+      comment: 'Total accumulated tokens (input + output) across all spans in this run',
+    },
+    {
+      name: 'totalCost',
+      type: 'float',
+      defaultValue: 0,
+      comment: 'Estimated total cost in USD across all spans in this run',
+    },
+    {
+      name: 'budgetMaxTokens',
+      type: 'integer',
+      allowNull: true,
+      comment: 'Maximum allowed tokens for this run (null = unlimited)',
+    },
+    {
+      name: 'budgetMaxCost',
+      type: 'float',
+      allowNull: true,
+      comment: 'Maximum allowed cost in USD for this run (null = unlimited)',
     },
     {
       name: 'metadata',
