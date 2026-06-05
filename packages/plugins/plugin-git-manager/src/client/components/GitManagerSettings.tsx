@@ -5,7 +5,6 @@ import {
   RobotOutlined, AuditOutlined, ClockCircleOutlined,
 } from '@ant-design/icons';
 import { GitManagerProvider, useGitManager } from '../context/GitManagerContext';
-import { RepositoryConfig } from './RepositoryConfig';
 import { FileExplorer } from './FileExplorer';
 import { CommitHistory } from './CommitHistory';
 import { MergeRequests } from './MergeRequests';
@@ -76,18 +75,9 @@ const GitManagerContent: React.FC = () => {
 
       <Tabs
         type="card"
-        defaultActiveKey="repos"
+        defaultActiveKey="explorer"
         destroyInactiveTabPane
         items={[
-          {
-            key: 'repos',
-            label: (
-              <span>
-                <DatabaseOutlined /> {t('Repositories')}
-              </span>
-            ),
-            children: <RepositoryConfig />,
-          },
           {
             key: 'explorer',
             label: (

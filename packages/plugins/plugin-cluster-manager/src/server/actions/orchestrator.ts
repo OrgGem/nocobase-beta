@@ -41,7 +41,12 @@ async function getStack(ctx: Context, stackId?: number | string): Promise<StackC
   return stack.toJSON() as StackConfig;
 }
 
-async function assertManagedContainer(ctx: Context, adapter: IOrchestratorAdapter, stack: StackConfig, containerId: string) {
+async function assertManagedContainer(
+  ctx: Context,
+  adapter: IOrchestratorAdapter,
+  stack: StackConfig,
+  containerId: string,
+) {
   try {
     await adapter.assertManagedByStack(stack, containerId);
   } catch (err: any) {
@@ -87,7 +92,9 @@ export const orchestratorActions = {
           if (rawStatus && typeof rawStatus === 'string') {
             (c as any).packageStatus = JSON.parse(rawStatus);
           }
-        } catch {}
+        } catch {
+          // Redis may not be configured — skip package status
+        }
       }
     }
 
@@ -114,6 +121,10 @@ export const orchestratorActions = {
    * POST /workerOrchestrator:scale
    * Body: { stackId: 1, replicas: 3 }
    * Leader-only
+   *
+   * Before scaling, resolves queue-to-stack mappings and injects
+   * WORKER_MODE into the stack's envVars so new containers only
+   * process assigned queues.
    */
   async scale(ctx: Context, next: () => Promise<void>) {
     assertLeader(ctx);
@@ -124,6 +135,47 @@ export const orchestratorActions = {
     if (replicas < 0 || replicas > 20) ctx.throw(400, 'replicas must be between 0 and 20');
 
     const stack = await getStack(ctx, stackId);
+
+    // ── Resolve queue assignments for this stack ──
+    try {
+      const mappingsRepo = ctx.db.getRepository('workerQueueMappings');
+      if (mappingsRepo) {
+        const assigned = await mappingsRepo.find({
+          filter: {
+            stackId: stack.id,
+            enabled: true,
+          },
+        });
+
+        const queueNames = assigned.map((m: any) => m.get('queueName') as string).filter(Boolean);
+
+        if (queueNames.length > 0) {
+          const workerMode = queueNames.join(',');
+          ctx.app.logger.info(
+            `[Orchestrator] Injecting WORKER_MODE=${workerMode} for stack "${stack.name}" (${queueNames.length} queue(s) assigned)`,
+          );
+          // Merge into envVars; adapter code merges envVars over inherited env
+          stack.envVars = {
+            ...(stack.envVars || {}),
+            WORKER_MODE: workerMode,
+          };
+        } else {
+          // No specific assignment → default to all queues (backwards compatible)
+          stack.envVars = {
+            ...(stack.envVars || {}),
+            WORKER_MODE: '*',
+          };
+        }
+      }
+    } catch (err: any) {
+      // If workerQueueMappings table doesn't exist yet, fall back gracefully
+      ctx.app.logger.debug(`[Orchestrator] Queue mappings not available: ${err.message}`);
+      stack.envVars = {
+        ...(stack.envVars || {}),
+        WORKER_MODE: '*',
+      };
+    }
+
     const result = await adapter.scale(stack, Number(replicas));
 
     // Update DB

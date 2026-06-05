@@ -6,7 +6,7 @@
   "description": "Manage document templates rendered by an external Carbone.io service: upload templates, auto-extract placeholders, version & rollback, test playground, monitoring, MD5 cache, REST API, workflow instruction.",
   "description.zh-CN": "通过外部 Carbone.io 服务管理文档模板：上传模板、自动提取占位符、版本回滚、测试运行、监控、MD5 缓存、REST API、工作流指令。",
   "description.vi-VN": "Quản lý mẫu tài liệu render qua Carbone.io: upload mẫu, tự động trích xuất placeholder, versioning & rollback, playground test, monitoring, cache MD5, REST API, workflow instruction.",
-  "version": "1.1.8",
+  "version": "1.1.10",
   "main": "dist/server/index.js",
   "files": [
     "dist",

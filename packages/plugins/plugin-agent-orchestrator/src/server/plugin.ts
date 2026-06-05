@@ -53,6 +53,21 @@ export class PluginAgentOrchestratorServer extends Plugin {
       ],
     });
 
+    // Allow any logged-in user to read available skills and loop configs.
+    // This mirrors the plugin-ai pattern (acl.allow with 'loggedIn')
+    // so that non-admin users with AI roles can use skills without
+    // requiring manual snippet assignment per role.
+    // Create/update/destroy remain restricted to admin roles via the snippet above.
+    (this as any).app.acl.allow('skillDefinitions', 'list', 'loggedIn');
+    (this as any).app.acl.allow('skillDefinitions', 'get', 'loggedIn');
+    (this as any).app.acl.allow('skillLoopConfigs', 'list', 'loggedIn');
+    (this as any).app.acl.allow('skillLoopConfigs', 'get', 'loggedIn');
+    (this as any).app.acl.allow('skillExecutions', 'list', 'loggedIn');
+    (this as any).app.acl.allow('skillExecutions', 'get', 'loggedIn');
+    (this as any).app.acl.allow('skillHub', 'test', 'loggedIn');
+    (this as any).app.acl.allow('skillHub', 'download', 'loggedIn');
+    (this as any).app.acl.allow('skillHub', 'listTemplates', 'loggedIn');
+
     // --- Register Dynamic Tools ---
     // Each configured sub-agent becomes a callable tool for its leader.
     // Uses createReactAgent (LangGraph public API) instead of private AIEmployee class.

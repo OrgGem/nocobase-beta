@@ -6,7 +6,7 @@
   "description": "NocoBase AI Assistant 预览附件（Word, Excel, PDF, CSV...）支持 S3 auth",
   "description.vi-VN": "Preview file attachment tren AI Chat (Word, Excel, PDF, CSV...) kem S3 auth",
   "description.zh-CN": "在AI员工聊天中直接预览上传的文件附件，支持浏览器缓存。",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "main": "dist/server/index.js",
   "dependencies": {},
   "peerDependencies": {

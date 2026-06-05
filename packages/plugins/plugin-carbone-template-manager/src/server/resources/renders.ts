@@ -40,15 +40,11 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
     if (!(await checkRate(ctx, plugin, logger, 'renderById', { templateId: templateId || templateName }))) return;
 
     const filter = templateId ? { id: templateId } : { name: templateName };
-    const tpl = await plugin.db
-      .getRepository(COLLECTION.templates)
-      .findOne({ filter, appends: ['currentVersion'] });
+    const tpl = await plugin.db.getRepository(COLLECTION.templates).findOne({ filter, appends: ['currentVersion'] });
     if (!tpl) ctx.throw(404, 'template not found');
     if (!tpl.enabled) ctx.throw(409, 'template is disabled');
     const version = requestedVersionId
-      ? await plugin.db
-          .getRepository(COLLECTION.versions)
-          .findOne({ filterByTk: requestedVersionId })
+      ? await plugin.db.getRepository(COLLECTION.versions).findOne({ filterByTk: requestedVersionId })
       : tpl.currentVersion;
     if (!version) ctx.throw(404, 'template version not found');
     if (Number(version.templateId) !== Number(tpl.id)) {
@@ -91,37 +87,42 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
         };
       }
 
-      await logger.log({
-        ...baseEntry(ctx, 'renderById', 'success'),
-        templateId: tpl.id,
-        versionId: version.id,
-        carboneTemplateId,
-        format: outcome.format,
-        filename,
-        cacheKey: outcome.cacheKey,
-        cacheHit: outcome.cacheHit,
-        inputMd5: outcome.inputMd5,
-        inputBytes: byteSize(data),
-        outputBytes: outcome.size,
-        durationMs: outcome.durationMs,
-        outputAttachmentId: outcome.attachmentId,
-        inputData: data,
-      });
+      // Best-effort logging — never block the response for telemetry.
+      logger
+        .log({
+          ...baseEntry(ctx, 'renderById', 'success'),
+          templateId: tpl.id,
+          versionId: version.id,
+          carboneTemplateId,
+          format: outcome.format,
+          filename,
+          cacheKey: outcome.cacheKey,
+          cacheHit: outcome.cacheHit,
+          inputMd5: outcome.inputMd5,
+          inputBytes: byteSize(data),
+          outputBytes: outcome.size,
+          durationMs: outcome.durationMs,
+          outputAttachmentId: outcome.attachmentId,
+          inputData: data,
+        })
+        .catch(() => undefined);
       await next();
     } catch (err: any) {
-      await logger.log({
-        ...baseEntry(ctx, 'renderById', 'error'),
-        templateId: tpl?.id,
-        versionId: version?.id ?? tpl?.currentVersionId,
-        carboneTemplateId: version?.carboneTemplateId ?? tpl?.carboneTemplateId,
-        format: format ?? tpl?.defaultOutputFormat,
-        filename,
-        inputMd5: inputMd5(data),
-        inputBytes: byteSize(data),
-        durationMs: Date.now() - t0,
-        inputData: data,
-        errorMessage: err?.message || String(err),
-      });
+      logger
+        .log({
+          ...baseEntry(ctx, 'renderById', 'error'),
+          templateId: tpl?.id,
+          versionId: version?.id ?? tpl?.currentVersionId,
+          carboneTemplateId: version?.carboneTemplateId ?? tpl?.carboneTemplateId,
+          format: format ?? tpl?.defaultOutputFormat,
+          filename,
+          inputMd5: inputMd5(data),
+          inputBytes: byteSize(data),
+          durationMs: Date.now() - t0,
+          inputData: data,
+          errorMessage: err?.message || String(err),
+        })
+        .catch(() => undefined);
       throw err;
     }
   }
@@ -138,10 +139,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
 
     try {
       const { buffer, attachment } = await readAttachmentBuffer(plugin.app, attachmentId);
-      const carboneTemplateId = await client.uploadTemplate(
-        buffer,
-        attachment.filename || 'inline-template',
-      );
+      const carboneTemplateId = await client.uploadTemplate(buffer, attachment.filename || 'inline-template');
 
       const pipeline = await buildPipeline(plugin);
       const outcome = await pipeline.render({
@@ -165,31 +163,35 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
         carboneTemplateId,
       };
 
-      await logger.log({
-        ...baseEntry(ctx, 'renderDirect', 'success'),
-        carboneTemplateId,
-        format: outcome.format,
-        filename,
-        cacheKey: outcome.cacheKey,
-        cacheHit: outcome.cacheHit,
-        inputMd5: outcome.inputMd5,
-        inputBytes: byteSize(data ?? {}),
-        outputBytes: outcome.size,
-        durationMs: outcome.durationMs,
-        outputAttachmentId: outcome.attachmentId,
-        inputData: data ?? {},
-      });
+      logger
+        .log({
+          ...baseEntry(ctx, 'renderDirect', 'success'),
+          carboneTemplateId,
+          format: outcome.format,
+          filename,
+          cacheKey: outcome.cacheKey,
+          cacheHit: outcome.cacheHit,
+          inputMd5: outcome.inputMd5,
+          inputBytes: byteSize(data ?? {}),
+          outputBytes: outcome.size,
+          durationMs: outcome.durationMs,
+          outputAttachmentId: outcome.attachmentId,
+          inputData: data ?? {},
+        })
+        .catch(() => undefined);
       await next();
     } catch (err: any) {
-      await logger.log({
-        ...baseEntry(ctx, 'renderDirect', 'error'),
-        format,
-        filename,
-        inputBytes: byteSize(data ?? {}),
-        durationMs: Date.now() - t0,
-        inputData: data ?? {},
-        errorMessage: err?.message || String(err),
-      });
+      logger
+        .log({
+          ...baseEntry(ctx, 'renderDirect', 'error'),
+          format,
+          filename,
+          inputBytes: byteSize(data ?? {}),
+          durationMs: Date.now() - t0,
+          inputData: data ?? {},
+          errorMessage: err?.message || String(err),
+        })
+        .catch(() => undefined);
       throw err;
     }
   }
@@ -208,9 +210,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
     if (!templateId) ctx.throw(400, 'templateId is required');
     if (!(await checkRate(ctx, plugin, logger, 'test', { templateId }))) return;
 
-    const tpl = await plugin.db
-      .getRepository(COLLECTION.templates)
-      .findOne({ filterByTk: templateId });
+    const tpl = await plugin.db.getRepository(COLLECTION.templates).findOne({ filterByTk: templateId });
     if (!tpl) ctx.throw(404, 'template not found');
     if (!tpl.enabled) ctx.throw(409, 'template is disabled');
     if (!tpl.carboneTemplateId) ctx.throw(409, 'template has no Carbone id');
@@ -230,40 +230,41 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
       ctx.set('X-Carbone-Cache', 'BYPASS');
       ctx.set('X-Carbone-Render-Ms', String(outcome.durationMs));
       ctx.type = mimeForFormat(outcome.format);
-      ctx.set(
-        'Content-Disposition',
-        `inline; filename="${encodeURIComponent(`${tpl.name}-test.${outcome.format}`)}"`,
-      );
+      ctx.set('Content-Disposition', `inline; filename="${encodeURIComponent(`${tpl.name}-test.${outcome.format}`)}"`);
       ctx.body = outcome.buffer;
 
-      await logger.log({
-        ...baseEntry(ctx, 'test', 'success'),
-        templateId: tpl.id,
-        versionId: tpl.currentVersionId,
-        carboneTemplateId: tpl.carboneTemplateId,
-        format: outcome.format,
-        cacheKey: outcome.cacheKey,
-        cacheHit: false,
-        inputMd5: outcome.inputMd5,
-        inputBytes: byteSize(data),
-        outputBytes: outcome.size,
-        durationMs: outcome.durationMs,
-        inputData: data,
-      });
+      logger
+        .log({
+          ...baseEntry(ctx, 'test', 'success'),
+          templateId: tpl.id,
+          versionId: tpl.currentVersionId,
+          carboneTemplateId: tpl.carboneTemplateId,
+          format: outcome.format,
+          cacheKey: outcome.cacheKey,
+          cacheHit: false,
+          inputMd5: outcome.inputMd5,
+          inputBytes: byteSize(data),
+          outputBytes: outcome.size,
+          durationMs: outcome.durationMs,
+          inputData: data,
+        })
+        .catch(() => undefined);
       await next();
     } catch (err: any) {
-      await logger.log({
-        ...baseEntry(ctx, 'test', 'error'),
-        templateId: tpl?.id,
-        versionId: tpl?.currentVersionId,
-        carboneTemplateId: tpl?.carboneTemplateId,
-        format: format ?? tpl?.defaultOutputFormat,
-        inputMd5: inputMd5(data),
-        inputBytes: byteSize(data),
-        durationMs: Date.now() - t0,
-        inputData: data,
-        errorMessage: err?.message || String(err),
-      });
+      logger
+        .log({
+          ...baseEntry(ctx, 'test', 'error'),
+          templateId: tpl?.id,
+          versionId: tpl?.currentVersionId,
+          carboneTemplateId: tpl?.carboneTemplateId,
+          format: format ?? tpl?.defaultOutputFormat,
+          inputMd5: inputMd5(data),
+          inputBytes: byteSize(data),
+          durationMs: Date.now() - t0,
+          inputData: data,
+          errorMessage: err?.message || String(err),
+        })
+        .catch(() => undefined);
       throw err;
     }
   }
@@ -282,9 +283,7 @@ export function makeCacheActions(plugin: PluginCarboneTemplateManagerServer) {
       const n = await cache.invalidateByTemplate(Number(v.templateId));
       ctx.body = { ok: true, removed: n };
     } else if (v.cacheKey) {
-      const row = await plugin.db
-        .getRepository(COLLECTION.renderCache)
-        .findOne({ filter: { cacheKey: v.cacheKey } });
+      const row = await plugin.db.getRepository(COLLECTION.renderCache).findOne({ filter: { cacheKey: v.cacheKey } });
       if (row) await cache.evict(row.id);
       ctx.body = { ok: true, removed: row ? 1 : 0 };
     } else {
@@ -311,9 +310,7 @@ export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer
     if (!log.templateId) ctx.throw(409, 'replay only supports logged render/test entries');
 
     const pipeline = await buildPipeline(plugin);
-    const tpl = await plugin.db
-      .getRepository(COLLECTION.templates)
-      .findOne({ filterByTk: log.templateId });
+    const tpl = await plugin.db.getRepository(COLLECTION.templates).findOne({ filterByTk: log.templateId });
     if (!tpl) ctx.throw(404, 'template no longer exists');
 
     // Use the carboneTemplateId and versionId from the log record — these
@@ -364,7 +361,8 @@ export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer
     const success = rows.filter((r: any) => r.status === 'success');
     const hits = success.filter((r: any) => r.cacheHit).length;
     const durations = success.map((r: any) => r.durationMs ?? 0).sort((a, b) => a - b);
-    const p = (q: number) => (durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * q))] : 0);
+    const p = (q: number) =>
+      durations.length ? durations[Math.min(durations.length - 1, Math.floor(durations.length * q))] : 0;
 
     // Hourly buckets for a sparkline.
     const buckets: Record<string, { count: number; errors: number; hits: number }> = {};
@@ -414,11 +412,13 @@ async function checkRate(
   ctx.set('X-Carbone-Rate-Limit', String(limit));
   ctx.status = 429;
   ctx.body = { errors: [{ message: `rate limit ${limit}/min exceeded` }] };
-  await logger.log({
-    ...baseEntry(ctx, action, 'rate_limited'),
-    templateId: extras.templateId ? Number(extras.templateId) : undefined,
-    errorMessage: `rate limit ${limit}/min exceeded`,
-  });
+  logger
+    .log({
+      ...baseEntry(ctx, action, 'rate_limited'),
+      templateId: extras.templateId ? Number(extras.templateId) : undefined,
+      errorMessage: `rate limit ${limit}/min exceeded`,
+    })
+    .catch(() => undefined);
   return false;
 }
 
@@ -446,7 +446,10 @@ function byteSize(data: unknown): number {
 
 function bucketKey(d: Date | string): string {
   const dt = typeof d === 'string' ? new Date(d) : d;
-  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}T${String(dt.getUTCHours()).padStart(2, '0')}`;
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(
+    2,
+    '0',
+  )}T${String(dt.getUTCHours()).padStart(2, '0')}`;
 }
 
 async function buildPipeline(plugin: PluginCarboneTemplateManagerServer): Promise<RenderPipeline> {

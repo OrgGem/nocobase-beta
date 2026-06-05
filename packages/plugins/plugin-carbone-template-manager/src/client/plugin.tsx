@@ -4,23 +4,35 @@ import { NAMESPACE } from './locale';
 import CarboneRenderInstruction from './workflow/CarboneRenderInstruction';
 
 const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'SettingsPage');
+const ConnectionSettings = lazy(() => import('./components/ConnectionSettings'), 'ConnectionSettings');
 
 export class PluginCarboneTemplateManagerClient extends Plugin {
   declare app: any;
   async load() {
     const locale = this.app.i18n.language || 'en-US';
     try {
-      const messages = await import(`../locale/${locale}.json`).catch(
-        () => import('../locale/en-US.json'),
-      );
+      const messages = await import(`../locale/${locale}.json`).catch(() => import('../locale/en-US.json'));
       this.app.i18n.addResourceBundle(locale, NAMESPACE, messages.default || messages, true, true);
     } catch {
       // Locale file may not exist for this language — silently skip
     }
 
+    // Parent group — acts as a category in settings
     this.app.pluginSettingsManager.add(NAMESPACE, {
       title: `{{t("Carbone Template Manager", { ns: "${NAMESPACE}" })}}`,
       icon: 'FileWordOutlined',
+    });
+
+    // Connection config — separate ACL-granular group
+    this.app.pluginSettingsManager.add(`${NAMESPACE}.connection`, {
+      title: `{{t("Connection", { ns: "${NAMESPACE}" })}}`,
+      Component: ConnectionSettings,
+      aclSnippet: `pm.${NAMESPACE}.connection`,
+    });
+
+    // Full settings — requires broader permissions
+    this.app.pluginSettingsManager.add(`${NAMESPACE}.settings`, {
+      title: `{{t("Settings", { ns: "${NAMESPACE}" })}}`,
       Component: SettingsPage,
       aclSnippet: `pm.${NAMESPACE}.settings`,
     });

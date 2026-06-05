@@ -5,6 +5,7 @@ import * as gitActions from './actions/git-actions';
 import * as gitlabApi from './actions/gitlab-api';
 import * as reviewActions from './actions/review';
 import * as pollerActions from './actions/poller';
+import * as rolePermissionsActions from './actions/role-permissions';
 import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
@@ -57,6 +58,8 @@ export class PluginGitManagerServer extends Plugin {
         reviewReject: reviewActions.reviewReject,
         pollNow: pollerActions.pollNow,
         pollerStatus: pollerActions.pollerStatus,
+        rolePermissions: rolePermissionsActions.rolePermissions,
+        updateRolePermissions: rolePermissionsActions.updateRolePermissions,
       },
     });
 
@@ -147,6 +150,24 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:reviewApprovePost',
         'gitManager:reviewReject',
         'gitManager:pollNow',
+      ],
+    });
+
+    // Repositories config — CRUD on gitRepositories only (no operations)
+    (this as any).app.acl.registerSnippet({
+      name: `pm.${(this as any).name}.repositories`,
+      actions: [
+        'gitRepositories:*',
+      ],
+    });
+
+    // Full management — all git manager actions
+    (this as any).app.acl.registerSnippet({
+      name: `pm.${(this as any).name}.manage`,
+      actions: [
+        `pm.${(this as any).name}.repositories`,
+        `pm.${(this as any).name}.read`,
+        `pm.${(this as any).name}.write`,
       ],
     });
 

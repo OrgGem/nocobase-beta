@@ -8,6 +8,7 @@ import { ContainerOrchestrator } from './ContainerOrchestrator';
 import { PackageInstaller } from './PackageInstaller';
 import { PluginOperations } from './PluginOperations';
 import { Doctor } from './Doctor';
+import { QueueAssignment } from './QueueAssignment';
 import { useT } from './utils';
 
 export function ClusterManagerLayout() {
@@ -56,6 +57,11 @@ export function ClusterManagerLayout() {
             key: 'doctor',
             label: t('Doctor'),
             children: <Doctor />,
+          },
+          {
+            key: 'queues',
+            label: t('Queue Assignment'),
+            children: <QueueAssignment />,
           },
         ]}
       />

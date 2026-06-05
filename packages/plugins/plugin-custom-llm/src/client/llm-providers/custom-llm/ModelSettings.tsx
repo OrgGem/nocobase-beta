@@ -13,6 +13,7 @@ import { tval } from '@nocobase/utils/client';
 import { namespace, useT } from '../../locale';
 import { Collapse } from 'antd';
 import { ModelSelect } from '@nocobase/plugin-ai/client';
+import { Chat } from '@nocobase/plugin-ai/client';
 
 const Options: React.FC = () => {
   const t = useT();
@@ -121,7 +122,10 @@ const Options: React.FC = () => {
                       'x-decorator': 'FormItem',
                       'x-component': 'Checkbox',
                       default: true,
-                      description: tval('Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.', { ns: namespace }),
+                      description: tval(
+                        'Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.',
+                        { ns: namespace },
+                      ),
                     },
                     maxToolRetries: {
                       title: tval('Max tool retries', { ns: namespace }),
@@ -147,7 +151,10 @@ const Options: React.FC = () => {
                       'x-decorator': 'FormItem',
                       'x-component': 'Checkbox',
                       default: false,
-                      description: tval('Uses a rough heuristic to estimate token count (not exact). May over- or under-count for some content types. Enable only when hitting context length limits.', { ns: namespace }),
+                      description: tval(
+                        'Uses a rough heuristic to estimate token count (not exact). May over- or under-count for some content types. Enable only when hitting context length limits.',
+                        { ns: namespace },
+                      ),
                     },
                     maxContextTokens: {
                       title: tval('Max Context Tokens', { ns: namespace }),
@@ -174,7 +181,7 @@ const Options: React.FC = () => {
 export const ModelSettingsForm: React.FC = () => {
   return (
     <SchemaComponent
-      components={{ Options, ModelSelect }}
+      components={{ Options, ModelSelect, Chat }}
       schema={{
         type: 'void',
         properties: {
@@ -188,6 +195,10 @@ export const ModelSettingsForm: React.FC = () => {
           options: {
             type: 'void',
             'x-component': 'Options',
+          },
+          chat: {
+            type: 'void',
+            'x-component': 'Chat',
           },
         },
       }}

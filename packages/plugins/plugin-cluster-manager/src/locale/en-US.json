@@ -187,5 +187,19 @@
   "Log Files": "Log Files",
   "Package": "Package",
   "DB Version": "DB Version",
-  "Runtime Versions": "Runtime Versions"
+  "Runtime Versions": "Runtime Versions",
+  "Queue Assignment": "Queue Assignment",
+  "Queue Name": "Queue Name",
+  "Map queues to worker stacks. Unassigned queues run on all workers.": "Map queues to worker stacks. Unassigned queues run on all workers.",
+  "Scan Queues": "Scan Queues",
+  "Auto-map ({count})": "Auto-map ({count})",
+  "Register": "Register",
+  "Unregister": "Unregister",
+  "Assigned Stack": "Assigned Stack",
+  "All (default)": "All (default)",
+  "Delete this mapping?": "Delete this mapping?",
+  "No queues discovered. Click \"Scan Queues\" to detect registered queues.": "No queues discovered. Click \"Scan Queues\" to detect registered queues.",
+  "Auto-mapped {count} queue(s)": "Auto-mapped {count} queue(s)",
+  "Queue Assignment updated": "Queue Assignment updated",
+  "Unassigned (worker runs all queues)": "Unassigned (worker runs all queues)"
 }

@@ -179,5 +179,12 @@
   "new": "mới",
   "Reviewed SHA": "SHA đã đánh giá",
   "Latest SHA": "SHA mới nhất",
-  "All triggers": "Tất cả nguồn"
+  "All triggers": "Tất cả nguồn",
+  "Manage": "Quản lý",
+  "Repository Permissions": "Phân quyền kho mã nguồn",
+  "Read (List, Browse Files, View History)": "Đọc (Xem danh sách, Duyệt tệp, Xem lịch sử)",
+  "Write (Clone, Pull, Push, Review)": "Ghi (Sao chép, Kéo về, Đẩy lên, Đánh giá)",
+  "Configure access permissions for each repository for the role {{roleName}}": "Cấu hình quyền truy cập cho từng kho mã nguồn đối với vai trò {{roleName}}",
+  "Failed to load repository permissions": "Không thể tải phân quyền kho mã nguồn",
+  "Failed to update permissions": "Cập nhật phân quyền thất bại"
 }

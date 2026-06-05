@@ -1,5 +1,7 @@
 import { Plugin } from '@nocobase/server';
+import { readdir, unlink } from 'fs/promises';
 import { resolve } from 'path';
+import { tmpdir } from 'os';
 import WorkflowPlugin from '@nocobase/plugin-workflow';
 import { COLLECTION, DEFAULTS } from '../shared/constants';
 import { CarboneClient, CarboneClientConfig } from './services/carbone-client';
@@ -55,6 +57,10 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     // 1. Auto-load collections
     await this.db.import({ directory: resolve(__dirname, 'collections') });
 
+    // 1.5 Stale temp file cleanup — remove any carbone-* files left behind
+    //     by a previous process crash (#8).
+    this.cleanupTempFiles().catch((err) => this.app.logger.warn(`[carbone] temp file cleanup failed: ${err}`));
+
     // 2. Resource actions (extend default collection actions using registerActionHandlers to avoid 404s)
     const tplActions = makeTemplateActions(this);
     const renderActions = makeRenderActions(this);
@@ -85,14 +91,44 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
       [`${COLLECTION.renderLogs}:summary`]: monitoringActions.summary,
     });
 
-    // 2.5 Cache invalidation hook — purge cache rows when a template is removed.
+    // 2.5 Cleanup hook — purge cache rows + Carbone-side template when destroyed.
     this.db.on(`${COLLECTION.templates}.afterDestroy`, async (model: any) => {
+      const id = model?.id ?? model?.dataValues?.id;
+      if (!id) return;
       try {
-        const id = model?.id ?? model?.dataValues?.id;
-        if (!id) return;
         await new CacheManager(this.app).invalidateByTemplate(Number(id));
       } catch (err) {
         this.app.logger.warn(`[carbone] cache invalidation on destroy failed: ${err}`);
+      }
+      // Best-effort cleanup of Carbone-side SHA-256 entries for versions
+      // that aren't shared with any remaining template/version.
+      try {
+        const client = await this.getCarboneClient();
+        if (!client) return;
+        const verRepo = this.db.getRepository(COLLECTION.versions);
+        const versions = await verRepo.find({
+          filter: { templateId: Number(id) },
+          fields: ['id', 'carboneTemplateId'],
+        });
+        for (const ver of versions) {
+          const carboneId = ver.carboneTemplateId;
+          if (!carboneId) continue;
+          // Only delete from Carbone if no other template or version references this SHA-256.
+          const siblingVersions = await verRepo.count({
+            filter: { carboneTemplateId: carboneId, id: { $ne: ver.id } },
+          });
+          if (siblingVersions > 0) continue;
+          const tplRepo = this.db.getRepository(COLLECTION.templates);
+          const activeTpl = await tplRepo.count({
+            filter: { carboneTemplateId: carboneId, id: { $ne: Number(id) } },
+          });
+          if (activeTpl > 0) continue;
+          await client.deleteTemplate(carboneId).catch((err) => {
+            this.app.logger.warn(`[carbone] failed to delete remote template ${carboneId}: ${err}`);
+          });
+        }
+      } catch (err) {
+        this.app.logger.warn(`[carbone] remote cleanup on destroy failed: ${err}`);
       }
     });
 
@@ -101,6 +137,13 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     this.app.on('beforeStop', () => {
       if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
     });
+
+    // 2.6a Log a startup warning about the in-memory rate limiter so
+    //      operators of multi-instance deployments are aware of the gap.
+    this.app.logger?.info(
+      '[carbone] rate limiter is in-memory (single-instance only); ' +
+        'multi-instance deployments should swap RateLimiter for a Redis-backed store',
+    );
 
     // 2.7 Workflow integration (P6) — register the `carbone-render` instruction.
     const workflowPlugin = this.app.pm.get(WorkflowPlugin) as any;
@@ -112,11 +155,17 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     //    that don't exist yet are scoped now to keep migrations stable.
     const ns = this.name;
     this.app.acl.registerSnippet({
+      name: `pm.${ns}.connection`,
+      actions: [`${COLLECTION.settings}:get`, `${COLLECTION.settings}:save`, `${COLLECTION.settings}:testConnection`],
+    });
+    this.app.acl.registerSnippet({
       name: `pm.${ns}.settings`,
       actions: [
-        `${COLLECTION.settings}:get`,
-        `${COLLECTION.settings}:save`,
-        `${COLLECTION.settings}:testConnection`,
+        `pm.${ns}.connection`,
+        `pm.${ns}.templates`,
+        `pm.${ns}.render`,
+        `pm.${ns}.versions`,
+        `pm.${ns}.monitoring`,
       ],
     });
     this.app.acl.registerSnippet({
@@ -178,6 +227,19 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
       maxRetries: row.maxRetries ?? DEFAULTS.maxRetries,
     };
     return new CarboneClient(cfg);
+  }
+
+  /**
+   * Stale temp file cleanup — scans os.tmpdir() for `carbone-*` files left
+   * behind by a previous process crash and removes them.
+   */
+  private async cleanupTempFiles(): Promise<void> {
+    const dir = tmpdir();
+    const files = await readdir(dir);
+    const carboneTemp = files.filter((f) => f.startsWith('carbone-'));
+    if (!carboneTemp.length) return;
+    await Promise.all(carboneTemp.map((f) => unlink(resolve(dir, f)).catch(() => undefined)));
+    this.app.logger?.info(`[carbone] cleaned up ${carboneTemp.length} stale temp files`);
   }
 
   private async runMaintenance() {

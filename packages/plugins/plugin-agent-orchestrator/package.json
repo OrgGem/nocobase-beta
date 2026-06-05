@@ -4,7 +4,7 @@
   "displayName.zh-CN": "代理协调器",
   "displayName.vi-VN": "Điều phối Agent",
   "description": "Hierarchical Multi-Agent orchestration for NocoBase AI Employees. Enables Leader agents to delegate tasks to Sub-Agent employees without modifying core plugin-ai.",
-  "version": "1.0.20",
+  "version": "1.0.22",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

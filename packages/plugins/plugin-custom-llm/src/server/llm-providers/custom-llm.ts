@@ -8,6 +8,8 @@
  */
 
 import { LLMProvider, LLMProviderMeta } from '@nocobase/plugin-ai';
+import { EmbeddingProvider, SupportedModel } from '../utils/ai-types';
+import { EmbeddingsInterface } from '@langchain/core/embeddings';
 import { Model } from '@nocobase/database';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -155,9 +157,13 @@ function createReasoningChatClass() {
         options?.[REASONING_MAP_KEY] instanceof Map
           ? (options[REASONING_MAP_KEY] as Map<string, string>)
           : collectReasoningMap(messages);
-      
-      const stream = super._streamResponseChunks(messages, { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap }, runManager);
-      
+
+      const stream = super._streamResponseChunks(
+        messages,
+        { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap },
+        runManager,
+      );
+
       let thinkingOpened = false;
       let thinkingClosed = false;
 
@@ -166,56 +172,69 @@ function createReasoningChatClass() {
 
       for await (const chunk of stream) {
         const rc = chunk.message?.additional_kwargs?.reasoning_content;
-        const text = chunk.message?.content || "";
-        
-        let injectedText = "";
-        
+        const text = chunk.message?.content || '';
+
+        let injectedText = '';
+
         if (rc) {
           if (!thinkingOpened) {
-            injectedText += "<details style=\"margin-bottom: 12px; background: #fdfdfd; padding: 4px 8px; border-radius: 4px; border: 1px solid #f0f0f0;\">\n<summary style=\"cursor: pointer; color: #888; font-size: 0.9em; user-select: none;\">Thinking...</summary>\n\n";
+            injectedText +=
+              '<details style="margin-bottom: 12px; background: #fdfdfd; padding: 4px 8px; border-radius: 4px; border: 1px solid #f0f0f0;">\n<summary style="cursor: pointer; color: #888; font-size: 0.9em; user-select: none;">Thinking...</summary>\n\n';
             thinkingOpened = true;
           }
           injectedText += rc;
         }
-        
-        if (!rc && thinkingOpened && !thinkingClosed && (text && text !== KEEPALIVE_PREFIX || chunk.message?.tool_calls?.length > 0 || chunk.message?.tool_call_chunks?.length > 0)) {
-          injectedText += "\n\n</details>\n\n";
+
+        if (
+          !rc &&
+          thinkingOpened &&
+          !thinkingClosed &&
+          ((text && text !== KEEPALIVE_PREFIX) ||
+            chunk.message?.tool_calls?.length > 0 ||
+            chunk.message?.tool_call_chunks?.length > 0)
+        ) {
+          injectedText += '\n\n</details>\n\n';
           thinkingClosed = true;
         }
-        
+
         if (text && text !== KEEPALIVE_PREFIX) {
           injectedText += text;
         }
-        
+
         if (text === KEEPALIVE_PREFIX && !injectedText) {
           // Pass keepalive directly without wrapping
           yield chunk;
           continue;
         }
-        
-        if (injectedText || chunk.message?.tool_call_chunks?.length > 0 || chunk.message?.tool_calls?.length > 0 || text === "") {
+
+        if (
+          injectedText ||
+          chunk.message?.tool_call_chunks?.length > 0 ||
+          chunk.message?.tool_calls?.length > 0 ||
+          text === ''
+        ) {
           const newMsgOptions: any = { content: injectedText };
           if (chunk.message.additional_kwargs) newMsgOptions.additional_kwargs = chunk.message.additional_kwargs;
           if (chunk.message.tool_call_chunks) newMsgOptions.tool_call_chunks = chunk.message.tool_call_chunks;
           if (chunk.message.tool_calls) newMsgOptions.tool_calls = chunk.message.tool_calls;
           if (chunk.message.response_metadata) newMsgOptions.response_metadata = chunk.message.response_metadata;
           if (chunk.message.usage_metadata) newMsgOptions.usage_metadata = chunk.message.usage_metadata;
-          
+
           yield new ChatGenerationChunk({
             message: new AIMessageChunk(newMsgOptions),
-            text: injectedText
+            text: injectedText,
           });
           continue;
         }
-        
+
         yield chunk;
       }
-      
+
       // Close thinking block if stream abruptly ended
       if (thinkingOpened && !thinkingClosed) {
         yield new ChatGenerationChunk({
-          message: new AIMessageChunk({ content: "\n\n</details>\n\n" }),
-          text: "\n\n</details>\n\n"
+          message: new AIMessageChunk({ content: '\n\n</details>\n\n' }),
+          text: '\n\n</details>\n\n',
         });
       }
     }
@@ -701,7 +720,7 @@ function createMappingFetch(responseMapping: Record<string, string>) {
 
                             for (let i = 0; i < maxLen; i += SSE_MAPPING_CHUNK_SIZE) {
                               const chunkMapped = cloneDeep(baseMapped);
-                              const newDelta = (!hasEmitted && i === 0) ? { ...delta } : {};
+                              const newDelta = !hasEmitted && i === 0 ? { ...delta } : {};
                               if (delta.role && i === 0) newDelta.role = delta.role;
                               if ('content' in newDelta) delete newDelta.content;
                               newDelta.tool_calls = [];
@@ -847,120 +866,7 @@ function isKeepAlive(text: string): boolean {
   return typeof text === 'string' && text.startsWith(KEEPALIVE_PREFIX);
 }
 
-/**
- * Wrap bindTools on the model to fix empty tool properties.
- * Gemini and some providers reject tools with `properties: {}`.
- * This ensures empty properties objects get a placeholder property.
- *
- * The fix works at TWO levels:
- * 1. Pre-conversion: Fix raw tool definitions before LangChain converts them
- * 2. Post-conversion: Fix the converted OpenAI-format tools after bindTools
- *    returns, catching cases where Zod `z.object({})` schemas get converted
- *    to `{ properties: {} }` by LangChain's _convertToOpenAITool
- */
-function fixEmptyToolProperties(model: any) {
-  const originalBind = model.bindTools?.bind(model);
-  if (!originalBind) return model;
-
-  const PLACEHOLDER_PROP = {
-    _placeholder: { type: 'string', description: 'No parameters required' },
-  };
-
-  /**
-   * Recursively fix empty properties in a JSON Schema-like object.
-   * Handles: top-level properties, function.parameters.properties,
-   * and nested anyOf/oneOf/allOf schemas.
-   */
-  function fixPropertiesInSchema(schema: any): void {
-    if (!schema || typeof schema !== 'object') return;
-
-    // Fix direct properties
-    if (schema.properties && typeof schema.properties === 'object' && Object.keys(schema.properties).length === 0) {
-      schema.properties = { ...PLACEHOLDER_PROP };
-    }
-
-    // Recurse into nested schemas
-    for (const key of ['anyOf', 'oneOf', 'allOf']) {
-      if (Array.isArray(schema[key])) {
-        schema[key].forEach((sub: any) => fixPropertiesInSchema(sub));
-      }
-    }
-  }
-
-  model.bindTools = function (tools: any[], kwargs?: any) {
-    // Phase 1: Pre-conversion fix for raw JSON Schema tool definitions
-    const fixedTools = tools.map((tool: any) => {
-      if (!tool || typeof tool !== 'object') return tool;
-
-      // Skip Zod schema tools — they'll be handled post-conversion
-      if (typeof tool.schema?.safeParse === 'function') {
-        return tool;
-      }
-
-      // Handle raw schema objects (already JSON Schema)
-      const schema = tool.schema;
-      if (schema && typeof schema === 'object' && !schema.safeParse) {
-        const props = schema.properties;
-        if (props && typeof props === 'object' && Object.keys(props).length === 0) {
-          return {
-            ...tool,
-            schema: {
-              ...schema,
-              properties: { ...PLACEHOLDER_PROP },
-            },
-          };
-        }
-      }
-
-      // Handle function-calling style definitions  (OpenAI format)
-      const funcParams = tool.function?.parameters;
-      if (funcParams?.properties) {
-        if (typeof funcParams.properties === 'object' && Object.keys(funcParams.properties).length === 0) {
-          return {
-            ...tool,
-            function: {
-              ...tool.function,
-              parameters: {
-                ...funcParams,
-                properties: { ...PLACEHOLDER_PROP },
-              },
-            },
-          };
-        }
-      }
-
-      return tool;
-    });
-
-    // Call the original bindTools — this converts Zod → JSON Schema internally
-    const result = originalBind(fixedTools, kwargs);
-
-    // Phase 2: Post-conversion fix — patch the converted tools in the result
-    // LangChain's bindTools returns a RunnableBinding or the model itself with
-    // tools stored in defaultOptions or bound config
-    try {
-      const config = result?.kwargs ?? result?.defaultOptions;
-      if (config?.tools && Array.isArray(config.tools)) {
-        for (const tool of config.tools) {
-          // OpenAI format: { type: 'function', function: { parameters: { properties: {} } } }
-          if (tool?.function?.parameters) {
-            fixPropertiesInSchema(tool.function.parameters);
-          }
-          // Direct parameter format (some providers)
-          if (tool?.parameters) {
-            fixPropertiesInSchema(tool.parameters);
-          }
-        }
-      }
-    } catch {
-      // Don't break tool binding if post-fix inspection fails
-    }
-
-    return result;
-  };
-
-  return model;
-}
+/* bindTools empty-tool-properties fix is now integrated into patchRunnableForSanitization below */
 
 /**
  * Strip Gemini __thought__ suffixes from tool_calls on an AIMessage (mutates in place).
@@ -997,7 +903,7 @@ function estimateTokens(msg: any): number {
   let tokens = 0;
   for (const char of text) {
     // CJK Unified Ideographs and related blocks are ~1 token each
-    tokens += char.charCodeAt(0) > 0x2E80 ? 1 : 0.25;
+    tokens += char.charCodeAt(0) > 0x2e80 ? 1 : 0.25;
   }
   return Math.ceil(tokens);
 }
@@ -1021,10 +927,12 @@ function truncateMessages(messages: any[], maxTokens: number): any[] {
 
   const result = [...messages];
   // Preserve system message separately
-  const systemMsg = result.length > 0 && (result[0].getType?.() === 'system' || result[0]._getType?.() === 'system') ? result.shift() : null;
-  if (systemMsg) {
-    totalTokens -= estimateTokens(systemMsg);
-  }
+  const systemMsg =
+    result.length > 0 && (result[0].getType?.() === 'system' || result[0]._getType?.() === 'system')
+      ? result.shift()
+      : null;
+  const systemTokenCost = systemMsg ? estimateTokens(systemMsg) : 0;
+  totalTokens -= systemTokenCost;
 
   // Group remaining messages into conversation turns.
   // A turn is: [user/human] or [ai + tool*] (ai message with its tool responses)
@@ -1055,9 +963,11 @@ function truncateMessages(messages: any[], maxTokens: number): any[] {
     }
   }
 
-  // Remove oldest turns until under budget, keeping at least the last turn
-  while (turns.length > 1 && totalTokens > maxTokens) {
-    const removed = turns.shift()!;
+  // Remove oldest turns until under budget (including system message cost),
+  // keeping at least the last turn
+  const effectiveBudget = maxTokens - systemTokenCost;
+  while (turns.length > 1 && totalTokens > effectiveBudget) {
+    const removed = turns.shift() ?? [];
     for (const msg of removed) {
       totalTokens -= estimateTokens(msg);
     }
@@ -1102,29 +1012,32 @@ function patchRunnableForSanitization(
         messages = truncateMessages(messages, options.maxContextTokens);
         args[0] = messages;
       }
-      
-      let retries = options?.enableToolRetry ? (options.maxToolRetries || 1) : 0;
-      while (true) {
+
+      const retries = options?.enableToolRetry ? options.maxToolRetries || 1 : 0;
+      for (let attempt = 0; attempt <= retries; attempt++) {
         try {
           const result = await origInvoke(...args);
           sanitizeAIMessageToolCalls(result);
           return result;
         } catch (e: any) {
-          if (retries > 0) {
-            retries--;
-            if (Array.isArray(messages)) {
-              try {
-                const HumanMessage = requireFromApp('@langchain/core/messages').HumanMessage;
-                // Clone to avoid mutating the caller's original message array
-                messages = [...messages, new HumanMessage(`Your previous response was invalid. Please correct it and try again. Error: ${e.message}`)];
-                args[0] = messages;
-                continue;
-              } catch (err) {
-                // Ignore errors if HumanMessage fails to import
-              }
+          if (attempt === retries) {
+            throw e;
+          }
+          if (Array.isArray(messages)) {
+            try {
+              const HumanMessage = requireFromApp('@langchain/core/messages').HumanMessage;
+              // Clone to avoid mutating the caller's original message array
+              messages = [
+                ...messages,
+                new HumanMessage(
+                  `Your previous response was invalid. Please correct it and try again. Error: ${e.message}`,
+                ),
+              ];
+              args[0] = messages;
+            } catch (err) {
+              // Ignore errors if HumanMessage fails to import
             }
           }
-          throw e;
         }
       }
     };
@@ -1163,11 +1076,68 @@ function patchRunnableForSanitization(
     };
   }
 
-  // Patch bindTools — the result is a RunnableBinding used by langgraph
+  // Patch bindTools — combined wrapper that fixes empty tool properties (Gemini
+  // rejects `properties: {}`) AND propagates sanitization to derived runnables.
+  const PLACEHOLDER_PROP = {
+    _placeholder: { type: 'string', description: 'No parameters required' },
+  };
+
+  /**
+   * Recursively fix empty properties in a JSON Schema-like object.
+   * Handles: top-level properties, function.parameters.properties,
+   * and nested anyOf/oneOf/allOf schemas.
+   */
+  function fixPropertiesInSchema(schema: any): void {
+    if (!schema || typeof schema !== 'object') return;
+    if (schema.properties && typeof schema.properties === 'object' && Object.keys(schema.properties).length === 0) {
+      schema.properties = { ...PLACEHOLDER_PROP };
+    }
+    for (const key of ['anyOf', 'oneOf', 'allOf']) {
+      if (Array.isArray(schema[key])) {
+        schema[key].forEach((sub: any) => fixPropertiesInSchema(sub));
+      }
+    }
+  }
+
   const origBindTools = runnable.bindTools?.bind(runnable);
   if (origBindTools) {
-    runnable.bindTools = function (...args: any[]) {
-      const bound = origBindTools(...args);
+    runnable.bindTools = function (tools: any[], kwargs?: any) {
+      // Phase 1: Pre-conversion fix for raw JSON Schema tool definitions
+      const fixedTools = tools.map((tool: any) => {
+        if (!tool || typeof tool !== 'object') return tool;
+        // Skip Zod schema tools — they'll be handled post-conversion
+        if (typeof tool.schema?.safeParse === 'function') return tool;
+        const schema = tool.schema;
+        if (schema && typeof schema === 'object' && !schema.safeParse) {
+          const props = schema.properties;
+          if (props && typeof props === 'object' && Object.keys(props).length === 0) {
+            return { ...tool, schema: { ...schema, properties: { ...PLACEHOLDER_PROP } } };
+          }
+        }
+        const funcParams = tool.function?.parameters;
+        if (funcParams?.properties) {
+          if (typeof funcParams.properties === 'object' && Object.keys(funcParams.properties).length === 0) {
+            return {
+              ...tool,
+              function: { ...tool.function, parameters: { ...funcParams, properties: { ...PLACEHOLDER_PROP } } },
+            };
+          }
+        }
+        return tool;
+      });
+      const bound = origBindTools(fixedTools, kwargs);
+      // Phase 2: Post-conversion fix — patch the converted tools in the result
+      try {
+        const config = bound?.kwargs ?? bound?.defaultOptions;
+        if (config?.tools && Array.isArray(config.tools)) {
+          for (const tool of config.tools) {
+            if (tool?.function?.parameters) fixPropertiesInSchema(tool.function.parameters);
+            if (tool?.parameters) fixPropertiesInSchema(tool.parameters);
+          }
+        }
+      } catch {
+        /* don't break tool binding if post-fix inspection fails */
+      }
       return patchRunnableForSanitization(bound, options);
     };
   }
@@ -1198,19 +1168,17 @@ export class CustomLLMProvider extends LLMProvider {
   }
 
   createModel() {
-    const {
-      apiKey, disableStream, timeout, streamKeepAlive,
-      keepAliveIntervalMs, enableReasoning,
-    } = this.serviceOptions || {};
+    const { apiKey, disableStream, timeout, streamKeepAlive, keepAliveIntervalMs, enableReasoning } =
+      this.serviceOptions || {};
     // baseURL comes from core's options.baseURL field
     const baseURL = this.serviceOptions?.baseURL;
-    const { 
-      responseFormat, 
-      jsonSchemaDefinition, 
-      enableTokenTruncation, 
+    const {
+      responseFormat,
+      jsonSchemaDefinition,
+      enableTokenTruncation,
       maxContextTokens,
       enableToolRetry,
-      maxToolRetries
+      maxToolRetries,
     } = this.modelOptions || {};
     const reqConfig = this.requestConfig;
     const resConfig = this.responseConfig;
@@ -1236,9 +1204,12 @@ export class CustomLLMProvider extends LLMProvider {
     // Fields like maxToolRetries, enableToolRetry, enableVision etc. are not
     // LangChain constructor params and could cause collisions (e.g. maxRetries).
     const {
-      responseFormat: _rf, jsonSchemaDefinition: _jsd,
-      enableTokenTruncation: _ett, maxContextTokens: _mct,
-      enableToolRetry: _etr, maxToolRetries: _mtr,
+      responseFormat: _rf,
+      jsonSchemaDefinition: _jsd,
+      enableTokenTruncation: _ett,
+      maxContextTokens: _mct,
+      enableToolRetry: _etr,
+      maxToolRetries: _mtr,
       enableVision: _ev,
       ...langchainModelOptions
     } = this.modelOptions || {};
@@ -1276,9 +1247,6 @@ export class CustomLLMProvider extends LLMProvider {
     }
 
     let model = new ChatClass(config);
-
-    // Fix empty tool properties for strict providers (Gemini, etc.)
-    model = fixEmptyToolProperties(model);
 
     // Sanitize Gemini's __thought__<base64> suffixes in tool call IDs.
     // Patches invoke/stream/bindTools/bind at the public API level so that
@@ -1481,7 +1449,9 @@ export class CustomLLMProvider extends LLMProvider {
 
     // Internal API stream URL (e.g. s3-private-storage proxy) — read directly via fileManager
     if (url.includes('/api/attachments:stream')) {
-      const rawStorageId = attachment.storageId || (typeof attachment.get === 'function' ? attachment.get('storageId') : attachment.storageId);
+      const rawStorageId =
+        attachment.storageId ||
+        (typeof attachment.get === 'function' ? attachment.get('storageId') : attachment.storageId);
       let matchedKey = null;
       if (rawStorageId) {
         const strId = String(rawStorageId);
@@ -1562,9 +1532,7 @@ export class CustomLLMProvider extends LLMProvider {
       // The field may be placed differently depending on whether the request
       // comes from sendMessages action, workflow invoke, or direct API call.
       const employeeUsername =
-        ctx.action?.params?.values?.aiEmployee ??
-        ctx.action?.params?.aiEmployee ??
-        ctx.state?.currentAiEmployee;
+        ctx.action?.params?.values?.aiEmployee ?? ctx.action?.params?.aiEmployee ?? ctx.state?.currentAiEmployee;
 
       if (!employeeUsername) {
         ctx.state._docPixieActive = false;
@@ -1752,7 +1720,26 @@ export class CustomLLMProvider extends LLMProvider {
   }
 }
 
+export class CustomEmbeddingProvider extends EmbeddingProvider {
+  protected getDefaultUrl(): string {
+    return '';
+  }
+
+  createEmbedding(): EmbeddingsInterface {
+    const { OpenAIEmbeddings } = requireFromApp('@langchain/openai');
+    return new OpenAIEmbeddings({
+      apiKey: (this as any).apiKey,
+      configuration: {
+        baseURL: (this as any).baseURL,
+      },
+      model: (this as any).model,
+    });
+  }
+}
+
 export const customLLMProviderOptions: LLMProviderMeta = {
   title: 'Custom LLM (OpenAI Compatible)',
   provider: CustomLLMProvider,
+  embedding: CustomEmbeddingProvider as any,
+  supportedModel: [SupportedModel.LLM, SupportedModel.EMBEDDING] as any,
 };

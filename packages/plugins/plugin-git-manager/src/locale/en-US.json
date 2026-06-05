@@ -186,5 +186,12 @@
   "Only flows with automatic trigger modes are shown": "Only flows with automatic trigger modes are shown",
   "Fallback": "Fallback",
   "AI employee not found": "AI employee not found",
-  "Failed to open AI chat": "Failed to open AI chat"
+  "Failed to open AI chat": "Failed to open AI chat",
+  "Manage": "Manage",
+  "Repository Permissions": "Repository Permissions",
+  "Read (List, Browse Files, View History)": "Read (List, Browse Files, View History)",
+  "Write (Clone, Pull, Push, Review)": "Write (Clone, Pull, Push, Review)",
+  "Configure access permissions for each repository for the role {{roleName}}": "Configure access permissions for each repository for the role {{roleName}}",
+  "Failed to load repository permissions": "Failed to load repository permissions",
+  "Failed to update permissions": "Failed to update permissions"
 }
