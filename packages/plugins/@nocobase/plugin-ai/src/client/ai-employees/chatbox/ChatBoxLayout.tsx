@@ -7,8 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useMemo } from 'react';
-import { useMobileLayout } from '@nocobase/client';
+import React, { useEffect } from 'react';
+import { useApp, useMobileLayout } from '@nocobase/client';
 import { ChatBoxWrapper } from './ChatBox';
 import { Helmet } from 'react-helmet';
 import { ChatButton } from './ChatButton';
@@ -18,10 +18,7 @@ import { ToolModal } from './generative-ui/ToolModal';
 import { useChatToolsStore } from './stores/chat-tools';
 // [AI_DEBUG]
 import { DebugPanel } from './DebugPanel';
-
-const useIsEmbedMode = () => {
-  return useMemo(() => window.location.pathname.includes('/embed'), []);
-};
+import { useChatConversationActions } from './hooks/useChatConversationActions';
 
 export const ChatBoxLayout: React.FC<{
   children: React.ReactNode;
@@ -32,39 +29,50 @@ export const ChatBoxLayout: React.FC<{
   // [AI_DEBUG]
   const showDebugPanel = useChatBoxStore.use.showDebugPanel();
   const { isMobileLayout } = useMobileLayout();
-  const isEmbedMode = useIsEmbedMode();
 
   useChatBoxEffect();
 
-  const chatBoxWidth = isEmbedMode ? '100vw' : 'min(450px, 100vw)';
+  const app = useApp();
+  const { loadUnreadCounts } = useChatConversationActions();
+  useEffect(() => {
+    void loadUnreadCounts();
+  }, [loadUnreadCounts]);
+  useEffect(() => {
+    app.eventBus.addEventListener('ws:message:ai-employee-tasks:status', loadUnreadCounts);
+    app.eventBus.addEventListener('ws:message:ai-conversations:read', loadUnreadCounts);
+    return () => {
+      app.eventBus.removeEventListener('ws:message:ai-employee-tasks:status', loadUnreadCounts);
+      app.eventBus.removeEventListener('ws:message:ai-conversations:read', loadUnreadCounts);
+    };
+  }, [app.eventBus, loadUnreadCounts]);
 
   return (
     <>
       {props.children}
       <ChatButton />
-      {open && !expanded && !isMobileLayout && !isEmbedMode ? (
+      {open && !expanded && !isMobileLayout ? (
         <Helmet>
           <style type="text/css">
             {`
 html {
-  padding-left: min(450px, 100vw);
+  padding-left: 450px;
 }
 html body {
   position: relative;
   overflow: hidden;
-  transform: translateX(min(-450px, -100vw));
+  transform: translateX(-450px);
 }
 .ant-dropdown-placement-topLeft {
-  transform: translateX(min(450px, 100vw)) !important;
+  transform: translateX(450px) !important;
 }
 .ant-dropdown-placement-bottomLeft {
-  transform: translateX(min(450px, 100vw)) !important;
+  transform: translateX(450px) !important;
 }
 .ant-dropdown-menu-submenu-placement-rightTop {
-  transform: translateX(min(450px, 100vw)) !important;
+  transform: translateX(450px) !important;
 }
 .ant-dropdown-menu-submenu-placement-rightBottom {
-  transform: translateX(min(450px, 100vw)) !important;
+  transform: translateX(450px) !important;
 }
 `}
           </style>

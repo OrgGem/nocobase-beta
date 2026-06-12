@@ -7,8 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { Suspense, useEffect, useRef } from 'react';
-import { Layout, Card, Button, Divider, Tooltip, notification, Avatar, Flex, Typography, Skeleton } from 'antd';
+import React, { useEffect, useRef } from 'react';
+import { Layout, Card, Button, Divider, Tooltip, notification, Avatar, Flex, Typography } from 'antd';
 import {
   CloseOutlined,
   FullscreenOutlined,
@@ -22,7 +22,7 @@ import {
 } from '@ant-design/icons';
 import { useMobileLayout, useToken } from '@nocobase/client';
 const { Header, Footer, Sider } = Layout;
-const Conversations = React.lazy(() => import('./Conversations').then((m) => ({ default: m.Conversations })));
+import { Conversations } from './conversations';
 import { Messages } from './Messages';
 import { Sender } from './Sender';
 import { useT } from '../../locale';
@@ -93,9 +93,7 @@ export const ChatBox: React.FC = () => {
               overflow: 'hidden',
             }}
           >
-            <Suspense fallback={<Skeleton active style={{ padding: 16 }} />}>
-              <Conversations />
-            </Suspense>
+            <Conversations />
           </div>
         </>
       )}
@@ -108,9 +106,7 @@ export const ChatBox: React.FC = () => {
             overflow: 'hidden',
           }}
         >
-          <Suspense fallback={<Skeleton active style={{ padding: 16 }} />}>
-            <Conversations />
-          </Suspense>
+          <Conversations />
         </Sider>
       )}
       <Layout>
@@ -328,10 +324,10 @@ export const ChatBoxWrapper: React.FC = () => {
       style={{
         position: 'fixed',
         transform: 'translateX(0px) !important',
-        right: 'min(-450px, -100vw)',
+        right: '-450px',
         zIndex: 1,
         top: 0,
-        width: 'min(450px, 100vw)',
+        width: '450px',
         height: '100vh',
         overflow: 'hidden',
         borderInlineStart: '1px solid rgba(5, 5, 5, 0.06)',

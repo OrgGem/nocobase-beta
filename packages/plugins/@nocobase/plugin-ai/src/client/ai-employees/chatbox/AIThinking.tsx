@@ -8,30 +8,22 @@
  */
 
 import React from 'react';
-import { LoadingOutlined, SearchOutlined, BookOutlined } from '@ant-design/icons';
+import { LoadingOutlined } from '@ant-design/icons';
 import { useT } from '../../locale';
-import { Space, Spin } from 'antd';
-import { useChatMessagesStore } from './stores/chat-messages';
+import { Space, Spin, Tag } from 'antd';
+import { useChat } from './hooks/useChat';
+import { SearchOutlined } from '@ant-design/icons';
 import { useToken } from '@nocobase/client';
 import { Typography } from 'antd';
+import { useChatConversationsStore } from './stores/chat-conversations';
 const { Paragraph } = Typography;
 
 export const AIThinking: React.FC<{ nickname: string }> = ({ nickname }) => {
   const t = useT();
-  const webSearching = useChatMessagesStore.use.webSearching();
-  const knowledgeBaseSearching = useChatMessagesStore.use.knowledgeBaseSearching();
+  const currentConversation = useChatConversationsStore.use.currentConversation();
+  const chat = useChat(currentConversation);
+  const webSearching = chat.use.webSearching();
   const { token } = useToken();
-
-  const getStatusText = () => {
-    if (knowledgeBaseSearching) {
-      return t('AI is searching knowledge base', { nickname });
-    }
-    if (webSearching) {
-      return t('AI is searching', { nickname });
-    }
-    return t('AI is thinking', { nickname });
-  };
-
   return (
     <Space direction="vertical">
       <Space
@@ -42,15 +34,8 @@ export const AIThinking: React.FC<{ nickname: string }> = ({ nickname }) => {
         }}
       >
         <Spin indicator={<LoadingOutlined spin />} />
-        {getStatusText()}
+        {webSearching ? t('AI is searching', { nickname }) : t('AI is thinking', { nickname })}
       </Space>
-      {knowledgeBaseSearching && (
-        <Paragraph>
-          <blockquote>
-            <BookOutlined /> {t('Retrieving relevant documents...')}
-          </blockquote>
-        </Paragraph>
-      )}
       {webSearching?.query && (
         <Paragraph>
           <blockquote>
