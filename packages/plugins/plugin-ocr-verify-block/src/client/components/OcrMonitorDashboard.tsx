@@ -9,6 +9,7 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useAPIClient } from '@nocobase/client';
+import { useT } from '../locale';
 
 const { Text } = Typography;
 
@@ -22,6 +23,7 @@ function formatBytes(bytes?: number) {
 
 export const OcrMonitorDashboard = () => {
   const api = useAPIClient();
+  const t = useT();
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -37,11 +39,11 @@ export const OcrMonitorDashboard = () => {
       });
       setData(res?.data?.data || res?.data || []);
     } catch (err: any) {
-      message.error(err?.message || 'Failed to load OCR monitor data');
+      message.error(err?.message || t('Failed to load OCR monitor data'));
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, t]);
 
   useEffect(() => {
     loadData();
@@ -53,10 +55,12 @@ export const OcrMonitorDashboard = () => {
       await api.resource('filePreviewAuth').runOcr({
         values: { attachmentId: record.attachmentId },
       });
-      message.success(`OCR job enqueued for ${record.attachment?.filename || 'attachment'}`);
+      message.success(
+        t('OCR job enqueued for {{filename}}', { filename: record.attachment?.filename || t('attachment') }),
+      );
       await loadData();
     } catch (err: any) {
-      message.error(err?.message || 'Failed to trigger OCR');
+      message.error(err?.message || t('Failed to trigger OCR'));
     } finally {
       setRefreshingId(null);
     }
@@ -70,64 +74,64 @@ export const OcrMonitorDashboard = () => {
 
   const columns = [
     {
-      title: 'Attachment Name',
+      title: t('Attachment name'),
       key: 'filename',
       render: (record: any) => (
         <Space direction="vertical" size={0}>
-          <Text strong>{record.attachment?.filename || `Attachment #${record.attachmentId}`}</Text>
+          <Text strong>{record.attachment?.filename || t('Attachment #{{id}}', { id: record.attachmentId })}</Text>
           <Text type="secondary" style={{ fontSize: '12px' }}>
-            ID: {record.attachmentId}
+            {t('ID')}: {record.attachmentId}
           </Text>
         </Space>
       ),
     },
     {
-      title: 'File Size',
+      title: t('File size'),
       key: 'size',
       render: (record: any) => <Text>{formatBytes(record.attachment?.size)}</Text>,
     },
     {
-      title: 'MIME Type',
+      title: t('MIME type'),
       key: 'mimetype',
-      render: (record: any) => <Tag color="blue">{record.attachment?.mimetype || 'unknown'}</Tag>,
+      render: (record: any) => <Tag color="blue">{record.attachment?.mimetype || t('unknown')}</Tag>,
     },
     {
-      title: 'OCR Status',
+      title: t('OCR status'),
       key: 'status',
       render: (record: any) => {
         const status = record.status;
         if (status === 'pending-ocr') {
           return (
             <Tag icon={<SyncOutlined spin />} color="processing">
-              Pending OCR
+              {t('Pending OCR')}
             </Tag>
           );
         }
         if (status === 'waiting-verify' || status === 'success') {
           return (
             <Tag icon={<CheckCircleOutlined />} color="success">
-              Waiting Verify
+              {t('Waiting verify')}
             </Tag>
           );
         }
         if (status === 'failed') {
           return (
-            <Tooltip title={record.error || 'Unknown error'}>
+            <Tooltip title={record.error || t('Unknown error')}>
               <Tag icon={<ExclamationCircleOutlined />} color="error" style={{ cursor: 'pointer' }}>
-                Failed
+                {t('Failed')}
               </Tag>
             </Tooltip>
           );
         }
         return (
           <Tag icon={<ClockCircleOutlined />} color="default">
-            No OCR
+            {t('No OCR')}
           </Tag>
         );
       },
     },
     {
-      title: 'Last Error Message',
+      title: t('Last error message'),
       dataIndex: 'error',
       key: 'error',
       render: (error: string) =>
@@ -136,20 +140,20 @@ export const OcrMonitorDashboard = () => {
             {error}
           </Text>
         ) : (
-          <Text type="secondary">—</Text>
+          <Text type="secondary">-</Text>
         ),
     },
     {
-      title: 'Created At',
+      title: t('Created at'),
       dataIndex: 'createdAt',
       key: 'createdAt',
       render: (val: string) => {
-        if (!val) return '—';
+        if (!val) return '-';
         return new Date(val).toLocaleString();
       },
     },
     {
-      title: 'Actions',
+      title: t('Actions'),
       key: 'actions',
       render: (record: any) => {
         const isRetrying = refreshingId === record.id;
@@ -161,7 +165,7 @@ export const OcrMonitorDashboard = () => {
             disabled={!canRetry || isRetrying}
             onClick={() => handleRetry(record)}
           >
-            Retry OCR
+            {t('Retry OCR')}
           </Button>
         );
       },
@@ -177,10 +181,10 @@ export const OcrMonitorDashboard = () => {
       }}
       title={
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Document OCR Monitoring Panel</span>
+          <span>{t('Document OCR monitoring panel')}</span>
           <Space>
             <Input
-              placeholder="Search by filename or status..."
+              placeholder={t('Search by filename or status...')}
               prefix={<SearchOutlined />}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -188,7 +192,7 @@ export const OcrMonitorDashboard = () => {
               allowClear
             />
             <Button type="primary" icon={<SyncOutlined spin={loading} />} onClick={loadData}>
-              Refresh Panel
+              {t('Refresh panel')}
             </Button>
           </Space>
         </div>
@@ -197,8 +201,10 @@ export const OcrMonitorDashboard = () => {
       <Alert
         type="info"
         showIcon
-        message="System OCR Status Board"
-        description="Here you can review all system documents uploaded and monitor their Tesseract OCR processing queues, retry failed extraction pipelines, and diagnose execution faults."
+        message={t('System OCR status board')}
+        description={t(
+          'Review uploaded documents, monitor Tesseract OCR processing queues, retry failed extraction, and diagnose execution faults.',
+        )}
         style={{ marginBottom: 16 }}
       />
       <Table
@@ -207,7 +213,7 @@ export const OcrMonitorDashboard = () => {
         rowKey="id"
         loading={loading}
         pagination={{ pageSize: 10, showSizeChanger: true }}
-        locale={{ emptyText: 'No document OCR processing history found' }}
+        locale={{ emptyText: t('No document OCR processing history found') }}
         style={{
           transition: 'all 0.3s ease',
         }}

@@ -28,7 +28,7 @@ import {
   Tabs,
   Select,
 } from 'antd';
-import { useAPIClient, useCurrentUserContext } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import {
   SyncOutlined,
   SettingOutlined,
@@ -41,8 +41,9 @@ import {
 const { Title, Text, Paragraph } = Typography;
 
 const MemorySettingsPage: React.FC = () => {
-  const api = useAPIClient();
-  const { data: currentUser } = useCurrentUserContext();
+  const app = useApp();
+  const api = app.apiClient;
+  const t = useT();
   const [loading, setLoading] = useState(false);
   const [settings, setSettings] = useState<any>(null);
   const [profiles, setProfiles] = useState<any[]>([]);
@@ -51,27 +52,21 @@ const MemorySettingsPage: React.FC = () => {
   const [syncLogs, setSyncLogs] = useState<any[]>([]);
   const [llmServices, setLlmServices] = useState<any[]>([]);
   const [selectedService, setSelectedService] = useState<string | undefined>(undefined);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [form] = Form.useForm();
-
-  // Determine if current user is admin
-  const isAdmin = useMemo(() => {
-    const roles = currentUser?.data?.roles;
-    if (!roles) return false;
-    return roles.some((r: any) => r.name === 'admin' || r.name === 'root');
-  }, [currentUser]);
 
   // Load settings
   const loadSettings = useCallback(async () => {
-    if (!isAdmin) return;
     try {
       const { data } = await api.request({ url: 'userMemoryAdmin:getSettings' });
+      setIsAdmin(true);
       setSettings(data?.data || {});
       form.setFieldsValue(data?.data || {});
       setSelectedService(data?.data?.llmService);
     } catch (e) {
-      // Non-admin users will get 403, silently ignore
+      setIsAdmin(false);
     }
-  }, [api, form, isAdmin]);
+  }, [api, form]);
 
   // Load available LLM services and their models
   const loadLlmServices = useCallback(async () => {
@@ -125,25 +120,28 @@ const MemorySettingsPage: React.FC = () => {
   }, [loadSettings, loadMyProfile, loadProfiles, loadSyncLogs, loadLlmServices, isAdmin]);
 
   // Save settings
-  const handleSaveSettings = async (values: any) => {
-    setLoading(true);
-    try {
-      await api.request({
-        url: 'userMemoryAdmin:updateSettings',
-        method: 'post',
-        data: values,
-      });
-      message.success('Settings saved');
-      loadSettings();
-    } catch (e) {
-      message.error('Failed to save settings');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const handleSaveSettings = useCallback(
+    async (values: any) => {
+      setLoading(true);
+      try {
+        await api.request({
+          url: 'userMemoryAdmin:updateSettings',
+          method: 'post',
+          data: values,
+        });
+        message.success('Settings saved');
+        loadSettings();
+      } catch (e) {
+        message.error('Failed to save settings');
+      } finally {
+        setLoading(false);
+      }
+    },
+    [api, loadSettings],
+  );
 
   // Sync now (my profile)
-  const handleSyncNow = async () => {
+  const handleSyncNow = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.request({ url: 'userMemory:syncNow', method: 'post' });
@@ -159,15 +157,17 @@ const MemorySettingsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, loadMyProfile, loadSyncLogs]);
 
   // Sync all users (admin)
-  const handleSyncAll = async () => {
+  const handleSyncAll = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.request({ url: 'userMemoryAdmin:syncAll', method: 'post' });
       message.success(
-        `Sync complete: ${data?.data?.processed || 0} processed, ${data?.data?.skipped || 0} skipped, ${data?.data?.errors || 0} errors`,
+        `Sync complete: ${data?.data?.processed || 0} processed, ${data?.data?.skipped || 0} skipped, ${
+          data?.data?.errors || 0
+        } errors`,
       );
       loadProfiles();
     } catch (e) {
@@ -175,25 +175,28 @@ const MemorySettingsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api, loadProfiles]);
 
   // Toggle memory
-  const handleToggle = async (enabled: boolean) => {
-    try {
-      await api.request({
-        url: 'userMemory:toggleEnabled',
-        method: 'post',
-        data: { enabled },
-      });
-      message.success(enabled ? 'Memory enabled' : 'Memory disabled');
-      loadMyProfile();
-    } catch (e) {
-      message.error('Failed to toggle memory');
-    }
-  };
+  const handleToggle = useCallback(
+    async (enabled: boolean) => {
+      try {
+        await api.request({
+          url: 'userMemory:toggleEnabled',
+          method: 'post',
+          data: { enabled },
+        });
+        message.success(enabled ? 'Memory enabled' : 'Memory disabled');
+        loadMyProfile();
+      } catch (e) {
+        message.error('Failed to toggle memory');
+      }
+    },
+    [api, loadMyProfile],
+  );
 
   // Clear memory
-  const handleClearMemory = () => {
+  const handleClearMemory = useCallback(() => {
     Modal.confirm({
       title: 'Clear Memory',
       content: 'Are you sure you want to clear your memory profile? This cannot be undone.',
@@ -207,63 +210,67 @@ const MemorySettingsPage: React.FC = () => {
         }
       },
     });
-  };
+  }, [api, loadMyProfile]);
 
-  const profileColumns = [
-    { title: 'User ID', dataIndex: 'userId', key: 'userId' },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (status: string) => (
-        <Tag color={status === 'idle' ? 'green' : status === 'processing' ? 'blue' : 'red'}>{status}</Tag>
-      ),
-    },
-    { title: 'Version', dataIndex: 'memoryVersion', key: 'memoryVersion' },
-    {
-      title: 'Enabled',
-      dataIndex: 'enabled',
-      key: 'enabled',
-      render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? 'Yes' : 'No'}</Tag>,
-    },
-    {
-      title: 'Last Synced',
-      dataIndex: 'lastSyncedAt',
-      key: 'lastSyncedAt',
-      render: (v: string) => (v ? new Date(v).toLocaleString() : 'Never'),
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      render: (_: any, record: any) => (
-        <Button size="small" icon={<EyeOutlined />} onClick={() => setSelectedProfile(record)}>
-          View
-        </Button>
-      ),
-    },
-  ];
+  const profileColumns = useMemo(
+    () => [
+      { title: 'User ID', dataIndex: 'userId', key: 'userId' },
+      {
+        title: 'Status',
+        dataIndex: 'status',
+        key: 'status',
+        render: (status: string) => (
+          <Tag color={status === 'idle' ? 'green' : status === 'processing' ? 'blue' : 'red'}>{status}</Tag>
+        ),
+      },
+      { title: 'Version', dataIndex: 'memoryVersion', key: 'memoryVersion' },
+      {
+        title: 'Enabled',
+        dataIndex: 'enabled',
+        key: 'enabled',
+        render: (v: boolean) => <Tag color={v ? 'green' : 'default'}>{v ? 'Yes' : 'No'}</Tag>,
+      },
+      {
+        title: 'Last Synced',
+        dataIndex: 'lastSyncedAt',
+        key: 'lastSyncedAt',
+        render: (v: string) => (v ? new Date(v).toLocaleString() : 'Never'),
+      },
+      {
+        title: 'Actions',
+        key: 'actions',
+        render: (_: any, record: any) => (
+          <Button size="small" icon={<EyeOutlined />} onClick={() => setSelectedProfile(record)}>
+            View
+          </Button>
+        ),
+      },
+    ],
+    [],
+  );
 
-  const logColumns = [
-    {
-      title: 'Date',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      render: (v: string) => new Date(v).toLocaleString(),
-    },
-    { title: 'Type', dataIndex: 'syncType', key: 'syncType' },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      render: (v: string) => (
-        <Tag color={v === 'success' ? 'green' : v === 'error' ? 'red' : 'default'}>{v}</Tag>
-      ),
-    },
-    { title: 'Conversations', dataIndex: 'conversationsProcessed', key: 'conversationsProcessed' },
-    { title: 'Messages', dataIndex: 'messagesProcessed', key: 'messagesProcessed' },
-    { title: 'Version', key: 'version', render: (_: any, r: any) => `v${r.previousVersion} → v${r.newVersion}` },
-    { title: 'Summary', dataIndex: 'changeSummary', key: 'changeSummary', ellipsis: true },
-  ];
+  const logColumns = useMemo(
+    () => [
+      {
+        title: 'Date',
+        dataIndex: 'createdAt',
+        key: 'createdAt',
+        render: (v: string) => new Date(v).toLocaleString(),
+      },
+      { title: 'Type', dataIndex: 'syncType', key: 'syncType' },
+      {
+        title: 'Status',
+        dataIndex: 'status',
+        key: 'status',
+        render: (v: string) => <Tag color={v === 'success' ? 'green' : v === 'error' ? 'red' : 'default'}>{v}</Tag>,
+      },
+      { title: 'Conversations', dataIndex: 'conversationsProcessed', key: 'conversationsProcessed' },
+      { title: 'Messages', dataIndex: 'messagesProcessed', key: 'messagesProcessed' },
+      { title: 'Version', key: 'version', render: (_: any, r: any) => `v${r.previousVersion} → v${r.newVersion}` },
+      { title: 'Summary', dataIndex: 'changeSummary', key: 'changeSummary', ellipsis: true },
+    ],
+    [],
+  );
 
   const modelOptions = useMemo(() => {
     const serviceObj = llmServices.find((s) => s.llmService === selectedService);
@@ -305,8 +312,7 @@ const MemorySettingsPage: React.FC = () => {
 
               {myProfile?.lastSyncedAt && (
                 <Text type="secondary">
-                  Last synced: {new Date(myProfile.lastSyncedAt).toLocaleString()} | Version: v
-                  {myProfile.memoryVersion}
+                  Last synced: {new Date(myProfile.lastSyncedAt).toLocaleString()} | Version: v{myProfile.memoryVersion}
                 </Text>
               )}
 

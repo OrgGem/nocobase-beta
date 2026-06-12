@@ -4,15 +4,18 @@
 
 ```
 Client -> nginx (LB :80)
-           ├── app-1  (WORKER_MODE=! primary, runs migrations first)
-           └── app-2  (WORKER_MODE=! secondary, waits for app-1)
+           -> app-1  (WORKER_MODE=! HTTP + WebSocket)
 
-           ├── worker-1 (WORKER_MODE=* all background jobs)
-           └── worker-2 (WORKER_MODE=* all background jobs)
+           -> worker containers managed by plugin-cluster-manager
 
-           ├── redis 7  (cache db0 + pub/sub+queue db1)
+           ├── redis 8  (cache db0 + pub/sub/queue/locks db1-db4)
            └── postgres 16 (tuned for production)
 ```
+
+This stack is pinned to `nocobase/nocobase:2.1.0-full` via
+`NOCOBASE_VERSION=2.1.0-full`. The compose fallback also uses the same tag, so
+fresh deployments and existing `.env` based deployments resolve to the same
+NocoBase version.
 
 ## Quick Start
 
@@ -22,6 +25,36 @@ cp .env.example .env
 
 docker compose up -d
 ```
+
+## Upgrade to NocoBase 2.1.0
+
+Before upgrading, make a database backup. NocoBase supports upgrades only; if a
+rollback is required, restore the backup and start again with the previous image
+tag.
+
+```bash
+cd docker/production-ha
+
+# Confirm the target version.
+grep '^NOCOBASE_VERSION=' .env
+
+# Optional backup example. Adjust the output path for your environment.
+docker compose exec postgres sh -c \
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/nocobase-before-2.1.0.dump'
+docker compose cp postgres:/tmp/nocobase-before-2.1.0.dump ./nocobase-before-2.1.0.dump
+
+# Pull and recreate the app container with the pinned 2.1.0 image.
+docker compose pull app-1
+docker compose up -d app-1 nginx
+
+# Watch the upgrade/startup logs until the app is healthy.
+docker compose logs -f app-1
+docker compose ps
+```
+
+If plugin-cluster-manager has created worker containers outside this compose
+file, recreate those workers after `app-1` is healthy so they use the same
+`2.1.0-full` image.
 
 ## Install plugin-worker-monitor
 
@@ -40,8 +73,8 @@ docker cp plugin-worker-monitor-1.0.0.tgz <container>:/tmp/
 docker exec -it <container> bash -c \
   "cd /app/nocobase && yarn pm add /tmp/plugin-worker-monitor-1.0.0.tgz && yarn pm enable plugin-worker-monitor"
 
-# Restart all app/worker containers
-docker compose restart app-1 app-2 worker-1 worker-2
+# Restart the compose-managed app and proxy
+docker compose restart app-1 nginx
 ```
 
 Or add `APPEND_PRESET_LOCAL_PLUGINS=plugin-worker-monitor` in `.env` if the plugin is
@@ -68,9 +101,9 @@ services:
 Then update `nginx.conf` upstream:
 ```nginx
 upstream apps {
-    server app-1:80;
-    server app-2:80;
-    server app-3:80;
+    server app-1:13000;
+    server app-2:13000;
+    server app-3:13000;
 }
 ```
 

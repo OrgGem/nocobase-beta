@@ -13,6 +13,8 @@ export class DocumentUnderstandingService {
   private pipelineExecutor!: PipelineExecutor;
   private jobManager!: AsyncJobManager;
   private initialized = false;
+  private startupRecoveryCompleted = false;
+  private initializationPromise?: Promise<void>;
   private static readonly HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 
   constructor(app: Application, db: Database) {
@@ -20,11 +22,61 @@ export class DocumentUnderstandingService {
     this.db = db;
   }
 
-  async initialize(): Promise<void> {
+  async initialize(options: { recoverJobs?: boolean } = {}): Promise<void> {
+    if (this.initializationPromise) {
+      await this.initializationPromise;
+      return;
+    }
+
+    this.initializationPromise = this.doInitialize(options.recoverJobs ?? false).finally(() => {
+      this.initializationPromise = undefined;
+    });
+    await this.initializationPromise;
+  }
+
+  async ensureInitialized(): Promise<void> {
+    if (this.initialized) return;
+    await this.initialize();
+  }
+
+  private async doInitialize(recoverJobs: boolean): Promise<void> {
+    const config = await this.ensureConfig();
+
+    this.jobManager?.destroy();
+    this.apiClient = new ExternalApiClient(config);
+    this.jobManager = new AsyncJobManager(
+      this.db,
+      this.apiClient,
+      {
+        onJobComplete: async (jobId, result) => {
+          await this.pipelineExecutor.resumeFromStep(jobId, result);
+        },
+        onJobError: async (jobId, error) => {
+          const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
+          await jobsRepo.update({
+            filterByTk: jobId,
+            values: { status: 'failed', error, completedAt: new Date() },
+          });
+        },
+      },
+      this.app.logger,
+    );
+
+    this.pipelineExecutor = new PipelineExecutor(this.db, this.apiClient, this.jobManager, this.app.logger);
+
+    if (recoverJobs && !this.startupRecoveryCompleted) {
+      await this.jobManager.cleanupStuckJobs();
+      await this.jobManager.recoverPollingJobs();
+      this.startupRecoveryCompleted = true;
+    }
+
+    this.initialized = true;
+  }
+
+  private async ensureConfig(): Promise<ServiceConfig> {
     const configRepo = this.db.getRepository<any>('doc_understanding_config');
     let config = await configRepo.findOne();
 
-    // Create default config if not exists
     if (!config) {
       config = await configRepo.create({
         values: {
@@ -38,29 +90,7 @@ export class DocumentUnderstandingService {
       });
     }
 
-    this.apiClient = new ExternalApiClient(config);
-    this.jobManager = new AsyncJobManager(this.db, this.apiClient, {
-      onJobComplete: async (jobId, result) => {
-        await this.pipelineExecutor.resumeFromStep(jobId, result);
-      },
-      onJobError: async (jobId, error) => {
-        const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
-        await jobsRepo.update({
-          filterByTk: jobId,
-          values: { status: 'failed', error, completedAt: new Date() },
-        });
-      },
-    });
-
-    this.pipelineExecutor = new PipelineExecutor(this.db, this.apiClient, this.jobManager);
-
-    // Clean up stuck jobs (pending/running) that were in-flight when server restarted
-    await this.jobManager.cleanupStuckJobs();
-
-    // Recover any polling jobs that were in-flight before server restart
-    await this.jobManager.recoverPollingJobs();
-
-    this.initialized = true;
+    return config;
   }
 
   isReady(): boolean {
@@ -68,10 +98,7 @@ export class DocumentUnderstandingService {
   }
 
   async getConfig(): Promise<ServiceConfig> {
-    const configRepo = this.db.getRepository<any>('doc_understanding_config');
-    const conf = await configRepo.findOne();
-    if (!conf) throw new Error('Config not found');
-    return conf;
+    return this.ensureConfig();
   }
 
   async updateConfig(data: Partial<ServiceConfig>): Promise<void> {
@@ -85,6 +112,7 @@ export class DocumentUnderstandingService {
   }
 
   async listEndpoints(): Promise<EndpointDef[]> {
+    await this.ensureInitialized();
     return this.db.getRepository<any>('doc_understanding_endpoints').find({ sort: 'sortOrder' });
   }
 
@@ -132,6 +160,7 @@ export class DocumentUnderstandingService {
   }
 
   async listPipelines(): Promise<PipelineDef[]> {
+    await this.ensureInitialized();
     return this.db.getRepository<any>('doc_understanding_pipelines').find({
       appends: ['steps', 'steps.endpoint'],
     });
@@ -166,7 +195,7 @@ export class DocumentUnderstandingService {
     files: FileInput[] = [],
     userId?: number,
   ): Promise<{ jobId: number }> {
-    if (!this.isReady()) throw new Error('Service not ready');
+    await this.ensureInitialized();
     const job = await this.pipelineExecutor.execute(pipelineId, input, files, userId);
     return { jobId: job.id };
   }
@@ -185,7 +214,7 @@ export class DocumentUnderstandingService {
   }
 
   async handleWebhook(payload: any, signature?: string): Promise<void> {
-    // Verify webhook signature if secret is configured
+    await this.ensureInitialized();
     const config = await this.getConfig();
     if (config.webhookSecret) {
       if (!signature) {

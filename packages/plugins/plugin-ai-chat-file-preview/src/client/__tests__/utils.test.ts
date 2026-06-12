@@ -3,6 +3,8 @@ import {
   extractFilenameFromText,
   getDisplayNameCandidates,
   isKnownFileUrl,
+  selectChatAttachments,
+  selectChatMessages,
 } from '../ChatFilePreviewProvider';
 
 describe('AI Chat File Preview client utils', () => {
@@ -50,6 +52,41 @@ describe('AI Chat File Preview client utils', () => {
       expect(isKnownFileUrl('https://google.com')).toBe(false);
       expect(isKnownFileUrl('')).toBe(false);
       expect(isKnownFileUrl(undefined)).toBe(false);
+    });
+  });
+
+  describe('chat store selectors', () => {
+    it('should read legacy flat chat message state', () => {
+      expect(selectChatMessages({ messages: [{ key: 'm1' }], attachments: [] })).toEqual([{ key: 'm1' }]);
+      expect(selectChatAttachments({ messages: [], attachments: [{ filename: 'a.pdf' }] })).toEqual([
+        { filename: 'a.pdf' },
+      ]);
+    });
+
+    it('should read NocoBase 2.1 session chat message state', () => {
+      const state = {
+        sessions: {
+          s1: {
+            messages: [{ key: 'm2' }],
+            attachments: [{ filename: 'b.pdf' }],
+          },
+        },
+      };
+
+      expect(selectChatMessages(state, 's1')).toEqual([{ key: 'm2' }]);
+      expect(selectChatAttachments(state, 's1')).toEqual([{ filename: 'b.pdf' }]);
+    });
+
+    it('should prefer getSessionState when available', () => {
+      const state = {
+        getSessionState: () => ({
+          messages: [{ key: 'm3' }],
+          attachments: [{ filename: 'c.pdf' }],
+        }),
+      };
+
+      expect(selectChatMessages(state, 's2')).toEqual([{ key: 'm3' }]);
+      expect(selectChatAttachments(state, 's2')).toEqual([{ filename: 'c.pdf' }]);
     });
   });
 });

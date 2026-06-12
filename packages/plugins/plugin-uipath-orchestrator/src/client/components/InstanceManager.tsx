@@ -150,7 +150,7 @@ export const InstanceManager: React.FC = () => {
           layout="vertical"
           initialValues={{
             deploymentType: 'cloud',
-            scopes: 'OR.Default',
+            scopes: 'OR.Default OR.Administration OR.Execution OR.Assets OR.Users OR.Folders',
             esIndex: 'default-robotlogs-*',
             enabled: true,
             pollEnabled: true,

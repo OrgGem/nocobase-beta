@@ -1,5 +1,6 @@
 import { ISchema } from '@formily/react';
 import { ocrVerifyCategoriesCollection } from '../collections/ocrVerifyCategories';
+import { tStr } from '../locale';
 
 export const categoriesSchema: ISchema = {
   type: 'object',
@@ -22,7 +23,7 @@ export const categoriesSchema: ISchema = {
           properties: {
             create: {
               type: 'void',
-              title: '{{t("Add new")}}',
+              title: tStr('Add new'),
               'x-component': 'Action',
               'x-component-props': {
                 type: 'primary',
@@ -33,7 +34,7 @@ export const categoriesSchema: ISchema = {
                   type: 'void',
                   'x-component': 'Action.Drawer',
                   'x-component-props': {
-                    title: '{{t("Add new category")}}',
+                    title: tStr('Add new category'),
                   },
                   properties: {
                     form: {
@@ -42,47 +43,126 @@ export const categoriesSchema: ISchema = {
                       'x-use-component-props': 'useCreateFormProps',
                       properties: {
                         name: {
-                          title: 'Name (Unique ID)',
+                          title: tStr('Name (unique ID)'),
                           type: 'string',
                           'x-decorator': 'FormItem',
                           'x-component': 'Input',
                           required: true,
                         },
                         title: {
-                          title: 'Title',
+                          title: tStr('Title'),
                           type: 'string',
                           'x-decorator': 'FormItem',
                           'x-component': 'Input',
                           required: true,
                         },
+                        description: {
+                          title: tStr('Description'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input.TextArea',
+                        },
                         callbackUrl: {
-                          title: 'Callback URL',
+                          title: tStr('Callback URL'),
                           type: 'string',
                           'x-decorator': 'FormItem',
                           'x-component': 'Input',
                         },
                         callbackApiKey: {
-                          title: 'Callback API Key',
+                          title: tStr('Callback API key'),
                           type: 'string',
                           'x-decorator': 'FormItem',
                           'x-component': 'Password',
                         },
+                        callbackTimeoutMs: {
+                          title: tStr('Callback timeout (ms)'),
+                          type: 'number',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'InputNumber',
+                          default: 15000,
+                        },
                         acceptStatus: {
-                          title: 'Accept Status',
+                          title: tStr('Accept status'),
                           type: 'string',
                           'x-decorator': 'FormItem',
                           'x-component': 'Input',
                           default: 'accepted',
                         },
                         rejectStatus: {
-                          title: 'Reject Status',
+                          title: tStr('Reject status'),
                           type: 'string',
                           'x-decorator': 'FormItem',
                           'x-component': 'Input',
                           default: 'rejected',
                         },
+                        itemsPath: {
+                          title: tStr('Items path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'pages[].items[]',
+                          required: true,
+                        },
+                        idPath: {
+                          title: tStr('ID path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'id',
+                        },
+                        keyPath: {
+                          title: tStr('Key path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'key',
+                          required: true,
+                        },
+                        valuePath: {
+                          title: tStr('Value path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'value',
+                          required: true,
+                        },
+                        pagePath: {
+                          title: tStr('Page path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'position.page',
+                        },
+                        rectPath: {
+                          title: tStr('Rectangle path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'position',
+                        },
+                        pointsPath: {
+                          title: tStr('Points path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'points',
+                        },
+                        confidencePath: {
+                          title: tStr('Confidence path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'confidence',
+                        },
+                        statusPath: {
+                          title: tStr('Status path'),
+                          type: 'string',
+                          'x-decorator': 'FormItem',
+                          'x-component': 'Input',
+                          default: 'status',
+                        },
                         enabled: {
-                          title: 'Enabled',
+                          title: tStr('Enabled'),
                           type: 'boolean',
                           'x-decorator': 'FormItem',
                           'x-component': 'Checkbox',
@@ -93,12 +173,12 @@ export const categoriesSchema: ISchema = {
                           'x-component': 'Action.Drawer.Footer',
                           properties: {
                             cancel: {
-                              title: '{{t("Cancel")}}',
+                              title: tStr('Cancel'),
                               'x-component': 'Action',
                               'x-use-component-props': 'useCancelActionProps',
                             },
                             submit: {
-                              title: '{{t("Submit")}}',
+                              title: tStr('Submit'),
                               'x-component': 'Action',
                               'x-use-component-props': 'useCreateActionProps',
                             },
@@ -155,19 +235,19 @@ export const categoriesSchema: ISchema = {
             },
             actions: {
               type: 'void',
-              title: '{{t("Actions")}}',
+              title: tStr('Actions'),
               'x-component': 'TableV2.Column',
               properties: {
                 edit: {
                   type: 'void',
-                  title: '{{t("Edit")}}',
+                  title: tStr('Edit'),
                   'x-component': 'Action.Link',
                   properties: {
                     drawer: {
                       type: 'void',
                       'x-component': 'Action.Drawer',
                       'x-component-props': {
-                        title: '{{t("Edit category")}}',
+                        title: tStr('Edit category'),
                       },
                       properties: {
                         form: {
@@ -176,45 +256,114 @@ export const categoriesSchema: ISchema = {
                           'x-use-component-props': 'useEditFormProps',
                           properties: {
                             name: {
-                              title: 'Name',
+                              title: tStr('Name'),
                               type: 'string',
                               'x-decorator': 'FormItem',
                               'x-component': 'Input',
                               required: true,
                             },
                             title: {
-                              title: 'Title',
+                              title: tStr('Title'),
                               type: 'string',
                               'x-decorator': 'FormItem',
                               'x-component': 'Input',
                               required: true,
                             },
+                            description: {
+                              title: tStr('Description'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input.TextArea',
+                            },
                             callbackUrl: {
-                              title: 'Callback URL',
+                              title: tStr('Callback URL'),
                               type: 'string',
                               'x-decorator': 'FormItem',
                               'x-component': 'Input',
                             },
                             callbackApiKey: {
-                              title: 'Callback API Key',
+                              title: tStr('Callback API key'),
                               type: 'string',
                               'x-decorator': 'FormItem',
                               'x-component': 'Password',
                             },
+                            callbackTimeoutMs: {
+                              title: tStr('Callback timeout (ms)'),
+                              type: 'number',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'InputNumber',
+                            },
                             acceptStatus: {
-                              title: 'Accept Status',
+                              title: tStr('Accept status'),
                               type: 'string',
                               'x-decorator': 'FormItem',
                               'x-component': 'Input',
                             },
                             rejectStatus: {
-                              title: 'Reject Status',
+                              title: tStr('Reject status'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                            },
+                            itemsPath: {
+                              title: tStr('Items path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                              required: true,
+                            },
+                            idPath: {
+                              title: tStr('ID path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                            },
+                            keyPath: {
+                              title: tStr('Key path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                              required: true,
+                            },
+                            valuePath: {
+                              title: tStr('Value path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                              required: true,
+                            },
+                            pagePath: {
+                              title: tStr('Page path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                            },
+                            rectPath: {
+                              title: tStr('Rectangle path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                            },
+                            pointsPath: {
+                              title: tStr('Points path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                            },
+                            confidencePath: {
+                              title: tStr('Confidence path'),
+                              type: 'string',
+                              'x-decorator': 'FormItem',
+                              'x-component': 'Input',
+                            },
+                            statusPath: {
+                              title: tStr('Status path'),
                               type: 'string',
                               'x-decorator': 'FormItem',
                               'x-component': 'Input',
                             },
                             enabled: {
-                              title: 'Enabled',
+                              title: tStr('Enabled'),
                               type: 'boolean',
                               'x-decorator': 'FormItem',
                               'x-component': 'Checkbox',
@@ -224,12 +373,12 @@ export const categoriesSchema: ISchema = {
                               'x-component': 'Action.Drawer.Footer',
                               properties: {
                                 cancel: {
-                                  title: '{{t("Cancel")}}',
+                                  title: tStr('Cancel'),
                                   'x-component': 'Action',
                                   'x-use-component-props': 'useCancelActionProps',
                                 },
                                 submit: {
-                                  title: '{{t("Submit")}}',
+                                  title: tStr('Submit'),
                                   'x-component': 'Action',
                                   'x-use-component-props': 'useUpdateActionProps',
                                 },
@@ -243,7 +392,7 @@ export const categoriesSchema: ISchema = {
                 },
                 delete: {
                   type: 'void',
-                  title: '{{t("Delete")}}',
+                  title: tStr('Delete'),
                   'x-component': 'Action.Link',
                   'x-use-component-props': 'useDestroyActionProps',
                 },

@@ -1,33 +1,50 @@
-import type { Field } from '@formily/core';
-import { useField, useFieldSchema } from '@formily/react';
 import {
-  getShouldChange,
+  FilterGroup,
   Plugin,
-  removeNullCondition,
-  SchemaSettingsDataScope,
-  useCollection_deprecated,
-  useCollectionField,
-  useCollectionManager_deprecated,
-  useColumnSchema,
-  useDesignable,
-  useFormBlockContext,
-  useLocalVariables,
-  useRecord,
-  useSchemaSettings,
-  useVariables,
-  VariableInput,
+  QuickEditFormModel,
+  TableColumnModel,
+  TableSelectModel,
+  VariableFilterItem,
 } from '@nocobase/client';
+import { defineAction, FlowModel, useFlowSettingsContext } from '@nocobase/flow-engine';
 import React from 'react';
-import { useTranslation } from 'react-i18next';
+import { tExpr } from './locale';
+
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+type FilterValue = Record<string, JsonValue>;
+
+type FieldSelectionFilterParams = {
+  filter?: FilterValue;
+};
 
 type CollectionFieldLike = {
   interface?: string;
-  name?: string;
   target?: string;
-  targetCollection?: string | { name?: string };
-  uiSchema?: Record<string, any>;
+  targetCollection?: { name?: string };
+  isAssociationField?: () => boolean;
 };
 
+type FieldModelLike = FlowModel & {
+  collectionField?: CollectionFieldLike;
+};
+
+type TableColumnModelLike = TableColumnModel & {
+  associationPathName?: string;
+  collectionField?: CollectionFieldLike;
+  subModels?: {
+    field?: FieldModelLike;
+  };
+};
+
+type SubModelContainerLike = FlowModel & {
+  subModels?: Record<string, FlowModel | FlowModel[] | undefined>;
+};
+
+const EMPTY_FILTER: FilterValue = { logic: '$and', items: [] };
+const TABLE_COLUMN_FLOW_KEY = 'fieldSelectionFilterSettings';
+const FIELD_DATA_SCOPE_FLOW_KEY = 'selectSettings';
+const FIELD_DATA_SCOPE_STEP_KEY = 'dataScope';
 const ASSOCIATION_INTERFACES = [
   'obo',
   'oho',
@@ -39,203 +56,234 @@ const ASSOCIATION_INTERFACES = [
   'snapshot',
   'createdBy',
   'updatedBy',
+  'mbm',
 ];
-const SELECTABLE_MODES = ['Select', 'Picker', 'RecordPicker', 'CascadeSelect'];
+
+function getColumnFieldModel(model?: FlowModel): FieldModelLike | undefined {
+  const field = (model as TableColumnModelLike | undefined)?.subModels?.field;
+  return field instanceof FlowModel ? field : undefined;
+}
+
+function getCollectionField(model?: FlowModel): CollectionFieldLike | undefined {
+  const columnModel = model as TableColumnModelLike | undefined;
+  const fieldModel = getColumnFieldModel(model);
+  return (
+    columnModel?.context?.collectionField ||
+    columnModel?.collectionField ||
+    fieldModel?.context?.collectionField ||
+    fieldModel?.collectionField
+  );
+}
+
+function getFirstSubModel(model: SubModelContainerLike | undefined, subModelKey: string): FieldModelLike | undefined {
+  const subModelValue = model?.subModels?.[subModelKey];
+  const subModel = Array.isArray(subModelValue) ? subModelValue[0] : subModelValue;
+  return subModel instanceof FlowModel ? (subModel as FieldModelLike) : undefined;
+}
 
 function getTargetCollectionName(collectionField?: CollectionFieldLike) {
   const target = collectionField?.target || collectionField?.targetCollection;
-
   return typeof target === 'string' ? target : target?.name;
 }
 
-function isSelectionField(collectionField?: CollectionFieldLike) {
+function isAssociationSelectionField(collectionField?: CollectionFieldLike) {
   if (!getTargetCollectionName(collectionField)) {
     return false;
+  }
+
+  if (typeof collectionField?.isAssociationField === 'function') {
+    return collectionField.isAssociationField();
   }
 
   return !collectionField?.interface || ASSOCIATION_INTERFACES.includes(collectionField.interface);
 }
 
-function getFieldMode(fieldSchema?: any, collectionField?: CollectionFieldLike) {
-  return (
-    fieldSchema?.['x-component-props']?.mode ||
-    collectionField?.uiSchema?.['x-component-props']?.mode ||
-    'Select'
-  );
+function isSelectableTableColumn(model?: FlowModel) {
+  const columnModel = model as TableColumnModelLike | undefined;
+  if (!columnModel || columnModel.use !== 'TableColumnModel') {
+    return false;
+  }
+
+  if (!getColumnFieldModel(columnModel)) {
+    return false;
+  }
+
+  return isAssociationSelectionField(getCollectionField(columnModel));
 }
 
-function withServiceFilter(componentProps: Record<string, any> = {}, filter: any) {
-  const service = componentProps.service && typeof componentProps.service === 'object' ? componentProps.service : {};
-  const params = service.params && typeof service.params === 'object' ? service.params : {};
-
-  return {
-    ...componentProps,
-    service: {
-      ...service,
-      params: {
-        ...params,
-        filter,
-      },
-    },
-  };
+function cloneFilterParams(params?: FieldSelectionFilterParams): FieldSelectionFilterParams {
+  return JSON.parse(JSON.stringify(params || { filter: EMPTY_FILTER })) as FieldSelectionFilterParams;
 }
 
-function syncRenderedFieldInstances(field: Field, fieldSchema: any, componentProps: Record<string, any>) {
-  if (!fieldSchema?.name || !field?.form?.query) {
+function getFieldDataScopeParams(fieldModel?: FieldModelLike): FieldSelectionFilterParams | undefined {
+  return fieldModel?.getStepParams?.(FIELD_DATA_SCOPE_FLOW_KEY, FIELD_DATA_SCOPE_STEP_KEY);
+}
+
+function getTableColumnDataScopeParams(model?: FlowModel): FieldSelectionFilterParams | undefined {
+  return model?.getStepParams?.(TABLE_COLUMN_FLOW_KEY, FIELD_DATA_SCOPE_STEP_KEY);
+}
+
+function hasSelectionFilterConfig(model?: FlowModel, fieldModel?: FieldModelLike) {
+  return !!getTableColumnDataScopeParams(model) || !!getFieldDataScopeParams(fieldModel);
+}
+
+function syncFieldDataScopeParams(fieldModel: FieldModelLike | undefined, params?: FieldSelectionFilterParams) {
+  if (!fieldModel) {
     return;
   }
 
-  if (field.props?.name === fieldSchema.name) {
-    field.componentProps = {
-      ...field.componentProps,
-      ...componentProps,
-    };
-  }
+  fieldModel.setStepParams(FIELD_DATA_SCOPE_FLOW_KEY, FIELD_DATA_SCOPE_STEP_KEY, cloneFilterParams(params));
+}
 
-  const path = field.path?.splice?.(field.path?.length - 1, 1);
-  if (!path?.concat) {
-    return;
-  }
-
-  field.form.query(`${path.concat(`*.` + fieldSchema.name)}`).forEach((runtimeField: Field) => {
-    runtimeField.componentProps = {
-      ...runtimeField.componentProps,
-      ...componentProps,
-    };
+function createFilterContextModel(sourceModel: FlowModel, collectionField?: CollectionFieldLike) {
+  const filterModel = new FlowModel({
+    uid: `${sourceModel.uid}-field-selection-filter-context`,
+    flowEngine: sourceModel.flowEngine,
   });
+  filterModel.context.addDelegate(sourceModel.context);
+  filterModel.context.defineProperty('collection', {
+    get: () => collectionField?.targetCollection,
+    cache: false,
+  });
+  return filterModel;
 }
 
-function useTableColumnSelectionContext() {
-  const { getCollectionJoinField, getAllCollectionsInheritChain } = useCollectionManager_deprecated();
-  const { getField } = useCollection_deprecated();
-  const { fieldSchema: tableColumnFieldSchema, collectionField: tableColumnCollectionField } = useColumnSchema();
-  const currentSchema = useFieldSchema();
-  const targetCollectionField = useCollectionField();
-  
-  // Try to get column/field schema from SchemaSettings context to avoid context loss in Portals/Dropdown menus
-  const schemaSettings = useSchemaSettings();
-  const parentSchema = schemaSettings?.fieldSchema;
-  const tableColumnFieldSchemaFromSettings = parentSchema?.reduceProperties((buf, s) => {
-    if (s['x-component'] === 'CollectionField') {
-      return s;
-    }
-    return buf;
-  }, null);
-
-  const fieldSchema = tableColumnFieldSchema || tableColumnFieldSchemaFromSettings || currentSchema;
-  const collectionField =
-    tableColumnCollectionField ||
-    targetCollectionField ||
-    getField(fieldSchema?.name) ||
-    getCollectionJoinField(fieldSchema?.['x-collection-field']);
-
-  return {
-    collectionField,
-    fieldSchema,
-    getAllCollectionsInheritChain,
-  };
-}
-
-const fieldSelectionDataScopeSettingsItem = {
-  Component: SchemaSettingsDataScope,
-  sort: 45,
-  useVisible() {
-    const { collectionField, fieldSchema } = useTableColumnSelectionContext();
-    const fieldMode = getFieldMode(fieldSchema, collectionField);
-    
-    console.log('[plugin-field-selection-filter] useVisible:', {
-      collectionField,
-      fieldSchema,
-      fieldMode,
-      isSelection: isSelectionField(collectionField),
-      selectableMode: SELECTABLE_MODES.includes(fieldMode),
-      modes: SELECTABLE_MODES
-    });
-
-    return isSelectionField(collectionField) && SELECTABLE_MODES.includes(fieldMode);
+const fieldSelectionDataScope = defineAction<TableColumnModelLike>({
+  name: 'fieldSelectionDataScope',
+  title: tExpr('Set field selection filter'),
+  uiMode: {
+    type: 'dialog',
+    props: {
+      width: 800,
+    },
   },
-  useComponentProps() {
-    const { t } = useTranslation();
-    const field = useField<Field>();
-    const { collectionField, fieldSchema, getAllCollectionsInheritChain } = useTableColumnSelectionContext();
-    const { form } = useFormBlockContext();
-    const record = useRecord();
-    const variables = useVariables();
-    const localVariables = useLocalVariables();
-    const { dn } = useDesignable();
+  uiSchema: {
+    filter: {
+      type: 'object',
+      'x-decorator': 'FormItem',
+      'x-component': function FieldSelectionFilterComponent(props) {
+        const flowContext = useFlowSettingsContext<TableColumnModelLike>();
+        const fieldModel = getColumnFieldModel(flowContext.model);
+        const sourceModel = fieldModel || flowContext.model;
+        const collectionField = getCollectionField(flowContext.model);
+        const filterModel = React.useMemo(
+          () => createFilterContextModel(sourceModel, collectionField),
+          [collectionField, sourceModel],
+        );
 
-    return {
-      title: t('Set field selection filter'),
-      collectionName: getTargetCollectionName(collectionField),
-      defaultFilter: fieldSchema?.['x-component-props']?.service?.params?.filter || {},
-      form,
-      dynamicComponent: (props: any) => {
         return (
-          <VariableInput
-            {...props}
-            form={form}
-            collectionField={props.collectionField}
-            record={record}
-            noDisabled={true}
-            shouldChange={getShouldChange({
-              collectionField: props.collectionField,
-              variables,
-              localVariables,
-              getAllCollectionsInheritChain,
-            })}
+          <FilterGroup
+            value={props.value}
+            onChange={props.onChange}
+            FilterItem={(filterItemProps) => (
+              <VariableFilterItem {...filterItemProps} model={filterModel} rightAsVariable />
+            )}
           />
         );
       },
-      onSubmit: ({ filter }) => {
-        const nextFilter = removeNullCondition(filter);
-        const nextComponentProps = withServiceFilter(fieldSchema?.['x-component-props'] || {}, nextFilter);
-
-        fieldSchema['x-component-props'] = nextComponentProps;
-        syncRenderedFieldInstances(field, fieldSchema, nextComponentProps);
-
-        dn.emit('patch', {
-          schema: {
-            'x-uid': fieldSchema['x-uid'],
-            'x-component-props': nextComponentProps,
-          },
-        });
-        dn.refresh();
-      },
-    };
+    },
   },
-};
+  defaultParams(ctx) {
+    return getFieldDataScopeParams(getColumnFieldModel(ctx.model)) || { filter: EMPTY_FILTER };
+  },
+  useRawParams: true,
+  async handler(ctx, params: FieldSelectionFilterParams) {
+    const fieldModel = getColumnFieldModel(ctx.model);
+    if (!hasSelectionFilterConfig(ctx.model, fieldModel)) {
+      return;
+    }
+    syncFieldDataScopeParams(fieldModel, params);
+    if (fieldModel?.getFlow(FIELD_DATA_SCOPE_FLOW_KEY)) {
+      await fieldModel.applyFlow(FIELD_DATA_SCOPE_FLOW_KEY);
+    }
+  },
+});
 
 export class PluginFieldSelectionFilterClient extends Plugin {
   async load() {
-    // Register to component-specific settings for different field modes
-    // This allows it to show up under "Specific properties" in both Form and Table settings, like copy settings
-    this.app.schemaSettingsManager.addItem(
-      'fieldSettings:component:Select',
-      'fieldSelectionDataScope',
-      fieldSelectionDataScopeSettingsItem,
-    );
-    this.app.schemaSettingsManager.addItem(
-      'fieldSettings:component:Picker',
-      'fieldSelectionDataScope',
-      fieldSelectionDataScopeSettingsItem,
-    );
-    this.app.schemaSettingsManager.addItem(
-      'fieldSettings:component:CascadeSelect',
-      'fieldSelectionDataScope',
-      fieldSelectionDataScopeSettingsItem,
-    );
+    this.flowEngine.registerActions({
+      fieldSelectionDataScope,
+    });
 
-    // Keep tableColumn and formItem for backward compatibility and extra entry points
-    this.app.schemaSettingsManager.addItem(
-      'fieldSettings:TableColumn',
-      'decoratorOptions.fieldSelectionDataScope',
-      fieldSelectionDataScopeSettingsItem,
-    );
-    this.app.schemaSettingsManager.addItem(
-      'fieldSettings:FormItem',
-      'decoratorOptions.fieldSelectionDataScope',
-      fieldSelectionDataScopeSettingsItem,
-    );
+    TableColumnModel.registerFlow({
+      key: TABLE_COLUMN_FLOW_KEY,
+      sort: 505,
+      steps: {
+        dataScope: {
+          use: 'fieldSelectionDataScope',
+          title: tExpr('Set field selection filter'),
+          hideInSettings(ctx) {
+            return !isSelectableTableColumn(ctx.model);
+          },
+          async beforeParamsSave(ctx, params: FieldSelectionFilterParams) {
+            const fieldModel = getColumnFieldModel(ctx.model);
+            syncFieldDataScopeParams(fieldModel, params);
+            await fieldModel?.saveStepParams?.();
+          },
+          async handler(ctx, params: FieldSelectionFilterParams) {
+            const fieldModel = getColumnFieldModel(ctx.model);
+            if (!hasSelectionFilterConfig(ctx.model, fieldModel)) {
+              return;
+            }
+            syncFieldDataScopeParams(fieldModel, params);
+            if (fieldModel?.getFlow(FIELD_DATA_SCOPE_FLOW_KEY)) {
+              await fieldModel.applyFlow(FIELD_DATA_SCOPE_FLOW_KEY);
+            }
+          },
+        },
+      },
+    });
+
+    QuickEditFormModel.registerFlow({
+      key: TABLE_COLUMN_FLOW_KEY,
+      sort: 105,
+      on: {
+        eventName: 'beforeRender',
+        phase: 'afterFlow',
+        flowKey: 'quickEditFormSettings',
+      },
+      steps: {
+        dataScope: {
+          title: tExpr('Field selection filter'),
+          async handler(ctx) {
+            const sourceFieldModelUid = ctx.inputArgs?.sourceFieldModelUid;
+            const sourceFieldModel =
+              typeof sourceFieldModelUid === 'string'
+                ? (ctx.engine.getModel(sourceFieldModelUid) as FieldModelLike | undefined)
+                : undefined;
+            const params = getFieldDataScopeParams(sourceFieldModel);
+            if (!params) {
+              return;
+            }
+
+            const quickEditField = getFirstSubModel(ctx.model as SubModelContainerLike, 'fields');
+            syncFieldDataScopeParams(quickEditField, params);
+            await quickEditField?.dispatchEvent?.('beforeRender', undefined, { useCache: false });
+          },
+        },
+      },
+    });
+
+    TableSelectModel.registerFlow({
+      key: 'fieldSelectionFilterSettings',
+      sort: 505,
+      steps: {
+        dataScope: {
+          title: tExpr('Field selection filter'),
+          async handler(ctx) {
+            const sourceFieldModelUid = ctx.view?.inputArgs?.parentId;
+            const sourceFieldModel =
+              typeof sourceFieldModelUid === 'string'
+                ? (ctx.engine.getModel(sourceFieldModelUid, true) as FieldModelLike | undefined)
+                : undefined;
+            const params = getFieldDataScopeParams(sourceFieldModel);
+            if (params) {
+              await ctx.runAction('dataScope', params);
+            }
+          },
+        },
+      },
+    });
   }
 }
 

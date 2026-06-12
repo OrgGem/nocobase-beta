@@ -22,7 +22,8 @@
   "peerDependencies": {
     "@nocobase/client": "2.x",
     "@nocobase/database": "2.x",
-    "@nocobase/server": "2.x"
+    "@nocobase/server": "2.x",
+    "plugin-file-preview-auth": "*"
   },
   "keywords": [
     "ocr",

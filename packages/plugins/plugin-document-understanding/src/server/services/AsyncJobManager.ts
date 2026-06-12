@@ -2,12 +2,17 @@ import { Database } from '@nocobase/database';
 import { ExternalApiClient } from './ExternalApiClient';
 import { EndpointDef, JobState } from '../types';
 
+interface LoggerLike {
+  warn: (...args: unknown[]) => void;
+}
+
 export class AsyncJobManager {
   private db: Database;
   private apiClient: ExternalApiClient;
   private intervals: Map<number, NodeJS.Timeout> = new Map();
   private onJobComplete: (jobId: number, result: any) => Promise<void>;
   private onJobError: (jobId: number, error: string) => Promise<void>;
+  private logger: LoggerLike;
 
   constructor(
     db: Database,
@@ -16,11 +21,13 @@ export class AsyncJobManager {
       onJobComplete: (jobId: number, result: any) => Promise<void>;
       onJobError: (jobId: number, error: string) => Promise<void>;
     },
+    logger: LoggerLike,
   ) {
     this.db = db;
     this.apiClient = apiClient;
     this.onJobComplete = callbacks.onJobComplete;
     this.onJobError = callbacks.onJobError;
+    this.logger = logger;
   }
 
   async startPolling(
@@ -45,7 +52,13 @@ export class AsyncJobManager {
           return;
         }
 
-        const url = endpoint.pollResultSubpath!.replace('{taskId}', taskId);
+        const pollResultSubpath = endpoint.pollResultSubpath;
+        if (!pollResultSubpath) {
+          await this.onJobError(jobId, 'Polling result subpath is not configured');
+          return;
+        }
+
+        const url = pollResultSubpath.replace('{taskId}', taskId);
         const response = await this.apiClient.get(url);
 
         // Smart completion check: use pollStatusField if configured
@@ -73,9 +86,9 @@ export class AsyncJobManager {
             await this.onJobComplete(jobId, resultValue);
           }
         }
-      } catch (err: any) {
-        // Log but don't stop polling on transient errors
-        console.error(`Polling error for job ${jobId}: ${err.message}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Polling error for job ${jobId}: ${message}`);
       }
     }, interval);
 
@@ -138,8 +151,9 @@ export class AsyncJobManager {
   }
 
   stopPolling(jobId: number) {
-    if (this.intervals.has(jobId)) {
-      clearInterval(this.intervals.get(jobId)!);
+    const timer = this.intervals.get(jobId);
+    if (timer) {
+      clearInterval(timer);
       this.intervals.delete(jobId);
     }
   }

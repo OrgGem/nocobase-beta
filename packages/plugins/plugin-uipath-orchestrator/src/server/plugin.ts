@@ -13,7 +13,7 @@
 
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
-import { UiPathApiClient } from './services/UiPathApiClient';
+import { DEFAULT_UIPATH_SCOPES, UiPathApiClient } from './services/UiPathApiClient';
 import type { UiPathInstanceConfig, FolderContext, DashboardSnapshot } from './services/types';
 
 import { createInstanceActions } from './actions/instances';
@@ -54,8 +54,17 @@ export class PluginUiPathOrchestratorServer extends Plugin {
     const repo = this.db.getRepository('uipathInstances');
     let instance: any;
 
-    if (instanceId) {
-      instance = await repo.findOne({ filter: { id: Number(instanceId) } });
+    const hasExplicitInstanceId = instanceId !== undefined && instanceId !== null && instanceId !== '';
+
+    if (hasExplicitInstanceId) {
+      const explicitId = Number(instanceId);
+      if (!Number.isFinite(explicitId)) {
+        throw new Error(`Invalid UiPath instance ID: ${instanceId}`);
+      }
+      instance = await repo.findOne({ filter: { id: explicitId } });
+      if (!instance) {
+        throw new Error(`UiPath instance not found: ${instanceId}`);
+      }
     }
     if (!instance) {
       instance = await repo.findOne({ filter: { isDefault: true, enabled: true } });
@@ -87,7 +96,7 @@ export class PluginUiPathOrchestratorServer extends Plugin {
       tokenUrl: instance.get('tokenUrl') as string,
       clientId: instance.get('clientId') as string,
       clientSecret: instance.get('clientSecret') as string,
-      scopes: (instance.get('scopes') as string) || 'OR.Default',
+      scopes: (instance.get('scopes') as string) || DEFAULT_UIPATH_SCOPES,
       defaultFolderId: instance.get('defaultFolderId') as number,
       defaultFolderKey: instance.get('defaultFolderKey') as string,
       defaultFolderPath: instance.get('defaultFolderPath') as string,

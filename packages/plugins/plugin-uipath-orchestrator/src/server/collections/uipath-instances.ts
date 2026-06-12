@@ -20,7 +20,12 @@ export default {
     { name: 'tokenUrl', type: 'text' },
     { name: 'clientId', type: 'text' },
     { name: 'clientSecret', type: 'text' },
-    { name: 'scopes', type: 'string', length: 500, defaultValue: 'OR.Default' },
+    {
+      name: 'scopes',
+      type: 'string',
+      length: 500,
+      defaultValue: 'OR.Default OR.Administration OR.Execution OR.Assets OR.Users OR.Folders',
+    },
     // Default folder context
     { name: 'defaultFolderId', type: 'bigInt' },
     { name: 'defaultFolderKey', type: 'string', length: 100 },

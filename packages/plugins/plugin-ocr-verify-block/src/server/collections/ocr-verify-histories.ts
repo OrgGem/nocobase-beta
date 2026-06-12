@@ -8,6 +8,8 @@ export default defineCollection({
     { name: 'dataSource', type: 'string', allowNull: true },
     { name: 'collectionName', type: 'string' },
     { name: 'recordId', type: 'string' },
+    { name: 'categoryId', type: 'string', allowNull: true },
+    { name: 'categoryName', type: 'string', allowNull: true },
     { name: 'pdfField', type: 'string', allowNull: true },
     { name: 'jsonField', type: 'string' },
     { name: 'statusField', type: 'string', allowNull: true },

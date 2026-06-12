@@ -2,59 +2,60 @@ import { ISchema, useField, useFieldSchema } from '@formily/react';
 import { SchemaSettings, useDesignable } from '@nocobase/client';
 import React from 'react';
 import { CategorySelect } from '../components/CategorySelect';
+import { tStr } from '../locale';
 
 const editSchema: ISchema = {
   type: 'object',
   properties: {
     sourceMode: {
-      title: 'Source mode',
+      title: tStr('Source mode'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': 'Select',
       default: 'currentRecord',
       enum: [
-        { label: 'Current record', value: 'currentRecord' },
-        { label: 'Manual record', value: 'manualRecord' },
+        { label: tStr('Current record'), value: 'currentRecord' },
+        { label: tStr('Manual record'), value: 'manualRecord' },
       ],
       required: true,
     },
     collection: {
-      title: 'Collection',
+      title: tStr('Collection'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': 'Input',
-      description: 'Optional for current-record blocks.',
+      description: tStr('Optional for current-record blocks.'),
     },
     recordId: {
-      title: 'Record ID',
+      title: tStr('Record ID'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': 'Input',
-      description: 'Only used in manual-record mode.',
+      description: tStr('Only used in manual-record mode.'),
     },
     pdfField: {
-      title: 'PDF attachment field',
+      title: tStr('PDF attachment field'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': 'Input',
       required: true,
     },
     jsonField: {
-      title: 'OCR JSON field',
+      title: tStr('OCR JSON field'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': 'Input',
       required: true,
     },
     statusField: {
-      title: 'Status field',
+      title: tStr('Status field'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': 'Input',
-      description: 'String field updated to accepted/rejected.',
+      description: tStr('String field updated to accepted/rejected.'),
     },
     categoryId: {
-      title: 'Verify Category / Profile',
+      title: tStr('Verify category / profile'),
       type: 'string',
       'x-decorator': 'FormItem',
       'x-component': CategorySelect,
@@ -74,7 +75,7 @@ export const ocrVerifyBlockSettings = new SchemaSettings({
         const fieldSchema = useFieldSchema();
         const { dn } = useDesignable();
         return {
-          title: 'Edit OCR Verify block',
+          title: tStr('Edit OCR Verify block'),
           initialValues: fieldSchema['x-component-props'] || {},
           schema: editSchema,
           onSubmit(values) {

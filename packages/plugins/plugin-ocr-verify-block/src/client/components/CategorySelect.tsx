@@ -1,6 +1,7 @@
 import React from 'react';
 import { Select } from 'antd';
 import { useRequest } from '@nocobase/client';
+import { useT } from '../locale';
 
 function normalizeRecords(response: any) {
   const records = response?.data?.data || response?.data || response || [];
@@ -8,6 +9,7 @@ function normalizeRecords(response: any) {
 }
 
 export const CategorySelect = (props: any) => {
+  const t = useT();
   const { data, loading } = useRequest<any>({
     resource: 'ocrVerifyCategories',
     action: 'list',
@@ -18,20 +20,20 @@ export const CategorySelect = (props: any) => {
     },
   });
 
-  const options = normalizeRecords(data).map((item: any) => ({
-    label: item.title || item.name,
-    value: item.id,
-  })) || [];
+  const options =
+    normalizeRecords(data).map((item: any) => ({
+      label: item.title || item.name,
+      value: item.id,
+    })) || [];
 
   return (
     <Select
       {...props}
       loading={loading}
       options={options}
+      placeholder={props.placeholder || t('Select a verify category')}
       showSearch
-      filterOption={(input, option) =>
-        (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-      }
+      filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
     />
   );
 };

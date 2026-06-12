@@ -23,6 +23,6 @@ export default {
     { type: 'string', name: 'pollCompletedValue', length: 100, defaultValue: 'completed' },
     { type: 'json', name: 'customHeaders' },
     { type: 'boolean', name: 'enabled', defaultValue: true },
-    { type: 'sort', name: 'sortOrder' },
+    { type: 'integer', name: 'sortOrder', defaultValue: 0 },
   ],
 } as CollectionOptions;
