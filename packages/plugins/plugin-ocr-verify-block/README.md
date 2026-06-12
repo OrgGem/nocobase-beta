@@ -15,7 +15,9 @@ NocoBase plugin for verifying OCR JSON data against a PDF attachment field.
 - Updates the JSON field and an optional string status field.
 - Stores verify history.
 - Optionally calls a configured callback URL with `X-API-Key`.
+- Supports verify categories with per-category mapping, statuses, callback URL, and callback API key.
 - Exposes API actions and a Skill Hub-compatible skill template.
+- Requires `plugin-file-preview-auth` for authenticated PDF downloads, OCR retry/status actions, and the OCR monitor tab.
 
 ## Default OCR JSON shape
 
@@ -65,10 +67,11 @@ The default mapping profile uses `pages[].items[]`, `key`, `value`, `position`, 
 - `ocrVerifySettings:testCallback`
 - `ocrVerifyMappingProfiles:default`
 
+Requests can pass `categoryId` or `categoryName` to use the selected verify category as the mapping profile and action configuration.
+
 ## Next implementation steps
 
 - Replace manual block field inputs with datasource/collection/field pickers.
 - Add current-selection queue mode for table/list selections.
-- Add mapping profile editor UI.
 - Add callback replay in the history tab.
 - Add e2e coverage for PDF rendering and overlay scaling.

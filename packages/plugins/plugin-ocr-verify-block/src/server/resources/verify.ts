@@ -10,6 +10,24 @@ import {
 import { applyOcrItemChanges, normalizeOcrJson } from '../services/json-mapping';
 import { ensureDefaultMapping, ensureSettings } from './settings';
 
+type OcrVerifyCategory = OcrMappingProfile & {
+  id?: string | number;
+  name?: string;
+  title?: string;
+  callbackUrl?: string;
+  callbackApiKey?: string;
+  callbackTimeoutMs?: number;
+  acceptStatus?: string;
+  rejectStatus?: string;
+  enabled?: boolean;
+};
+
+type CategoryMapping = OcrMappingProfile & {
+  id?: string | number;
+  name?: string;
+  title?: string;
+};
+
 function getValues(ctx: Context) {
   return { ...(ctx.action.params || {}), ...(ctx.action.params.values || {}) };
 }
@@ -134,16 +152,73 @@ function aclFilter(acl: any) {
   return acl?.params?.filter ? { ...acl.params.filter } : undefined;
 }
 
-async function getMapping(
-  ctx: Context,
-  input: VerifyPayloadInput,
-): Promise<OcrMappingProfile & { id?: any; name?: string }> {
+async function getMapping(ctx: Context, input: VerifyPayloadInput): Promise<CategoryMapping> {
+  const category = await getCategory(ctx, input);
+  if (category) return categoryToMapping(category);
+
   const repo = ctx.db.getRepository(COLLECTION.mappingProfiles);
   let row: any = null;
   if (input.mappingProfileId) row = await repo.findOne({ filterByTk: input.mappingProfileId });
   if (!row && input.mappingProfileName) row = await repo.findOne({ filter: { name: input.mappingProfileName } });
   if (!row) row = await ensureDefaultMapping(ctx.db);
   return modelToJson(row);
+}
+
+async function getCategory(ctx: Context, input: VerifyPayloadInput): Promise<OcrVerifyCategory | null> {
+  if (!input.categoryId && !input.categoryName) return null;
+
+  const repo = ctx.db.getRepository(COLLECTION.categories);
+  let row = input.categoryId ? await repo.findOne({ filterByTk: input.categoryId }) : null;
+  if (!row && input.categoryName) {
+    row = await repo.findOne({ filter: { name: input.categoryName } });
+  }
+  if (!row) {
+    ctx.throw(400, 'OCR verify category not found');
+  }
+
+  const category = modelToJson(row) as OcrVerifyCategory;
+  if (category.enabled === false) {
+    ctx.throw(400, 'OCR verify category is disabled');
+  }
+  return category;
+}
+
+function categoryToMapping(category: OcrVerifyCategory): CategoryMapping {
+  return {
+    id: category.id,
+    name: category.name,
+    title: category.title,
+    itemsPath: category.itemsPath,
+    idPath: category.idPath,
+    keyPath: category.keyPath,
+    valuePath: category.valuePath,
+    pagePath: category.pagePath,
+    rectPath: category.rectPath,
+    pointsPath: category.pointsPath,
+    confidencePath: category.confidencePath,
+    statusPath: category.statusPath,
+  };
+}
+
+function maskCategory(category: OcrVerifyCategory | null) {
+  if (!category) return undefined;
+  return {
+    ...category,
+    callbackApiKey: undefined,
+    callbackApiKeySet: !!category.callbackApiKey,
+  };
+}
+
+function applyCategorySettings(settings: any, category: OcrVerifyCategory | null) {
+  if (!category) return settings;
+  return {
+    ...settings,
+    callbackUrl: category.callbackUrl || settings.callbackUrl,
+    callbackApiKey: category.callbackApiKey || settings.callbackApiKey,
+    callbackTimeoutMs: category.callbackTimeoutMs || settings.callbackTimeoutMs,
+    acceptStatus: category.acceptStatus || settings.acceptStatus,
+    rejectStatus: category.rejectStatus || settings.rejectStatus,
+  };
 }
 
 async function getRecord(ctx: Context, input: VerifyPayloadInput, acl: any) {
@@ -210,7 +285,8 @@ export async function getPayload(ctx: Context, next: Next) {
   assertFieldAcl(ctx, acl, [input.pdfField, input.jsonField, input.statusField].filter(Boolean), 'get');
 
   const { json } = await getRecord(ctx, input, acl);
-  const mapping = await getMapping(ctx, input);
+  const category = await getCategory(ctx, input);
+  const mapping = category ? categoryToMapping(category) : await getMapping(ctx, input);
 
   const pdfAttachment = json[input.pdfField];
   const firstPdf = Array.isArray(pdfAttachment) ? pdfAttachment[0] : pdfAttachment;
@@ -253,6 +329,7 @@ export async function getPayload(ctx: Context, next: Next) {
     data: ocrJson,
     items,
     mapping,
+    category: maskCategory(category),
   };
   await next();
 }
@@ -262,8 +339,10 @@ async function runAction(ctx: Context, action: VerifyAction) {
   if (!input.collection || !input.recordId) ctx.throw(400, 'collection and recordId are required');
   if (!input.jsonField) ctx.throw(400, 'jsonField is required');
 
-  const settings = modelToJson(await ensureSettings(ctx.db));
-  const mapping = await getMapping(ctx, input);
+  const baseSettings = modelToJson(await ensureSettings(ctx.db));
+  const category = await getCategory(ctx, input);
+  const settings = applyCategorySettings(baseSettings, category);
+  const mapping = category ? categoryToMapping(category) : await getMapping(ctx, input);
   const readAcl = await getAclParams(ctx, input.collection, 'get');
   const updateAcl = await getAclParams(ctx, input.collection, 'update');
   assertFieldAcl(ctx, readAcl, [input.pdfField, input.jsonField, input.statusField].filter(Boolean), 'get');
@@ -290,6 +369,8 @@ async function runAction(ctx: Context, action: VerifyAction) {
     dataSource: input.dataSource || 'main',
     collection: input.collection,
     recordId: input.recordId,
+    categoryId: input.categoryId,
+    categoryName: input.categoryName,
     status,
     jsonField: input.jsonField,
     pdfField: input.pdfField,
@@ -306,6 +387,8 @@ async function runAction(ctx: Context, action: VerifyAction) {
       dataSource: input.dataSource || 'main',
       collectionName: input.collection,
       recordId: String(input.recordId),
+      categoryId: input.categoryId ? String(input.categoryId) : undefined,
+      categoryName: input.categoryName,
       pdfField: input.pdfField,
       jsonField: input.jsonField,
       statusField: input.statusField,
@@ -326,6 +409,7 @@ async function runAction(ctx: Context, action: VerifyAction) {
     items: normalizeOcrJson(afterJson, mapping) as NormalizedOcrItem[],
     history: modelToJson(history),
     callback,
+    category: maskCategory(category),
   };
 }
 

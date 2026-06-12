@@ -12,6 +12,48 @@ import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
 import { useChatMessagesStore } from '@nocobase/plugin-ai/client';
 import { Modal, Button } from 'antd';
 
+type ChatPreviewStoreState = {
+  messages?: any[];
+  attachments?: any[];
+  sessions?: Record<string, { messages?: any[]; attachments?: any[] } | undefined>;
+  getSessionState?: (sessionId?: string) => { messages?: any[]; attachments?: any[] };
+};
+
+type ChatMessagesStoreArrayHook = (selector: (state: ChatPreviewStoreState) => any[]) => any[];
+
+const CHAT_DEFAULT_SESSION_KEY = '__draft__';
+
+function pickSessionState(state: ChatPreviewStoreState, sessionId?: string) {
+  if (typeof state.getSessionState === 'function') {
+    return state.getSessionState(sessionId || undefined);
+  }
+
+  const sessions = state.sessions;
+  if (!sessions) return null;
+
+  const sessionKey = sessionId || CHAT_DEFAULT_SESSION_KEY;
+  const selectedSession = sessions[sessionKey];
+  if (selectedSession) return selectedSession;
+
+  return (
+    Object.values(sessions).find(
+      (session) => (session?.messages?.length || 0) > 0 || (session?.attachments?.length || 0) > 0,
+    ) || null
+  );
+}
+
+export function selectChatMessages(state: ChatPreviewStoreState, sessionId?: string) {
+  const session = pickSessionState(state, sessionId);
+  if (Array.isArray(session?.messages)) return session.messages;
+  return Array.isArray(state.messages) ? state.messages : [];
+}
+
+export function selectChatAttachments(state: ChatPreviewStoreState, sessionId?: string) {
+  const session = pickSessionState(state, sessionId);
+  if (Array.isArray(session?.attachments)) return session.attachments;
+  return Array.isArray(state.attachments) ? state.attachments : [];
+}
+
 export interface PreviewFile {
   id?: string | number;
   uid?: string;
@@ -283,10 +325,20 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
   const [sessionId, setSessionId] = useState('');
   const apiClient = useAPIClient();
+  const currentSessionIdRef = useRef<string>('');
 
-  // Read zustand stores via hooks — these re-render on changes
-  const messages = useChatMessagesStore.use.messages();
-  const pendingAttachments = useChatMessagesStore.use.attachments();
+  // NocoBase 2.1 moved chat messages into per-session store state.
+  const chatStore = useChatMessagesStore as unknown as ChatMessagesStoreArrayHook;
+  const selectMessagesForSession = useCallback(
+    (state: ChatPreviewStoreState) => selectChatMessages(state, sessionId),
+    [sessionId],
+  );
+  const selectAttachmentsForSession = useCallback(
+    (state: ChatPreviewStoreState) => selectChatAttachments(state, sessionId),
+    [sessionId],
+  );
+  const messages = chatStore(selectMessagesForSession);
+  const pendingAttachments = chatStore(selectAttachmentsForSession);
 
   // Keep latest values in refs for the click handler (avoids stale closures)
   const messagesRef = useRef(messages);
@@ -297,8 +349,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   // We don't have direct access to useChatConversationsStore (not exported).
   // Instead, we'll extract sessionId from the URL or from a data attribute on the DOM.
   // A simpler approach: use a global ref that gets populated via the axios interceptor.
-  const currentSessionIdRef = useRef<string>('');
-
   // Track the current sessionId by intercepting the getMessages API call
   useEffect(() => {
     const reqInterceptor = apiClient.axios.interceptors.request.use((config) => {
@@ -307,7 +357,9 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       if (url.includes('aiConversations:getMessages')) {
         const match = url.match(/sessionId=([^&]+)/);
         if (match) {
-          currentSessionIdRef.current = decodeURIComponent(match[1]);
+          const nextSessionId = decodeURIComponent(match[1]);
+          currentSessionIdRef.current = nextSessionId;
+          setSessionId(nextSessionId);
         }
       }
       // When sendMessages is called, sessionId is in the request body
@@ -316,6 +368,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
           const data = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
           if (data?.sessionId) {
             currentSessionIdRef.current = data.sessionId;
+            setSessionId(data.sessionId);
           }
         } catch {
           // ignore

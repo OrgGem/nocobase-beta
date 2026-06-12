@@ -159,4 +159,87 @@ describe('OCR Verify Block plugin smoke', () => {
     const updatedRecord3 = await collection.repository.findOne({ filterByTk: record.id });
     expect(updatedRecord3.status).toBe('rejected');
   });
+
+  it('uses category-specific mapping and statuses', async () => {
+    const category = await app.db.getRepository('ocrVerifyCategories').create({
+      values: {
+        name: 'invoice-category',
+        title: 'Invoice category',
+        itemsPath: 'fields[]',
+        idPath: 'code',
+        keyPath: 'code',
+        valuePath: 'text',
+        pagePath: 'box.page',
+        rectPath: 'box',
+        callbackApiKey: 'secret-category-key',
+        acceptStatus: 'category_accepted',
+        rejectStatus: 'category_rejected',
+        enabled: true,
+      },
+    });
+
+    const collection = app.db.collection({
+      name: 'categoryInvoices',
+      fields: [
+        { name: 'pdf', type: 'json' },
+        { name: 'ocrData', type: 'json' },
+        { name: 'status', type: 'string' },
+      ],
+    });
+    await collection.sync();
+
+    const record = await collection.repository.create({
+      values: {
+        pdf: [{ id: 2, url: 'https://example.com/category.pdf' }],
+        ocrData: {
+          fields: [
+            {
+              code: 'total',
+              text: '100.00',
+              box: { page: 1, x: 10, y: 20, width: 80, height: 24 },
+            },
+          ],
+        },
+        status: 'pending',
+      },
+    });
+
+    const payloadRes = await agent.resource('ocrVerify').getPayload({
+      values: {
+        collection: 'categoryInvoices',
+        recordId: record.id,
+        pdfField: 'pdf',
+        jsonField: 'ocrData',
+        statusField: 'status',
+        categoryId: category.id,
+      },
+    });
+    expect(payloadRes.status).toBe(200);
+    const payload = payloadRes.body.data || payloadRes.body;
+    expect(payload.items[0].key).toBe('total');
+    expect(payload.items[0].value).toBe('100.00');
+    expect(payload.mapping.valuePath).toBe('text');
+    expect(payload.mapping.callbackApiKey).toBeUndefined();
+    expect(payload.category.callbackApiKey).toBeUndefined();
+    expect(payload.category.callbackApiKeySet).toBe(true);
+
+    const acceptRes = await agent.resource('ocrVerify').accept({
+      values: {
+        collection: 'categoryInvoices',
+        recordId: record.id,
+        jsonField: 'ocrData',
+        statusField: 'status',
+        categoryId: category.id,
+        items: [{ key: 'total', value: '101.00' }],
+      },
+    });
+    expect(acceptRes.status).toBe(200);
+    const acceptBody = acceptRes.body.data || acceptRes.body;
+    expect(acceptBody.status).toBe('category_accepted');
+    expect(acceptBody.items[0].value).toBe('101.00');
+
+    const updatedRecord = await collection.repository.findOne({ filterByTk: record.id });
+    expect(updatedRecord.status).toBe('category_accepted');
+    expect(updatedRecord.ocrData.fields[0].text).toBe('101.00');
+  });
 });

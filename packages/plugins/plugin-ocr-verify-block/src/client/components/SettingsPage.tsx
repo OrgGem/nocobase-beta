@@ -1,16 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Space, Switch, Tabs, message } from 'antd';
 import { useAPIClient } from '@nocobase/client';
 import { CategoriesManager } from './CategoriesManager';
 import { OcrMonitorDashboard } from './OcrMonitorDashboard';
+import { useT } from '../locale';
 
 export const SettingsPage = () => {
   const api = useAPIClient();
+  const t = useT();
   const [form] = Form.useForm();
   const [mapping, setMapping] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const [settingsRes, mappingRes] = await Promise.all([
@@ -22,16 +24,16 @@ export const SettingsPage = () => {
     } finally {
       setLoading(false);
     }
-  }
+  }, [api, form]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   async function save() {
     const values = await form.validateFields();
     await api.resource('ocrVerifySettings').save({ values });
-    message.success('Settings saved');
+    message.success(t('Settings saved'));
     await load();
   }
 
@@ -39,8 +41,8 @@ export const SettingsPage = () => {
     const values = await form.validateFields();
     const res = await api.resource('ocrVerifySettings').testCallback({ values });
     const data = res?.data?.data || res?.data;
-    if (data?.ok) message.success(`Callback test status: ${data.callbackStatus}`);
-    else message.error(data?.callbackResponse || 'Callback test failed');
+    if (data?.ok) message.success(t('Callback test status: {{status}}', { status: data.callbackStatus }));
+    else message.error(data?.callbackResponse || t('Callback test failed'));
   }
 
   return (
@@ -48,43 +50,43 @@ export const SettingsPage = () => {
       items={[
         {
           key: 'settings',
-          label: 'Settings',
+          label: t('Settings'),
           children: (
             <Card loading={loading}>
               <Form form={form} layout="vertical">
-                <Form.Item label="PDF.js CDN URL" name="pdfjsCdnUrl" rules={[{ required: true }]}>
+                <Form.Item label={t('PDF.js CDN URL')} name="pdfjsCdnUrl" rules={[{ required: true }]}>
                   <Input />
                 </Form.Item>
-                <Form.Item label="PDF.js worker URL" name="pdfjsWorkerUrl" rules={[{ required: true }]}>
+                <Form.Item label={t('PDF.js worker URL')} name="pdfjsWorkerUrl" rules={[{ required: true }]}>
                   <Input />
                 </Form.Item>
-                <Form.Item label="Callback URL" name="callbackUrl">
+                <Form.Item label={t('Callback URL')} name="callbackUrl">
                   <Input />
                 </Form.Item>
                 <Form.Item
-                  label="Callback API key"
+                  label={t('Callback API key')}
                   name="callbackApiKey"
-                  extra="Leave empty to keep the existing key. Sent as X-API-Key."
+                  extra={t('Leave empty to keep the existing key. Sent as X-API-Key.')}
                 >
                   <Input.Password />
                 </Form.Item>
-                <Form.Item label="Callback timeout (ms)" name="callbackTimeoutMs">
+                <Form.Item label={t('Callback timeout (ms)')} name="callbackTimeoutMs">
                   <InputNumber min={1000} style={{ width: '100%' }} />
                 </Form.Item>
-                <Form.Item label="Accept status" name="acceptStatus">
+                <Form.Item label={t('Accept status')} name="acceptStatus">
                   <Input />
                 </Form.Item>
-                <Form.Item label="Reject status" name="rejectStatus">
+                <Form.Item label={t('Reject status')} name="rejectStatus">
                   <Input />
                 </Form.Item>
-                <Form.Item label="Auto save edits" name="autoSave" valuePropName="checked">
+                <Form.Item label={t('Auto save edits')} name="autoSave" valuePropName="checked">
                   <Switch />
                 </Form.Item>
                 <Space>
                   <Button type="primary" onClick={save}>
-                    Save
+                    {t('Save')}
                   </Button>
-                  <Button onClick={testCallback}>Test callback</Button>
+                  <Button onClick={testCallback}>{t('Test callback')}</Button>
                 </Space>
               </Form>
             </Card>
@@ -92,13 +94,15 @@ export const SettingsPage = () => {
         },
         {
           key: 'mapping',
-          label: 'Default mapping',
+          label: t('Default mapping'),
           children: (
             <Card>
               <Alert
                 type="info"
-                message="Default OCR JSON contract"
-                description="The MVP maps pages[].items[] with id/key/value/confidence/status and position/page metadata. Custom mapping profiles are stored as records in ocrVerifyMappingProfiles."
+                message={t('Default OCR JSON contract')}
+                description={t(
+                  'The default profile maps pages[].items[] with id/key/value/confidence/status and position/page metadata.',
+                )}
                 style={{ marginBottom: 16 }}
               />
               <pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify(mapping, null, 2)}</pre>
@@ -107,7 +111,7 @@ export const SettingsPage = () => {
         },
         {
           key: 'categories',
-          label: 'Categories (Profiles)',
+          label: t('Categories (profiles)'),
           children: (
             <Card>
               <CategoriesManager />
@@ -116,7 +120,7 @@ export const SettingsPage = () => {
         },
         {
           key: 'monitor',
-          label: 'OCR Monitor',
+          label: t('OCR monitor'),
           children: <OcrMonitorDashboard />,
         },
       ]}

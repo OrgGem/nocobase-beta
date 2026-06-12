@@ -4,6 +4,21 @@ import { DocumentUnderstandingService } from './services/DocumentUnderstandingSe
 import { defineActions } from './actions';
 import { createDynamicPipelineToolsProvider } from './tools/document-understanding-tool';
 
+type DynamicToolsProvider = ReturnType<typeof createDynamicPipelineToolsProvider>;
+
+interface AiPluginLike {
+  ai?: {
+    toolsManager?: {
+      registerDynamicTools: (provider: DynamicToolsProvider) => void;
+    };
+  };
+}
+
+const isAiPluginLike = (plugin: unknown): plugin is AiPluginLike => {
+  const candidate = plugin as AiPluginLike;
+  return typeof candidate?.ai?.toolsManager?.registerDynamicTools === 'function';
+};
+
 export class PluginDocumentUnderstandingServer extends Plugin {
   public service!: DocumentUnderstandingService;
 
@@ -16,14 +31,14 @@ export class PluginDocumentUnderstandingServer extends Plugin {
     await this.db.import({
       directory: resolve(__dirname, 'collections'),
     });
-    
+
     // 2. Create service
     this.service = new DocumentUnderstandingService(this.app, this.db);
-    
+
     // Defer initialization to after app has loaded database so config exists
     this.app.on('afterStart', async () => {
       try {
-        await this.service.initialize();
+        await this.service.initialize({ recoverJobs: true });
       } catch (err) {
         this.app.logger.warn('Document Understanding plugin not configured yet, skip init.', err);
       }
@@ -31,10 +46,10 @@ export class PluginDocumentUnderstandingServer extends Plugin {
 
     // 3. Register REST actions
     this.registerActions();
-    
+
     // 4. Register AI tool (graceful)
     this.registerAITools();
-    
+
     // 5. ACL
     this.app.acl.registerSnippet({
       name: `pm.${this.name}`,
@@ -63,19 +78,17 @@ export class PluginDocumentUnderstandingServer extends Plugin {
         getJobStatus: actions.getJobStatus,
         listJobs: actions.listJobs,
         webhookCallback: actions.webhookCallback,
-      }
+      },
     });
   }
 
   private registerAITools() {
     try {
-      const aiPlugin = this.app.pm.get('@nocobase/plugin-ai') as any;
-      if (!aiPlugin?.ai?.toolsManager) {
+      const aiPlugin = this.app.pm.get('@nocobase/plugin-ai');
+      if (!isAiPluginLike(aiPlugin)) {
         this.app.logger.warn('Document Understanding: plugin-ai not available, skip AI tool registration.');
         return;
       }
-      // Register dynamic provider: each enabled pipeline becomes a separate AI tool.
-      // Tools are resolved on-demand when AI lists available tools.
       aiPlugin.ai.toolsManager.registerDynamicTools(createDynamicPipelineToolsProvider(this.service));
       this.app.logger.info('Document Understanding: Dynamic pipeline tools provider registered.');
     } catch (err) {

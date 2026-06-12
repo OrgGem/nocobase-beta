@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Spin } from 'antd';
 import { NormalizedOcrItem, OcrPoint, OcrRect } from '../../shared/types';
+import { useT } from '../locale';
 
 type Props = {
   url?: string;
@@ -36,13 +37,12 @@ function pointsToCss(points: OcrPoint[] | undefined, pageWidth: number, pageHeig
 }
 
 export const PdfJsViewer = ({ url, pdfjsCdnUrl, pdfjsWorkerUrl, selected, scale = 1.25 }: Props) => {
+  const t = useT();
   const containerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [renderVersion, setRenderVersion] = useState(0);
   const selectedPage = selected?.page || 1;
-
-  const selectedKey = useMemo(() => JSON.stringify(selected || null), [selected]);
 
   useEffect(() => {
     if (!url || !pdfjsCdnUrl || !pdfjsWorkerUrl || !containerRef.current) return;
@@ -131,14 +131,16 @@ export const PdfJsViewer = ({ url, pdfjsCdnUrl, pdfjsWorkerUrl, selected, scale 
     overlay.appendChild(polygon);
     pageWrap.appendChild(overlay);
     pageWrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [selectedKey, selectedPage, scale, renderVersion]);
+  }, [selected, selectedPage, scale, renderVersion]);
 
-  if (!url) return <Alert type="warning" message="PDF attachment is missing" />;
+  if (!url) return <Alert type="warning" message={t('PDF attachment is missing')} />;
 
   return (
     <div style={{ position: 'relative', height: '70vh', overflow: 'auto', background: '#f5f5f5', padding: 16 }}>
       {loading && <Spin style={{ position: 'absolute', top: 16, right: 16, zIndex: 1 }} />}
-      {error && <Alert type="error" message="PDF.js render failed" description={error} style={{ marginBottom: 12 }} />}
+      {error && (
+        <Alert type="error" message={t('PDF.js render failed')} description={error} style={{ marginBottom: 12 }} />
+      )}
       <div ref={containerRef} />
     </div>
   );

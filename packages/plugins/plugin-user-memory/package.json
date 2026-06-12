@@ -1,27 +1,35 @@
 {
   "name": "plugin-user-memory",
-  "version": "1.0.6",
-  "description": "User Memory plugin — synthesizes chat history into persistent user profiles for personalized AI responses",
   "displayName": "User Memory",
   "displayName.zh-CN": "用户记忆",
   "displayName.vi-VN": "Bộ nhớ người dùng",
+  "description": "User Memory plugin — synthesizes chat history into persistent user profiles for personalized AI responses.",
+  "version": "1.0.6",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
-  "types": "dist/server/index.d.ts",
-  "license": "AGPL-3.0",
+  "keywords": [
+    "AI",
+    "Memory",
+    "Personalization",
+    "User Profile"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "server.js",
+    "client.d.ts",
+    "server.d.ts"
+  ],
   "nocobase": {
-    "displayName": "User Memory"
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
   },
   "peerDependencies": {
     "@nocobase/client": "2.x",
     "@nocobase/server": "2.x",
-    "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x"
-  },
-  "devDependencies": {
-    "@nocobase/client": "2.x",
-    "@nocobase/server": "2.x",
-    "@nocobase/database": "2.x",
-    "@nocobase/plugin-ai": "2.x",
-    "@nocobase/test": "2.x"
   }
 }

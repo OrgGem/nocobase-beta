@@ -6,11 +6,11 @@
 #             -> app-1:13000 (Node.js/Koa, WORKER_MODE=! : HTTP + WebSocket)
 #
 #   Background:
-#             worker-1, worker-2 (WORKER_MODE=* : all background jobs)
+#             worker containers managed dynamically by plugin-cluster-manager
 #
 #   Data:
 #             postgres 16 (tuned)
-#             redis 7 (cache + pub/sub + job queue)
+#             redis 8 (cache + pub/sub + job queue)
 #             qdrant (external RAG vector index)
 #
 #   Boot order:
@@ -79,7 +79,7 @@ x-nocobase-env: &nocobase-env
   KB_DEFAULT_LOCAL_EMBED_DTYPE: ${KB_DEFAULT_LOCAL_EMBED_DTYPE:-q8}
 
 x-nocobase-base: &nocobase-base
-  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.0.46-full}
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.0-full}
   restart: unless-stopped
   networks:
     - nocobase
@@ -285,6 +285,18 @@ services:
                     proxy_cache off;
                 }
 
+                location ^~ /static/plugins/plugin-ai-chat-file-preview/ {
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_cache off;
+                    add_header Cache-Control "no-cache, no-store, must-revalidate";
+                }
+
                 location ~* ^/static/.+\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
                     proxy_pass http://nocobase;
                     proxy_http_version 1.1;
@@ -387,7 +399,11 @@ services:
     ports:
       - "13000:13000"
     healthcheck:
-      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:13000/api/app:getInfo']
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://127.0.0.1:13000/api/app:getInfo'', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
       interval: 15s
       timeout: 10s
       retries: 20
@@ -396,7 +412,7 @@ services:
 
 
   # ============================================================================
-  # Redis 7
+  # Redis 8
   # ============================================================================
   redis:
     image: redis:8-alpine

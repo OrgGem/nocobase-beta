@@ -5,6 +5,7 @@ import { OcrVerifyBlockInitializer } from './block/OcrVerifyBlockInitializer';
 import { OcrVerifyBlock } from './block/OcrVerifyBlock';
 import { ocrVerifyBlockSettings } from './block/schemaSettings';
 import { ocrVerifyCategoriesCollection } from './collections/ocrVerifyCategories';
+import { namespace } from './locale';
 
 const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'SettingsPage');
 
@@ -13,6 +14,10 @@ function addOcrVerifyCategoriesCollection(dataSource: DataSource) {
 }
 
 export class PluginOcrVerifyBlockClient extends Plugin {
+  private t(key: string) {
+    return this.app.i18n.t(key, { ns: [namespace, 'client'], nsMode: 'fallback' }) as string;
+  }
+
   async load() {
     this.app.addComponents({
       OcrVerifyBlockInitializer,
@@ -29,7 +34,7 @@ export class PluginOcrVerifyBlockClient extends Plugin {
     }
 
     this.app.pluginSettingsManager.add(NAMESPACE, {
-      title: 'OCR Verify Block',
+      title: this.t('OCR Verify Block'),
       icon: 'FileSearchOutlined',
       Component: SettingsPage,
       aclSnippet: `pm.${NAMESPACE}.settings`,
@@ -38,7 +43,7 @@ export class PluginOcrVerifyBlockClient extends Plugin {
     const register = (name: string) => {
       this.app.schemaInitializerManager.addItem(name, 'otherBlocks.ocrVerify', {
         name: 'ocrVerify',
-        title: 'OCR Verify',
+        title: this.t('OCR Verify'),
         Component: 'OcrVerifyBlockInitializer',
       });
     };

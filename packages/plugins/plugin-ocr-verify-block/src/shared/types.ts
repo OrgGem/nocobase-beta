@@ -43,6 +43,8 @@ export interface VerifyPayloadInput {
   pdfField: string;
   jsonField: string;
   statusField?: string;
+  categoryId?: string | number;
+  categoryName?: string;
   mappingProfileId?: string | number;
   mappingProfileName?: string;
 }

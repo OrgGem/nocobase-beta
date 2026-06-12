@@ -7,26 +7,48 @@
  * Design decisions:
  * - Does NOT depend on the @uipath/orchestrator-nodejs package (outdated, uses legacy auth).
  * - Owns its own OAuth2 client_credentials flow with 60s pre-expiry refresh.
- * - Folder context resolved via priority: FolderKey > OrganizationUnitId > FolderPath.
+ * - On-prem folder context prefers OrganizationUnitId; cloud prefers FolderKey.
+ * - Default folder context is only sent to endpoints that support UiPath folder headers.
  * - OData query builder for $top/$skip/$filter/$select/$expand/$orderby/$count.
  * - Uses undici's fetch (not global fetch) so the `dispatcher` option works correctly
  *   for ignoreSsl / custom TLS settings. Global fetch silently ignores `dispatcher`,
  *   which causes unhandled rejections on self-signed / HTTP-only environments.
  */
 
-import type {
-  UiPathInstanceConfig,
-  FolderContext,
-  ODataQuery,
-  UiPathRequestOptions,
-  TokenCacheEntry,
-} from './types';
+import type { UiPathInstanceConfig, FolderContext, ODataQuery, UiPathRequestOptions, TokenCacheEntry } from './types';
 import { fetch as undiciFetch, Agent } from 'undici';
 
 const TOKEN_REFRESH_BUFFER_MS = 60_000; // Refresh 60s before expiry
 const DEFAULT_TIMEOUT_MS = 15_000;
 const TOKEN_TIMEOUT_MS = 10_000; // Timeout for token acquisition
 const DEFAULT_CLOUD_BASE_URL = 'https://cloud.uipath.com';
+export const DEFAULT_UIPATH_SCOPES = 'OR.Default OR.Administration OR.Execution OR.Assets OR.Users OR.Folders';
+const FOLDER_SCOPED_ENDPOINTS = [
+  /^\/odata\/Assets(?:[(/]|$)/i,
+  /^\/odata\/Jobs(?:[(/]|$)/i,
+  /^\/odata\/QueueDefinitions(?:[(/]|$)/i,
+  /^\/odata\/QueueItems(?:[(/]|$)/i,
+  /^\/odata\/Queues(?:[(/]|$)/i,
+  /^\/odata\/Releases(?:[(/]|$)/i,
+  /^\/odata\/RobotLogs(?:[(/]|$)/i,
+  /^\/odata\/Robots(?:[(/]|$)/i,
+  /^\/odata\/Sessions$/i,
+];
+const TENANT_SCOPED_ENDPOINTS = [
+  /^\/api\/Stats(?:[/?]|$)/i,
+  /^\/odata\/Folders(?:[(/]|$)/i,
+  /^\/odata\/Machines(?:[(/]|$)/i,
+  /^\/odata\/Processes(?:[(/]|$)/i,
+  /^\/odata\/Users(?:[(/]|$)/i,
+];
+
+function normalizeScopes(scopes?: string): string {
+  const trimmedScopes = scopes?.trim();
+  if (!trimmedScopes || trimmedScopes === 'OR.Default') {
+    return DEFAULT_UIPATH_SCOPES;
+  }
+  return trimmedScopes;
+}
 
 export class UiPathApiClient {
   private tokenCache: TokenCacheEntry | null = null;
@@ -40,7 +62,7 @@ export class UiPathApiClient {
       apiBaseUrl: config.apiBaseUrl?.trim(),
       tokenUrl: config.tokenUrl?.trim(),
       clientId: config.clientId?.trim(),
-      scopes: config.scopes?.trim() || 'OR.Default',
+      scopes: normalizeScopes(config.scopes),
     };
     this.config = {
       ...normalizedConfig,
@@ -54,7 +76,10 @@ export class UiPathApiClient {
   private buildApiBaseUrl(config: UiPathInstanceConfig): string {
     const base = (config.baseUrl || '').replace(/\/+$/, '');
     if (config.deploymentType === 'onPrem') {
-      return base;
+      if (/\/orchestrator_?$/i.test(base)) {
+        return base;
+      }
+      return `${base}/orchestrator`;
     }
     // Cloud: https://cloud.uipath.com/{accountLogicalName}/{tenantLogicalName}/orchestrator_
     const cloudBase = (config.baseUrl || DEFAULT_CLOUD_BASE_URL).replace(/\/+$/, '');
@@ -217,7 +242,19 @@ export class UiPathApiClient {
 
   // ─── Folder Header Resolution ─────────────────────────────────────
 
-  private buildFolderHeaders(folder?: FolderContext): Record<string, string> {
+  private buildFolderHeaders(endpoint: string, folder?: FolderContext): Record<string, string> {
+    const cleanEndpoint = endpoint.split('?')[0];
+    const isTenantScoped = TENANT_SCOPED_ENDPOINTS.some((pattern) => pattern.test(cleanEndpoint));
+    if (isTenantScoped) {
+      return {};
+    }
+
+    const explicitFolder = Boolean(folder?.folderKey || folder?.folderId || folder?.folderPath);
+    const isFolderScoped = FOLDER_SCOPED_ENDPOINTS.some((pattern) => pattern.test(cleanEndpoint));
+    if (!explicitFolder && !isFolderScoped) {
+      return {};
+    }
+
     const ctx = folder || {
       folderId: this.config.defaultFolderId,
       folderKey: this.config.defaultFolderKey,
@@ -226,8 +263,9 @@ export class UiPathApiClient {
 
     const headers: Record<string, string> = {};
 
-    // Priority: FolderKey > OrganizationUnitId > FolderPath
-    if (ctx.folderKey) {
+    if (this.config.deploymentType === 'onPrem' && ctx.folderId) {
+      headers['X-UIPATH-OrganizationUnitId'] = String(ctx.folderId);
+    } else if (ctx.folderKey) {
       headers['X-UIPATH-FolderKey'] = ctx.folderKey;
     } else if (ctx.folderId) {
       headers['X-UIPATH-OrganizationUnitId'] = String(ctx.folderId);
@@ -273,9 +311,9 @@ export class UiPathApiClient {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
-      ...this.buildFolderHeaders(folder),
+      ...this.buildFolderHeaders(endpoint, folder),
     };
-    if (this.config.tenantName) {
+    if (this.config.deploymentType !== 'onPrem' && this.config.tenantName) {
       headers['X-UIPATH-TenantName'] = this.config.tenantName;
     }
     if (body) {

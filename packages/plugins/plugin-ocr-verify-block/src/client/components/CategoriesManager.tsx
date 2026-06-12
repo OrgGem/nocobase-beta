@@ -11,17 +11,30 @@ import {
 import { createForm } from '@formily/core';
 import { useForm } from '@formily/react';
 import { App } from 'antd';
+import { DEFAULT_MAPPING, DEFAULT_SETTINGS } from '../../shared/constants';
+import { useT } from '../locale';
 import { categoriesSchema } from '../schemas/categoriesSchema';
 
 export const CategoriesManager = () => {
+  const t = useT();
   const useCreateFormProps = () => {
     const form = useMemo(
       () =>
         createForm({
           initialValues: {
             enabled: true,
-            acceptStatus: 'accepted',
-            rejectStatus: 'rejected',
+            acceptStatus: DEFAULT_SETTINGS.acceptStatus,
+            rejectStatus: DEFAULT_SETTINGS.rejectStatus,
+            callbackTimeoutMs: DEFAULT_SETTINGS.callbackTimeoutMs,
+            itemsPath: DEFAULT_MAPPING.itemsPath,
+            idPath: DEFAULT_MAPPING.idPath,
+            keyPath: DEFAULT_MAPPING.keyPath,
+            valuePath: DEFAULT_MAPPING.valuePath,
+            pagePath: DEFAULT_MAPPING.pagePath,
+            rectPath: DEFAULT_MAPPING.rectPath,
+            pointsPath: DEFAULT_MAPPING.pointsPath,
+            confidencePath: DEFAULT_MAPPING.confidencePath,
+            statusPath: DEFAULT_MAPPING.statusPath,
           },
         }),
       [],
@@ -65,11 +78,11 @@ export const CategoriesManager = () => {
           await form.submit();
           await resource.create({ values: form.values });
           refresh();
-          message.success('Category created successfully');
+          message.success(t('Category created successfully'));
           setVisible(false);
         } catch (err: any) {
           if (err?.name !== 'ValidateError') {
-            message.error(err?.message || 'Failed to create category');
+            message.error(err?.message || t('Failed to create category'));
           }
         }
       },
@@ -94,11 +107,11 @@ export const CategoriesManager = () => {
             values: form.values,
           });
           refresh();
-          message.success('Category updated successfully');
+          message.success(t('Category updated successfully'));
           setVisible(false);
         } catch (err: any) {
           if (err?.name !== 'ValidateError') {
-            message.error(err?.message || 'Failed to update category');
+            message.error(err?.message || t('Failed to update category'));
           }
         }
       },

@@ -5,23 +5,27 @@
  * into AI Employee system prompts for personalized responses.
  */
 
+import { resolve } from 'path';
 import { Plugin } from '@nocobase/server';
 import { MemoryInjector } from './services/memory-injector';
 import { MemorySyncJob } from './cron/memory-sync-job';
 import * as userMemoryActions from './actions/user-memory';
 import * as userMemoryAdminActions from './actions/user-memory-admin';
 
-
 export class PluginUserMemoryServer extends Plugin {
   memoryInjector: MemoryInjector;
   syncJob: MemorySyncJob;
   private _cronJobInstance: any = null;
+  private readonly autoSyncCooldownMs = 5 * 60 * 1000;
+  private readonly autoSyncLastRun = new Map<number, number>();
 
   async afterAdd() {}
 
   async beforeLoad() {}
 
   async load() {
+    await this.importCollections(resolve(__dirname, 'collections'));
+
     // Ensure dayjs timezone + utc plugins are loaded globally to prevent 'm.startOf is not a function' errors
     const dayjsLib = require('dayjs');
     const utcPlugin = require('dayjs/plugin/utc');
@@ -36,10 +40,13 @@ export class PluginUserMemoryServer extends Plugin {
     // 2. Register memory injection into AI system prompts via plugin-ai extension point
     this.memoryInjector.register();
 
-    // 3. Define API resources
+    // 3. Keep memory storage fresh after successful chats
+    this.registerAutoSyncAfterChat();
+
+    // 4. Define API resources
     this.defineResources();
 
-    // 4. Set ACL permissions
+    // 5. Set ACL permissions
     this.setPermissions();
 
     // 5. Schedule cron job for periodic memory sync
@@ -71,6 +78,39 @@ export class PluginUserMemoryServer extends Plugin {
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────────────
+
+  private registerAutoSyncAfterChat() {
+    this.app.resourceManager.use(async (ctx: any, next: () => Promise<void>) => {
+      const { resourceName, actionName } = ctx.action || {};
+      if (resourceName !== 'aiConversations' || actionName !== 'sendMessages') {
+        return next();
+      }
+
+      await next();
+
+      const userId = ctx.auth?.user?.id;
+      if (!userId || ctx.status >= 400) {
+        return;
+      }
+
+      const now = Date.now();
+      const lastRun = this.autoSyncLastRun.get(userId) || 0;
+      if (now - lastRun < this.autoSyncCooldownMs) {
+        return;
+      }
+
+      this.autoSyncLastRun.set(userId, now);
+
+      try {
+        const result = await this.syncJob.syncUser(userId, 'manual');
+        if (result !== 'error') {
+          this.invalidateMemoryCache(userId);
+        }
+      } catch (error: any) {
+        this.app.logger.warn('[UserMemory] Auto-sync after chat failed:', error.message);
+      }
+    });
+  }
 
   private defineResources() {
     // User-facing resource

@@ -1,8 +1,38 @@
 import type { Context } from '@nocobase/actions';
+import { existsSync, readFileSync } from 'fs';
 import { DocumentUnderstandingService } from './services/DocumentUnderstandingService';
+import { FileInput } from './services/ExternalApiClient';
 
-export const defineActions = (plugin: any) => {
-  const service = plugin.service as DocumentUnderstandingService;
+interface LoggerLike {
+  warn: (...args: unknown[]) => void;
+}
+
+interface DocumentUnderstandingPluginLike {
+  service: DocumentUnderstandingService;
+  app: {
+    logger: LoggerLike;
+  };
+}
+
+interface UploadedFileLike {
+  path?: string;
+  filepath?: string;
+  name?: string;
+  originalFilename?: string;
+  type?: string;
+  mimetype?: string;
+}
+
+interface RequestWithFiles {
+  files?: Record<string, UploadedFileLike | UploadedFileLike[]>;
+  body?: {
+    files?: Record<string, UploadedFileLike | UploadedFileLike[]>;
+  };
+  headers: Context['request']['headers'];
+}
+
+export const defineActions = (plugin: DocumentUnderstandingPluginLike) => {
+  const service = plugin.service;
 
   return {
     async getConfig(ctx: Context, next: () => Promise<any>) {
@@ -73,24 +103,24 @@ export const defineActions = (plugin: any) => {
       const input = values?.input || {};
       const userId = ctx.state?.currentUser?.id;
 
-      const multipartFiles: any[] = [];
-      const filesObj = (ctx.request as any).files || (ctx.request as any).body?.files;
+      const multipartFiles: FileInput[] = [];
+      const request = ctx.request as RequestWithFiles;
+      const filesObj = request.files || request.body?.files;
       if (filesObj) {
-        const addFile = (key: string, file: any) => {
+        const addFile = (key: string, file: UploadedFileLike) => {
           const filePath = file.path || file.filepath;
           const fileName = file.name || file.originalFilename || 'file';
           const mimeType = file.type || file.mimetype || 'application/octet-stream';
-          if (filePath) {
+          if (filePath && existsSync(filePath)) {
             try {
-              const buffer = require('fs').readFileSync(filePath);
               multipartFiles.push({
                 fieldName: key,
-                buffer,
+                buffer: readFileSync(filePath),
                 filename: fileName,
                 mimeType,
               });
             } catch (err) {
-              console.error('Failed to read uploaded multipart file:', err);
+              plugin.app.logger.warn('Failed to read uploaded multipart file', err);
             }
           }
         };
@@ -131,7 +161,7 @@ export const defineActions = (plugin: any) => {
         await service.handleWebhook(values || ctx.request.body, signature);
         ctx.body = { received: true };
       } catch (err: any) {
-        console.error('Webhook callback error:', err.message);
+        plugin.app.logger.warn(`Webhook callback error: ${err.message}`);
         if (err.message.includes('signature')) {
           ctx.status = 401;
           ctx.body = { error: err.message };
