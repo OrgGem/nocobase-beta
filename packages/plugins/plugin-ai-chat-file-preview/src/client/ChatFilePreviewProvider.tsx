@@ -22,12 +22,10 @@ type ChatPreviewStoreState = {
 type ChatMessagesStoreArrayHook = (selector: (state: ChatPreviewStoreState) => any[]) => any[];
 
 const CHAT_DEFAULT_SESSION_KEY = '__draft__';
+const EMPTY_MESSAGES: any[] = [];
+const EMPTY_ATTACHMENTS: any[] = [];
 
 function pickSessionState(state: ChatPreviewStoreState, sessionId?: string) {
-  if (typeof state.getSessionState === 'function') {
-    return state.getSessionState(sessionId || undefined);
-  }
-
   const sessions = state.sessions;
   if (!sessions) return null;
 
@@ -45,13 +43,13 @@ function pickSessionState(state: ChatPreviewStoreState, sessionId?: string) {
 export function selectChatMessages(state: ChatPreviewStoreState, sessionId?: string) {
   const session = pickSessionState(state, sessionId);
   if (Array.isArray(session?.messages)) return session.messages;
-  return Array.isArray(state.messages) ? state.messages : [];
+  return Array.isArray(state.messages) ? state.messages : EMPTY_MESSAGES;
 }
 
 export function selectChatAttachments(state: ChatPreviewStoreState, sessionId?: string) {
   const session = pickSessionState(state, sessionId);
   if (Array.isArray(session?.attachments)) return session.attachments;
-  return Array.isArray(state.attachments) ? state.attachments : [];
+  return Array.isArray(state.attachments) ? state.attachments : EMPTY_ATTACHMENTS;
 }
 
 export interface PreviewFile {

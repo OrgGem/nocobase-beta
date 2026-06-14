@@ -13,13 +13,28 @@ const extractList = (data: any) => {
   return Array.isArray(value) ? value : [];
 };
 
+const getAuthToken = (app: any) => app?.apiClient?.auth?.getToken?.() || app?.apiClient?.auth?.token || '';
+
+const registerSkillHubCard = (toolsManager: any, name: string) => {
+  try {
+    toolsManager.registerTools(name, { ui: { card: SkillHubCard } });
+  } catch (err: unknown) {
+    if (!(err instanceof Error) || !err.message.includes('override existing keys')) {
+      throw err;
+    }
+  }
+};
+
 export async function registerSkillLoopCards(app: any) {
   const toolsManager = app.aiManager?.toolsManager;
   if (!toolsManager) return;
+  registerSkillHubCard(toolsManager, 'skill_hub_execute');
+  if (!getAuthToken(app)) return;
 
   try {
     const skillsResponse = await app.apiClient.request({
       url: 'skillDefinitions:list',
+      skipNotify: true,
       params: {
         filter: { enabled: true },
         fields: ['id', 'name', 'autoCall', 'interactionSchema'],
@@ -31,6 +46,7 @@ export async function registerSkillLoopCards(app: any) {
     try {
       const loopConfigsResponse = await app.apiClient.request({
         url: 'skillLoopConfigs:list',
+        skipNotify: true,
         params: {
           filter: { enabled: true },
           fields: ['skillId'],
@@ -38,9 +54,6 @@ export async function registerSkillLoopCards(app: any) {
         },
       });
       loopSkillIds = new Set(extractList(loopConfigsResponse.data).map((config: any) => String(config.skillId)));
-      if (loopSkillIds.size > 0) {
-        toolsManager.registerTools('skill_hub_execute', { ui: { card: SkillHubCard } });
-      }
     } catch {
       // Older deployments may not have the collection before migration/sync.
     }
@@ -50,7 +63,7 @@ export async function registerSkillLoopCards(app: any) {
       const hasLoopConfig = loopSkillIds.has(String(skill.id));
       const hasLegacySchema = !skill.autoCall && !!parseJsonText(skill.interactionSchema, null);
       if (!hasLoopConfig && !hasLegacySchema) continue;
-      toolsManager.registerTools(`skill_hub_${sanitize(skill.name)}`, { ui: { card: SkillHubCard } });
+      registerSkillHubCard(toolsManager, `skill_hub_${sanitize(skill.name)}`);
     }
   } catch {
     // user without ACL or backend unavailable - skip silently

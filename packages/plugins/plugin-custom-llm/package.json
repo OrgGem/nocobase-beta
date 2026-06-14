@@ -11,7 +11,9 @@
     "client.d.ts",
     "server.js",
     "server.d.ts",
-    "src"
+    "src",
+    "client-v2.js",
+    "client-v2.d.ts"
   ],
   "nocobase": {
     "supportedVersions": [
@@ -34,7 +36,8 @@
     "@nocobase/flow-engine": "2.x",
     "@nocobase/server": "2.x",
     "@nocobase/utils": "2.x",
-    "@nocobase/plugin-ai": "2.x"
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/client-v2": "2.x"
   },
   "keywords": [
     "AI"

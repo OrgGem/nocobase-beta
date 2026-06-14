@@ -11,10 +11,15 @@
     "client.d.ts",
     "server.js",
     "server.d.ts",
-    "src"
+    "src",
+    "client-v2.js",
+    "client-v2.d.ts"
   ],
   "nocobase": {
-    "supportedVersions": ["2.x"]
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
   },
   "peerDependencies": {
     "@nocobase/actions": "2.x",
@@ -23,7 +28,9 @@
     "@nocobase/server": "2.x",
     "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x",
-    "@nocobase/plugin-file-manager": "2.x"
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
   },
   "devDependencies": {
     "@nocobase/test": "2.x"
@@ -33,6 +40,11 @@
     "form-data": "^4.0.0",
     "xlsx": "^0.18.5"
   },
-  "keywords": ["AI", "document", "parser", "OCR"],
+  "keywords": [
+    "AI",
+    "document",
+    "parser",
+    "OCR"
+  ],
   "license": "Apache-2.0"
 }

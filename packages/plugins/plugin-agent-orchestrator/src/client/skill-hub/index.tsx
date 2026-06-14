@@ -39,6 +39,13 @@ export class PluginSkillHubClient extends Plugin {
       aclSnippet: 'pm.skill-hub',
     });
 
+    (this as any).app.eventBus?.addEventListener?.('auth:tokenChanged', (event: Event) => {
+      const token = (event as CustomEvent<{ token?: string | null }>).detail?.token;
+      if (token) {
+        this.registerSkillUiCards();
+      }
+    });
+
     await this.registerSkillUiCards();
   }
 

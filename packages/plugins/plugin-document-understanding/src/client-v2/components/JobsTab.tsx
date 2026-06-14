@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Table, Tag, Button, Drawer, Select, Space, Badge } from 'antd';
 import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
   pending: { color: 'default', label: 'Pending' },
@@ -13,7 +13,8 @@ const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
 };
 
 export const JobsTab = () => {
-  const api = useAPIClient();
+  const app = useApp();
+  const api = app.apiClient;
   const [data, setData] = useState<any[]>([]);
   const [pipelines, setPipelines] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

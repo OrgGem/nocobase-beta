@@ -3,11 +3,19 @@ import { existsSync } from 'fs';
 import { resolve } from 'path';
 import { PPTX_ADVANCED_SKILL } from './skill-definition';
 
+type SkillHubLike = {
+  registerSkillTemplate?: (pluginName: string, template: unknown) => void;
+};
+
 export class PluginSkillPptxAdvancedServer extends Plugin {
   async afterAdd() {}
   async beforeLoad() {}
 
-  async load() {}
+  async load() {
+    this.registerSkill();
+    this.app.on('afterLoad', () => this.registerSkill());
+    this.app.on('afterStart', () => this.registerSkill());
+  }
 
   async install() {}
 
@@ -28,12 +36,16 @@ export class PluginSkillPptxAdvancedServer extends Plugin {
   // Fallback direct push method
   private registerSkill() {
     try {
-      const skillHub = this.app.pm.get('plugin-skill-hub') as any;
+      const skillHub = this.app.pm.get('plugin-skill-hub') as unknown as SkillHubLike | undefined;
       if (!skillHub) return;
       if (skillHub.registerSkillTemplate) {
         skillHub.registerSkillTemplate(this.name, this.getSkillTemplates()[0]);
       }
-    } catch (err) {}
+    } catch (err) {
+      this.app.logger?.warn?.('[plugin-skill-pptx-advanced] Failed to register PPTX skill template', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private getSkillPackageRoot() {
@@ -47,16 +59,7 @@ export class PluginSkillPptxAdvancedServer extends Plugin {
     return found || candidates[0];
   }
 
-  async afterLoad() {
-    this.registerSkill();
-    this.app.on('afterStart', () => this.registerSkill());
-  }
-
   async afterEnable() {
-    this.registerSkill();
-  }
-
-  async afterStart() {
     this.registerSkill();
   }
 

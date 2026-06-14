@@ -29,7 +29,7 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
@@ -362,7 +362,8 @@ const StepEditor: React.FC<{
 
 /* ─── Pipelines Tab ─────────────────────────────────────────────── */
 export const PipelinesTab = () => {
-  const api = useAPIClient();
+  const app = useApp();
+  const api = app.apiClient;
   const [pipelines, setPipelines] = useState<any[]>([]);
   const [endpoints, setEndpoints] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

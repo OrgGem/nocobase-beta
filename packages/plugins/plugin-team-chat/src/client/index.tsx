@@ -16,14 +16,14 @@ const MeetingAdmin = React.lazy(() => import('./components/MeetingAdmin'));
  */
 export class PluginTeamChatClient extends Plugin {
   async load() {
+    // String route components must be registered before the router resolves them.
+    this.app.addComponents({ ChatPage });
+
     // Register main chat route (includes embedded Meeting Manager for users)
     this.app.router.add('team-chat', {
       path: '/chat',
       Component: 'ChatPage',
     });
-
-    // Register the ChatPage component
-    this.app.addComponent('ChatPage', ChatPage);
 
     // Register settings sub-pages under comm-suite
     this.app.pluginSettingsManager.add('comm-suite.team-chat', {

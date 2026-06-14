@@ -8,7 +8,7 @@
   "description.zh-CN": "使用 ONNX 模型在浏览器端对知识库文档进行分块和向量嵌入，零 API 成本。",
   "version": "1.1.8",
   "license": "Apache-2.0",
-  "main": "./dist/server/index.js",
+  "main": "dist/server/index.js",
   "files": [
     "dist",
     "public",
@@ -16,7 +16,10 @@
     "client.d.ts",
     "server.js",
     "server.d.ts",
-    "README.md"
+    "README.md",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "src"
   ],
   "dependencies": {
     "@aws-sdk/client-s3": "^3.0.0",
@@ -29,7 +32,9 @@
     "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/plugin-knowledge-base": "2.x",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
   },
   "devDependencies": {
     "@nocobase/test": "2.x"
@@ -40,5 +45,11 @@
     "embedding",
     "ONNX",
     "transformers"
-  ]
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
 }

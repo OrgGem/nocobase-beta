@@ -6,12 +6,20 @@
   "description.vi-VN": "Tạo và cài skill mới vào Skill Hub từ đặc tả do AI Employee sinh ra.",
   "version": "1.0.1",
   "license": "Apache-2.0",
+  "keywords": [
+    "AI",
+    "Skill",
+    "Skill Hub"
+  ],
   "files": [
     "dist",
     "client.js",
     "server.js",
     "client.d.ts",
-    "server.d.ts"
+    "server.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "src"
   ],
   "scripts": {
     "prepack": "powershell -Command \"Copy-Item -Path src/server/skills/* -Destination dist/server/skills/ -Recurse -Force\""
@@ -20,7 +28,9 @@
   "peerDependencies": {
     "@nocobase/client": "2.x",
     "@nocobase/server": "2.x",
-    "plugin-agent-orchestrator": ">=1.0.0"
+    "plugin-agent-orchestrator": ">=1.0.0",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
   },
   "nocobase": {
     "supportedVersions": [

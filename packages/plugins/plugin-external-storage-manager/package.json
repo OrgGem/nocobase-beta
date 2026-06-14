@@ -6,14 +6,16 @@
   "description": "Unified file browser for external storage backends (S3, SFTP) with virtual directory mapping, per-directory ACL, and streaming data transfer.",
   "description.zh-CN": "外部存储后端（S3、SFTP）的统一文件浏览器，支持虚拟目录映射、目录级 ACL 和流式数据传输。",
   "license": "AGPL-3.0",
-  "main": "./dist/server/index.js",
+  "main": "dist/server/index.js",
   "files": [
     "dist",
     "client.js",
     "client.d.ts",
     "server.js",
     "server.d.ts",
-    "src"
+    "src",
+    "client-v2.js",
+    "client-v2.d.ts"
   ],
   "keywords": [
     "nocobase",
@@ -36,6 +38,14 @@
     "@nocobase/database": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/server": "2.x",
-    "@nocobase/utils": "2.x"
+    "@nocobase/utils": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
   }
 }

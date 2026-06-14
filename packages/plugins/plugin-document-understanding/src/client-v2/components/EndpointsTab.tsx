@@ -15,7 +15,7 @@ import {
   Popconfirm,
 } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { TextArea } = Input;
 
@@ -143,7 +143,8 @@ const JsonEditor: React.FC<{ value?: any; onChange?: (v: any) => void; placehold
 };
 
 export const EndpointsTab = () => {
-  const api = useAPIClient();
+  const app = useApp();
+  const api = app.apiClient;
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);

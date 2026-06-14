@@ -7,14 +7,17 @@
   "description.vi-VN": "Agent RAG thích ứng cho phân tích tài liệu — OCR + LLM Vision + trích xuất cấu trúc.",
   "version": "1.1.1",
   "license": "Apache-2.0",
-  "main": "./dist/server/index.js",
+  "main": "dist/server/index.js",
   "files": [
     "dist",
     "client.js",
     "client.d.ts",
     "server.js",
     "server.d.ts",
-    "README.md"
+    "README.md",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "src"
   ],
   "nocobase": {
     "supportedVersions": [
@@ -28,7 +31,9 @@
     "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/test": "2.x",
-    "@langchain/core": "^1.0.0"
+    "@langchain/core": "^1.0.0",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
   },
   "keywords": [
     "AI",

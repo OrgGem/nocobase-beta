@@ -4,7 +4,7 @@ import { NAMESPACE } from './locale';
 import CarboneRenderInstruction from './workflow/CarboneRenderInstruction';
 
 const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'SettingsPage');
-const ConnectionSettings = lazy(() => import('./components/ConnectionSettings'), 'ConnectionSettings');
+const { ConnectionSettings } = lazy(() => import('./components/ConnectionSettings'), 'ConnectionSettings');
 
 export class PluginCarboneTemplateManagerClient extends Plugin {
   declare app: any;

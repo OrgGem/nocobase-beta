@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Form, Input, Select, Button, message, InputNumber, Spin, Alert, Space } from 'antd';
 import { SaveOutlined, LinkOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 export const ServiceConfigTab = () => {
   const [form] = Form.useForm();
-  const api = useAPIClient();
+  const app = useApp();
+  const api = app.apiClient;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 

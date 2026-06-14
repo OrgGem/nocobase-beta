@@ -5,7 +5,7 @@ import {
   TableColumnModel,
   TableSelectModel,
   VariableFilterItem,
-} from '@nocobase/client';
+} from '@nocobase/client-v2';
 import { defineAction, FlowModel, useFlowSettingsContext } from '@nocobase/flow-engine';
 import React from 'react';
 import { tExpr } from './locale';
@@ -249,7 +249,7 @@ export class PluginFieldSelectionFilterClient extends Plugin {
             const sourceFieldModelUid = ctx.inputArgs?.sourceFieldModelUid;
             const sourceFieldModel =
               typeof sourceFieldModelUid === 'string'
-                ? (ctx.engine.getModel(sourceFieldModelUid) as FieldModelLike | undefined)
+                ? (ctx.engine.getModel(sourceFieldModelUid, true) as FieldModelLike | undefined)
                 : undefined;
             const params = getFieldDataScopeParams(sourceFieldModel);
             if (!params) {

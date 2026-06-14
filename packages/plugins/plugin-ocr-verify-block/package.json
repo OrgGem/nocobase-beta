@@ -11,7 +11,9 @@
     "client.js",
     "client.d.ts",
     "server.js",
-    "server.d.ts"
+    "server.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts"
   ],
   "nocobase": {
     "supportedVersions": [
@@ -23,7 +25,9 @@
     "@nocobase/client": "2.x",
     "@nocobase/database": "2.x",
     "@nocobase/server": "2.x",
-    "plugin-file-preview-auth": "*"
+    "plugin-file-preview-auth": "*",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
   },
   "keywords": [
     "ocr",

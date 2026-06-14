@@ -3,7 +3,12 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { SKILL_CREATOR_SKILL } from './skill-definition';
 
-function stringifyJsonText(value: any, fallback: any = null): string {
+type SkillHubLike = {
+  skillHub?: SkillHubLike;
+  registerSkillTemplate?: (pluginName: string, template: unknown) => void;
+};
+
+function stringifyJsonText(value: unknown, fallback: unknown = null): string {
   const normalized = value === undefined || value === null || value === '' ? fallback : value;
   return `\`\`\`json\n${JSON.stringify(normalized, null, 2)}\n\`\`\``;
 }
@@ -21,7 +26,21 @@ function parseSkillMarkdown(markdown: string) {
 export class PluginSkillCreatorServer extends Plugin {
   async afterAdd() {}
   async beforeLoad() {}
-  async load() {}
+  async load() {
+    this.registerSkill();
+    await this.ensureSkillDefinition();
+
+    this.app.on('afterLoad', async () => {
+      this.registerSkill();
+      await this.ensureSkillDefinition();
+    });
+
+    this.app.on('afterStart', async () => {
+      this.registerSkill();
+      await this.ensureSkillDefinition();
+    });
+  }
+
   async install() {
     await this.ensureSkillDefinition();
   }
@@ -34,22 +53,22 @@ export class PluginSkillCreatorServer extends Plugin {
           rootDir: this.getSkillPackageRoot(),
           mountMode: 'reference',
         },
-        storageUrl: `plugin://${(this as any).name}/${SKILL_CREATOR_SKILL.name}`,
+        storageUrl: `plugin://${this.name}/${SKILL_CREATOR_SKILL.name}`,
       },
     ];
   }
 
   private registerSkill() {
     try {
-      const skillHubPlugin = (this as any).app.pm.get('plugin-skill-hub') as any;
-      const orchestratorPlugin = (this as any).app.pm.get('plugin-agent-orchestrator') as any;
+      const skillHubPlugin = this.app.pm.get('plugin-skill-hub') as unknown as SkillHubLike | undefined;
+      const orchestratorPlugin = this.app.pm.get('plugin-agent-orchestrator') as unknown as SkillHubLike | undefined;
       const skillHub = skillHubPlugin || orchestratorPlugin?.skillHub;
       if (!skillHub) return;
       if (skillHub.registerSkillTemplate) {
-        skillHub.registerSkillTemplate((this as any).name, this.getSkillTemplates()[0]);
+        skillHub.registerSkillTemplate(this.name, this.getSkillTemplates()[0]);
       }
     } catch (err) {
-      (this as any).app.logger?.warn?.('[plugin-skill-creator] Failed to register create-skill template', {
+      this.app.logger?.warn?.('[plugin-skill-creator] Failed to register create-skill template', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -57,7 +76,7 @@ export class PluginSkillCreatorServer extends Plugin {
 
   private async ensureSkillDefinition() {
     try {
-      const repo = (this as any).db.getRepository('skillDefinitions');
+      const repo = this.db.getRepository('skillDefinitions');
       if (!repo) return;
 
       const template = this.getSkillTemplates()[0];
@@ -65,7 +84,7 @@ export class PluginSkillCreatorServer extends Plugin {
       const instructions = parseSkillMarkdown(readPackageText(packageRoot, 'SKILL.md'));
       const codeTemplate = readPackageText(packageRoot, 'index.py');
       if (!codeTemplate) {
-        (this as any).app.logger?.warn?.('[plugin-skill-creator] create-skill package code was not found', {
+        this.app.logger?.warn?.('[plugin-skill-creator] create-skill package code was not found', {
           packageRoot,
         });
         return;
@@ -97,7 +116,7 @@ export class PluginSkillCreatorServer extends Plugin {
         await repo.create({ values });
       }
     } catch (err) {
-      (this as any).app.logger?.warn?.('[plugin-skill-creator] Failed to ensure create-skill Skill Hub definition', {
+      this.app.logger?.warn?.('[plugin-skill-creator] Failed to ensure create-skill Skill Hub definition', {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -114,21 +133,7 @@ export class PluginSkillCreatorServer extends Plugin {
     return found || candidates[0];
   }
 
-  async afterLoad() {
-    this.registerSkill();
-    await this.ensureSkillDefinition();
-    ((this as any).app as any).on('afterStart', async () => {
-      this.registerSkill();
-      await this.ensureSkillDefinition();
-    });
-  }
-
   async afterEnable() {
-    this.registerSkill();
-    await this.ensureSkillDefinition();
-  }
-
-  async afterStart() {
     this.registerSkill();
     await this.ensureSkillDefinition();
   }

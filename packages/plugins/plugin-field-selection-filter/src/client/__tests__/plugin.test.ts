@@ -1,6 +1,7 @@
-import { TableColumnModel, TableSelectModel, QuickEditFormModel } from '@nocobase/client';
+import { QuickEditFormModel, TableColumnModel, TableSelectModel } from '@nocobase/client-v2';
 import { FlowEngine, FlowModel } from '@nocobase/flow-engine';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
+import PluginFieldSelectionFilterClientV2 from '../../client-v2/plugin';
 import { PluginFieldSelectionFilterClient } from '../plugin';
 
 type FilterParams = {
@@ -103,6 +104,7 @@ describe('PluginFieldSelectionFilterClient', () => {
     const engine = new FlowEngine();
     const sourceField = createFieldModel(engine, 'quick-edit-source');
     sourceField.setStepParams('selectSettings', 'dataScope', params);
+    const getModel = vi.spyOn(engine, 'getModel');
     const quickEditField = createFieldModel(engine, 'quick-edit-target');
     const dispatchEvent = vi.spyOn(quickEditField, 'dispatchEvent').mockResolvedValue(undefined);
     const step = QuickEditFormModel.globalFlowRegistry.getFlow('fieldSelectionFilterSettings')?.steps
@@ -121,7 +123,14 @@ describe('PluginFieldSelectionFilterClient', () => {
     });
 
     expect(quickEditField.getStepParams('selectSettings', 'dataScope')).toEqual(params);
+    expect(getModel).toHaveBeenCalledWith(sourceField.uid, true);
     expect(dispatchEvent).toHaveBeenCalledWith('beforeRender', undefined, { useCache: false });
+  });
+
+  it('loads the same flow registrations from the client-v2 entry', () => {
+    expect(PluginFieldSelectionFilterClientV2).toBe(PluginFieldSelectionFilterClient);
+    expect(QuickEditFormModel.globalFlowRegistry.getFlow('fieldSelectionFilterSettings')).toBeDefined();
+    expect(TableSelectModel.globalFlowRegistry.getFlow('fieldSelectionFilterSettings')).toBeDefined();
   });
 
   it('applies the source field filter to the popup record-picker table', async () => {

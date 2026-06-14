@@ -4,13 +4,16 @@
   "displayName": "Next App Client",
   "displayName.zh-CN": "Next App 客户端",
   "description": "Provides a full desktop-like NocoBase experience under /next-app with its own route collection, ACL permissions, and menu management.",
-  "main": "./dist/server/index.js",
+  "main": "dist/server/index.js",
   "files": [
     "dist",
     "client.js",
     "client.d.ts",
     "server.js",
-    "server.d.ts"
+    "server.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "src"
   ],
   "peerDependencies": {
     "@nocobase/client": "2.x",
@@ -18,6 +21,14 @@
     "@nocobase/database": "2.x",
     "@nocobase/plugin-acl": "2.x",
     "@nocobase/plugin-localization": "2.x",
-    "@nocobase/test": "2.x"
+    "@nocobase/test": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
   }
 }

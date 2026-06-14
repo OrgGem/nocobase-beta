@@ -15,6 +15,13 @@ export class PluginAgentOrchestratorClient extends Plugin {
       Component: OrchestratorSettings,
     });
 
+    (this as any).app.eventBus?.addEventListener?.('auth:tokenChanged', (event: Event) => {
+      const token = (event as CustomEvent<{ token?: string | null }>).detail?.token;
+      if (token) {
+        registerSkillLoopCards((this as any).app);
+      }
+    });
+
     await this.registerSkillUiCards();
   }
 

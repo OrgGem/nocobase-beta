@@ -77,16 +77,22 @@ describe('AI Chat File Preview client utils', () => {
       expect(selectChatAttachments(state, 's1')).toEqual([{ filename: 'b.pdf' }]);
     });
 
-    it('should prefer getSessionState when available', () => {
+    it('should read session arrays directly when getSessionState is also available', () => {
       const state = {
+        sessions: {
+          s2: {
+            messages: [{ key: 'm4' }],
+            attachments: [{ filename: 'd.pdf' }],
+          },
+        },
         getSessionState: () => ({
           messages: [{ key: 'm3' }],
           attachments: [{ filename: 'c.pdf' }],
         }),
       };
 
-      expect(selectChatMessages(state, 's2')).toEqual([{ key: 'm3' }]);
-      expect(selectChatAttachments(state, 's2')).toEqual([{ filename: 'c.pdf' }]);
+      expect(selectChatMessages(state, 's2')).toBe(state.sessions.s2.messages);
+      expect(selectChatAttachments(state, 's2')).toBe(state.sessions.s2.attachments);
     });
   });
 });

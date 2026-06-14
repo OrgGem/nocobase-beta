@@ -33,6 +33,7 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
   const defaultTheme = useMemo(() => data?.find((item) => item.default), [data]);
   const themeId = useRef<number>(null);
   const api = useAPIClient();
+  const authToken = api.auth.getToken?.() || api.auth.token;
 
   useEffect(() => {
     const storageTheme = api.auth.getOption('theme');
@@ -43,11 +44,15 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
         error(err);
       }
     }
-  }, []);
+  }, [api.auth, setTheme]);
 
   useEffect(() => {
+    if (!authToken) {
+      return;
+    }
     if (!data) {
-      return run();
+      run();
+      return;
     }
 
     const currentThemeId = currentUser?.data?.data?.systemSettings?.themeId;
@@ -72,7 +77,7 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
       setTheme(presetTheme);
       api.auth.setOption('theme', null);
     }
-  }, [api.auth, currentUser?.data?.data?.systemSettings?.themeId, data, run, setTheme, defaultTheme]);
+  }, [api.auth, authToken, currentUser?.data?.data?.systemSettings?.themeId, data, run, setTheme, defaultTheme]);
 
   const value =
     (loading && !data) || currentUser.loading

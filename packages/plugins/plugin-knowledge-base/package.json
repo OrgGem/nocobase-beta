@@ -8,14 +8,17 @@
   "description.zh-CN": "为 AI 员工提供知识库管理、向量存储、向量数据库 (PGVector) 和 RAG 检索功能。",
   "version": "1.2.9",
   "license": "Apache-2.0",
-  "main": "./dist/server/index.js",
+  "main": "dist/server/index.js",
   "files": [
     "dist",
     "client.js",
     "client.d.ts",
     "server.js",
     "server.d.ts",
-    "README.md"
+    "README.md",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "src"
   ],
   "dependencies": {
     "pg": "^8.13.0",
@@ -30,7 +33,9 @@
     "@nocobase/server": "2.x",
     "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x",
-    "@nocobase/plugin-file-manager": "2.x"
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x"
   },
   "devDependencies": {
     "@nocobase/test": "2.x"
@@ -40,5 +45,11 @@
     "knowledge-base",
     "RAG",
     "vector-store"
-  ]
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
 }
