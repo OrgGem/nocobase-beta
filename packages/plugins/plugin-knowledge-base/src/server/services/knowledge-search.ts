@@ -1,5 +1,5 @@
 import type { Context } from '@nocobase/actions';
-import { buildAccessibleKnowledgeBaseFilter } from '../utils/access';
+import { buildAccessibleKnowledgeBaseFilter, resolveAccessContext } from '../utils/access';
 import { EXTERNAL_HTTP_RAG_PROVIDER, EXTERNAL_RAG_KB_TYPE } from '../providers/external-rag';
 import type { RagSearchResult } from '../providers/external-rag';
 
@@ -120,8 +120,9 @@ export class KnowledgeSearchService {
     const kbIds = options.knowledgeBaseIds?.filter(Boolean).map(String);
 
     const kbRepo = this.plugin.db.getRepository('aiKnowledgeBases');
+    const access = await resolveAccessContext(ctx, this.plugin.db);
     const kbRecords = await kbRepo.find({
-      filter: buildAccessibleKnowledgeBaseFilter(ctx, kbIds),
+      filter: buildAccessibleKnowledgeBaseFilter(access, kbIds),
       fields: ['id', 'name', 'type', 'options'],
     });
     const accessibleKbs = kbRecords.map((record: any) => (record.toJSON ? record.toJSON() : record));

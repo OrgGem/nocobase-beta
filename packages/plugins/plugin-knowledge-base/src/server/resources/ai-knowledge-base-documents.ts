@@ -15,8 +15,8 @@ import {
   canManageKnowledgeBase,
   canReadKnowledgeBase,
   getAuthUserId,
-  getCurrentRoles,
-  isAdminRole,
+  resolveAccessContext,
+  type KbAccessContext,
 } from '../utils/access';
 
 /**
@@ -31,27 +31,23 @@ function getPlugin(ctx: Context): PluginKnowledgeBaseServer | null {
 }
 
 /**
- * Helper: check if user can access a KB based on accessLevel
+ * Helper: load a KB and evaluate read access against an already-resolved context.
  */
-async function checkKBAccess(
+async function loadKbForRead(
   ctx: Context,
+  access: KbAccessContext,
   knowledgeBaseId: string,
-): Promise<{ hasAccess: boolean; isAdmin: boolean; kbData?: any }> {
-  const roles = getCurrentRoles(ctx);
-  const isAdmin = isAdminRole(roles);
-
-  if (isAdmin) {
-    return { hasAccess: true, isAdmin };
+): Promise<{ hasAccess: boolean; kbData?: any }> {
+  if (access.isAdmin) {
+    return { hasAccess: true };
   }
-
   const kbRepo = ctx.db.getRepository('aiKnowledgeBases');
   const kb = await kbRepo.findOne({ filter: { id: knowledgeBaseId } });
   if (!kb) {
-    return { hasAccess: false, isAdmin };
+    return { hasAccess: false };
   }
-
   const kbData = kb.toJSON();
-  return { hasAccess: canReadKnowledgeBase(ctx, kbData), isAdmin, kbData };
+  return { hasAccess: canReadKnowledgeBase(access, kbData), kbData };
 }
 
 export default {
@@ -62,12 +58,11 @@ export default {
     async list(ctx: Context, next: Function) {
       const { filter = {}, sort, page, pageSize } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
+      const access = await resolveAccessContext(ctx, ctx.db);
 
       // If filtering by knowledgeBaseId, check KB access first
-      if (filter.knowledgeBaseId && !isAdmin) {
-        const { hasAccess } = await checkKBAccess(ctx, filter.knowledgeBaseId);
+      if (filter.knowledgeBaseId && !access.isAdmin) {
+        const { hasAccess } = await loadKbForRead(ctx, access, filter.knowledgeBaseId);
         if (!hasAccess) {
           ctx.body = [];
           await next();
@@ -76,11 +71,11 @@ export default {
       }
 
       // For non-admin users without specific KB filter, join with KB access check
-      if (!filter.knowledgeBaseId && !isAdmin) {
-        // Get all accessible KB IDs for this user
+      if (!filter.knowledgeBaseId && !access.isAdmin) {
+        // Get all accessible KB IDs for this principal
         const kbRepo = ctx.db.getRepository('aiKnowledgeBases');
         const accessibleKBs = await kbRepo.find({
-          filter: buildAccessibleKnowledgeBaseFilter(ctx),
+          filter: buildAccessibleKnowledgeBaseFilter(access),
           fields: ['id'],
         });
         const accessibleIds = accessibleKBs.map((kb: any) => kb.id || kb.get('id'));
@@ -105,7 +100,6 @@ export default {
       const values = rawValues.values || rawValues;
 
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
-      let kbData: any;
       // Always derive userId from the authenticated session — never trust client-provided userId
       const userId = getAuthUserId(ctx);
 
@@ -123,7 +117,7 @@ export default {
         return;
       }
 
-      kbData = kb.toJSON();
+      const kbData = kb.toJSON();
 
       // EXTERNAL_RAG KBs are managed by external services — no local document uploads
       if (kbData.type === 'EXTERNAL_RAG') {
@@ -131,7 +125,8 @@ export default {
         return;
       }
 
-      if (!canManageKnowledgeBase(ctx, kbData)) {
+      const access = await resolveAccessContext(ctx, ctx.db);
+      if (!canManageKnowledgeBase(access, kbData)) {
         ctx.throw(403, 'You do not have permission to upload documents to this knowledge base');
         return;
       }
@@ -178,8 +173,7 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
+      const access = await resolveAccessContext(ctx, ctx.db);
 
       // Find the document to check its KB's access level
       const doc = await repo.findOne({ filterByTk });
@@ -189,9 +183,9 @@ export default {
       }
 
       const docData = doc.toJSON();
-      if (docData.knowledgeBaseId && !isAdmin) {
-        const { hasAccess, kbData } = await checkKBAccess(ctx, docData.knowledgeBaseId);
-        if (!hasAccess || !canManageKnowledgeBase(ctx, kbData)) {
+      if (docData.knowledgeBaseId && !access.isAdmin) {
+        const { hasAccess, kbData } = await loadKbForRead(ctx, access, docData.knowledgeBaseId);
+        if (!hasAccess || !canManageKnowledgeBase(access, kbData)) {
           ctx.throw(403, 'You do not have permission to delete this document');
           return;
         }
@@ -207,17 +201,16 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
 
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
+      const access = await resolveAccessContext(ctx, ctx.db);
 
       // Check permission: same as upload (need write access to the KB)
-      if (!isAdmin) {
+      if (!access.isAdmin) {
         const doc = await repo.findOne({ filterByTk });
         if (doc) {
           const docData = doc.toJSON();
           if (docData.knowledgeBaseId) {
-            const { hasAccess, kbData } = await checkKBAccess(ctx, docData.knowledgeBaseId);
-            if (!hasAccess || !canManageKnowledgeBase(ctx, kbData)) {
+            const { hasAccess, kbData } = await loadKbForRead(ctx, access, docData.knowledgeBaseId);
+            if (!hasAccess || !canManageKnowledgeBase(access, kbData)) {
               ctx.throw(403, 'You do not have permission to reprocess this document');
               return;
             }

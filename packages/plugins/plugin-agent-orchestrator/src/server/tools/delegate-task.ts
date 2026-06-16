@@ -6,7 +6,7 @@ import { createReactAgent } from '@langchain/langgraph/prebuilt';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type PluginAIServer from '@nocobase/plugin-ai/dist/server';
-import type { ToolsEntry } from '@nocobase/ai';
+import type { ToolsEntry, ToolsRuntime } from '@nocobase/ai';
 import {
   ExecutionSpanService,
   getOrchestratorTraceContext,
@@ -39,10 +39,11 @@ type AgentExecutionResult = {
   messages: any[];
 };
 
-type EmployeeSkillConfig = {
-  name: string;
-  autoCall: boolean;
-};
+type ToolRuntimeInput = string | ToolsRuntime | undefined;
+
+function getToolCallId(runtime: ToolRuntimeInput) {
+  return typeof runtime === 'string' ? runtime : runtime?.toolCallId;
+}
 
 function sanitizeToolPart(value: string) {
   return (value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -154,7 +155,8 @@ function createDelegateToolOptions(
           .describe('Optional additional context to help the sub-agent understand the task better.'),
       }),
     },
-    invoke: async (ctx: Context, args: { task: string; context?: string }, id: string) => {
+    invoke: async (ctx: Context, args: { task: string; context?: string }, runtime?: ToolRuntimeInput) => {
+      const id = getToolCallId(runtime) || `delegate-${Date.now()}`;
       const callingEmployee = await resolveCallingEmployee(ctx, plugin);
       if (!callingEmployee) {
         await logDelegation(ctx, plugin, {
@@ -312,8 +314,9 @@ function createDispatchToolOptions(
     invoke: async (
       ctx: Context,
       args: { tasks: Array<{ subAgent: string; task: string; context?: string }> },
-      id: string,
+      runtime?: ToolRuntimeInput,
     ) => {
+      const id = getToolCallId(runtime) || `dispatch-${Date.now()}`;
       const callingEmployee = await resolveCallingEmployee(ctx, plugin);
       if (!callingEmployee) {
         const distinctSubs = Array.from(new Set((args.tasks ?? []).map((t) => t.subAgent).filter(Boolean)));
@@ -706,9 +709,9 @@ export function invalidateDelegateToolsCache() {
  *
  * Tool resolution uses the CORE toolsManager (app.aiManager.toolsManager) —
  * the same manager that AIEmployee.getToolsMap() uses (see ai-employee.ts:1286).
- * This ensures tool names in skillSettings.skills[].name match correctly.
+ * This ensures tool names in skillSettings.tools[].name match correctly.
  *
- * skillSettings.skills shape (verified against ai-employee.ts:1028):
+ * skillSettings.tools shape:
  *   { name: string, autoCall: boolean }[]
  */
 async function invokeDelegateTask(

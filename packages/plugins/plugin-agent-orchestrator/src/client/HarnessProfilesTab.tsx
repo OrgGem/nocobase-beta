@@ -202,7 +202,14 @@ export const HarnessProfilesTab: React.FC = () => {
               New Profile
             </Button>
           </div>
-          <Table rowKey="id" loading={loading} dataSource={rows} columns={columns} pagination={false} />
+          <Table
+            rowKey="id"
+            loading={loading}
+            dataSource={rows}
+            columns={columns}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
         </Space>
       </Card>
 

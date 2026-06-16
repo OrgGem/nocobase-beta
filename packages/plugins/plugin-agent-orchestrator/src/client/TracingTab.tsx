@@ -269,6 +269,7 @@ export const TracingTab: React.FC = () => {
           dataSource={logs}
           columns={columns}
           size="middle"
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: page,
             pageSize,

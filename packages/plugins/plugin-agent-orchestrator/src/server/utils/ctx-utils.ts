@@ -44,6 +44,20 @@ export function currentUserId(ctx: any) {
   return ctx?.state?.currentUser?.id || ctx?.auth?.user?.id;
 }
 
+/**
+ * Whether the current request is made by an admin/root user.
+ * Mirrors the owner/admin check used by skillHub:download so list/get
+ * scoping and file access stay consistent.
+ */
+export function isAdminUser(ctx: any): boolean {
+  const roles = ctx?.state?.currentUser?.roles || ctx?.auth?.user?.roles;
+  if (!Array.isArray(roles)) return false;
+  return roles.some((r: any) => {
+    const name = typeof r === 'string' ? r : r?.name;
+    return name === 'root' || name === 'admin';
+  });
+}
+
 /** Get action params values from ctx. */
 export function valuesFromCtx(ctx: any) {
   return ctx?.action?.params?.values || ctx?.request?.body || {};

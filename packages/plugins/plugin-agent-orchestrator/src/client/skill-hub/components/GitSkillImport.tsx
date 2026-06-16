@@ -178,8 +178,7 @@ export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose })
     const lower = searchText.toLowerCase();
     return skills.filter(
       (s) =>
-        (s.title || s.name || '').toLowerCase().includes(lower) ||
-        (s.description || '').toLowerCase().includes(lower),
+        (s.title || s.name || '').toLowerCase().includes(lower) || (s.description || '').toLowerCase().includes(lower),
     );
   }, [skills, searchText]);
 
@@ -531,6 +530,7 @@ export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose })
                   selectedRowKeys: selectedSkills,
                   onChange: (keys) => setSelectedSkills(keys as string[]),
                 }}
+                scroll={{ x: 'max-content' }}
               />
             </div>
           )}
@@ -547,7 +547,14 @@ export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose })
               syncResults.filter((r) => r.status === 'updated').length
             } ${t('updated')}, ${syncResults.filter((r) => r.status === 'skipped').length} ${t('skipped')}`}
           />
-          <Table dataSource={syncResults} columns={resultColumns} rowKey="folder" size="small" pagination={false} />
+          <Table
+            dataSource={syncResults}
+            columns={resultColumns}
+            rowKey="folder"
+            size="small"
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
         </div>
       )}
     </Modal>

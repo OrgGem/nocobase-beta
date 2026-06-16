@@ -12,6 +12,32 @@ import { SkillRepositoryService } from '../services/SkillRepositoryService';
 import { gitListSkills, gitSyncSkills } from './actions/git-import';
 import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fields';
 import { getOrchestratorTraceContext } from '../services/ExecutionSpanService';
+import { tryGetAIToolsManager } from '../utils/ai-manager';
+import type { ToolsRuntime } from '@nocobase/ai';
+
+type ToolRuntimeInput = string | ToolsRuntime | undefined;
+
+function normalizeToolRuntime(runtime: ToolRuntimeInput): ToolsRuntime | undefined {
+  if (!runtime) return undefined;
+  if (typeof runtime === 'string') {
+    return { toolCallId: runtime, writer: () => {} };
+  }
+  return runtime;
+}
+
+function assignToolRuntime(ctx: any, runtime: ToolRuntimeInput) {
+  const normalizedRuntime = normalizeToolRuntime(runtime);
+  if (!ctx || !normalizedRuntime) return () => {};
+  const previousRuntime = ctx.runtime;
+  ctx.runtime = normalizedRuntime;
+  return () => {
+    if (previousRuntime === undefined) {
+      delete ctx.runtime;
+    } else {
+      ctx.runtime = previousRuntime;
+    }
+  };
+}
 
 /**
  * Simple in-memory rate limiter per user.
@@ -601,17 +627,21 @@ export class SkillHubSubFeature {
 
   private registerAITools() {
     try {
-      const aiPlugin = (this as any).app.pm.get('@nocobase/plugin-ai') as any;
-      if (!aiPlugin?.ai?.toolsManager) {
+      // Register on the SAME tools manager the harness resolves from
+      // (app.aiManager.toolsManager). Using pluginAI.ai.toolsManager here while
+      // the harness reads app.aiManager.toolsManager would register skill tools
+      // on one object and look them up on another if the wiring ever diverges.
+      const toolsManager = tryGetAIToolsManager((this as any).app);
+      if (!toolsManager) {
         (this as any).app.logger.warn('[skill-hub] plugin-ai not available, skip AI tool registration.');
         return;
       }
 
       // 1. General tool (list + execute)
-      aiPlugin.ai.toolsManager.registerTools(createSkillExecuteTool(this));
+      toolsManager.registerTools(createSkillExecuteTool(this));
 
       // 2. Dynamic tools — each enabled skill becomes a separate AI tool.
-      aiPlugin.ai.toolsManager.registerDynamicTools(async (register: { registerTools: (options: any) => void }) => {
+      toolsManager.registerDynamicTools(async (register: { registerTools: (options: any) => void }) => {
         try {
           const skills = await (this as any).db.getRepository('skillDefinitions').find({
             filter: { enabled: true },
@@ -657,19 +687,24 @@ export class SkillHubSubFeature {
                   description,
                   schema: parseJsonText(skill.get('inputSchema'), { type: 'object', properties: {} }),
                 },
-                invoke: async (toolCtx: any, args: any) => {
-                  // Re-fetch skill to get latest version (hot-reload support)
-                  const latestSkill = await (this as any).db.getRepository('skillDefinitions').findOne({
-                    filter: { id: skill.get('id'), enabled: true },
-                  });
-                  if (!latestSkill) {
-                    return { status: 'error', content: `Skill "${skill.get('name')}" is no longer available` };
+                invoke: async (toolCtx: any, args: any, runtime?: ToolRuntimeInput) => {
+                  const restoreRuntime = assignToolRuntime(toolCtx, runtime);
+                  try {
+                    // Re-fetch skill to get latest version (hot-reload support)
+                    const latestSkill = await (this as any).db.getRepository('skillDefinitions').findOne({
+                      filter: { id: skill.get('id'), enabled: true },
+                    });
+                    if (!latestSkill) {
+                      return { status: 'error', content: `Skill "${skill.get('name')}" is no longer available` };
+                    }
+                    const result = await this.executeSkill(latestSkill, args, toolCtx);
+                    return {
+                      status: result.status === 'succeeded' ? 'success' : 'error',
+                      result: result, // Attach raw result
+                    };
+                  } finally {
+                    restoreRuntime();
                   }
-                  const result = await this.executeSkill(latestSkill, args, toolCtx);
-                  return {
-                    status: result.status === 'succeeded' ? 'success' : 'error',
-                    result: result, // Attach raw result
-                  };
                 },
               };
             }),

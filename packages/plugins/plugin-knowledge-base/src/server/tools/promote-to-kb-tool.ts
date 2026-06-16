@@ -12,15 +12,11 @@
 
 import { z } from 'zod';
 import type { SessionContextService, ContextScope } from '../services/session-context';
-import { canManageKnowledgeBase } from '../utils/access';
+import { canManageKnowledgeBase, resolveAccessContext } from '../utils/access';
 import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
 import { resolveScope, resolveUserId } from '../utils/scope-resolver';
 
-export function createPromoteToKbToolProvider(
-  sessionContext: SessionContextService,
-  db: any,
-  pluginRef: any,
-) {
+export function createPromoteToKbToolProvider(sessionContext: SessionContextService, db: any, pluginRef: any) {
   return async (register: { registerTools: (tools: any) => void }) => {
     register.registerTools({
       scope: 'CUSTOM' as const,
@@ -54,17 +50,9 @@ Args:
             .string()
             .optional()
             .describe('Session context key to promote. Use shared_context.list to discover keys.'),
-          knowledgeBaseId: z
-            .string()
-            .describe('Target Knowledge Base ID. Ask the user or check available KBs.'),
-          filename: z
-            .string()
-            .optional()
-            .describe('Document name in the KB. Defaults to "session-context-<key>".'),
-          text: z
-            .string()
-            .optional()
-            .describe('Direct text to save. If provided, "key" is ignored.'),
+          knowledgeBaseId: z.string().describe('Target Knowledge Base ID. Ask the user or check available KBs.'),
+          filename: z.string().optional().describe('Document name in the KB. Defaults to "session-context-<key>".'),
+          text: z.string().optional().describe('Direct text to save. If provided, "key" is ignored.'),
         }),
       },
 
@@ -83,7 +71,7 @@ Args:
             };
           }
           const kbData = kb.toJSON ? kb.toJSON() : kb;
-          const permissionError = checkUploadPermission(ctx, kbData);
+          const permissionError = await checkUploadPermission(ctx, db, kbData);
           if (permissionError) {
             return { status: 'error' as const, content: permissionError };
           }
@@ -152,7 +140,8 @@ Args:
 
           return {
             status: 'success' as const,
-            content: `Promoted to Knowledge Base "${kb.get?.('name') || args.knowledgeBaseId}". ` +
+            content:
+              `Promoted to Knowledge Base "${kb.get?.('name') || args.knowledgeBaseId}". ` +
               `Document "${docFilename}" (ID: ${docId}) created and queued for vectorization. ` +
               'It will be searchable via RAG once processing completes.',
           };
@@ -166,12 +155,13 @@ Args:
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function checkUploadPermission(ctx: any, kbData: any): string | null {
+async function checkUploadPermission(ctx: any, db: any, kbData: any): Promise<string | null> {
   if (kbData.type === 'EXTERNAL_RAG') {
     return 'Cannot promote documents to an external RAG knowledge base.';
   }
 
-  if (canManageKnowledgeBase(ctx, kbData)) {
+  const access = await resolveAccessContext(ctx, db);
+  if (canManageKnowledgeBase(access, kbData)) {
     return null;
   }
 

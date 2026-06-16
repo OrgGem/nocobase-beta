@@ -9,7 +9,7 @@
 
 import PluginKnowledgeBaseServer from '../plugin';
 import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
-import { canManageKnowledgeBase, getAuthUserId } from '../utils/access';
+import { canManageKnowledgeBase, getAuthUserId, resolveAccessContext } from '../utils/access';
 
 /**
  * API action: aiKnowledgeBase:addDocument
@@ -71,7 +71,8 @@ export async function addDocumentAction(ctx: any, next: any) {
     );
     return;
   }
-  if (!canManageKnowledgeBase(ctx, kbData)) {
+  const access = await resolveAccessContext(ctx, ctx.db);
+  if (!canManageKnowledgeBase(access, kbData)) {
     ctx.throw(403, 'You do not have permission to add documents to this knowledge base');
     return;
   }

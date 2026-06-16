@@ -49,7 +49,16 @@ export const SkillMetrics: React.FC = () => {
     executions.forEach((e) => {
       const skillName = e.skill?.title || e.skill?.name || 'Unknown';
       if (!bySkill[skillName]) {
-        bySkill[skillName] = { name: skillName, total: 0, succeeded: 0, failed: 0, timeout: 0, canceled: 0, totalDuration: 0, durationCount: 0 };
+        bySkill[skillName] = {
+          name: skillName,
+          total: 0,
+          succeeded: 0,
+          failed: 0,
+          timeout: 0,
+          canceled: 0,
+          totalDuration: 0,
+          durationCount: 0,
+        };
       }
       bySkill[skillName].total += 1;
       bySkill[skillName][e.status] = (bySkill[skillName][e.status] || 0) + 1;
@@ -59,11 +68,13 @@ export const SkillMetrics: React.FC = () => {
       }
     });
 
-    const skillData = Object.values(bySkill).map((s) => ({
-      ...s,
-      successRate: s.total > 0 ? (s.succeeded / s.total) * 100 : 0,
-      avgDuration: s.durationCount > 0 ? (s.totalDuration / s.durationCount / 1000).toFixed(2) : 0,
-    })).sort((a: any, b: any) => b.total - a.total);
+    const skillData = Object.values(bySkill)
+      .map((s) => ({
+        ...s,
+        successRate: s.total > 0 ? (s.succeeded / s.total) * 100 : 0,
+        avgDuration: s.durationCount > 0 ? (s.totalDuration / s.durationCount / 1000).toFixed(2) : 0,
+      }))
+      .sort((a: any, b: any) => b.total - a.total);
 
     return { total, succeeded, failed, timeout, canceled, skillData };
   }, [executions]);
@@ -71,12 +82,18 @@ export const SkillMetrics: React.FC = () => {
   const columns = [
     { title: t('Skill'), dataIndex: 'name', key: 'name', width: 200 },
     { title: t('Total Runs'), dataIndex: 'total', key: 'total', width: 100 },
-    { 
-      title: t('Success Rate'), 
-      dataIndex: 'successRate', 
-      key: 'successRate', 
+    {
+      title: t('Success Rate'),
+      dataIndex: 'successRate',
+      key: 'successRate',
       width: 150,
-      render: (val: number) => <Progress percent={Math.round(val)} size="small" status={val === 100 ? 'success' : val > 50 ? 'active' : 'exception'} /> 
+      render: (val: number) => (
+        <Progress
+          percent={Math.round(val)}
+          size="small"
+          status={val === 100 ? 'success' : val > 50 ? 'active' : 'exception'}
+        />
+      ),
     },
     { title: t('Success'), dataIndex: 'succeeded', key: 'succeeded', width: 100 },
     { title: t('Failed'), dataIndex: 'failed', key: 'failed', width: 100 },
@@ -94,29 +111,45 @@ export const SkillMetrics: React.FC = () => {
         </Col>
         <Col span={6}>
           <Card size="small">
-            <Statistic title="Succeeded" value={metrics.succeeded} valueStyle={{ color: '#3f8600' }} prefix={<CheckCircleOutlined />} />
+            <Statistic
+              title="Succeeded"
+              value={metrics.succeeded}
+              valueStyle={{ color: '#3f8600' }}
+              prefix={<CheckCircleOutlined />}
+            />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
-            <Statistic title="Failed" value={metrics.failed} valueStyle={{ color: '#cf1322' }} prefix={<CloseCircleOutlined />} />
+            <Statistic
+              title="Failed"
+              value={metrics.failed}
+              valueStyle={{ color: '#cf1322' }}
+              prefix={<CloseCircleOutlined />}
+            />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
-            <Statistic title="Timeout/Canceled" value={metrics.timeout + metrics.canceled} valueStyle={{ color: '#faad14' }} prefix={<ClockCircleOutlined />} />
+            <Statistic
+              title="Timeout/Canceled"
+              value={metrics.timeout + metrics.canceled}
+              valueStyle={{ color: '#faad14' }}
+              prefix={<ClockCircleOutlined />}
+            />
           </Card>
         </Col>
       </Row>
 
       <Card title={t('Metrics by Skill (Recent)')}>
-        <Table 
-          dataSource={metrics.skillData} 
-          columns={columns} 
-          rowKey="name" 
-          loading={loading} 
-          pagination={false} 
-          size="middle" 
+        <Table
+          dataSource={metrics.skillData}
+          columns={columns}
+          rowKey="name"
+          loading={loading}
+          pagination={false}
+          size="middle"
+          scroll={{ x: 'max-content' }}
         />
       </Card>
     </Space>

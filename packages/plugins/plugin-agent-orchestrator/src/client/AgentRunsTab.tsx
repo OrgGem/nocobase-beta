@@ -483,6 +483,7 @@ export const AgentRunsTab: React.FC = () => {
           loading={loading}
           dataSource={runs}
           columns={columns}
+          scroll={{ x: 'max-content' }}
           pagination={{
             current: page,
             pageSize,
@@ -571,6 +572,7 @@ export const AgentRunsTab: React.FC = () => {
                   dataSource={steps}
                   columns={stepColumns}
                   pagination={false}
+                  scroll={{ x: 'max-content' }}
                   expandable={{
                     expandedRowRender: (record: any) => (
                       <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -632,6 +634,7 @@ export const AgentRunsTab: React.FC = () => {
                         size="small"
                         dataSource={spans}
                         pagination={false}
+                        scroll={{ x: 'max-content' }}
                         columns={[
                           {
                             title: 'Type',

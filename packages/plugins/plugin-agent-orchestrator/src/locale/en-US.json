@@ -1,6 +1,13 @@
 {
   "Agent Orchestrator": "Agent Orchestrator",
   "Orchestration Rules": "Orchestration Rules",
+  "Execution Tracing": "Execution Tracing",
+  "Agent Runs": "Agent Runs",
+  "Harness Profiles": "Harness Profiles",
+  "Skill Hub Definitions": "Skill Hub Definitions",
+  "Execution History": "Execution History",
+  "Skill Review Settings": "Skill Review Settings",
+  "Metrics": "Metrics",
   "Swarm Tracing": "Swarm Tracing",
   "Leader (Orchestrator)": "Leader (Orchestrator)",
   "Sub-Agent": "Sub-Agent",

@@ -65,6 +65,20 @@ export default defineCollection({
       name: 'allowedRoles',
     },
     {
+      // How AI Employees (agents) may reach this KB when running tools:
+      //   inherit  — ride on the triggering user's access (default)
+      //   explicit — only agents named in allowedAgents (or holding a role in allowedRoles)
+      //   none     — no agent may ever read/use this KB
+      type: 'string',
+      name: 'agentAccess',
+      defaultValue: 'inherit',
+    },
+    {
+      // AI Employee usernames explicitly granted access when agentAccess === 'explicit'
+      type: 'array',
+      name: 'allowedAgents',
+    },
+    {
       // Legacy field. SHARED KBs now use allowedRoles for read/use/manage.
       type: 'array',
       name: 'uploadRoles',

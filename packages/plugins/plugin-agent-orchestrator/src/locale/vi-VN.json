@@ -1,6 +1,13 @@
 {
   "Agent Orchestrator": "Điều phối Agent",
   "Orchestration Rules": "Quy tắc điều phối",
+  "Execution Tracing": "Truy vết thực thi",
+  "Agent Runs": "Lượt chạy Agent",
+  "Harness Profiles": "Hồ sơ Harness",
+  "Skill Hub Definitions": "Định nghĩa Skill Hub",
+  "Execution History": "Lịch sử thực thi",
+  "Skill Review Settings": "Cài đặt duyệt Skill",
+  "Metrics": "Số liệu",
   "Swarm Tracing": "Truy vết Swarm",
   "Leader (Orchestrator)": "Leader (Điều phối viên)",
   "Sub-Agent": "Agent con",

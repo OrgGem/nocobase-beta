@@ -1,9 +1,27 @@
 import { parseJsonText } from '../skill-hub/utils/json-fields';
+import type { ToolsRuntime } from '@nocobase/ai';
+
+type ToolRuntimeInput = string | ToolsRuntime | undefined;
+
+function normalizeRuntime(runtime: ToolRuntimeInput): ToolsRuntime | undefined {
+  if (!runtime) return undefined;
+  if (typeof runtime === 'string') {
+    return { toolCallId: runtime, writer: () => {} };
+  }
+  return runtime;
+}
 
 export function createSkillExecuteTool(plugin: any) {
   return {
     scope: 'CUSTOM',
     execution: 'backend',
+    // Intentionally fixed to ASK. This is the universal gateway: a single tool
+    // whose `execute` action can run ANY enabled skill by name, so the
+    // per-skill `autoCall` flag cannot be honored here — the harness decides
+    // approval from `defaultPermission` before invoke, when the target skill is
+    // not yet known. The per-skill dynamic tools (`skill_hub_<name>`) are the
+    // fast path that respect `autoCall: true → ALLOW`. Keeping the generic
+    // gateway on ASK is deliberate defense-in-depth, not an oversight.
     defaultPermission: 'ASK',
 
     introduction: {
@@ -43,7 +61,7 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
       },
     },
 
-    async invoke(ctx: any, args: Record<string, any>, _id?: string) {
+    async invoke(ctx: any, args: Record<string, any>, runtime?: ToolRuntimeInput) {
       plugin.app.logger.info(`[skill-execute] Tool invoked with action: ${args.action}, skillName: ${args.skillName}`);
 
       // Action: list available skills
@@ -125,7 +143,23 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
         }
 
         try {
-          const result = await plugin.executeSkill(skill, args.input || {}, ctx);
+          const normalizedRuntime = normalizeRuntime(runtime);
+          const previousRuntime = ctx.runtime;
+          if (normalizedRuntime) {
+            ctx.runtime = normalizedRuntime;
+          }
+          let result;
+          try {
+            result = await plugin.executeSkill(skill, args.input || {}, ctx);
+          } finally {
+            if (normalizedRuntime) {
+              if (previousRuntime === undefined) {
+                delete ctx.runtime;
+              } else {
+                ctx.runtime = previousRuntime;
+              }
+            }
+          }
 
           return {
             status: result.status === 'succeeded' ? 'success' : 'error',

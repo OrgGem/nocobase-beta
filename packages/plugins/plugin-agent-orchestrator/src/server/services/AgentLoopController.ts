@@ -5,7 +5,7 @@ import { AgentLoopRepository } from './AgentLoopRepository';
 import { AgentHarness } from './AgentHarness';
 import { AgentLoopPolicy, AgentLoopPlanStepInput, AgentLoopRunStatus, AgentLoopStepStatus } from './AgentLoopService';
 import { TokenTracker } from './TokenTracker';
-import { getCircuitBreaker } from './CircuitBreaker';
+import { getCircuitBreaker, subAgentCircuitKey } from './CircuitBreaker';
 import { createHash } from 'crypto';
 import { asObject, asArray, trimText, normalizeStepType, normalizePlanKey } from '../utils/ctx-utils';
 
@@ -816,7 +816,7 @@ export class AgentLoopController {
       const target = step.target || '';
       if (target) {
         const circuitBreaker = getCircuitBreaker();
-        const state = circuitBreaker.getState(target);
+        const state = circuitBreaker.getState(subAgentCircuitKey(run.leaderUsername, target));
         const attempt = Number(step.attempt || 0);
 
         // Route away if: circuit is open, or 2+ failures and at least 1 retry already attempted
@@ -1044,7 +1044,13 @@ export class AgentLoopController {
           runningSteps.map((step: any) => this.harness.executeStep(snapshot.run, step, options)),
         );
 
-        // Process results — failures need individual backoff before retry
+        // Process results. Failed-but-retryable steps need a backoff before the
+        // next iteration picks them up again. We compute the LARGEST backoff in
+        // the batch and sleep once after the loop — never sum per-step sleeps.
+        // Summing held the run-lock for up to maxConcurrency × 60s (= the whole
+        // 5-minute lock when a full batch fails), starving other steps.
+        let batchBackoffMs = 0;
+        let approvalBreak = false;
         for (let i = 0; i < results.length; i++) {
           const runningStep = runningSteps[i];
           const result = results[i];
@@ -1063,6 +1069,7 @@ export class AgentLoopController {
                 { userId: options.userId, reason: 'Dynamic tool approval required by policy.' },
               );
               // Stop processing more results; remaining steps are left pending
+              approvalBreak = true;
               break;
             }
 
@@ -1075,15 +1082,19 @@ export class AgentLoopController {
               failedStep &&
               Number(failedStep.attempt || 0) < Number(failedStep.maxAttempts || policy.maxStepAttempts)
             ) {
-              // Exponential backoff before retry
+              // Exponential backoff — track the max; the step stays pending for retry.
               const attempt = Number(failedStep.attempt || 1);
               const baseDelay = 1000;
               const maxDelay = 60000;
               const delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
-              await new Promise((resolve) => setTimeout(resolve, delay));
-              // Step remains pending for retry (failStep resets status back)
+              batchBackoffMs = Math.max(batchBackoffMs, delay);
             }
           }
+        }
+
+        // Single consolidated backoff for the whole batch (bounded at maxDelay).
+        if (!approvalBreak && batchBackoffMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, batchBackoffMs));
         }
 
         // Re-evaluate the plan — newly unblocked steps become eligible

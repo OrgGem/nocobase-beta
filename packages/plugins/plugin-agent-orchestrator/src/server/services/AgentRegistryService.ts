@@ -1,5 +1,61 @@
 import { toPlain, asObject, normalizeEmployeeUsername } from '../utils/ctx-utils';
 
+type OrchestratorConfigRow = {
+  leaderUsername?: string;
+  subAgentUsername?: string;
+};
+
+type ModelRef = { llmService: string; model: string };
+
+/**
+ * Normalize an AI employee's `modelSettings` (or a per-rule override) into a
+ * flat { llmService, model } the harness can hand to getLLMService().
+ *
+ * The admin UI (plugin-ai ModelSettings) stores the dedicated model selection
+ * as `{ enabled, models: [{ llmService, model }] }` and clears the flat
+ * `llmService`/`model` fields. Older records still use the flat shape, and
+ * per-rule overrides arrive flat too. Mirror plugin-ai's resolveModel:
+ *   - if `enabled`, prefer `models[0]`, else fall back to the flat fields
+ *   - a bare flat { llmService, model } (e.g. a rule override) is also valid
+ */
+function extractModelRef(value: any): ModelRef | undefined {
+  if (!value) return undefined;
+
+  const isValid = (m: any): m is ModelRef => Boolean(m?.llmService && m?.model);
+
+  // Dedicated model configuration (UI shape).
+  if (value.enabled) {
+    const models = Array.isArray(value.models) ? value.models : [];
+    const first = models.find(isValid);
+    if (first) {
+      return { llmService: first.llmService, model: first.model };
+    }
+  }
+
+  // Flat legacy shape, or a per-rule override.
+  if (isValid(value)) {
+    return { llmService: value.llmService, model: value.model };
+  }
+
+  return undefined;
+}
+
+function sanitizeToolPart(value: string) {
+  return (value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function buildDelegateToolName(leaderUsername: string, subAgentUsername: string) {
+  return `delegate_${sanitizeToolPart(leaderUsername)}_to_${sanitizeToolPart(subAgentUsername)}`;
+}
+
+function buildDispatchToolName(leaderUsername: string) {
+  return `dispatch_subagents_${sanitizeToolPart(leaderUsername)}`;
+}
+
+function buildLegacyDelegateToolName(subAgentUsername: string) {
+  return `delegate_to_${sanitizeToolPart(subAgentUsername)}`;
+}
+
 export class AgentRegistryService {
   constructor(private readonly plugin: any) {}
 
@@ -59,26 +115,28 @@ export class AgentRegistryService {
       throw new Error(`Sub-agent "${subAgentUsername}" was not found.`);
     }
 
-    const hasModelSettings = (val: any): val is { llmService: string; model: string } => {
-      return Boolean(val?.llmService && val?.model);
-    };
-
-    let modelSettings = hasModelSettings(dynamicValues) ? dynamicValues : undefined;
-
-    if (!modelSettings) {
-      if (hasModelSettings(subAgent.modelSettings)) {
-        modelSettings = subAgent.modelSettings;
-      }
+    // 1. Explicit per-rule override (already a flat { llmService, model }).
+    const dynamic = extractModelRef(dynamicValues);
+    if (dynamic) {
+      return dynamic;
     }
 
-    if (!modelSettings && leaderUsername) {
+    // 2. Sub-agent's own dedicated model configuration.
+    const subAgentModel = extractModelRef(subAgent.modelSettings);
+    if (subAgentModel) {
+      return subAgentModel;
+    }
+
+    // 3. Inherit from leader.
+    if (leaderUsername) {
       const leader = await this.getAIEmployee(leaderUsername);
-      if (leader && hasModelSettings(leader.modelSettings)) {
-        modelSettings = leader.modelSettings;
+      const leaderModel = extractModelRef(leader?.modelSettings);
+      if (leaderModel) {
+        return leaderModel;
       }
     }
 
-    return modelSettings;
+    return undefined;
   }
 
   /**
@@ -127,47 +185,31 @@ export class AgentRegistryService {
       const configRepo = this.db.getRepository('orchestratorConfig');
       if (!configRepo) return false;
 
+      const configs: OrchestratorConfigRow[] = await configRepo.find({
+        filter: { enabled: true },
+      });
+      if (!configs || configs.length === 0) return false;
+
       // 1. Check if it matches dispatch_subagents_${leader}
       if (toolName.startsWith('dispatch_subagents_')) {
-        const leader = toolName.substring('dispatch_subagents_'.length);
-        const count = await configRepo.count({
-          filter: {
-            leaderUsername: leader,
-            enabled: true,
-          },
-        });
-        return count > 0;
+        return configs.some((config) => buildDispatchToolName(config.leaderUsername || '') === toolName);
       }
 
-      // 2. Check if it matches delegate_${leader}_to_${subAgent}
-      if (toolName.startsWith('delegate_') && toolName.includes('_to_')) {
-        const parts = toolName.substring('delegate_'.length).split('_to_');
-        if (parts.length === 2) {
-          const [leader, subAgent] = parts;
-          const count = await configRepo.count({
-            filter: {
-              leaderUsername: leader,
-              subAgentUsername: subAgent,
-              enabled: true,
-            },
-          });
-          if (count > 0) return true;
-        }
-      }
-
-      // 3. Check legacy alias: delegate_to_${subAgent}
+      // 2. Check legacy alias: delegate_to_${subAgent}
       if (toolName.startsWith('delegate_to_')) {
-        const subAgent = toolName.substring('delegate_to_'.length);
-        const configs = await configRepo.find({
-          filter: {
-            subAgentUsername: subAgent,
-            enabled: true,
-          },
-        });
-        // Legacy alias is only registered if there is exactly one leader for this subAgent
-        if (configs?.length === 1) {
+        const matchingConfigs = configs.filter(
+          (config) => buildLegacyDelegateToolName(config.subAgentUsername || '') === toolName,
+        );
+        if (matchingConfigs.length === 1) {
           return true;
         }
+      }
+
+      // 3. Check if it matches delegate_${leader}_to_${subAgent}
+      if (toolName.startsWith('delegate_') && toolName.includes('_to_')) {
+        return configs.some(
+          (config) => buildDelegateToolName(config.leaderUsername || '', config.subAgentUsername || '') === toolName,
+        );
       }
 
       return false;

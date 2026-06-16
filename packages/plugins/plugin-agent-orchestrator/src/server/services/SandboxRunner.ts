@@ -1,8 +1,16 @@
 import { exec, ChildProcess, ExecException } from 'child_process';
 import { writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, delimiter } from 'path';
+import { tmpdir } from 'os';
 import { FileManager, OutputFileInfo } from './FileManager';
 import { CodeValidator } from './CodeValidator';
+
+const IS_WINDOWS = process.platform === 'win32';
+
+/** Resolve the python executable name per platform (python3 on *nix, python on Windows). */
+function pythonBinary() {
+  return process.env.SKILL_HUB_PYTHON_BIN || (IS_WINDOWS ? 'python' : 'python3');
+}
 
 export interface ExecuteOptions {
   language: 'node' | 'python';
@@ -65,10 +73,10 @@ export class SandboxRunner {
     // 1. Validate code against forbidden patterns
     this.validator.validate(code, language);
 
-    // 1b. Validate imports against whitelist (if env initialized)
-    if (packageWhitelist?.length) {
-      this.validator.validateImports(code, language, packageWhitelist);
-    }
+    // 1b. Validate imports against the allowlist (builtins + whitelist).
+    // Always runs: an empty whitelist restricts code to built-in modules only,
+    // which blocks stdlib-based network exfiltration (urllib/socket/etc.).
+    this.validator.validateImports(code, language, packageWhitelist || []);
 
     // 2. Prepare workspace
     const workDir = this.fileManager.createExecDir(execId);
@@ -80,17 +88,21 @@ export class SandboxRunner {
 
     onProgress?.({ percent: 20, log: 'Code validated, executing...' });
 
-    // 3. Build command
-    const cmd = language === 'node'
-      ? `node "${scriptPath}"`
-      : `python3 "${scriptPath}"`;
+    // 3. Resolve Node Modules Path using the local sandbox workspace
+    const nodePath = resolve(this.sandboxWorkspace, 'node_modules');
+    const finalNodePath = process.env.NODE_PATH ? `${nodePath}${delimiter}${process.env.NODE_PATH}` : nodePath;
 
-    // 4. Resolve Node Modules Path using the local sandbox workspace
-    const path = require('path');
-    const nodePath = path.resolve(this.sandboxWorkspace, 'node_modules');
-    const finalNodePath = process.env.NODE_PATH 
-      ? `${nodePath}${path.delimiter}${process.env.NODE_PATH}` 
-      : nodePath;
+    // 4. Build command.
+    // Memory cap (MB): node gets --max-old-space-size; on Linux/macOS the whole
+    // process tree is additionally bounded with `ulimit -v` so a python skill
+    // cannot exhaust host memory. Windows has no ulimit equivalent, so the cap
+    // there is best-effort (node heap only) — production runs on Linux.
+    const memLimitMb = Math.max(64, Number(process.env.SKILL_HUB_MEM_LIMIT_MB || 512));
+    const baseCmd =
+      language === 'node'
+        ? `node --max-old-space-size=${memLimitMb} "${scriptPath}"`
+        : `${pythonBinary()} "${scriptPath}"`;
+    const cmd = !IS_WINDOWS && memLimitMb > 0 ? `ulimit -v ${memLimitMb * 1024} 2>/dev/null; exec ${baseCmd}` : baseCmd;
 
     // 5. Execute via child_process with sanitized env
     const startTime = Date.now();
@@ -101,7 +113,7 @@ export class SandboxRunner {
       exitCode: number;
       stdout: string;
       stderr: string;
-    }>((resolveResult) => {
+    }>((_resolve) => {
       childProc = exec(
         cmd,
         {
@@ -111,18 +123,20 @@ export class SandboxRunner {
           env: {
             // Sanitized environment — only expose what's necessary
             PATH: process.env.PATH,
-            HOME: '/tmp',
-            TMPDIR: '/tmp',
+            HOME: tmpdir(),
+            TMPDIR: tmpdir(),
             OUTPUT_DIR: outputDir,
             LANG: 'en_US.UTF-8',
             // Node.js
             NODE_PATH: finalNodePath,
             // Python — include bundled packages (svg_to_pptx etc.)
             PYTHONPATH: [
-              skillDir ? path.resolve(skillDir, 'scripts') : '',
-              path.resolve(this.sandboxWorkspace, 'python_packages'),
+              skillDir ? resolve(skillDir, 'scripts') : '',
+              resolve(this.sandboxWorkspace, 'python_packages'),
               process.env.PYTHONPATH || '',
-            ].filter(Boolean).join(path.delimiter),
+            ]
+              .filter(Boolean)
+              .join(delimiter),
             PYTHONIOENCODING: 'utf-8',
             SKILL_DIR: skillDir || '',
             // DO NOT pass: DB credentials, API keys, APP_KEY, etc.
@@ -138,7 +152,7 @@ export class SandboxRunner {
             }
           }
 
-          resolveResult({
+          _resolve({
             exitCode,
             stdout: (stdout || '').slice(0, 5000),
             stderr: (stderr || '').slice(0, 2000),

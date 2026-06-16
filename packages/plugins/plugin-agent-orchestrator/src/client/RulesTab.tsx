@@ -34,7 +34,7 @@ const { Text } = Typography;
 /**
  * Mirrors server-side `sanitizeToolPart` in delegate-task.ts so we can compute
  * the expected delegation tool names here and detect when the leader hasn't
- * added them to its skillSettings.
+ * added them to its skillSettings.tools.
  */
 const sanitizeToolPart = (value: string) => (value || '').replace(/[^a-zA-Z0-9_-]/g, '_');
 const expectedDelegateToolName = (leader: string, sub: string) =>
@@ -46,6 +46,62 @@ const controllerToolNames = [
   'orchestrator_status',
   'orchestrator_cancel',
 ];
+const toolLikeNames = new Set([...controllerToolNames, 'external_rag_search', 'skill_hub_execute']);
+
+const isToolLikeName = (name: string) =>
+  toolLikeNames.has(name) ||
+  name.startsWith('delegate_') ||
+  name.startsWith('dispatch_subagents_') ||
+  name.startsWith('skill_hub_') ||
+  name.startsWith('browser_') ||
+  name.startsWith('drawio-');
+
+const normalizeToolBinding = (value: any) => {
+  const name = typeof value === 'string' ? value : value?.name;
+  if (typeof name !== 'string' || !name.trim()) return null;
+  return {
+    name: name.trim(),
+    autoCall: value?.autoCall === true,
+  };
+};
+
+const normalizeSkillSettingsForTools = (skillSettings: any) => {
+  const source = skillSettings && typeof skillSettings === 'object' ? skillSettings : {};
+  const toolsByName = new Map<string, { name: string; autoCall: boolean }>();
+  const addTool = (tool: { name: string; autoCall: boolean } | null) => {
+    if (!tool || toolsByName.has(tool.name)) return;
+    toolsByName.set(tool.name, tool);
+  };
+
+  if (Array.isArray(source.tools)) {
+    for (const item of source.tools) {
+      addTool(normalizeToolBinding(item));
+    }
+  }
+
+  const nextSkills: string[] = [];
+  if (Array.isArray(source.skills)) {
+    for (const item of source.skills) {
+      if (typeof item === 'string') {
+        const name = item.trim();
+        if (!name) continue;
+        if (isToolLikeName(name)) {
+          addTool({ name, autoCall: false });
+        } else {
+          nextSkills.push(name);
+        }
+        continue;
+      }
+      addTool(normalizeToolBinding(item));
+    }
+  }
+
+  return {
+    ...source,
+    skills: nextSkills,
+    tools: Array.from(toolsByName.values()),
+  };
+};
 
 export const RulesTab: React.FC = () => {
   const api = useAPIClient();
@@ -86,15 +142,15 @@ export const RulesTab: React.FC = () => {
   }, [harnessProfilesData]);
 
   // P3 FIX: Use shared context instead of duplicate API call
-  const { employeeMap, skillsMap, refresh: refreshEmployees } = useAIEmployees();
+  const { employeeMap, toolNamesMap, refresh: refreshEmployees } = useAIEmployees();
   const rules = React.useMemo(() => {
     const rows = (data as any)?.data;
     return Array.isArray(rows) ? rows : [];
   }, [data]);
 
-  const handleAddSkillsToEmployee = async (employeeUsername: string, toolNames: string[]) => {
+  const handleAddToolsToEmployee = async (employeeUsername: string, toolNames: string[]) => {
     try {
-      // Re-fetch the leader to merge its current skills (skillsMap may be stale).
+      // Re-fetch the leader to merge current tools and clean up legacy skillSettings.skills tool entries.
       const leaderResp = await api.request({
         url: 'aiEmployees:get',
         params: { filterByTk: employeeUsername },
@@ -104,41 +160,47 @@ export const RulesTab: React.FC = () => {
         message.error('Could not load AI employee.');
         return;
       }
-      const existing = Array.isArray(leader.skillSettings?.skills) ? leader.skillSettings.skills : [];
-      const existingNames = new Set(existing.map((s: any) => (typeof s === 'string' ? s : s?.name)));
+      const normalizedSkillSettings = normalizeSkillSettingsForTools(leader.skillSettings);
+      const existingNames = new Set(normalizedSkillSettings.tools.map((tool: { name: string }) => tool.name));
       const missing = toolNames.filter((toolName) => !existingNames.has(toolName));
-      if (!missing.length) {
-        message.info('Skills already present.');
+      const hadLegacyToolBindings =
+        JSON.stringify(normalizedSkillSettings) !== JSON.stringify(leader.skillSettings || {});
+      if (!missing.length && !hadLegacyToolBindings) {
+        message.info('Tools already present.');
         await refreshEmployees();
         return;
       }
-      const nextSkills = [...existing, ...missing.map((name) => ({ name, autoCall: false }))];
+      const nextTools = [...normalizedSkillSettings.tools, ...missing.map((name) => ({ name, autoCall: false }))];
       await api.request({
         url: 'aiEmployees:update',
         method: 'put',
         params: { filterByTk: employeeUsername },
-        data: { skillSettings: { ...(leader.skillSettings || {}), skills: nextSkills } },
+        data: { skillSettings: { ...normalizedSkillSettings, tools: nextTools } },
       });
-      message.success(`Added ${missing.length} skill${missing.length > 1 ? 's' : ''} to ${employeeUsername}.`);
+      message.success(
+        missing.length
+          ? `Added ${missing.length} tool${missing.length > 1 ? 's' : ''} to ${employeeUsername}.`
+          : `Normalized tool bindings for ${employeeUsername}.`,
+      );
       await refreshEmployees();
     } catch (e: any) {
       message.error(`Auto-assign failed: ${e?.message || 'unknown error'}`);
     }
   };
 
-  const handleAddSkillToEmployee = async (employeeUsername: string, toolName: string) => {
-    await handleAddSkillsToEmployee(employeeUsername, [toolName]);
+  const handleAddToolToEmployee = async (employeeUsername: string, toolName: string) => {
+    await handleAddToolsToEmployee(employeeUsername, [toolName]);
   };
 
-  const handleAutoAssignSkill = async (record: any) => {
-    await handleAddSkillToEmployee(
+  const handleAutoAssignTool = async (record: any) => {
+    await handleAddToolToEmployee(
       record.leaderUsername,
       expectedDelegateToolName(record.leaderUsername, record.subAgentUsername),
     );
   };
 
-  const handleAutoAssignDispatchSkill = async (leaderUsername: string) => {
-    await handleAddSkillToEmployee(leaderUsername, expectedDispatchToolName(leaderUsername));
+  const handleAutoAssignDispatchTool = async (leaderUsername: string) => {
+    await handleAddToolToEmployee(leaderUsername, expectedDispatchToolName(leaderUsername));
   };
 
   const subAgentLeaderCount = React.useMemo(() => {
@@ -323,20 +385,20 @@ export const RulesTab: React.FC = () => {
       ),
     },
     {
-      title: 'Skill',
-      key: 'skill',
+      title: 'Tool',
+      key: 'tool',
       width: 150,
       render: (_: any, record: any) => {
         const expected = expectedDelegateToolName(record.leaderUsername, record.subAgentUsername);
-        const leaderSkills = skillsMap.get(record.leaderUsername);
-        if (!leaderSkills) {
+        const leaderTools = toolNamesMap.get(record.leaderUsername);
+        if (!leaderTools) {
           return (
             <Text type="secondary" style={{ fontSize: 12 }}>
               —
             </Text>
           );
         }
-        const present = leaderSkills.has(expected);
+        const present = leaderTools.has(expected);
         if (present) {
           return <Tag color="success">Assigned</Tag>;
         }
@@ -349,7 +411,7 @@ export const RulesTab: React.FC = () => {
               type="link"
               size="small"
               icon={<ThunderboltOutlined />}
-              onClick={() => handleAutoAssignSkill(record)}
+              onClick={() => handleAutoAssignTool(record)}
             >
               Auto-add
             </Button>
@@ -378,38 +440,38 @@ export const RulesTab: React.FC = () => {
 
   const leaderUsername = Form.useWatch('leaderUsername', form);
 
-  const missingSkillCount = React.useMemo(() => {
+  const missingToolCount = React.useMemo(() => {
     return rules.reduce((acc: number, r: any) => {
-      const leaderSkills = skillsMap.get(r.leaderUsername);
-      if (!leaderSkills) return acc;
+      const leaderTools = toolNamesMap.get(r.leaderUsername);
+      if (!leaderTools) return acc;
       const expected = expectedDelegateToolName(r.leaderUsername, r.subAgentUsername);
-      return leaderSkills.has(expected) ? acc : acc + 1;
+      return leaderTools.has(expected) ? acc : acc + 1;
     }, 0);
-  }, [rules, skillsMap]);
+  }, [rules, toolNamesMap]);
 
-  const missingDispatchSkills = React.useMemo(() => {
+  const missingDispatchTools = React.useMemo(() => {
     return groupedRules
       .map((group) => {
-        const leaderSkills = skillsMap.get(group.leaderUsername);
-        if (!leaderSkills) return null;
+        const leaderTools = toolNamesMap.get(group.leaderUsername);
+        if (!leaderTools) return null;
         const toolName = expectedDispatchToolName(group.leaderUsername);
-        return leaderSkills.has(toolName)
+        return leaderTools.has(toolName)
           ? null
           : { leaderUsername: group.leaderUsername, toolName, count: group.items.length };
       })
       .filter(Boolean) as Array<{ leaderUsername: string; toolName: string; count: number }>;
-  }, [groupedRules, skillsMap]);
+  }, [groupedRules, toolNamesMap]);
 
-  const missingControllerSkills = React.useMemo(() => {
+  const missingControllerTools = React.useMemo(() => {
     return groupedRules
       .map((group) => {
-        const leaderSkills = skillsMap.get(group.leaderUsername);
-        if (!leaderSkills) return null;
-        const missing = controllerToolNames.filter((toolName) => !leaderSkills.has(toolName));
+        const leaderTools = toolNamesMap.get(group.leaderUsername);
+        if (!leaderTools) return null;
+        const missing = controllerToolNames.filter((toolName) => !leaderTools.has(toolName));
         return missing.length ? { leaderUsername: group.leaderUsername, missing } : null;
       })
       .filter(Boolean) as Array<{ leaderUsername: string; missing: string[] }>;
-  }, [groupedRules, skillsMap]);
+  }, [groupedRules, toolNamesMap]);
 
   return (
     <div>
@@ -426,37 +488,37 @@ export const RulesTab: React.FC = () => {
         }
       />
 
-      {missingSkillCount > 0 && (
+      {missingToolCount > 0 && (
         <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`${missingSkillCount} rule${missingSkillCount > 1 ? 's' : ''} missing required skill assignment`}
+          message={`${missingToolCount} rule${missingToolCount > 1 ? 's' : ''} missing required tool assignment`}
           description={
             <Text type="secondary">
               The Leader employee hasn&apos;t added the corresponding{' '}
-              <Text code>delegate_&lt;leader&gt;_to_&lt;sub&gt;</Text> tool to its skillSettings, so the LLM cannot
-              actually call these sub-agents. Use the <b>Auto-add</b> button in the Skill column to fix.
+              <Text code>delegate_&lt;leader&gt;_to_&lt;sub&gt;</Text> tool to its skillSettings.tools, so the LLM
+              cannot actually call these sub-agents. Use the <b>Auto-add</b> button in the Tool column to fix.
             </Text>
           }
         />
       )}
 
-      {missingControllerSkills.length > 0 && (
+      {missingControllerTools.length > 0 && (
         <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`${missingControllerSkills.length} leader${
-            missingControllerSkills.length > 1 ? 's' : ''
+          message={`${missingControllerTools.length} leader${
+            missingControllerTools.length > 1 ? 's' : ''
           } missing orchestrator controller tools`}
           description={
             <Space direction="vertical" size={6}>
               <Text type="secondary">
-                Leaders need the orchestrator controller tools to create an approval-first plan and execute it after
-                the user accepts the card.
+                Leaders need the orchestrator controller tools to create an approval-first plan and execute it after the
+                user accepts the card.
               </Text>
-              {missingControllerSkills.map(({ leaderUsername, missing }) => (
+              {missingControllerTools.map(({ leaderUsername, missing }) => (
                 <Space key={leaderUsername} size={8} wrap>
                   <Tag color="blue">{employeeMap.get(leaderUsername) || leaderUsername}</Tag>
                   <Text type="secondary">{missing.length} missing</Text>
@@ -464,7 +526,7 @@ export const RulesTab: React.FC = () => {
                     type="link"
                     size="small"
                     icon={<ThunderboltOutlined />}
-                    onClick={() => handleAddSkillsToEmployee(leaderUsername, missing)}
+                    onClick={() => handleAddToolsToEmployee(leaderUsername, missing)}
                   >
                     Auto-add
                   </Button>
@@ -475,21 +537,21 @@ export const RulesTab: React.FC = () => {
         />
       )}
 
-      {missingDispatchSkills.length > 0 && (
+      {missingDispatchTools.length > 0 && (
         <Alert
           type="warning"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`${missingDispatchSkills.length} leader${
-            missingDispatchSkills.length > 1 ? 's' : ''
-          } missing dispatch skill assignment`}
+          message={`${missingDispatchTools.length} leader${
+            missingDispatchTools.length > 1 ? 's' : ''
+          } missing dispatch tool assignment`}
           description={
             <Space direction="vertical" size={6}>
               <Text type="secondary">
                 The fan-out tool lets a Leader dispatch multiple independent sub-tasks in one call. Add it to the
-                Leader&apos;s skills to enable the new multi-agent flow.
+                Leader&apos;s tools to enable the new multi-agent flow.
               </Text>
-              {missingDispatchSkills.map(({ leaderUsername, toolName, count }) => (
+              {missingDispatchTools.map(({ leaderUsername, toolName, count }) => (
                 <Space key={leaderUsername} size={8} wrap>
                   <Tag color="blue">{employeeMap.get(leaderUsername) || leaderUsername}</Tag>
                   <Text type="secondary">
@@ -500,7 +562,7 @@ export const RulesTab: React.FC = () => {
                     type="link"
                     size="small"
                     icon={<ThunderboltOutlined />}
-                    onClick={() => handleAutoAssignDispatchSkill(leaderUsername)}
+                    onClick={() => handleAutoAssignDispatchTool(leaderUsername)}
                   >
                     Auto-add
                   </Button>
@@ -524,7 +586,7 @@ export const RulesTab: React.FC = () => {
                   <Tag color="green">{employeeMap.get(sub) || sub}</Tag>
                   has multiple leaders ({leaders.map((l) => employeeMap.get(l) || l).join(', ')}). The legacy alias is
                   dropped to avoid ambiguity — leaders must use <Text code>delegate_&lt;leader&gt;_to_&lt;sub&gt;</Text>{' '}
-                  in their skills.
+                  in their tools.
                 </Text>
               ))}
             </Space>
@@ -550,7 +612,7 @@ export const RulesTab: React.FC = () => {
                   <Text type="secondary">
                     {group.items.length} sub-agent{group.items.length > 1 ? 's' : ''}
                   </Text>
-                  {missingDispatchSkills.some((item) => item.leaderUsername === group.leaderUsername) && (
+                  {missingDispatchTools.some((item) => item.leaderUsername === group.leaderUsername) && (
                     <Tag color="warning">Dispatch missing</Tag>
                   )}
                 </Space>
@@ -563,6 +625,7 @@ export const RulesTab: React.FC = () => {
                   columns={columns}
                   pagination={false}
                   size="middle"
+                  scroll={{ x: 'max-content' }}
                 />
               ),
             }))}
@@ -575,6 +638,7 @@ export const RulesTab: React.FC = () => {
             columns={columns}
             pagination={false}
             size="middle"
+            scroll={{ x: 'max-content' }}
             locale={{ emptyText: <Empty description="No orchestration rules yet" /> }}
           />
         )}

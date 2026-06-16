@@ -2,6 +2,16 @@ import { AgentLoopPlanStepInput } from './AgentLoopService';
 
 import { normalizeStepType, normalizePlanKey, asArray, asObject } from '../utils/ctx-utils';
 
+/**
+ * Deterministic, template-based plan builder. This service does NOT call an LLM:
+ * it either passes through a caller-provided plan or emits a fixed
+ * prepare → (delegate|execute) → verify skeleton.
+ *
+ * The run's `plannerModel` field is metadata only (records which model an
+ * upstream caller used to author a provided plan); it does not drive any
+ * generation here. If LLM-authored planning is added later, it belongs in a
+ * separate path — keep this builder deterministic so it stays test-stable.
+ */
 export class AgentPlannerService {
   buildPlan(
     goal: string,

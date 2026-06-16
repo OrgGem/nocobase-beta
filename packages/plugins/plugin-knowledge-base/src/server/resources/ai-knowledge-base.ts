@@ -13,10 +13,9 @@ import {
   buildAccessibleKnowledgeBaseFilter,
   canManageKnowledgeBase,
   canReadKnowledgeBase,
-  getAuthUserId,
-  getCurrentRoles,
-  isAdminRole,
+  normalizeAgents,
   normalizeRoles,
+  resolveAccessContext,
 } from '../utils/access';
 
 /**
@@ -29,6 +28,7 @@ function getPlugin(ctx: Context): PluginKnowledgeBaseServer {
 
 const SUPPORTED_KNOWLEDGE_BASE_TYPES = new Set(['LOCAL', 'READONLY', 'EXTERNAL', 'EXTERNAL_RAG']);
 const SUPPORTED_ACCESS_LEVELS = new Set(['BASIC', 'SHARED', 'PUBLIC']);
+const SUPPORTED_AGENT_ACCESS = new Set(['inherit', 'explicit', 'none']);
 const LEGACY_KNOWLEDGE_BASE_FIELDS = ['embed' + 'ModelId', 'embed' + 'Mode'];
 
 function normalizeKnowledgeBaseValues(ctx: Context, values: any, existing?: any) {
@@ -41,9 +41,15 @@ function normalizeKnowledgeBaseValues(ctx: Context, values: any, existing?: any)
   if (values.accessLevel && !SUPPORTED_ACCESS_LEVELS.has(values.accessLevel)) {
     ctx.throw(400, `Unsupported knowledge base access level "${values.accessLevel}"`);
   }
+  if (values.agentAccess && !SUPPORTED_AGENT_ACCESS.has(values.agentAccess)) {
+    ctx.throw(400, `Unsupported knowledge base agent access "${values.agentAccess}"`);
+  }
 
   if (values.allowedRoles !== undefined) {
     values.allowedRoles = normalizeRoles(values.allowedRoles);
+  }
+  if (values.allowedAgents !== undefined) {
+    values.allowedAgents = normalizeAgents(values.allowedAgents);
   }
 
   // SHARED KBs use one role list for read/use/manage. Accept uploadRoles only
@@ -60,20 +66,14 @@ function normalizeKnowledgeBaseValues(ctx: Context, values: any, existing?: any)
   if (effective.accessLevel === 'SHARED' && normalizeRoles(effective.allowedRoles).length === 0) {
     ctx.throw(400, 'allowedRoles is required for role-based knowledge bases');
   }
-}
-
-/**
- * Permission check helper for KB ownership/role access.
- */
-async function checkKBPermission(ctx: Context, filterByTk: string, _action: 'update' | 'destroy'): Promise<boolean> {
-  const repo = ctx.db.getRepository('aiKnowledgeBases');
-  const record = await repo.findOne({ filterByTk });
-
-  if (!record) {
-    return true; // Let the action handle not-found naturally
+  // explicit agent access needs at least one grant (named agent or listed role)
+  if (
+    effective.agentAccess === 'explicit' &&
+    normalizeAgents(effective.allowedAgents).length === 0 &&
+    normalizeRoles(effective.allowedRoles).length === 0
+  ) {
+    ctx.throw(400, 'allowedAgents or allowedRoles is required when agentAccess is "explicit"');
   }
-
-  return canManageKnowledgeBase(ctx, record.toJSON());
 }
 
 export default {
@@ -84,22 +84,42 @@ export default {
       const { filter = {}, fields, sort, page, pageSize } = ctx.action.params;
 
       // Apply permission-based filtering
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
-      const effectiveFilter = isAdmin
+      const access = await resolveAccessContext(ctx, ctx.db);
+      const effectiveFilter = access.isAdmin
         ? filter
         : {
-            $and: [{ ...filter }, buildAccessibleKnowledgeBaseFilter(ctx)],
+            $and: [{ ...filter }, buildAccessibleKnowledgeBaseFilter(access)],
           };
 
-      ctx.body = await repo.find({
+      // Intercept 'key' field request since it is virtual and not in the DB
+      let queryFields = fields;
+      if (Array.isArray(fields)) {
+        if (fields.includes('key')) {
+          queryFields = fields.filter((f) => f !== 'key');
+          if (!queryFields.includes('id')) {
+            queryFields.push('id');
+          }
+        }
+      }
+
+      const records = await repo.find({
         filter: effectiveFilter,
-        fields,
+        fields: queryFields,
         sort: sort ?? ['-createdAt'],
         limit: pageSize,
         offset: page ? (page - 1) * (pageSize || 20) : 0,
         appends: ['vectorStore'],
       });
+
+      if (Array.isArray(records)) {
+        ctx.body = records.map((record) => {
+          const data = record.toJSON ? record.toJSON() : record;
+          data.key = String(data.id);
+          return data;
+        });
+      } else {
+        ctx.body = records;
+      }
 
       await next();
     },
@@ -119,12 +139,15 @@ export default {
         return;
       }
 
-      if (!canReadKnowledgeBase(ctx, record.toJSON())) {
+      const access = await resolveAccessContext(ctx, ctx.db);
+      if (!canReadKnowledgeBase(access, record.toJSON())) {
         ctx.throw(403, 'Access denied');
         return;
       }
 
-      ctx.body = record;
+      const data = record.toJSON ? record.toJSON() : record;
+      data.key = String(data.id);
+      ctx.body = data;
       await next();
     },
 
@@ -132,23 +155,24 @@ export default {
       const rawValues = ctx.action.params.values || {};
       const values = rawValues.values || rawValues;
       const repo = ctx.db.getRepository('aiKnowledgeBases');
-      const userId = getAuthUserId(ctx);
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
+      const access = await resolveAccessContext(ctx, ctx.db);
 
-      if (!isAdmin) {
+      if (!access.isAdmin) {
         if (values.accessLevel && values.accessLevel !== 'BASIC') {
           ctx.throw(403, 'Only administrators can create shared or public knowledge bases');
           return;
         }
         values.accessLevel = 'BASIC';
         delete values.allowedRoles;
+        // Non-admins cannot configure agent exposure policy.
+        delete values.agentAccess;
+        delete values.allowedAgents;
       }
       normalizeKnowledgeBaseValues(ctx, values);
 
       // For BASIC KBs, automatically set the owner.
       if (values.accessLevel === 'BASIC') {
-        values.ownerId = userId;
+        values.ownerId = access.userId;
       }
 
       const record = await repo.create({ values });
@@ -164,7 +188,9 @@ export default {
         });
       }
 
-      ctx.body = record;
+      const data = record.toJSON ? record.toJSON() : record;
+      data.key = String(data.id);
+      ctx.body = data;
       await next();
     },
 
@@ -174,28 +200,40 @@ export default {
       const values = rawValues.values || rawValues;
       const repo = ctx.db.getRepository('aiKnowledgeBases');
 
-      const allowed = await checkKBPermission(ctx, filterByTk, 'update');
-      if (!allowed) {
+      const access = await resolveAccessContext(ctx, ctx.db);
+      const existing = await repo.findOne({ filterByTk });
+      if (!existing) {
+        ctx.throw(404, 'Knowledge base not found');
+        return;
+      }
+      if (!canManageKnowledgeBase(access, existing.toJSON())) {
         ctx.throw(403, 'You do not have permission to update this knowledge base');
         return;
       }
 
-      const roles = getCurrentRoles(ctx);
-      const isAdmin = isAdminRole(roles);
-      const existing = await repo.findOne({ filterByTk });
       normalizeKnowledgeBaseValues(ctx, values, existing);
-      if (!isAdmin) {
+      if (!access.isAdmin) {
         // Members may manage KB content/settings, but changing the row-level
-        // access policy remains an admin concern.
+        // access policy (user or agent) remains an admin concern.
         delete values.ownerId;
         delete values.allowedRoles;
         delete values.accessLevel;
+        delete values.agentAccess;
+        delete values.allowedAgents;
       }
 
-      ctx.body = await repo.update({
+      const updated = await repo.update({
         filterByTk,
         values,
       });
+
+      if (updated) {
+        const data = updated.toJSON ? updated.toJSON() : updated;
+        data.key = String(data.id);
+        ctx.body = data;
+      } else {
+        ctx.body = updated;
+      }
 
       await next();
     },
@@ -204,8 +242,9 @@ export default {
       const { filterByTk } = ctx.action.params;
       const repo = ctx.db.getRepository('aiKnowledgeBases');
 
-      const allowed = await checkKBPermission(ctx, filterByTk, 'destroy');
-      if (!allowed) {
+      const access = await resolveAccessContext(ctx, ctx.db);
+      const existing = await repo.findOne({ filterByTk });
+      if (existing && !canManageKnowledgeBase(access, existing.toJSON())) {
         ctx.throw(403, 'You do not have permission to delete this knowledge base');
         return;
       }

@@ -82,6 +82,12 @@ const accessLevelOptions = [
   { label: 'Common knowledge', value: 'PUBLIC' },
 ];
 
+const agentAccessOptions = [
+  { label: 'Inherit from user', value: 'inherit' },
+  { label: 'Explicit agents only', value: 'explicit' },
+  { label: 'No agent access', value: 'none' },
+];
+
 const kbTypeConfig: Record<string, { color: string; label: string }> = {
   LOCAL: { color: 'blue', label: 'Local' },
   READONLY: { color: 'default', label: 'Readonly' },
@@ -135,6 +141,7 @@ export const KnowledgeBases: React.FC = () => {
   const [vectorStores, setVectorStores] = useState<any[]>([]);
   const [llmServices, setLlmServices] = useState<any[]>([]);
   const [roleOptions, setRoleOptions] = useState<any[]>([]);
+  const [agentOptions, setAgentOptions] = useState<any[]>([]);
 
   // Forms
   const [textModalVisible, setTextModalVisible] = useState(false);
@@ -188,6 +195,17 @@ export const KnowledgeBases: React.FC = () => {
       setLlmServices(llmRes?.data?.data ?? []);
       const roleRes = await api.request({ url: 'roles:list' });
       setRoleOptions((roleRes?.data?.data ?? []).map((r: any) => ({ label: r.title || r.name, value: r.name })));
+      try {
+        const agentRes = await api.request({ url: 'aiEmployees:list', params: { filter: { enabled: true } } });
+        setAgentOptions(
+          (agentRes?.data?.data ?? []).map((a: any) => ({
+            label: a.nickname ? `${a.nickname} (${a.username})` : a.username,
+            value: a.username,
+          })),
+        );
+      } catch {
+        // ignore — aiEmployees may be unavailable if plugin-ai is not loaded
+      }
     } catch {
       // ignore
     }
@@ -569,22 +587,28 @@ export const KnowledgeBases: React.FC = () => {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    <div style={{ 
-                      width: 36, 
-                      height: 36, 
-                      borderRadius: '8px', 
-                      background: isActive ? '#1890ff' : '#fafafa', 
-                      display: 'flex', 
-                      alignItems: 'center', 
-                      justifyContent: 'center',
-                      color: isActive ? '#fff' : '#8c8c8c',
-                      fontSize: 18,
-                      transition: 'all 0.3s ease'
-                    }}>
+                    <div
+                      style={{
+                        width: 36,
+                        height: 36,
+                        borderRadius: '8px',
+                        background: isActive ? '#1890ff' : '#fafafa',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: isActive ? '#fff' : '#8c8c8c',
+                        fontSize: 18,
+                        transition: 'all 0.3s ease',
+                      }}
+                    >
                       {isActive ? <BookOutlined /> : accessIcons[kb.accessLevel || 'PUBLIC']}
                     </div>
                     <div style={{ flex: 1, overflow: 'hidden' }}>
-                      <Text strong style={{ fontSize: 15, display: 'block', color: isActive ? '#1890ff' : 'inherit' }} ellipsis>
+                      <Text
+                        strong
+                        style={{ fontSize: 15, display: 'block', color: isActive ? '#1890ff' : 'inherit' }}
+                        ellipsis
+                      >
                         {kb.name}
                       </Text>
                       <Text type="secondary" style={{ fontSize: 12 }}>
@@ -592,13 +616,23 @@ export const KnowledgeBases: React.FC = () => {
                       </Text>
                     </div>
                   </div>
-                  <div style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div
+                    style={{ marginTop: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                  >
                     <Space size={4} wrap>
                       <Tag color={typeConfig.color} style={{ borderRadius: 4, margin: 0 }}>
                         {typeConfig.label}
                       </Tag>
-                      {processingCount > 0 && <Tag color="processing" style={{ borderRadius: 4, margin: 0 }}>{processingCount} processing</Tag>}
-                      {failedCount > 0 && <Tag color="error" style={{ borderRadius: 4, margin: 0 }}>{failedCount} err</Tag>}
+                      {processingCount > 0 && (
+                        <Tag color="processing" style={{ borderRadius: 4, margin: 0 }}>
+                          {processingCount} processing
+                        </Tag>
+                      )}
+                      {failedCount > 0 && (
+                        <Tag color="error" style={{ borderRadius: 4, margin: 0 }}>
+                          {failedCount} err
+                        </Tag>
+                      )}
                     </Space>
                   </div>
                 </div>
@@ -705,58 +739,70 @@ export const KnowledgeBases: React.FC = () => {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <Row gutter={24} style={{ marginBottom: 24 }}>
-            <Col xs={24} md={16}>
-              <Card 
-                hoverable 
-                bodyStyle={{ padding: 0 }} 
-                style={{ height: '100%', borderRadius: 12, overflow: 'hidden', border: '1px solid #e8e8e8' }}
+          <Col xs={24} md={16}>
+            <Card
+              hoverable
+              bodyStyle={{ padding: 0 }}
+              style={{ height: '100%', borderRadius: 12, overflow: 'hidden', border: '1px solid #e8e8e8' }}
+            >
+              <Dragger
+                name="file"
+                multiple
+                showUploadList={false}
+                accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
+                customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
+                onChange={handleUploadChange}
+                style={{ padding: '32px 0', background: '#fafafa', border: 'none' }}
               >
-                <Dragger
-                  name="file"
-                  multiple
-                  showUploadList={false}
-                  accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
-                  customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
-                  onChange={handleUploadChange}
-                  style={{ padding: '32px 0', background: '#fafafa', border: 'none' }}
-                >
-                  <p className="ant-upload-drag-icon">
-                    <InboxOutlined style={{ color: '#1890ff', fontSize: 48 }} />
-                  </p>
-                  <Title level={5} style={{ margin: '16px 0 8px' }}>
-                    Click or drag file to this area to upload
-                  </Title>
-                  <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-                    Support for single or bulk upload. Select multiple documents to populate your knowledge base quickly.
-                  </Text>
-                  <Button type="primary" shape="round" icon={<UploadOutlined />}>
-                    Select Files
-                  </Button>
-                </Dragger>
-              </Card>
-            </Col>
+                <p className="ant-upload-drag-icon">
+                  <InboxOutlined style={{ color: '#1890ff', fontSize: 48 }} />
+                </p>
+                <Title level={5} style={{ margin: '16px 0 8px' }}>
+                  Click or drag file to this area to upload
+                </Title>
+                <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+                  Support for single or bulk upload. Select multiple documents to populate your knowledge base quickly.
+                </Text>
+                <Button type="primary" shape="round" icon={<UploadOutlined />}>
+                  Select Files
+                </Button>
+              </Dragger>
+            </Card>
+          </Col>
 
-            <Col xs={24} md={8}>
-              <Card 
-                hoverable 
-                style={{ height: '100%', borderRadius: 12, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', border: '1px solid #e8e8e8', background: '#fafafa', cursor: 'pointer' }}
-                onClick={() => setTextModalVisible(true)}
-              >
-                <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                  <FileTextOutlined style={{ fontSize: 48, color: '#52c41a', marginBottom: 16 }} />
-                  <Title level={5} style={{ margin: '0 0 8px' }}>Paste Plain Text</Title>
-                  <Text type="secondary" style={{ textAlign: 'center', marginBottom: 16, display: 'block' }}>
-                    Directly paste your text content to create a document.
-                  </Text>
-                  <Button shape="round" icon={<PlusOutlined />}>
-                    Paste Text
-                  </Button>
-                </div>
-              </Card>
-            </Col>
+          <Col xs={24} md={8}>
+            <Card
+              hoverable
+              style={{
+                height: '100%',
+                borderRadius: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                border: '1px solid #e8e8e8',
+                background: '#fafafa',
+                cursor: 'pointer',
+              }}
+              onClick={() => setTextModalVisible(true)}
+            >
+              <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                <FileTextOutlined style={{ fontSize: 48, color: '#52c41a', marginBottom: 16 }} />
+                <Title level={5} style={{ margin: '0 0 8px' }}>
+                  Paste Plain Text
+                </Title>
+                <Text type="secondary" style={{ textAlign: 'center', marginBottom: 16, display: 'block' }}>
+                  Directly paste your text content to create a document.
+                </Text>
+                <Button shape="round" icon={<PlusOutlined />}>
+                  Paste Text
+                </Button>
+              </div>
+            </Card>
+          </Col>
         </Row>
 
-        <Card 
+        <Card
           title="Document List"
           style={{ borderRadius: 12, border: '1px solid #e8e8e8', flex: 1, display: 'flex', flexDirection: 'column' }}
           headStyle={{ borderBottom: '1px solid #f0f0f0', padding: '0 24px' }}
@@ -778,11 +824,21 @@ export const KnowledgeBases: React.FC = () => {
         >
           <div style={{ marginBottom: 16 }}>
             <Space wrap size={[0, 8]}>
-              <Tag icon={<FileTextOutlined />} color="blue" style={{ borderRadius: 4 }}>{documentStats.total} total</Tag>
-              <Tag icon={<CheckCircleOutlined />} color="success" style={{ borderRadius: 4 }}>{documentStats.success} ready</Tag>
-              <Tag icon={<SyncOutlined />} color="processing" style={{ borderRadius: 4 }}>{documentStats.processing} processing</Tag>
-              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 4 }}>{documentStats.pending || 0} pending</Tag>
-              <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 4 }}>{documentStats.failed} failed</Tag>
+              <Tag icon={<FileTextOutlined />} color="blue" style={{ borderRadius: 4 }}>
+                {documentStats.total} total
+              </Tag>
+              <Tag icon={<CheckCircleOutlined />} color="success" style={{ borderRadius: 4 }}>
+                {documentStats.success} ready
+              </Tag>
+              <Tag icon={<SyncOutlined />} color="processing" style={{ borderRadius: 4 }}>
+                {documentStats.processing} processing
+              </Tag>
+              <Tag icon={<ClockCircleOutlined />} color="warning" style={{ borderRadius: 4 }}>
+                {documentStats.pending || 0} pending
+              </Tag>
+              <Tag icon={<CloseCircleOutlined />} color="error" style={{ borderRadius: 4 }}>
+                {documentStats.failed} failed
+              </Tag>
             </Space>
           </div>
           <Table
@@ -898,6 +954,33 @@ export const KnowledgeBases: React.FC = () => {
         </Row>
       )}
 
+      <Row gutter={16}>
+        <Col span={12}>
+          <Form.Item
+            name="agentAccess"
+            label="Agent access"
+            initialValue="inherit"
+            tooltip="Controls how AI Employees may reach this KB. Inherit: rides on the triggering user's access. Explicit: only named agents (or agents holding an allowed role). None: no agent access."
+          >
+            <Select options={agentAccessOptions} />
+          </Form.Item>
+        </Col>
+        <Col span={12}>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.agentAccess !== cur.agentAccess}>
+            {({ getFieldValue }) =>
+              getFieldValue('agentAccess') === 'explicit' ? (
+                <Form.Item
+                  name="allowedAgents"
+                  label="Allowed agents"
+                  tooltip="AI Employees explicitly granted access. Agents holding a role in 'Allowed roles' also pass."
+                >
+                  <Select mode="multiple" options={agentOptions} placeholder="Select AI Employees" />
+                </Form.Item>
+              ) : null
+            }
+          </Form.Item>
+        </Col>
+      </Row>
 
       {currentType !== 'EXTERNAL_RAG' ? (
         <Form.Item
@@ -1020,42 +1103,74 @@ export const KnowledgeBases: React.FC = () => {
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '24px' }}>
         {selectedKB ? (
-          <div style={{ background: '#fff', borderRadius: 12, display: 'flex', flexDirection: 'column', height: '100%', boxShadow: '0 4px 16px rgba(0,0,0,0.04)', border: '1px solid #f0f0f0' }}>
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.04)',
+              border: '1px solid #f0f0f0',
+            }}
+          >
             <div style={{ padding: '24px 32px 16px', borderBottom: '1px solid #f0f0f0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}
+              >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <div style={{ 
-                    width: 56, 
-                    height: 56, 
-                    borderRadius: '12px', 
-                    background: '#e6f4ff', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    color: '#1890ff',
-                    fontSize: 28
-                  }}>
+                  <div
+                    style={{
+                      width: 56,
+                      height: 56,
+                      borderRadius: '12px',
+                      background: '#e6f4ff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#1890ff',
+                      fontSize: 28,
+                    }}
+                  >
                     <BookOutlined />
                   </div>
                   <div>
-                    <Title level={3} style={{ margin: 0, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <Title
+                      level={3}
+                      style={{ margin: 0, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}
+                    >
                       {selectedKB.name}
                       <Space size={4}>
-                        <Tag color={selectedTypeConfig.color} style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}>{selectedTypeConfig.label}</Tag>
-                        <Tag color={accessColors[selectedKB.accessLevel || 'PUBLIC']} style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}>
+                        <Tag
+                          color={selectedTypeConfig.color}
+                          style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
+                        >
+                          {selectedTypeConfig.label}
+                        </Tag>
+                        <Tag
+                          color={accessColors[selectedKB.accessLevel || 'PUBLIC']}
+                          style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
+                        >
                           {selectedKB.accessLevel || 'PUBLIC'}
                         </Tag>
-                        <Tag color={selectedKB.enabled === false ? 'default' : 'success'} style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}>
+                        <Tag
+                          color={selectedKB.enabled === false ? 'default' : 'success'}
+                          style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
+                        >
                           {selectedKB.enabled === false ? 'Disabled' : 'Active'}
                         </Tag>
                       </Space>
                     </Title>
                     <Text type="secondary" style={{ fontSize: 14 }}>
-                      {selectedKB.description || 'Manage documents, search content, and configure settings for this knowledge base.'}
+                      {selectedKB.description ||
+                        'Manage documents, search content, and configure settings for this knowledge base.'}
                     </Text>
                   </div>
                 </div>
-                <Popconfirm title="Are you sure to delete this knowledge base? This action cannot be undone." onConfirm={() => handleDeleteKB(selectedKB.id)}>
+                <Popconfirm
+                  title="Are you sure to delete this knowledge base? This action cannot be undone."
+                  onConfirm={() => handleDeleteKB(selectedKB.id)}
+                >
                   <Button danger shape="round" icon={<DeleteOutlined />}>
                     Delete
                   </Button>
@@ -1076,9 +1191,7 @@ export const KnowledgeBases: React.FC = () => {
                     </span>
                   ),
                   children: (
-                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>
-                      {renderDocumentsTab()}
-                    </div>
+                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>{renderDocumentsTab()}</div>
                   ),
                 },
                 {
@@ -1116,16 +1229,34 @@ export const KnowledgeBases: React.FC = () => {
             />
           </div>
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', borderRadius: 12, boxShadow: '0 4px 16px rgba(0,0,0,0.04)', border: '1px solid #f0f0f0' }}>
-            <Empty 
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: '#fff',
+              borderRadius: 12,
+              boxShadow: '0 4px 16px rgba(0,0,0,0.04)',
+              border: '1px solid #f0f0f0',
+            }}
+          >
+            <Empty
               image={Empty.PRESENTED_IMAGE_SIMPLE}
               description={
                 <span style={{ color: '#8c8c8c', fontSize: 16 }}>
                   Select a knowledge base from the sidebar or create a new one
                 </span>
-              } 
+              }
             >
-              <Button type="primary" size="large" shape="round" icon={<PlusOutlined />} onClick={handleCreate} style={{ marginTop: 16 }}>
+              <Button
+                type="primary"
+                size="large"
+                shape="round"
+                icon={<PlusOutlined />}
+                onClick={handleCreate}
+                style={{ marginTop: 16 }}
+              >
                 Create Knowledge Base
               </Button>
             </Empty>

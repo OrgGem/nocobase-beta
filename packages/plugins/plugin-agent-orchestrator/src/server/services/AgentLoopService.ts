@@ -63,8 +63,8 @@ export class AgentLoopService {
     this.plannerService = new AgentPlannerService();
     this.validator = new AgentPlanValidator();
     this.repository = new AgentLoopRepository(plugin);
-    this.harness = new AgentHarness(plugin, this.registryService);
     const tokenTracker = new TokenTracker(plugin);
+    this.harness = new AgentHarness(plugin, this.registryService, tokenTracker);
     this.controller = new AgentLoopController(
       this.registryService,
       this.plannerService,

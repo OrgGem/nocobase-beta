@@ -7,10 +7,13 @@ import { ExecutionSpanService, setOrchestratorTraceContext } from './ExecutionSp
 import { AgentRegistryService } from './AgentRegistryService';
 import { TokenTracker, extractTokenUsage } from './TokenTracker';
 import { ContextAggregator } from './ContextAggregator';
-import { getCircuitBreaker } from './CircuitBreaker';
+import { getCircuitBreaker, subAgentCircuitKey } from './CircuitBreaker';
 import { toPlain, asObject, trimText, nowIso } from '../utils/ctx-utils';
+import { normalizeAIEmployeeSkillSettings } from '../utils/skill-settings';
 import { logDelegation as sharedLogDelegation } from '../utils/logging';
+import { getAIToolsManager, tryGetAIToolsManager } from '../utils/ai-manager';
 import { TraceEvent } from '../types';
+import type { ToolsRuntime } from '@nocobase/ai';
 
 const ORCHESTRATOR_DEPTH_KEY = '__orchestratorDepth';
 const ORCHESTRATOR_PATH_KEY = '__orchestratorPath';
@@ -31,9 +34,10 @@ export class AgentHarness {
   constructor(
     private readonly plugin: any,
     private readonly registryService: AgentRegistryService,
+    tokenTracker?: TokenTracker,
   ) {
     this.spanService = new ExecutionSpanService(plugin);
-    this.tokenTracker = new TokenTracker(plugin);
+    this.tokenTracker = tokenTracker || new TokenTracker(plugin);
     this.contextAggregator = new ContextAggregator(plugin);
   }
 
@@ -112,10 +116,11 @@ export class AgentHarness {
     );
 
     const circuitBreaker = getCircuitBreaker({ appLog: this.app });
+    const circuitKey = subAgentCircuitKey(run.leaderUsername, target);
 
     // ── Circuit breaker check before invoking sub-agent ──────────────
-    if (!circuitBreaker.isAllowed(target)) {
-      const state = circuitBreaker.getState(target);
+    if (!circuitBreaker.isAllowed(circuitKey)) {
+      const state = circuitBreaker.getState(circuitKey);
       throw new Error(
         `Sub-agent "${target}" circuit is open (${state?.failures || 0} failures). Retry after the recovery timeout.`,
       );
@@ -123,12 +128,12 @@ export class AgentHarness {
 
     try {
       const result = await this.invokeNamedTool(run, step, toolName, { task, context }, settings, options);
-      circuitBreaker.recordSuccess(target);
+      circuitBreaker.recordSuccess(circuitKey);
       return result;
     } catch (e: any) {
       // Don't count approval pauses as circuit failures
       if (e?.message !== 'requires_approval') {
-        circuitBreaker.recordFailure(target);
+        circuitBreaker.recordFailure(circuitKey);
       }
       throw e;
     }
@@ -157,7 +162,7 @@ export class AgentHarness {
       }
     }
 
-    const toolsManager = this.app?.aiManager?.toolsManager;
+    const toolsManager = tryGetAIToolsManager(this.app);
     const tool = await toolsManager?.getTools?.(toolName);
     if (!tool?.invoke) {
       throw new Error(`Tool "${toolName}" was not found or is missing standard invoke handler.`);
@@ -184,8 +189,18 @@ export class AgentHarness {
       ctx.state = { ...(ctx.state || {}), currentAIEmployee: run.leaderUsername };
     }
 
+    const previousRuntime = ctx.runtime;
+    const toolCallId = `agent-loop-${run.id}-${step.id}`;
+    const runtime: ToolsRuntime = {
+      toolCallId,
+      writer: (chunk: any) => {
+        this.app.log.trace(`[AgentHarness] Tool output:`, chunk);
+      },
+    };
+    ctx.runtime = runtime;
+
     try {
-      const result = await tool.invoke(ctx, args, `agent-loop-${run.id}-${step.id}`);
+      const result = await tool.invoke(ctx, args, runtime);
       if (result?.status === 'error') {
         throw new Error(result.content || `Tool "${toolName}" returned an error.`);
       }
@@ -195,6 +210,11 @@ export class AgentHarness {
         result,
       };
     } finally {
+      if (previousRuntime === undefined) {
+        delete ctx.runtime;
+      } else {
+        ctx.runtime = previousRuntime;
+      }
       if (previousEmployee === undefined) {
         delete ctx._currentAIEmployee;
       } else {
@@ -251,6 +271,7 @@ export class AgentHarness {
       agentLoopRunId,
       agentLoopStepId,
     } = options;
+    const effectiveRootRunId = rootRunId || `run_${Date.now()}`;
 
     const startTime = Date.now();
     const currentDepth = options.currentDepth ?? 0;
@@ -265,7 +286,7 @@ export class AgentHarness {
     ];
 
     const executionSpan = await this.spanService.create({
-      rootRunId: rootRunId || `run_${Date.now()}`,
+      rootRunId: effectiveRootRunId,
       parentSpanId,
       type: 'sub_agent',
       status: 'running',
@@ -323,24 +344,21 @@ export class AgentHarness {
       });
       const chatModel = provider.createModel();
 
-      const coreToolsManager = ctx.app.aiManager.toolsManager;
+      const coreToolsManager = getAIToolsManager(ctx.app);
       const allTools = await coreToolsManager.listTools();
 
-      const employeeSkills = (subAgentEmployee.skillSettings?.skills ?? [])
-        .map((s: any) =>
-          typeof s === 'string' ? { name: s, autoCall: false } : { name: s?.name, autoCall: s?.autoCall === true },
-        )
-        .filter((s: any) => Boolean(s.name));
-      const employeeSkillMap = new Map<string, any>(employeeSkills.map((s: any) => [s.name, s]));
+      const normalizedSkillSettings = normalizeAIEmployeeSkillSettings(subAgentEmployee.skillSettings).skillSettings;
+      const employeeTools = normalizedSkillSettings.tools.filter((tool) => Boolean(tool.name));
+      const employeeToolMap = new Map(employeeTools.map((tool) => [tool.name, tool]));
 
       const langchainTools: DynamicStructuredTool[] = [];
 
       for (const toolEntry of allTools) {
         const entryName = toolEntry.definition.name;
         if (!entryName) continue;
-        const employeeSkill = employeeSkillMap.get(entryName);
+        const employeeTool = employeeToolMap.get(entryName);
 
-        if (!employeeSkill || employeeSkill.autoCall !== true || toolEntry.defaultPermission !== 'ALLOW') {
+        if (!employeeTool || employeeTool.autoCall !== true || toolEntry.execution === 'frontend') {
           continue;
         }
 
@@ -362,7 +380,7 @@ export class AgentHarness {
               const toolStartedAt = Date.now();
               const isSkillHubTool = entryName === 'skill_hub_execute' || entryName.startsWith('skill_hub_');
               const toolSpan = await this.spanService.create({
-                rootRunId: rootRunId || `run_${Date.now()}`,
+                rootRunId: effectiveRootRunId,
                 parentSpanId: executionSpanId,
                 type: isSkillHubTool ? 'skill' : 'tool',
                 status: 'running',
@@ -381,7 +399,7 @@ export class AgentHarness {
               });
               const toolSpanId = toolSpan?.id ? String(toolSpan.id) : undefined;
               setOrchestratorTraceContext(invokeCtx, {
-                rootRunId,
+                rootRunId: effectiveRootRunId,
                 spanId: toolSpanId,
                 parentSpanId: executionSpanId,
                 toolCallId: `orch-${toolCallId}`,
@@ -400,8 +418,17 @@ export class AgentHarness {
                 args: toolArgs,
               });
 
+              const subToolCallId = `orch-${toolCallId}`;
+              const runtime: ToolsRuntime = {
+                toolCallId: subToolCallId,
+                writer: (chunk: any) => {
+                  this.app.log.trace(`[AgentHarness] Tool output:`, chunk);
+                },
+              };
+              invokeCtx.runtime = runtime;
+
               try {
-                const res = await toolEntry.invoke(invokeCtx, toolArgs, `orch-${toolCallId}`);
+                const res = await toolEntry.invoke(invokeCtx, toolArgs, runtime);
                 const output = trimText(res?.content ?? res?.result ?? res, 50000);
                 trace.push({
                   type: 'tool_result',
@@ -461,7 +488,7 @@ export class AgentHarness {
           const sessionId =
             ctx.action?.params?.values?.sessionId || ctx.action?.params?.sessionId || ctx.state?.sessionId;
           const contextSummary = await kbPlugin.sessionContext.buildSummary(
-            { rootRunId, ...(sessionId ? { sessionId } : {}) },
+            { rootRunId: effectiveRootRunId, ...(sessionId ? { sessionId } : {}) },
             6000,
           );
           if (contextSummary) {

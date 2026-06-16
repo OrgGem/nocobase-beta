@@ -100,6 +100,16 @@ export class CircuitBreakerRegistry {
   }
 }
 
+/**
+ * Build the circuit key for a sub-agent. Keying by `${leader}::${target}` keeps
+ * one leader's failures from opening the circuit for the same sub-agent under a
+ * different leader — their delegations are independent code paths. Falls back to
+ * the bare target when no leader is known.
+ */
+export function subAgentCircuitKey(leaderUsername: string | undefined, target: string): string {
+  return leaderUsername ? `${leaderUsername}::${target}` : target;
+}
+
 // Singleton shared across the plugin
 let globalInstance: CircuitBreakerRegistry | null = null;
 
