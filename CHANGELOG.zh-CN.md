@@ -5,6 +5,96 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/),
 并且本项目遵循 [语义化版本](https://semver.org/spec/v2.0.0.html)。
 
+## [v2.1.5](https://github.com/nocobase/nocobase/compare/v2.1.4...v2.1.5) - 2026-06-15
+
+### 🎉 新特性
+
+- **[工作流：邮件发送节点]** 为工作流邮件节点新增附件发送能力。 ([#9724](https://github.com/nocobase/nocobase/pull/9724)) by @mytharcher
+
+### 🚀 优化
+
+- **[client-v2]** 表单子表格关系字段列数据范围支持当前项变量。 ([#9444](https://github.com/nocobase/nocobase/pull/9444)) by @gchust
+
+- **[undefined]** 将版本控制插件的中文文档名称统一为「版本控制」。 ([#9776](https://github.com/nocobase/nocobase/pull/9776)) by @cgyrock
+
+- **[文件管理器]** 为文件管理器的 PDF 预览增加可选择文本支持，适用于包含内嵌文本的 PDF。 ([#9781](https://github.com/nocobase/nocobase/pull/9781)) by @mytharcher
+
+- **[操作：批量编辑]** 优化 v2 操作插件加载方式，并保持已迁移操作按钮的顺序稳定。 ([#9778](https://github.com/nocobase/nocobase/pull/9778)) by @katherinehhh
+
+- **[版本控制]** 将版本控制插件的中文显示名称改为「版本控制」。 by @cgyrock
+
+### 🐛 修复
+
+- **[cli-v1]** 修复 create-nocobase-app 创建的项目从 2.0 升级到 2.1 运行 yarn dev 报错的问题。 ([#9775](https://github.com/nocobase/nocobase/pull/9775)) by @Molunerfinn
+
+- **[client-v2]** 修复迁移进度未显示专用进度视图的问题 ([#9761](https://github.com/nocobase/nocobase/pull/9761)) by @2013xile
+
+- **[flow-engine]** 修复 v2 单行文本和多行文本字段中的越南语和中文输入法输入问题。 ([#9764](https://github.com/nocobase/nocobase/pull/9764)) by @katherinehhh
+
+- **[server]** 修复 `pm:enable` 中不安全插件名处理，避免插件解析过程导致本地文件包含风险。 ([#9701](https://github.com/nocobase/nocobase/pull/9701)) by @mytharcher
+
+- **[文件管理器]** 修复 pdf.js worker 模块加载异常导致 PDF 预览失败的问题。 ([#9779](https://github.com/nocobase/nocobase/pull/9779)) by @mytharcher
+
+- **[区块：看板]** 修复非编辑态打开日历、甘特图和看板区块时意外持久化隐藏弹窗操作并重复发送删除请求的问题。 ([#9772](https://github.com/nocobase/nocobase/pull/9772)) by @jiannx
+
+- **[操作：导出记录 Pro]** 改进 v2 导入/导出 Pro 的处理模式设置和提示说明。 by @katherinehhh
+
+- **[迁移管理]** 修复导入大型迁移数据文件时可能失败的问题 by @2013xile
+
+- **[模板打印]** 在模板打印开始前拒绝不支持的模板文件类型 by @2013xile
+
+## [v2.1.4](https://github.com/nocobase/nocobase/compare/v2.1.3...v2.1.4) - 2026-06-13
+
+### 🚀 优化
+
+- **[工作流]** 优化工作流元数据编辑体验，支持在详情弹窗中编辑描述，并在复制工作流时默认填充源工作流元数据。 ([#9766](https://github.com/nocobase/nocobase/pull/9766)) by @mytharcher
+
+### 🐛 修复
+
+- **[操作：导入记录]** 导入上传文件改为落盘存储，降低大数据量导入时的内存压力。 ([#9739](https://github.com/nocobase/nocobase/pull/9739)) by @mytharcher
+
+- **[备份管理器]** 修复备份还原时可能接受不安全 PostgreSQL schema 名称的安全问题 ([#9758](https://github.com/nocobase/nocobase/pull/9758)) by @2013xile
+
+- **[工作流]**
+  - 修复工作流超时处理，使已中止的执行及其待处理任务能够原子更新。 ([#9768](https://github.com/nocobase/nocobase/pull/9768)) by @mytharcher
+
+  - 修复工作流节点变更后工作流最后更新人未同步更新的问题。 ([#9769](https://github.com/nocobase/nocobase/pull/9769)) by @mytharcher
+
+- **[操作：导入记录 Pro]** 避免 Pro 导入在创建异步任务前于请求节点解析大文件。 by @mytharcher
+
+- **[版本管理]** 调整版本管理顶部快捷入口的位置，使其在旧版和 v2 管理布局中都显示在 UI 编辑器旁边。 by @cgyrock
+
+## [v2.1.3](https://github.com/nocobase/nocobase/compare/v2.1.2...v2.1.3) - 2026-06-12
+
+### 🚀 优化
+
+- **[cli]**
+  - 优化不同格式的版本号兼容判断 ([#9763](https://github.com/nocobase/nocobase/pull/9763)) by @chenos
+
+  - skills 支持指定版本更新 ([#9760](https://github.com/nocobase/nocobase/pull/9760)) by @chenos
+
+### 🐛 修复
+
+- **[client]** 修复水平子表单中字段过窄导致数据不显示的问题 ([#9755](https://github.com/nocobase/nocobase/pull/9755)) by @zhangzhonghe
+
+- **[数据源管理]**
+  - 修复 v1 外部数据源 Configure fields 页面反复重渲染导致字段编辑弹窗内容为空的问题。 ([#9759](https://github.com/nocobase/nocobase/pull/9759)) by @katherinehhh
+
+  - 修复 v1 数据源管理中删除当前集合分类后，All collections 标签页可能显示为空的问题。 ([#9757](https://github.com/nocobase/nocobase/pull/9757)) by @katherinehhh
+
+- **[异步任务管理器]** 修复异步任务 worker 日志中的请求 ID 错误问题 ([#9686](https://github.com/nocobase/nocobase/pull/9686)) by @2013xile
+
+- **[工作流：SQL 节点]** 修复部分 beta 版本用户跳过 SQL 工作流历史模板变量迁移的问题。 ([#9762](https://github.com/nocobase/nocobase/pull/9762)) by @mytharcher
+
+- **[AI 员工]**
+  - 修复工作流LLM节点消息配置丢失问题. ([#9743](https://github.com/nocobase/nocobase/pull/9743)) by @cgyrock
+
+  - 修复 AI 员工对话框粘贴的附件无法删除问题。 ([#9753](https://github.com/nocobase/nocobase/pull/9753)) by @cgyrock
+
+- **[区块：看板]** 修复日历等弹窗支持URL ([#9751](https://github.com/nocobase/nocobase/pull/9751)) by @jiannx
+
+- **[工作流：审批]** 修复 v2 审批表单中关联数据显示不出来的问题 by @zhangzhonghe
+
 ## [v2.1.2](https://github.com/nocobase/nocobase/compare/v2.1.1...v2.1.2) - 2026-06-11
 
 ### 🎉 新特性
@@ -1516,7 +1606,7 @@ AI 能力正式下沉至内核，成为 NocoBase 的一等公民，支持通过�
 
 参考文档：
 
-- [AI 员工](https://v2.docs.nocobase.com/cn/ai-employees)
+- [AI 员工](https://docs.nocobase.com/cn/ai-employees)
 
 ### 应用监管器
 
@@ -1534,7 +1624,7 @@ AI 能力正式下沉至内核，成为 NocoBase 的一等公民，支持通过�
 
 参考文档：
 
-- [多应用管理](https://v2.docs.nocobase.com/cn/multi-app/multi-app)
+- [多应用管理](https://docs.nocobase.com/cn/multi-app/multi-app)
 
 ### 工作流画布编排能力增强
 
@@ -1561,8 +1651,8 @@ AI 能力正式下沉至内核，成为 NocoBase 的一等公民，支持通过�
 
 参考文档：
 
-- [子表格（行内编辑）](https://v2.docs.nocobase.com/cn/interface-builder/fields/specific/sub-table)
-- [子表格（弹窗编辑）](https://v2.docs.nocobase.com/cn/interface-builder/fields/specific/sub-table-popup)
+- [子表格（行内编辑）](https://docs.nocobase.com/cn/interface-builder/fields/specific/sub-table)
+- [子表格（弹窗编辑）](https://docs.nocobase.com/cn/interface-builder/fields/specific/sub-table-popup)
 
 ### 字段赋值（新版）
 
@@ -1611,7 +1701,7 @@ event:
 
 参考文档：
 
-- [事件流](https://v2.docs.nocobase.com/cn/interface-builder/event-flow)
+- [事件流](https://docs.nocobase.com/cn/interface-builder/event-flow)
 
 ## 新增 2.0 适配
 
@@ -1621,7 +1711,7 @@ event:
 
 参考文档：
 
-- [批量编辑](https://v2.docs.nocobase.com/cn/interface-builder/actions/types/bulk-edit)
+- [批量编辑](https://docs.nocobase.com/cn/interface-builder/actions/types/bulk-edit)
 
 ### 复制
 
@@ -1629,7 +1719,7 @@ event:
 
 参考文档：
 
-- [复制](https://v2.docs.nocobase.com/cn/interface-builder/actions/types/duplicate)
+- [复制](https://docs.nocobase.com/cn/interface-builder/actions/types/duplicate)
 
 ### 区块高度
 
@@ -1637,7 +1727,7 @@ event:
 
 参考文档：
 
-- [区块高度](https://v2.docs.nocobase.com/cn/interface-builder/blocks/block-settings/block-height)
+- [区块高度](https://docs.nocobase.com/cn/interface-builder/blocks/block-settings/block-height)
 
 ### 表格行拖拽排序
 
@@ -1649,7 +1739,7 @@ event:
 
 参考文档：
 
-- [数据加载方式](https://v2.docs.nocobase.com/cn/interface-builder/blocks/block-settings/data-loading-method)
+- [数据加载方式](https://docs.nocobase.com/cn/interface-builder/blocks/block-settings/data-loading-method)
 
 ### 表单支持展示关系字段的字段
 
@@ -1657,7 +1747,7 @@ event:
 
 参考文档：
 
-- [表单](https://v2.docs.nocobase.com/cn/interface-builder/blocks/data-blocks/form)
+- [表单](https://docs.nocobase.com/cn/interface-builder/blocks/data-blocks/form)
 
 ### 页面（V2）本地化支持
 
