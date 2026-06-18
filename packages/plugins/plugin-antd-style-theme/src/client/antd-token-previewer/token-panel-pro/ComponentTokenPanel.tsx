@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { StablePopover } from '@nocobase/client';
+import { StablePopover } from '../../theme-compat';
 import { Button, Collapse, ConfigProvider, Empty, Input, InputNumber, Select, Space, Tooltip, Typography } from 'antd';
 import classNames from 'classnames';
 import type { FC } from 'react';

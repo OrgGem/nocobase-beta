@@ -23,7 +23,7 @@ import {
   StopOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
 const { Text } = Typography;
@@ -147,7 +147,7 @@ function countMissingPackages(packages?: { apt?: string[]; npm?: string[]; pytho
 
 export function Doctor() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);

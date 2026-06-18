@@ -6,7 +6,7 @@ import { COLLECTION } from '../../shared/constants';
  *
  * The full input/output payloads are kept only when
  * `carboneSettings.keepRawInDatabase` is true; otherwise we keep just the
- * sizes + MD5 so an admin can replay against the same template/version.
+ * sizes + MD5 for troubleshooting.
  *
  * `expiresAt` is set to `now + monitoringRetentionDays` so the cleanup job can
  * purge old rows without scanning everything.

@@ -14,7 +14,7 @@ export class RedisNodeRegistry {
     if (this.timer) {
       clearInterval(this.timer);
     }
-    
+
     // Initial heartbeat
     this.heartbeat();
 
@@ -51,6 +51,7 @@ export class RedisNodeRegistry {
       hostname: os.hostname(),
       appVersion: process.env.NOCOBASE_VERSION || process.version,
       workerMode: mode,
+      appRole: process.env.APP_ROLE,
       isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
       pid: process.pid,
       url: process.env.APP_PUBLIC_URL || null,
@@ -88,13 +89,7 @@ export class RedisNodeRegistry {
     };
 
     try {
-      await redis.sendCommand([
-        'SET',
-        key,
-        JSON.stringify(metadata),
-        'EX',
-        this.ttlSecs.toString(),
-      ]);
+      await redis.sendCommand(['SET', key, JSON.stringify(metadata), 'EX', this.ttlSecs.toString()]);
     } catch (err: any) {
       this.app.logger.error(`[RedisNodeRegistry] Heartbeat failed: ${err.message}`);
     }
@@ -109,7 +104,7 @@ export class RedisNodeRegistry {
       if (rawKeys.length === 0) return [];
 
       const values = await redis.sendCommand(['MGET', ...rawKeys]);
-      
+
       const nodes: any[] = [];
       if (Array.isArray(values)) {
         for (const val of values) {

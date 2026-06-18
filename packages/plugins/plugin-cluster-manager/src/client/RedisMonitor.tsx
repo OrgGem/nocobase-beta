@@ -7,7 +7,7 @@ import {
   ThunderboltOutlined,
   FieldTimeOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { formatBytes, formatUptime } from './utils';
 
 const { Text } = Typography;
@@ -40,7 +40,7 @@ interface RedisInfo {
 
 
 export function RedisMonitor() {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [info, setInfo] = useState<RedisInfo | null>(null);
   const [channels, setChannels] = useState<Record<string, number>>({});
   const [totalChannels, setTotalChannels] = useState(0);
@@ -306,7 +306,7 @@ export function RedisMonitor() {
 }
 
 function SyncMessagesSection() {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {

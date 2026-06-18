@@ -5,7 +5,7 @@
   "displayName.zh-CN": "AI 浏览器自动化",
   "description": "AI Employee drives browser end-to-end in readonly mode. Manages sessions, profiles, policies, audit logs, artifacts, and cached workflow steps for faster reruns.",
   "description.vi-VN": "AI Employee điều khiển browser end-to-end ở chế độ readonly. Quản lý session, profile, policy, audit log, artifact, và cache workflow/step/selector.",
-  "version": "1.0.18",
+  "version": "1.0.22",
   "license": "Apache-2.0",
   "keywords": [
     "ai",

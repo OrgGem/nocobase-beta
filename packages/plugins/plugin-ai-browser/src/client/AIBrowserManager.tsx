@@ -32,7 +32,7 @@ import {
   SearchOutlined,
   SaveOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './locale';
 
 const { Title, Text } = Typography;
@@ -74,7 +74,7 @@ function matchesSearch(record: any, search: string, fields: string[]) {
  */
 export const AIBrowserManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [activeTab, setActiveTab] = useState('sessions');
   const [sessions, setSessions] = useState<any[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Select } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { COLLECTION } from '../../shared/constants';
 
 interface TemplateRow {
@@ -20,7 +20,7 @@ export const TemplateSelect: React.FC<{
   value?: number | null;
   onChange?: (v: number | null) => void;
 }> = ({ value, onChange }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [rows, setRows] = useState<TemplateRow[]>([]);
   const [loading, setLoading] = useState(false);
 

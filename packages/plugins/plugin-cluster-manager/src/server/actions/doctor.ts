@@ -6,7 +6,7 @@ import os from 'os';
 import path from 'path';
 import { RedisNodeRegistry } from '../adapters/redis-node-registry';
 import type { ContainerInfo, StackConfig } from '../orchestrator/types';
-import { getLocalNodeId } from '../utils/node';
+import { getLocalNodeId, getNodeRoleFrom } from '../utils/node';
 import { getRedisClient, scanKeys } from '../utils/redis';
 import { packagesFromConfig, type CustomPackageMap, type WorkerPackageMap } from '../../shared/packages';
 
@@ -83,6 +83,7 @@ interface DoctorNodeRecord {
   hostname?: string;
   appVersion?: string;
   workerMode?: string;
+  appRole?: string;
   isSandbox?: boolean;
   status?: string;
   lastHeartbeatAt?: number;
@@ -281,12 +282,12 @@ function countPackages(packages: NormalizedPackages) {
   return packages.apt.length + packages.npm.length + packages.python.length;
 }
 
-function getNodeRole(node: { workerMode?: string; isSandbox?: boolean }): 'app' | 'worker' | 'sandbox' {
-  if (node.isSandbox) {
-    return 'sandbox';
-  }
-  const workerMode = node.workerMode || 'main';
-  return workerMode === 'worker' || workerMode === 'task' || workerMode === '*' ? 'worker' : 'app';
+function getNodeRole(node: {
+  workerMode?: string;
+  appRole?: string;
+  isSandbox?: boolean;
+}): 'app' | 'worker' | 'sandbox' {
+  return getNodeRoleFrom({ workerMode: node.workerMode, appRole: node.appRole, isSandbox: node.isSandbox });
 }
 
 function getSafeEnv() {
@@ -539,11 +540,12 @@ export async function collectLocalDoctorSnapshot(
   options: DoctorSnapshotOptions = {},
 ): Promise<DoctorNodeSnapshot> {
   const workerMode = process.env.WORKER_MODE || 'main';
+  const appRole = process.env.APP_ROLE;
   const node = {
     hostname: os.hostname(),
     pid: process.pid,
     workerMode,
-    role: getNodeRole({ workerMode, isSandbox: process.env.SKILL_HUB_SANDBOX === 'true' }),
+    role: getNodeRole({ workerMode, appRole, isSandbox: process.env.SKILL_HUB_SANDBOX === 'true' }),
     appVersion: process.env.NOCOBASE_VERSION || process.version,
     nodeVersion: process.version,
     platform: process.platform,
@@ -773,7 +775,7 @@ async function collectNodeSnapshots(
             hostname: node.hostname || 'unknown',
             pid: Number(node.pid || 0),
             workerMode,
-            role: getNodeRole({ workerMode, isSandbox: node.isSandbox }),
+            role: getNodeRole({ workerMode, appRole: node.appRole, isSandbox: node.isSandbox }),
             appVersion: node.appVersion || '',
             nodeVersion: '',
             platform: '',

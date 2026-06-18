@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AIBrowserSessionCard } from '../AIBrowserSessionCard';
 import { AIBrowserBlock } from '../AIBrowserBlock';
 import { useT } from '../locale';
-import { ToolsOptions, ToolsUIProperties, useAPIClient } from '@nocobase/client';
+import { ToolsOptions, ToolsUIProperties } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { Button, Drawer, Space, Typography } from 'antd';
 
 const { Text } = Typography;
@@ -71,7 +72,7 @@ async function waitForLiveViewOpened(api: any, sessionId: string, timeoutMs = 10
 
 const BrowserSessionUICard: React.FC<ToolsUIProperties> = ({ toolCall, decisions, messageId }) => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const viewerIdRef = useRef(`browser-viewer-${Math.random().toString(36).slice(2, 10)}`);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [fallbackSession, setFallbackSession] = useState<any>(null);

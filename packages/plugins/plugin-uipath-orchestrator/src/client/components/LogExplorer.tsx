@@ -20,7 +20,7 @@ import {
   message,
 } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
@@ -38,7 +38,7 @@ const LOG_LEVELS = ['Trace', 'Info', 'Warn', 'Error', 'Fatal'];
 
 export const LogExplorer: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, folderId, folderKey } = useCurrentInstance();
 
   const [level, setLevel] = useState<string | undefined>();

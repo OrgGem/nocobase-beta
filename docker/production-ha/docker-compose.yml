@@ -79,7 +79,7 @@ x-nocobase-env: &nocobase-env
   KB_DEFAULT_LOCAL_EMBED_DTYPE: ${KB_DEFAULT_LOCAL_EMBED_DTYPE:-q8}
 
 x-nocobase-base: &nocobase-base
-  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.0-full}
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.6-full}
   restart: unless-stopped
   networks:
     - nocobase

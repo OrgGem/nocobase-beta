@@ -1,7 +1,8 @@
 import React from 'react';
 import { Button, Card, Drawer, Form, Input, Popconfirm, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 
 const { Text } = Typography;
 
@@ -12,18 +13,20 @@ const parseSettings = (value: string) => {
 };
 
 export const HarnessProfilesTab: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [open, setOpen] = React.useState(false);
   const [editingRecord, setEditingRecord] = React.useState<any>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest({
-    url: 'agentHarnessProfiles:list',
-    params: {
-      sort: ['tag'],
-      pageSize: 100,
-    },
-  });
+  const { data, loading, refresh } = useRequest(() =>
+    api.request({
+      url: 'agentHarnessProfiles:list',
+      params: {
+        sort: ['tag'],
+        pageSize: 100,
+      },
+    }),
+  );
 
   const rows = React.useMemo(() => {
     const raw = (data as any)?.data;

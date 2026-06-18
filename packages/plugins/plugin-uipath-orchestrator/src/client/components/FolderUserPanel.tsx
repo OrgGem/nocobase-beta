@@ -5,7 +5,7 @@
 import React from 'react';
 import { Alert, Table, Card, Button, message, Tag } from 'antd';
 import { SyncOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
@@ -20,7 +20,7 @@ type FolderRow = {
 
 export const FolderUserPanel: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, instances, setFolder, folders, foldersLoading, refreshFolders, refreshInstances } =
     useCurrentInstance();
   const { data: users, loading: uLoading, error: usersError } = useUiPathRequest('uipathUsers', 'list');

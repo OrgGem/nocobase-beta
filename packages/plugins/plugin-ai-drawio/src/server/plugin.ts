@@ -4,7 +4,8 @@ import { loadXml } from './actions/loadXml';
 import { saveXml } from './actions/saveXml';
 import { getConfig, setConfig } from './actions/getConfig';
 import { getSystemPrompt } from './actions/getSystemPrompt';
-import { assertDiagramAccess } from './actions/access';
+import { assertDiagramRead, resolveAccessContext } from './actions/access';
+import aiDiagramsResource from './resources/ai-diagrams';
 import {
   displayModelDiagramTool,
   displayDiagramTool,
@@ -28,6 +29,9 @@ export class PluginAIDrawioServer extends Plugin {
       },
     });
 
+    // ACL-enforcing CRUD for aiDiagrams (BASIC/SHARED/PUBLIC + agent access).
+    this.app.resourceManager.define(aiDiagramsResource);
+
     this.app.resourceManager.registerActionHandlers({
       'aiDiagrams:loadXml': loadXml,
       'aiDiagrams:saveXml': saveXml,
@@ -36,27 +40,30 @@ export class PluginAIDrawioServer extends Plugin {
         const repository = ctx.db.getRepository('aiDiagrams');
         const model = await repository.findById(filterByTk);
         if (!model) ctx.throw(404, 'Diagram not found');
-        assertDiagramAccess(ctx, model);
+        const access = await resolveAccessContext(ctx, ctx.db);
+        assertDiagramRead(ctx, access, model.toJSON ? model.toJSON() : model);
         ctx.body = { id: model.get('id'), title: model.get('title'), mode: model.get('mode') || 'editable' };
         await next();
       },
     });
 
+    // Open the ACL gate for logged-in users; the resource handlers above enforce
+    // the row-level policy (BASIC owner, SHARED roles, PUBLIC, and agent access).
+    this.app.acl.allow('aiDiagrams', 'list', 'loggedIn');
+    this.app.acl.allow('aiDiagrams', 'get', 'loggedIn');
+    this.app.acl.allow('aiDiagrams', 'create', 'loggedIn');
+    this.app.acl.allow('aiDiagrams', 'update', 'loggedIn');
+    this.app.acl.allow('aiDiagrams', 'destroy', 'loggedIn');
     this.app.acl.allow('aiDiagrams', 'loadXml', 'loggedIn');
     this.app.acl.allow('aiDiagrams', 'saveXml', 'loggedIn');
     this.app.acl.allow('aiDiagrams', 'getMeta', 'loggedIn');
     this.app.acl.allow('aiDrawio', 'getConfig', 'loggedIn');
     this.app.acl.allow('aiDrawio', 'getSystemPrompt', 'loggedIn');
 
+    // Admin snippet: full management bypass + plugin configuration.
     this.app.acl.registerSnippet({
       name: 'pm.ai-drawio',
-      actions: [
-        'aiDiagrams:create',
-        'aiDiagrams:update',
-        'aiDiagrams:destroy',
-        'aiDiagrams:list',
-        'aiDrawio:setConfig',
-      ],
+      actions: ['aiDiagrams:*', 'aiDrawio:setConfig'],
     });
 
     this.registerAITools();

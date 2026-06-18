@@ -2,7 +2,7 @@
   "name": "plugin-markitdown-parser",
   "displayName": "MarkItDown Parser",
   "description": "Convert attachments to Markdown with Microsoft MarkItDown and register as a Document Parser internal handler.",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [

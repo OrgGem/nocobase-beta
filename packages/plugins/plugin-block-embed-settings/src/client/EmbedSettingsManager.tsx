@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Table, Button, Switch, Empty, Space, Popconfirm, Typography, Card, message } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient, useApp, useCompile, useRequest, useSystemSettings } from '@nocobase/client';
+import { useApp, useSystemSettings } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import { useT } from './locale';
 import { collectEmbeddablePlugins, normalizeAllowedRecords } from './EmbedSettingsPluginSelect';
 
@@ -9,21 +10,18 @@ const { Title } = Typography;
 
 export const EmbedSettingsManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
   const app = useApp();
-  const compile = useCompile();
+  const api = app.apiClient;
 
   const systemSettings = useSystemSettings();
   const showHelp = systemSettings?.data?.data?.options?.showHelp !== false;
   const [savingSettings, setSavingSettings] = useState(false);
 
-  const { data, loading, refresh } = useRequest<any>({
-    resource: 'embedAllowedPlugins',
-    action: 'list',
-    params: { pageSize: 200 },
-  });
+  const { data, loading, refresh } = useRequest<any, any[]>(() =>
+    api.resource('embedAllowedPlugins').list({ pageSize: 200 }),
+  );
 
-  const allPlugins = useMemo(() => collectEmbeddablePlugins(app, compile), [app, compile]);
+  const allPlugins = useMemo(() => collectEmbeddablePlugins(app), [app]);
 
   const allowedRecords: any[] = normalizeAllowedRecords(data);
   const allowedKeys = new Set(allowedRecords.map((r: any) => r.pluginName));

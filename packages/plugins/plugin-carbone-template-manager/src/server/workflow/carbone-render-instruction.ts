@@ -38,6 +38,13 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
         bypassCache,
         persistOutput,
         ignoreFail,
+        complement,
+        enum: enumOption,
+        translations,
+        lang,
+        timezone,
+        variableStr,
+        formatOptions,
       } = config;
       const renderLogger = new RenderLogger(plugin.app);
       let resolvedTpl: any = null;
@@ -58,11 +65,10 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
         }
 
         const version = versionId
-          ? await plugin.db
-              .getRepository(COLLECTION.versions)
-              .findOne({ filterByTk: versionId })
+          ? await plugin.db.getRepository(COLLECTION.versions).findOne({ filterByTk: versionId })
           : tpl.currentVersion;
-        if (!version) return failOrIgnore(ignoreFail, `template version ${versionId ?? tpl.currentVersionId} not found`);
+        if (!version)
+          return failOrIgnore(ignoreFail, `template version ${versionId ?? tpl.currentVersionId} not found`);
         if (Number(version.templateId) !== Number(tpl.id)) {
           return failOrIgnore(ignoreFail, `version ${version.id} does not belong to template ${tpl.id}`);
         }
@@ -81,6 +87,13 @@ export function makeCarboneRenderInstructionClass(plugin: PluginCarboneTemplateM
           filename: filename ?? tpl.originalFileName?.replace(/\.[^.]+$/, '') ?? tpl.name,
           bypassCache: !!bypassCache,
           persistOutput: persistOutput !== false, // default true for workflows
+          complement,
+          enum: enumOption,
+          translations,
+          lang,
+          timezone,
+          variableStr,
+          formatOptions,
         });
 
         // Best-effort log entry — workflow renders count toward monitoring too.

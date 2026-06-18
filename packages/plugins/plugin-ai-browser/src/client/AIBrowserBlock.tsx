@@ -46,7 +46,7 @@ function shouldUseScreenshotFallback(url?: string) {
   }
 }
 
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 /**
  * AIBrowserBlock — readonly iframe/live viewer for the browser session.
@@ -54,7 +54,7 @@ import { useAPIClient } from '@nocobase/client';
  */
 export const AIBrowserBlock: React.FC<AIBrowserBlockProps> = (props) => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const fieldSchema = useFieldSchema();
   const [liveUrl, setLiveUrl] = useState(props.liveUrl || fieldSchema?.['x-component-props']?.liveUrl);
   const [sessionId, setSessionId] = useState(props.sessionId || fieldSchema?.['x-component-props']?.sessionId);

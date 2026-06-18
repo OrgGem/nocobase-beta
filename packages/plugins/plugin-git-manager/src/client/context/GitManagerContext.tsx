@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 interface Repository {
   id: number;
@@ -30,7 +30,7 @@ export function useGitManager() {
 }
 
 export const GitManagerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [loading, setLoading] = useState(false);

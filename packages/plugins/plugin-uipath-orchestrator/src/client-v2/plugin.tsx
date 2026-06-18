@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginUipathOrchestratorClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'uipath-orchestrator',
+      title: this.t('UiPath Orchestrator'),
+      icon: 'RobotOutlined',
+      aclSnippet: 'pm.plugin-uipath-orchestrator',
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'uipath-orchestrator',
+      key: 'index',
+      title: this.t('UiPath Orchestrator'),
+      
+      componentLoader: () => import('../client/components/UiPathSettingsPage').then(m => ({ default: m.UiPathSettingsPage })),
+    });
+
   }
 }
 

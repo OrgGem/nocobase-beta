@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "code-graph": {
-      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "command": "C:\\Users\\gem\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
       "args": [
         "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\code-graph-index\\scripts\\graph_mcp_server.py",
         "--graph",
@@ -11,7 +11,7 @@
       "disabled": false
     },
     "faiss-code-index": {
-      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "command": "C:\\Users\\gem\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
       "args": [
         "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\code-graph-index\\scripts\\faiss_mcp_server.py",
         "--index-dir",
@@ -21,7 +21,7 @@
       "disabled": false
     },
     "document-reader": {
-      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "command": "C:\\Users\\gem\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
       "args": [
         "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\document-reader\\scripts\\reader_mcp_server.py"
       ],
@@ -29,7 +29,7 @@
       "disabled": false
     },
     "brain-manager": {
-      "command": "C:\\Users\\gem\\AppData\\Local\\Programs\\Python\\Python314\\python.exe",
+      "command": "C:\\Users\\gem\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
       "args": [
         "C:\\Users\\gem\\Documents\\GitHub\\nocobase-beta\\packages\\plugins\\plugin-git-manager\\.agent\\skills\\brain-manager\\scripts\\brain_mcp_server.py"
       ],

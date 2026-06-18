@@ -1,4 +1,4 @@
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useState, useEffect, useCallback, useRef } from 'react';
 
@@ -77,7 +77,7 @@ export function toUiPathArray<T = Record<string, unknown>>(value: unknown): T[] 
  * Automatically injects instanceId, folderId, folderKey from context.
  */
 export function useUiPathRequest(resource: string, action: string, extraParams: RequestParams = {}) {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, folderId, folderKey } = useCurrentInstance();
   const [data, setData] = useState<unknown>(null);
   const [meta, setMeta] = useState<unknown>(null);

@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginPackageRegistryClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'plugin-package-registry',
+      title: this.t('Package Registries'),
+      icon: 'ApiOutlined',
+      
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'plugin-package-registry',
+      key: 'index',
+      title: this.t('Package Registries'),
+      
+      componentLoader: () => import('../client/PackageRegistriesSettings').then(m => ({ default: m.PackageRegistriesSettings })),
+    });
+
   }
 }
 

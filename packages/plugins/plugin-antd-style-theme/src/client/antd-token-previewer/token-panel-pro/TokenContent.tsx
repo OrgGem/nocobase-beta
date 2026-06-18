@@ -8,8 +8,8 @@
  */
 
 import { CaretRightOutlined, EditOutlined, ExpandOutlined, QuestionCircleOutlined } from '@ant-design/icons';
-import type { ThemeConfig } from '@nocobase/client';
-import { StablePopover } from '@nocobase/client';
+import type { ThemeConfig } from '@nocobase/client-v2';
+import { StablePopover } from '../../theme-compat';
 import { Button, Checkbox, Collapse, ConfigProvider, InputNumber, Switch, Tooltip, Typography, Input } from 'antd';
 import seed from 'antd/es/theme/themes/seed';
 import classNames from 'classnames';

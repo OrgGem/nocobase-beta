@@ -1,9 +1,7 @@
-import { Plugin, Application } from '@nocobase/client-v2';
+import { Plugin } from '@nocobase/client-v2';
 
-export class PluginCustomLlmClient extends Plugin<Record<string, never>, Application> {
-  async load() {
-    // TODO: migrate v1 client UI to client-v2
-  }
+export class PluginCustomLLMClient extends Plugin {
+  async load() {}
 }
 
-export default PluginCustomLlmClient;
+export default PluginCustomLLMClient;

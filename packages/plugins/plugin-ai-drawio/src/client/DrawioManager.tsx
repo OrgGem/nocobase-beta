@@ -14,7 +14,8 @@ import {
   Select,
   Tag,
 } from 'antd';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './locale';
 import { DrawioBlock } from './DrawioBlock';
 
@@ -31,10 +32,10 @@ function getUserDisplayName(user: any) {
 
 const SettingsTab: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { message } = AntApp.useApp();
   const [form] = Form.useForm();
-  const { data, refresh, loading } = useRequest<any>({ resource: 'aiDrawio', action: 'getConfig' });
+  const { data, refresh, loading } = useRequest<any>(() => api.resource('aiDrawio').getConfig());
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -86,22 +87,20 @@ const SettingsTab: React.FC = () => {
 
 const DiagramsTab: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { message, modal } = AntApp.useApp();
   const [editing, setEditing] = useState<any | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [createForm] = Form.useForm();
   const [creating, setCreating] = useState(false);
-  const { data, refresh, loading } = useRequest<any>({
-    resource: 'aiDiagrams',
-    action: 'list',
-    params: {
+  const { data, refresh, loading } = useRequest<any>(() =>
+    api.resource('aiDiagrams').list({
       pageSize: 100,
       sort: ['-updatedAt'],
       fields: ['id', 'title', 'description', 'mode', 'createdById', 'updatedAt'],
       appends: ['createdBy'],
-    },
-  });
+    }),
+  );
 
   const records = data?.data?.data || data?.data || [];
 
@@ -272,7 +271,7 @@ const DiagramsTab: React.FC = () => {
 
 const SystemPromptTab: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { message } = AntApp.useApp();
   const [prompt, setPrompt] = useState('');
   const [loading, setLoading] = useState(true);

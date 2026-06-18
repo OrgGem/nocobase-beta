@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginBuildUiTemplateClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'ai-build-ui-template',
+      title: this.t('Build UI Template'),
+      icon: 'LayoutOutlined',
+      aclSnippet: 'pm.ai-build-ui-template',
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-build-ui-template',
+      key: 'index',
+      title: this.t('Build UI Template'),
+      
+      componentLoader: () => import('../client/BuildUITemplateManager').then(m => ({ default: m.BuildUITemplateManager })),
+    });
+
   }
 }
 

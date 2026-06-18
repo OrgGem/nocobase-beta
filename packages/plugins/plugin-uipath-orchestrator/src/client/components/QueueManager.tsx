@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { Alert, Table, Tag, Tabs, Space, Button, Select, Drawer, Descriptions, Popconfirm, message } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
@@ -23,7 +23,7 @@ const statusColors: Record<string, string> = {
 
 export const QueueManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, folderId, folderKey } = useCurrentInstance();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [selectedItem, setSelectedItem] = useState<any>(null);

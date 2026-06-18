@@ -1,6 +1,6 @@
 import { Context, Next } from '@nocobase/actions';
 import { Repository } from '@nocobase/database';
-import { assertDiagramAccess } from './access';
+import { assertDiagramWriteContent, resolveAccessContext } from './access';
 
 export async function saveXml(ctx: Context, next: Next) {
   const { filterByTk } = ctx.action.params;
@@ -12,7 +12,8 @@ export async function saveXml(ctx: Context, next: Next) {
     ctx.throw(404, 'Diagram not found');
   }
 
-  assertDiagramAccess(ctx, model);
+  const access = await resolveAccessContext(ctx, ctx.db);
+  assertDiagramWriteContent(ctx, access, model.toJSON ? model.toJSON() : model);
 
   if (model.get?.('mode') === 'readonly') {
     ctx.body = { success: true, readonly: true };

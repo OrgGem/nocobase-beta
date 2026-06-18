@@ -29,12 +29,12 @@ import {
   FileTextOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT, formatBytes, formatUptime } from './utils';
 
 function LogViewerModal({ open, node, onClose }: { open: boolean; node: any; onClose: () => void }) {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [lines, setLines] = useState<string[]>([]);
   const [logMeta, setLogMeta] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -197,7 +197,7 @@ function countPackages(packages?: { apt?: string[]; npm?: string[]; python?: str
 
 export function ClusterNodes() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [currentNode, setCurrentNode] = useState<any>(null);
   const [environments, setEnvironments] = useState<any[]>([]);
@@ -643,7 +643,14 @@ export function ClusterNodes() {
 
         {/* Cluster nodes table */}
         <Card title={t('Cluster Nodes')} size="small">
-          <Table dataSource={environments} columns={nodeColumns} rowKey="id" size="small" pagination={false} />
+          <Table
+            dataSource={environments}
+            columns={nodeColumns}
+            rowKey="id"
+            size="small"
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
         </Card>
 
         {/* Current node details (always APP node) */}

@@ -40,6 +40,31 @@ export default defineCollection({
       name: 'metadata',
     },
     {
+      // BASIC (per-user owner) | SHARED (role-based) | PUBLIC (system-wide)
+      type: 'string',
+      name: 'accessLevel',
+      defaultValue: 'BASIC',
+    },
+    {
+      // Roles allowed to read/use/manage (for SHARED diagrams)
+      type: 'array',
+      name: 'allowedRoles',
+    },
+    {
+      // How AI Employees (agents) may reach this diagram when running tools:
+      //   inherit  — ride on the triggering user's access (default)
+      //   explicit — only agents named in allowedAgents (or holding a role in allowedRoles)
+      //   none     — no agent may ever read/use this diagram
+      type: 'string',
+      name: 'agentAccess',
+      defaultValue: 'inherit',
+    },
+    {
+      // AI Employee usernames explicitly granted access when agentAccess === 'explicit'
+      type: 'array',
+      name: 'allowedAgents',
+    },
+    {
       type: 'belongsTo',
       name: 'createdBy',
       target: 'users',

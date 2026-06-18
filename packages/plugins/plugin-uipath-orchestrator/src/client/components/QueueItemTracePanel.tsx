@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Spin, Table, Tag, Alert, Descriptions, Empty, Space } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
 export const QueueItemTracePanel: React.FC<{ itemId: number }> = ({ itemId }) => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, folderId, folderKey } = useCurrentInstance();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);

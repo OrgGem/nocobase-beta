@@ -16,7 +16,7 @@ import {
   Typography,
 } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import { useAPIClient, useApp } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { formatJsonText, parseJsonText, stringifyJsonText } from '../utils/jsonFields';
 import { getLoopTemplate, LOOP_TEMPLATES } from '../tools/loopTemplates';
@@ -30,8 +30,8 @@ const extractList = (data: any) => {
 };
 
 export const LoopSettings: React.FC = () => {
-  const api = useAPIClient();
   const app = useApp();
+  const api = app.apiClient;
   const t = useT();
   const [form] = Form.useForm();
   const [skills, setSkills] = useState<any[]>([]);

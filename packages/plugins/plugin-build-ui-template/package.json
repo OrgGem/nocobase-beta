@@ -5,7 +5,7 @@
   "displayName.zh-CN": "构建UI模板",
   "description": "Generate standard UI Block and Popup templates using AI, saving directly to plugin-ui-templates.",
   "description.vi-VN": "Tạo block và popup template bằng AI, lưu trực tiếp vào plugin-ui-templates.",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "license": "Apache-2.0",
   "keywords": [
     "ai",

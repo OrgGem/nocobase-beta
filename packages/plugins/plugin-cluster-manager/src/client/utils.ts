@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { useApp } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const namespace = 'cluster-manager';
 

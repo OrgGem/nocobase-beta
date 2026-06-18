@@ -1,6 +1,6 @@
 import { createForm } from '@formily/core';
 import { Field, FormProvider } from '@formily/react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { Alert, App, Button, Card, Form, Space, Switch } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
@@ -38,7 +38,7 @@ function readStringValue(values: unknown, key: string): string | undefined {
 }
 
 export const SettingsPage: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { message } = App.useApp();
   const t = useT();
   const form = useMemo(() => createForm(), []);

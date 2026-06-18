@@ -1,4 +1,4 @@
-import { useApp } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 export const namespace = 'plugin-git-manager';
 

@@ -7,160 +7,94 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useCallback } from 'react';
-import { SchemaComponent, useAPIClient } from '@nocobase/client';
-import { useForm } from '@formily/react';
-import { message } from 'antd';
+import React, { useCallback, useState } from 'react';
+import { Checkbox, Form, Input, Select } from 'antd';
 import { useTranslation } from 'react-i18next';
 
-type CollectionsFieldFactoryResult = {
-  CollectionsTable: React.ComponentType<any>;
-  createCollectionsSchema: (from?: 'create' | 'edit', loadCollections?: (key: string) => Promise<any>) => any;
-  Text: React.ComponentType<any>;
-  addAllCollectionsSchema?: any;
-};
-
-type CollectionsFieldFactory = (params: { NAMESPACE: string; t: any }) => CollectionsFieldFactoryResult;
-
-type ElasticsearchConfigFormProps = {
-  CollectionsTableField: CollectionsFieldFactory;
+interface ElasticsearchConfigFormProps {
+  mode: 'create' | 'edit';
+  type: Record<string, any>;
+  initialValues?: Record<string, any>;
   loadCollections: (key: string) => Promise<any>;
-  from?: 'create' | 'edit';
-};
+}
 
-export const ElasticsearchConfigForm: React.FC<ElasticsearchConfigFormProps> = ({
-  CollectionsTableField,
-  loadCollections,
-  from,
-}) => {
-  const api = useAPIClient();
-  const form = useForm();
-  const { t } = useTranslation();
-  const NAMESPACE = 'data-source-manager';
-  const { CollectionsTable, createCollectionsSchema, Text, addAllCollectionsSchema } = CollectionsTableField({
-    NAMESPACE,
-    t,
+function toCollectionOptions(result: any): { label: string; value: string }[] {
+  const list = result?.data?.data ?? result?.data ?? result ?? [];
+  if (!Array.isArray(list)) return [];
+  return list.map((item: any) => {
+    const name = typeof item === 'string' ? item : item?.name;
+    return { label: name, value: name };
   });
+}
 
-  const handleTestConnection = useCallback(async () => {
-    await form.submit();
-    const values = form.values;
+export const ElasticsearchConfigForm: React.FC<ElasticsearchConfigFormProps> = ({ initialValues, loadCollections }) => {
+  const { t } = useTranslation();
+  const form = Form.useFormInstance();
+  const addAllCollections = Form.useWatch('addAllCollections', form);
+  const [collectionOptions, setCollectionOptions] = useState<{ label: string; value: string }[]>([]);
+  const [loading, setLoading] = useState(false);
 
+  const handleLoadCollections = useCallback(async () => {
+    setLoading(true);
     try {
-      await api.request({
-        url: 'external-elasticsearch:testConnection',
-        method: 'post',
-        data: values,
-      });
-      message.success(t('Connection successful'));
-    } catch (error) {
-      const errMessage = error?.response?.data?.message || error.message;
-      message.error(errMessage);
+      const result = await loadCollections(initialValues?.key);
+      setCollectionOptions(toCollectionOptions(result));
+    } finally {
+      setLoading(false);
     }
-  }, [api, form, t]);
+  }, [loadCollections, initialValues?.key]);
 
   return (
-    <SchemaComponent
-      scope={{
-        CollectionsTableField,
-        loadCollections,
-        handleTestConnection,
-        from,
-        t,
-        CollectionsTable,
-        createCollectionsSchema,
-        Text,
-        addAllCollectionsSchema,
-      }}
-      components={{ CollectionsTable, Text }}
-      schema={{
-        type: 'object',
-        properties: {
-          type: {
-            type: 'string',
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-            'x-hidden': true,
-          },
-          key: {
-            type: 'string',
-            title: t('Data source name'),
-            required: true,
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-          },
-          displayName: {
-            type: 'string',
-            title: t('Display name'),
-            required: true,
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-          },
-          options: {
-            type: 'object',
-            properties: {
-              nodes: {
-                type: 'string',
-                title: t('Elasticsearch Nodes'),
-                required: true,
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-                'x-component-props': {
-                  placeholder: 'http://localhost:9200',
-                },
-                description: t('Comma-separated list of Elasticsearch node URLs'),
-              },
-              username: {
-                type: 'string',
-                title: t('Username'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-                description: t('Optional. For Basic authentication.'),
-              },
-              password: {
-                type: 'string',
-                title: t('Password'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Password',
-              },
-              apiKey: {
-                type: 'string',
-                title: t('API Key'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-                description: t('API Key description'),
-              },
-              rejectUnauthorized: {
-                type: 'boolean',
-                title: t('Verify TLS Certificate'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Checkbox',
-                default: true,
-                description: t('Uncheck for self-signed certificates'),
-              },
-              indexPattern: {
-                type: 'string',
-                title: t('Index Pattern'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-                'x-component-props': {
-                  placeholder: '*',
-                },
-                description: t('Filter indices by pattern (e.g. logs-*, my-data-*)'),
-              },
-              addAllCollections: {
-                type: 'boolean',
-                title: t('Load all collections'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Checkbox',
-                default: true,
-              },
-              collections: createCollectionsSchema(from, loadCollections),
-            },
-          },
-        },
-      }}
-    />
+    <>
+      <Form.Item
+        name={['options', 'nodes']}
+        label={t('Elasticsearch Nodes')}
+        rules={[{ required: true }]}
+        extra={t('Comma-separated list of Elasticsearch node URLs')}
+      >
+        <Input placeholder="http://localhost:9200" />
+      </Form.Item>
+      <Form.Item name={['options', 'username']} label={t('Username')} extra={t('Optional. For Basic authentication.')}>
+        <Input />
+      </Form.Item>
+      <Form.Item name={['options', 'password']} label={t('Password')}>
+        <Input.Password />
+      </Form.Item>
+      <Form.Item name={['options', 'apiKey']} label={t('API Key')} extra={t('API Key description')}>
+        <Input />
+      </Form.Item>
+      <Form.Item
+        name={['options', 'rejectUnauthorized']}
+        label={t('Verify TLS Certificate')}
+        valuePropName="checked"
+        initialValue={true}
+        extra={t('Uncheck for self-signed certificates')}
+      >
+        <Checkbox />
+      </Form.Item>
+      <Form.Item
+        name={['options', 'indexPattern']}
+        label={t('Index Pattern')}
+        extra={t('Filter indices by pattern (e.g. logs-*, my-data-*)')}
+      >
+        <Input placeholder="*" />
+      </Form.Item>
+      <Form.Item name="addAllCollections" label={t('Load all collections')} valuePropName="checked" initialValue={true}>
+        <Checkbox />
+      </Form.Item>
+      {!addAllCollections ? (
+        <Form.Item name="collections" label={t('Collections')}>
+          <Select
+            mode="multiple"
+            allowClear
+            loading={loading}
+            options={collectionOptions}
+            onFocus={handleLoadCollections}
+            optionFilterProp="label"
+          />
+        </Form.Item>
+      ) : null}
+    </>
   );
 };
 

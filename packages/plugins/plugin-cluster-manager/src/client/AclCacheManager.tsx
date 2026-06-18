@@ -1,18 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import {
-  Card,
-  Row,
-  Col,
-  Statistic,
-  Table,
-  Tag,
-  Button,
-  Space,
-  Popconfirm,
-  message,
-  Typography,
-  Select,
-} from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Button, Space, Popconfirm, message, Typography, Select } from 'antd';
 import {
   ReloadOutlined,
   DeleteOutlined,
@@ -21,7 +8,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
 const { Text } = Typography;
@@ -45,7 +32,7 @@ interface CachedKey {
 }
 
 export function AclCacheManager() {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const [stats, setStats] = useState<AclStats | null>(null);
   const [keys, setKeys] = useState<CachedKey[]>([]);
@@ -61,7 +48,13 @@ export function AclCacheManager() {
       ]);
       const statsData = statsRes?.data?.data || statsRes?.data || {};
       setStats(statsData);
-      const keysArray = Array.isArray(keysRes?.data?.data?.data) ? keysRes.data.data.data : Array.isArray(keysRes?.data?.data) ? keysRes.data.data : Array.isArray(keysRes?.data) ? keysRes.data : [];
+      const keysArray = Array.isArray(keysRes?.data?.data?.data)
+        ? keysRes.data.data.data
+        : Array.isArray(keysRes?.data?.data)
+          ? keysRes.data.data
+          : Array.isArray(keysRes?.data)
+            ? keysRes.data
+            : [];
       setKeys(keysArray);
     } catch {
       message.error('Failed to load ACL cache data');
@@ -124,14 +117,24 @@ export function AclCacheManager() {
   }));
 
   const keyColumns = [
-    { title: t('Role'), dataIndex: 'role', width: 120, filters: [...new Set(keys.map((k) => k.role))].map((r) => ({ text: r, value: r })), onFilter: (value: any, record: CachedKey) => record.role === value },
+    {
+      title: t('Role'),
+      dataIndex: 'role',
+      width: 120,
+      filters: [...new Set(keys.map((k) => k.role))].map((r) => ({ text: r, value: r })),
+      onFilter: (value: any, record: CachedKey) => record.role === value,
+    },
     { title: t('Resource'), dataIndex: 'resource', width: 200 },
     { title: t('Action'), dataIndex: 'action', width: 120 },
     {
       title: t('Cache Key'),
       dataIndex: 'key',
       ellipsis: true,
-      render: (val: string) => <Text code style={{ fontSize: 11 }}>{val}</Text>,
+      render: (val: string) => (
+        <Text code style={{ fontSize: 11 }}>
+          {val}
+        </Text>
+      ),
     },
   ];
 
@@ -154,16 +157,17 @@ export function AclCacheManager() {
       title: t('Hit Rate'),
       dataIndex: 'hitRate',
       width: 100,
-      render: (val: number) => (
-        <Tag color={val > 80 ? 'green' : val > 50 ? 'orange' : 'red'}>{val}%</Tag>
-      ),
+      render: (val: number) => <Tag color={val > 80 ? 'green' : val > 50 ? 'orange' : 'red'}>{val}%</Tag>,
       sorter: (a: any, b: any) => a.hitRate - b.hitRate,
     },
     {
       title: t('Actions'),
       width: 80,
       render: (_: any, record: any) => (
-        <Popconfirm title={`${t('Clear cache for role')} "${record.role}"?`} onConfirm={() => handleClearRole(record.role)}>
+        <Popconfirm
+          title={`${t('Clear cache for role')} "${record.role}"?`}
+          onConfirm={() => handleClearRole(record.role)}
+        >
           <Button type="link" size="small" icon={<DeleteOutlined />} danger />
         </Popconfirm>
       ),
@@ -197,18 +201,16 @@ export function AclCacheManager() {
           <Button>{t('Reset Stats')}</Button>
         </Popconfirm>
         <Tag>TTL: {stats.ttlSeconds}s</Tag>
-        <Tag>{t('Since')}: {new Date(stats.startedAt).toLocaleString()}</Tag>
+        <Tag>
+          {t('Since')}: {new Date(stats.startedAt).toLocaleString()}
+        </Tag>
       </Space>
 
       {/* Overview stats */}
       <Row gutter={[16, 16]}>
         <Col span={6}>
           <Card size="small">
-            <Statistic
-              title={t('Total ACL Checks')}
-              value={stats.totalChecks}
-              prefix={<SafetyCertificateOutlined />}
-            />
+            <Statistic title={t('Total ACL Checks')} value={stats.totalChecks} prefix={<SafetyCertificateOutlined />} />
           </Card>
         </Col>
         <Col span={6}>
@@ -242,7 +244,9 @@ export function AclCacheManager() {
                 color: stats.hitRate > 80 ? '#3f8600' : stats.hitRate > 50 ? '#faad14' : '#cf1322',
               }}
             />
-            <Text type="secondary">{t('Cached keys')}: {stats.cachedKeys}</Text>
+            <Text type="secondary">
+              {t('Cached keys')}: {stats.cachedKeys}
+            </Text>
           </Card>
         </Col>
       </Row>
@@ -260,6 +264,7 @@ export function AclCacheManager() {
                 pagination={false}
                 dataSource={roleData}
                 columns={roleColumns}
+                scroll={{ x: 'max-content' }}
               />
             )}
           </Card>

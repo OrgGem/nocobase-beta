@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import {
   Card,
   Space,
@@ -31,7 +31,7 @@ import {
 const { Title, Paragraph, Text } = Typography;
 
 export const BuildUITemplateManager: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [spaces, setSpaces] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
   const [services, setServices] = useState<any[]>([]);

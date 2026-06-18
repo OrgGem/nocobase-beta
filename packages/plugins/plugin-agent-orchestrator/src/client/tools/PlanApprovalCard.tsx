@@ -1,6 +1,7 @@
 import React from 'react';
 import { Alert, Button, Card, Input, List, Space, Tag, Typography, message } from 'antd';
-import { ToolsUIProperties, useAPIClient } from '@nocobase/client';
+import { ToolsUIProperties } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { Paragraph, Text } = Typography;
 
@@ -18,7 +19,7 @@ const summarizeArgsPlan = (plan: any[]) =>
   }));
 
 export const PlanApprovalCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const rawArgs = (toolCall.args as Record<string, any>) || {};
   const runId = rawArgs.runId;
   const [detail, setDetail] = React.useState<any>(null);

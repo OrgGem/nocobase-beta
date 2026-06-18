@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, Switch, Tooltip, Select, message } from 'antd';
 import { PlusOutlined, DeleteOutlined, LinkOutlined, RobotOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { useT } from '../locale';
 
 export const RepositoryConfig: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { repos, refreshRepos, selectedRepo, setSelectedRepo } = useGitManager();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRepo, setEditingRepo] = useState<any>(null);

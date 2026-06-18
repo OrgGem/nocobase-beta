@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Select, Space, Switch, message } from 'antd';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION, SUPPORTED_OUTPUT_FORMATS } from '../../shared/constants';
 
@@ -28,7 +29,7 @@ interface SettingsForm {
  */
 export const ConnectionSettings: React.FC = () => {
   const { t } = useCarboneTranslation();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [form] = Form.useForm<SettingsForm>();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -174,7 +175,7 @@ const StorageSelect: React.FC<{ value?: number | null; onChange?: (v: number | n
   value,
   onChange,
 }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { data, loading } = useRequest<{ data: Array<{ id: number; title: string; name: string }> }>(
     () =>
       api

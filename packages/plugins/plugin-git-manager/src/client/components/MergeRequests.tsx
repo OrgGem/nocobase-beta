@@ -17,7 +17,7 @@ import {
   FileTextOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { RunReviewButton } from './RunReviewButton';
 import { useT } from '../locale';
@@ -34,7 +34,7 @@ const STATE_CONFIG: Record<string, { color: string; icon: React.ReactNode; label
 export const MergeRequests: React.FC = () => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { selectedRepo } = useGitManager();
   const [mergeRequestsList, setMergeRequestsList] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

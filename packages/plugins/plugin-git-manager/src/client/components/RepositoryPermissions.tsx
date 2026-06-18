@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { Table, Checkbox, Spin, Typography, message } from 'antd';
 
 export const RepositoryPermissions = ({ activeRole }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [repositories, setRepositories] = useState([]);
   const [permissions, setPermissions] = useState({ read: [], write: [] });

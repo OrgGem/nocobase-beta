@@ -1,6 +1,6 @@
 {
   "name": "plugin-shared-forms",
-  "version": "2.0.16",
+  "version": "2.0.20",
   "main": "dist/server/index.js",
   "displayName": "Shared forms",
   "displayName.vi-VN": "Biểu mẫu chia sẻ",

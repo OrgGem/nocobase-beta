@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 
 interface InstanceContextType {
   instanceId: number | null;
@@ -20,11 +21,10 @@ export const useCurrentInstance = () => useContext(InstanceContext);
 export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [instanceId, setInstanceId] = useState<number | null>(null);
 
-  const { data, loading } = useRequest<any>({
-    resource: 'n8nInstances',
-    action: 'list',
-    params: { pageSize: 100, filter: { enabled: true } },
-  });
+  const api = useApp().apiClient;
+  const { data, loading } = useRequest<any>(() =>
+    api.resource('n8nInstances').list({ pageSize: 100, filter: { enabled: true } }),
+  );
 
   const instances = data?.data || [];
 

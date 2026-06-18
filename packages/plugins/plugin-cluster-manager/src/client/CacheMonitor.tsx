@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Tag, Button, Space, Row, Col, Statistic, Tabs, Spin, Popconfirm, message } from 'antd';
 import { ReloadOutlined, DatabaseOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { AclCacheManager } from './AclCacheManager';
 import { RedisMonitor } from './RedisMonitor';
 import { LockMonitor } from './LockMonitor';
@@ -11,7 +11,7 @@ import { useT } from './utils';
 
 export function CacheMonitor() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [stores, setStores] = useState<any[]>([]);
   const [caches, setCaches] = useState<any[]>([]);

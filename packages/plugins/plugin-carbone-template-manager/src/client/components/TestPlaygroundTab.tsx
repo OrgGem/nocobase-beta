@@ -7,7 +7,7 @@ import {
   ReloadOutlined,
 } from '@ant-design/icons';
 import { saveAs } from 'file-saver';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION, SUPPORTED_OUTPUT_FORMATS } from '../../shared/constants';
 import { PlaceholderTree, PlaceholderSchemaView } from './PlaceholderTree';
@@ -39,7 +39,7 @@ const PREVIEWABLE_IMAGE = new Set(['png', 'jpg']);
  * without a round-trip via attachments.
  */
 export const TestPlaygroundTab: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useCarboneTranslation();
 
   const [templates, setTemplates] = useState<TemplateOption[]>([]);

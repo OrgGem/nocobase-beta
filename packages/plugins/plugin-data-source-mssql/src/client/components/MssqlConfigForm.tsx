@@ -7,174 +7,85 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useCallback } from 'react';
-import { SchemaComponent, useAPIClient } from '@nocobase/client';
-import { useForm } from '@formily/react';
-import { message } from 'antd';
+import React, { useCallback, useState } from 'react';
+import { Checkbox, Form, Input, InputNumber, Select } from 'antd';
 import { useTranslation } from 'react-i18next';
 
-type CollectionsFieldFactoryResult = {
-  CollectionsTable: React.ComponentType<any>;
-  createCollectionsSchema: (from?: 'create' | 'edit', loadCollections?: (key: string) => Promise<any>) => any;
-  Text: React.ComponentType<any>;
-  addAllCollectionsSchema?: any;
-};
-
-type CollectionsFieldFactory = (params: { NAMESPACE: string; t: any }) => CollectionsFieldFactoryResult;
-
-type MssqlConfigFormProps = {
-  CollectionsTableField: CollectionsFieldFactory;
+interface MssqlConfigFormProps {
+  mode: 'create' | 'edit';
+  type: Record<string, any>;
+  initialValues?: Record<string, any>;
   loadCollections: (key: string) => Promise<any>;
-  from?: 'create' | 'edit';
-};
+}
 
-export const MssqlConfigForm: React.FC<MssqlConfigFormProps> = ({ CollectionsTableField, loadCollections, from }) => {
-  console.log('[MSSQL Plugin] ConfigForm rendering...');
-  const api = useAPIClient();
-  const form = useForm();
-  const { t } = useTranslation();
-  const NAMESPACE = 'data-source-manager';
-  const { CollectionsTable, createCollectionsSchema, Text, addAllCollectionsSchema } = CollectionsTableField({
-    NAMESPACE,
-    t,
+function toCollectionOptions(result: any): { label: string; value: string }[] {
+  const list = result?.data?.data ?? result?.data ?? result ?? [];
+  if (!Array.isArray(list)) return [];
+  return list.map((item: any) => {
+    const name = typeof item === 'string' ? item : item?.name;
+    return { label: name, value: name };
   });
-  const handleTestConnection = useCallback(async () => {
-    await form.submit();
-    const values = form.values;
+}
 
+export const MssqlConfigForm: React.FC<MssqlConfigFormProps> = ({ initialValues, loadCollections }) => {
+  const { t } = useTranslation();
+  const form = Form.useFormInstance();
+  const addAllCollections = Form.useWatch('addAllCollections', form);
+  const [collectionOptions, setCollectionOptions] = useState<{ label: string; value: string }[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const handleLoadCollections = useCallback(async () => {
+    setLoading(true);
     try {
-      await api.request({
-        url: 'dataSources:testConnection',
-        method: 'post',
-        data: {
-          values: {
-            type: 'mssql',
-            options: values.options || values,
-          },
-        },
-      });
-      message.success(t('Connection successful'));
-    } catch (error) {
-      const errMessage = error?.response?.data?.errors?.[0]?.message || error?.response?.data?.message || error.message;
-      message.error(errMessage);
-      return;
+      const result = await loadCollections(initialValues?.key);
+      setCollectionOptions(toCollectionOptions(result));
+    } finally {
+      setLoading(false);
     }
-  }, [api, form, t]);
-
+  }, [loadCollections, initialValues?.key]);
 
   return (
-    <SchemaComponent
-      scope={{
-        CollectionsTableField,
-        loadCollections,
-        handleTestConnection,
-        from,
-        t,
-        CollectionsTable,
-        createCollectionsSchema,
-        Text,
-        addAllCollectionsSchema,
-      }}
-      components={{ CollectionsTable, Text }}
-      schema={{
-        type: 'object',
-        properties: {
-          type: {
-            type: 'string',
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-            'x-hidden': true,
-          },
-          key: {
-            type: 'string',
-            title: t('Data source name'),
-            required: true,
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-          },
-          displayName: {
-            type: 'string',
-            title: t('Display name'),
-            required: true,
-            'x-decorator': 'FormItem',
-            'x-component': 'Input',
-          },
-          options: {
-            type: 'object',
-            properties: {
-              host: {
-                type: 'string',
-                title: t('Host'),
-                required: true,
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-                'x-component-props': {
-                  placeholder: 'localhost',
-                },
-              },
-              port: {
-                type: 'number',
-                title: t('Port'),
-                required: true,
-                'x-decorator': 'FormItem',
-                'x-component': 'InputNumber',
-                'x-component-props': {
-                  min: 1,
-                  max: 65535,
-                },
-                default: 1433,
-              },
-              database: {
-                type: 'string',
-                title: t('Database'),
-                required: true,
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-              },
-              schema: {
-                type: 'string',
-                title: t('Schema'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-              },
-              username: {
-                type: 'string',
-                title: t('Username'),
-                required: true,
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-              },
-              password: {
-                type: 'string',
-                title: t('Password'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Password',
-              },
-              encrypt: {
-                type: 'boolean',
-                title: t('Encrypt'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Checkbox',
-              },
-              tablePrefix: {
-                type: 'string',
-                title: t('Table prefix'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Input',
-              },
-              addAllCollections: {
-                type: 'boolean',
-                title: t('Load all collections'),
-                'x-decorator': 'FormItem',
-                'x-component': 'Checkbox',
-                default: true,
-              },
-              collections: createCollectionsSchema(from, loadCollections),
-            },
-          },
-        },
-      }}
-    />
+    <>
+      <Form.Item name={['options', 'host']} label={t('Host')} rules={[{ required: true }]}>
+        <Input placeholder="localhost" />
+      </Form.Item>
+      <Form.Item name={['options', 'port']} label={t('Port')} rules={[{ required: true }]} initialValue={1433}>
+        <InputNumber min={1} max={65535} style={{ width: '100%' }} />
+      </Form.Item>
+      <Form.Item name={['options', 'database']} label={t('Database')} rules={[{ required: true }]}>
+        <Input />
+      </Form.Item>
+      <Form.Item name={['options', 'schema']} label={t('Schema')}>
+        <Input />
+      </Form.Item>
+      <Form.Item name={['options', 'username']} label={t('Username')} rules={[{ required: true }]}>
+        <Input />
+      </Form.Item>
+      <Form.Item name={['options', 'password']} label={t('Password')}>
+        <Input.Password />
+      </Form.Item>
+      <Form.Item name={['options', 'encrypt']} label={t('Encrypt')} valuePropName="checked">
+        <Checkbox />
+      </Form.Item>
+      <Form.Item name={['options', 'tablePrefix']} label={t('Table prefix')}>
+        <Input />
+      </Form.Item>
+      <Form.Item name="addAllCollections" label={t('Load all collections')} valuePropName="checked" initialValue={true}>
+        <Checkbox />
+      </Form.Item>
+      {!addAllCollections ? (
+        <Form.Item name="collections" label={t('Collections')}>
+          <Select
+            mode="multiple"
+            allowClear
+            loading={loading}
+            options={collectionOptions}
+            onFocus={handleLoadCollections}
+            optionFilterProp="label"
+          />
+        </Form.Item>
+      ) : null}
+    </>
   );
 };
 

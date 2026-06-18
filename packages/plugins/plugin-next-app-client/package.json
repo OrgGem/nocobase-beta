@@ -1,6 +1,6 @@
 {
   "name": "plugin-next-app-client",
-  "version": "1.2.0",
+  "version": "1.2.4",
   "displayName": "Next App Client",
   "displayName.zh-CN": "Next App 客户端",
   "description": "Provides a full desktop-like NocoBase experience under /next-app with its own route collection, ACL permissions, and menu management.",

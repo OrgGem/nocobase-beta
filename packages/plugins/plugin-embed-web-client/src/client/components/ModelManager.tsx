@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useTranslation } from 'react-i18next';
 import {
   Card,
@@ -84,7 +84,7 @@ interface UploadModelModalProps {
 }
 
 const UploadModelModal: React.FC<UploadModelModalProps> = ({ open, onClose, onDone }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useTranslation('plugin-embed-web-client');
   const [form] = Form.useForm();
   const [fileStatuses, setFileStatuses] = useState<FileStatus[]>([]);
@@ -234,7 +234,7 @@ const UploadModelModal: React.FC<UploadModelModalProps> = ({ open, onClose, onDo
 // ── Main component ────────────────────────────────────────────────────────────
 
 export const ModelManager: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useTranslation('plugin-embed-web-client');
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(false);

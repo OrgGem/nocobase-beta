@@ -12,10 +12,12 @@ Client -> nginx (LB :80)
            └── postgres 16 (tuned for production)
 ```
 
-This stack is pinned to `nocobase/nocobase:2.1.0-full` via
-`NOCOBASE_VERSION=2.1.0-full`. The compose fallback also uses the same tag, so
+This stack is pinned to `nocobase/nocobase:2.1.6-full` via
+`NOCOBASE_VERSION=2.1.6-full`. The compose fallback also uses the same tag, so
 fresh deployments and existing `.env` based deployments resolve to the same
-NocoBase version.
+NocoBase version. Worker containers spawned by `plugin-cluster-manager` (Docker
+adapter) inherit the app container's image automatically, so they stay
+version-locked with `app-1` without configuring an image per stack.
 
 ## Quick Start
 
@@ -26,7 +28,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-## Upgrade to NocoBase 2.1.0
+## Upgrade to NocoBase 2.1.6
 
 Before upgrading, make a database backup. NocoBase supports upgrades only; if a
 rollback is required, restore the backup and start again with the previous image
@@ -40,10 +42,10 @@ grep '^NOCOBASE_VERSION=' .env
 
 # Optional backup example. Adjust the output path for your environment.
 docker compose exec postgres sh -c \
-  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/nocobase-before-2.1.0.dump'
-docker compose cp postgres:/tmp/nocobase-before-2.1.0.dump ./nocobase-before-2.1.0.dump
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/nocobase-before-2.1.6.dump'
+docker compose cp postgres:/tmp/nocobase-before-2.1.6.dump ./nocobase-before-2.1.6.dump
 
-# Pull and recreate the app container with the pinned 2.1.0 image.
+# Pull and recreate the app container with the pinned 2.1.6 image.
 docker compose pull app-1
 docker compose up -d app-1 nginx
 
@@ -54,7 +56,9 @@ docker compose ps
 
 If plugin-cluster-manager has created worker containers outside this compose
 file, recreate those workers after `app-1` is healthy so they use the same
-`2.1.0-full` image.
+`2.1.6-full` image. Workers created by the Docker orchestrator now inherit the
+app container's image automatically, so they stay version-locked with `app-1`
+after the recreate.
 
 ## Install plugin-worker-monitor
 

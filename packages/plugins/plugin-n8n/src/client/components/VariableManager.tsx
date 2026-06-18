@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { Table, Button, Modal, Form, Input, Space, message, Popconfirm, Tag, Tooltip } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useN8nRequest } from '../hooks/useN8nRequest';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
 export const VariableManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId } = useCurrentInstance();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);

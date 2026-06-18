@@ -13,7 +13,7 @@ import {
   NodeIndexOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useN8nRequest } from '../hooks/useN8nRequest';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
@@ -225,7 +225,7 @@ const ExecutionDetail: React.FC<{ detail: any }> = ({ detail }) => {
 
 export const ExecutionList: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId } = useCurrentInstance();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [workflowFilter, setWorkflowFilter] = useState<string | undefined>();

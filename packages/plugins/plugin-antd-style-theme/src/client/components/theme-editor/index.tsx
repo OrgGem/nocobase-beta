@@ -8,7 +8,8 @@
  */
 
 import { css, cx } from '@emotion/css';
-import { createStyles, useAPIClient, useGlobalTheme } from '@nocobase/client';
+import { useApp, useGlobalTheme } from '@nocobase/client-v2';
+import { createStyles } from '../../theme-compat';
 import { error } from '@nocobase/utils/client';
 import { Button, ConfigProvider, Input, Space, message } from 'antd';
 import antdEnUs from 'antd/locale/en_US';
@@ -58,7 +59,7 @@ const CustomTheme = ({ onThemeChange }: { onThemeChange?: (theme: ThemeConfig) =
   const { setOpen } = useThemeEditorContext();
   const { t, i18n } = useTranslation();
   const { refresh } = useThemeListContext();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [themeName, setThemeName] = React.useState<string>(globalTheme.name);
   const [loading, setLoading] = React.useState(false);
   const { updateUserThemeSettings } = useUpdateThemeSettings();

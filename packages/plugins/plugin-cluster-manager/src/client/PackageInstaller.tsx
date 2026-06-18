@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, Form, Input, Button, Alert, Progress, Tag, Typography, Space, Divider, message, Select } from 'antd';
 import { CloudServerOutlined, SafetyOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 import {
   DEFAULT_WORKER_PACKAGES,
@@ -37,7 +37,7 @@ function renderPackageTags(packages: string[], color?: string) {
 
 export const PackageInstaller: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);

@@ -7,13 +7,12 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { useAPIClient, useCurrentUserContext } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { error } from '@nocobase/utils/client';
 import { useCallback } from 'react';
 
 export function useUpdateThemeSettings() {
-  const api = useAPIClient();
-  const currentUser = useCurrentUserContext();
+  const api = useApp().apiClient;
 
   const updateUserThemeSettings = useCallback(
     async (themeId: number | null) => {
@@ -23,22 +22,12 @@ export function useUpdateThemeSettings() {
             themeId,
           },
         });
-        currentUser.mutate({
-          data: {
-            ...currentUser.data.data,
-            systemSettings: {
-              ...(currentUser.data.data.systemSettings || {}),
-              themeId,
-            },
-          },
-        });
         window.location.reload();
       } catch (err) {
-        console.log(error);
         error(err);
       }
     },
-    [api, currentUser],
+    [api],
   );
 
   return { updateUserThemeSettings };

@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import {
   Button,
   Modal,
@@ -43,7 +43,7 @@ import {
 const { Text, Title } = Typography;
 
 export const Infrastructure: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
 
   // ----- Vector Databases State -----
   const [vectorDatabases, setVectorDatabases] = useState<any[]>([]);

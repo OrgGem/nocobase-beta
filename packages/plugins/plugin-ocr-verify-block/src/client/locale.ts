@@ -1,4 +1,4 @@
-import { useApp } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCallback } from 'react';
 import { NAMESPACE } from '../shared/constants';
 

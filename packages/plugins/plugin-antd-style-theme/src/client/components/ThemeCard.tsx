@@ -8,7 +8,8 @@
  */
 
 import { DeleteOutlined, EditOutlined, EllipsisOutlined } from '@ant-design/icons';
-import { compatOldTheme, useAPIClient, useCurrentUserContext, useGlobalTheme, useToken } from '@nocobase/client';
+import { compatOldTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
+import { useToken } from '../theme-compat';
 import { error } from '@nocobase/utils/client';
 import { App, Card, ConfigProvider, Dropdown, Space, Switch, Tag, message } from 'antd';
 import React, { useCallback, useMemo } from 'react';
@@ -72,7 +73,7 @@ const ThemeCard = (props: Props) => {
   const { setOpen } = useThemeEditorContext();
   const currentUser = useCurrentUserContext();
   const { item, style = {}, onChange } = props;
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { updateUserThemeSettings } = useUpdateThemeSettings();
   const { modal } = App.useApp();
   const [loading, setLoading] = React.useState(false);

@@ -6,7 +6,7 @@ import {
   RobotOutlined, ReloadOutlined, CheckOutlined, CloseOutlined, ClockCircleOutlined,
   FileTextOutlined, ExportOutlined, EditOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { MarkdownView } from './MarkdownView';
 import { useT } from '../locale';
@@ -35,7 +35,7 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
 }) => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { repos } = useGitManager();
   const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

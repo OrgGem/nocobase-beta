@@ -7,7 +7,7 @@ import { redisActions } from './actions/redis-monitor';
 import { aclCacheActions, createAclCacheMiddleware } from './actions/acl-cache';
 import { clusterActions, readLocalLogs } from './actions/cluster-nodes';
 import { getRedisClient } from './utils/redis';
-import { getLocalNodeId } from './utils/node';
+import { getLocalNodeId, isWorkerMode } from './utils/node';
 import { eventQueueActions } from './actions/event-queue-monitor';
 import { lockActions } from './actions/lock-monitor';
 import { cacheMonitorActions } from './actions/cache-monitor';
@@ -57,14 +57,12 @@ export class PluginClusterManagerServer extends Plugin {
     (this.app as any).on('afterStart', () => {
       this.nodeRegistry?.start();
 
-      // Automatically install packages on boot for worker nodes
-      const mode = process.env.WORKER_MODE || 'main';
+      // Automatically install packages on boot for worker / sandbox nodes
       const isWorker =
-        mode === 'worker' ||
-        mode === 'task' ||
-        mode === '*' ||
+        isWorkerMode(process.env.WORKER_MODE) ||
         process.env.APP_ROLE === 'worker' ||
-        process.env.APP_ROLE === 'sandbox';
+        process.env.APP_ROLE === 'sandbox' ||
+        process.env.SKILL_HUB_SANDBOX === 'true';
       if (isWorker) {
         setTimeout(async () => {
           try {
@@ -126,9 +124,7 @@ export class PluginClusterManagerServer extends Plugin {
 
     // Workflow hook to trace executing node
     this.app.db.on('executions.afterSave', async (model: any) => {
-      const mode = process.env.WORKER_MODE || 'main';
-      const isWorker = mode === 'worker' || mode === 'task' || mode === '*';
-      if (isWorker) {
+      if (isWorkerMode(process.env.WORKER_MODE)) {
         const id = model.get('id');
         const redis = getRedisClient(this.app);
         if (id && redis) {
@@ -566,8 +562,7 @@ export class PluginClusterManagerServer extends Plugin {
   }
 
   private isWorkerOnlyNode(): boolean {
-    const workerMode = process.env.WORKER_MODE || '';
-    return workerMode === 'worker' || workerMode === 'task' || workerMode === '*';
+    return isWorkerMode(process.env.WORKER_MODE);
   }
 }
 

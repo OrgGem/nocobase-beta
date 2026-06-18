@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginN8nClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'n8n',
+      title: this.t('n8n Integration'),
+      icon: 'ApiOutlined',
+      aclSnippet: 'pm.plugin-n8n',
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'n8n',
+      key: 'index',
+      title: this.t('n8n Integration'),
+      
+      componentLoader: () => import('../client/components/N8nSettingsPage').then(m => ({ default: m.N8nSettingsPage })),
+    });
+
   }
 }
 

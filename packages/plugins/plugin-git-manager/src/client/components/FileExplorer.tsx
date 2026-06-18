@@ -8,7 +8,7 @@ import {
   FileMarkdownOutlined,
   Html5Outlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { useT } from '../locale';
 
@@ -61,7 +61,7 @@ interface TreeNode {
 export const FileExplorer: React.FC = () => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { selectedRepo, branches: branchList, currentBranch, refreshBranches } = useGitManager();
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);

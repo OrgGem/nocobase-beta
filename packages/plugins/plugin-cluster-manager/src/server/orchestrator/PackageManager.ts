@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { getRedisClient } from '../utils/redis';
-import { getLocalNodeId } from '../utils/node';
+import { getLocalNodeId, getLocalRole } from '../utils/node';
 import { promises as fsp } from 'fs';
 import path from 'path';
 import Application from '@nocobase/server';
@@ -67,15 +67,7 @@ function redactUrl(value: string): string {
 }
 
 function getCurrentRole(): Exclude<TargetRole, 'all'> {
-  if (process.env.APP_ROLE === 'app' || process.env.APP_ROLE === 'worker' || process.env.APP_ROLE === 'sandbox') {
-    return process.env.APP_ROLE;
-  }
-  if (process.env.SKILL_HUB_SANDBOX === 'true') {
-    return 'sandbox';
-  }
-
-  const workerMode = process.env.WORKER_MODE || 'main';
-  return workerMode === 'worker' || workerMode === 'task' || workerMode === '*' ? 'worker' : 'app';
+  return getLocalRole();
 }
 
 function formatCommand(command: string, args: string[]): string {

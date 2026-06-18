@@ -11,7 +11,7 @@ import {
   DeleteOutlined,
   QuestionCircleOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { useT } from '../locale';
 
@@ -30,7 +30,7 @@ const FILE_STATUS_MAP: Record<string, { color: string; icon: React.ReactNode; la
 export const GitOperations: React.FC = () => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { selectedRepo, refreshRepos } = useGitManager();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [statusData, setStatusData] = useState<any>(null);

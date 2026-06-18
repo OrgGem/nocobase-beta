@@ -1,9 +1,9 @@
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 export function useN8nRequest(resource: string, action: string, extraParams: any = {}) {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId } = useCurrentInstance();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);

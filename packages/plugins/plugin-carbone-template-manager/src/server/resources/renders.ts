@@ -35,6 +35,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
     const format = (v.format as CarboneOutputFormat | undefined) ?? undefined;
     const filename = v.filename;
     const inline = v.inline === true || ctx.action.params.inline === 'true';
+    const renderOptions = pickRenderOptions(v);
 
     if (!templateId && !templateName) ctx.throw(400, 'templateId or templateName is required');
     if (!(await checkRate(ctx, plugin, logger, 'renderById', { templateId: templateId || templateName }))) return;
@@ -63,6 +64,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
         format: format ?? tpl.defaultOutputFormat,
         filename: filename ?? tpl.originalFileName?.replace(/\.[^.]+$/, '') ?? tpl.name,
         persistOutput: !inline,
+        ...renderOptions,
       });
 
       ctx.set('X-Carbone-Cache', outcome.cacheHit ? 'HIT' : 'MISS');
@@ -74,6 +76,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
           'Content-Disposition',
           `inline; filename="${encodeURIComponent(filename ?? `${tpl.name}.${outcome.format}`)}"`,
         );
+        (ctx as any).withoutDataWrapping = true;
         ctx.body = outcome.buffer;
       } else {
         ctx.body = {
@@ -131,6 +134,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
     const t0 = Date.now();
     const v = ctx.action.params.values || {};
     const { attachmentId, data, format, filename } = v;
+    const renderOptions = pickRenderOptions(v);
     if (!attachmentId) ctx.throw(400, 'attachmentId is required');
     if (!(await checkRate(ctx, plugin, logger, 'renderDirect', {}))) return;
 
@@ -147,6 +151,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
         data: data ?? {},
         format,
         filename,
+        ...renderOptions,
       });
 
       ctx.set('X-Carbone-Cache', outcome.cacheHit ? 'HIT' : 'MISS');
@@ -206,6 +211,7 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
     const templateId = v.templateId ?? ctx.action.params.filterByTk;
     const data = v.data ?? {};
     const format = v.format;
+    const renderOptions = pickRenderOptions(v);
 
     if (!templateId) ctx.throw(400, 'templateId is required');
     if (!(await checkRate(ctx, plugin, logger, 'test', { templateId }))) return;
@@ -225,12 +231,14 @@ export function makeRenderActions(plugin: PluginCarboneTemplateManagerServer) {
         format: format ?? tpl.defaultOutputFormat,
         bypassCache: true,
         persistOutput: false,
+        ...renderOptions,
       });
 
       ctx.set('X-Carbone-Cache', 'BYPASS');
       ctx.set('X-Carbone-Render-Ms', String(outcome.durationMs));
       ctx.type = mimeForFormat(outcome.format);
       ctx.set('Content-Disposition', `inline; filename="${encodeURIComponent(`${tpl.name}-test.${outcome.format}`)}"`);
+      (ctx as any).withoutDataWrapping = true;
       ctx.body = outcome.buffer;
 
       logger
@@ -295,55 +303,7 @@ export function makeCacheActions(plugin: PluginCarboneTemplateManagerServer) {
   return { invalidate };
 }
 
-/**
- * Replay a logged render. Reads the saved `inputData` (only available when
- * `keepRawInDatabase` was true at the time of capture) and re-runs the
- * matching action via the standard pipeline.
- */
 export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer) {
-  async function replay(ctx: Context, next: Next) {
-    const id = ctx.action.params.filterByTk ?? ctx.action.params.values?.id;
-    if (!id) ctx.throw(400, 'log id is required');
-    const log = await plugin.db.getRepository(COLLECTION.renderLogs).findOne({ filterByTk: id });
-    if (!log) ctx.throw(404, 'log not found');
-    if (!log.inputData) ctx.throw(409, 'inputData was not retained for this log');
-    if (!log.templateId) ctx.throw(409, 'replay only supports logged render/test entries');
-
-    const pipeline = await buildPipeline(plugin);
-    const tpl = await plugin.db.getRepository(COLLECTION.templates).findOne({ filterByTk: log.templateId });
-    if (!tpl) ctx.throw(404, 'template no longer exists');
-
-    // Use the carboneTemplateId and versionId from the log record — these
-    // reflect the exact template version that was used at the time of the
-    // original render.  Previously we used `tpl.carboneTemplateId` and
-    // `tpl.currentVersionId` which point to the *current* version and would
-    // produce a completely different file when the template had been updated.
-    const carboneTemplateId = log.carboneTemplateId || tpl.carboneTemplateId;
-    const versionId = log.versionId || tpl.currentVersionId;
-
-    const outcome = await pipeline.render({
-      templateId: tpl.id,
-      versionId,
-      carboneTemplateId,
-      data: log.inputData,
-      format: log.format,
-      bypassCache: true,
-      persistOutput: false,
-    });
-
-    ctx.set('X-Carbone-Cache', 'BYPASS');
-    ctx.set('X-Carbone-Render-Ms', String(outcome.durationMs));
-    ctx.type = mimeForFormat(outcome.format);
-    const replayFilename = encodeURIComponent(`replay-${id}.${outcome.format}`);
-    // Use inline only for browser-previewable formats; others download (#12).
-    const disposition = PREVIEWABLE_FORMATS.has(outcome.format) ? 'inline' : 'attachment';
-    ctx.set('Content-Disposition', `${disposition}; filename="${replayFilename}"`);
-    ctx.body = outcome.buffer;
-    // Intentionally NOT calling next() — the response is a raw binary stream
-    // and we must prevent NocoBase middleware from wrapping it in a JSON
-    // envelope, which would corrupt the output and show "strange data".
-  }
-
   /**
    * Aggregate KPIs over the last `hours` hours (default 24). Cheap because the
    * dataset is bounded by `monitoringRetentionDays`.
@@ -391,7 +351,7 @@ export function makeMonitoringActions(plugin: PluginCarboneTemplateManagerServer
     await next();
   }
 
-  return { replay, summary };
+  return { summary };
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
@@ -444,6 +404,31 @@ function byteSize(data: unknown): number {
   }
 }
 
+/**
+ * Extract the optional Carbone render parameters from an action's `values`.
+ * Only keys that are actually present are returned, so a caller that sends
+ * none behaves exactly as before (no cache-key change, no payload change).
+ */
+function pickRenderOptions(v: Record<string, any>): {
+  complement?: unknown;
+  enum?: Record<string, unknown>;
+  translations?: Record<string, unknown>;
+  lang?: string;
+  timezone?: string;
+  variableStr?: string;
+  formatOptions?: unknown;
+} {
+  const out: Record<string, unknown> = {};
+  if (v.complement !== undefined) out.complement = v.complement;
+  if (v.enum !== undefined) out.enum = v.enum;
+  if (v.translations !== undefined) out.translations = v.translations;
+  if (v.lang !== undefined) out.lang = v.lang;
+  if (v.timezone !== undefined) out.timezone = v.timezone;
+  if (v.variableStr !== undefined) out.variableStr = v.variableStr;
+  if (v.formatOptions !== undefined) out.formatOptions = v.formatOptions;
+  return out;
+}
+
 function bucketKey(d: Date | string): string {
   const dt = typeof d === 'string' ? new Date(d) : d;
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(
@@ -457,9 +442,6 @@ async function buildPipeline(plugin: PluginCarboneTemplateManagerServer): Promis
   if (!client) throw new Error('Carbone settings are not configured');
   return new RenderPipeline(plugin.app, client, new CacheManager(plugin.app));
 }
-
-/** Formats the browser can render inline (PDF viewer, image, text). */
-const PREVIEWABLE_FORMATS = new Set(['pdf', 'html', 'svg', 'txt', 'csv', 'png', 'jpg']);
 
 const MIME: Record<string, string> = {
   pdf: 'application/pdf',

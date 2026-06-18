@@ -8,12 +8,12 @@ import {
   ApiOutlined,
   DatabaseOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
 export function EventQueueMonitor() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState<any>(null);
   const [autoRefresh, setAutoRefresh] = useState<number | null>(null);

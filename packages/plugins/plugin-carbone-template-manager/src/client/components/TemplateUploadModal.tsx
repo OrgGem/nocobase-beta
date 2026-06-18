@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Form, Input, Modal, Select, Space, Spin, Upload, message } from 'antd';
 import { InboxOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION, SUPPORTED_OUTPUT_FORMATS } from '../../shared/constants';
 import { PlaceholderTree, PlaceholderSchemaView } from './PlaceholderTree';
@@ -38,7 +38,7 @@ interface ParsedPreview {
  *   3. User fills metadata → POST /api/carboneTemplates:upload to persist.
  */
 export const TemplateUploadModal: React.FC<Props> = ({ open, onClose, onSaved, template }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useCarboneTranslation();
   const [form] = Form.useForm();
 

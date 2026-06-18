@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { Card, Switch, Select, Space, Typography, Spin, Divider } from 'antd';
 
 const { Text } = Typography;
@@ -31,7 +31,7 @@ interface RolePermRecord {
  * Lets admins control whether a role can use the AI API and which AI Employees it may access.
  */
 export function AiApiRolePermissions({ role }: { role: any }) {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [employees, setEmployees] = useState<AiEmployee[]>([]);

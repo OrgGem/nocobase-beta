@@ -13,6 +13,16 @@ export interface RenderInput {
   filename?: string;
   bypassCache?: boolean;
   persistOutput?: boolean; // when false the buffer is returned but no attachment is created
+
+  // Extra Carbone render parameters forwarded as-is to the Carbone API.
+  // They also participate in the cache key so different options don't collide.
+  complement?: unknown; // {c.xxx} scope
+  enum?: Record<string, unknown>;
+  translations?: Record<string, unknown>;
+  lang?: string;
+  timezone?: string;
+  variableStr?: string;
+  formatOptions?: unknown; // passed under convertTo.formatOptions
 }
 
 export interface RenderOutcome {
@@ -48,10 +58,19 @@ export class RenderPipeline {
       throw new Error(`Unsupported output format: ${format}`);
     }
 
-    const cacheKey = buildCacheKey(input.carboneTemplateId, input.data, format, {
-      templateId: input.templateId,
-      versionId: input.versionId,
-    });
+    const renderOptions = collectRenderOptions(input);
+    const cacheKey = buildCacheKey(
+      input.carboneTemplateId,
+      input.data,
+      format,
+      {
+        templateId: input.templateId,
+        versionId: input.versionId,
+      },
+      // formatOptions travels inside convertTo, not in renderOptions, but it
+      // still changes the output — fold it into the key so it doesn't collide.
+      input.formatOptions != null ? { ...renderOptions, formatOptions: input.formatOptions } : renderOptions,
+    );
     // Cache LOOKUP runs whenever caching is on and the caller didn't bypass —
     // independent of `persistOutput`, so inline previews (playground) can hit
     // entries populated by earlier persisted renders.
@@ -73,9 +92,7 @@ export class RenderPipeline {
             buffer = (await readAttachmentBuffer(this.app, hit.attachmentId)).buffer;
             bufferOk = true;
           } catch (err) {
-            this.app.logger?.warn(
-              `[carbone] cache hit but attachment unreadable, re-rendering: ${err}`,
-            );
+            this.app.logger?.warn(`[carbone] cache hit but attachment unreadable, re-rendering: ${err}`);
           }
         }
         if (bufferOk) {
@@ -97,13 +114,11 @@ export class RenderPipeline {
     // Cache miss → call Carbone.
     const result = await this.carbone.render(input.carboneTemplateId, {
       data: input.data,
-      convertTo: format,
+      convertTo: input.formatOptions != null ? { formatName: format, formatOptions: input.formatOptions } : format,
       reportName: input.filename,
+      ...renderOptions,
     });
-    const filename = ensureExtension(
-      input.filename || `${input.carboneTemplateId.slice(0, 8)}-${Date.now()}`,
-      format,
-    );
+    const filename = ensureExtension(input.filename || `${input.carboneTemplateId.slice(0, 8)}-${Date.now()}`, format);
 
     let attachmentId: number | null = null;
     let url: string | null = null;
@@ -122,8 +137,7 @@ export class RenderPipeline {
       // didn't persist, we always need a fresh attachment for the cache row.
       let cacheAttachmentId: number;
       let cacheSize: number;
-      const cacheStorageDiffers =
-        settings.cacheStorageId && settings.cacheStorageId !== settings.outputStorageId;
+      const cacheStorageDiffers = settings.cacheStorageId && settings.cacheStorageId !== settings.outputStorageId;
       if (attachmentId !== null && !cacheStorageDiffers) {
         cacheAttachmentId = attachmentId;
         cacheSize = result.buffer.length;
@@ -173,4 +187,20 @@ function ensureExtension(filename: string, format: string): string {
   const expected = `.${format}`;
   if (clean.toLowerCase().endsWith(expected.toLowerCase())) return clean;
   return `${clean.replace(/\.[^.\\/]+$/, '')}${expected}`;
+}
+
+/**
+ * Collect the optional Carbone render parameters that are actually set, so they
+ * can be both folded into the cache key and spread into the Carbone request.
+ * `formatOptions` is intentionally excluded — it travels inside `convertTo`.
+ */
+function collectRenderOptions(input: RenderInput): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (input.complement !== undefined && input.complement !== null) out.complement = input.complement;
+  if (input.enum !== undefined && input.enum !== null) out.enum = input.enum;
+  if (input.translations !== undefined && input.translations !== null) out.translations = input.translations;
+  if (input.lang) out.lang = input.lang;
+  if (input.timezone) out.timezone = input.timezone;
+  if (input.variableStr) out.variableStr = input.variableStr;
+  return out;
 }

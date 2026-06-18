@@ -8,7 +8,7 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useTranslation } from 'react-i18next';
 import {
   Form,
@@ -71,7 +71,7 @@ interface ModelStatus {
 }
 
 export const PluginSettings: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useTranslation('plugin-embed-web-client');
   const { message } = App.useApp();
   const [form] = Form.useForm();

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Table, Tag, Button, Space, Popconfirm, message, Select, Dropdown } from 'antd';
 import { ReloadOutlined, StopOutlined, UnorderedListOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import dayjs from 'dayjs';
 
 const EXEC_STATUS: Record<string, { label: string; color: string }> = {
@@ -26,7 +26,7 @@ const JOB_STATUS: Record<string, { label: string; color: string }> = {
 };
 
 export function WorkflowExecutions() {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
@@ -43,7 +43,13 @@ export function WorkflowExecutions() {
           params: { page, pageSize, statusFilter: statusFilter === undefined ? '' : statusFilter },
         });
         const body = res.data;
-        const rows = Array.isArray(body?.data?.data) ? body.data.data : Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+        const rows = Array.isArray(body?.data?.data)
+          ? body.data.data
+          : Array.isArray(body?.data)
+            ? body.data
+            : Array.isArray(body)
+              ? body
+              : [];
         setData(rows);
         setPagination((prev) => ({
           ...prev,
@@ -71,7 +77,13 @@ export function WorkflowExecutions() {
         url: 'clusterManagerWorkflow:getJobs',
         params: { filterByTk: executionId },
       });
-      const jobs = Array.isArray(res?.data?.data?.data) ? res.data.data.data : Array.isArray(res?.data?.data) ? res.data.data : Array.isArray(res?.data) ? res.data : [];
+      const jobs = Array.isArray(res?.data?.data?.data)
+        ? res.data.data.data
+        : Array.isArray(res?.data?.data)
+          ? res.data.data
+          : Array.isArray(res?.data)
+            ? res.data
+            : [];
       setExpandedJobs((prev) => ({ ...prev, [executionId]: jobs }));
     } catch {
       message.error('Failed to load jobs');
@@ -211,19 +223,12 @@ export function WorkflowExecutions() {
         dataSource={data}
         loading={loading}
         size="small"
+        scroll={{ x: 'max-content' }}
         expandable={{
           expandedRowRender: (record) => {
             const jobs = expandedJobs[record.id];
-            if (!jobs) return <div style={{ padding: 8 }}>Click "Jobs" to load</div>;
-            return (
-              <Table
-                rowKey="id"
-                columns={jobColumns}
-                dataSource={jobs}
-                size="small"
-                pagination={false}
-              />
-            );
+            if (!jobs) return <div style={{ padding: 8 }}>Click &quot;Jobs&quot; to load</div>;
+            return <Table rowKey="id" columns={jobColumns} dataSource={jobs} size="small" pagination={false} />;
           },
         }}
         pagination={{

@@ -1,6 +1,6 @@
 {
   "name": "plugin-data-cloner",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "displayName": "Data Cloner",
   "description": "Gradually clone data from one MSSQL datasource to another",
   "main": "dist/server/index.js",

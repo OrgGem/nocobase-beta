@@ -8,7 +8,8 @@
  */
 
 import { PlusOutlined } from '@ant-design/icons';
-import { compatOldTheme, defaultTheme, useGlobalTheme, useToken } from '@nocobase/client';
+import { compatOldTheme, defaultTheme, useGlobalTheme } from '@nocobase/client-v2';
+import { useToken } from '../theme-compat';
 import { App, Button, Space } from 'antd';
 import React, { useCallback } from 'react';
 import { useTranslation } from '../locale';

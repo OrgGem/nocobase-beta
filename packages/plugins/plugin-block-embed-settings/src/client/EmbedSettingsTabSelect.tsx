@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useForm } from '@formily/react';
 import { observer } from '@formily/reactive-react';
 import { Checkbox, Empty, Space, Typography } from 'antd';
-import { useApp, useCompile } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './locale';
 import { collectEmbeddablePluginTabs } from './EmbedSettingsPluginSelect';
 
@@ -12,17 +12,16 @@ export const EmbedSettingsTabSelect = observer((props: any) => {
   const { value, onChange, disabled, ...others } = props;
   const form = useForm();
   const app = useApp();
-  const compile = useCompile();
   const t = useT();
   const pluginName = form.values?.pluginName;
   const previousPluginNameRef = useRef(pluginName);
 
   const options = useMemo(() => {
-    return collectEmbeddablePluginTabs(app, pluginName, compile).map((tab) => ({
+    return collectEmbeddablePluginTabs(app, pluginName).map((tab) => ({
       value: tab.value,
       label: tab.label,
     }));
-  }, [app, compile, pluginName]);
+  }, [app, pluginName]);
 
   useEffect(() => {
     const clearSelectedTabs = () => {

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Table, Tag, Button, Progress, Space, Popconfirm, message, Select, Dropdown } from 'antd';
 import { ReloadOutlined, StopOutlined, RedoOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import dayjs from 'dayjs';
 
 const STATUS_MAP: Record<number | string, { label: string; color: string }> = {
@@ -13,7 +13,7 @@ const STATUS_MAP: Record<number | string, { label: string; color: string }> = {
 };
 
 export function TaskManager() {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
@@ -28,7 +28,13 @@ export function TaskManager() {
           params: { page, pageSize, statusFilter: statusFilter === undefined ? '' : statusFilter },
         });
         const body = res.data;
-        const rows = Array.isArray(body?.data?.data) ? body.data.data : Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+        const rows = Array.isArray(body?.data?.data)
+          ? body.data.data
+          : Array.isArray(body?.data)
+            ? body.data
+            : Array.isArray(body)
+              ? body
+              : [];
         setData(rows);
         setPagination((prev) => ({
           ...prev,
@@ -175,6 +181,7 @@ export function TaskManager() {
         dataSource={data}
         loading={loading}
         size="small"
+        scroll={{ x: 'max-content' }}
         pagination={{
           ...pagination,
           showSizeChanger: true,

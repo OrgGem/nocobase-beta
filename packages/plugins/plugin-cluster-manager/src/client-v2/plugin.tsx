@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginClusterManagerClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'plugin-cluster-manager',
+      title: this.t('Cluster Manager'),
+      icon: 'DashboardOutlined',
+      
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'plugin-cluster-manager',
+      key: 'index',
+      title: this.t('Cluster Manager'),
+      
+      componentLoader: () => import('../client/ClusterManagerLayout').then(m => ({ default: m.ClusterManagerLayout })),
+    });
+
   }
 }
 

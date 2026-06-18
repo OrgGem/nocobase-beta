@@ -10,7 +10,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Layout, Menu, Table, Button, Breadcrumb, Space, Modal, Input,
-  Popconfirm, Empty, Spin, Tag, Tooltip, message, Typography, Upload, Descriptions, Pagination
+  Popconfirm, Empty, Spin, Tag, Tooltip, message, Typography, Upload, Descriptions, Pagination, Image
 } from 'antd';
 import {
   FolderOutlined, FileOutlined, UploadOutlined, FolderAddOutlined,
@@ -23,7 +23,7 @@ import {
   FileUnknownOutlined
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useFileBrowser, FileItem } from '../hooks/useFileBrowser';
 
 const { Sider, Content } = Layout;
@@ -62,7 +62,7 @@ const getFileIcon = (mimetype?: string) => {
 };
 
 export const FileBrowser: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const browser = useFileBrowser();
   const {
     directories, currentDir, files, currentPath, loading, dirLoading,
@@ -421,23 +421,47 @@ export const FileBrowser: React.FC = () => {
       </Modal>
       {previewOpen && previewFile ? (
         (() => {
-          const type = attachmentFileTypes.getTypeByFile(previewFile);
-          if (type?.Previewer) {
+          const ext = (previewFile.extname || '').toLowerCase().replace(/^\./, '');
+          const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(ext);
+          const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext);
+          const isAudio = ['mp3', 'wav', 'oga', 'm4a', 'flac', 'aac'].includes(ext);
+          const isPdf = ext === 'pdf';
+          const close = () => setPreviewOpen(false);
+          if (isImage) {
             return (
-              <type.Previewer
-                index={previewIndex}
-                list={previewFiles as any}
-                onSwitchIndex={(index: number | null | undefined) => {
-                  if (index === null || index === undefined) {
-                    setPreviewOpen(false);
-                  } else {
-                    setPreviewIndex(index);
-                  }
+              <Image
+                style={{ display: 'none' }}
+                src={previewFile.url}
+                preview={{
+                  visible: previewOpen,
+                  src: previewFile.url,
+                  onVisibleChange: (v) => {
+                    if (!v) close();
+                  },
                 }}
               />
             );
           }
-          return null;
+          return (
+            <Modal open={previewOpen} title={previewFile.filename} footer={null} width={880} onCancel={close} destroyOnClose>
+              {isVideo ? (
+                <video src={previewFile.url} controls style={{ width: '100%' }} />
+              ) : isAudio ? (
+                <audio src={previewFile.url} controls style={{ width: '100%' }} />
+              ) : isPdf ? (
+                <iframe src={previewFile.url} title={previewFile.filename} style={{ width: '100%', height: '70vh', border: 'none' }} />
+              ) : (
+                <Empty
+                  description="Preview not available for this file type"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                >
+                  <Button type="primary" href={previewFile.url} target="_blank" rel="noopener noreferrer">
+                    Download
+                  </Button>
+                </Empty>
+              )}
+            </Modal>
+          );
         })()
       ) : null}
     </Layout>

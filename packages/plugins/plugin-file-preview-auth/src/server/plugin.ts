@@ -380,9 +380,23 @@ export class PluginFilePreviewAuthServer extends Plugin {
             ctx.attachment(attachmentObj.filename);
             ctx.body = stream;
             // S3 Private Bucket Handler
-          } catch (err) {
+          } catch (err: any) {
             this.log.error(`[FilePreviewAuth] Error fetching stream for URL ${url}: ${err.message}`);
-            ctx.throw(500, 'Failed to fetch the file from storage');
+            try {
+              require('fs').writeFileSync(
+                require('path').join(process.cwd(), 'preview_error.log'),
+                `Error fetching stream for URL ${url}:\n` +
+                `Time: ${new Date().toISOString()}\n` +
+                `Message: ${err.message}\n` +
+                `Stack: ${err.stack}\n` +
+                `Attachment: ${JSON.stringify(attachment, null, 2)}\n` +
+                `AttachmentObj: ${JSON.stringify(attachmentObj, null, 2)}\n` +
+                `StorageModel: ${JSON.stringify(storageModel, null, 2)}\n`
+              );
+            } catch (fsErr: any) {
+              this.log.error(`[FilePreviewAuth] Failed to write preview_error.log: ${fsErr.message}`);
+            }
+            ctx.throw(500, `Failed to fetch the file from storage: ${err.message}`);
           }
 
           await next();

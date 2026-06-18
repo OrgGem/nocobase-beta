@@ -20,7 +20,13 @@ export function buildCacheKey(
   data: unknown,
   format: string,
   scope?: { templateId?: number; versionId?: number },
+  options?: Record<string, unknown>,
 ): string {
+  // Only fold render options into the key when at least one is set, so
+  // existing cache rows (rendered before options were supported) keep the
+  // same key and stay valid.
+  const definedOptions = options ? pickDefined(options) : {};
+  const optionsPart = Object.keys(definedOptions).length ? stableStringify(definedOptions) : '';
   return createHash('md5')
     .update(scope?.templateId != null ? String(scope.templateId) : '')
     .update('|')
@@ -31,7 +37,18 @@ export function buildCacheKey(
     .update(stableStringify(data))
     .update('|')
     .update(format)
+    .update('|')
+    .update(optionsPart)
     .digest('hex');
+}
+
+/** Drop keys whose value is undefined or null so they don't affect the cache key. */
+function pickDefined(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined && v !== null) out[k] = v;
+  }
+  return out;
 }
 
 export function inputMd5(data: unknown): string {
@@ -62,9 +79,7 @@ export class CacheManager {
    *  - the linked attachment was deleted.
    */
   async lookup(cacheKey: string): Promise<CacheLookupHit | CacheLookupMiss> {
-    const row = await this.app.db
-      .getRepository(COLLECTION.renderCache)
-      .findOne({ filter: { cacheKey } });
+    const row = await this.app.db.getRepository(COLLECTION.renderCache).findOne({ filter: { cacheKey } });
     if (!row) return { status: 'miss', cacheKey };
 
     if (row.expiresAt && new Date(row.expiresAt) < new Date()) {
@@ -72,9 +87,7 @@ export class CacheManager {
       return { status: 'miss', cacheKey };
     }
 
-    const attachment = await this.app.db
-      .getRepository('attachments')
-      .findOne({ filterByTk: row.outputAttachmentId });
+    const attachment = await this.app.db.getRepository('attachments').findOne({ filterByTk: row.outputAttachmentId });
     if (!attachment) {
       // Backing file disappeared — drop the row and treat as miss.
       await this.evict(row.id);

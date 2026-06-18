@@ -1,14 +1,10 @@
-import React, { Component as ReactComponent } from 'react';
+import React, { Component as ReactComponent, Suspense, useMemo } from 'react';
 import { useFieldSchema } from '@formily/react';
-import { useApp, SchemaComponentOptions } from '@nocobase/client';
-import { Empty, Result, Button, Typography, Tabs } from 'antd';
+import { useApp } from '@nocobase/client-v2';
+import { Empty, Result, Button, Typography, Tabs, Spin } from 'antd';
 import { css } from '@emotion/css';
 import { useT } from './locale';
-import {
-  collectEmbeddablePluginTabs,
-  EmbedSettingsTabOption,
-  isRenderableSettingsComponent,
-} from './EmbedSettingsPluginSelect';
+import { collectEmbeddablePluginTabs, EmbedSettingsTabOption } from './EmbedSettingsPluginSelect';
 
 const { Text } = Typography;
 
@@ -81,14 +77,13 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
     return <Empty description={t('Plugin not found or not authorized')} />;
   }
 
-  const setting = app.pluginSettingsManager.getSetting(pluginName);
   const tabOptions = collectEmbeddablePluginTabs(app, pluginName);
   const selectedTabKeys = Array.isArray(enabledTabKeys) ? enabledTabKeys : tabOptions.map((tab) => tab.value);
   const enabledTabs = tabOptions.filter((tab) => selectedTabKeys.includes(tab.value));
   const tabsToRender =
     enabledTabs.length === 0 && Array.isArray(enabledTabKeys) && enabledTabKeys.length > 0 ? tabOptions : enabledTabs;
 
-  if (!isRenderableSettingsComponent(setting?.Component) && tabOptions.length === 0) {
+  if (tabOptions.length === 0) {
     return <Empty description={t('This plugin has no embeddable settings page')} />;
   }
 
@@ -96,21 +91,12 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
     return <Empty description={t('No tabs enabled')} />;
   }
 
-  const renderComponent = (tab: EmbedSettingsTabOption) => {
-    const Comp = tab.Component;
-    return (
-      <SchemaComponentOptions components={app.components}>
-        <Comp {...tab.componentProps} dataSourceName={dataSourceName} collectionName={collectionName} embedded />
-      </SchemaComponentOptions>
-    );
-  };
-
   return (
     <EmbedErrorBoundary pluginName={pluginName}>
       <div
         className={css`
           min-height: 200px;
-          /* Force override the inline styles (like max-width 800px and padding 16px) 
+          /* Force override the inline styles (like max-width 800px and padding 16px)
              often set by other plugins' settings components */
           > div {
             max-width: 100% !important;
@@ -119,17 +105,35 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
         `}
       >
         {tabsToRender.length === 1 ? (
-          renderComponent(tabsToRender[0])
+          <EmbedTabContent tab={tabsToRender[0]} dataSourceName={dataSourceName} collectionName={collectionName} />
         ) : (
           <Tabs
             items={tabsToRender.map((tab) => ({
               key: tab.value,
               label: tab.label,
-              children: renderComponent(tab),
+              children: <EmbedTabContent tab={tab} dataSourceName={dataSourceName} collectionName={collectionName} />,
             }))}
           />
         )}
       </div>
     </EmbedErrorBoundary>
+  );
+};
+
+const EmbedTabContent: React.FC<{
+  tab: EmbedSettingsTabOption;
+  dataSourceName?: string;
+  collectionName?: string;
+}> = ({ tab, dataSourceName, collectionName }) => {
+  const Comp = useMemo<React.ComponentType<any>>(() => {
+    if (tab.Component) return tab.Component;
+    if (tab.componentLoader) return React.lazy(tab.componentLoader);
+    return () => null;
+  }, [tab.Component, tab.componentLoader]);
+
+  return (
+    <Suspense fallback={<Spin />}>
+      <Comp {...tab.componentProps} dataSourceName={dataSourceName} collectionName={collectionName} embedded />
+    </Suspense>
   );
 };

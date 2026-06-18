@@ -22,7 +22,7 @@ import {
   CloseCircleOutlined,
   SendOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
 const { TextArea } = Input;
@@ -30,7 +30,7 @@ const { Title, Text } = Typography;
 
 export function NginxCacheManager() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [status, setStatus] = useState<any>(null);

@@ -5,7 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { RedisNodeRegistry } from '../adapters/redis-node-registry';
 import { getRedis } from '../utils/redis';
-import { getLocalNodeId } from '../utils/node';
+import { getLocalNodeId, getNodeRoleFrom, isWorkerMode } from '../utils/node';
 import { packagesFromConfig, type CustomPackageMap, type WorkerPackageMap } from '../../shared/packages';
 
 const LOG_RESPONSE_KEY_PREFIX = 'cluster-manager:log-response:';
@@ -17,6 +17,7 @@ interface ClusterNodeRecord {
   hostname?: string;
   appVersion?: string;
   workerMode?: string;
+  appRole?: string;
   isSandbox?: boolean;
   status?: string;
   url?: string | null;
@@ -162,11 +163,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function getNodeRole(node: ClusterNodeRecord): 'app' | 'worker' | 'sandbox' {
-  if (node.isSandbox) {
-    return 'sandbox';
-  }
-  const workerMode = node.workerMode || 'main';
-  return workerMode === 'worker' || workerMode === 'task' || workerMode === '*' ? 'worker' : 'app';
+  return getNodeRoleFrom({ workerMode: node.workerMode, appRole: node.appRole, isSandbox: node.isSandbox });
 }
 
 function getReferenceVersion(nodes: ClusterNodeRecord[]) {
@@ -304,7 +301,7 @@ export const clusterActions = {
    */
   async current(ctx: Context, next: () => Promise<void>) {
     const currentMode = process.env.WORKER_MODE || 'main';
-    const isApp = currentMode === 'main' || currentMode === '' || currentMode === 'app';
+    const isApp = !isWorkerMode(process.env.WORKER_MODE);
 
     if (isApp) {
       // This process IS the APP node — return local data directly

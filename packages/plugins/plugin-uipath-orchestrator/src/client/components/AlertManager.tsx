@@ -5,7 +5,8 @@
 import React, { useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Space, message, Tag } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined } from '@ant-design/icons';
-import { useRequest, useAPIClient } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
@@ -22,18 +23,14 @@ const SEVERITIES = ['info', 'warning', 'critical'];
 
 export const AlertManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId } = useCurrentInstance();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<any>(null);
   const [form] = Form.useForm();
 
   const { data, loading, refresh } = useRequest<any>(
-    {
-      resource: 'uipathAlertRules',
-      action: 'list',
-      params: { pageSize: 100, filter: { instanceId } },
-    },
+    () => api.resource('uipathAlertRules').list({ pageSize: 100, filter: { instanceId } }),
     { ready: !!instanceId, refreshDeps: [instanceId] },
   );
 

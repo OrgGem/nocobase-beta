@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginAiDrawioClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'ai-drawio',
+      title: this.t('AI Drawio'),
+      icon: 'ApartmentOutlined',
+      aclSnippet: 'pm.ai-drawio',
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-drawio',
+      key: 'index',
+      title: this.t('AI Drawio'),
+      
+      componentLoader: () => import('../client/DrawioManager').then(m => ({ default: m.DrawioManager })),
+    });
+
   }
 }
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Select } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 export const LLMModelSelect: React.FC<{
   llmService?: string;
@@ -11,7 +11,7 @@ export const LLMModelSelect: React.FC<{
   style?: React.CSSProperties;
   placeholder?: string;
 }> = ({ llmService, value, onChange, allowClear = true, size, style, placeholder }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [models, setModels] = useState<{ id: string }[]>([]);
   const [loading, setLoading] = useState(false);
 

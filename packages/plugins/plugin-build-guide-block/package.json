@@ -5,7 +5,7 @@
   "displayName.zh-CN": "构建指南区块",
   "description": "Generate user guides, tutorials and help books from documents using AI, then render the result as a block (HTML or Markdown).",
   "description.vi-VN": "Tạo hướng dẫn người dùng, tutorial và help book từ tài liệu bằng AI, hiển thị kết quả dưới dạng block (HTML hoặc Markdown).",
-  "version": "1.1.6",
+  "version": "1.1.10",
   "license": "Apache-2.0",
   "keywords": [
     "ai",

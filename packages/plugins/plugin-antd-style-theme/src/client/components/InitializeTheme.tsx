@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { defaultTheme as presetTheme, useAPIClient, useCurrentUserContext, useGlobalTheme } from '@nocobase/client';
+import { defaultTheme as presetTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
 import { error } from '@nocobase/utils/client';
 import React, { useEffect, useMemo, useRef } from 'react';
 import { changeAlgorithmFromFunctionToString } from '../utils/changeAlgorithmFromFunctionToString';
@@ -32,7 +32,7 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
   const { run, data, loading } = useThemeListContext();
   const defaultTheme = useMemo(() => data?.find((item) => item.default), [data]);
   const themeId = useRef<number>(null);
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const authToken = api.auth.getToken?.() || api.auth.token;
 
   useEffect(() => {
@@ -80,7 +80,7 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
   }, [api.auth, authToken, currentUser?.data?.data?.systemSettings?.themeId, data, run, setTheme, defaultTheme]);
 
   const value =
-    (loading && !data) || currentUser.loading
+    (loading && !data) || currentUser?.loading
       ? {}
       : {
           currentThemeId: themeId.current,

@@ -1,5 +1,6 @@
 import React, { createContext, useContext } from 'react';
-import { useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 
 interface AIEmployeeInfo {
   username: string;
@@ -74,13 +75,17 @@ function extractToolNames(skillSettings: any) {
  * delegate_<leader>_to_<sub> tool to its skillSettings.tools.
  */
 export const AIEmployeesProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { data, loading, refresh } = useRequest({
-    url: 'aiEmployees:list',
-    params: { pageSize: 200 },
-  });
+  const api = useApp().apiClient;
+  const { data, loading, refresh } = useRequest(() =>
+    api.request({
+      url: 'aiEmployees:list',
+      params: { pageSize: 200 },
+    }),
+  );
 
   const value = React.useMemo(() => {
-    const rawEmployees = (data as any)?.data || [];
+    const raw = (data as any)?.data ?? data;
+    const rawEmployees = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
     const employees: AIEmployeeInfo[] = rawEmployees.map((emp: any) => {
       const tools = extractToolNames(emp.skillSettings);
       return {

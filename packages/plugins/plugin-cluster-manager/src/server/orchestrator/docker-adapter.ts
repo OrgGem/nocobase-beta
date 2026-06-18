@@ -17,9 +17,7 @@ function getDockerode() {
     try {
       Dockerode = require('dockerode');
     } catch {
-      throw new Error(
-        '[DockerAdapter] "dockerode" package not found. Install it: yarn add dockerode',
-      );
+      throw new Error('[DockerAdapter] "dockerode" package not found. Install it: yarn add dockerode');
     }
   }
   return Dockerode;
@@ -58,11 +56,7 @@ export class DockerAdapter implements IOrchestratorAdapter {
     const containers = await this.docker.listContainers({
       all: true,
       filters: {
-        label: [
-          `${LABEL_STACK}=${stack.name}`,
-          `${LABEL_MANAGED}=true`,
-          ...this.buildLabelFilters(this.workerLabels),
-        ],
+        label: [`${LABEL_STACK}=${stack.name}`, `${LABEL_MANAGED}=true`, ...this.buildLabelFilters(this.workerLabels)],
       },
     });
 
@@ -105,9 +99,20 @@ export class DockerAdapter implements IOrchestratorAdapter {
     if (diff > 0) {
       // Scale UP
       let targetNetworks = stack.networks && stack.networks.length > 0 ? stack.networks : [];
-      let targetNetworkMode = stack.networkMode;
+      const targetNetworkMode = stack.networkMode;
       let targetEnvVars = this.buildEnvArray(stack.envVars);
       let targetVolumes = stack.volumes || [];
+      // Default the worker image to whatever the app container is running, so
+      // workers stay version-locked with the app even when the stack record
+      // has a stale/empty image. An explicit stack.image still wins.
+      let targetImage = stack.image;
+      // Inherit the app container's startup command/entrypoint so workers boot
+      // identically (e.g. source-tarball extraction + `yarn start`). Without
+      // this, a worker created from the bare image runs the image default
+      // command, skips the app's bootstrap, never finishes booting, and never
+      // registers a heartbeat — so it never appears in Cluster Nodes.
+      let inheritedCmd: string[] | undefined;
+      let inheritedEntrypoint: string[] | undefined;
 
       // Auto-detect current container's configuration to inherit networks and env vars
       try {
@@ -115,32 +120,46 @@ export class DockerAdapter implements IOrchestratorAdapter {
         const myContainerId = os.hostname();
         const myContainer = this.docker.getContainer(myContainerId);
         const myInfo = await myContainer.inspect();
-        
+
+        // Inherit the app container's image when the stack does not pin one
+        if (!targetImage && myInfo?.Config?.Image) {
+          targetImage = myInfo.Config.Image;
+          console.log('[DockerAdapter] Inherited image from app container:', targetImage);
+        }
+
         // Always inherit Networks so worker can communicate with main app
         if (myInfo?.NetworkSettings?.Networks) {
           const inheritedNetworks = Object.keys(myInfo.NetworkSettings.Networks);
           targetNetworks = Array.from(new Set([...inheritedNetworks, ...targetNetworks]));
           console.log('[DockerAdapter] Inherited networks:', targetNetworks);
         }
-        
+
         // Inherit Environment Variables and merge with stack.envVars
         if (myInfo?.Config?.Env) {
-           const envDict: Record<string, string> = {};
-           myInfo.Config.Env.forEach((e: string) => {
-             const idx = e.indexOf('=');
-             if (idx !== -1) {
-               envDict[e.substring(0, idx)] = e.substring(idx + 1);
-             }
-           });
-           // Overwrite with explicitly defined env vars
-           Object.assign(envDict, stack.envVars || {});
-           
-           targetEnvVars = Object.entries(envDict).map(([k, v]) => `${k}=${v}`);
+          const envDict: Record<string, string> = {};
+          myInfo.Config.Env.forEach((e: string) => {
+            const idx = e.indexOf('=');
+            if (idx !== -1) {
+              envDict[e.substring(0, idx)] = e.substring(idx + 1);
+            }
+          });
+          // Overwrite with explicitly defined env vars
+          Object.assign(envDict, stack.envVars || {});
+
+          targetEnvVars = Object.entries(envDict).map(([k, v]) => `${k}=${v}`);
         }
         // Inherit Volumes (Binds)
         if (myInfo?.HostConfig?.Binds) {
           const inheritedBinds = myInfo.HostConfig.Binds as string[];
           targetVolumes = Array.from(new Set([...inheritedBinds, ...targetVolumes]));
+        }
+        // Inherit the startup Cmd/Entrypoint so the worker runs the same bootstrap
+        // as the app container (used only when the stack pins no explicit command).
+        if (Array.isArray(myInfo?.Config?.Cmd) && myInfo.Config.Cmd.length > 0) {
+          inheritedCmd = myInfo.Config.Cmd as string[];
+        }
+        if (Array.isArray(myInfo?.Config?.Entrypoint) && myInfo.Config.Entrypoint.length > 0) {
+          inheritedEntrypoint = myInfo.Config.Entrypoint as string[];
         }
       } catch (e: any) {
         // Ignore error if not running in a container or cannot inspect
@@ -148,9 +167,15 @@ export class DockerAdapter implements IOrchestratorAdapter {
       }
 
       // Automatically separate logs for workers to prevent log interleaving with the main app
-      const hasLoggerBase = targetEnvVars.some(e => e.startsWith('LOGGER_BASE_PATH='));
+      const hasLoggerBase = targetEnvVars.some((e) => e.startsWith('LOGGER_BASE_PATH='));
       if (!hasLoggerBase) {
         targetEnvVars.push(`LOGGER_BASE_PATH=/app/nocobase/storage/logs/${stack.name}`);
+      }
+
+      if (!targetImage) {
+        throw new Error(
+          `[DockerAdapter] No image configured for stack "${stack.name}" and the app container image could not be determined.`,
+        );
       }
 
       for (let i = 0; i < diff; i++) {
@@ -158,7 +183,7 @@ export class DockerAdapter implements IOrchestratorAdapter {
         const containerName = `${stack.name}-${suffix}`;
 
         const createOpts: any = {
-          Image: stack.image,
+          Image: targetImage,
           name: containerName,
           Env: targetEnvVars,
           Labels: {
@@ -174,6 +199,15 @@ export class DockerAdapter implements IOrchestratorAdapter {
 
         if (stack.command) {
           createOpts.Cmd = ['/bin/sh', '-c', stack.command];
+        } else {
+          // No explicit command: replay the app container's bootstrap so the
+          // worker boots NocoBase the same way and registers a heartbeat.
+          if (inheritedEntrypoint) {
+            createOpts.Entrypoint = inheritedEntrypoint;
+          }
+          if (inheritedCmd) {
+            createOpts.Cmd = inheritedCmd;
+          }
         }
 
         if (stack.resourceLimits?.memory) {
@@ -190,7 +224,7 @@ export class DockerAdapter implements IOrchestratorAdapter {
         createOpts.HostConfig.SecurityOpt = ['no-new-privileges:true'];
 
         const container = await this.docker.createContainer(createOpts);
-        
+
         // Connect to additional networks before starting
         if (targetNetworks.length > 0) {
           const startIndex = targetNetworkMode ? 0 : 1;
@@ -199,7 +233,9 @@ export class DockerAdapter implements IOrchestratorAdapter {
               const net = this.docker.getNetwork(targetNetworks[i]);
               await net.connect({ Container: container.id });
             } catch (err: any) {
-              console.warn(`[DockerAdapter] Failed to connect container ${container.id} to network ${targetNetworks[i]}: ${err.message}`);
+              console.warn(
+                `[DockerAdapter] Failed to connect container ${container.id} to network ${targetNetworks[i]}: ${err.message}`,
+              );
             }
           }
         }
@@ -209,9 +245,7 @@ export class DockerAdapter implements IOrchestratorAdapter {
       }
     } else if (diff < 0) {
       // Scale DOWN — remove newest first (LIFO)
-      const sorted = running.sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-      );
+      const sorted = running.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
       const toRemove = sorted.slice(0, Math.abs(diff));
 
       for (const c of toRemove) {
@@ -334,14 +368,17 @@ export class DockerAdapter implements IOrchestratorAdapter {
       .split(',')
       .map((part) => part.trim())
       .filter(Boolean)
-      .reduce((acc, part) => {
-        const [key, ...valueParts] = part.split('=');
-        const value = valueParts.join('=');
-        if (key?.trim() && value?.trim()) {
-          acc[key.trim()] = value.trim();
-        }
-        return acc;
-      }, {} as Record<string, string>);
+      .reduce(
+        (acc, part) => {
+          const [key, ...valueParts] = part.split('=');
+          const value = valueParts.join('=');
+          if (key?.trim() && value?.trim()) {
+            acc[key.trim()] = value.trim();
+          }
+          return acc;
+        },
+        {} as Record<string, string>,
+      );
   }
 
   private labelsMatch(labels: Record<string, string>, expected: Record<string, string>): boolean {

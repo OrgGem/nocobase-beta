@@ -1,7 +1,42 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Table, Button, Space, Tag, InputNumber, Popconfirm, message, Modal, Typography, Alert, Spin, Tooltip, Badge, Row, Col, Form, Input, Select, Switch } from 'antd';
-import { PlayCircleOutlined, PauseCircleOutlined, DeleteOutlined, FileTextOutlined, ReloadOutlined, ExpandAltOutlined, ShrinkOutlined, CloudServerOutlined, ApiOutlined, SettingOutlined, SaveOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import {
+  Card,
+  Table,
+  Button,
+  Space,
+  Tag,
+  InputNumber,
+  Popconfirm,
+  message,
+  Modal,
+  Typography,
+  Alert,
+  Spin,
+  Tooltip,
+  Badge,
+  Row,
+  Col,
+  Form,
+  Input,
+  Select,
+  Switch,
+} from 'antd';
+import {
+  PlayCircleOutlined,
+  PauseCircleOutlined,
+  DeleteOutlined,
+  FileTextOutlined,
+  ReloadOutlined,
+  ExpandAltOutlined,
+  ShrinkOutlined,
+  CloudServerOutlined,
+  ApiOutlined,
+  SettingOutlined,
+  SaveOutlined,
+  PlusOutlined,
+  EditOutlined,
+} from '@ant-design/icons';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
 const { Text, Title } = Typography;
@@ -131,7 +166,7 @@ function stackToFormValues(stack?: StackInfo | null) {
     return {
       name: 'app-workers',
       adapter: 'kubernetes',
-      image: 'nocobase/nocobase:2.0.46-full',
+      image: 'nocobase/nocobase:2.1.6-full',
       command: DEFAULT_WORKER_COMMAND,
       envVars: jsonText(DEFAULT_WORKER_ENV, {}),
       resourceLimits: jsonText({ memory: '1536Mi' }, {}),
@@ -177,17 +212,21 @@ function formValuesToStack(values: any) {
 
 export function ContainerOrchestrator() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
   const [containers, setContainers] = useState<Record<number, ContainerInfo[]>>({});
   const [containerMeta, setContainerMeta] = useState<Record<number, any>>({});
   const [scaleValues, setScaleValues] = useState<Record<number, number>>({});
   const [logModal, setLogModal] = useState<{ visible: boolean; containerId: string; logs: string[] }>({
-    visible: false, containerId: '', logs: [],
+    visible: false,
+    containerId: '',
+    logs: [],
   });
   const [pkgLogModal, setPkgLogModal] = useState<{ visible: boolean; containerName: string; logs: string }>({
-    visible: false, containerName: '', logs: '',
+    visible: false,
+    containerName: '',
+    logs: '',
   });
   const [pingResult, setPingResult] = useState<any>(null);
   const [settingsModal, setSettingsModal] = useState(false);
@@ -197,7 +236,7 @@ export function ContainerOrchestrator() {
   });
   const [settingsForm] = Form.useForm();
   const [stackForm] = Form.useForm();
-  const [dockerNetworks, setDockerNetworks] = useState<{id: string, name: string}[]>([]);
+  const [dockerNetworks, setDockerNetworks] = useState<{ id: string; name: string }[]>([]);
 
   // Fetch Docker networks
   const fetchNetworks = useCallback(async () => {
@@ -229,7 +268,9 @@ export function ContainerOrchestrator() {
       setStacks(data);
       // Init scale values
       const sv: Record<number, number> = {};
-      data.forEach((s: StackInfo) => { sv[s.id] = s.desiredReplicas; });
+      data.forEach((s: StackInfo) => {
+        sv[s.id] = s.desiredReplicas;
+      });
       setScaleValues(sv);
     } catch {
       // Collection might not exist yet
@@ -237,26 +278,31 @@ export function ContainerOrchestrator() {
   }, [api]);
 
   // Load containers for a specific stack
-  const fetchContainers = useCallback(async (stackId: number) => {
-    try {
-      const res = await api.request({
-        url: '/workerOrchestrator:containers',
-        params: { stackId },
-      });
-      const data = res.data?.data || res.data;
-      setContainers(prev => ({ ...prev, [stackId]: data.data || [] }));
-      setContainerMeta(prev => ({ ...prev, [stackId]: data.meta || {} }));
-    } catch (err: any) {
-      message.error(`Failed to load containers: ${err.message}`);
-    }
-  }, [api]);
+  const fetchContainers = useCallback(
+    async (stackId: number) => {
+      try {
+        const res = await api.request({
+          url: '/workerOrchestrator:containers',
+          params: { stackId },
+        });
+        const data = res.data?.data || res.data;
+        setContainers((prev) => ({ ...prev, [stackId]: data.data || [] }));
+        setContainerMeta((prev) => ({ ...prev, [stackId]: data.meta || {} }));
+      } catch (err: any) {
+        message.error(`Failed to load containers: ${err.message}`);
+      }
+    },
+    [api],
+  );
 
   // Load settings
   const fetchSettings = useCallback(async () => {
     try {
       const res = await api.request({ url: '/workerOrchestrator:getSettings' });
       settingsForm.setFieldsValue(res.data?.data || res.data);
-    } catch {}
+    } catch {
+      // Settings not yet available — leave form at defaults
+    }
   }, [api, settingsForm]);
 
   // Save settings
@@ -332,12 +378,12 @@ export function ContainerOrchestrator() {
       stacks.forEach((s) => fetchContainers(s.id));
     };
     doFetch();
-    
+
     const interval = setInterval(() => {
       fetchStacks(); // refresh stack info
       doFetch(); // refresh containers
     }, 10000);
-    
+
     return () => clearInterval(interval);
   }, [stacks, fetchContainers, fetchStacks]);
 
@@ -353,9 +399,7 @@ export function ContainerOrchestrator() {
         data: { stackId, replicas },
       });
       const result = res.data?.data || res.data;
-      message.success(
-        `Scaled: ${result.previousReplicas} → ${result.currentReplicas} replicas`,
-      );
+      message.success(`Scaled: ${result.previousReplicas} → ${result.currentReplicas} replicas`);
       await fetchContainers(stackId);
       await fetchStacks();
     } catch (err: any) {
@@ -405,7 +449,9 @@ export function ContainerOrchestrator() {
       key: 'name',
       render: (name: string, record: ContainerInfo) => (
         <Space>
-          <Text code style={{ fontSize: 11 }}>{record.id}</Text>
+          <Text code style={{ fontSize: 11 }}>
+            {record.id}
+          </Text>
           <Text>{name}</Text>
         </Space>
       ),
@@ -415,9 +461,7 @@ export function ContainerOrchestrator() {
       dataIndex: 'status',
       key: 'status',
       width: 100,
-      render: (status: string) => (
-        <Tag color={STATUS_COLORS[status] || 'default'}>{status.toUpperCase()}</Tag>
-      ),
+      render: (status: string) => <Tag color={STATUS_COLORS[status] || 'default'}>{status.toUpperCase()}</Tag>,
     },
     {
       title: t('Packages'),
@@ -434,10 +478,16 @@ export function ContainerOrchestrator() {
             <Tag
               color={color}
               style={{ cursor: 'pointer' }}
-              onClick={() => setPkgLogModal({ visible: true, containerName: record.name, logs: pStatus.lastInitLog || '' })}
+              onClick={() =>
+                setPkgLogModal({ visible: true, containerName: record.name, logs: pStatus.lastInitLog || '' })
+              }
             >
               {pStatus.initStatus === 'running' && <ReloadOutlined spin style={{ marginRight: 4 }} />}
-              {pStatus.initStatus === 'succeeded' ? 'Installed' : pStatus.initStatus === 'failed' ? 'Failed' : `${pStatus.initProgressPercent || 0}%`}
+              {pStatus.initStatus === 'succeeded'
+                ? 'Installed'
+                : pStatus.initStatus === 'failed'
+                  ? 'Failed'
+                  : `${pStatus.initProgressPercent || 0}%`}
             </Tag>
           </Tooltip>
         );
@@ -448,14 +498,18 @@ export function ContainerOrchestrator() {
       dataIndex: 'image',
       key: 'image',
       ellipsis: true,
-      render: (img: string) => <Text type="secondary" style={{ fontSize: 12 }}>{img}</Text>,
+      render: (img: string) => (
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          {img}
+        </Text>
+      ),
     },
     {
       title: t('Age'),
       dataIndex: 'createdAt',
       key: 'age',
       width: 80,
-      render: (dt: string) => dt ? formatAge(dt) : '-',
+      render: (dt: string) => (dt ? formatAge(dt) : '-'),
     },
     {
       title: t('Actions'),
@@ -464,46 +518,56 @@ export function ContainerOrchestrator() {
       render: (_: any, record: ContainerInfo & { _stackId?: number }) => {
         const isK8s = pingResult?.adapter === 'kubernetes';
         return (
-        <Space size="small">
-          {!isK8s && (
-            record.status === 'running' ? (
-              <Tooltip title={t('Stop')}>
-                <Button
-                  size="small" type="text" icon={<PauseCircleOutlined />}
-                  onClick={() => handleAction('stop', record.id, record._stackId!)}
-                />
-              </Tooltip>
-            ) : (
-              <Tooltip title={t('Start')}>
-                <Button
-                  size="small" type="text" icon={<PlayCircleOutlined style={{ color: '#52c41a' }} />}
-                  onClick={() => handleAction('start', record.id, record._stackId!)}
-                />
-              </Tooltip>
-            )
-          )}
-          <Tooltip title={t('Logs')}>
-            <Button
-              size="small" type="text" icon={<FileTextOutlined />}
-              onClick={() => handleViewLogs(record.id, record._stackId!)}
-            />
-          </Tooltip>
-          <Popconfirm
-            title={t('Remove this container?')}
-            onConfirm={() => handleAction('remove', record.id, record._stackId!)}
-          >
-            <Tooltip title={t('Remove')}>
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+          <Space size="small">
+            {!isK8s &&
+              (record.status === 'running' ? (
+                <Tooltip title={t('Stop')}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<PauseCircleOutlined />}
+                    onClick={() => handleAction('stop', record.id, record._stackId!)}
+                  />
+                </Tooltip>
+              ) : (
+                <Tooltip title={t('Start')}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<PlayCircleOutlined style={{ color: '#52c41a' }} />}
+                    onClick={() => handleAction('start', record.id, record._stackId!)}
+                  />
+                </Tooltip>
+              ))}
+            <Tooltip title={t('Logs')}>
+              <Button
+                size="small"
+                type="text"
+                icon={<FileTextOutlined />}
+                onClick={() => handleViewLogs(record.id, record._stackId!)}
+              />
             </Tooltip>
-          </Popconfirm>
-        </Space>
+            <Popconfirm
+              title={t('Remove this container?')}
+              onConfirm={() => handleAction('remove', record.id, record._stackId!)}
+            >
+              <Tooltip title={t('Remove')}>
+                <Button size="small" type="text" danger icon={<DeleteOutlined />} />
+              </Tooltip>
+            </Popconfirm>
+          </Space>
         );
       },
     },
   ];
 
   if (!pingResult) {
-    return <Spin tip={t('Connecting to orchestrator...')} style={{ display: 'flex', justifyContent: 'center', padding: 48 }} />;
+    return (
+      <Spin
+        tip={t('Connecting to orchestrator...')}
+        style={{ display: 'flex', justifyContent: 'center', padding: 48 }}
+      />
+    );
   }
 
   return (
@@ -516,33 +580,35 @@ export function ContainerOrchestrator() {
               <ApiOutlined style={{ fontSize: 18 }} />
               <Text strong>{t('Adapter')}: </Text>
               <Tag color="blue">{pingResult.adapter?.toUpperCase() || 'NONE'}</Tag>
-              <Badge status={pingResult.connected ? 'success' : 'error'} text={pingResult.connected ? t('Connected') : t('Disconnected')} />
+              <Badge
+                status={pingResult.connected ? 'success' : 'error'}
+                text={pingResult.connected ? t('Connected') : t('Disconnected')}
+              />
               {pingResult.leader !== undefined && (
                 <>
                   <Text type="secondary">|</Text>
-                  <Badge status={pingResult.leader ? 'success' : 'default'} text={pingResult.leader ? t('Leader (this node)') : t('Follower')} />
+                  <Badge
+                    status={pingResult.leader ? 'success' : 'default'}
+                    text={pingResult.leader ? t('Leader (this node)') : t('Follower')}
+                  />
                 </>
               )}
             </Space>
           </Col>
           <Col>
             <Space>
-              <Button
-                type="primary"
-                icon={<PlusOutlined />}
-                onClick={() => openStackModal()}
-              >
+              <Button type="primary" icon={<PlusOutlined />} onClick={() => openStackModal()}>
                 {t('New worker stack')}
               </Button>
-              <Button
-                icon={<SettingOutlined />}
-                onClick={() => setSettingsModal(true)}
-              >
+              <Button icon={<SettingOutlined />} onClick={() => setSettingsModal(true)}>
                 {t('Settings')}
               </Button>
               <Button
                 icon={<ReloadOutlined />}
-                onClick={() => { fetchPing(); fetchStacks(); }}
+                onClick={() => {
+                  fetchPing();
+                  fetchStacks();
+                }}
               >
                 {t('Refresh')}
               </Button>
@@ -577,8 +643,8 @@ export function ContainerOrchestrator() {
             />
           )}
 
-          {stacks.map(stack => {
-            const stackContainers = (containers[stack.id] || []).map(c => ({ ...c, _stackId: stack.id }));
+          {stacks.map((stack) => {
+            const stackContainers = (containers[stack.id] || []).map((c) => ({ ...c, _stackId: stack.id }));
             const meta = containerMeta[stack.id] || {};
 
             return (
@@ -593,7 +659,9 @@ export function ContainerOrchestrator() {
                 }
                 extra={
                   <Space>
-                    <Text type="secondary" style={{ fontSize: 12 }}>{stack.image}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      {stack.image}
+                    </Text>
                     <Tooltip title={t('Edit worker stack')}>
                       <Button size="small" type="text" icon={<EditOutlined />} onClick={() => openStackModal(stack)} />
                     </Tooltip>
@@ -608,20 +676,24 @@ export function ContainerOrchestrator() {
                     size="small"
                     icon={<ShrinkOutlined />}
                     disabled={loading || (scaleValues[stack.id] || 0) <= 0}
-                    onClick={() => setScaleValues(prev => ({ ...prev, [stack.id]: Math.max(0, (prev[stack.id] || 0) - 1) }))}
+                    onClick={() =>
+                      setScaleValues((prev) => ({ ...prev, [stack.id]: Math.max(0, (prev[stack.id] || 0) - 1) }))
+                    }
                   />
                   <InputNumber
                     min={0}
                     max={20}
                     value={scaleValues[stack.id] ?? stack.desiredReplicas}
-                    onChange={(v) => setScaleValues(prev => ({ ...prev, [stack.id]: v ?? 0 }))}
+                    onChange={(v) => setScaleValues((prev) => ({ ...prev, [stack.id]: v ?? 0 }))}
                     style={{ width: 70 }}
                   />
                   <Button
                     size="small"
                     icon={<ExpandAltOutlined />}
                     disabled={loading || (scaleValues[stack.id] || 0) >= 20}
-                    onClick={() => setScaleValues(prev => ({ ...prev, [stack.id]: Math.min(20, (prev[stack.id] || 0) + 1) }))}
+                    onClick={() =>
+                      setScaleValues((prev) => ({ ...prev, [stack.id]: Math.min(20, (prev[stack.id] || 0) + 1) }))
+                    }
                   />
                   <Button
                     type="primary"
@@ -634,11 +706,7 @@ export function ContainerOrchestrator() {
                   <Text type="secondary">
                     {meta.running ?? '?'} / {scaleValues[stack.id] ?? stack.desiredReplicas} {t('running')}
                   </Text>
-                  <Button
-                    size="small"
-                    icon={<ReloadOutlined />}
-                    onClick={() => fetchContainers(stack.id)}
-                  />
+                  <Button size="small" icon={<ReloadOutlined />} onClick={() => fetchContainers(stack.id)} />
                 </div>
 
                 {/* Container list */}
@@ -718,11 +786,7 @@ export function ContainerOrchestrator() {
         width={860}
         destroyOnClose
       >
-        <Form
-          form={stackForm}
-          layout="vertical"
-          onFinish={handleSaveStack}
-        >
+        <Form form={stackForm} layout="vertical" onFinish={handleSaveStack}>
           {/* Row 1: Stack name | Image */}
           <Row gutter={12}>
             <Col span={12}>
@@ -806,12 +870,18 @@ export function ContainerOrchestrator() {
                 {() => {
                   if (stackForm.getFieldValue('adapter') === 'docker') {
                     return (
-                      <Form.Item name="networkMode" label={t('Docker Network')} extra={t('Main network. Workers also inherit app networks.')}>
+                      <Form.Item
+                        name="networkMode"
+                        label={t('Docker Network')}
+                        extra={t('Main network. Workers also inherit app networks.')}
+                      >
                         <Select allowClear placeholder={t('Default (bridge)')}>
                           <Select.Option value="bridge">bridge</Select.Option>
                           <Select.Option value="host">host</Select.Option>
-                          {(Array.isArray(dockerNetworks) ? dockerNetworks : []).map(n => (
-                            <Select.Option key={n.id} value={n.name}>{n.name}</Select.Option>
+                          {(Array.isArray(dockerNetworks) ? dockerNetworks : []).map((n) => (
+                            <Select.Option key={n.id} value={n.name}>
+                              {n.name}
+                            </Select.Option>
                           ))}
                         </Select>
                       </Form.Item>
@@ -889,7 +959,7 @@ export function ContainerOrchestrator() {
               <Select.Option value="kubernetes">{t('Kubernetes')}</Select.Option>
             </Select>
           </Form.Item>
-          
+
           <Form.Item noStyle shouldUpdate={(prev, curr) => prev.adapterType !== curr.adapterType}>
             {() => {
               const adapter = settingsForm.getFieldValue('adapterType');
@@ -899,7 +969,11 @@ export function ContainerOrchestrator() {
                     <Form.Item name="dockerSocketPath" label={t('Socket Path')} extra="/var/run/docker.sock">
                       <Input />
                     </Form.Item>
-                    <Form.Item name="dockerHost" label={t('TCP Host')} extra="e.g. tcp://192.168.1.10:2376 (Overrides socket)">
+                    <Form.Item
+                      name="dockerHost"
+                      label={t('TCP Host')}
+                      extra="e.g. tcp://192.168.1.10:2376 (Overrides socket)"
+                    >
                       <Input />
                     </Form.Item>
                   </Card>
@@ -911,7 +985,11 @@ export function ContainerOrchestrator() {
                     <Form.Item name="k8sNamespace" label={t('Namespace')} extra="nocobase">
                       <Input />
                     </Form.Item>
-                    <Form.Item name="k8sKubeconfig" label={t('Kubeconfig')} extra="Paste kubeconfig YAML or enter a file path. Leave empty to use in-cluster ServiceAccount.">
+                    <Form.Item
+                      name="k8sKubeconfig"
+                      label={t('Kubeconfig')}
+                      extra="Paste kubeconfig YAML or enter a file path. Leave empty to use in-cluster ServiceAccount."
+                    >
                       <Input.TextArea rows={4} />
                     </Form.Item>
                   </Card>
@@ -921,7 +999,11 @@ export function ContainerOrchestrator() {
             }}
           </Form.Item>
 
-          <Form.Item name="workerLabelSelector" label={t('Worker Label Selector')} extra="Only containers with this label will be managed. Example: role=worker">
+          <Form.Item
+            name="workerLabelSelector"
+            label={t('Worker Label Selector')}
+            extra="Only containers with this label will be managed. Example: role=worker"
+          >
             <Input />
           </Form.Item>
 

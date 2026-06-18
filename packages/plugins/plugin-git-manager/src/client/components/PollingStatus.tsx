@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Card, Button, Space, Tag, Typography, Table, message, Tooltip, Empty, theme } from 'antd';
 import { ReloadOutlined, ThunderboltOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { useT } from '../locale';
 
@@ -19,7 +19,7 @@ interface PollerStatus {
 export const PollingStatus: React.FC = () => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { repos, refreshRepos } = useGitManager();
   const [status, setStatus] = useState<PollerStatus | null>(null);
   const [loading, setLoading] = useState(false);

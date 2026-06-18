@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Button, Table, Tag, Modal, Form, Input, Select, message, Space, InputNumber } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { ProgressMonitor } from './ProgressMonitor';
 
 export const ClonerManager = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);

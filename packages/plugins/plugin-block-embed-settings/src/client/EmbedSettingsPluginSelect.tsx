@@ -1,55 +1,69 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Select } from 'antd';
-import { useAPIClient, useApp, useCompile } from '@nocobase/client';
-import { Outlet } from 'react-router-dom';
+import { useApp } from '@nocobase/client-v2';
 
 export type EmbedSettingsPluginOption = { value: string; label: string };
-export type EmbedSettingsTabOption = { value: string; label: string; Component: any; componentProps?: any };
+export type EmbedSettingsTabOption = {
+  value: string;
+  label: string;
+  componentLoader?: () => Promise<{ default: React.ComponentType<any> }>;
+  Component?: React.ComponentType<any>;
+  componentProps?: any;
+};
 
-export function isRenderableSettingsComponent(comp: any): boolean {
-  if (!comp) return false;
-  if (comp === Outlet) return false;
-  return true;
+const TEMPLATE_RE = /\{\{\s*t\(\s*(['"])(.*?)\1\s*(?:,\s*(\{.*?\}))?\)\s*\}\}/;
+
+/**
+ * Resolve a possibly-`{{t("...")}}`-wrapped label to a display string using the
+ * v2 app i18n instance.
+ */
+function compileLabel(app: any, value: any, fallback: string): string {
+  if (typeof value !== 'string') return value || fallback;
+  const match = value.match(TEMPLATE_RE);
+  if (!match) return value || fallback;
+  const key = match[2];
+  let options: Record<string, any> | undefined;
+  if (match[3]) {
+    try {
+      options = JSON.parse(match[3].replace(/(\w+):/g, '"$1":').replace(/'/g, '"'));
+    } catch {
+      options = undefined;
+    }
+  }
+  const translated = app?.i18n?.t?.(key, options);
+  return typeof translated === 'string' && translated ? translated : fallback;
 }
 
-function toLabel(value: any, fallback: string, compile?: (value: any) => string) {
-  const label = typeof compile === 'function' ? compile(value || fallback) : value || fallback;
-  return typeof label === 'string' ? label : fallback;
+function isRenderablePage(page: any): boolean {
+  if (!page) return false;
+  return Boolean(page.Component || page.componentLoader);
 }
 
-function collectRenderableSettingPages(
-  app: any,
-  setting: any,
-  compile?: (value: any) => string,
-  parentLabels: string[] = [],
-): EmbedSettingsTabOption[] {
-  if (!setting) {
-    return [];
+/**
+ * Collect the embeddable settings tabs for a given top-level settings menu key,
+ * using the v2 flat `pluginSettingsManager.getList()` snapshot.
+ */
+export function collectEmbeddablePluginTabs(app: any, pluginName?: string): EmbedSettingsTabOption[] {
+  if (!pluginName || !app.pluginSettingsManager.has(pluginName)) return [];
+  const setting = app.pluginSettingsManager.get(pluginName);
+  if (!setting) return [];
+
+  const children = Array.isArray(setting.children) ? setting.children.filter(isRenderablePage) : [];
+  if (children.length > 0) {
+    return children.map((child: any) => ({
+      value: child.name || `${setting.name}.${child.key}`,
+      label: compileLabel(app, child.title || child.label, child.key || child.name),
+      componentLoader: child.componentLoader,
+      Component: child.Component,
+    }));
   }
 
-  const explicitTabs = collectExplicitEmbedTabs(setting, compile);
-  if (explicitTabs.length > 0) {
-    return explicitTabs;
-  }
-
-  const currentLabel = toLabel(setting.title, setting.name, compile);
-  const labels = currentLabel ? [...parentLabels, currentLabel] : parentLabels;
-  const children = Object.keys(setting.children || {})
-    .sort((a, b) => a.localeCompare(b))
-    .map((key) => setting.children[key])
-    .filter((child: any) => child?.name && app.pluginSettingsManager.has(child.name))
-    .sort((a: any, b: any) => (a.sort || 0) - (b.sort || 0));
-  const childTabs = children.flatMap((child: any) => collectRenderableSettingPages(app, child, compile, labels));
-
-  if (childTabs.length > 0) {
-    return childTabs;
-  }
-
-  if (isRenderableSettingsComponent(setting.Component)) {
+  if (isRenderablePage(setting)) {
     return [
       {
         value: setting.name,
-        label: labels.length > 1 ? labels.slice(1).join(' / ') : currentLabel || setting.name,
+        label: compileLabel(app, setting.title || setting.label, setting.name),
+        componentLoader: setting.componentLoader,
         Component: setting.Component,
       },
     ];
@@ -58,55 +72,18 @@ function collectRenderableSettingPages(
   return [];
 }
 
-function collectExplicitEmbedTabs(setting: any, compile?: (value: any) => string): EmbedSettingsTabOption[] {
-  const tabs =
-    typeof setting?.embedSettings?.tabs === 'function'
-      ? setting.embedSettings.tabs(setting)
-      : setting?.embedSettings?.tabs;
-  if (!Array.isArray(tabs)) {
-    return [];
+/**
+ * Collect all top-level settings menus that expose at least one embeddable tab.
+ */
+export function collectEmbeddablePlugins(app: any): EmbedSettingsPluginOption[] {
+  const list = app.pluginSettingsManager.getList?.() || [];
+  const results: EmbedSettingsPluginOption[] = [];
+  for (const setting of list) {
+    const key = setting.name;
+    if (!key || key.includes(':')) continue;
+    if (collectEmbeddablePluginTabs(app, key).length === 0) continue;
+    results.push({ value: key, label: compileLabel(app, setting.title || setting.label, key) });
   }
-
-  return tabs.reduce((result: EmbedSettingsTabOption[], tab: any, index: number) => {
-    const key = tab?.value || tab?.key || tab?.name || String(index + 1);
-    const Component = tab?.Component || tab?.component || setting.Component;
-    if (!key || !isRenderableSettingsComponent(Component)) {
-      return result;
-    }
-    result.push({
-      value: tab?.value || `${setting.name}.${key}`,
-      label: toLabel(tab?.title || tab?.label, key, compile),
-      Component,
-      componentProps: tab?.componentProps || tab?.props,
-    });
-    return result;
-  }, []);
-}
-
-export function collectEmbeddablePluginTabs(
-  app: any,
-  pluginName?: string,
-  compile?: (value: any) => string,
-): EmbedSettingsTabOption[] {
-  if (!pluginName || !app.pluginSettingsManager.has(pluginName)) return [];
-
-  const setting = app.pluginSettingsManager.getSetting(pluginName);
-  return collectRenderableSettingPages(app, setting, compile);
-}
-
-export function collectEmbeddablePlugins(app: any, compile?: (value: any) => string): EmbedSettingsPluginOption[] {
-  const results: { value: string; label: string }[] = [];
-  const settings = (app.pluginSettingsManager as any).settings as Record<string, any>;
-
-  for (const [key, setting] of Object.entries(settings || {})) {
-    if (!app.pluginSettingsManager.has(key)) continue;
-    if (setting.topLevelName !== key) continue;
-    if (collectEmbeddablePluginTabs(app, key, compile).length === 0) continue;
-    if (key.includes(':')) continue;
-
-    results.push({ value: key, label: toLabel(setting.title, key, compile) });
-  }
-
   return results.sort((a, b) => a.label.localeCompare(b.label));
 }
 
@@ -117,8 +94,7 @@ export function normalizeAllowedRecords(data: any): any[] {
 
 export function useEnabledEmbedSettingsPluginOptions() {
   const app = useApp();
-  const api = useAPIClient();
-  const compile = useCompile();
+  const api = app.apiClient;
   const [records, setRecords] = useState<any[] | null>(null);
 
   useEffect(() => {
@@ -128,7 +104,7 @@ export function useEnabledEmbedSettingsPluginOptions() {
         url: 'embedAllowedPlugins:list',
         params: { filter: { enabled: true }, pageSize: 200 },
       })
-      .then(({ data }) => {
+      .then(({ data }: any) => {
         if (!cancelled) setRecords(normalizeAllowedRecords(data));
       })
       .catch(() => {
@@ -141,15 +117,14 @@ export function useEnabledEmbedSettingsPluginOptions() {
 
   const options = useMemo(() => {
     if (!records) return [];
-
     const allowedTitles = new Map(records.map((record: any) => [record.pluginName, record.title]));
-    return collectEmbeddablePlugins(app, compile)
+    return collectEmbeddablePlugins(app)
       .filter((option) => allowedTitles.has(option.value))
       .map((option) => ({
         ...option,
         label: allowedTitles.get(option.value) || option.label,
       }));
-  }, [app, compile, records]);
+  }, [app, records]);
 
   return {
     loading: records === null,

@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
-import { useChatMessagesStore } from '@nocobase/plugin-ai/client';
+import { useChatMessagesStore, useChatConversationsStore } from '@nocobase/plugin-ai/client';
 import { Modal, Button } from 'antd';
 
 type ChatPreviewStoreState = {
@@ -241,6 +241,129 @@ function attToPreviewFile(att: any): PreviewFile {
   };
 }
 
+export function findSkillHubUrlForFile(filename: string, messages: any[]): string | null {
+  if (!filename) return null;
+  const cleanFilename = filename.toLowerCase().trim();
+
+  for (const msg of messages) {
+    if (!msg?.content) continue;
+    const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    const regex = /\/api\/skillHub:download\?[^)\s"']+/g;
+    const matches = contentStr.match(regex);
+    if (matches) {
+      for (const match of matches) {
+        try {
+          const cleanMatch = match.replace(/&amp;/g, '&');
+          const url = new URL(cleanMatch, window.location.origin);
+          const f = url.searchParams.get('f');
+          const fn = url.searchParams.get('filename') || url.searchParams.get('name');
+          
+          let decodedName = '';
+          if (f) {
+            try {
+              let base64 = f.replace(/-/g, '+').replace(/_/g, '/');
+              while (base64.length % 4) {
+                base64 += '=';
+              }
+              decodedName = atob(base64);
+            } catch {
+              // ignore
+            }
+          } else if (fn) {
+            decodedName = decodeURIComponent(fn);
+          }
+
+          if (decodedName && decodedName.toLowerCase().trim() === cleanFilename) {
+            return cleanMatch;
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+  return null;
+}
+
+export function findLatestExecId(messages: any[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg?.content) continue;
+    const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    const match = contentStr.match(/execId=([a-zA-Z0-9_-]+)/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
+export function resolveDownloadUrl(urlOrPath: string, messages: any[]): string {
+  if (!urlOrPath) return urlOrPath;
+
+  if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
+    return urlOrPath;
+  }
+
+  let cleanPath = urlOrPath.replace(/^sandbox:(?:\/\/)?/, '');
+
+  if (cleanPath.startsWith('api/')) {
+    return '/' + cleanPath;
+  }
+
+  let isDownload = false;
+  let filenamePath = cleanPath;
+  if (cleanPath.startsWith('download/')) {
+    isDownload = true;
+    filenamePath = cleanPath.substring('download/'.length);
+  } else if (cleanPath.startsWith('/download/')) {
+    isDownload = true;
+    filenamePath = cleanPath.substring('/download/'.length);
+  }
+
+  if (isDownload) {
+    const filename = filenamePath;
+    const matchedUrl = findSkillHubUrlForFile(filename, messages);
+    if (matchedUrl) {
+      return matchedUrl;
+    }
+    const latestExecId = findLatestExecId(messages);
+    if (latestExecId) {
+      return `/api/skillHub:download?execId=${latestExecId}&filename=${encodeURIComponent(filename)}`;
+    }
+    return '/download/' + filename;
+  }
+
+  if (!cleanPath.startsWith('/') && !cleanPath.includes(':')) {
+    return '/' + cleanPath;
+  }
+
+  return cleanPath;
+}
+
+export function rewriteMarkdownContent(content: string, messages: any[]): string {
+  if (typeof content !== 'string') return content;
+
+  // Match: sandbox:download/, sandbox://download/, download/, /download/ with optional sandbox prefix
+  let nextContent = content.replace(
+    /\]\(((?:sandbox:(?:\/\/)?|\/?download\/)[^)]+)\)/g,
+    (match, p1) => {
+      const resolved = resolveDownloadUrl(p1, messages);
+      return `](${resolved})`;
+    }
+  );
+
+  nextContent = nextContent.replace(
+    /href=["']((?:sandbox:(?:\/\/)?|\/?download\/)[^"']+)["']/g,
+    (match, p1) => {
+      const resolved = resolveDownloadUrl(p1, messages);
+      return `href="${resolved}"`;
+    }
+  );
+
+  return nextContent;
+}
+
 /**
  * Find file metadata matching the displayed filename across all message attachments.
  */
@@ -321,19 +444,20 @@ function findFileByUrl(url: string, messages: any[], pendingAttachments: any[]):
 const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
-  const [sessionId, setSessionId] = useState('');
   const apiClient = useAPIClient();
-  const currentSessionIdRef = useRef<string>('');
+
+  const currentConversation = useChatConversationsStore.use.currentConversation();
+  const activeSessionId = currentConversation || '';
 
   // NocoBase 2.1 moved chat messages into per-session store state.
   const chatStore = useChatMessagesStore as unknown as ChatMessagesStoreArrayHook;
   const selectMessagesForSession = useCallback(
-    (state: ChatPreviewStoreState) => selectChatMessages(state, sessionId),
-    [sessionId],
+    (state: ChatPreviewStoreState) => selectChatMessages(state, activeSessionId),
+    [activeSessionId],
   );
   const selectAttachmentsForSession = useCallback(
-    (state: ChatPreviewStoreState) => selectChatAttachments(state, sessionId),
-    [sessionId],
+    (state: ChatPreviewStoreState) => selectChatAttachments(state, activeSessionId),
+    [activeSessionId],
   );
   const messages = chatStore(selectMessagesForSession);
   const pendingAttachments = chatStore(selectAttachmentsForSession);
@@ -343,42 +467,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   const pendingAttachmentsRef = useRef(pendingAttachments);
   messagesRef.current = messages;
   pendingAttachmentsRef.current = pendingAttachments;
-
-  // We don't have direct access to useChatConversationsStore (not exported).
-  // Instead, we'll extract sessionId from the URL or from a data attribute on the DOM.
-  // A simpler approach: use a global ref that gets populated via the axios interceptor.
-  // Track the current sessionId by intercepting the getMessages API call
-  useEffect(() => {
-    const reqInterceptor = apiClient.axios.interceptors.request.use((config) => {
-      const url = config.url || '';
-      // When loadMessages is called, the sessionId appears in the URL
-      if (url.includes('aiConversations:getMessages')) {
-        const match = url.match(/sessionId=([^&]+)/);
-        if (match) {
-          const nextSessionId = decodeURIComponent(match[1]);
-          currentSessionIdRef.current = nextSessionId;
-          setSessionId(nextSessionId);
-        }
-      }
-      // When sendMessages is called, sessionId is in the request body
-      if (url.includes('aiConversations:sendMessages') && config.data) {
-        try {
-          const data = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
-          if (data?.sessionId) {
-            currentSessionIdRef.current = data.sessionId;
-            setSessionId(data.sessionId);
-          }
-        } catch {
-          // ignore
-        }
-      }
-      return config;
-    });
-
-    return () => {
-      apiClient.axios.interceptors.request.eject(reqInterceptor);
-    };
-  }, [apiClient]);
 
   const token = apiClient.auth?.token || '';
 
@@ -489,6 +577,25 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     });
   }, [pendingAttachments]);
+
+  // Rewrite sandbox: and relative download/ links in messages to clean absolute routes so rehypeSanitize doesn't strip them and links function correctly
+  useEffect(() => {
+    if (!messages?.length) return;
+    messages.forEach((msg) => {
+      if (!msg) return;
+      if (typeof msg.content === 'string') {
+        const nextContent = rewriteMarkdownContent(msg.content, messages);
+        if (nextContent !== msg.content) {
+          msg.content = nextContent;
+        }
+      } else if (msg.content && typeof msg.content === 'object' && typeof msg.content.content === 'string') {
+        const nextContent = rewriteMarkdownContent(msg.content.content, messages);
+        if (nextContent !== msg.content.content) {
+          msg.content.content = nextContent;
+        }
+      }
+    });
+  }, [messages]);
 
   // Periodically check pure RAM cache and ONLY mark DOM cards that physically exist in local JS memory.
   // This automatically rules out external database checks and prevents 403s on old un-cached files.
@@ -751,7 +858,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         collectionName: (file as any).collectionName || 'aiFiles',
       };
 
-      setSessionId(currentSessionIdRef.current || '');
       setPreviewFile(file);
       setPreviewOpen(true);
     };

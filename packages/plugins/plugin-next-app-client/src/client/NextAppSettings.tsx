@@ -10,7 +10,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Switch, Space, Popconfirm, Alert, Typography, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useTranslation } from 'react-i18next';
 
 const { Title, Text } = Typography;
@@ -43,7 +43,7 @@ interface SubpathRecord {
 }
 
 export const NextAppSettings: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useTranslation();
 
   const [subpaths, setSubpaths] = useState<SubpathRecord[]>([]);

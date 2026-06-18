@@ -8,7 +8,7 @@
  */
 
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import type { WorkerMessage, WorkerResponse } from '../workers/embedding-worker';
 import { mainDataSourceRequest } from '../api';
 
@@ -67,7 +67,7 @@ export const EmbeddingWorkerProvider: React.FC<{ children: React.ReactNode; know
   children,
   knowledgeBaseId,
 }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const workerRef = useRef<Worker | null>(null);
   const configRef = useRef<EmbeddingConfig | null>(null);
   const [state, setState] = useState<WorkerState>('idle');

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, InputNumber, Switch, Space, message, Popconfirm } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
@@ -26,17 +27,15 @@ const OPERATORS = [
 
 export const AlertManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, instances } = useCurrentInstance();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>({
-    resource: 'n8nAlertRules',
-    action: 'list',
-    params: { pageSize: 100 },
-  });
+  const { data, loading, refresh } = useRequest<any>(() =>
+    api.resource('n8nAlertRules').list({ pageSize: 100 }),
+  );
 
   const rules = data?.data || [];
 

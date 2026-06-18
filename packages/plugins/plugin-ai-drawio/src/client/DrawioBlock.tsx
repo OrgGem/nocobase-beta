@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card, Empty, Spin, App as AntApp } from 'antd';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useFieldSchema } from '@formily/react';
 import { useT } from './locale';
 import { DrawioBridge, buildDrawioEmbedUrl } from './lib/drawioBridge';
@@ -25,7 +26,7 @@ function getXmlFromResponse(response: unknown): string {
 
 export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'kennedy', baseUrlOverride }) => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { message } = AntApp.useApp();
   const fieldSchema = useFieldSchema();
   const [fallbackUid] = useState(() => `inline-${Math.random().toString(36).slice(2, 10)}`);
@@ -37,10 +38,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   const [iframeReady, setIframeReady] = useState(false);
 
   const { data: settingsData } = useRequest<any>(
-    {
-      resource: 'aiDrawio',
-      action: 'getConfig',
-    },
+    () => api.resource('aiDrawio').getConfig(),
     { manual: !!baseUrlOverride },
   );
 
@@ -49,20 +47,12 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   const embedUrl = useMemo(() => buildDrawioEmbedUrl(baseUrl, { ui }), [baseUrl, ui]);
 
   const { data: xmlData, loading: loadingXml } = useRequest<any>(
-    {
-      resource: 'aiDiagrams',
-      action: 'loadXml',
-      params: { filterByTk: diagramId },
-    },
+    () => api.resource('aiDiagrams').loadXml({ filterByTk: diagramId }),
     { refreshDeps: [diagramId], manual: !diagramId },
   );
 
   const { data: metaData } = useRequest<any>(
-    {
-      resource: 'aiDiagrams',
-      action: 'getMeta',
-      params: { filterByTk: diagramId },
-    },
+    () => api.resource('aiDiagrams').getMeta({ filterByTk: diagramId }),
     { refreshDeps: [diagramId], manual: !diagramId },
   );
 

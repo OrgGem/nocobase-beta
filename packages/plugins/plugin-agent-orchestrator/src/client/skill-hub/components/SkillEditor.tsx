@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Form, Input, Select, InputNumber, Switch, message, Upload, Radio, Button, Space, theme } from 'antd';
 import { InboxOutlined, CloseOutlined, SaveOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { formatJsonText, stringifyJsonText, parseJsonText } from '../utils/jsonFields';
 
@@ -14,7 +14,7 @@ interface SkillEditorProps {
 }
 
 export const SkillEditor: React.FC<SkillEditorProps> = ({ skill, onClose }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const { token } = useToken();
   const [form] = Form.useForm();

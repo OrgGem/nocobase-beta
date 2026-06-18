@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Space, Switch, Tabs, message } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { CategoriesManager } from './CategoriesManager';
 import { OcrMonitorDashboard } from './OcrMonitorDashboard';
 import { useT } from '../locale';
 
 export const SettingsPage = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm();
   const [mapping, setMapping] = useState<any>(null);

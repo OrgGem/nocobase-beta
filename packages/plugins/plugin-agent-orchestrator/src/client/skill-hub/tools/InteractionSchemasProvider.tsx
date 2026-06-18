@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { parseJsonText } from '../utils/jsonFields';
 import { InteractionSchema } from './loopTemplates';
 
@@ -7,7 +7,7 @@ const Ctx = createContext<Map<string, InteractionSchema>>(new Map());
 
 export const useInteractionSchemas = () => useContext(Ctx);
 
-type ApiClientWithAuth = ReturnType<typeof useAPIClient> & {
+type ApiClientWithAuth = ReturnType<typeof useApp>['apiClient'] & {
   auth?: {
     getToken?: () => string | null | undefined;
     token?: string | null;
@@ -28,7 +28,7 @@ const sanitize = (name: string) =>
     .replace(/^_|_$/g, '');
 
 export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
-  const api = useAPIClient() as ApiClientWithAuth;
+  const api = useApp().apiClient as ApiClientWithAuth;
   const authToken = api.auth?.getToken?.() || api.auth?.token || '';
   const [map, setMap] = useState<Map<string, InteractionSchema>>(new Map());
   const [version, setVersion] = useState(0);

@@ -7,7 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import {
   Card,
   Table,
@@ -96,24 +97,25 @@ const getRoutePath = (record: any, allRoutes: any[], appPath?: string): string |
  */
 export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> = ({ configId, appPath }) => {
   const { t } = useTranslation();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [modalVisible, setModalVisible] = useState(false);
   const [editingRoute, setEditingRoute] = useState<any>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<{ data: any[] }>({
-    resource: 'nextAppRoutes',
-    action: 'list',
-    params: {
-      tree: true,
-      sort: 'sort',
-      paginate: false,
-      filter: {
-        'hidden.$ne': true,
-        configId: configId || null,
-      },
-    },
-  });
+  const { data, loading, refresh } = useRequest<{ data: any[] }, any[]>(() =>
+    api
+      .resource('nextAppRoutes')
+      .list({
+        tree: true,
+        sort: 'sort',
+        paginate: false,
+        filter: {
+          'hidden.$ne': true,
+          configId: configId || null,
+        },
+      })
+      .then((res) => res?.data),
+  );
 
   const routes = useMemo(() => data?.data || [], [data]);
 

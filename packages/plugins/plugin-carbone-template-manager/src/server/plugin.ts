@@ -87,7 +87,6 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
 
       [`${COLLECTION.renderCache}:invalidate`]: cacheActions.invalidate,
 
-      [`${COLLECTION.renderLogs}:replay`]: monitoringActions.replay,
       [`${COLLECTION.renderLogs}:summary`]: monitoringActions.summary,
     });
 
@@ -200,7 +199,6 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
         `${COLLECTION.renderLogs}:list`,
         `${COLLECTION.renderLogs}:get`,
         `${COLLECTION.renderLogs}:destroy`,
-        `${COLLECTION.renderLogs}:replay`,
         `${COLLECTION.renderLogs}:summary`,
         `${COLLECTION.renderCache}:list`,
         `${COLLECTION.renderCache}:get`,

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Table, Tag, Button, Progress, Space } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 export const ProgressMonitor = ({ taskId, onBack }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [tables, setTables] = useState([]);
   const [loading, setLoading] = useState(false);
 

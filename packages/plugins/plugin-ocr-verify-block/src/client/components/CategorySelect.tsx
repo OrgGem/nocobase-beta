@@ -1,6 +1,7 @@
 import React from 'react';
 import { Select } from 'antd';
-import { useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 
 function normalizeRecords(response: any) {
@@ -10,15 +11,14 @@ function normalizeRecords(response: any) {
 
 export const CategorySelect = (props: any) => {
   const t = useT();
-  const { data, loading } = useRequest<any>({
-    resource: 'ocrVerifyCategories',
-    action: 'list',
-    params: {
+  const api = useApp().apiClient;
+  const { data, loading } = useRequest<any>(() =>
+    api.resource('ocrVerifyCategories').list({
       filter: { enabled: true },
       pageSize: 100,
       sort: ['-createdAt'],
-    },
-  });
+    }),
+  );
 
   const options =
     normalizeRecords(data).map((item: any) => ({

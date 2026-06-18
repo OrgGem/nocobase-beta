@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Modal, Input, Button, Alert, Typography, Space, Spin } from 'antd';
-import { useAPIClient, Upload } from '@nocobase/client';
+import { Upload } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { parseJsonText } from '../utils/jsonFields';
 
@@ -12,7 +13,7 @@ interface SkillTestPanelProps {
 }
 
 export const SkillTestPanel: React.FC<SkillTestPanelProps> = ({ skill, onClose }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const inputSchema = parseJsonText(skill.inputSchema, null);
   const [input, setInput] = useState(

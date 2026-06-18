@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { useToken } from '@nocobase/client';
+import { useToken } from '../theme-compat';
 import { error } from '@nocobase/utils/client';
 import { Space } from 'antd';
 import React, { useCallback, useEffect } from 'react';

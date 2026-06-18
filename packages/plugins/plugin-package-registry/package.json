@@ -4,7 +4,7 @@
   "displayName.zh-CN": "包注册表",
   "displayName.vi-VN": "Package Registry",
   "description": "Provides a package registry functionality for managing plugin and artifact distributions.",
-  "version": "1.0.4",
+  "version": "1.0.8",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

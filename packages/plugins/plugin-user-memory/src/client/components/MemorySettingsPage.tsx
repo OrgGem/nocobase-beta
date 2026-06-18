@@ -29,6 +29,7 @@ import {
   Select,
 } from 'antd';
 import { useApp } from '@nocobase/client-v2';
+import { useT } from '../../client-v2/locale';
 import {
   SyncOutlined,
   SettingOutlined,

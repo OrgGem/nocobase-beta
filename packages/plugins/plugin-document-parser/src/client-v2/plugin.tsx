@@ -1,8 +1,23 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import React from 'react';
 
 export class PluginDocumentParserClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    // TODO: migrate v1 client UI to client-v2
+    this.pluginSettingsManager.addMenuItem({
+      key: 'document-parser',
+      title: this.t('Document Parser'),
+      icon: 'FileTextOutlined',
+      aclSnippet: 'pm.document-parser.settings',
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'document-parser',
+      key: 'index',
+      title: this.t('Document Parser'),
+      
+      componentLoader: () => import('../client/components/SettingsPage').then(m => ({ default: m.SettingsPage })),
+    });
+
   }
 }
 

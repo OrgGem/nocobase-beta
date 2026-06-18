@@ -10,7 +10,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Form, Radio, Switch, Select, Button, message, Spin, Divider, Alert, Space, Typography } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useDocParserTranslation } from '../locale';
 import { DEFAULT_SETTINGS } from '../../shared/defaults';
 
@@ -35,7 +35,7 @@ type Provider = {
 
 export const GlobalSettings: React.FC = () => {
   const { t } = useDocParserTranslation();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [form] = Form.useForm<Settings>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

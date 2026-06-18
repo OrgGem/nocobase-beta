@@ -30,7 +30,8 @@ import {
   ReloadOutlined,
   StopOutlined,
 } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useAIEmployees } from './AIEmployeesContext';
 import { parseJsonText } from './skill-hub/utils/jsonFields';
 
@@ -174,7 +175,7 @@ function TextBlock({ value, rows = 10 }: { value: any; rows?: number }) {
 }
 
 export const AgentRunsTab: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { employees, employeeMap } = useAIEmployees();
   const [filters, setFilters] = useState<FilterState>({});
   const [page, setPage] = useState(1);
@@ -197,22 +198,25 @@ export const AgentRunsTab: React.FC = () => {
   }, [filters, page, pageSize]);
 
   const { data, loading, refresh } = useRequest(
-    {
-      url: 'agentLoops:list',
-      params: requestParams,
-    },
+    () =>
+      api.request({
+        url: 'agentLoops:list',
+        params: requestParams,
+      }),
     {
       refreshDeps: [requestParams],
     },
   );
 
   const runs = useMemo(() => {
-    const rows = (data as any)?.data;
-    return Array.isArray(rows) ? rows : [];
+    const raw = (data as any)?.data ?? data;
+    if (Array.isArray(raw)) return raw;
+    return Array.isArray(raw?.data) ? raw.data : [];
   }, [data]);
 
   const total = useMemo(() => {
-    const count = (data as any)?.meta?.count;
+    const raw = (data as any)?.data ?? data;
+    const count = raw?.meta?.count ?? (data as any)?.meta?.count;
     return typeof count === 'number' ? count : 0;
   }, [data]);
 

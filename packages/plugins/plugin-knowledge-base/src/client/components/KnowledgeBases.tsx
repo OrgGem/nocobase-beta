@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import {
   Button,
   Modal,
@@ -122,7 +122,7 @@ function formatDate(value?: string) {
 }
 
 export const KnowledgeBases: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
   const [selectedKB, setSelectedKB] = useState<any | null>(null);

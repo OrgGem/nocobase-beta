@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { Select, SelectProps } from 'antd';
 import { useField } from '@formily/react';
 import { Field, isField } from '@formily/core';
@@ -43,7 +43,7 @@ export type LLMServiceSelectProps = Omit<SelectProps<string>, 'options' | 'loadi
  */
 export const LLMServiceSelect = (props: LLMServiceSelectProps) => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const field = useField<Field>();
   const [options, setOptions] = useState<SelectOption[]>([]);
   const [loading, setLoading] = useState(false);

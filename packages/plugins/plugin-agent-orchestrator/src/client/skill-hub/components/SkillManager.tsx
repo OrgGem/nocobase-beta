@@ -17,7 +17,7 @@ import {
   Tooltip,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, PlayCircleOutlined, BranchesOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { SkillEditor } from './SkillEditor';
 import { SkillTestPanel } from './SkillTestPanel';
@@ -26,7 +26,7 @@ import { GitSkillImport } from './GitSkillImport';
 const { TextArea } = Input;
 
 export const SkillManager: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const [skills, setSkills] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

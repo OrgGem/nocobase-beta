@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Drawer, List, Popconfirm, Space, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, FileSearchOutlined, RollbackOutlined } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION } from '../../shared/constants';
 import { PlaceholderTree, PlaceholderSchemaView } from './PlaceholderTree';
@@ -29,7 +30,7 @@ interface Props {
 }
 
 export const VersionHistory: React.FC<Props> = ({ open, onClose, template, onChanged }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useCarboneTranslation();
   const [previewData, setPreviewData] = useState<{ url: string; filename: string } | null>(null);
   const [currentVersionId, setCurrentVersionId] = useState<number | null>(template?.currentVersionId ?? null);

@@ -1,13 +1,13 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, Table, Typography, Space, Row, Col, Statistic, Progress } from 'antd';
 import { SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 
 const { Title, Text } = Typography;
 
 export const SkillMetrics: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const [executions, setExecutions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

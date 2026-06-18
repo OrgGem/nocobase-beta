@@ -10,7 +10,7 @@ import {
   DeleteOutlined,
   DiffOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { RunReviewButton } from './RunReviewButton';
 import { useT } from '../locale';
@@ -28,7 +28,7 @@ const STATUS_COLORS: Record<string, { color: string; icon: React.ReactNode; labe
 export const CommitHistory: React.FC = () => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { selectedRepo, branches: branchList, currentBranch } = useGitManager();
   const [commits, setCommits] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

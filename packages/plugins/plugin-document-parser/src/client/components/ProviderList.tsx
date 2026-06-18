@@ -17,7 +17,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { ProviderForm, ProviderFormValues } from './ProviderForm';
 import { useDocParserTranslation } from '../locale';
 
@@ -25,7 +25,7 @@ type Provider = ProviderFormValues & { id: number };
 
 export const ProviderList: React.FC = () => {
   const { t } = useDocParserTranslation();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);

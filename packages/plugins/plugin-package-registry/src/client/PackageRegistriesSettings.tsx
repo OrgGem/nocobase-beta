@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Card, Form, Input, message, Modal, Select, Space, Table, Tag } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 export const PackageRegistriesSettings = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);

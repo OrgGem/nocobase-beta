@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { Select, SelectProps } from 'antd';
 import { useField, useForm, observer } from '@formily/react';
 import { Field } from '@formily/core';
@@ -38,7 +38,7 @@ export type ModelSelectProps = Omit<SelectProps<string>, 'options' | 'loading' |
  */
 export const ModelSelect = observer((props: ModelSelectProps) => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const field = useField<Field>();
   const form = useForm();
   const [options, setOptions] = useState<SelectOption[]>([]);

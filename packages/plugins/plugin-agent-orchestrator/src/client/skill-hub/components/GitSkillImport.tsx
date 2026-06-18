@@ -25,7 +25,7 @@ import {
   DatabaseOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 
 const { Text } = Typography;
@@ -39,7 +39,7 @@ interface GitSkillImportProps {
 export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose }) => {
   const t = useT();
   const { token } = useToken();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
 
   const [step, setStep] = useState(0);
 

@@ -39,7 +39,7 @@ import {
   TeamOutlined,
   LockOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { Text, Title } = Typography;
 const { Dragger } = Upload;
@@ -99,7 +99,7 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
   onRemove,
   onClose,
 }) => {
-  const apiClient = useAPIClient();
+  const apiClient = useApp().apiClient;
   const [loading, setLoading] = useState(true);
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseItem[]>([]);
   const [selectedKB, setSelectedKB] = useState<KnowledgeBaseItem | null>(null);

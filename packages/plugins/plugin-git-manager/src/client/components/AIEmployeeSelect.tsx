@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Select } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 interface AIEmployeeOption {
   username: string;
@@ -20,7 +20,7 @@ export const AIEmployeeSelect: React.FC<{
   style?: React.CSSProperties;
   placeholder?: string;
 }> = ({ value, onChange, allowClear = true, size, style, placeholder }) => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [employees, setEmployees] = useState<AIEmployeeOption[]>([]);
   const [loading, setLoading] = useState(false);
 

@@ -3,7 +3,7 @@ import {
   Table, Button, Space, Modal, Form, Input, Select, Switch, Tag, Popconfirm, message, Empty, Tooltip,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BranchesOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
 import { LLMServiceSelect } from './LLMServiceSelect';
@@ -33,7 +33,7 @@ const DEFAULT_INSTRUCTION = `Please review the code changes with a focus on:
 
 export const ReviewFlows: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { repos } = useGitManager();
   const [flows, setFlows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

@@ -13,7 +13,8 @@ import {
   Tag, Typography, Checkbox, Divider, InputNumber,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -23,7 +24,7 @@ const { TextArea } = Input;
  * and their per-role permissions.
  */
 export const DirectoryManager: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [dirModalOpen, setDirModalOpen] = useState(false);
   const [editingDir, setEditingDir] = useState<any>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
@@ -31,16 +32,20 @@ export const DirectoryManager: React.FC = () => {
   const [dirForm] = Form.useForm();
   const [configForm] = Form.useForm();
 
-  const { data: dirsData, loading: dirsLoading, refresh: refreshDirs } = useRequest<any>({
-    url: 'externalStorageDirectories:list',
-    params: { sort: ['sort', 'name'], pageSize: 100 },
-  });
+  const { data: dirsData, loading: dirsLoading, refresh: refreshDirs } = useRequest<any, []>(() =>
+    api.request({
+      url: 'externalStorageDirectories:list',
+      params: { sort: ['sort', 'name'], pageSize: 100 },
+    }),
+  );
 
-  const { data: rolesData } = useRequest<any>({ url: 'roles:list', params: { pageSize: 100 } });
+  const { data: rolesData } = useRequest<any, []>(() =>
+    api.request({ url: 'roles:list', params: { pageSize: 100 } }),
+  );
   const {
     data: storageOptionsData,
     refresh: refreshStorageOptions,
-  } = useRequest<any>({ url: 'extStorage:storageOptions', method: 'get' });
+  } = useRequest<any, []>(() => api.request({ url: 'extStorage:storageOptions', method: 'get' }));
 
   const dirs = Array.isArray(dirsData?.data?.data) ? dirsData.data.data : Array.isArray(dirsData?.data) ? dirsData.data : Array.isArray(dirsData) ? dirsData : [];
   const roles = Array.isArray(rolesData?.data?.data) ? rolesData.data.data : Array.isArray(rolesData?.data) ? rolesData.data : Array.isArray(rolesData) ? rolesData : [];

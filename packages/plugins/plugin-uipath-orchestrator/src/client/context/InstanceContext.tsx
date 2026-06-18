@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
-import { useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 
 interface UiPathInstanceRecord {
   id: number;
@@ -50,16 +51,16 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [folderId, setFolderId] = useState<number | null>(null);
   const [folderKey, setFolderKey] = useState<string | null>(null);
 
+  const api = useApp().apiClient;
+
   // Fetch instances
   const {
     data: instData,
     loading,
     refresh: refreshInstances,
-  } = useRequest<any>({
-    resource: 'uipathInstances',
-    action: 'list',
-    params: { pageSize: 100, filter: { enabled: true } },
-  });
+  } = useRequest<any>(() =>
+    api.resource('uipathInstances').list({ pageSize: 100, filter: { enabled: true } }),
+  );
   const instances = useMemo(() => (Array.isArray(instData?.data) ? instData.data : []), [instData?.data]);
 
   // Auto-select default instance
@@ -83,11 +84,7 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     loading: foldersLoading,
     refresh: refreshFolders,
   } = useRequest<any>(
-    {
-      resource: 'uipathFoldersCache',
-      action: 'list',
-      params: { pageSize: 500, filter: { instanceId } },
-    },
+    () => api.resource('uipathFoldersCache').list({ pageSize: 500, filter: { instanceId } }),
     { ready: !!instanceId, refreshDeps: [instanceId] },
   );
   const folders = useMemo(() => (Array.isArray(folderData?.data) ? folderData.data : []), [folderData?.data]);

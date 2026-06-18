@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Descriptions, Space, Spin, Tag, Typography, message } from 'antd';
 import { CheckCircleOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useMarkItDownParserTranslation } from '../locale';
 
 const { Text } = Typography;
@@ -23,7 +23,7 @@ type CheckResult = RuntimeInfo & {
 };
 
 export const SettingsPage: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useMarkItDownParserTranslation();
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [check, setCheck] = useState<CheckResult | null>(null);

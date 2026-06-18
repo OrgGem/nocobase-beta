@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { Alert, Table, Tag, Button, Space, Input, Select, Drawer, Descriptions, Popconfirm, message } from 'antd';
 import { StopOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
@@ -24,7 +24,7 @@ const escapeODataString = (value: string) => value.replace(/'/g, "''");
 
 export const JobManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId, folderId, folderKey } = useCurrentInstance();
   const [stateFilter, setStateFilter] = useState<string | undefined>();
   const [search, setSearch] = useState('');

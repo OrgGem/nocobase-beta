@@ -1,4 +1,4 @@
-import { BlockModel } from '@nocobase/client';
+import { BlockModel } from '@nocobase/client-v2';
 import { escapeT } from '@nocobase/flow-engine';
 import React from 'react';
 import { EmbedSettingsBlock } from '../EmbedSettingsBlock';

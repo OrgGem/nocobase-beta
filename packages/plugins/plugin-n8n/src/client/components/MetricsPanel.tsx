@@ -8,7 +8,7 @@ import {
   UnorderedListOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
@@ -138,7 +138,7 @@ function kpiColor(value: number, warn: number, danger: number): string {
 
 export const MetricsPanel: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { instanceId } = useCurrentInstance();
   const [history, setHistory] = useState<MetricsSnapshot[]>([]);
   const [loading, setLoading] = useState(false);

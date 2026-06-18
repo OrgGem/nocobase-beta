@@ -61,7 +61,7 @@ import {
   InteractionOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Plugin, useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -80,8 +80,8 @@ const kpiCardStyle = {
   minHeight: 120,
 };
 
-const DocPixieSettings: React.FC = () => {
-  const api = useAPIClient();
+export const DocPixieSettings: React.FC = () => {
+  const api = useApp().apiClient;
   const [activeTab, setActiveTab] = useState('config');
   const [loading, setLoading] = useState(false);
   const [config, setConfig] = useState<any>(null);
@@ -855,18 +855,3 @@ const DocPixieSettings: React.FC = () => {
   );
 };
 
-export class PluginDocPixieClient extends Plugin {
-  async afterAdd() {}
-
-  async beforeLoad() {}
-
-  async load() {
-    (this as any).app.pluginSettingsManager.add('plugin-docpixie', {
-      title: '{{t("DocPixie Document AI")}}',
-      icon: 'FileSearchOutlined',
-      Component: DocPixieSettings,
-    });
-  }
-}
-
-export default PluginDocPixieClient;

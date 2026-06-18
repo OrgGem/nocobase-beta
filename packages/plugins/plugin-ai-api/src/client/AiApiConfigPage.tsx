@@ -9,7 +9,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Card, Form, Select, InputNumber, Button, message, Typography, Space, Alert, Divider, Spin, Radio } from 'antd';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -34,7 +34,7 @@ interface LlmService {
 }
 
 export function AiApiConfigPage() {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

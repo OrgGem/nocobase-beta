@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Button, Input, Popconfirm, Space, Spin, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, ExclamationCircleOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons';
-import { useAPIClient } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
 interface PluginRecord {
@@ -22,7 +22,7 @@ function getErrorMessage(err: any, fallback: string) {
 
 export function PluginOperations() {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [actionKey, setActionKey] = useState<string | null>(null);
   const [search, setSearch] = useState('');

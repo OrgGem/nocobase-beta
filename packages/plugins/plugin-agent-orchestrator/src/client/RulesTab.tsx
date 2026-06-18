@@ -25,7 +25,8 @@ import {
   WarningOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
 import { useAIEmployees } from './AIEmployeesContext';
 
@@ -104,30 +105,36 @@ const normalizeSkillSettingsForTools = (skillSettings: any) => {
 };
 
 export const RulesTab: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [visible, setVisible] = useState(false);
   const [editingRecord, setEditingRecord] = useState<any>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest({
-    url: 'orchestratorConfig:list',
-    params: {
-      sort: ['-createdAt'],
-    },
-  });
+  const { data, loading, refresh } = useRequest(() =>
+    api.request({
+      url: 'orchestratorConfig:list',
+      params: {
+        sort: ['-createdAt'],
+      },
+    }),
+  );
 
-  const { data: llmServicesData, loading: llmLoading } = useRequest({
-    url: 'ai:listAllEnabledModels',
-  });
+  const { data: llmServicesData, loading: llmLoading } = useRequest(() =>
+    api.request({
+      url: 'ai:listAllEnabledModels',
+    }),
+  );
 
-  const { data: harnessProfilesData, loading: harnessLoading } = useRequest({
-    url: 'agentHarnessProfiles:list',
-    params: {
-      filter: { enabled: true },
-      sort: ['tag'],
-      pageSize: 100,
-    },
-  });
+  const { data: harnessProfilesData, loading: harnessLoading } = useRequest(() =>
+    api.request({
+      url: 'agentHarnessProfiles:list',
+      params: {
+        filter: { enabled: true },
+        sort: ['tag'],
+        pageSize: 100,
+      },
+    }),
+  );
 
   const llmServices = React.useMemo(() => {
     const raw = (llmServicesData as any)?.data ?? llmServicesData;
@@ -144,8 +151,9 @@ export const RulesTab: React.FC = () => {
   // P3 FIX: Use shared context instead of duplicate API call
   const { employeeMap, toolNamesMap, refresh: refreshEmployees } = useAIEmployees();
   const rules = React.useMemo(() => {
-    const rows = (data as any)?.data;
-    return Array.isArray(rows) ? rows : [];
+    const raw = (data as any)?.data ?? data;
+    if (Array.isArray(raw)) return raw;
+    return Array.isArray(raw?.data) ? raw.data : [];
   }, [data]);
 
   const handleAddToolsToEmployee = async (employeeUsername: string, toolNames: string[]) => {

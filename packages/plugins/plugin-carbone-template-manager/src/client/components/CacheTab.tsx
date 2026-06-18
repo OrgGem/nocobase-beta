@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { Button, Popconfirm, Space, Table, Tag, message } from 'antd';
 import { ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import { useCarboneTranslation } from '../locale';
 import { COLLECTION } from '../../shared/constants';
 
@@ -24,7 +25,7 @@ interface CacheRow {
  * `carboneRenderCache:invalidate` action.
  */
 export const CacheTab: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { t } = useCarboneTranslation();
   const [templateNames, setTemplateNames] = useState<Record<number, string>>({});
 

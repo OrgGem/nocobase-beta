@@ -1,7 +1,8 @@
 ﻿import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Tag, Button, Typography, Space, Tooltip, Popconfirm, message } from 'antd';
 import { ReloadOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useAPIClient, Upload } from '@nocobase/client';
+import { Upload } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { parseJsonText } from '../utils/jsonFields';
 
@@ -15,7 +16,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export const ExecutionHistory: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const t = useT();
   const [executions, setExecutions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);

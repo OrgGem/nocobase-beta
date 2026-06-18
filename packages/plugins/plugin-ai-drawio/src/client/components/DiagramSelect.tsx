@@ -1,6 +1,7 @@
 import React from 'react';
 import { Select } from 'antd';
-import { useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 
 function normalizeRecords(response: any) {
   const records = response?.data?.data || response?.data || response || [];
@@ -8,14 +9,13 @@ function normalizeRecords(response: any) {
 }
 
 export const DiagramSelect = (props: any) => {
-  const { data, loading } = useRequest<any>({
-    resource: 'aiDiagrams',
-    action: 'list',
-    params: {
+  const api = useApp().apiClient;
+  const { data, loading } = useRequest<any>(() =>
+    api.resource('aiDiagrams').list({
       pageSize: 200,
       sort: ['-updatedAt'],
-    },
-  });
+    }),
+  );
 
   const options =
     normalizeRecords(data).map((item: any) => ({

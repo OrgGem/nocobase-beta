@@ -7,14 +7,19 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { ReturnTypeOfUseRequest, useRequest } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
+import { useRequest } from 'ahooks';
 import { error } from '@nocobase/utils/client';
 import React, { createContext, useMemo } from 'react';
 import { ThemeItem } from '../../types';
 import { changeAlgorithmFromStringToFunction } from '../utils/changeAlgorithmFromStringToFunction';
 
-interface TData extends Pick<ReturnTypeOfUseRequest, 'data' | 'error' | 'run' | 'refresh' | 'loading'> {
+interface TData {
   data?: ThemeItem[];
+  error?: Error;
+  run: () => void;
+  refresh: () => void;
+  loading: boolean;
 }
 
 const ThemeListContext = createContext<TData>(null);
@@ -25,6 +30,8 @@ export const useThemeListContext = () => {
 };
 
 export const ThemeListProvider = ({ children }) => {
+  const app = useApp();
+  const api = app.apiClient;
   const {
     data,
     error: err,
@@ -32,13 +39,16 @@ export const ThemeListProvider = ({ children }) => {
     refresh,
     loading,
   } = useRequest(
-    {
-      url: 'antdStyleThemeConfig:list',
-      params: {
-        sort: 'id',
-        paginate: false,
-      },
-    },
+    () =>
+      api
+        .request({
+          url: 'antdStyleThemeConfig:list',
+          params: {
+            sort: 'id',
+            paginate: false,
+          },
+        })
+        .then((res) => res?.data),
     {
       manual: true,
     },

@@ -5,24 +5,23 @@
 import React, { useState } from 'react';
 import { Table, Button, Modal, Form, Input, Select, Switch, Space, message, Tag, Popconfirm } from 'antd';
 import { PlusOutlined, DeleteOutlined, EditOutlined, ApiOutlined } from '@ant-design/icons';
-import { useRequest, useAPIClient } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
 export const InstanceManager: React.FC = () => {
   const t = useT();
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const { refreshInstances } = useCurrentInstance();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [testing, setTesting] = useState<number | null>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>({
-    resource: 'uipathInstances',
-    action: 'list',
-    params: { pageSize: 100 },
-  });
+  const { data, loading, refresh } = useRequest<any>(() =>
+    api.resource('uipathInstances').list({ pageSize: 100 }),
+  );
 
   const instances = Array.isArray(data?.data) ? data.data : [];
   const isMaskedSecret = (value: any) =>

@@ -18,7 +18,8 @@ import {
   Form,
 } from 'antd';
 import { EyeOutlined, CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useAPIClient, useRequest } from '@nocobase/client';
+import { useRequest } from 'ahooks';
+import { useApp } from '@nocobase/client-v2';
 import { useAIEmployees } from './AIEmployeesContext';
 
 const { Text, Paragraph } = Typography;
@@ -32,7 +33,7 @@ type FilterState = {
 };
 
 export const TracingTab: React.FC = () => {
-  const api = useAPIClient();
+  const api = useApp().apiClient;
   const [selectedLog, setSelectedLog] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
@@ -61,10 +62,11 @@ export const TracingTab: React.FC = () => {
   }, [page, pageSize, filters]);
 
   const { data, loading, refresh } = useRequest(
-    {
-      url: 'orchestratorTracing:list',
-      params: requestParams,
-    },
+    () =>
+      api.request({
+        url: 'orchestratorTracing:list',
+        params: requestParams,
+      }),
     {
       refreshDeps: [requestParams],
     },
@@ -72,12 +74,14 @@ export const TracingTab: React.FC = () => {
 
   // Server returns { data: rows, meta: { count } }; useRequest unwraps to that shape.
   const logs = useMemo(() => {
-    const rows = (data as any)?.data;
-    return Array.isArray(rows) ? rows : [];
+    const raw = (data as any)?.data ?? data;
+    if (Array.isArray(raw)) return raw;
+    return Array.isArray(raw?.data) ? raw.data : [];
   }, [data]);
 
   const total = useMemo(() => {
-    const count = (data as any)?.meta?.count;
+    const raw = (data as any)?.data ?? data;
+    const count = raw?.meta?.count ?? (data as any)?.meta?.count;
     return typeof count === 'number' ? count : 0;
   }, [data]);
 
