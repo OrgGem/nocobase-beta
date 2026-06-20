@@ -11,7 +11,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai.orchestrator',
       key: 'index',
-      title: this.t('Orchestration Rules'),
+      title: this.t('Native Monitor'),
       componentLoader: () => import('./pages/RulesPage'),
       sort: -1,
     });
@@ -26,14 +26,14 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai.orchestrator',
       key: 'agent-runs',
-      title: this.t('Agent Runs'),
+      title: this.t('Native Agent Runs'),
       componentLoader: () => import('./pages/AgentRunsPage'),
     });
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai.orchestrator',
       key: 'harness-profiles',
-      title: this.t('Harness Profiles'),
+      title: this.t('Policy Profiles'),
       componentLoader: () => import('./pages/HarnessProfilesPage'),
     });
 

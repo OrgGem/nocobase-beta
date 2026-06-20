@@ -29,6 +29,28 @@ export default defineCollection({
       length: 100,
     },
     {
+      name: 'source',
+      type: 'string',
+      length: 100,
+      comment: 'native-plugin-ai or legacy orchestrator source.',
+    },
+    {
+      name: 'parentSessionId',
+      type: 'uuid',
+      comment: 'Main AI conversation session id when this span comes from native plugin-ai.',
+    },
+    {
+      name: 'subSessionId',
+      type: 'uuid',
+      comment: 'Sub-agent AI conversation session id when this span comes from native plugin-ai.',
+    },
+    {
+      name: 'toolCallId',
+      type: 'string',
+      length: 200,
+      comment: 'Native AI tool call id associated with this span.',
+    },
+    {
       name: 'type',
       type: 'string',
       length: 30,
@@ -144,10 +166,25 @@ export default defineCollection({
       fields: ['parentSpanId'],
     },
     {
+      fields: ['source'],
+    },
+    {
+      fields: ['parentSessionId'],
+    },
+    {
+      fields: ['subSessionId'],
+    },
+    {
+      fields: ['toolCallId'],
+    },
+    {
       fields: ['type'],
     },
     {
       fields: ['status'],
+    },
+    {
+      fields: ['userId'],
     },
   ],
 });

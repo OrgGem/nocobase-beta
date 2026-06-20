@@ -32,14 +32,14 @@ function estimateCost(inputTokens: number, outputTokens: number): number {
 }
 
 /**
- * Extract usage_metadata from the final state returned by createReactAgent.invoke().
+ * Extract usage_metadata from a legacy agent final state.
  *
- * LangChain's createReactAgent returns a final state object with a `messages` array.
+ * Legacy agent execution returned a final state object with a `messages` array.
  * The last AIMessage in that array carries `usage_metadata` populated by the
  * LLM provider after the final generation step. This is the standard LangChain
  * approach — no private API access needed.
  *
- * Expected shape (from @langchain/core/messages/ai):
+ * Expected message shape:
  *   AIMessage.usage_metadata = {
  *     input_tokens: number,
  *     output_tokens: number,

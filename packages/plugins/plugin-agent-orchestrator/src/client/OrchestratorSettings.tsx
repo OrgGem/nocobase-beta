@@ -1,61 +1,52 @@
 import React from 'react';
 import { Tabs } from 'antd';
 import {
-  ApartmentOutlined,
   BarChartOutlined,
   CheckCircleOutlined,
   CodeOutlined,
   HistoryOutlined,
   MonitorOutlined,
-  ProfileOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import { RulesTab } from './RulesTab';
-import { TracingTab } from './TracingTab';
+import { TracingTab } from '../client-v2/components/TracingTab';
 import { AgentRunsTab } from './AgentRunsTab';
 import { HarnessProfilesTab } from './HarnessProfilesTab';
-import { AIEmployeesProvider } from './AIEmployeesContext';
+import { AIEmployeesProvider } from '../client-v2/components/AIEmployeesContext';
+import { useT } from './skill-hub/locale';
 import { SkillManager, ExecutionHistory, SkillMetrics, LoopSettings } from './skill-hub';
 
 const OrchestratorSettings: React.FC = () => {
+  const t = useT();
+
   return (
     <AIEmployeesProvider>
       <div style={{ padding: '0 24px 24px' }}>
         <Tabs
-          defaultActiveKey="rules"
+          defaultActiveKey="native-monitor"
           items={[
             {
-              key: 'rules',
+              key: 'native-monitor',
               label: (
                 <span>
-                  <ApartmentOutlined /> Orchestration Rules
-                </span>
-              ),
-              children: <RulesTab />,
-            },
-            {
-              key: 'tracing',
-              label: (
-                <span>
-                  <MonitorOutlined /> Execution Tracing
-                </span>
-              ),
-              children: <TracingTab />,
-            },
-            {
-              key: 'agent-runs',
-              label: (
-                <span>
-                  <ProfileOutlined /> Agent Runs
+                  <MonitorOutlined /> {t('Native Monitor')}
                 </span>
               ),
               children: <AgentRunsTab />,
             },
             {
+              key: 'tracing',
+              label: (
+                <span>
+                  <MonitorOutlined /> {t('Execution Tracing')}
+                </span>
+              ),
+              children: <TracingTab />,
+            },
+            {
               key: 'harness-profiles',
               label: (
                 <span>
-                  <SettingOutlined /> Harness Profiles
+                  <SettingOutlined /> {t('Policy Profiles')}
                 </span>
               ),
               children: <HarnessProfilesTab />,
@@ -64,7 +55,7 @@ const OrchestratorSettings: React.FC = () => {
               key: 'skill-definitions',
               label: (
                 <span>
-                  <CodeOutlined /> Skill Hub Definitions
+                  <CodeOutlined /> {t('Skill Hub Definitions')}
                 </span>
               ),
               children: <SkillManager />,
@@ -73,7 +64,7 @@ const OrchestratorSettings: React.FC = () => {
               key: 'skill-executions',
               label: (
                 <span>
-                  <HistoryOutlined /> Execution History
+                  <HistoryOutlined /> {t('Execution History')}
                 </span>
               ),
               children: <ExecutionHistory />,
@@ -82,7 +73,7 @@ const OrchestratorSettings: React.FC = () => {
               key: 'skill-loop-settings',
               label: (
                 <span>
-                  <CheckCircleOutlined /> Skill Review Settings
+                  <CheckCircleOutlined /> {t('Skill Review Settings')}
                 </span>
               ),
               children: <LoopSettings />,
@@ -91,7 +82,7 @@ const OrchestratorSettings: React.FC = () => {
               key: 'skill-metrics',
               label: (
                 <span>
-                  <BarChartOutlined /> Metrics
+                  <BarChartOutlined /> {t('Metrics')}
                 </span>
               ),
               children: <SkillMetrics />,

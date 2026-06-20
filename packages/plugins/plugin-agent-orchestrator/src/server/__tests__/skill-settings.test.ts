@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { normalizeAIEmployeeSkillSettings } from '../utils/skill-settings';
 
 describe('normalizeAIEmployeeSkillSettings', () => {
-  it('moves legacy object tool bindings from skills to tools', () => {
+  it('removes retired orchestrator plan tool bindings from skills', () => {
     const result = normalizeAIEmployeeSkillSettings({
       skills: [{ name: 'orchestrator_plan_goal', autoCall: false }, 'crm-research'],
       tools: [],
@@ -10,20 +10,20 @@ describe('normalizeAIEmployeeSkillSettings', () => {
 
     expect(result.changed).toBe(true);
     expect(result.skillSettings.skills).toEqual(['crm-research']);
-    expect(result.skillSettings.tools).toEqual([{ name: 'orchestrator_plan_goal', autoCall: false }]);
+    expect(result.skillSettings.tools).toEqual([]);
   });
 
-  it('moves orchestrator tool names stored as skill strings to tools', () => {
+  it('removes retired delegate tool names stored as skill strings', () => {
     const result = normalizeAIEmployeeSkillSettings({
       skills: ['delegate_lead_to_researcher', 'crm-research'],
     });
 
     expect(result.changed).toBe(true);
     expect(result.skillSettings.skills).toEqual(['crm-research']);
-    expect(result.skillSettings.tools).toEqual([{ name: 'delegate_lead_to_researcher', autoCall: false }]);
+    expect(result.skillSettings.tools).toEqual([]);
   });
 
-  it('keeps current tool bindings and avoids duplicate migrated tools', () => {
+  it('removes retired dispatch tool bindings from current tools', () => {
     const result = normalizeAIEmployeeSkillSettings({
       skills: [{ name: 'dispatch_subagents_lead', autoCall: true }],
       tools: [{ name: 'dispatch_subagents_lead', autoCall: false }],
@@ -31,7 +31,7 @@ describe('normalizeAIEmployeeSkillSettings', () => {
 
     expect(result.changed).toBe(true);
     expect(result.skillSettings.skills).toEqual([]);
-    expect(result.skillSettings.tools).toEqual([{ name: 'dispatch_subagents_lead', autoCall: false }]);
+    expect(result.skillSettings.tools).toEqual([]);
   });
 
   it('moves browser and drawio tools stored as skill strings to tools', () => {

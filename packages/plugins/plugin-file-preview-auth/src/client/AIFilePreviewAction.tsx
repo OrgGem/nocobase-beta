@@ -9,8 +9,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileTextOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Dropdown, Space, Tooltip, message } from 'antd';
-import type { MenuProps } from 'antd';
+import { Button, Space, Tooltip, message } from 'antd';
 import type { Application } from '@nocobase/client';
 import { useChatBoxActions, useAIConfigRepository, type AIEmployee } from '@nocobase/plugin-ai/client';
 import { useT } from './locale';
@@ -78,10 +77,6 @@ function setStoredAIEmployeeUsername(username: string) {
   } catch {
     // Ignore storage restrictions in embedded/sandboxed clients.
   }
-}
-
-function getEmployeeLabel(employee: AIEmployee) {
-  return employee?.nickname || employee?.username || '';
 }
 
 class AIFilePreviewActionBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean }> {
@@ -186,48 +181,27 @@ const AIFilePreviewActionInner: React.FC<{ file: any }> = ({ file }) => {
     [file, t, triggerTask],
   );
 
-  const menuItems: MenuProps['items'] = orderedEmployees.map((employee) => ({
-    key: employee.username,
-    label: getEmployeeLabel(employee),
-    onClick: () => openAIChat(employee),
-  }));
-
   if (!loading && !orderedEmployees.length) {
     return null;
   }
 
-  if (orderedEmployees.length === 1) {
-    return (
-      <Tooltip title={t('Ask AI')}>
-        <Button
-          type="text"
-          size="small"
-          icon={<RobotOutlined />}
-          loading={asking || loading}
-          onClick={(event) => {
-            event.stopPropagation();
-            openAIChat(orderedEmployees[0]);
-          }}
-        >
-          {t('Ask AI')}
-        </Button>
-      </Tooltip>
-    );
-  }
-
+  // Single click attaches the file content to the chat box using the preferred
+  // employee (last used, otherwise the first available) without listing employees.
   return (
     <Tooltip title={t('Ask AI')}>
-      <Dropdown menu={{ items: menuItems }} trigger={['click']} placement="bottomRight" disabled={asking || loading}>
-        <Button
-          type="text"
-          size="small"
-          icon={<RobotOutlined />}
-          loading={asking || loading}
-          onClick={(event) => event.stopPropagation()}
-        >
-          {t('Ask AI')}
-        </Button>
-      </Dropdown>
+      <Button
+        type="text"
+        size="small"
+        icon={<RobotOutlined />}
+        loading={asking || loading}
+        disabled={!orderedEmployees.length}
+        onClick={(event) => {
+          event.stopPropagation();
+          openAIChat(orderedEmployees[0]);
+        }}
+      >
+        {t('Ask AI')}
+      </Button>
     </Tooltip>
   );
 };

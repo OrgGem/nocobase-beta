@@ -51,7 +51,7 @@ export function parseSkillMarkdown(markdown: string) {
       if (key) result[key] = value;
     }
   });
-  
+
   const body = markdown.substring(match[0].length).trim();
   return { metadata: result, body };
 }

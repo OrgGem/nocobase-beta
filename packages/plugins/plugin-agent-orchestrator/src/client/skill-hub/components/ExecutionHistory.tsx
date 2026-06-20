@@ -56,8 +56,8 @@ export const ExecutionHistory: React.FC = () => {
         url: `skillExecutions:destroy`,
         method: 'POST',
         params: {
-          filterByTk: id
-        }
+          filterByTk: id,
+        },
       });
       message.success(t('Deleted successfully'));
       fetchExecutions();
@@ -84,9 +84,7 @@ export const ExecutionHistory: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 120,
-      render: (status: string) => (
-        <Tag color={STATUS_COLORS[status] || 'default'}>{status}</Tag>
-      ),
+      render: (status: string) => <Tag color={STATUS_COLORS[status] || 'default'}>{status}</Tag>,
     },
     {
       title: t('Duration'),
@@ -109,7 +107,7 @@ export const ExecutionHistory: React.FC = () => {
           filename: f.name,
           extname: f.name.includes('.') ? `.${f.name.split('.').pop()}` : '',
           url: `/api/skillHub:download?execId=${record.id}&filename=${encodeURIComponent(f.name)}`,
-          status: 'done'
+          status: 'done',
         }));
         return <Upload.ReadPretty value={formattedFiles} multiple={true} showFileName={true} />;
       },

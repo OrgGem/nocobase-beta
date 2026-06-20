@@ -19,7 +19,7 @@ export default class AddProgressFieldsMigration extends Migration {
 
       const fieldsToSync = [
         { name: 'initProgressPercent', type: 'integer', defaultValue: 0 },
-        { name: 'initProgressLog', type: 'text' }
+        { name: 'initProgressLog', type: 'text' },
       ];
 
       for (const f of fieldsToSync) {
@@ -28,19 +28,19 @@ export default class AddProgressFieldsMigration extends Migration {
         });
 
         if (!fieldMeta && tableDesc[f.name]) {
-           // The physical column exists, but NocoBase metadata is missing it!
-           // Let's create the metadata right now BEFORE NocoBase's collection.sync() 
-           // runs and crashes on addColumn.
-           await fieldRepo.create({
-              values: {
-                 name: f.name,
-                 type: f.type,
-                 collectionName,
-                 // Avoid trying to physically add it because it already exists
-                 interface: f.type,
-              }
-           });
-           (this as any).app.logger.info(`[skill-hub] Restored NocoBase metadata for preexisting column ${f.name}`);
+          // The physical column exists, but NocoBase metadata is missing it!
+          // Let's create the metadata right now BEFORE NocoBase's collection.sync()
+          // runs and crashes on addColumn.
+          await fieldRepo.create({
+            values: {
+              name: f.name,
+              type: f.type,
+              collectionName,
+              // Avoid trying to physically add it because it already exists
+              interface: f.type,
+            },
+          });
+          (this as any).app.logger.info(`[skill-hub] Restored NocoBase metadata for preexisting column ${f.name}`);
         }
       }
     } catch (error) {

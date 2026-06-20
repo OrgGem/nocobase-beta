@@ -16,7 +16,7 @@ export default defineCollection({
       length: 100,
       allowNull: false,
       unique: true,
-      comment: 'Stable harness profile tag used by orchestration rules and agent loop runs.',
+      comment: 'Stable policy profile tag used by native sub-agent observer and context injection.',
     },
     {
       name: 'title',
@@ -36,7 +36,7 @@ export default defineCollection({
       name: 'settings',
       type: 'json',
       defaultValue: {},
-      comment: 'Harness limits and behavior settings such as max parallel sub-agents, approval mode, and tool policy.',
+      comment: 'Policy settings such as native observer enablement, memory scopes, and tracing retention.',
     },
     {
       name: 'createdAt',

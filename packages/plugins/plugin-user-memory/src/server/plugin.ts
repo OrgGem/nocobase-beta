@@ -11,6 +11,7 @@ import { MemoryInjector } from './services/memory-injector';
 import { MemorySyncJob } from './cron/memory-sync-job';
 import * as userMemoryActions from './actions/user-memory';
 import * as userMemoryAdminActions from './actions/user-memory-admin';
+import { createRememberToolProvider } from './tools/remember-tool';
 
 export class PluginUserMemoryServer extends Plugin {
   memoryInjector: MemoryInjector;
@@ -39,6 +40,9 @@ export class PluginUserMemoryServer extends Plugin {
 
     // 2. Register memory injection into AI system prompts via plugin-ai extension point
     this.memoryInjector.register();
+
+    // 2b. Register the "remember" AI tool so agents can persist user facts on command
+    this.registerRememberTool();
 
     // 3. Keep memory storage fresh after successful chats
     this.registerAutoSyncAfterChat();
@@ -78,6 +82,20 @@ export class PluginUserMemoryServer extends Plugin {
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────────────────
+
+  private registerRememberTool() {
+    try {
+      const toolsManager = (this.app.pm.get('ai') as any)?.ai?.toolsManager;
+      if (!toolsManager) {
+        this.app.logger.warn('[UserMemory] plugin-ai toolsManager not available, skip remember tool.');
+        return;
+      }
+      toolsManager.registerDynamicTools(createRememberToolProvider(this));
+      this.app.logger.info('[UserMemory] remember_user_fact AI tool registered.');
+    } catch (err: any) {
+      this.app.logger.warn('[UserMemory] Failed to register remember tool:', err.message);
+    }
+  }
 
   private registerAutoSyncAfterChat() {
     this.app.resourceManager.use(async (ctx: any, next: () => Promise<void>) => {
@@ -218,6 +236,7 @@ export class PluginUserMemoryServer extends Plugin {
           enabled: true,
           syncSchedule: '0 0 3 * * *',
           maxTokens: 800,
+          maxChars: 2000,
           maxConversationsPerSync: 50,
           syncLogRetentionDays: 30,
         },

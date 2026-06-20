@@ -6,7 +6,7 @@
   "description": "Preview PDF, image, and text files with Bearer token authentication via blob URLs.",
   "description.vi-VN": "Xem trước file PDF, hình ảnh và văn bản với xác thực Bearer token qua blob URL.",
   "description.zh-CN": "通过 Bearer 令牌认证和 Blob URL 预览 PDF、图片和文本文件。",
-  "version": "1.3.9",
+  "version": "1.3.10",
   "main": "dist/server/index.js",
   "files": [
     "dist",

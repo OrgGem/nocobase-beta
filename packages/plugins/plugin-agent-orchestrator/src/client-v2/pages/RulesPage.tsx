@@ -1,11 +1,11 @@
 import React from 'react';
 import { AIEmployeesProvider } from '../components/AIEmployeesContext';
-import { RulesTab } from '../components/RulesTab';
+import { AgentRunsTab } from '../components/AgentRunsTab';
 
 const RulesPage: React.FC = () => (
   <AIEmployeesProvider>
     <div style={{ padding: '0 24px 24px' }}>
-      <RulesTab />
+      <AgentRunsTab />
     </div>
   </AIEmployeesProvider>
 );

@@ -393,6 +393,9 @@ const MemorySettingsPage: React.FC = () => {
                 <Form.Item name="maxTokens" label="Max Tokens (memory budget)">
                   <InputNumber min={100} max={4000} />
                 </Form.Item>
+                <Form.Item name="maxChars" label={t('Max Characters')}>
+                  <InputNumber min={500} max={5000} />
+                </Form.Item>
                 <Form.Item name="maxConversationsPerSync" label="Max Conversations Per Sync">
                   <InputNumber min={5} max={200} />
                 </Form.Item>
@@ -469,6 +472,7 @@ const MemorySettingsPage: React.FC = () => {
     llmServices,
     selectedService,
     modelOptions,
+    t,
   ]);
 
   return (

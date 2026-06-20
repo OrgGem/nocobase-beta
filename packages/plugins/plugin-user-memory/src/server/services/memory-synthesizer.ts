@@ -78,6 +78,30 @@ export interface SynthesisResult {
   error?: string;
 }
 
+/**
+ * Truncate a markdown profile to at most maxChars characters, preferring to cut
+ * at a '## ' section boundary, falling back to a word boundary. The returned
+ * string is guaranteed to be <= maxChars.
+ */
+export function truncateToMaxChars(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+
+  // Try to cut at the last '## ' section header before the limit
+  const truncated = content.slice(0, maxChars);
+  const lastSectionBoundary = truncated.lastIndexOf('\n## ');
+  if (lastSectionBoundary > maxChars * 0.5) {
+    return truncated.slice(0, lastSectionBoundary).trimEnd();
+  }
+
+  // Fall back to word boundary, reserving room for the suffix so the
+  // total length never exceeds maxChars.
+  const suffix = '\n\n*(truncated)*';
+  const budget = Math.max(0, maxChars - suffix.length);
+  const head = content.slice(0, budget);
+  const lastSpace = head.lastIndexOf(' ');
+  return (lastSpace > 0 ? head.slice(0, lastSpace) : head).trimEnd() + suffix;
+}
+
 export class MemorySynthesizer {
   constructor(private app: Application) {}
 
@@ -93,6 +117,7 @@ export class MemorySynthesizer {
     llmServiceId?: string,
     llmModel?: string,
     maxTokens?: number,
+    maxChars?: number,
   ): Promise<SynthesisResult> {
     try {
       const aiPlugin = this.app.pm.get('ai') as any;
@@ -105,8 +130,10 @@ export class MemorySynthesizer {
       const maxWords = Math.floor(effectiveMaxTokens * 0.75); // tokens → approximate words
 
       // Build the prompt — use arrow function replacements to prevent injection of placeholders
-      const prompt = SYNTHESIS_PROMPT
-        .replace('{existingMemory}', () => existingMemory || '(Empty — no existing profile)')
+      const prompt = SYNTHESIS_PROMPT.replace(
+        '{existingMemory}',
+        () => existingMemory || '(Empty — no existing profile)',
+      )
         .replace('{newConversations}', () => newConversationsText)
         .replace('{maxWords}', () => String(maxWords));
 
@@ -130,13 +157,15 @@ export class MemorySynthesizer {
         return { content: '', success: false, error: 'LLM returned empty or too short response' };
       }
 
-      // Phase 6: Enforce maxTokens by truncating overly long responses
-      const maxChars = effectiveMaxTokens * CHARS_PER_TOKEN;
-      if (content.length > maxChars) {
-        content = this.truncateProfile(content, maxChars);
-        this.app.logger.debug(
-          `[UserMemory] Synthesis output truncated to ~${effectiveMaxTokens} tokens`,
-        );
+      // Phase 6: Enforce maxTokens by truncating overly long responses.
+      // Phase 7: A hard character cap (maxChars) takes precedence — the profile must
+      // never exceed it regardless of the token budget.
+      const tokenCharLimit = effectiveMaxTokens * CHARS_PER_TOKEN;
+      const effectiveMaxChars = maxChars && maxChars > 0 ? maxChars : 2000;
+      const maxCharsLimit = Math.min(effectiveMaxChars, tokenCharLimit);
+      if (content.length > maxCharsLimit) {
+        content = this.truncateProfile(content, maxCharsLimit);
+        this.app.logger.debug(`[UserMemory] Synthesis output truncated to ${maxCharsLimit} chars`);
       }
 
       return { content: content.trim(), success: true };
@@ -198,17 +227,6 @@ export class MemorySynthesizer {
    * trying to cut at a section boundary (## heading) to keep it coherent.
    */
   private truncateProfile(content: string, maxChars: number): string {
-    if (content.length <= maxChars) return content;
-
-    // Try to cut at the last '## ' section header before the limit
-    const truncated = content.slice(0, maxChars);
-    const lastSectionBoundary = truncated.lastIndexOf('\n## ');
-    if (lastSectionBoundary > maxChars * 0.5) {
-      return truncated.slice(0, lastSectionBoundary).trimEnd();
-    }
-
-    // Fall back to word boundary
-    const lastSpace = truncated.lastIndexOf(' ');
-    return (lastSpace > 0 ? truncated.slice(0, lastSpace) : truncated).trimEnd() + '\n\n*(truncated)*';
+    return truncateToMaxChars(content, maxChars);
   }
 }

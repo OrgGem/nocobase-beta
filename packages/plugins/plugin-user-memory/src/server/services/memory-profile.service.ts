@@ -6,6 +6,31 @@
  */
 
 import type { Database } from '@nocobase/database';
+import type { RelatedSession } from './conversation-extractor';
+
+/** Max related sessions to retain in profile metadata. */
+export const MAX_RELATED_SESSIONS = 10;
+
+/**
+ * Merge newly processed sessions into the existing list, dedupe by sessionId
+ * (newest wins), sort by updatedAt desc, and keep at most MAX_RELATED_SESSIONS.
+ */
+export function mergeRelatedSessions(
+  existing: RelatedSession[] = [],
+  incoming: RelatedSession[] = [],
+): RelatedSession[] {
+  const byId = new Map<string, RelatedSession>();
+  for (const s of existing) {
+    if (s?.sessionId) byId.set(s.sessionId, s);
+  }
+  // Incoming entries override existing ones with the same sessionId.
+  for (const s of incoming) {
+    if (s?.sessionId) byId.set(s.sessionId, s);
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, MAX_RELATED_SESSIONS);
+}
 
 export interface MemoryProfile {
   id: number;
@@ -65,9 +90,15 @@ export class MemoryProfileService {
     userId: number,
     memoryContent: string,
     lastSessionId: string | null,
+    relatedSessions?: RelatedSession[],
   ): Promise<MemoryProfile> {
     const profile = await this.getOrCreate(userId);
     const repo = this.db.getRepository('userMemoryProfiles');
+
+    const mergedSessions = mergeRelatedSessions(
+      (profile.metadata?.relatedSessions as RelatedSession[]) || [],
+      relatedSessions || [],
+    );
 
     await repo.update({
       filter: { userId },
@@ -79,6 +110,7 @@ export class MemoryProfileService {
         status: 'idle',
         metadata: {
           ...profile.metadata,
+          relatedSessions: mergedSessions,
           lastContentLength: memoryContent.length,
           estimatedTokens: Math.ceil(memoryContent.length / 4), // rough estimate
         },

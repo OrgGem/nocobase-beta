@@ -162,7 +162,7 @@ export async function gitSyncSkills(ctx: Context, next: () => Promise<void>) {
           const parsed = parseSkillMarkdown(skillMd);
           frontmatter = parsed.metadata;
           instructions = parsed.body;
-          
+
           const otherMds = await fetchAllMarkdownInFolder(git, ref, skillBaseDir);
           if (otherMds) instructions += otherMds;
         } catch {
@@ -422,8 +422,6 @@ function parseBoolean(value: any, fallback: boolean) {
   return Boolean(value);
 }
 
-
-
 function extractStringProperty(source: string, property: string) {
   const match = source.match(new RegExp(`${property}\\s*:\\s*(['"\`])([\\s\\S]*?)\\1`));
   return match ? match[2] : null;
@@ -470,7 +468,7 @@ async function fetchAllMarkdownInFolder(git: any, ref: string, folderPath: strin
   try {
     const filesOut = await git.raw(['ls-tree', '-r', '--name-only', `${ref}:${folderPath}/`]);
     const files = filesOut.trim().split('\n').filter(Boolean);
-    
+
     for (const file of files) {
       if (file.toLowerCase().endsWith('.md') && file.toUpperCase() !== 'SKILL.md') {
         const content = await readOptionalGitFile(git, ref, joinGitPath(folderPath, file));
@@ -479,8 +477,8 @@ async function fetchAllMarkdownInFolder(git: any, ref: string, folderPath: strin
         }
       }
     }
-  } catch (err) {}
+  } catch (err) {
+    // Optional folder expansion can fail for missing paths or refs; keep import best-effort.
+  }
   return combined;
 }
-
-

@@ -2,6 +2,7 @@ import React from 'react';
 import { Button, Card, Drawer, Form, Input, Popconfirm, Space, Switch, Table, Tag, Typography, message } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { useApiClient as useAPIClient, useRequest } from '../hooks/useApiRequest';
+import { useT } from '../skill-hub/locale';
 
 const { Text } = Typography;
 
@@ -13,6 +14,7 @@ const parseSettings = (value: string) => {
 
 export const HarnessProfilesTab: React.FC = () => {
   const api = useAPIClient();
+  const t = useT();
   const [open, setOpen] = React.useState(false);
   const [editingRecord, setEditingRecord] = React.useState<any>(null);
   const [form] = Form.useForm();
@@ -46,11 +48,12 @@ export const HarnessProfilesTab: React.FC = () => {
             enabled: true,
             settingsText: JSON.stringify(
               {
-                requirePlanApproval: true,
-                allowSubAgents: true,
-                allowToolCalls: true,
-                maxParallelSubAgents: 3,
-                maxControllerSteps: 100,
+                nativeObserverEnabled: true,
+                memoryInjectionEnabled: true,
+                memoryScopes: ['public', 'user', 'agent_user'],
+                knowledgeScopes: ['public', 'private'],
+                maxMemoryContextChars: 6000,
+                tracingRetentionDays: 30,
               },
               null,
               2,
@@ -70,7 +73,7 @@ export const HarnessProfilesTab: React.FC = () => {
     try {
       settings = parseSettings(values.settingsText);
     } catch (error: any) {
-      message.error(`Settings JSON is invalid: ${error?.message || error}`);
+      message.error(t('Settings JSON is invalid: {{message}}', { message: error?.message || error }));
       return;
     }
 
@@ -90,20 +93,20 @@ export const HarnessProfilesTab: React.FC = () => {
           params: { filterByTk: editingRecord.id },
           data: payload,
         });
-        message.success('Harness profile updated');
+        message.success(t('Policy profile updated'));
       } else {
         await api.request({
           url: 'agentHarnessProfiles:create',
           method: 'post',
           data: payload,
         });
-        message.success('Harness profile created');
+        message.success(t('Policy profile created'));
       }
       closeDrawer();
       refresh();
     } catch (error: any) {
       const msg = error?.response?.data?.errors?.[0]?.message || error?.message || 'unknown error';
-      message.error(`Save failed: ${msg}`);
+      message.error(t('Save failed: {{message}}', { message: msg }));
     }
   };
 
@@ -114,29 +117,29 @@ export const HarnessProfilesTab: React.FC = () => {
         method: 'delete',
         params: { filterByTk: id },
       });
-      message.success('Harness profile deleted');
+      message.success(t('Policy profile deleted'));
       refresh();
     } catch (error: any) {
-      message.error(`Delete failed: ${error?.message || 'unknown error'}`);
+      message.error(t('Delete failed: {{message}}', { message: error?.message || t('unknown error') }));
     }
   };
 
   const columns = [
     {
-      title: 'Tag',
+      title: t('Tag'),
       dataIndex: 'tag',
       key: 'tag',
       width: 140,
       render: (tag: string) => <Tag color="blue">{tag}</Tag>,
     },
     {
-      title: 'Title',
+      title: t('Title'),
       dataIndex: 'title',
       key: 'title',
       render: (title: string, record: any) => title || record.tag,
     },
     {
-      title: 'Enabled',
+      title: t('Enabled'),
       dataIndex: 'enabled',
       key: 'enabled',
       width: 90,
@@ -157,7 +160,7 @@ export const HarnessProfilesTab: React.FC = () => {
       ),
     },
     {
-      title: 'Settings',
+      title: t('Settings'),
       key: 'settings',
       render: (_: any, record: any) => (
         <Space size={4} wrap>
@@ -172,17 +175,17 @@ export const HarnessProfilesTab: React.FC = () => {
       ),
     },
     {
-      title: 'Actions',
+      title: t('Actions'),
       key: 'actions',
       width: 150,
       render: (_: any, record: any) => (
         <Space>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openDrawer(record)}>
-            Edit
+            {t('Edit')}
           </Button>
-          <Popconfirm title="Delete this profile?" onConfirm={() => deleteProfile(record.id)}>
+          <Popconfirm title={t('Delete this profile?')} onConfirm={() => deleteProfile(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              Delete
+              {t('Delete')}
             </Button>
           </Popconfirm>
         </Space>
@@ -196,10 +199,10 @@ export const HarnessProfilesTab: React.FC = () => {
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
             <Text type="secondary">
-              Harness profiles are selected by orchestration rules through the harnessTag field.
+              {t('Policy profiles control native observer, tracing retention, and memory/knowledge scopes.')}
             </Text>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openDrawer()}>
-              New Profile
+              {t('New Policy')}
             </Button>
           </div>
           <Table
@@ -214,37 +217,37 @@ export const HarnessProfilesTab: React.FC = () => {
       </Card>
 
       <Drawer
-        title={editingRecord ? 'Edit Harness Profile' : 'New Harness Profile'}
+        title={editingRecord ? t('Edit Policy Profile') : t('New Policy Profile')}
         width={560}
         open={open}
         onClose={closeDrawer}
         extra={
           <Space>
-            <Button onClick={closeDrawer}>Cancel</Button>
+            <Button onClick={closeDrawer}>{t('Cancel')}</Button>
             <Button type="primary" onClick={() => form.submit()}>
-              Save
+              {t('Save')}
             </Button>
           </Space>
         }
       >
         <Form form={form} layout="vertical" onFinish={saveProfile}>
-          <Form.Item name="tag" label="Tag" rules={[{ required: true, message: 'Tag is required' }]}>
-            <Input placeholder="default" disabled={editingRecord?.tag === 'default'} />
+          <Form.Item name="tag" label={t('Tag')} rules={[{ required: true, message: t('Tag is required') }]}>
+            <Input placeholder={t('default')} disabled={editingRecord?.tag === 'default'} />
           </Form.Item>
-          <Form.Item name="title" label="Title">
+          <Form.Item name="title" label={t('Title')}>
             <Input />
           </Form.Item>
-          <Form.Item name="description" label="Description">
+          <Form.Item name="description" label={t('Description')}>
             <Input.TextArea rows={3} />
           </Form.Item>
           <Form.Item
             name="settingsText"
-            label="Settings JSON"
-            rules={[{ required: true, message: 'Settings JSON is required' }]}
+            label={t('Settings JSON')}
+            rules={[{ required: true, message: t('Settings JSON is required') }]}
           >
             <Input.TextArea rows={12} spellCheck={false} />
           </Form.Item>
-          <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+          <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>

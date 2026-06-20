@@ -36,7 +36,13 @@ export default defineCollection({
       name: 'maxTokens',
       type: 'integer',
       defaultValue: 800,
-      comment: 'Max token budget for the memory profile content',
+      comment: 'Soft token budget hint passed to the LLM for the memory profile content',
+    },
+    {
+      name: 'maxChars',
+      type: 'integer',
+      defaultValue: 2000,
+      comment: 'Hard character cap for the memory profile content',
     },
     {
       name: 'maxConversationsPerSync',

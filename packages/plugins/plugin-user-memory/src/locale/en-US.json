@@ -16,6 +16,7 @@
   "LLM Model": "LLM Model",
   "Sync Schedule": "Sync Schedule",
   "Max Tokens": "Max Tokens",
+  "Max Characters": "Max Characters",
   "Max Conversations Per Sync": "Max Conversations Per Sync",
   "Sync Log Retention Days": "Sync Log Retention Days",
   "Global Enable": "Global Enable",

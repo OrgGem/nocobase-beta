@@ -33,7 +33,7 @@ export default class NormalizeAIEmployeeToolBindings extends Migration {
   }
 
   async down() {
-    // No rollback: this only moves tool-shaped entries from skillSettings.skills
-    // into the current NocoBase skillSettings.tools shape.
+    // No rollback: this only normalizes current tool-shaped entries and removes
+    // retired custom orchestrator tools that are no longer registered.
   }
 }

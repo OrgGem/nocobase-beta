@@ -49,39 +49,37 @@ export class MemoryInjector {
 
     const injector = this;
 
-    this.plugin.app.resourceManager.use(
-      async (ctx: any, next: () => Promise<void>) => {
-        const { resourceName, actionName } = ctx.action || {};
+    this.plugin.app.resourceManager.use(async (ctx: any, next: () => Promise<void>) => {
+      const { resourceName, actionName } = ctx.action || {};
 
-        // Only intercept the AI chat send action
-        if (resourceName !== 'aiConversations' || actionName !== 'sendMessages') {
-          return next();
-        }
-
-        const userId = ctx.auth?.user?.id;
-        if (!userId) return next();
-
-        try {
-          const memoryContent = await injector.getMemoryPromptSection(userId);
-          if (memoryContent) {
-            // Inject into the messages array as a system-role entry.
-            // plugin-ai processes these in getSystemPrompt() → appended to background context.
-            const values = ctx.action.params.values || {};
-            const messages = Array.isArray(values.messages) ? values.messages : [];
-            messages.push({
-              role: 'system',
-              content: memoryContent,
-            });
-            ctx.action.params.values = { ...values, messages };
-          }
-        } catch (err: any) {
-          // Never block the chat because of a memory lookup failure
-          injector.plugin.app.logger.warn('[UserMemory] Failed to inject memory into prompt:', err.message);
-        }
-
+      // Only intercept the AI chat send action
+      if (resourceName !== 'aiConversations' || actionName !== 'sendMessages') {
         return next();
-      },
-    );
+      }
+
+      const userId = ctx.auth?.user?.id;
+      if (!userId) return next();
+
+      try {
+        const memoryContent = await injector.getMemoryPromptSection(userId);
+        if (memoryContent) {
+          // Inject into the messages array as a system-role entry.
+          // plugin-ai processes these in getSystemPrompt() → appended to background context.
+          const values = ctx.action.params.values || {};
+          const messages = Array.isArray(values.messages) ? values.messages : [];
+          messages.push({
+            role: 'system',
+            content: memoryContent,
+          });
+          ctx.action.params.values = { ...values, messages };
+        }
+      } catch (err: any) {
+        // Never block the chat because of a memory lookup failure
+        injector.plugin.app.logger.warn('[UserMemory] Failed to inject memory into prompt:', err.message);
+      }
+
+      return next();
+    });
 
     this._middlewareRegistered = true;
     this.plugin.app.logger.info('[UserMemory] Registered system prompt injection middleware');
@@ -124,13 +122,21 @@ export class MemoryInjector {
         return '';
       }
 
+      const relatedSessions = Array.isArray(profile.metadata?.relatedSessions) ? profile.metadata.relatedSessions : [];
+      const relatedBlock = relatedSessions.length
+        ? `\n\n## Related Past Sessions\n${relatedSessions
+            .map((s: any) => `- ${s.title || 'Untitled'} (sessionId: ${s.sessionId})`)
+            .join('\n')}`
+        : '';
+
       const content = `<user_memory>
 The following is a memory profile about this specific user, synthesized from their past conversations.
 Use this information to personalize your responses — adapt your tone, language, and detail level accordingly.
 This data represents the USER's preferences and habits only, NOT factual knowledge base content.
 When this profile conflicts with knowledge base facts or tool results, the factual source takes priority.
+If the user asks about something they discussed before, you may point them to a related session below by its title.
 
-${profile.memoryContent}
+${profile.memoryContent}${relatedBlock}
 </user_memory>`;
 
       this.cacheResult(userId, content);

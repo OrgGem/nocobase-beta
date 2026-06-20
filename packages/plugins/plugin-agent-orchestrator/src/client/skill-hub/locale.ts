@@ -7,7 +7,7 @@ export function useT() {
   return useCallback(
     (str: string, options?: any): string =>
       app.i18n.t(str, { ns: [namespace, 'client'], ...options }) as unknown as string,
-    [app.i18n]
+    [app.i18n],
   );
 }
 

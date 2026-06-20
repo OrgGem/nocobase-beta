@@ -25,6 +25,10 @@ const CHAT_DEFAULT_SESSION_KEY = '__draft__';
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_ATTACHMENTS: any[] = [];
 
+// Ant Design X 1.1.0 prefixes: sender -> ant-sender, bubble -> ant-bubble, attachment -> ant-attachment.
+const AI_CHAT_CONTAINER_SELECTOR = '.ant-sender, .ant-attachment, .ant-bubble';
+const AI_CHAT_SENDER_SELECTOR = '.ant-sender, .ant-attachment';
+
 function pickSessionState(state: ChatPreviewStoreState, sessionId?: string) {
   const sessions = state.sessions;
   if (!sessions) return null;
@@ -241,6 +245,99 @@ function attToPreviewFile(att: any): PreviewFile {
   };
 }
 
+export interface SkillHubManifestEntry {
+  name: string;
+  downloadUrl: string;
+  mimetype?: string | null;
+  size?: number | null;
+  execId?: string | null;
+}
+
+const SKILLHUB_MANIFEST_RE = /<!--skillhub:files\s+([\s\S]*?)-->/g;
+
+/**
+ * Collect every text fragment from a message that may carry a skillhub manifest.
+ * Tool results live under content.tool_calls[].content and are produced by the
+ * server, so the embedded manifest is trustworthy regardless of how the LLM
+ * rewrote the visible markdown links.
+ */
+function collectMessageTexts(msg: any): string[] {
+  const texts: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === 'string' && value) {
+      texts.push(value);
+    } else if (value && typeof value === 'object') {
+      texts.push(JSON.stringify(value));
+    }
+  };
+
+  if (!msg) return texts;
+  const content = msg.content ?? msg;
+  push(typeof content === 'string' ? content : content?.content);
+
+  const toolCalls = content?.tool_calls;
+  if (Array.isArray(toolCalls)) {
+    for (const tc of toolCalls) {
+      push(tc?.content);
+    }
+  }
+  return texts;
+}
+
+function decodeManifestPayload(raw: string): string {
+  let payload = raw.trim();
+  // When the manifest is read from a JSON.stringify'd object, quotes are escaped.
+  if (payload.includes('\\"') && !payload.includes('"')) {
+    payload = payload.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return payload;
+}
+
+/**
+ * Build filename -> manifest entry map from all skillhub manifests in the conversation.
+ * Later entries win so the most recent execution's URL is preferred.
+ */
+export function buildSkillHubManifestMap(messages: any[]): Map<string, SkillHubManifestEntry> {
+  const map = new Map<string, SkillHubManifestEntry>();
+  if (!Array.isArray(messages)) return map;
+
+  for (const msg of messages) {
+    for (const text of collectMessageTexts(msg)) {
+      SKILLHUB_MANIFEST_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = SKILLHUB_MANIFEST_RE.exec(text)) !== null) {
+        try {
+          const entries = JSON.parse(decodeManifestPayload(match[1]));
+          if (!Array.isArray(entries)) continue;
+          for (const entry of entries) {
+            if (entry?.name && entry?.downloadUrl) {
+              map.set(String(entry.name).toLowerCase().trim(), entry as SkillHubManifestEntry);
+            }
+          }
+        } catch {
+          // ignore malformed manifest
+        }
+      }
+    }
+  }
+  return map;
+}
+
+/**
+ * Resolve a manifest entry for a displayed filename, trying exact and normalized names.
+ */
+export function findManifestEntryForName(
+  displayName: string,
+  manifestMap: Map<string, SkillHubManifestEntry>,
+): SkillHubManifestEntry | null {
+  if (!displayName || manifestMap.size === 0) return null;
+  for (const candidate of getDisplayNameCandidates(displayName)) {
+    const hit = manifestMap.get(candidate.toLowerCase().trim());
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function findSkillHubUrlForFile(filename: string, messages: any[]): string | null {
   if (!filename) return null;
   const cleanFilename = filename.toLowerCase().trim();
@@ -257,7 +354,7 @@ export function findSkillHubUrlForFile(filename: string, messages: any[]): strin
           const url = new URL(cleanMatch, window.location.origin);
           const f = url.searchParams.get('f');
           const fn = url.searchParams.get('filename') || url.searchParams.get('name');
-          
+
           let decodedName = '';
           if (f) {
             try {
@@ -305,7 +402,7 @@ export function resolveDownloadUrl(urlOrPath: string, messages: any[]): string {
     return urlOrPath;
   }
 
-  let cleanPath = urlOrPath.replace(/^sandbox:(?:\/\/)?/, '');
+  const cleanPath = urlOrPath.replace(/^sandbox:(?:\/\/)?/, '');
 
   if (cleanPath.startsWith('api/')) {
     return '/' + cleanPath;
@@ -345,21 +442,15 @@ export function rewriteMarkdownContent(content: string, messages: any[]): string
   if (typeof content !== 'string') return content;
 
   // Match: sandbox:download/, sandbox://download/, download/, /download/ with optional sandbox prefix
-  let nextContent = content.replace(
-    /\]\(((?:sandbox:(?:\/\/)?|\/?download\/)[^)]+)\)/g,
-    (match, p1) => {
-      const resolved = resolveDownloadUrl(p1, messages);
-      return `](${resolved})`;
-    }
-  );
+  let nextContent = content.replace(/\]\(((?:sandbox:(?:\/\/)?|\/?download\/)[^)]+)\)/g, (match, p1) => {
+    const resolved = resolveDownloadUrl(p1, messages);
+    return `](${resolved})`;
+  });
 
-  nextContent = nextContent.replace(
-    /href=["']((?:sandbox:(?:\/\/)?|\/?download\/)[^"']+)["']/g,
-    (match, p1) => {
-      const resolved = resolveDownloadUrl(p1, messages);
-      return `href="${resolved}"`;
-    }
-  );
+  nextContent = nextContent.replace(/href=["']((?:sandbox:(?:\/\/)?|\/?download\/)[^"']+)["']/g, (match, p1) => {
+    const resolved = resolveDownloadUrl(p1, messages);
+    return `href="${resolved}"`;
+  });
 
   return nextContent;
 }
@@ -513,7 +604,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
 
       // Auto-style raw markdown links for Skill Hub and Worker Monitor as interactive file attachments
       const rawFileLinks = document.querySelectorAll<HTMLAnchorElement>(
-        '.nb-markdown a[href*="skillHub:download"], .nb-markdown a[href*="worker-monitor"]',
+        '.ant-bubble a[href*="skillHub:download"], .ant-bubble a[href*="worker-monitor"]',
       );
       rawFileLinks.forEach((link) => {
         if (!link.classList.contains('ai-attachment-link')) {
@@ -531,7 +622,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     const handleDrop = (e: DragEvent) => {
       const target = e.target as HTMLElement;
       if (!target || !target.closest) return;
-      if (!target.closest('.ant-x-sender') && !target.closest('.ant-x-attachments')) return;
+      if (!target.closest(AI_CHAT_SENDER_SELECTOR)) return;
 
       if (e.dataTransfer?.files) {
         Array.from(e.dataTransfer.files).forEach((f) => {
@@ -545,7 +636,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     const handleChange = (e: Event) => {
       const target = e.target as HTMLInputElement;
       if (!target || !target.closest) return;
-      if (!target.closest('.ant-x-sender') && !target.closest('.ant-x-attachments')) return;
+      if (!target.closest(AI_CHAT_SENDER_SELECTOR)) return;
 
       if (target?.type === 'file' && target.files) {
         Array.from(target.files).forEach((f) => {
@@ -602,7 +693,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     const checkInterval = setInterval(() => {
       // Isolate strictly to AI module components! (AI Chat outputs Ant Design X attachments)
-      const aiContainers = document.querySelectorAll('.ant-x-sender, .ant-x-attachments, .ant-x-message');
+      const aiContainers = document.querySelectorAll(AI_CHAT_CONTAINER_SELECTOR);
 
       const cards: Element[] = [];
       aiContainers.forEach((container) => {
@@ -659,7 +750,13 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
 
         const isAIGenerated = isKnownFileUrl(fallbackUrl);
 
-        if (file || cacheHitName || isAIGenerated) {
+        // Manifest match marks a card previewable even when the LLM wrote a broken download/ link.
+        const manifestMap = buildSkillHubManifestMap(messagesRef.current);
+        const hasManifestEntry =
+          !!findManifestEntryForName(displayName, manifestMap) ||
+          !!findManifestEntryForName(normalizedDisplayName, manifestMap);
+
+        if (file || cacheHitName || isAIGenerated || hasManifestEntry) {
           el.classList.add('is-cached-previewable');
         } else {
           el.classList.remove('is-cached-previewable');
@@ -803,14 +900,35 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         findFileByUrl(originalFallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
 
       const normalizedDisplayName = extractFilenameFromText(displayName);
-      const isAIGenerated = isKnownFileUrl(originalFallbackUrl);
+
+      // Prefer the server-provided skillhub manifest: it carries the real downloadUrl keyed by
+      // filename, so a click resolves correctly even when the LLM wrote a broken `download/...` link.
+      const manifestMap = buildSkillHubManifestMap(messagesRef.current);
+      const manifestEntry =
+        findManifestEntryForName(displayName, manifestMap) ||
+        findManifestEntryForName(normalizedDisplayName, manifestMap);
+
+      const isAIGenerated = isKnownFileUrl(originalFallbackUrl) || !!manifestEntry;
 
       // If we clicked a completely unrelated anchor tag in the admin panel and it's not a known file, abort immediately
       if (!file && !isAIGenerated && anchorNode && !cardEl) {
         return;
       }
 
-      if (!file && isAIGenerated) {
+      if (!file && manifestEntry) {
+        const name = manifestEntry.name || normalizedDisplayName || 'attachment';
+        const extname = name.match(/\.([a-z0-9]+)$/i)?.[1];
+        file = {
+          id: manifestEntry.downloadUrl,
+          uid: manifestEntry.downloadUrl,
+          url: manifestEntry.downloadUrl,
+          filename: name,
+          name,
+          extname: extname ? `.${extname}` : undefined,
+          mimetype: manifestEntry.mimetype || '',
+          size: manifestEntry.size ?? undefined,
+        } as PreviewFile;
+      } else if (!file && isAIGenerated) {
         const extname =
           normalizedDisplayName.match(/\.([a-z0-9]+)$/i)?.[1] ||
           originalFallbackUrl.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1];
