@@ -7,18 +7,20 @@ export default class ChangeOtherJsonToTextMigration extends Migration {
     const fieldRepo = (this as any).db.getRepository('fields');
 
     const tablePrefix = (this as any).db.options.tablePrefix || '';
-    
+
     // 1. skillWorkerConfigs
     const workerTableName = `${tablePrefix}skillWorkerConfigs`;
     try {
       if (await queryInterface.tableExists(workerTableName)) {
         const tableDesc = await queryInterface.describeTable(workerTableName);
         const columns = ['packageWhitelist', 'customPackages'];
-        
+
         for (const col of columns) {
           if (tableDesc[col]) {
             if (dialect === 'postgres') {
-              await (this as any).db.sequelize.query(`ALTER TABLE "${workerTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+              await (this as any).db.sequelize.query(
+                `ALTER TABLE "${workerTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`,
+              );
             } else {
               await queryInterface.changeColumn(workerTableName, col, { type: 'TEXT' });
             }
@@ -38,10 +40,12 @@ export default class ChangeOtherJsonToTextMigration extends Migration {
       if (await queryInterface.tableExists(execTableName)) {
         const tableDesc = await queryInterface.describeTable(execTableName);
         const col = 'outputFiles';
-        
+
         if (tableDesc[col]) {
           if (dialect === 'postgres') {
-            await (this as any).db.sequelize.query(`ALTER TABLE "${execTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+            await (this as any).db.sequelize.query(
+              `ALTER TABLE "${execTableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`,
+            );
           } else {
             await queryInterface.changeColumn(execTableName, col, { type: 'TEXT' });
           }

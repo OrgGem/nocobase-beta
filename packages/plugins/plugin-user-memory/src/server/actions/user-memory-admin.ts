@@ -22,7 +22,8 @@ function getPlugin(ctx: Context): PluginUserMemoryServer | null {
 
 // ─── Phase 6: Settings validation helpers ────────────────────────────────────────────
 
-const CRON_REGEX = /^(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)(\s+(\*|[0-9,\-*/]+))?$/;
+const CRON_REGEX =
+  /^(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)\s+(\*|[0-9,\-*/]+)(\s+(\*|[0-9,\-*/]+))?$/;
 
 function validateSettings(values: Record<string, any>): string | null {
   if ('enabled' in values && typeof values.enabled !== 'boolean') {
@@ -37,6 +38,12 @@ function validateSettings(values: Record<string, any>): string | null {
     const v = Number(values.maxTokens);
     if (!Number.isInteger(v) || v < 100 || v > 3000) {
       return 'maxTokens must be an integer between 100 and 3000';
+    }
+  }
+  if ('maxChars' in values) {
+    const v = Number(values.maxChars);
+    if (!Number.isInteger(v) || v < 500 || v > 5000) {
+      return 'maxChars must be an integer between 500 and 5000';
     }
   }
   if ('maxConversationsPerSync' in values) {

@@ -26,7 +26,9 @@ export default class AddInteractionSchemaMigration extends Migration {
             interface: 'textarea',
           },
         });
-        (this as any).app.logger.info('[skill-hub] Restored NocoBase metadata for preexisting column interactionSchema');
+        (this as any).app.logger.info(
+          '[skill-hub] Restored NocoBase metadata for preexisting column interactionSchema',
+        );
       }
     } catch (error) {
       (this as any).app.logger.error(`[skill-hub] Failed to check interactionSchema field: ${error.message}`);

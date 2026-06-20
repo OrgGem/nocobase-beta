@@ -25,20 +25,11 @@ const AIEmployeesContext = createContext<AIEmployeesContextType>({
   refresh: () => {},
 });
 
-const orchestratorToolNames = new Set([
-  'orchestrator_plan_goal',
-  'orchestrator_execute_plan',
-  'orchestrator_status',
-  'orchestrator_cancel',
-  'external_rag_search',
-  'skill_hub_execute',
-]);
+const supportedToolNames = new Set(['dispatch-sub-agent-task', 'external_rag_search', 'skill_hub_execute']);
 
 function isToolLikeName(name: string) {
   return (
-    orchestratorToolNames.has(name) ||
-    name.startsWith('delegate_') ||
-    name.startsWith('dispatch_subagents_') ||
+    supportedToolNames.has(name) ||
     name.startsWith('skill_hub_') ||
     name.startsWith('browser_') ||
     name.startsWith('drawio-')
@@ -67,12 +58,8 @@ function extractToolNames(skillSettings: any) {
 }
 
 /**
- * P3 FIX: Shared context provider that fetches aiEmployees once
- * and shares the data across RulesTab, TracingTab, and AIEmployeeSelect.
- *
- * Also exposes each employee's configured tools so RulesTab can warn when
- * a delegation rule exists but the leader hasn't added the corresponding
- * delegate_<leader>_to_<sub> tool to its skillSettings.tools.
+ * Shared context provider that fetches aiEmployees once and shares the data
+ * across native monitor, tracing views, and employee selectors.
  */
 export const AIEmployeesProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const api = useApp().apiClient;
@@ -85,7 +72,7 @@ export const AIEmployeesProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const value = React.useMemo(() => {
     const raw = (data as any)?.data ?? data;
-    const rawEmployees = Array.isArray(raw) ? raw : (Array.isArray(raw?.data) ? raw.data : []);
+    const rawEmployees = Array.isArray(raw) ? raw : Array.isArray(raw?.data) ? raw.data : [];
     const employees: AIEmployeeInfo[] = rawEmployees.map((emp: any) => {
       const tools = extractToolNames(emp.skillSettings);
       return {

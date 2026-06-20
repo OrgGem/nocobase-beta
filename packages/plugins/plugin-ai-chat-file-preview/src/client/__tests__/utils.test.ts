@@ -5,6 +5,8 @@ import {
   isKnownFileUrl,
   selectChatAttachments,
   selectChatMessages,
+  buildSkillHubManifestMap,
+  findManifestEntryForName,
 } from '../ChatFilePreviewProvider';
 
 describe('AI Chat File Preview client utils', () => {
@@ -93,6 +95,51 @@ describe('AI Chat File Preview client utils', () => {
 
       expect(selectChatMessages(state, 's2')).toBe(state.sessions.s2.messages);
       expect(selectChatAttachments(state, 's2')).toBe(state.sessions.s2.attachments);
+    });
+  });
+
+  describe('skillhub manifest', () => {
+    const manifestUrl = '/api/skillHub:download?execId=42&f=cmVwb3J0LmRvY3g';
+    const manifestComment = `<!--skillhub:files ${JSON.stringify([
+      { name: 'report.docx', downloadUrl: manifestUrl, mimetype: null, size: 123, execId: '42' },
+    ])}-->`;
+
+    it('parses manifest embedded in a tool_calls content', () => {
+      const messages = [
+        {
+          content: {
+            content: 'Here is your file.',
+            tool_calls: [{ id: 't1', name: 'gen', content: `done\n${manifestComment}` }],
+          },
+        },
+      ];
+      const map = buildSkillHubManifestMap(messages);
+      expect(map.get('report.docx')?.downloadUrl).toBe(manifestUrl);
+    });
+
+    it('parses manifest embedded in plain string content', () => {
+      const messages = [{ content: `text ${manifestComment}` }];
+      const map = buildSkillHubManifestMap(messages);
+      expect(map.size).toBe(1);
+    });
+
+    it('resolves an entry by display name with noise', () => {
+      const map = buildSkillHubManifestMap([{ content: manifestComment }]);
+      expect(findManifestEntryForName('"report.docx"', map)?.downloadUrl).toBe(manifestUrl);
+    });
+
+    it('returns null when no manifest matches', () => {
+      const map = buildSkillHubManifestMap([{ content: 'no manifest here' }]);
+      expect(map.size).toBe(0);
+      expect(findManifestEntryForName('report.docx', map)).toBeNull();
+    });
+
+    it('prefers the most recent manifest entry for the same filename', () => {
+      const older = `<!--skillhub:files ${JSON.stringify([
+        { name: 'report.docx', downloadUrl: '/api/skillHub:download?execId=1&f=x' },
+      ])}-->`;
+      const map = buildSkillHubManifestMap([{ content: older }, { content: manifestComment }]);
+      expect(map.get('report.docx')?.downloadUrl).toBe(manifestUrl);
     });
   });
 });

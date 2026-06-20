@@ -20,11 +20,7 @@ interface ExecutionProgressProps {
  * }
  * ```
  */
-export const ExecutionProgress: React.FC<ExecutionProgressProps> = ({
-  skillName,
-  percent,
-  log,
-}) => {
+export const ExecutionProgress: React.FC<ExecutionProgressProps> = ({ skillName, percent, log }) => {
   const isDone = percent >= 100;
 
   return (

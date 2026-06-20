@@ -17,6 +17,10 @@ export type OrchestratorTraceContext = {
 type SpanValues = {
   rootRunId: string;
   parentSpanId?: string;
+  source?: string;
+  parentSessionId?: string;
+  subSessionId?: string;
+  toolCallId?: string;
   type: string;
   status: string;
   leaderUsername?: string;

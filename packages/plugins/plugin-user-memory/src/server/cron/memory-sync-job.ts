@@ -130,13 +130,14 @@ export class MemorySyncJob {
       // Format conversations for summarization
       const conversationsText = this.extractor.formatForSummarization(extractionResult);
 
-      // Synthesize via LLM (Phase 6: pass maxTokens from settings)
+      // Synthesize via LLM (Phase 6: pass maxTokens; Phase 7: pass maxChars hard cap)
       const synthesisResult = await this.synthesizer.synthesize(
         profile.memoryContent || '',
         conversationsText,
         settings?.llmService,
         settings?.llmModel,
         settings?.maxTokens,
+        settings?.maxChars,
       );
 
       if (!synthesisResult.success) {
@@ -154,11 +155,12 @@ export class MemorySyncJob {
         return 'error';
       }
 
-      // Update profile with synthesized memory
+      // Update profile with synthesized memory + related session links
       const updatedProfile = await this.profileService.updateMemory(
         userId,
         synthesisResult.content,
         extractionResult.lastSessionId,
+        this.extractor.toRelatedSessions(extractionResult),
       );
 
       // Log success

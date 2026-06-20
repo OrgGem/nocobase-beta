@@ -16,6 +16,7 @@
   "LLM Model": "LLM 模型",
   "Sync Schedule": "同步计划",
   "Max Tokens": "最大 Token 数",
+  "Max Characters": "最大字符数",
   "Max Conversations Per Sync": "每次同步最大对话数",
   "Sync Log Retention Days": "同步日志保留天数",
   "Global Enable": "全局启用",

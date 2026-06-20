@@ -25,7 +25,7 @@ export class SkillRepositoryService {
    */
   async extractSkillPackage(skillName: string, zipFilePath: string) {
     const targetDir = resolve(this.baseDir, skillName);
-    
+
     // Clean target dir if exists
     if (existsSync(targetDir)) {
       rmSync(targetDir, { recursive: true, force: true });
@@ -100,8 +100,6 @@ export class SkillRepositoryService {
     });
   }
 
-
-
   private getSkillCodeFromDir(dir: string): string | null {
     if (existsSync(resolve(dir, 'index.py'))) {
       return readFileSync(resolve(dir, 'index.py'), 'utf8');
@@ -118,14 +116,14 @@ export class SkillRepositoryService {
 
   private aggregateOtherMarkdownFiles(dir: string, baseDir = dir): string {
     let combined = '';
-    
+
     if (!existsSync(dir)) return combined;
-    
+
     const items = readdirSync(dir);
     for (const item of items) {
       const fullPath = resolve(dir, item);
       const stat = statSync(fullPath);
-      
+
       if (stat.isDirectory()) {
         if (item !== 'node_modules' && item !== '.git') {
           combined += this.aggregateOtherMarkdownFiles(fullPath, baseDir);
@@ -136,7 +134,7 @@ export class SkillRepositoryService {
         combined += `\n\n--- Content from ${relPath} ---\n\n${content}`;
       }
     }
-    
+
     return combined;
   }
 }

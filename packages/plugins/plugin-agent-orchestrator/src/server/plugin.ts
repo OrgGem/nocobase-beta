@@ -1,23 +1,135 @@
 import { Plugin } from '@nocobase/server';
 import path from 'path';
-import { createDelegateToolsProvider } from './tools/delegate-task';
 import { createExternalRagSearchTool } from './tools/external-rag-search';
-import { createOrchestratorPlanTools } from './tools/orchestrator-plan';
 import { registerTracingResource } from './resources/tracing';
-import { registerAgentLoopResource } from './resources/agent-loop';
-import { getRunEventBus } from './services/RunEventBus';
+import { registerAgentMonitorResource } from './resources/agent-monitor';
 import SkillHubSubFeature from './skill-hub/plugin';
-import { AgentLoopService } from './services/AgentLoopService';
-import { isAdminUser, currentUserId } from './utils/ctx-utils';
+import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
+import { asObject, isAdminUser, currentUserId } from './utils/ctx-utils';
 import { getAIToolsManager } from './utils/ai-manager';
+
+function normalizeOptionalString(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function readModelValue(record: unknown, key: string) {
+  const model = record as { get?: (name: string) => unknown; [key: string]: unknown };
+  return typeof model?.get === 'function' ? model.get(key) : model?.[key];
+}
+
+function buildAgentMemoryContextKey(values: { scope: string; userId?: unknown; aiEmployeeUsername?: string }) {
+  const userPart = values.scope === 'public' ? 'public' : String(values.userId || '');
+  const agentPart = values.aiEmployeeUsername || '*';
+  return `${values.scope}:${userPart}:${agentPart}`;
+}
+
+async function validateAgentMemoryContextValues(ctx: any) {
+  const actionName = ctx.action?.actionName;
+  const values = ctx.action?.params?.values || {};
+  let nextValues = values;
+  let currentId = ctx.action?.params?.filterByTk;
+
+  if (actionName === 'update' && ctx.action?.params?.filterByTk) {
+    const existing = await ctx.db.getRepository('agentMemoryContexts').findOne({
+      filter: { id: ctx.action.params.filterByTk },
+    });
+    currentId = readModelValue(existing, 'id') || currentId;
+    nextValues = {
+      ...(existing?.toJSON?.() || existing || {}),
+      ...values,
+    };
+  }
+
+  const scope = normalizeOptionalString(nextValues.scope);
+  const userId = nextValues.userId;
+  const aiEmployeeUsername = normalizeOptionalString(nextValues.aiEmployeeUsername);
+
+  if (!['public', 'user', 'agent_user'].includes(scope)) {
+    ctx.throw(400, 'scope must be one of: public, user, agent_user.');
+    return;
+  }
+
+  if (scope === 'public' && userId != null && userId !== '') {
+    ctx.throw(400, 'scope="public" requires userId to be empty.');
+    return;
+  }
+
+  if ((scope === 'user' || scope === 'agent_user') && (userId == null || userId === '')) {
+    ctx.throw(400, `scope="${scope}" requires userId.`);
+    return;
+  }
+
+  if (scope === 'agent_user' && !aiEmployeeUsername) {
+    ctx.throw(400, 'scope="agent_user" requires aiEmployeeUsername.');
+    return;
+  }
+
+  const normalizedValues = {
+    ...values,
+    scope,
+    userId: scope === 'public' ? null : userId,
+    aiEmployeeUsername,
+    contextKey: buildAgentMemoryContextKey({
+      scope,
+      userId: scope === 'public' ? null : userId,
+      aiEmployeeUsername,
+    }),
+  };
+
+  const repo = ctx.db.getRepository('agentMemoryContexts');
+  const duplicate =
+    (await repo.findOne({
+      filter: { contextKey: normalizedValues.contextKey },
+    })) ||
+    (await repo.findOne({
+      filter: {
+        scope,
+        userId: normalizedValues.userId,
+        aiEmployeeUsername,
+      },
+    }));
+  const duplicateId = readModelValue(duplicate, 'id');
+  if (duplicateId && String(duplicateId) !== String(currentId || '')) {
+    ctx.throw(400, 'An agent memory context already exists for this scope, user, and AI employee.');
+    return;
+  }
+
+  ctx.action.params.values = normalizedValues;
+}
+
+async function resolveTracingRetentionDays(plugin: { db: any; app: any }) {
+  const envDays = Number(process.env.ORCHESTRATOR_LOG_RETENTION_DAYS);
+  if (Number.isFinite(envDays) && envDays > 0) return envDays;
+
+  try {
+    const defaultProfile = await plugin.db.getRepository('agentHarnessProfiles').findOne({
+      filter: {
+        tag: 'default',
+        enabled: true,
+      },
+    });
+    const settings = asObject(readModelValue(defaultProfile, 'settings'));
+    const profileDays = Number(settings.tracingRetentionDays);
+    if (Number.isFinite(profileDays) && profileDays > 0) {
+      return profileDays;
+    }
+  } catch (error) {
+    plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to load tracing retention policy', error);
+  }
+
+  return 30;
+}
 
 export class PluginAgentOrchestratorServer extends Plugin {
   skillHub: SkillHubSubFeature;
-  agentLoopService: AgentLoopService;
+  nativeObserver: NativeSubAgentObserver;
+  private readonly installNativeObserver = () => {
+    this.nativeObserver?.install();
+  };
 
   async afterAdd() {
     this.skillHub = new SkillHubSubFeature(this);
-    this.agentLoopService = new AgentLoopService(this);
+    this.nativeObserver = new NativeSubAgentObserver(this);
   }
 
   async beforeLoad() {
@@ -40,11 +152,11 @@ export class PluginAgentOrchestratorServer extends Plugin {
       actions: [
         'orchestratorConfig:*',
         'orchestratorTracing:*',
-        'agentLoops:*',
+        'agentMonitor:*',
+        'agentMemoryContexts:*',
         'agentLoopRuns:*',
         'agentLoopSteps:*',
         'agentLoopEvents:*',
-        'agentLoopEventsStream:*',
         'agentHarnessProfiles:*',
         'agentExecutionSpans:*',
         'skillDefinitions:*',
@@ -69,6 +181,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('skillHub', 'test', 'loggedIn');
     this.app.acl.allow('skillHub', 'download', 'loggedIn');
     this.app.acl.allow('skillHub', 'listTemplates', 'loggedIn');
+    this.app.acl.allow('agentMonitor', ['list', 'get'], 'loggedIn');
 
     // Data scoping for skillExecutions: a logged-in non-admin user may only
     // read their own executions. Rows hold inputArgs / stdout / output files,
@@ -90,87 +203,28 @@ export class PluginAgentOrchestratorServer extends Plugin {
       { tag: 'orchestrator-skill-executions-scope', after: 'acl' },
     );
 
-    // --- Register Dynamic Tools ---
-    // Each configured sub-agent becomes a callable tool for its leader.
-    // Uses createReactAgent (LangGraph public API) instead of private AIEmployee class.
-    // Tools are registered via app.aiManager.toolsManager (public API from @nocobase/ai core).
-    const toolsManager = getAIToolsManager(this.app);
-    toolsManager.registerTools(createOrchestratorPlanTools(this, this.agentLoopService));
-    toolsManager.registerTools(createExternalRagSearchTool(this));
-    toolsManager.registerDynamicTools(createDelegateToolsProvider(this));
-
-    // --- Register Agent Loop Resource ---
-    registerAgentLoopResource(this, this.agentLoopService);
-
-    // --- Register SSE Event Stream Resource (Phase 6) ---
-    this.app.resource({
-      name: 'agentLoopEventsStream',
-      actions: {
-        async stream(ctx, next) {
-          const runId = ctx.action.params?.runId || ctx.query?.runId || ctx.request.query?.runId;
-          if (!runId) {
-            ctx.throw(400, 'runId query parameter is required.');
-            return;
-          }
-
-          // Ownership check: a non-admin user may only stream events for a run
-          // they started. Run events can echo step inputs/outputs, so an
-          // unscoped stream would leak another user's run activity.
-          if (!isAdminUser(ctx)) {
-            const userId = currentUserId(ctx);
-            const run = await ctx.db.getRepository('agentLoopRuns').findOne({
-              filter: { id: runId },
-            });
-            if (!run) {
-              ctx.throw(404, 'Run not found.');
-              return;
-            }
-            const ownerId = run.get ? run.get('userId') : run.userId;
-            if (!userId || String(ownerId) !== String(userId)) {
-              ctx.throw(403, 'You cannot stream events for this run.');
-              return;
-            }
-          }
-
-          ctx.type = 'text/event-stream';
-          ctx.set('Cache-Control', 'no-cache');
-          ctx.set('Connection', 'keep-alive');
-          ctx.set('X-Accel-Buffering', 'no');
-
-          const unsubscribe = getRunEventBus().subscribe(runId, (event: any) => {
-            try {
-              ctx.res.write(`data: ${JSON.stringify(event)}\n\n`);
-            } catch {
-              unsubscribe();
-            }
-          });
-
-          const keepalive = setInterval(() => {
-            try {
-              ctx.res.write(': keepalive\n\n');
-            } catch {
-              clearInterval(keepalive);
-              unsubscribe();
-            }
-          }, 15000);
-
-          ctx.req.on('close', () => {
-            clearInterval(keepalive);
-            unsubscribe();
-          });
-
-          ctx.req.on('error', () => {
-            clearInterval(keepalive);
-            unsubscribe();
-          });
-
-          ctx.res.writeHead(200);
-          ctx.res.write(': connected\n\n');
-
-          await next();
-        },
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        const { resourceName, actionName } = ctx.action || {};
+        if (resourceName === 'agentMemoryContexts' && (actionName === 'create' || actionName === 'update')) {
+          await validateAgentMemoryContextValues(ctx);
+        }
+        await next();
       },
-    });
+      { tag: 'orchestrator-agent-memory-context-policy', after: 'acl' },
+    );
+
+    // --- Register External Tool Only ---
+    // Native @nocobase/plugin-ai owns sub-agent dispatch. The orchestrator no
+    // longer registers delegate_* / dispatch_subagents_* tools or controller
+    // plan tools; Skill Hub still registers its own AI tools from its subfeature.
+    const toolsManager = getAIToolsManager(this.app);
+    toolsManager.registerTools(createExternalRagSearchTool(this));
+
+    // --- Native plugin-ai Monitor Resource ---
+    registerAgentMonitorResource(this);
+    this.installNativeObserver();
+    this.app.on?.('afterStart', this.installNativeObserver);
 
     // --- Register Tracing Resource (Phase 5) ---
     // Custom read-only resource for the Swarm Tracing admin page.
@@ -183,8 +237,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
       cronTime: '0 30 2 * * *',
       onTick: async () => {
         try {
-          const days = Number(process.env.ORCHESTRATOR_LOG_RETENTION_DAYS || 30);
-          if (!Number.isFinite(days) || days <= 0) return;
+          const days = await resolveTracingRetentionDays(this);
           const cutoff = new Date(Date.now() - days * 86400000);
           const repo = this.db.getRepository('orchestratorLogs');
           const spansRepo = this.db.getRepository('agentExecutionSpans');
@@ -207,9 +260,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
       },
     });
 
-    // NOTE: The createReactAgent approach does NOT create aiConversation records,
-    // so there is no need for a middleware to hide "headless" conversations.
-    // If future versions need conversation logging, add it here.
+    // Native sub-agent conversations are owned by @nocobase/plugin-ai. This
+    // plugin only observes their execution spans and policy context.
   }
 
   async install() {
@@ -217,10 +269,15 @@ export class PluginAgentOrchestratorServer extends Plugin {
   }
 
   async afterEnable() {}
-  async afterDisable() {}
+  async afterDisable() {
+    this.nativeObserver?.uninstall();
+  }
   async remove() {}
 
   async beforeStop() {
+    this.app.off?.('afterStart', this.installNativeObserver);
+    this.app.removeListener?.('afterStart', this.installNativeObserver);
+    this.nativeObserver?.uninstall();
     await this.skillHub.beforeStop();
   }
 }

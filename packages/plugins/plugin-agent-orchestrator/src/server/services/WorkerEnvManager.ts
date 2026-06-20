@@ -101,8 +101,7 @@ export class WorkerEnvManager {
 
     await (this as any).app.pubSubManager.publish('skill-hub.init-env.done', {
       status: 'succeeded',
-      log:
-        'Sandbox environment is ready on this worker. Package installation is managed by the worker image/runtime; whitelist was refreshed.',
+      log: 'Sandbox environment is ready on this worker. Package installation is managed by the worker image/runtime; whitelist was refreshed.',
       whitelist,
     });
   }

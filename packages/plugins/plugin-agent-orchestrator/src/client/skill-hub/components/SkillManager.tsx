@@ -122,30 +122,47 @@ export const SkillManager: React.FC = () => {
           <List.Item>
             <Card
               size="small"
-              title={<Typography.Text ellipsis title={skill.title}>{skill.title}</Typography.Text>}
+              title={
+                <Typography.Text ellipsis title={skill.title}>
+                  {skill.title}
+                </Typography.Text>
+              }
               extra={<Tag color={skill.language === 'python' ? 'blue' : 'green'}>{skill.language}</Tag>}
               actions={[
-                <Tooltip title={t('Test')}>
-                  <PlayCircleOutlined key="test" onClick={() => handleTest(skill)} />
+                <Tooltip key="test" title={t('Test')}>
+                  <PlayCircleOutlined onClick={() => handleTest(skill)} />
                 </Tooltip>,
-                <Tooltip title={t('Edit')}>
-                  <EditOutlined key="edit" onClick={() => handleEdit(skill)} />
+                <Tooltip key="edit" title={t('Edit')}>
+                  <EditOutlined onClick={() => handleEdit(skill)} />
                 </Tooltip>,
-                <Popconfirm title={t('Delete?')} onConfirm={() => handleDelete(skill.id)}>
+                <Popconfirm key="delete" title={t('Delete?')} onConfirm={() => handleDelete(skill.id)}>
                   <Tooltip title={t('Delete')}>
-                    <DeleteOutlined key="delete" style={{ color: 'red' }} />
+                    <DeleteOutlined style={{ color: 'red' }} />
                   </Tooltip>
                 </Popconfirm>,
               ]}
               style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.05)', borderRadius: 8 }}
             >
-              <Card.Meta 
-                title={<Typography.Text type="secondary" style={{ fontSize: 13 }}>{skill.name}</Typography.Text>} 
+              <Card.Meta
+                title={
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                    {skill.name}
+                  </Typography.Text>
+                }
                 description={
-                  <div style={{ height: 60, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', fontSize: 13 }}>
+                  <div
+                    style={{
+                      height: 60,
+                      overflow: 'hidden',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                      fontSize: 13,
+                    }}
+                  >
                     {skill.description || t('No description')}
                   </div>
-                } 
+                }
               />
               <div style={{ marginTop: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Space size={4}>
@@ -161,13 +178,9 @@ export const SkillManager: React.FC = () => {
         )}
       />
 
-      {editorVisible && (
-        <SkillEditor skill={editingSkill} onClose={handleEditorClose} />
-      )}
+      {editorVisible && <SkillEditor skill={editingSkill} onClose={handleEditorClose} />}
 
-      {testVisible && testingSkill && (
-        <SkillTestPanel skill={testingSkill} onClose={() => setTestVisible(false)} />
-      )}
+      {testVisible && testingSkill && <SkillTestPanel skill={testingSkill} onClose={() => setTestVisible(false)} />}
 
       <GitSkillImport
         open={gitImportVisible}

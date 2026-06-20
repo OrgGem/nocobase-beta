@@ -3,8 +3,8 @@ import { defineCollection } from '@nocobase/database';
 /**
  * Stores delegation execution logs for Swarm Tracing (Phase 5).
  *
- * Since createReactAgent doesn't create aiConversation records,
- * we log delegation events to a dedicated table for observability.
+ * Legacy delegation events were logged to a dedicated table for observability.
+ * Native plugin-ai runs are now observed through agentExecutionSpans.
  */
 export default defineCollection({
   name: 'orchestratorLogs',
@@ -31,7 +31,7 @@ export default defineCollection({
     {
       name: 'toolName',
       type: 'string',
-      comment: 'The tool name used for delegation (e.g., delegate_pm_to_sql_expert)',
+      comment: 'Legacy delegation or native dispatch tool name',
     },
     {
       name: 'context',
@@ -79,7 +79,7 @@ export default defineCollection({
       name: 'messages',
       type: 'json',
       defaultValue: [],
-      comment: 'Serialized LangChain messages from the sub-agent run',
+      comment: 'Serialized message snapshots from the sub-agent run',
     },
     {
       name: 'userId',

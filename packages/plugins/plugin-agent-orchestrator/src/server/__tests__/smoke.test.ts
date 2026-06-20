@@ -25,6 +25,7 @@ describe('Agent Orchestrator plugin smoke', () => {
       'orchestratorConfig',
       'orchestratorLogs',
       'agentExecutionSpans',
+      'agentMemoryContexts',
       'agentHarnessProfiles',
       'skillDefinitions',
       'skillExecutions',

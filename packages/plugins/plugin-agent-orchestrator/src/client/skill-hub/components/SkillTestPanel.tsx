@@ -18,13 +18,7 @@ export const SkillTestPanel: React.FC<SkillTestPanelProps> = ({ skill, onClose }
   const inputSchema = parseJsonText(skill.inputSchema, null);
   const [input, setInput] = useState(
     inputSchema?.properties
-      ? JSON.stringify(
-          Object.fromEntries(
-            Object.keys(inputSchema.properties).map((k) => [k, '']),
-          ),
-          null,
-          2,
-        )
+      ? JSON.stringify(Object.fromEntries(Object.keys(inputSchema.properties).map((k) => [k, ''])), null, 2)
       : '{}',
   );
   const [running, setRunning] = useState(false);
@@ -111,7 +105,9 @@ export const SkillTestPanel: React.FC<SkillTestPanelProps> = ({ skill, onClose }
 
             {result.stderr && (
               <div>
-                <Typography.Text strong type="danger">stderr:</Typography.Text>
+                <Typography.Text strong type="danger">
+                  stderr:
+                </Typography.Text>
                 <pre style={{ background: '#fff2f0', padding: 8, maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
                   {result.stderr}
                 </pre>
@@ -122,17 +118,17 @@ export const SkillTestPanel: React.FC<SkillTestPanelProps> = ({ skill, onClose }
               <div>
                 <Typography.Text strong>{t('Output Files')}:</Typography.Text>
                 <div style={{ marginTop: 8 }}>
-                  <Upload.ReadPretty 
+                  <Upload.ReadPretty
                     value={result.files.map((f: any, i: number) => ({
                       id: `test-${f.name}-${i}`,
                       title: f.name,
                       filename: f.name,
                       extname: f.name.includes('.') ? `.${f.name.split('.').pop()}` : '',
                       url: f.downloadUrl,
-                      status: 'done'
-                    }))} 
-                    multiple={true} 
-                    showFileName={true} 
+                      status: 'done',
+                    }))}
+                    multiple={true}
+                    showFileName={true}
                   />
                 </div>
               </div>

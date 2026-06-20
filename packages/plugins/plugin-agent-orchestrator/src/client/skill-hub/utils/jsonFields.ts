@@ -14,7 +14,9 @@ export function parseJsonText<T = any>(value: any, fallback: T): T {
       const innerJson = innerFenced ? innerFenced[1].trim() : innerTrimmed;
       try {
         parsed = JSON.parse(innerJson);
-      } catch {}
+      } catch {
+        // Keep the original parsed string when nested JSON parsing fails.
+      }
     }
     return parsed;
   } catch {
@@ -24,7 +26,8 @@ export function parseJsonText<T = any>(value: any, fallback: T): T {
 
 export function formatJsonText(value: any, fallback: any = null): string {
   const parsed = parseJsonText(value, undefined);
-  const normalized = parsed === undefined ? (value === undefined || value === null || value === '' ? fallback : value) : parsed;
+  const normalized =
+    parsed === undefined ? (value === undefined || value === null || value === '' ? fallback : value) : parsed;
   if (normalized === undefined || normalized === null) return '';
   if (typeof normalized === 'string') return normalized;
   return JSON.stringify(normalized, null, 2);
@@ -32,6 +35,7 @@ export function formatJsonText(value: any, fallback: any = null): string {
 
 export function stringifyJsonText(value: any, fallback: any = null): string {
   const parsed = parseJsonText(value, undefined);
-  const normalized = parsed === undefined ? (value === undefined || value === null || value === '' ? fallback : value) : parsed;
+  const normalized =
+    parsed === undefined ? (value === undefined || value === null || value === '' ? fallback : value) : parsed;
   return `\`\`\`json\n${JSON.stringify(normalized, null, 2)}\n\`\`\``;
 }

@@ -19,13 +19,15 @@ export default class ChangePackagesToTextMigration extends Migration {
           // Change physical column type in Postgres if needed
           const dialect = (this as any).db.sequelize.getDialect();
           if (dialect === 'postgres') {
-            await (this as any).db.sequelize.query(`ALTER TABLE "${tableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`);
+            await (this as any).db.sequelize.query(
+              `ALTER TABLE "${tableName}" ALTER COLUMN "${col}" TYPE text USING "${col}"::text;`,
+            );
           } else {
             await queryInterface.changeColumn(tableName, col, {
               type: 'TEXT',
             });
           }
-          
+
           // Also update NocoBase metadata
           const fieldMeta = await fieldRepo.findOne({
             filter: { name: col, collectionName },

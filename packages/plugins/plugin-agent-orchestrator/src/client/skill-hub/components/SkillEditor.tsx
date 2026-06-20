@@ -282,44 +282,44 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ skill, onClose }) => {
 
           {storageType === 'plugin' && (
             <>
-            <Form.Item name="inputSchema" hidden>
-              <TextArea />
-            </Form.Item>
-            <Form.Item name="packages" hidden>
-              <Input />
-            </Form.Item>
-            <Form.Item
-              name="pluginSource"
-              label={t('Select Plugin Skill')}
-              rules={[{ required: true }]}
-              style={{
-                marginBottom: 24,
-                padding: 12,
-                background: '#e6f4ff',
-                borderRadius: 8,
-                border: '1px solid #91caff',
-              }}
-              extra={
-                <div style={{ fontSize: 12, color: '#1677ff', marginTop: 8 }}>
-                  {t(
-                    'Binding dynamically delegates execution to the plugin logic. Code, Language, and Schemas are managed externally.',
-                  )}
-                </div>
-              }
-            >
-              <Select
-                placeholder={t('Choose an enabled plugin skill to attach')}
-                onChange={handleTemplateSelect}
-                allowClear
+              <Form.Item name="inputSchema" hidden>
+                <TextArea />
+              </Form.Item>
+              <Form.Item name="packages" hidden>
+                <Input />
+              </Form.Item>
+              <Form.Item
+                name="pluginSource"
+                label={t('Select Plugin Skill')}
+                rules={[{ required: true }]}
+                style={{
+                  marginBottom: 24,
+                  padding: 12,
+                  background: '#e6f4ff',
+                  borderRadius: 8,
+                  border: '1px solid #91caff',
+                }}
+                extra={
+                  <div style={{ fontSize: 12, color: '#1677ff', marginTop: 8 }}>
+                    {t(
+                      'Binding dynamically delegates execution to the plugin logic. Code, Language, and Schemas are managed externally.',
+                    )}
+                  </div>
+                }
               >
-                {Array.isArray(templates) &&
-                  templates.map((tmpl) => (
-                    <Select.Option key={tmpl.name} value={tmpl.name}>
-                      {tmpl.title} ({tmpl.pluginSource || tmpl.name})
-                    </Select.Option>
-                  ))}
-              </Select>
-            </Form.Item>
+                <Select
+                  placeholder={t('Choose an enabled plugin skill to attach')}
+                  onChange={handleTemplateSelect}
+                  allowClear
+                >
+                  {Array.isArray(templates) &&
+                    templates.map((tmpl) => (
+                      <Select.Option key={tmpl.name} value={tmpl.name}>
+                        {tmpl.title} ({tmpl.pluginSource || tmpl.name})
+                      </Select.Option>
+                    ))}
+                </Select>
+              </Form.Item>
             </>
           )}
 
@@ -417,12 +417,16 @@ export const SkillEditor: React.FC<SkillEditorProps> = ({ skill, onClose }) => {
           <Form.Item
             name="interactionSchema"
             label={t('Interaction Schema (optional)')}
-            extra={t('If set, user is prompted to fill / confirm input before execution. Type: form | select | confirm.')}
+            extra={t(
+              'If set, user is prompted to fill / confirm input before execution. Type: form | select | confirm.',
+            )}
           >
             <TextArea
               rows={6}
               style={{ fontFamily: 'monospace', fontSize: 13 }}
-              placeholder={'{\n  "type": "form",\n  "prompt": "Confirm parameters",\n  "fields": {\n    "fileName": { "type": "string", "title": "File name", "required": true }\n  }\n}'}
+              placeholder={
+                '{\n  "type": "form",\n  "prompt": "Confirm parameters",\n  "fields": {\n    "fileName": { "type": "string", "title": "File name", "required": true }\n  }\n}'
+              }
             />
           </Form.Item>
 

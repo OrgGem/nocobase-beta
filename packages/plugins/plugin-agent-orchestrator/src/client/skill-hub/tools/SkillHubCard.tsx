@@ -86,12 +86,7 @@ export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions 
           )}
           {schema.type === 'form' &&
             Object.entries(schema.fields ?? {}).map(([key, f]) => (
-              <Form.Item
-                key={key}
-                name={key}
-                label={f.title || key}
-                rules={[{ required: !!f.required }]}
-              >
+              <Form.Item key={key} name={key} label={f.title || key} rules={[{ required: !!f.required }]}>
                 {renderField(key, f)}
               </Form.Item>
             ))}

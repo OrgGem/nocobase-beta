@@ -16,6 +16,7 @@
   "LLM Model": "Model LLM",
   "Sync Schedule": "Lịch đồng bộ",
   "Max Tokens": "Giới hạn Token",
+  "Max Characters": "Giới hạn ký tự",
   "Max Conversations Per Sync": "Số hội thoại tối đa mỗi lần đồng bộ",
   "Sync Log Retention Days": "Số ngày giữ log đồng bộ",
   "Global Enable": "Bật toàn cục",

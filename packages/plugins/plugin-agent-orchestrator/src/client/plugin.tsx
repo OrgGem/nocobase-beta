@@ -2,7 +2,6 @@ import { Plugin } from '@nocobase/client';
 import { OrchestratorSettings } from './OrchestratorSettings';
 import { InteractionSchemasProvider } from './skill-hub/tools/InteractionSchemasProvider';
 import { registerSkillLoopCards } from './skill-hub/tools/registerSkillLoopCards';
-import { registerOrchestratorCards } from './tools/registerOrchestratorCards';
 
 export class PluginAgentOrchestratorClient extends Plugin {
   async load() {
@@ -26,7 +25,6 @@ export class PluginAgentOrchestratorClient extends Plugin {
   }
 
   private async registerSkillUiCards() {
-    await registerOrchestratorCards((this as any).app);
     await registerSkillLoopCards((this as any).app);
   }
 }

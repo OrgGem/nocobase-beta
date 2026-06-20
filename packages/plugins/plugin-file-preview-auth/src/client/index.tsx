@@ -157,6 +157,17 @@ export function getOcrAttachmentId(file: unknown): string | number | null {
   return null;
 }
 
+// Server-side OCR (runOcr/getOcrStatus) only queries the `attachments` collection,
+// so files from other collections (e.g. aiFiles in the AI chat) must skip OCR to
+// avoid 404s from filePreviewAuth:getOcrStatus.
+export function isOcrCapableCollection(file: unknown): boolean {
+  const inputRecord = isObjectRecord(file) ? file : {};
+  const previewRecord = getPreviewFileRecord(file);
+  const normalizedPreviewRecord = isObjectRecord(previewRecord) ? previewRecord : {};
+  const collectionName = normalizedPreviewRecord.collectionName ?? inputRecord.collectionName;
+  return collectionName == null || collectionName === '' || collectionName === 'attachments';
+}
+
 const getFileExt = (file: any): string => {
   const record = getPreviewFileRecord(file);
   const value =
@@ -1277,7 +1288,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
   const [ocrStatus, setOcrStatus] = useState<string>('no-ocr');
   const [ocrResultId, setOcrResultId] = useState<string | number | null>(null);
   const [ocrError, setOcrError] = useState<string | null>(null);
-  const ocrAttachmentId = useMemo(() => getOcrAttachmentId(file), [file]);
+  const ocrAttachmentId = useMemo(() => (isOcrCapableCollection(file) ? getOcrAttachmentId(file) : null), [file]);
 
   const isOcrSupported = useMemo(() => {
     if (!file || !ocrAttachmentId) return false;

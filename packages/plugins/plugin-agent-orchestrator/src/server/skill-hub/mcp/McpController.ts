@@ -13,13 +13,20 @@ export class McpController {
       filter: { enabled: true },
     });
 
-    const tools = await Promise.all(skills.map(async (skill: any) => ({
-        name: skill.get('name').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_'),
-        description: typeof this.plugin.getSkillDescriptionForAI === 'function'
-          ? await this.plugin.getSkillDescriptionForAI(skill)
-          : skill.get('description'),
+    const tools = await Promise.all(
+      skills.map(async (skill: any) => ({
+        name: skill
+          .get('name')
+          .toLowerCase()
+          .replace(/[^a-z0-9_]/g, '_')
+          .replace(/_+/g, '_'),
+        description:
+          typeof this.plugin.getSkillDescriptionForAI === 'function'
+            ? await this.plugin.getSkillDescriptionForAI(skill)
+            : skill.get('description'),
         inputSchema: parseJsonText(skill.get('inputSchema'), null),
-      })));
+      })),
+    );
 
     ctx.body = {
       tools,
@@ -44,8 +51,13 @@ export class McpController {
       filter: { enabled: true },
     });
 
-    const skill = skills.find((s: any) => 
-      s.get('name').toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_') === name
+    const skill = skills.find(
+      (s: any) =>
+        s
+          .get('name')
+          .toLowerCase()
+          .replace(/[^a-z0-9_]/g, '_')
+          .replace(/_+/g, '_') === name,
     );
 
     if (!skill) {
@@ -54,15 +66,30 @@ export class McpController {
 
     try {
       const result = await this.plugin.executeSkill(skill, args || {}, ctx);
-      
+
       let textContent = `Executed successfully.`;
       if (result.stdout) textContent += `\nOutput:\n${result.stdout}`;
       if (result.stderr) textContent += `\nErrors:\n${result.stderr}`;
-      
+
       if (result.files?.length) {
-        textContent += `\nFiles generated:\n` + result.files.map((f: any) => {
-          return `- [${f.name}](${f.downloadUrl})`;
-        }).join('\n');
+        textContent +=
+          `\nFiles generated:\n` +
+          result.files
+            .map((f: any) => {
+              return `- [${f.name}](${f.downloadUrl})`;
+            })
+            .join('\n');
+
+        // Embed a trustworthy file manifest so the chat file-preview plugin can resolve the
+        // real download URL by filename, instead of guessing it from LLM-rewritten links.
+        const manifest = result.files.map((f: any) => ({
+          name: f.name,
+          downloadUrl: f.downloadUrl,
+          mimetype: f.mimetype ?? f.mimeType ?? null,
+          size: f.size ?? null,
+          execId: result.execId ?? null,
+        }));
+        textContent += `\n<!--skillhub:files ${JSON.stringify(manifest)}-->`;
       }
 
       ctx.body = {
@@ -70,7 +97,7 @@ export class McpController {
           {
             type: 'text',
             text: textContent,
-          }
+          },
         ],
         isError: result.status !== 'succeeded',
       };

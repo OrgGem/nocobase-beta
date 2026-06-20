@@ -9,7 +9,6 @@ import {
   Empty,
   Form,
   message,
-  Popconfirm,
   Select,
   Space,
   Spin,
@@ -18,101 +17,41 @@ import {
   Timeline,
   Typography,
 } from 'antd';
-import {
-  BranchesOutlined,
-  CheckCircleOutlined,
-  ClockCircleOutlined,
-  CloseCircleOutlined,
-  EyeOutlined,
-  PauseCircleOutlined,
-  PlayCircleOutlined,
-  RedoOutlined,
-  ReloadOutlined,
-  StopOutlined,
-} from '@ant-design/icons';
+import { CheckCircleOutlined, CloseCircleOutlined, EyeOutlined, ReloadOutlined, SyncOutlined } from '@ant-design/icons';
 import { useApiClient as useAPIClient, useRequest } from '../hooks/useApiRequest';
 import { useAIEmployees } from './AIEmployeesContext';
-import { parseJsonText } from '../utils/jsonFields';
+import { useT } from '../skill-hub/locale';
 
 const { Paragraph, Text } = Typography;
 
 type FilterState = {
   leader?: string;
+  subAgent?: string;
   status?: string;
 };
 
-const terminalRunStatuses = new Set(['succeeded', 'failed', 'rejected', 'canceled']);
-
 function statusColor(status?: string) {
   switch (status) {
-    case 'succeeded':
     case 'success':
       return 'success';
-    case 'failed':
     case 'error':
       return 'error';
-    case 'waiting_user':
-    case 'waiting_plan_approval':
-    case 'needs_replan':
-      return 'warning';
-    case 'approved':
     case 'running':
-    case 'planning':
       return 'processing';
-    case 'rejected':
-    case 'canceled':
-    case 'skipped':
-      return 'default';
     default:
       return 'default';
   }
 }
 
 function statusIcon(status?: string) {
-  switch (status) {
-    case 'succeeded':
-    case 'success':
-      return <CheckCircleOutlined />;
-    case 'failed':
-    case 'error':
-      return <CloseCircleOutlined />;
-    case 'waiting_user':
-    case 'waiting_plan_approval':
-    case 'needs_replan':
-      return <PauseCircleOutlined />;
-    case 'approved':
-    case 'running':
-    case 'planning':
-      return <ClockCircleOutlined />;
-    default:
-      return undefined;
-  }
-}
-
-function timelineColor(status?: string) {
-  switch (status) {
-    case 'succeeded':
-    case 'success':
-      return 'green';
-    case 'failed':
-    case 'error':
-      return 'red';
-    case 'waiting_user':
-    case 'waiting_plan_approval':
-    case 'needs_replan':
-      return 'orange';
-    case 'approved':
-    case 'running':
-    case 'planning':
-      return 'blue';
-    default:
-      return 'gray';
-  }
+  if (status === 'success') return <CheckCircleOutlined />;
+  if (status === 'error') return <CloseCircleOutlined />;
+  return undefined;
 }
 
 function StatusTag({ status }: { status?: string }) {
   return (
-    <Tag icon={statusIcon(status)} color={statusColor(status)}>
+    <Tag color={statusColor(status)} icon={statusIcon(status)}>
       {status || '-'}
     </Tag>
   );
@@ -122,17 +61,14 @@ function formatDate(value?: string) {
   return value ? new Date(value).toLocaleString() : '-';
 }
 
-function formatDuration(start?: string, end?: string) {
-  if (!start) return '-';
-  const startMs = new Date(start).getTime();
-  const endMs = end ? new Date(end).getTime() : Date.now();
-  const diff = Math.max(0, endMs - startMs);
-  if (diff >= 60000) return `${Math.round(diff / 60000)}m`;
-  if (diff >= 1000) return `${(diff / 1000).toFixed(1)}s`;
-  return `${diff}ms`;
+function formatDurationMs(value?: number) {
+  if (!value) return '-';
+  if (value >= 60000) return `${Math.round(value / 60000)}m`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}s`;
+  return `${value}ms`;
 }
 
-function formatJson(value: any) {
+function formatJson(value: unknown) {
   if (value === undefined || value === null || value === '') return '';
   if (typeof value === 'string') return value;
   try {
@@ -142,25 +78,7 @@ function formatJson(value: any) {
   }
 }
 
-function buildSkillFileUrl(execution: any, file: any) {
-  if (file?.downloadUrl) return file.downloadUrl;
-  if (!execution?.id || !file?.name) return '';
-  return `/api/skillHub:download?execId=${execution.id}&filename=${encodeURIComponent(file.name)}`;
-}
-
-function renderSkillFileLink(execution: any, file: any, index: number) {
-  const url = buildSkillFileUrl(execution, file);
-  const label = file.name || file.path || `file-${index + 1}`;
-  return url ? (
-    <a key={index} href={url} target="_blank" rel="noreferrer">
-      {label}
-    </a>
-  ) : (
-    <Text key={index}>{label}</Text>
-  );
-}
-
-function TextBlock({ value, rows = 10 }: { value: any; rows?: number }) {
+function TextBlock({ value, rows = 8 }: { value: unknown; rows?: number }) {
   const text = formatJson(value);
   if (!text) return <Text type="secondary">-</Text>;
   return (
@@ -175,18 +93,19 @@ function TextBlock({ value, rows = 10 }: { value: any; rows?: number }) {
 
 export const AgentRunsTab: React.FC = () => {
   const api = useAPIClient();
+  const t = useT();
   const { employees, employeeMap } = useAIEmployees();
   const [filters, setFilters] = useState<FilterState>({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [selectedRun, setSelectedRun] = useState<any>(null);
-  const [detail, setDetail] = useState<any>(null);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState(false);
+  const [syncLoading, setSyncLoading] = useState(false);
 
   const requestParams = useMemo(() => {
-    const filter: any = {};
+    const filter: Record<string, string> = {};
     if (filters.leader) filter.leaderUsername = filters.leader;
+    if (filters.subAgent) filter.subAgentUsername = filters.subAgent;
     if (filters.status) filter.status = filters.status;
     return {
       sort: ['-createdAt'],
@@ -198,7 +117,7 @@ export const AgentRunsTab: React.FC = () => {
 
   const { data, loading, refresh } = useRequest(
     {
-      url: 'agentLoops:list',
+      url: 'agentMonitor:list',
       params: requestParams,
     },
     {
@@ -225,20 +144,6 @@ export const AgentRunsTab: React.FC = () => {
     [employees],
   );
 
-  const fetchDetail = async (runId: string | number, seed?: any) => {
-    setSelectedRun(seed || selectedRun || { id: runId });
-    setDetailLoading(true);
-    try {
-      const res = await api.request({
-        url: 'agentLoops:get',
-        params: { filterByTk: runId },
-      });
-      setDetail((res as any)?.data?.data || (res as any)?.data || null);
-    } finally {
-      setDetailLoading(false);
-    }
-  };
-
   const updateFilter = (patch: Partial<FilterState>) => {
     setFilters((prev) => ({ ...prev, ...patch }));
     setPage(1);
@@ -249,170 +154,106 @@ export const AgentRunsTab: React.FC = () => {
     setPage(1);
   };
 
-  const runAction = async (action: 'cancel' | 'resume', runId: string | number) => {
-    setActionLoading(true);
+  const fetchDetail = async (record: any) => {
+    setSelectedRun(record);
+    setDetailLoading(true);
     try {
-      await api.request({
-        url: action === 'cancel' ? 'agentLoops:cancel' : 'agentLoops:resume',
-        method: 'POST',
-        data: action === 'cancel' ? { runId } : { runId, stepId: detail?.run?.currentStepId, approved: true },
+      const res = await api.request({
+        url: 'agentMonitor:get',
+        params: { filterByTk: record.id },
       });
-      message.success(action === 'cancel' ? 'Run canceled' : 'Run resumed');
-      refresh();
-      await fetchDetail(runId);
-    } catch (error: any) {
-      message.error(error?.message || `Failed to ${action} run`);
+      setSelectedRun((res as any)?.data?.data || (res as any)?.data || record);
     } finally {
-      setActionLoading(false);
+      setDetailLoading(false);
     }
   };
 
-  const retryStep = async (stepId: string | number) => {
-    const runId = detail?.run?.id || selectedRun?.id;
-    setActionLoading(true);
+  const syncNativeRuns = async () => {
+    setSyncLoading(true);
     try {
-      await api.request({
-        url: 'agentLoops:retryStep',
-        method: 'POST',
-        data: { stepId },
+      const res = await api.request({
+        url: 'agentMonitor:sync',
+        method: 'post',
+        data: { limit: 500 },
       });
-      message.success('Step queued for retry');
+      const result = (res as any)?.data?.data || {};
+      message.success(t('Synced {{count}} native runs', { count: result.created || 0 }));
       refresh();
-      if (runId) await fetchDetail(runId);
     } catch (error: any) {
-      message.error(error?.message || 'Failed to retry step');
+      const text = error?.response?.data?.errors?.[0]?.message || error?.message || t('Sync failed');
+      message.error(text);
     } finally {
-      setActionLoading(false);
+      setSyncLoading(false);
     }
   };
+
+  const hasFilters = Boolean(filters.leader || filters.subAgent || filters.status);
+  const trace = Array.isArray(selectedRun?.trace) ? selectedRun.trace : [];
+  const toolMessages = Array.isArray(selectedRun?.toolMessages) ? selectedRun.toolMessages : [];
+  const nativeMessages = Array.isArray(selectedRun?.nativeMessages) ? selectedRun.nativeMessages : [];
 
   const columns = [
     {
-      title: 'Time',
+      title: t('Time'),
       dataIndex: 'createdAt',
       key: 'createdAt',
       width: 170,
       render: formatDate,
     },
     {
-      title: 'Leader',
+      title: t('Leader'),
       dataIndex: 'leaderUsername',
       key: 'leaderUsername',
       width: 160,
       render: (username: string) => <Tag color="blue">{employeeMap.get(username) || username || '-'}</Tag>,
     },
     {
-      title: 'Goal',
-      dataIndex: 'goal',
-      key: 'goal',
-      render: (goal: string) => (
-        <Text ellipsis style={{ maxWidth: 380 }}>
-          {goal || '-'}
+      title: t('Sub-Agent'),
+      dataIndex: 'subAgentUsername',
+      key: 'subAgentUsername',
+      width: 160,
+      render: (username: string) => <Tag color="green">{employeeMap.get(username) || username || '-'}</Tag>,
+    },
+    {
+      title: t('Task'),
+      dataIndex: 'task',
+      key: 'task',
+      render: (task: string) => (
+        <Text ellipsis style={{ maxWidth: 360 }}>
+          {task || '-'}
         </Text>
       ),
     },
     {
-      title: 'Status',
+      title: t('Status'),
       dataIndex: 'status',
       key: 'status',
-      width: 130,
+      width: 110,
       render: (status: string) => <StatusTag status={status} />,
     },
     {
-      title: 'Iterations',
-      dataIndex: 'iterationCount',
-      key: 'iterationCount',
-      width: 90,
-      render: (value: number) => value ?? 0,
+      title: t('Duration'),
+      dataIndex: 'durationMs',
+      key: 'durationMs',
+      width: 100,
+      render: formatDurationMs,
     },
     {
-      title: 'Duration',
-      key: 'duration',
+      title: t('Context'),
+      dataIndex: 'memoryContextApplied',
+      key: 'memoryContextApplied',
       width: 100,
-      render: (_: any, record: any) => formatDuration(record.startedAt || record.createdAt, record.endedAt),
+      render: (applied: boolean) => (applied ? <Tag color="purple">memory</Tag> : <Text type="secondary">-</Text>),
     },
     {
       title: '',
       key: 'actions',
       width: 90,
-      render: (_: any, record: any) => (
-        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => fetchDetail(record.id, record)}>
-          Detail
+      render: (_: unknown, record: any) => (
+        <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => fetchDetail(record)}>
+          {t('Detail')}
         </Button>
       ),
-    },
-  ];
-
-  const steps = Array.isArray(detail?.steps) ? detail.steps : [];
-  const events = Array.isArray(detail?.events) ? detail.events : [];
-  const spans = Array.isArray(detail?.spans) ? detail.spans : [];
-  const skillExecutions = Array.isArray(detail?.skillExecutions) ? detail.skillExecutions : [];
-  const run = detail?.run || selectedRun;
-  const hasFilters = Boolean(filters.leader || filters.status);
-
-  const stepColumns = [
-    {
-      title: '#',
-      dataIndex: 'index',
-      key: 'index',
-      width: 56,
-      render: (value: number) => Number(value ?? 0) + 1,
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      width: 130,
-      render: (status: string) => <StatusTag status={status} />,
-    },
-    {
-      title: 'Type',
-      dataIndex: 'type',
-      key: 'type',
-      width: 110,
-      render: (type: string) => <Tag>{type}</Tag>,
-    },
-    {
-      title: 'Step',
-      key: 'step',
-      render: (_: any, record: any) => (
-        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-          <Text strong>{record.title || record.planKey}</Text>
-          {record.description && <Text type="secondary">{record.description}</Text>}
-          {record.target && <Text code>{record.target}</Text>}
-        </Space>
-      ),
-    },
-    {
-      title: 'Depends',
-      dataIndex: 'dependsOn',
-      key: 'dependsOn',
-      width: 130,
-      render: (dependsOn: string[]) =>
-        Array.isArray(dependsOn) && dependsOn.length ? dependsOn.map((key) => <Tag key={key}>{key}</Tag>) : '-',
-    },
-    {
-      title: 'Attempts',
-      key: 'attempts',
-      width: 90,
-      render: (_: any, record: any) => `${record.attempt || 0}/${record.maxAttempts || 0}`,
-    },
-    {
-      title: '',
-      key: 'actions',
-      width: 90,
-      render: (_: any, record: any) =>
-        record.status === 'failed' && Number(record.attempt || 0) < Number(record.maxAttempts || 0) ? (
-          <Button
-            type="link"
-            size="small"
-            icon={<RedoOutlined />}
-            loading={actionLoading}
-            onClick={() => retryStep(record.id)}
-          >
-            Retry
-          </Button>
-        ) : null,
     },
   ];
 
@@ -422,57 +263,66 @@ export const AgentRunsTab: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Agent Runs"
+        message={t('Native Agent Runs')}
         description={
           <Text type="secondary">
-            Persistent loop runs created by the orchestrator tools. Each run stores the goal, plan, step state,
-            approvals, and linked Skill Hub or sub-agent traces.
+            {t(
+              'Native plugin-ai sub-agent dispatches captured by the orchestrator observer. Execution still runs through AIEmployee/SubAgentsDispatcher.',
+            )}
           </Text>
         }
       />
 
       <Card bordered={false}>
         <Form layout="inline" style={{ marginBottom: 16, rowGap: 8, flexWrap: 'wrap' }}>
-          <Form.Item label="Leader">
+          <Form.Item label={t('Leader')}>
             <Select
               allowClear
               showSearch
               optionFilterProp="label"
-              placeholder="Any leader"
+              placeholder={t('Any leader')}
               style={{ minWidth: 180 }}
               options={employeeOptions}
               value={filters.leader}
               onChange={(value) => updateFilter({ leader: value })}
             />
           </Form.Item>
-          <Form.Item label="Status">
+          <Form.Item label={t('Sub-Agent')}>
             <Select
               allowClear
-              placeholder="Any status"
-              style={{ minWidth: 160 }}
+              showSearch
+              optionFilterProp="label"
+              placeholder={t('Any sub-agent')}
+              style={{ minWidth: 180 }}
+              options={employeeOptions}
+              value={filters.subAgent}
+              onChange={(value) => updateFilter({ subAgent: value })}
+            />
+          </Form.Item>
+          <Form.Item label={t('Status')}>
+            <Select
+              allowClear
+              placeholder={t('Any status')}
+              style={{ minWidth: 140 }}
               value={filters.status}
               onChange={(value) => updateFilter({ status: value })}
               options={[
-                { label: 'Planning', value: 'planning' },
-                { label: 'Waiting plan approval', value: 'waiting_plan_approval' },
-                { label: 'Approved', value: 'approved' },
-                { label: 'Running', value: 'running' },
-                { label: 'Waiting user', value: 'waiting_user' },
-                { label: 'Needs replan', value: 'needs_replan' },
-                { label: 'Succeeded', value: 'succeeded' },
-                { label: 'Failed', value: 'failed' },
-                { label: 'Rejected', value: 'rejected' },
-                { label: 'Canceled', value: 'canceled' },
+                { label: t('Running'), value: 'running' },
+                { label: t('Success'), value: 'success' },
+                { label: t('Error'), value: 'error' },
               ]}
             />
           </Form.Item>
           <Form.Item>
             <Space>
               <Button onClick={resetFilters} disabled={!hasFilters}>
-                Reset
+                {t('Reset')}
               </Button>
               <Button icon={<ReloadOutlined />} onClick={refresh}>
-                Refresh
+                {t('Refresh')}
+              </Button>
+              <Button icon={<SyncOutlined />} onClick={syncNativeRuns} loading={syncLoading}>
+                {t('Sync')}
               </Button>
             </Space>
           </Form.Item>
@@ -490,272 +340,149 @@ export const AgentRunsTab: React.FC = () => {
             total,
             showSizeChanger: true,
             pageSizeOptions: [10, 20, 50, 100],
-            showTotal: (count) => `${count} run${count === 1 ? '' : 's'}`,
+            showTotal: (count) => t('{{count}} runs', { count }),
             onChange: (nextPage, nextSize) => {
               setPage(nextPage);
               if (nextSize && nextSize !== pageSize) setPageSize(nextSize);
             },
           }}
           locale={{
-            emptyText: <Empty description={hasFilters ? 'No runs match the current filters' : 'No agent runs yet'} />,
+            emptyText: (
+              <Empty description={hasFilters ? t('No runs match the current filters') : t('No native runs yet')} />
+            ),
           }}
         />
       </Card>
 
-      <Drawer
-        title="Agent Run Detail"
-        width={980}
-        onClose={() => {
-          setSelectedRun(null);
-          setDetail(null);
-        }}
-        open={!!selectedRun}
-      >
-        {run && (
+      <Drawer title={t('Native Run Detail')} width={960} onClose={() => setSelectedRun(null)} open={!!selectedRun}>
+        {selectedRun && (
           <Spin spinning={detailLoading}>
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <Space wrap>
-                <Button icon={<ReloadOutlined />} onClick={() => fetchDetail(run.id)} loading={detailLoading}>
-                  Refresh
-                </Button>
-                {run.status === 'waiting_user' && (
-                  <Button
-                    type="primary"
-                    icon={<PlayCircleOutlined />}
-                    loading={actionLoading}
-                    onClick={() => runAction('resume', run.id)}
-                  >
-                    Resume
-                  </Button>
-                )}
-                {!terminalRunStatuses.has(run.status) && (
-                  <Popconfirm title="Cancel this run?" onConfirm={() => runAction('cancel', run.id)}>
-                    <Button danger icon={<StopOutlined />} loading={actionLoading}>
-                      Cancel run
-                    </Button>
-                  </Popconfirm>
-                )}
-              </Space>
-
               <Descriptions bordered size="small" column={2}>
-                <Descriptions.Item label="Status">
-                  <StatusTag status={run.status} />
+                <Descriptions.Item label={t('Status')}>
+                  <StatusTag status={selectedRun.status} />
                 </Descriptions.Item>
-                <Descriptions.Item label="Leader">
-                  <Tag color="blue">{employeeMap.get(run.leaderUsername) || run.leaderUsername || '-'}</Tag>
+                <Descriptions.Item label={t('Harness')}>{selectedRun.harnessTag || 'default'}</Descriptions.Item>
+                <Descriptions.Item label={t('Leader')}>
+                  <Tag color="blue">
+                    {employeeMap.get(selectedRun.leaderUsername) || selectedRun.leaderUsername || '-'}
+                  </Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="Root run">
-                  <Text code>{run.rootRunId || '-'}</Text>
+                <Descriptions.Item label={t('Sub-Agent')}>
+                  <Tag color="green">
+                    {employeeMap.get(selectedRun.subAgentUsername) || selectedRun.subAgentUsername || '-'}
+                  </Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="Current step">
-                  <Text code>{run.currentStepId || '-'}</Text>
+                <Descriptions.Item label={t('Parent session')}>
+                  <Text code>{selectedRun.parentSessionId || '-'}</Text>
                 </Descriptions.Item>
-                <Descriptions.Item label="Iterations">{run.iterationCount || 0}</Descriptions.Item>
-                <Descriptions.Item label="Approval">{run.approvalStatus || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Plan version">{run.planVersion || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Harness">{run.metadata?.harnessTag || '-'}</Descriptions.Item>
-                <Descriptions.Item label="Duration">
-                  {formatDuration(run.startedAt || run.createdAt, run.endedAt)}
+                <Descriptions.Item label={t('Sub session')}>
+                  <Text code>{selectedRun.subSessionId || '-'}</Text>
                 </Descriptions.Item>
-                <Descriptions.Item label="Started">{formatDate(run.startedAt || run.createdAt)}</Descriptions.Item>
-                <Descriptions.Item label="Ended">{formatDate(run.endedAt)}</Descriptions.Item>
+                <Descriptions.Item label={t('Tool call')}>
+                  <Text code>{selectedRun.toolCallId || '-'}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label={t('Duration')}>{formatDurationMs(selectedRun.durationMs)}</Descriptions.Item>
+                <Descriptions.Item label={t('Started')}>
+                  {formatDate(selectedRun.startedAt || selectedRun.createdAt)}
+                </Descriptions.Item>
+                <Descriptions.Item label={t('Ended')}>{formatDate(selectedRun.endedAt)}</Descriptions.Item>
               </Descriptions>
 
-              <Card title="Goal" size="small">
-                <TextBlock value={run.goal} rows={6} />
+              <Card title={t('Task')} size="small">
+                <TextBlock value={selectedRun.task || selectedRun.input?.question} rows={6} />
               </Card>
 
-              <Card title="Plan" size="small" extra={<BranchesOutlined />}>
-                <Table
-                  rowKey="id"
-                  size="small"
-                  dataSource={steps}
-                  columns={stepColumns}
-                  pagination={false}
-                  scroll={{ x: 'max-content' }}
-                  expandable={{
-                    expandedRowRender: (record: any) => (
-                      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                        <Card size="small" title="Input">
-                          <TextBlock value={record.input} rows={8} />
-                        </Card>
-                        <Card size="small" title="Output">
-                          <TextBlock value={record.output} rows={8} />
-                        </Card>
-                        {record.approval && Object.keys(record.approval).length > 0 && (
-                          <Card size="small" title="Approval">
-                            <TextBlock value={record.approval} rows={8} />
-                          </Card>
-                        )}
-                        {record.error && (
-                          <Card size="small" title="Error" style={{ borderColor: '#ffa39e' }}>
-                            <TextBlock value={record.error} rows={8} />
-                          </Card>
-                        )}
-                      </Space>
-                    ),
-                  }}
-                  locale={{ emptyText: <Empty description="No plan steps" /> }}
-                />
-              </Card>
-
-              <Card title="Event Timeline" size="small">
-                {events.length ? (
+              <Card title={t('Execution Flow')} size="small">
+                {trace.length ? (
                   <Timeline
-                    items={events.map((event: any) => ({
-                      key: event.id,
-                      color: timelineColor(event.status),
+                    items={trace.map((item: any) => ({
+                      key: item.id,
+                      color: item.status === 'error' ? 'red' : item.status === 'running' ? 'blue' : 'green',
                       children: (
                         <Space direction="vertical" size={2} style={{ width: '100%' }}>
                           <Space wrap>
-                            <Text strong>{event.title || event.type}</Text>
-                            <StatusTag status={event.status} />
-                            {event.stepId && <Text type="secondary">step #{event.stepId}</Text>}
+                            <Text strong>{item.title || item.type}</Text>
+                            <Tag>{item.type}</Tag>
+                            <StatusTag status={item.status} />
+                            {item.toolName && <Text code>{item.toolName}</Text>}
+                            {item.durationMs ? <Text type="secondary">{formatDurationMs(item.durationMs)}</Text> : null}
                           </Space>
-                          <Text type="secondary">{formatDate(event.createdAt)}</Text>
-                          {event.content && <TextBlock value={event.content} rows={4} />}
+                          <Text type="secondary">{formatDate(item.at)}</Text>
+                          {item.content ? <TextBlock value={item.content} rows={4} /> : null}
                         </Space>
                       ),
                     }))}
                   />
                 ) : (
-                  <Empty description="No events captured" />
+                  <Empty description={t('No execution flow captured')} />
                 )}
               </Card>
 
               <Collapse
                 items={[
                   {
-                    key: 'spans',
-                    label: `Linked spans (${spans.length})`,
-                    children: spans.length ? (
+                    key: 'toolMessages',
+                    label: t('Native tool messages ({{count}})', { count: toolMessages.length }),
+                    children: toolMessages.length ? (
                       <Table
-                        rowKey="id"
+                        rowKey={(record: any) => `${record.sessionId}:${record.toolCallId}`}
                         size="small"
-                        dataSource={spans}
                         pagination={false}
+                        dataSource={toolMessages}
                         scroll={{ x: 'max-content' }}
                         columns={[
+                          { title: t('Session'), dataIndex: 'sessionId', key: 'sessionId' },
+                          { title: t('Tool'), dataIndex: 'toolName', key: 'toolName' },
                           {
-                            title: 'Type',
-                            dataIndex: 'type',
-                            key: 'type',
-                            width: 110,
-                            render: (value: string) => <Tag>{value}</Tag>,
-                          },
-                          {
-                            title: 'Status',
+                            title: t('Status'),
                             dataIndex: 'status',
                             key: 'status',
-                            width: 110,
-                            render: (value: string) => <StatusTag status={value} />,
+                            render: (value: string) => <StatusTag status={value === 'error' ? 'error' : value} />,
                           },
-                          { title: 'Title', dataIndex: 'title', key: 'title' },
+                          { title: t('Invoke'), dataIndex: 'invokeStatus', key: 'invokeStatus' },
                           {
-                            title: 'Tool',
-                            dataIndex: 'toolName',
-                            key: 'toolName',
-                            render: (value: string) => (value ? <Text code>{value}</Text> : '-'),
-                          },
-                          {
-                            title: 'Duration',
-                            dataIndex: 'durationMs',
-                            key: 'durationMs',
-                            width: 100,
-                            render: (value: number) => (value ? `${value}ms` : '-'),
-                          },
-                          {
-                            title: 'Skill Exec',
-                            dataIndex: 'skillExecutionId',
-                            key: 'skillExecutionId',
-                            width: 110,
-                            render: (value: any) => value || '-',
+                            title: t('Content'),
+                            dataIndex: 'content',
+                            key: 'content',
+                            render: (value: unknown) => <TextBlock value={value} rows={3} />,
                           },
                         ]}
                       />
                     ) : (
-                      <Empty description="No linked spans" />
+                      <Empty description={t('No native tool messages')} />
                     ),
                   },
                   {
-                    key: 'skills',
-                    label: `Skill executions (${skillExecutions.length})`,
-                    children: skillExecutions.length ? (
-                      <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                        {skillExecutions.map((execution: any) => {
-                          const files = parseJsonText<any[]>(execution.outputFiles, []);
-                          return (
-                            <Card
-                              key={execution.id}
-                              size="small"
-                              title={
-                                <Space wrap>
-                                  <Text>Skill execution #{execution.id}</Text>
-                                  <StatusTag status={execution.status} />
-                                  {execution.agentLoopStepId && (
-                                    <Text type="secondary">step #{execution.agentLoopStepId}</Text>
-                                  )}
-                                </Space>
-                              }
-                            >
-                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                <Descriptions size="small" column={2}>
-                                  <Descriptions.Item label="Duration">
-                                    {execution.durationMs ? `${execution.durationMs}ms` : '-'}
-                                  </Descriptions.Item>
-                                  <Descriptions.Item label="Created">
-                                    {formatDate(execution.createdAt)}
-                                  </Descriptions.Item>
-                                </Descriptions>
-                                <Collapse
-                                  size="small"
-                                  items={[
-                                    {
-                                      key: 'stdout',
-                                      label: 'stdout',
-                                      children: <TextBlock value={execution.stdout} rows={10} />,
-                                    },
-                                    {
-                                      key: 'stderr',
-                                      label: 'stderr',
-                                      children: <TextBlock value={execution.stderr} rows={10} />,
-                                    },
-                                    {
-                                      key: 'files',
-                                      label: `files (${files.length})`,
-                                      children: files.length ? (
-                                        <Space direction="vertical">
-                                          {files.map((file: any, index: number) =>
-                                            renderSkillFileLink(execution, file, index),
-                                          )}
-                                        </Space>
-                                      ) : (
-                                        <Empty description="No files" />
-                                      ),
-                                    },
-                                  ]}
-                                />
-                              </Space>
-                            </Card>
-                          );
-                        })}
+                    key: 'messages',
+                    label: t('Native messages ({{count}})', { count: nativeMessages.length }),
+                    children: nativeMessages.length ? (
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        {nativeMessages.map((item: any) => (
+                          <Card
+                            key={`${item.sessionId}:${item.messageId}`}
+                            size="small"
+                            title={`${item.role} #${item.messageId}`}
+                          >
+                            <TextBlock value={item.content || item.metadata} rows={6} />
+                          </Card>
+                        ))}
                       </Space>
                     ) : (
-                      <Empty description="No linked skill executions" />
+                      <Empty description={t('No native messages loaded')} />
                     ),
+                  },
+                  {
+                    key: 'metadata',
+                    label: t('Monitor metadata'),
+                    children: <TextBlock value={selectedRun.metadata} rows={10} />,
                   },
                 ]}
               />
 
-              {(run.finalAnswer || run.summary) && (
-                <Card title="Final Output" size="small">
-                  {run.summary && (
-                    <Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 12 }}>
-                      <Text strong>Summary: </Text>
-                      {run.summary}
-                    </Paragraph>
-                  )}
-                  <TextBlock value={run.finalAnswer} rows={16} />
+              {(selectedRun.output || selectedRun.error) && (
+                <Card title={selectedRun.error ? t('Error') : t('Result')} size="small">
+                  <TextBlock value={selectedRun.error || selectedRun.output} rows={12} />
                 </Card>
               )}
             </Space>

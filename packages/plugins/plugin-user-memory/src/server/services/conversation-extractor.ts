@@ -27,6 +27,12 @@ export interface ExtractionResult {
   lastSessionId: string | null;
 }
 
+export interface RelatedSession {
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+}
+
 export class ConversationExtractor {
   constructor(private db: Database) {}
 
@@ -34,20 +40,13 @@ export class ConversationExtractor {
    * Extract conversations for a user since a given timestamp.
    * Returns formatted conversations with their messages.
    */
-  async extract(
-    userId: number,
-    sinceDate?: Date,
-    maxConversations: number = 50,
-  ): Promise<ExtractionResult> {
+  async extract(userId: number, sinceDate?: Date, maxConversations = 50): Promise<ExtractionResult> {
     const filter: Record<string, any> = { userId };
 
     if (sinceDate) {
       // Include conversations that were CREATED or UPDATED since last sync
       // This ensures we don't miss ongoing conversations that received new messages
-      filter.$or = [
-        { createdAt: { $gt: sinceDate } },
-        { updatedAt: { $gt: sinceDate } },
-      ];
+      filter.$or = [{ createdAt: { $gt: sinceDate } }, { updatedAt: { $gt: sinceDate } }];
     }
 
     const conversations = await this.db.getRepository('aiConversations').find({
@@ -101,7 +100,6 @@ export class ConversationExtractor {
         })
         .filter((m): m is ExtractedMessage => m !== null && m.content.length > 0);
 
-
       if (!extractedMessages.length) continue;
 
       extracted.push({
@@ -123,14 +121,16 @@ export class ConversationExtractor {
    * Format extracted conversations into a compact text for LLM summarization.
    * Limits total text to maxChars to stay within token budget.
    */
-  formatForSummarization(result: ExtractionResult, maxChars: number = 30000): string {
+  formatForSummarization(result: ExtractionResult, maxChars = 30000): string {
     if (!result.conversations.length) return '';
 
     const parts: string[] = [];
     let currentLength = 0;
 
     for (const conv of result.conversations) {
-      const header = `\n--- Conversation: "${conv.title}" (with ${conv.aiEmployeeName}, ${conv.createdAt.toISOString().split('T')[0]}) ---\n`;
+      const header = `\n--- Conversation: "${conv.title}" (with ${conv.aiEmployeeName}, ${
+        conv.createdAt.toISOString().split('T')[0]
+      }) ---\n`;
       if (currentLength + header.length > maxChars) break;
       parts.push(header);
       currentLength += header.length;
@@ -144,6 +144,19 @@ export class ConversationExtractor {
     }
 
     return parts.join('');
+  }
+
+  /**
+   * Map extracted conversations to a compact list of related sessions,
+   * suitable for storing in the profile metadata so the agent can point
+   * the user back to relevant past conversations.
+   */
+  toRelatedSessions(result: ExtractionResult): RelatedSession[] {
+    return result.conversations.map((conv) => ({
+      sessionId: conv.sessionId,
+      title: conv.title,
+      updatedAt: conv.createdAt.toISOString(),
+    }));
   }
 
   /**

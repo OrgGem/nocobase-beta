@@ -88,9 +88,10 @@ export class SkillExecutionTask {
         const pluginSkillName = (skill.get ? skill.get('pluginSource') : skill.pluginSource) || skillName;
         const orchestratorPlugin = (this as any).app.pm.get('plugin-agent-orchestrator') as any;
         const skillHub = orchestratorPlugin?.skillHub;
-        let pluginTemplate = typeof skillHub?.resolveSkillTemplate === 'function'
-          ? skillHub.resolveSkillTemplate(pluginSkillName)
-          : skillHub?.skillTemplates?.get(pluginSkillName);
+        let pluginTemplate =
+          typeof skillHub?.resolveSkillTemplate === 'function'
+            ? skillHub.resolveSkillTemplate(pluginSkillName)
+            : skillHub?.skillTemplates?.get(pluginSkillName);
 
         // Fallback: discover dynamically if not cached (e.g. executed in worker before UI was loaded)
         if (!pluginTemplate && skillHub) {
@@ -101,9 +102,10 @@ export class SkillExecutionTask {
               if (Array.isArray(pluginSkills)) {
                 for (const s of pluginSkills) {
                   if (s.name === pluginSkillName) {
-                    pluginTemplate = typeof skillHub?.hydrateSkillTemplate === 'function'
-                      ? skillHub.hydrateSkillTemplate(pInstance.name, s)
-                      : { ...s, pluginSource: s.name, pluginName: pInstance.name };
+                    pluginTemplate =
+                      typeof skillHub?.hydrateSkillTemplate === 'function'
+                        ? skillHub.hydrateSkillTemplate(pInstance.name, s)
+                        : { ...s, pluginSource: s.name, pluginName: pInstance.name };
                     skillHub.skillTemplates.set(s.name, pluginTemplate);
                     break;
                   }
@@ -329,7 +331,9 @@ export class SkillExecutionTask {
     try {
       manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
     } catch (error) {
-      throw new Error(`Generated skill install manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `Generated skill install manifest is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
 
     if (!manifest?.autoInstall) return null;
@@ -375,7 +379,9 @@ export class SkillExecutionTask {
 
       if (!verifyResult.success) {
         throw new Error(
-          `Generated skill "${name}" failed smoke verification: ${verifyResult.stderr || verifyResult.stdout || 'unknown error'}`,
+          `Generated skill "${name}" failed smoke verification: ${
+            verifyResult.stderr || verifyResult.stdout || 'unknown error'
+          }`,
         );
       }
     }
@@ -453,7 +459,9 @@ export class SkillExecutionTask {
     if (missing.length > 0) {
       throw new Error(
         `Generated skill "${name}" requires ${language} package(s) not available in the Skill Hub worker environment: ` +
-          `${missing.join(', ')}. Add them to the worker environment and refresh/init Skill Hub before installing this skill.`,
+          `${missing.join(
+            ', ',
+          )}. Add them to the worker environment and refresh/init Skill Hub before installing this skill.`,
       );
     }
   }

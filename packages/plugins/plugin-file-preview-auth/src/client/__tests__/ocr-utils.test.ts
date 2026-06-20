@@ -1,4 +1,10 @@
-import { extractOcrStatusRecord, getOcrAttachmentId, isOcrCompleteStatus, normalizeOcrAttachmentId } from '../index';
+import {
+  extractOcrStatusRecord,
+  getOcrAttachmentId,
+  isOcrCapableCollection,
+  isOcrCompleteStatus,
+  normalizeOcrAttachmentId,
+} from '../index';
 
 describe('file preview OCR client utils', () => {
   describe('normalizeOcrAttachmentId', () => {
@@ -35,6 +41,18 @@ describe('file preview OCR client utils', () => {
           uid: '88',
         }),
       ).toBe('88');
+    });
+  });
+
+  describe('isOcrCapableCollection', () => {
+    it('allows attachments and collection-less records', () => {
+      expect(isOcrCapableCollection({ id: 1 })).toBe(true);
+      expect(isOcrCapableCollection({ id: 1, collectionName: 'attachments' })).toBe(true);
+      expect(isOcrCapableCollection({ id: 1, collectionName: '' })).toBe(true);
+    });
+
+    it('rejects non-attachment collections like aiFiles', () => {
+      expect(isOcrCapableCollection({ id: 1, collectionName: 'aiFiles' })).toBe(false);
     });
   });
 
