@@ -160,6 +160,12 @@
   "Queue Assignment": "Gán hàng đợi",
   "Queue Name": "Tên hàng đợi",
   "Map queues to worker stacks. Unassigned queues run on all workers.": "Gán hàng đợi vào worker stack. Hàng đợi chưa gán sẽ chạy trên tất cả worker.",
+  "Fallback mapping for legacy stacks without explicit Processes / queues.": "Mapping dự phòng cho các stack cũ chưa cấu hình Processes / queues rõ ràng.",
+  "Processes / queues": "Processes / queues",
+  "Saved as WORKER_MODE. Use tags for custom process keys that are not discovered yet.": "Được lưu thành WORKER_MODE. Có thể nhập tag cho process key tùy chỉnh chưa được phát hiện.",
+  "Select at least one process or queue": "Chọn ít nhất một process hoặc queue",
+  "WORKER_MODE=* makes this stack consume every queue. Prefer explicit queues in HA.": "WORKER_MODE=* khiến stack này tiêu thụ mọi queue. Nên chọn queue rõ ràng trong HA.",
+  "WORKER_MODE is managed by Processes / queues above.": "WORKER_MODE được quản lý bởi Processes / queues ở trên.",
   "Scan Queues": "Quét hàng đợi",
   "Auto-map ({count})": "Tự động gán ({count})",
   "Register": "Đăng ký",
@@ -202,5 +208,9 @@
   "Log Files": "Log Files",
   "Package": "Package",
   "DB Version": "DB Version",
-  "Runtime Versions": "Runtime Versions"
+  "Runtime Versions": "Runtime Versions",
+  "Cluster registry has no worker heartbeats": "Registry cụm chưa có heartbeat từ worker",
+  "Cluster registry Redis is not configured": "Chưa cấu hình Redis cho registry cụm",
+  "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.": "Cluster Nodes đọc heartbeat trong Redis, không đọc trực tiếp container runtime. Hãy kiểm tra worker đã boot, plugin-cluster-manager đã load, và cấu hình Redis dùng chung.",
+  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "Thiết lập REDIS_URL hoặc CLUSTER_MANAGER_REDIS_URL trên mọi app và worker để bật khám phá node trong cụm."
 }

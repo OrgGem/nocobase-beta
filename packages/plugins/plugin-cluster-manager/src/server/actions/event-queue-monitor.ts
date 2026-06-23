@@ -2,7 +2,13 @@ import { Context } from '@nocobase/actions';
 import { scanKeys } from '../utils/redis';
 
 const REDIS_QUEUE_CONNECTION = 'cluster-manager:queue-monitor';
-const REDIS_QUEUE_PATTERNS = ['*:plugin-git-manager:review:queue', '*:plugin-build-guide-block:build:queue'];
+const REDIS_QUEUE_PATTERNS = [
+  '*:plugin-git-manager:review:queue',
+  '*:plugin-build-guide-block:build:queue',
+  '*:plugin-build-visualization-block:build:queue',
+  'file-preview-auth.ocr.queue',
+  'nocobase:event-queue:*',
+];
 
 function getQueueRedisUrl() {
   return process.env.QUEUE_ADAPTER_REDIS_URL || process.env.REDIS_URL;
@@ -19,10 +25,16 @@ async function getQueueRedis(ctx: Context) {
 
 function knownRedisQueueKeys(ctx: Context) {
   const appName = (ctx.app as any).name || process.env.APP_NAME || 'main';
-  return [`${appName}:plugin-git-manager:review:queue`, `${appName}:plugin-build-guide-block:build:queue`];
+  return [
+    `${appName}:plugin-git-manager:review:queue`,
+    `${appName}:plugin-build-guide-block:build:queue`,
+    `${appName}:plugin-build-visualization-block:build:queue`,
+    'file-preview-auth.ocr.queue',
+  ];
 }
 
 function isKnownRedisQueueKey(key: string) {
+  if (key.startsWith('nocobase:event-queue:')) return true;
   return REDIS_QUEUE_PATTERNS.some((pattern) => {
     const suffix = pattern.replace('*:', '');
     return key === suffix || key.endsWith(`:${suffix}`);
@@ -30,6 +42,25 @@ function isKnownRedisQueueKey(key: string) {
 }
 
 function describeRedisQueueKey(key: string) {
+  if (key === 'file-preview-auth.ocr.queue') {
+    return {
+      appName: 'main',
+      plugin: 'plugin-file-preview-auth',
+      queue: 'ocr',
+      channel: key,
+    };
+  }
+
+  if (key.startsWith('nocobase:event-queue:')) {
+    const channel = key.slice('nocobase:event-queue:'.length);
+    return {
+      appName: channel.split('.')[0] || 'main',
+      plugin: 'event-queue',
+      queue: channel,
+      channel,
+    };
+  }
+
   const parts = String(key).split(':');
   const queue = parts[parts.length - 2] || key;
   const plugin = parts[parts.length - 3] || 'unknown';
@@ -96,7 +127,7 @@ function parseRedisQueueMessage(raw: string, key: string, index: number) {
   } catch {
     // Keep the raw string for non-JSON messages.
   }
-  const queuedAt = content?.queuedAt ? Date.parse(content.queuedAt) : null;
+  const queuedAt = content?.queuedAt ? Date.parse(content.queuedAt) : content?.options?.timestamp || null;
   return {
     id: `${key}:${index}`,
     index,

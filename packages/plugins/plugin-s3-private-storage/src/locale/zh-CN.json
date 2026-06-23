@@ -1,2 +1,9 @@
 {
+  "AWS S3 (Private)": "AWS S3\uff08\u79c1\u6709\uff09",
+  "The field value is required": "\u8be5\u5b57\u6bb5\u4e3a\u5fc5\u586b\u9879",
+  "Region": "\u533a\u57df",
+  "AccessKey ID": "AccessKey ID",
+  "AccessKey Secret": "AccessKey Secret",
+  "Bucket": "\u5b58\u50a8\u6876",
+  "Endpoint": "Endpoint"
 }

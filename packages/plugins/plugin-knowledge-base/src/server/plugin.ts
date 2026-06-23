@@ -389,7 +389,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     if (process.env.KB_DEFAULT_VECTOR_DATABASE_PROVIDER !== 'qdrant') {
       return;
     }
-    if (process.env.APP_ROLE === 'worker' || process.env.WORKER_MODE === '*') {
+    if (isWorkerOnlyRuntime()) {
       return;
     }
 
@@ -633,3 +633,21 @@ export class PluginKnowledgeBaseServer extends Plugin {
 }
 
 export default PluginKnowledgeBaseServer;
+
+function isWorkerOnlyRuntime() {
+  const appRole = process.env.APP_ROLE;
+  if (appRole === 'worker' || appRole === 'sandbox') {
+    return true;
+  }
+
+  const workerModes = String(process.env.WORKER_MODE || '')
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  if (!workerModes.length || workerModes.includes('!') || workerModes.includes('main') || workerModes.includes('app')) {
+    return false;
+  }
+
+  return true;
+}

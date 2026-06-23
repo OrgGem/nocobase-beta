@@ -56,9 +56,9 @@ x-nocobase-env: &nocobase-env
   # Timezone
   TZ: ${TZ:-UTC}
   APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
-  NPM_REGISTRY_URL: "http://nginx-cache-registry/npm/"
-  APT_MIRROR_URL: "http://nginx-cache-registry/debian/"
-  PYPI_INDEX_URL: "http://nginx-cache-registry/pypi-simple/"
+  NPM_REGISTRY_URL: 'http://nginx-cache-registry/npm/'
+  APT_MIRROR_URL: 'http://nginx-cache-registry/debian/'
+  PYPI_INDEX_URL: 'http://nginx-cache-registry/pypi-simple/'
   GIT_BINARY_PATH: ${GIT_BINARY_PATH:-git}
   # plugin-ai-browser — Playwright CDP Endpoint
   AI_BROWSER_CDP_URL: ${AI_BROWSER_CDP_URL:-ws://browser:3000}
@@ -93,8 +93,6 @@ x-nocobase-base: &nocobase-base
       condition: service_healthy
   init: true
 
-
-
 networks:
   nocobase:
     driver: bridge
@@ -122,9 +120,6 @@ volumes:
     driver: local
   dbgate-data:
     driver: local
-
-
-
 
 services:
   # ============================================================================
@@ -395,9 +390,9 @@ services:
       WORKER_MODE: '!'
       APP_PORT: 13000
       APP_BIND: 0.0.0.0
-      SKILL_HUB_SANDBOX: "false"
+      SKILL_HUB_SANDBOX: 'false'
     ports:
-      - "13000:13000"
+      - '13000:13000'
     healthcheck:
       test:
         [
@@ -408,8 +403,6 @@ services:
       timeout: 10s
       retries: 20
       start_period: 180s
-
-
 
   # ============================================================================
   # Redis 8
@@ -493,8 +486,6 @@ services:
         limits:
           memory: 1G
 
-
-
   # ============================================================================
   # MinIO - S3 Compatible Object Storage
   # ============================================================================
@@ -507,8 +498,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-password123}
     ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Console UI
+      - '9000:9000' # API
+      - '9001:9001' # Console UI
     volumes:
       - minio-data:/data
     networks:

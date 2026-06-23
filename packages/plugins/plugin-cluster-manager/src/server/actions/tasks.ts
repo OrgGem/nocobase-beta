@@ -7,7 +7,7 @@ export const tasksActions = {
 
     const filter: any = {};
     if (statusFilter !== undefined && statusFilter !== '') {
-       filter.status = statusFilter === 'null' ? null : Number(statusFilter);
+      filter.status = statusFilter === 'null' ? null : Number(statusFilter);
     }
 
     const [rows, count] = await repo.findAndCount({
@@ -49,9 +49,12 @@ export const tasksActions = {
     // Try to cancel via pub/sub for cross-instance support
     const pluginName = '@nocobase/plugin-async-task-manager';
     try {
-      await ctx.app.pubSubManager.publish(`${pluginName}.task.cancel`, JSON.stringify({
-        taskId: filterByTk,
-      }));
+      await ctx.app.pubSubManager.publish(
+        `${pluginName}.task.cancel`,
+        JSON.stringify({
+          taskId: filterByTk,
+        }),
+      );
     } catch {
       // Fallback: direct DB update
     }
@@ -104,7 +107,7 @@ export const tasksActions = {
     const pluginName = '@nocobase/plugin-async-task-manager';
     try {
       await ctx.app.eventQueue.publish(`${pluginName}.task`, {
-        taskId: filterByTk,
+        id: filterByTk,
       });
     } catch {
       // Queue may not be available
@@ -119,12 +122,9 @@ export const tasksActions = {
     const user = ctx.state?.currentUser?.nickname || ctx.state?.currentUser?.id || 'unknown';
     ctx.app.logger.info(`[cluster-manager] Purging tasks (days=${days}) by user ${user}`);
     const repo = ctx.db.getRepository('asyncTasks');
-    
+
     const filter: any = {
-      $and: [
-        { status: { $ne: 0 } },
-        { status: { $ne: null } }
-      ]
+      $and: [{ status: { $ne: 0 } }, { status: { $ne: null } }],
     };
 
     if (days && Number(days) > 0) {

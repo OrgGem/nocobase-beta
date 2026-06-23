@@ -193,6 +193,12 @@
   "Queue Assignment": "队列分配",
   "Queue Name": "队列名称",
   "Map queues to worker stacks. Unassigned queues run on all workers.": "将队列映射到工作节点栈。未分配的队列将在所有工作节点上运行。",
+  "Fallback mapping for legacy stacks without explicit Processes / queues.": "用于没有显式进程/队列配置的旧工作栈的兜底映射。",
+  "Processes / queues": "进程 / 队列",
+  "Saved as WORKER_MODE. Use tags for custom process keys that are not discovered yet.": "保存为 WORKER_MODE。可用标签输入尚未发现的自定义进程键。",
+  "Select at least one process or queue": "请至少选择一个进程或队列",
+  "WORKER_MODE=* makes this stack consume every queue. Prefer explicit queues in HA.": "WORKER_MODE=* 会让此工作栈消费所有队列。HA 环境建议显式选择队列。",
+  "WORKER_MODE is managed by Processes / queues above.": "WORKER_MODE 由上方的进程 / 队列配置管理。",
   "Scan Queues": "扫描队列",
   "Auto-map ({count})": "自动映射 ({count})",
   "Register": "注册",
@@ -203,5 +209,9 @@
   "No queues discovered. Click \"Scan Queues\" to detect registered queues.": "未发现队列。点击\"扫描队列\"以检测已注册的队列。",
   "Auto-mapped {count} queue(s)": "已自动映射 {count} 个队列",
   "Queue Assignment updated": "队列分配已更新",
-  "Unassigned (worker runs all queues)": "未分配（工作节点运行所有队列）"
+  "Unassigned (worker runs all queues)": "未分配（工作节点运行所有队列）",
+  "Cluster registry has no worker heartbeats": "集群注册表没有 worker 心跳",
+  "Cluster registry Redis is not configured": "未配置集群注册表 Redis",
+  "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.": "Cluster Nodes 读取 Redis 心跳，而不是直接读取容器运行时。请检查 worker 启动、plugin-cluster-manager 加载以及共享 Redis 配置。",
+  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "请在每个 app 和 worker 上设置 REDIS_URL 或 CLUSTER_MANAGER_REDIS_URL，以启用集群节点发现。"
 }

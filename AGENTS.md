@@ -9,8 +9,18 @@ If a file `AGENTS.local.md` exists in this repository root, read it once at the 
 ## Project Structure
 
 - New plugins live under `packages/plugins/@nocobase/plugin-<name>/`. Reuse the existing plugin scaffold; do not invent a new layout.
+- Core code and base plugins are read-only by default: do not modify `packages/core/**` or `packages/plugins/@nocobase*/**` when creating, upgrading, or fixing custom plugins unless the user explicitly asks for a core/base-plugin change in that turn. Treat these packages as upstream contracts to inspect, not implementation surfaces to patch.
 - This repo has two client runtimes: legacy v1 (`src/client/`, `@nocobase/client`, `SchemaComponent`) and v2 (`src/client-v2/`, `@nocobase/client-v2`, `FlowEngine` / `FlowModel`). Confirm which runtime the file under edit belongs to before writing code. Import direction is one-way: v1 client may import from v2 (`@nocobase/client-v2`), but v2 client must never import from v1 (`@nocobase/client`).
 - Pro (not open source) plugins live in individual repositories under `packages/plugins` or `packages/pro-plugins` (for example, `@nocobase/plugin-workflow-approval`), but used not as submodules. When working on a pro plugin, clone its repo separately under `packages/plugins/` or `packages/pro-plugins/` and treat it as a standalone project with git.
+- Plugin `package.json` files should follow the buildable structure used by `packages/plugins/plugin-sub-agent/package.json`: top-level `name`, localized `displayName*`, `description`, `version`, `license`, `main`, `keywords`, `files`, `nocobase.supportedVersions`, `nocobase.editionLevel`, and runtime `peerDependencies`. Avoid adding top-level `types` or `devDependencies` to plugin package manifests unless a plugin specifically proves they are required, because matching this structure fixed successful plugin builds for `plugin-user-memory`.
+
+## Plugin Build & Pack Workflow
+
+- On Windows, prefer PowerShell for NocoBase plugin build/pack commands. The same `yarn nocobase build <plugin> --no-dts` command can fail in Claude's bash shell during the `@nocobase/build` bootstrap (`entry point ... cannot be marked as external`) while succeeding in PowerShell with the same Node version.
+- Build plugins from the repository root with `yarn nocobase build <plugin-package-name> --no-dts`, for example `yarn nocobase build plugin-build-visualization-block --no-dts`.
+- After a successful build, pack from the plugin directory with `npm pack`, for example `Set-Location "packages/plugins/plugin-build-visualization-block"; npm pack` in PowerShell.
+- Verify the build output before reporting success: `dist/client/index.js` (or the plugin's expected client bundle), `dist/server/index.js`, locale files, and `dist/externalVersion.js` should exist.
+- Do not pack after a failed build unless the user explicitly wants a tarball from stale `dist/` output.
 
 ## Code Style Rules
 

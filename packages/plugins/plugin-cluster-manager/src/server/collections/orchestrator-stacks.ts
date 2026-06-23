@@ -45,6 +45,12 @@ export default {
       uiSchema: { title: 'Environment Variables' },
     },
     {
+      name: 'workerMode',
+      type: 'string',
+      interface: 'input',
+      uiSchema: { title: 'Worker Mode', 'x-component': 'Input' },
+    },
+    {
       name: 'volumes',
       type: 'json',
       defaultValue: [],

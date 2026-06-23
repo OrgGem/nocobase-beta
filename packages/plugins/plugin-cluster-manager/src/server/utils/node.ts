@@ -1,4 +1,5 @@
 import os from 'os';
+import { isWorkerOnlyMode, normalizeWorkerMode } from '../../shared/worker-processes';
 
 export type NodeRole = 'app' | 'worker' | 'sandbox';
 
@@ -15,15 +16,7 @@ export type NodeRole = 'app' | 'worker' | 'sandbox';
  * HTTP, so it is treated as an app node.
  */
 export function isWorkerMode(workerMode?: string): boolean {
-  const mode = (workerMode ?? process.env.WORKER_MODE ?? '').trim();
-  if (!mode || mode === 'main' || mode === 'app') return false;
-  if (mode === '-') return false;
-  const topics = mode
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
-  if (topics.includes('!')) return false;
-  return true;
+  return isWorkerOnlyMode(workerMode ?? process.env.WORKER_MODE);
 }
 
 /**
@@ -55,7 +48,7 @@ export function getLocalRole(): NodeRole {
  */
 export function getLocalNodeId(app: any): string {
   const port = process.env.APP_PORT || 'unknown';
-  const mode = process.env.WORKER_MODE || 'main';
+  const mode = normalizeWorkerMode(process.env.WORKER_MODE) || 'main';
   const appName = process.env.APP_NAME || app?.name || 'main';
   return `${appName}_${mode}_${os.hostname()}_${port}_${process.pid}`;
 }

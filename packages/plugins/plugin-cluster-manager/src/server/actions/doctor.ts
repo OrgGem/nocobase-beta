@@ -9,6 +9,12 @@ import type { ContainerInfo, StackConfig } from '../orchestrator/types';
 import { getLocalNodeId, getNodeRoleFrom } from '../utils/node';
 import { getRedisClient, scanKeys } from '../utils/redis';
 import { packagesFromConfig, type CustomPackageMap, type WorkerPackageMap } from '../../shared/packages';
+import {
+  getWorkerProcessDefinition,
+  normalizeWorkerMode,
+  resolveWorkerProcessName,
+  WORKER_PROCESS_DEFINITIONS,
+} from '../../shared/worker-processes';
 
 const ACTIVE_RUN_KEY = 'cluster-manager:doctor:active';
 const RESPONSE_KEY_PREFIX = 'cluster-manager:doctor-response:';
@@ -1112,27 +1118,89 @@ async function getQueueDiagnostics(app: Application) {
     | { constructor?: { name?: string }; queues?: Map<string, unknown[]> }
     | undefined;
   const channels = [];
+  const requiredProcesses = new Set<string>();
   for (const [channel, options] of eventQueue.events || new Map()) {
     let pending: number | null = null;
     if (adapter?.queues && eventQueue.getFullChannel) {
       const fullChannel = eventQueue.getFullChannel(channel, options.shared);
       pending = adapter.queues.get(fullChannel)?.length || 0;
     }
+    const processName = resolveWorkerProcessName(channel);
+    const definition = getWorkerProcessDefinition(processName);
+    if (definition && !definition.sandbox) {
+      requiredProcesses.add(definition.name);
+    }
     channels.push({
       channel,
+      workerProcessName: definition?.name,
       concurrency: options.concurrency || 1,
       interval: options.interval || 250,
       pending,
     });
   }
 
+  for (const definition of WORKER_PROCESS_DEFINITIONS) {
+    if (definition.common && definition.pluginName) {
+      try {
+        if ((app as any).pm?.get?.(definition.pluginName)) {
+          requiredProcesses.add(definition.name);
+        }
+      } catch {
+        // Ignore plugin-manager lookup errors.
+      }
+    }
+  }
+
+  const coverage = await getWorkerProcessCoverage(app, Array.from(requiredProcesses));
+
   return {
     available: true,
     connected: eventQueue.isConnected?.() || false,
     adapter: adapter?.constructor?.name || 'unknown',
     channels,
+    coverage,
     totalPending: channels.reduce((sum, item) => sum + (item.pending || 0), 0),
   };
+}
+
+async function getWorkerProcessCoverage(app: Application, requiredProcesses: string[]) {
+  const result = {
+    required: requiredProcesses,
+    covered: [] as string[],
+    missing: [] as string[],
+    wildcard: false,
+    stacks: [] as Array<{ id: unknown; name: unknown; workerMode: string }>,
+  };
+
+  try {
+    const repo = app.db.getRepository('orchestratorStacks');
+    const stacks = await repo.find({ filter: { enabled: true } });
+
+    const covered = new Set<string>();
+    for (const stack of stacks) {
+      const envVars = stack.get?.('envVars') as { WORKER_MODE?: string } | undefined;
+      const workerMode =
+        normalizeWorkerMode((stack.get?.('workerMode') as string | undefined) || envVars?.WORKER_MODE) || '*';
+      result.stacks.push({
+        id: stack.get?.('id'),
+        name: stack.get?.('name'),
+        workerMode,
+      });
+      if (workerMode === '*') {
+        result.wildcard = true;
+      }
+      for (const token of workerMode.split(',').filter(Boolean)) {
+        covered.add(token);
+      }
+    }
+
+    result.covered = Array.from(covered);
+    result.missing = result.wildcard ? [] : requiredProcesses.filter((processName) => !covered.has(processName));
+  } catch {
+    result.missing = requiredProcesses;
+  }
+
+  return result;
 }
 
 async function getOrchestratorDiagnostics(app: Application, options: DoctorSnapshotOptions) {
@@ -1214,6 +1282,7 @@ function buildRecommendations(params: {
   packageDrifts: number;
   redisAvailable: boolean;
   databaseOk: boolean;
+  queueCoverageMissing?: string[];
 }) {
   const recommendations = [];
   if (!params.redisAvailable) {
@@ -1256,6 +1325,13 @@ function buildRecommendations(params: {
       level: 'warning',
       code: 'package_drift',
       message: 'One or more worker nodes are missing configured packages or have failed package initialization.',
+    });
+  }
+  if (params.queueCoverageMissing?.length) {
+    recommendations.push({
+      level: 'warning',
+      code: 'worker_process_coverage_missing',
+      message: `No explicit worker stack covers: ${params.queueCoverageMissing.join(', ')}.`,
     });
   }
   if (params.topErrors > 0) {
@@ -1301,6 +1377,7 @@ async function buildDoctorReport(app: Application, run: Record<string, unknown>,
     packageDrifts: packageDiagnostics.packageDrifts.length,
     redisAvailable: Boolean(redisDiagnostics.available),
     databaseOk: Boolean(databaseDiagnostics.ping.ok),
+    queueCoverageMissing: queueDiagnostics.coverage?.missing || [],
   });
   const criticalFindings = recommendations.filter((item) => item.level === 'critical').length;
   const warningFindings = recommendations.filter((item) => item.level === 'warning').length;

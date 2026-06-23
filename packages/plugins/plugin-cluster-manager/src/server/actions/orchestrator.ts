@@ -8,6 +8,11 @@
 import { Context } from '@nocobase/actions';
 import { getRedisClient } from '../utils/redis';
 import type { IOrchestratorAdapter, StackConfig } from '../orchestrator/types';
+import { normalizeWorkerMode } from '../../shared/worker-processes';
+
+type QueueMappingRecord = {
+  get: (key: string) => unknown;
+};
 
 /** Helper: get orchestrator adapter from plugin instance */
 function getAdapter(ctx: Context): IOrchestratorAdapter {
@@ -52,6 +57,33 @@ async function assertManagedContainer(
   } catch (err: any) {
     ctx.throw(403, err.message || `Container ${containerId} is not managed by stack "${stack.name}"`);
   }
+}
+
+function applyWorkerMode(stack: StackConfig, workerMode: string) {
+  stack.workerMode = workerMode;
+  stack.envVars = {
+    ...(stack.envVars || {}),
+    APP_ROLE: stack.envVars?.APP_ROLE || 'worker',
+    WORKER_MODE: workerMode,
+    SKILL_HUB_SANDBOX: stack.envVars?.SKILL_HUB_SANDBOX || 'false',
+  };
+}
+
+async function resolveMappedWorkerMode(ctx: Context, stack: StackConfig): Promise<string | undefined> {
+  const mappingsRepo = ctx.db.getRepository('workerQueueMappings');
+  const assigned = (await mappingsRepo.find({
+    filter: {
+      stackId: stack.id,
+      enabled: true,
+    },
+  })) as QueueMappingRecord[];
+
+  return normalizeWorkerMode(
+    assigned
+      .map((mapping) => String(mapping.get('queueName') || ''))
+      .filter(Boolean)
+      .join(','),
+  );
 }
 
 export const orchestratorActions = {
@@ -122,9 +154,9 @@ export const orchestratorActions = {
    * Body: { stackId: 1, replicas: 3 }
    * Leader-only
    *
-   * Before scaling, resolves queue-to-stack mappings and injects
-   * WORKER_MODE into the stack's envVars so new containers only
-   * process assigned queues.
+   * Before scaling, resolves the stack-level worker mode and injects
+   * WORKER_MODE into envVars so new containers process only selected queues.
+   * Queue mappings remain as a fallback for legacy stacks.
    */
   async scale(ctx: Context, next: () => Promise<void>) {
     assertLeader(ctx);
@@ -136,44 +168,32 @@ export const orchestratorActions = {
 
     const stack = await getStack(ctx, stackId);
 
-    // ── Resolve queue assignments for this stack ──
-    try {
-      const mappingsRepo = ctx.db.getRepository('workerQueueMappings');
-      if (mappingsRepo) {
-        const assigned = await mappingsRepo.find({
-          filter: {
-            stackId: stack.id,
-            enabled: true,
-          },
-        });
+    const stackWorkerMode = normalizeWorkerMode(stack.workerMode);
+    const envWorkerMode = normalizeWorkerMode(stack.envVars?.WORKER_MODE);
 
-        const queueNames = assigned.map((m: any) => m.get('queueName') as string).filter(Boolean);
+    if (stackWorkerMode) {
+      applyWorkerMode(stack, stackWorkerMode);
+      ctx.app.logger.info(`[Orchestrator] Using stack WORKER_MODE=${stackWorkerMode} for "${stack.name}"`);
+    } else if (envWorkerMode && envWorkerMode !== '*') {
+      applyWorkerMode(stack, envWorkerMode);
+      ctx.app.logger.info(`[Orchestrator] Using env WORKER_MODE=${envWorkerMode} for "${stack.name}"`);
+    } else {
+      try {
+        const mappedWorkerMode = await resolveMappedWorkerMode(ctx, stack);
 
-        if (queueNames.length > 0) {
-          const workerMode = queueNames.join(',');
-          ctx.app.logger.info(
-            `[Orchestrator] Injecting WORKER_MODE=${workerMode} for stack "${stack.name}" (${queueNames.length} queue(s) assigned)`,
-          );
-          // Merge into envVars; adapter code merges envVars over inherited env
-          stack.envVars = {
-            ...(stack.envVars || {}),
-            WORKER_MODE: workerMode,
-          };
+        if (mappedWorkerMode) {
+          applyWorkerMode(stack, mappedWorkerMode);
+          ctx.app.logger.info(`[Orchestrator] Using mapped WORKER_MODE=${mappedWorkerMode} for "${stack.name}"`);
         } else {
-          // No specific assignment → default to all queues (backwards compatible)
-          stack.envVars = {
-            ...(stack.envVars || {}),
-            WORKER_MODE: '*',
-          };
+          const fallbackWorkerMode = envWorkerMode || '*';
+          applyWorkerMode(stack, fallbackWorkerMode);
+          ctx.app.logger.info(`[Orchestrator] Using fallback WORKER_MODE=${fallbackWorkerMode} for "${stack.name}"`);
         }
+      } catch (err: any) {
+        const fallbackWorkerMode = envWorkerMode || '*';
+        ctx.app.logger.debug(`[Orchestrator] Queue mappings not available: ${err.message}`);
+        applyWorkerMode(stack, fallbackWorkerMode);
       }
-    } catch (err: any) {
-      // If workerQueueMappings table doesn't exist yet, fall back gracefully
-      ctx.app.logger.debug(`[Orchestrator] Queue mappings not available: ${err.message}`);
-      stack.envVars = {
-        ...(stack.envVars || {}),
-        WORKER_MODE: '*',
-      };
     }
 
     const result = await adapter.scale(stack, Number(replicas));

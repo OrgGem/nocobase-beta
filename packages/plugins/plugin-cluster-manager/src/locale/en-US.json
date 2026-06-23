@@ -191,6 +191,12 @@
   "Queue Assignment": "Queue Assignment",
   "Queue Name": "Queue Name",
   "Map queues to worker stacks. Unassigned queues run on all workers.": "Map queues to worker stacks. Unassigned queues run on all workers.",
+  "Fallback mapping for legacy stacks without explicit Processes / queues.": "Fallback mapping for legacy stacks without explicit Processes / queues.",
+  "Processes / queues": "Processes / queues",
+  "Saved as WORKER_MODE. Use tags for custom process keys that are not discovered yet.": "Saved as WORKER_MODE. Use tags for custom process keys that are not discovered yet.",
+  "Select at least one process or queue": "Select at least one process or queue",
+  "WORKER_MODE=* makes this stack consume every queue. Prefer explicit queues in HA.": "WORKER_MODE=* makes this stack consume every queue. Prefer explicit queues in HA.",
+  "WORKER_MODE is managed by Processes / queues above.": "WORKER_MODE is managed by Processes / queues above.",
   "Scan Queues": "Scan Queues",
   "Auto-map ({count})": "Auto-map ({count})",
   "Register": "Register",
@@ -201,5 +207,9 @@
   "No queues discovered. Click \"Scan Queues\" to detect registered queues.": "No queues discovered. Click \"Scan Queues\" to detect registered queues.",
   "Auto-mapped {count} queue(s)": "Auto-mapped {count} queue(s)",
   "Queue Assignment updated": "Queue Assignment updated",
-  "Unassigned (worker runs all queues)": "Unassigned (worker runs all queues)"
+  "Unassigned (worker runs all queues)": "Unassigned (worker runs all queues)",
+  "Cluster registry has no worker heartbeats": "Cluster registry has no worker heartbeats",
+  "Cluster registry Redis is not configured": "Cluster registry Redis is not configured",
+  "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.": "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.",
+  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery."
 }

@@ -7,11 +7,12 @@ import { redisActions } from './actions/redis-monitor';
 import { aclCacheActions, createAclCacheMiddleware } from './actions/acl-cache';
 import { clusterActions, readLocalLogs } from './actions/cluster-nodes';
 import { getRedisClient } from './utils/redis';
-import { getLocalNodeId, isWorkerMode } from './utils/node';
+import { getLocalNodeId, getLocalRole, isWorkerMode } from './utils/node';
 import { eventQueueActions } from './actions/event-queue-monitor';
 import { lockActions } from './actions/lock-monitor';
 import { cacheMonitorActions } from './actions/cache-monitor';
 import { RedisPubSubAdapter } from './adapters/redis-pubsub-adapter';
+import { RedisEventQueueAdapter } from './adapters/redis-event-queue-adapter';
 import { RedisNodeRegistry } from './adapters/redis-node-registry';
 import { RedisLockAdapter } from './adapters/redis-lock-adapter';
 import { orchestratorActions } from './actions/orchestrator';
@@ -137,6 +138,7 @@ export class PluginClusterManagerServer extends Plugin {
 
     // Register Redis PubSub adapter if URL is configured and no adapter already set
     this.registerPubSubAdapter();
+    await this.registerEventQueueAdapter();
 
     // Register missing Redis Lock adapter if running bare open-source core
     const lockMgr = this.app.lockManager as any;
@@ -410,6 +412,38 @@ export class PluginClusterManagerServer extends Plugin {
     this.app.logger.info('[cluster-manager] Redis PubSub adapter registered');
   }
 
+  private async registerEventQueueAdapter() {
+    const enabled = process.env.QUEUE_ADAPTER === 'redis' || Boolean(process.env.QUEUE_ADAPTER_REDIS_URL);
+    if (!enabled) {
+      return;
+    }
+
+    const url = process.env.QUEUE_ADAPTER_REDIS_URL || process.env.REDIS_URL;
+    if (!url) {
+      this.app.logger.warn('[cluster-manager] QUEUE_ADAPTER=redis but QUEUE_ADAPTER_REDIS_URL/REDIS_URL is not set');
+      return;
+    }
+
+    const eventQueue = this.app.eventQueue as any;
+    const existingAdapter = eventQueue?.adapter;
+    const existingName = existingAdapter?.constructor?.name;
+    if (existingAdapter && existingName !== 'MemoryEventQueueAdapter') {
+      this.app.logger.info(`[cluster-manager] EventQueue adapter already registered (${existingName}), skipping`);
+      return;
+    }
+
+    const adapter = new RedisEventQueueAdapter({ app: this.app, url });
+    const wasConnected = Boolean(eventQueue?.isConnected?.());
+    if (wasConnected) {
+      await eventQueue.close();
+    }
+    eventQueue.setAdapter(adapter);
+    if (wasConnected) {
+      await eventQueue.connect();
+    }
+    this.app.logger.info('[cluster-manager] Redis EventQueue adapter registered');
+  }
+
   /**
    * Initialize the Container Orchestrator subsystem.
    * Config is loaded from DB (orchestratorSettings collection) first,
@@ -484,10 +518,10 @@ export class PluginClusterManagerServer extends Plugin {
     // Leader election runs on app nodes only. Worker-only pods still load the
     // plugin for monitoring/package installation, but they must not become the
     // Kubernetes orchestrator leader.
-    const workerOnlyNode = this.isWorkerOnlyNode();
+    const nonAppNode = this.isNonAppNode();
     this.leaderElection = new LeaderElection(this.app, {
-      enabled: !workerOnlyNode,
-      disabledReason: workerOnlyNode ? 'Worker-only nodes do not run orchestrator write operations.' : '',
+      enabled: !nonAppNode,
+      disabledReason: nonAppNode ? 'Non-app nodes do not run orchestrator write operations.' : '',
     });
     await this.leaderElection.init();
 
@@ -561,8 +595,8 @@ export class PluginClusterManagerServer extends Plugin {
     }
   }
 
-  private isWorkerOnlyNode(): boolean {
-    return isWorkerMode(process.env.WORKER_MODE);
+  private isNonAppNode(): boolean {
+    return getLocalRole() !== 'app';
   }
 }
 

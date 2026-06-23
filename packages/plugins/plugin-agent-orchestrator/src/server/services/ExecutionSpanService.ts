@@ -56,7 +56,7 @@ export class ExecutionSpanService {
       });
       return toPlain(record);
     } catch (error) {
-      this.plugin.app.log?.warn?.('[AgentOrchestrator] Failed to create execution span', error);
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to create execution span', error);
       return null;
     }
   }
@@ -75,7 +75,7 @@ export class ExecutionSpanService {
       });
       return { id: spanId };
     } catch (error) {
-      this.plugin.app.log?.warn?.(`[AgentOrchestrator] Failed to update execution span ${spanId}`, error);
+      this.plugin.app.logger?.warn?.(`[AgentOrchestrator] Failed to update execution span ${spanId}`, error);
       return null;
     }
   }

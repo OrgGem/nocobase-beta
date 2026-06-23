@@ -1,20 +1,22 @@
 # plugin-agent-orchestrator
 
 ## Overview
-Hierarchical Multi-Agent orchestration for NocoBase AI Employees. Enables Leader agents to delegate tasks to Sub-Agent employees without modifying core plugin-ai.
+Hierarchical Multi-Agent orchestration for NocoBase AI Employees. Enables Leader agents to delegate tasks to Sub-Agent employees, with detailed execution tracing and context/memory management.
 
 ## Features
-- **Hierarchical Delegation**: Allows AI Leader agents to break down complex tasks and assign them to specialized sub-agents.
-- **Seamless Integration**: Plugs directly into the existing AI Employee framework.
-- **Execution Tracking**: Monitor sub-agent task execution and responses within the main chat interface.
+- **Hierarchical Delegation**: Allows AI Leader agents to break down complex tasks and assign them to specialized sub-agents via native dispatching.
+- **Seamless Integration**: Plugs directly into the existing AI Employee framework, capturing execution spans.
+- **Execution Tracking**: Monitor sub-agent task execution and nested tool calls in detail within the main chat interface.
 - **External RAG Search**: Exposes `external_rag_search` so leaders and sub-agents can retrieve context from NocoBase knowledge bases, including external RAG services.
 
 ## Usage
 1. Enable the plugin in the NocoBase Plugin Manager.
 2. Navigate to the AI Employee configuration page.
-3. Configure a primary "Leader" agent.
-4. Add available "Sub-Agents" as tools or skills to the Leader agent.
-5. Interact with the Leader agent; it will automatically delegate tasks when necessary.
+3. Configure a primary "Leader" agent and specialized "Sub-Agent" employees.
+4. Add the built-in **AI employee task dispatching** (`dispatch-sub-agent-task`) tool to the Leader agent.
+5. Ensure the user role has access to both the Leader and Sub-Agent employees (configured via employee roles mapping).
+6. Interact with the Leader agent; it will automatically delegate tasks to the sub-agents when necessary.
+
 
 ## External RAG / Embedding service
 

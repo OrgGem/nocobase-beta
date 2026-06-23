@@ -20,6 +20,7 @@ const DEFAULT_TARGET_CHAPTERS = 5;
 export const WORKER_JOB_BUILD_GUIDE_PROCESS = 'build-guide:process';
 
 const BUILD_GUIDE_QUEUE_CHANNEL = 'plugin-build-guide-block.build';
+const BUILD_GUIDE_WORKER_ALIASES = [BUILD_GUIDE_QUEUE_CHANNEL, 'plugin-build-guide-block:build:queue'];
 const BUILD_GUIDE_QUEUE_CONCURRENCY = Math.max(
   1,
   Number.parseInt(process.env.BUILD_GUIDE_QUEUE_CONCURRENCY || process.env.BUILD_GUIDE_MAX_CONCURRENCY || '1', 10) || 1,
@@ -737,13 +738,22 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
 }
 
 function isBuildGuideWorker(app: Application) {
+  return app.serving(WORKER_JOB_BUILD_GUIDE_PROCESS) || workerModeServesBuildGuide();
+}
+
+function workerModeServesBuildGuide() {
   const workerMode = process.env.WORKER_MODE || '';
-  return (
-    app.serving(WORKER_JOB_BUILD_GUIDE_PROCESS) ||
-    workerMode === 'worker' ||
-    workerMode === 'task' ||
-    process.env.APP_ROLE === 'worker'
-  );
+  const workerModes = workerMode
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  return workerModes.some((mode) => {
+    if (mode === '*' || mode === 'worker' || mode === 'task' || mode === WORKER_JOB_BUILD_GUIDE_PROCESS) {
+      return true;
+    }
+    return BUILD_GUIDE_WORKER_ALIASES.some((alias) => mode === alias || mode.endsWith(`:${alias}`));
+  });
 }
 
 function clearLocalBuildMemoryQueue(app: Application) {

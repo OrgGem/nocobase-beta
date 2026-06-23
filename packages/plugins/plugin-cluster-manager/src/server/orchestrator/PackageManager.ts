@@ -8,6 +8,17 @@ import Application from '@nocobase/server';
 /** Allow only safe package name characters: letters, digits, dash, underscore, dot, @, /, [, ] */
 const SAFE_PKG_RE = /^(?:[a-zA-Z0-9_.@/-]|\[|\])+$/;
 const INSTALL_CHANNEL = 'cluster-manager.install-packages';
+const APT_ENV: NodeJS.ProcessEnv = {
+  DEBIAN_FRONTEND: 'noninteractive',
+  DEBCONF_NONINTERACTIVE_SEEN: 'true',
+  APT_LISTCHANGES_FRONTEND: 'none',
+  TERM: 'dumb',
+  NEEDRESTART_MODE: 'a',
+  UCF_FORCE_CONFOLD: '1',
+  UCF_FORCE_CONFFOLD: '1',
+};
+const APT_DPKG_OPTIONS = ['-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold'];
+const DPKG_CONFIGURE_OPTIONS = ['--force-confdef', '--force-confold', '--configure', '-a'];
 
 type TargetRole = 'app' | 'worker' | 'sandbox' | 'all';
 type PackageKind = 'apt' | 'npm' | 'python';
@@ -164,22 +175,27 @@ export class PackageManager {
       };
 
       // Step 1: APT packages
-      if (missingPackages.apt.length > 0) {
+      if (safePackages.apt.length > 0) {
         if (registryConfig.aptMirrorUrl) {
           const aptMirrorUrl = sanitizeHttpUrl(registryConfig.aptMirrorUrl, 'APT mirror URL');
           logs.push(`Applying APT mirror: ${redactUrl(aptMirrorUrl)}`);
           await this.configureAptMirror(aptMirrorUrl, logs);
         }
 
-        await this.updateInstallStatus('running', 20, 'Installing APT packages...', logs);
-        await this.runCommand('apt-get', ['update', '-qq'], 'Updating APT package index...', logs, 1200000);
-        await this.runCommand(
-          'apt-get',
-          ['install', '-y', '--no-install-recommends', ...missingPackages.apt],
-          'Installing APT packages...',
-          logs,
-          1200000,
-        );
+        await this.updateInstallStatus('running', 20, 'Preparing APT/dpkg...', logs);
+        await this.repairAptState(logs);
+        if (missingPackages.apt.length > 0) {
+          await this.updateInstallStatus('running', 25, 'Installing APT packages...', logs);
+          await this.runCommand('apt-get', ['update', '-qq'], 'Updating APT package index...', logs, 1200000, APT_ENV);
+          await this.runCommand(
+            'apt-get',
+            [...APT_DPKG_OPTIONS, 'install', '-y', '--no-install-recommends', ...missingPackages.apt],
+            'Installing APT packages...',
+            logs,
+            1200000,
+            APT_ENV,
+          );
+        }
       }
 
       // Step 2: NPM packages (Global)
@@ -277,12 +293,13 @@ export class PackageManager {
     label: string,
     logs: string[],
     timeoutMs = 1200000,
+    env?: NodeJS.ProcessEnv,
   ): Promise<void> {
     logs.push(`RUNNING: ${formatCommand(command, args)}`);
     logs.push(`${label}`);
 
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
       let stdout = '';
       let stderr = '';
       let settled = false;
@@ -322,6 +339,26 @@ export class PackageManager {
         }
       });
     });
+  }
+
+  private async repairAptState(logs: string[]): Promise<void> {
+    logs.push('Preparing APT/dpkg in non-interactive mode...');
+    await this.runCommand(
+      'dpkg',
+      DPKG_CONFIGURE_OPTIONS,
+      'Repairing interrupted dpkg configuration...',
+      logs,
+      1200000,
+      APT_ENV,
+    );
+    await this.runCommand(
+      'apt-get',
+      [...APT_DPKG_OPTIONS, '-f', 'install', '-y', '--no-install-recommends'],
+      'Repairing incomplete APT dependencies...',
+      logs,
+      1200000,
+      APT_ENV,
+    );
   }
 
   private async getMissingPackages(kind: PackageKind, packages: string[], logs: string[]): Promise<string[]> {

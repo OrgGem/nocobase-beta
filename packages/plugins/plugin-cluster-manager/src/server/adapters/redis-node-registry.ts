@@ -1,5 +1,5 @@
 import os from 'os';
-import { scanKeys, getRedisClient } from '../utils/redis';
+import { scanKeys, getRedisClient, isClusterRedisConfigured } from '../utils/redis';
 import { getLocalNodeId } from '../utils/node';
 
 export class RedisNodeRegistry {
@@ -7,6 +7,10 @@ export class RedisNodeRegistry {
   private readonly ttlSecs = 30; // 30 seconds TTL
   private readonly intervalMs = 10000; // Heartbeat every 10 seconds
   private readonly keyPrefix = 'cluster-manager:nodes:';
+  private warnedMissingRedis = false;
+  private lastHeartbeatAt: number | null = null;
+  private lastHeartbeatError: string | null = null;
+  private lastReadError: string | null = null;
 
   constructor(private app: any) {}
 
@@ -33,7 +37,16 @@ export class RedisNodeRegistry {
 
   private async heartbeat() {
     const redis = getRedisClient(this.app);
-    if (!redis) return;
+    if (!redis) {
+      this.lastHeartbeatError = 'Redis is not configured for cluster node discovery';
+      if (!this.warnedMissingRedis) {
+        this.warnedMissingRedis = true;
+        this.app.logger.warn(
+          '[RedisNodeRegistry] Redis is not configured; Cluster Nodes can only show the local fallback node.',
+        );
+      }
+      return;
+    }
 
     // Unique identifier combining hostname, port, pid, mode, and appName to handle multiple workers on the same host
     const port = process.env.APP_PORT || 'unknown';
@@ -69,6 +82,8 @@ export class RedisNodeRegistry {
           arch: process.arch,
           uptime: process.uptime(),
           workerMode: mode,
+          appRole: process.env.APP_ROLE || '',
+          isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
           appPort: port,
           clusterMode: process.env.CLUSTER_MODE || '',
         },
@@ -90,18 +105,27 @@ export class RedisNodeRegistry {
 
     try {
       await redis.sendCommand(['SET', key, JSON.stringify(metadata), 'EX', this.ttlSecs.toString()]);
+      this.lastHeartbeatAt = Date.now();
+      this.lastHeartbeatError = null;
     } catch (err: any) {
+      this.lastHeartbeatError = err.message;
       this.app.logger.error(`[RedisNodeRegistry] Heartbeat failed: ${err.message}`);
     }
   }
 
   public async getNodes(): Promise<any[]> {
     const redis = getRedisClient(this.app);
-    if (!redis) return [];
+    if (!redis) {
+      this.lastReadError = 'Redis is not configured for cluster node discovery';
+      return [];
+    }
 
     try {
       const rawKeys = await scanKeys(redis, `${this.keyPrefix}*`);
-      if (rawKeys.length === 0) return [];
+      if (rawKeys.length === 0) {
+        this.lastReadError = null;
+        return [];
+      }
 
       const values = await redis.sendCommand(['MGET', ...rawKeys]);
 
@@ -117,10 +141,26 @@ export class RedisNodeRegistry {
           }
         }
       }
+      this.lastReadError = null;
       return nodes;
     } catch (err: any) {
+      this.lastReadError = err.message;
       this.app.logger.error(`[RedisNodeRegistry] Error fetching nodes: ${err.message}`);
       return [];
     }
+  }
+
+  public getStatus() {
+    const redis = getRedisClient(this.app);
+    return {
+      configured: isClusterRedisConfigured(this.app),
+      connected: Boolean(redis),
+      keyPrefix: this.keyPrefix,
+      ttlSecs: this.ttlSecs,
+      intervalMs: this.intervalMs,
+      lastHeartbeatAt: this.lastHeartbeatAt,
+      lastHeartbeatError: this.lastHeartbeatError,
+      lastReadError: this.lastReadError,
+    };
   }
 }

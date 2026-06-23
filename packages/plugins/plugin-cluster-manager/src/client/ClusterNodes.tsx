@@ -31,6 +31,7 @@ import {
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useT, formatBytes, formatUptime } from './utils';
+import { isWorkerOnlyMode } from '../shared/worker-processes';
 
 function LogViewerModal({ open, node, onClose }: { open: boolean; node: any; onClose: () => void }) {
   const t = useT();
@@ -195,12 +196,46 @@ function countPackages(packages?: { apt?: string[]; npm?: string[]; python?: str
   return (packages?.apt?.length || 0) + (packages?.npm?.length || 0) + (packages?.python?.length || 0);
 }
 
+function getNodeRole(record: any): 'app' | 'worker' | 'sandbox' {
+  if (record?.appRole === 'app' || record?.appRole === 'worker' || record?.appRole === 'sandbox') {
+    return record.appRole;
+  }
+  if (record?.isSandbox) {
+    return 'sandbox';
+  }
+  return isWorkerOnlyMode(record?.workerMode) ? 'worker' : 'app';
+}
+
+function servesWorkerQueues(record: any) {
+  return record?.appRole === 'worker' || isWorkerOnlyMode(record?.workerMode);
+}
+
+function readClusterListPayload(response: any) {
+  const body = response?.data;
+  const wrapped = body?.data;
+
+  if (Array.isArray(wrapped)) {
+    return { rows: wrapped, meta: body?.meta || {} };
+  }
+
+  if (Array.isArray(wrapped?.data)) {
+    return { rows: wrapped.data, meta: wrapped.meta || {} };
+  }
+
+  if (Array.isArray(body?.rows)) {
+    return { rows: body.rows, meta: body?.meta || {} };
+  }
+
+  return { rows: [], meta: {} };
+}
+
 export function ClusterNodes() {
   const t = useT();
   const api = useApp().apiClient;
   const [loading, setLoading] = useState(false);
   const [currentNode, setCurrentNode] = useState<any>(null);
   const [environments, setEnvironments] = useState<any[]>([]);
+  const [clusterListMeta, setClusterListMeta] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
   const [drift, setDrift] = useState<any>(null);
   const [legacyDiagnostics, setLegacyDiagnostics] = useState<any>(null);
@@ -221,8 +256,10 @@ export function ClusterNodes() {
         api.request({ url: 'clusterManagerCluster:drift' }),
         api.request({ url: 'clusterManagerCluster:legacyDiagnostics' }),
       ]);
+      const listPayload = readClusterListPayload(listRes);
       setCurrentNode(currentRes?.data?.data);
-      setEnvironments(listRes?.data?.data?.data || []);
+      setEnvironments(listPayload.rows);
+      setClusterListMeta(listPayload.meta);
       setHealth(healthRes?.data?.data);
       setDrift(driftRes?.data?.data);
       setLegacyDiagnostics(legacyRes?.data?.data);
@@ -309,13 +346,21 @@ export function ClusterNodes() {
       title: t('Type'),
       dataIndex: 'workerMode',
       key: 'workerMode',
-      width: 100,
+      width: 150,
       render: (mode: string, record: any) => {
-        if (record.isSandbox) {
+        const role = getNodeRole(record);
+        if (role === 'sandbox') {
           return <Tag color="purple">SANDBOX</Tag>;
         }
-        const isWorker = mode === 'worker' || mode === 'task' || mode === '*';
-        return <Tag color={isWorker ? 'blue' : 'green'}>{isWorker ? 'WORKER' : 'APP'}</Tag>;
+        if (role === 'app' && isWorkerOnlyMode(mode)) {
+          return (
+            <Space size={4}>
+              <Tag color="green">APP</Tag>
+              <Tag color="blue">QUEUES</Tag>
+            </Space>
+          );
+        }
+        return <Tag color={role === 'worker' ? 'blue' : 'green'}>{role === 'worker' ? 'WORKER' : 'APP'}</Tag>;
       },
     },
     { title: t('PID'), dataIndex: 'pid', key: 'pid', width: 80 },
@@ -346,6 +391,10 @@ export function ClusterNodes() {
   const versionDrifts = drift?.versionDrifts || [];
   const runtimeDrifts = drift?.runtimeDrifts || [];
   const legacyFindings = legacyDiagnostics?.findings || [];
+  const registryStatus = clusterListMeta?.registry || {};
+  const showRegistryNotice = Boolean(
+    clusterListMeta?.fallback || registryStatus.lastHeartbeatError || registryStatus.lastReadError,
+  );
   const renderFindingMessage = (finding: any) => {
     const template = finding.messageKey ? t(finding.messageKey) : finding.message;
     if (!finding.messageArgs) {
@@ -416,11 +465,7 @@ export function ClusterNodes() {
             <Card size="small">
               <Statistic
                 title={t('Worker Nodes')}
-                value={
-                  environments.filter(
-                    (e) => e.workerMode === 'worker' || e.workerMode === 'task' || e.workerMode === '*',
-                  ).length
-                }
+                value={environments.filter((e) => servesWorkerQueues(e)).length}
                 prefix={<ClusterOutlined />}
               />
             </Card>
@@ -643,6 +688,27 @@ export function ClusterNodes() {
 
         {/* Cluster nodes table */}
         <Card title={t('Cluster Nodes')} size="small">
+          {showRegistryNotice && (
+            <Alert
+              type={registryStatus.configured ? 'warning' : 'info'}
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={
+                registryStatus.configured
+                  ? t('Cluster registry has no worker heartbeats')
+                  : t('Cluster registry Redis is not configured')
+              }
+              description={
+                registryStatus.configured
+                  ? t(
+                      'Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.',
+                    )
+                  : t(
+                      'Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.',
+                    )
+              }
+            />
+          )}
           <Table
             dataSource={environments}
             columns={nodeColumns}

@@ -84,7 +84,14 @@ export function useRequest<TData = unknown>(
             params: { ...(current.params || {}), ...(overrideParams || {}) },
             data: current.data,
           });
-          body = response?.data as TData;
+          const rawData = response?.data;
+          body = (rawData &&
+          typeof rawData === 'object' &&
+          rawData.data &&
+          typeof rawData.data === 'object' &&
+          'data' in rawData.data
+            ? rawData.data
+            : rawData) as TData;
         }
         setData(body);
         onSuccessRef.current?.(body);

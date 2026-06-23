@@ -7,14 +7,18 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { Plugin } from '@nocobase/server';
+import { Plugin, type Application } from '@nocobase/server';
 import { koaMulter as multer } from '@nocobase/utils';
 import { ExcelParserHandler } from './excel-parser-handler';
 import { readFile, unlink } from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { col } from 'sequelize';
-import { TesseractWorker } from './ocr/tesseract-worker';
+import {
+  FILE_PREVIEW_OCR_QUEUE_REDIS_KEY,
+  TesseractWorker,
+  WORKER_JOB_FILE_PREVIEW_OCR_PROCESS,
+} from './ocr/tesseract-worker';
 
 const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
@@ -39,8 +43,10 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
     this.app.on('afterStart', async () => {
       await this.disableBuiltinOfficePreviewer();
-      if (this.ocrWorker) {
+      if (this.ocrWorker && isFilePreviewOcrWorker(this.app)) {
         await this.ocrWorker.start();
+      } else {
+        this.log.debug('[FilePreviewAuth] OCR worker disabled on this node by WORKER_MODE.');
       }
     });
   }
@@ -386,12 +392,12 @@ export class PluginFilePreviewAuthServer extends Plugin {
               require('fs').writeFileSync(
                 require('path').join(process.cwd(), 'preview_error.log'),
                 `Error fetching stream for URL ${url}:\n` +
-                `Time: ${new Date().toISOString()}\n` +
-                `Message: ${err.message}\n` +
-                `Stack: ${err.stack}\n` +
-                `Attachment: ${JSON.stringify(attachment, null, 2)}\n` +
-                `AttachmentObj: ${JSON.stringify(attachmentObj, null, 2)}\n` +
-                `StorageModel: ${JSON.stringify(storageModel, null, 2)}\n`
+                  `Time: ${new Date().toISOString()}\n` +
+                  `Message: ${err.message}\n` +
+                  `Stack: ${err.stack}\n` +
+                  `Attachment: ${JSON.stringify(attachment, null, 2)}\n` +
+                  `AttachmentObj: ${JSON.stringify(attachmentObj, null, 2)}\n` +
+                  `StorageModel: ${JSON.stringify(storageModel, null, 2)}\n`,
               );
             } catch (fsErr: any) {
               this.log.error(`[FilePreviewAuth] Failed to write preview_error.log: ${fsErr.message}`);
@@ -1200,6 +1206,24 @@ export class PluginFilePreviewAuthServer extends Plugin {
 }
 
 export default PluginFilePreviewAuthServer;
+
+function isFilePreviewOcrWorker(app: Application) {
+  return app.serving(WORKER_JOB_FILE_PREVIEW_OCR_PROCESS) || workerModeServesFilePreviewOcr();
+}
+
+function workerModeServesFilePreviewOcr() {
+  const workerModes = String(process.env.WORKER_MODE || '')
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  return workerModes.some((mode) => {
+    if (mode === '*' || mode === 'worker' || mode === 'task' || mode === WORKER_JOB_FILE_PREVIEW_OCR_PROCESS) {
+      return true;
+    }
+    return mode === FILE_PREVIEW_OCR_QUEUE_REDIS_KEY;
+  });
+}
 
 function safeDebugJson(value: unknown): string {
   try {

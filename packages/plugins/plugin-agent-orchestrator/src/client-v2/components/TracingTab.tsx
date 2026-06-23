@@ -94,7 +94,7 @@ export const TracingTab: React.FC = () => {
         url: 'orchestratorTracing:get',
         params: { filterByTk: record.id, source: record.hasUnifiedTrace ? 'span' : 'log' },
       });
-      setSelectedLog((res as any)?.data?.data || (res as any)?.data || record);
+      setSelectedLog((res as any)?.data?.data?.data || (res as any)?.data?.data || record);
     } finally {
       setDetailLoading(false);
     }

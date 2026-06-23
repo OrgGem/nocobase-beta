@@ -42,6 +42,7 @@ export const queueMappingsActions = {
         .filter((q) => !mappedNames.has(q.name))
         .map((q) => ({
           name: q.name,
+          workerProcessName: q.workerProcessName,
           type: q.type,
           label: q.label,
           description: q.description,

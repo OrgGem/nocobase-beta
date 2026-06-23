@@ -8,6 +8,7 @@ import { uid } from '@nocobase/utils';
 
 export const WORKER_JOB_BUILD_UI_TEMPLATE_PROCESS = 'build-ui-template:process';
 const BUILD_TEMPLATE_QUEUE_CHANNEL = 'plugin-build-ui-template.build';
+const BUILD_TEMPLATE_WORKER_ALIASES = [BUILD_TEMPLATE_QUEUE_CHANNEL];
 const BUILD_TEMPLATE_QUEUE_TIMEOUT_MS = 10 * 60 * 1000;
 const BUILD_TEMPLATE_QUEUE_POLL_INTERVAL_MS = 5000;
 const BUILD_TEMPLATE_QUEUE_WAKE_CHANNEL = 'plugin-build-ui-template.build.wake';
@@ -83,11 +84,31 @@ function enqueueLocalBuild(app: Application, message: BuildQueueMessage) {
   publishBuildQueueWake(app, message);
 }
 
+function isBuildTemplateWorker(app: Application) {
+  return app.serving(WORKER_JOB_BUILD_UI_TEMPLATE_PROCESS) || workerModeServesBuildTemplate();
+}
+
+function workerModeServesBuildTemplate() {
+  const workerMode = process.env.WORKER_MODE || '';
+  const workerModes = workerMode
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  return workerModes.some((mode) => {
+    if (mode === '*' || mode === 'worker' || mode === 'task' || mode === WORKER_JOB_BUILD_UI_TEMPLATE_PROCESS) {
+      return true;
+    }
+    return BUILD_TEMPLATE_WORKER_ALIASES.includes(mode);
+  });
+}
+
 async function publishBuildQueueWake(app: Application, message?: BuildQueueMessage) {
   try {
     await (app as any).pubSubManager?.publish?.(
       BUILD_TEMPLATE_QUEUE_WAKE_CHANNEL,
       { spaceId: message?.spaceId, runId: message?.runId },
+      { skipSelf: !isBuildTemplateWorker(app) },
     );
   } catch (error: any) {
     app.log?.debug(`[plugin-build-ui-template] Wake publish skipped: ${error?.message || error}`);
@@ -95,6 +116,10 @@ async function publishBuildQueueWake(app: Application, message?: BuildQueueMessa
 }
 
 export function registerBuildTemplateQueue(app: Application) {
+  if (!isBuildTemplateWorker(app)) {
+    app.log?.debug?.('[plugin-build-ui-template] Queue processor disabled on non-worker node');
+    return;
+  }
   if (buildQueueTimer) return;
 
   buildQueueWakeHandler = async () => {
@@ -111,6 +136,9 @@ export function registerBuildTemplateQueue(app: Application) {
   buildQueueTimer = setInterval(() => scheduleBuildQueueTick(app, 0), BUILD_TEMPLATE_QUEUE_POLL_INTERVAL_MS);
   (buildQueueTimer as any).unref?.();
   scheduleBuildQueueTick(app, 1000);
+  app.log?.info?.(
+    `[plugin-build-ui-template] Queue processor started (interval ${BUILD_TEMPLATE_QUEUE_POLL_INTERVAL_MS}ms)`,
+  );
 }
 
 export function unregisterBuildTemplateQueue(app: Application) {
@@ -123,10 +151,9 @@ export function unregisterBuildTemplateQueue(app: Application) {
     buildQueueKickTimer = null;
   }
   if (buildQueueWakeHandler) {
-    (app as any).pubSubManager?.unsubscribe?.(
-      BUILD_TEMPLATE_QUEUE_WAKE_CHANNEL,
-      buildQueueWakeHandler,
-    ).catch(() => undefined);
+    (app as any).pubSubManager
+      ?.unsubscribe?.(BUILD_TEMPLATE_QUEUE_WAKE_CHANNEL, buildQueueWakeHandler)
+      .catch(() => undefined);
     buildQueueWakeHandler = null;
   }
   buildQueueProcessing = false;
@@ -169,7 +196,7 @@ async function runBuildQueueTick(app: Application) {
     };
 
     app.log?.info(`[plugin-build-ui-template] Starting async build for space ${run.spaceId}`);
-    
+
     // Claim run
     const [affected] = await spaceRepo.update({
       filter: {
@@ -192,34 +219,41 @@ async function runBuildQueueTick(app: Application) {
 
     // Keep updating heartbeat during the build
     const heartbeatTimer = setInterval(() => {
-      spaceRepo.update({
-        filter: { id: run.spaceId, buildRunId: run.runId },
-        values: { buildHeartbeatAt: new Date() },
-      }).catch(() => undefined);
+      spaceRepo
+        .update({
+          filter: { id: run.spaceId, buildRunId: run.runId },
+          values: { buildHeartbeatAt: new Date() },
+        })
+        .catch(() => undefined);
     }, 10000);
 
     try {
       await executeBuild(app, run);
     } catch (err: any) {
       app.log?.error(`[plugin-build-ui-template] Build ${run.runId} failed`, err);
-      await spaceRepo.update({
-        filter: { id: run.spaceId, buildRunId: run.runId },
-        values: {
-          status: 'error',
-          buildPhase: 'error',
-          buildLog: `Generation failed: ${err.message || String(err)}`,
-        },
-      }).catch(() => undefined);
+      await spaceRepo
+        .update({
+          filter: { id: run.spaceId, buildRunId: run.runId },
+          values: {
+            status: 'error',
+            buildPhase: 'error',
+            buildLog: `Generation failed: ${err.message || String(err)}`,
+          },
+        })
+        .catch(() => undefined);
     } finally {
       clearInterval(heartbeatTimer);
     }
-
   } finally {
     buildQueueProcessing = false;
   }
 }
 
 export async function recoverInterruptedBuilds(app: Application) {
+  if (!isBuildTemplateWorker(app)) {
+    return;
+  }
+
   const spaceRepo = app.db.getRepository('aiBuildUiTemplateSpaces');
   const runningSpaces = await spaceRepo.find({
     filter: {
@@ -265,7 +299,7 @@ async function executeBuild(app: Application, run: BuildRunContext) {
   }
 
   await updateSpace(app, run, 'generating', 'AI is generating UI flow models...');
-  
+
   const aiPlugin = app.pm.get('ai') as PluginAIServer;
   if (!aiPlugin) throw new Error('Plugin AI is not available');
 
@@ -289,12 +323,14 @@ async function executeBuild(app: Application, run: BuildRunContext) {
         - Every subModel must have a unique "uid" placeholder (you can output temporary strings like "node_1", "node_2").
         - Always include standard grid layouts: a Form or Details block should have a subModel with key "grid" using "ReferenceFormGridModel" or "FormGridModel" containing a grid of fields.
         - Ensure correct collection binding by using target fields provided in the prompt context.
-        `
-      )
+        `,
+      ),
     );
   }
 
-  let prompt = `Create a beautiful UI ${type === 'popup' ? 'Popup' : 'Block'} template for collection "${targetCollection || 'unknown'}".
+  let prompt = `Create a beautiful UI ${type === 'popup' ? 'Popup' : 'Block'} template for collection "${
+    targetCollection || 'unknown'
+  }".
   Requirements: ${promptRequirements || 'Create a clean, functional dashboard/form layout'}
   `;
 
@@ -422,19 +458,24 @@ async function executeBuild(app: Application, run: BuildRunContext) {
 
 async function updateSpace(app: Application, run: BuildRunContext, phase: string, log: string) {
   const spaceRepo = app.db.getRepository('aiBuildUiTemplateSpaces');
-  await spaceRepo.update({
-    filter: { id: run.spaceId, buildRunId: run.runId },
-    values: {
-      buildPhase: phase,
-      buildLog: log,
-    },
-  }).catch(() => undefined);
+  await spaceRepo
+    .update({
+      filter: { id: run.spaceId, buildRunId: run.runId },
+      values: {
+        buildPhase: phase,
+        buildLog: log,
+      },
+    })
+    .catch(() => undefined);
 }
 
 function toPlainText(value: unknown) {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
-    return value.map((item: any) => item?.text || item?.content || '').filter(Boolean).join('\n');
+    return value
+      .map((item: any) => item?.text || item?.content || '')
+      .filter(Boolean)
+      .join('\n');
   }
   if (value && typeof value === 'object') {
     return (value as any).text || (value as any).content || JSON.stringify(value);

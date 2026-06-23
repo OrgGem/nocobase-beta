@@ -1,6 +1,9 @@
 import { TesseractRunner } from './tesseract-runner';
 import path from 'path';
 
+export const WORKER_JOB_FILE_PREVIEW_OCR_PROCESS = 'file-preview-auth:ocr';
+export const FILE_PREVIEW_OCR_QUEUE_REDIS_KEY = 'file-preview-auth.ocr.queue';
+
 export class TesseractWorker {
   private app: any;
   private db: any;
@@ -8,7 +11,7 @@ export class TesseractWorker {
   private runner: TesseractRunner;
   private isRunning = false;
   private pollTimer: NodeJS.Timeout | null = null;
-  private redisKey = 'file-preview-auth.ocr.queue';
+  private redisKey = FILE_PREVIEW_OCR_QUEUE_REDIS_KEY;
 
   constructor(app: any) {
     this.app = app;

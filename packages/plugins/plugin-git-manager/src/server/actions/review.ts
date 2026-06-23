@@ -5,6 +5,7 @@ import { redactPat } from '../utils/redact';
 
 export const WORKER_JOB_GIT_REVIEW_PROCESS = 'git-review:process';
 const REVIEW_QUEUE_CHANNEL = 'plugin-git-manager.review';
+const REVIEW_WORKER_ALIASES = [REVIEW_QUEUE_CHANNEL, 'plugin-git-manager:review:queue'];
 const REVIEW_QUEUE_CONCURRENCY = Math.max(
   1,
   Number.parseInt(process.env.GIT_REVIEW_QUEUE_CONCURRENCY || process.env.GIT_REVIEW_MAX_CONCURRENCY || '3', 10) || 3,
@@ -305,13 +306,22 @@ function createFlowFromSnapshot(snapshot: ReviewFlowSnapshot | undefined, fallba
 }
 
 function isGitReviewWorker(app: Application): boolean {
+  return app.serving(WORKER_JOB_GIT_REVIEW_PROCESS) || workerModeServesGitReview();
+}
+
+function workerModeServesGitReview(): boolean {
   const workerMode = process.env.WORKER_MODE || '';
-  return (
-    app.serving(WORKER_JOB_GIT_REVIEW_PROCESS) ||
-    workerMode === 'worker' ||
-    workerMode === 'task' ||
-    process.env.APP_ROLE === 'worker'
-  );
+  const workerModes = workerMode
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  return workerModes.some((mode) => {
+    if (mode === '*' || mode === 'worker' || mode === 'task' || mode === WORKER_JOB_GIT_REVIEW_PROCESS) {
+      return true;
+    }
+    return REVIEW_WORKER_ALIASES.some((alias) => mode === alias || mode.endsWith(`:${alias}`));
+  });
 }
 
 function clearLocalReviewMemoryQueue(app: Application) {

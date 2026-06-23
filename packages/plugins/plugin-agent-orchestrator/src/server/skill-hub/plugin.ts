@@ -16,6 +16,8 @@ import { tryGetAIToolsManager } from '../utils/ai-manager';
 import type { ToolsRuntime } from '@nocobase/ai';
 
 type ToolRuntimeInput = string | ToolsRuntime | undefined;
+const SKILL_TASK_POLL_INTERVAL_MS = Number.parseInt(process.env.SKILL_HUB_TASK_POLL_INTERVAL_MS || '5000', 10);
+const SKILL_TASK_POLL_LIMIT = Number.parseInt(process.env.SKILL_HUB_TASK_POLL_LIMIT || '3', 10);
 
 function normalizeToolRuntime(runtime: ToolRuntimeInput): ToolsRuntime | undefined {
   if (!runtime) return undefined;
@@ -100,6 +102,10 @@ export class SkillHubSubFeature {
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
   private initEnvDoneCallback: any = null;
   private initEnvProgressCallback: any = null;
+  private skillTaskCallback: any = null;
+  private initEnvTaskCallback: any = null;
+  private skillTaskPoller: ReturnType<typeof setInterval> | null = null;
+  private skillTaskPolling = false;
   private mcpController: McpController;
   private skillRepoService: SkillRepositoryService;
   private rateLimiter = new RateLimiter(
@@ -255,21 +261,24 @@ export class SkillHubSubFeature {
     });
 
     // 5. Subscribe PubSub — worker processes skill execution tasks
-    (this as any).app.pubSubManager.subscribe('skill-hub.task', async (payload: any) => {
+    this.skillTaskCallback = async (payload: any) => {
       if (process.env.SKILL_HUB_SANDBOX === 'false') return;
       await this.onQueueTask(payload);
-    });
+    };
+    (this as any).app.pubSubManager.subscribe('skill-hub.task', this.skillTaskCallback);
 
     // 5b. Subscribe PubSub — worker processes init-env tasks
-    (this as any).app.pubSubManager.subscribe('skill-hub.init-env', async (payload: any) => {
+    this.initEnvTaskCallback = async (payload: any) => {
       if (process.env.SKILL_HUB_SANDBOX === 'false') return;
       await this.workerEnvManager.executeInit(payload);
-    });
+    };
+    (this as any).app.pubSubManager.subscribe('skill-hub.init-env', this.initEnvTaskCallback);
 
     // 6. Register AI tools + subscriptions (deferred — after all plugins loaded)
     (this as any).app.on('afterStart', async () => {
       this.registerAITools();
       this.startCleanupInterval();
+      this.startSkillTaskPoller();
       await this.subscribeInitEnvDone();
       // Ensure any newly added built-in skills are seeded automatically on upgrade/restart
       await this.skillManager.seedDefaults().catch((e) => {
@@ -280,6 +289,15 @@ export class SkillHubSubFeature {
 
   private async onQueueTask(message: { id: string }) {
     (this as any).app.logger.info(`[skill-hub] Worker received queue task: ${message.id}`);
+    if (process.env.SKILL_HUB_SANDBOX === 'false') {
+      return;
+    }
+    const claimed = await this.claimSkillExecution(message.id);
+    if (!claimed) {
+      (this as any).app.logger.debug(`[skill-hub] Task ${message.id} ignored: already claimed or not pending.`);
+      return;
+    }
+
     const execution = await (this as any).db.getRepository('skillExecutions').findOne({
       filter: { id: message.id },
       appends: ['skill'],
@@ -299,9 +317,56 @@ export class SkillHubSubFeature {
     await task.run();
   }
 
+  private async claimSkillExecution(id: string): Promise<boolean> {
+    const model = (this as any).db.getModel('skillExecutions');
+    const [affected] = await model.update(
+      { status: 'running' },
+      {
+        where: {
+          id,
+          status: 'pending',
+        },
+      },
+    );
+    return affected > 0;
+  }
+
+  private startSkillTaskPoller() {
+    if (process.env.SKILL_HUB_SANDBOX === 'false' || this.skillTaskPoller) {
+      return;
+    }
+
+    const tick = () => {
+      this.processPendingSkillExecutions().catch((error) => {
+        (this as any).app.logger.warn(`[skill-hub] Pending task poll failed: ${error?.message || error}`);
+      });
+    };
+
+    this.skillTaskPoller = setInterval(tick, SKILL_TASK_POLL_INTERVAL_MS);
+    (this.skillTaskPoller as any).unref?.();
+    setTimeout(tick, 1000);
+  }
+
+  private async processPendingSkillExecutions() {
+    if (this.skillTaskPolling) return;
+    this.skillTaskPolling = true;
+    try {
+      const records = await (this as any).db.getRepository('skillExecutions').find({
+        filter: { status: 'pending' },
+        sort: ['createdAt'],
+        limit: SKILL_TASK_POLL_LIMIT,
+      });
+      for (const record of records) {
+        await this.onQueueTask({ id: String(record.get('id')) });
+      }
+    } finally {
+      this.skillTaskPolling = false;
+    }
+  }
+
   /**
    * Execute skill — called by both AI tool and REST test endpoint.
-   * Dispatches to worker via EventQueue, waits for result via PubSub.
+   * Dispatches to sandbox workers via PubSub, waits for result via PubSub.
    * Pushes progress to SSE via runtime.writer (if within AI tool context).
    * Includes rate limiting and graceful abort propagation.
    */
@@ -408,7 +473,7 @@ export class SkillHubSubFeature {
         });
       }
 
-      // NOW Dispatch to worker via EventQueue
+      // NOW dispatch to sandbox workers.
       await (this as any).app.pubSubManager.publish('skill-hub.task', { id: execId });
 
       // Wait for completion
@@ -759,6 +824,20 @@ export class SkillHubSubFeature {
 
   async beforeStop() {
     // Unsubscribe PubSub
+    if (this.skillTaskCallback) {
+      try {
+        await (this as any).app.pubSubManager.unsubscribe('skill-hub.task', this.skillTaskCallback);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (this.initEnvTaskCallback) {
+      try {
+        await (this as any).app.pubSubManager.unsubscribe('skill-hub.init-env', this.initEnvTaskCallback);
+      } catch {
+        /* ignore */
+      }
+    }
     if (this.initEnvDoneCallback) {
       try {
         await (this as any).app.pubSubManager.unsubscribe('skill-hub.init-env.done', this.initEnvDoneCallback);
@@ -778,6 +857,10 @@ export class SkillHubSubFeature {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
+    }
+    if (this.skillTaskPoller) {
+      clearInterval(this.skillTaskPoller);
+      this.skillTaskPoller = null;
     }
   }
 

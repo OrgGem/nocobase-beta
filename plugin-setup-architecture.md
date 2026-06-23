@@ -1,65 +1,216 @@
-# NocoBase plugin setup architecture
+# NocoBase Plugin Setup Architecture
 
-This document summarizes how plugins under `packages/plugins/@nocobase` register themselves, configure client/server behavior, and extend each other through `src/client/index.ts(x)`, `src/server/plugin.ts`, and `src/index.ts`, with additional notes on related files that directly affect these entrypoints.
+This document summarizes plugin architecture for this repository after the
+NocoBase 2.1.x update. It supersedes the older 2.0.x mental model, where most
+client extension work was described only through `src/client`,
+`@nocobase/client`, `SchemaComponent`, schema initializers, and schema settings.
 
-## Scope And How To Read
+## Scope And Sources
 
-- Scope covered: all 107 plugin directories under `packages/plugins/@nocobase`.
-- Primary files: `src/client/index.ts`, `src/client/index.tsx`, `src/server/plugin.ts`, `src/index.ts`.
-- Core files cross-checked: `packages/core/client/src/application/Plugin.ts`, `packages/core/client/src/application/PluginManager.ts`, `packages/core/server/src/plugin.ts`, `packages/core/server/src/plugin-manager/plugin-manager.ts`.
-- Representative files reviewed in depth: `plugin-action-bulk-edit/src/client/index.tsx`, `plugin-acl/src/server/server.ts`, `plugin-ai/src/client/index.tsx`, `plugin-ai/src/server/plugin.ts`, `plugin-data-source-main/src/server/server.ts`, `plugin-workflow/src/client/index.tsx`, `plugin-workflow/src/server/plugin.ts`, `plugin-file-manager/src/server/plugin.ts`, `plugin-block-template/src/client/index.tsx`, `plugin-users/src/server/server.ts`, `plugin-public-forms/src/server/plugin.ts`, `plugin-workflow-mailer/src/client/index.ts`.
-- The inventory notes below are based on static scans of lifecycle hooks, `extends Plugin`, common registration calls, and peer dependencies. For runtime behavior changes, inspect the imported modules involved in that plugin.
+- Local core version checked: `@nocobase/server`, `@nocobase/client`,
+  `@nocobase/client-v2`, and `@nocobase/flow-engine` are `2.1.2`.
+- Plugin inventory checked: 109 directories under `packages/plugins/@nocobase`;
+  59 currently include `src/client-v2`.
+- Core files cross-checked:
+  - `packages/core/client-v2/src/Plugin.ts`
+  - `packages/core/client-v2/src/PluginManager.ts`
+  - `packages/core/client-v2/src/BaseApplication.tsx`
+  - `packages/core/client-v2/src/Application.tsx`
+  - `packages/core/client-v2/src/flow/index.ts`
+  - `packages/core/client-v2/src/PluginSettingsManager.ts`
+  - `packages/core/client/src/application/Plugin.ts`
+  - `packages/core/client/src/application/PluginManager.ts`
+  - `packages/core/server/src/plugin.ts`
+  - `packages/core/server/src/plugin-manager/plugin-manager.ts`
+  - `packages/core/server/src/plugin-manager/options/resource.ts`
+- Representative plugins checked:
+  - `plugin-action-bulk-update`, `plugin-action-export`,
+    `plugin-action-duplicate`
+  - `plugin-field-code`
+  - `plugin-calendar`
+  - `plugin-client`
+  - `@nocobase-example/plugin-simple-action`
+  - `@nocobase-example/plugin-simple-block`
+  - `@nocobase-example/plugin-field-simple`
+  - `@nocobase-example/plugin-settings-page`
+
+## 2.1.x Delta From 2.0.x
+
+NocoBase 2.1.x has two client runtimes:
+
+| Runtime | Path | Imports | Main extension style |
+| --- | --- | --- | --- |
+| Legacy v1 client | `src/client` | `@nocobase/client` | `SchemaComponent`, schema initializers/settings, old plugin settings manager |
+| client-v2 | `src/client-v2` | `@nocobase/client-v2`, `@nocobase/flow-engine` | `FlowEngine`, `FlowModel`, model loaders, flow settings, v2 plugin settings manager |
+
+Important compatibility rules:
+
+- `@nocobase/client` now wraps the base plugin/application skeleton from
+  `@nocobase/client-v2`.
+- v1 client code may import client-v2 APIs when the existing codebase does so.
+- client-v2 code must not import from `@nocobase/client`.
+- Server code is shared by both clients and usually stays in `src/server` plus
+  `src/index.ts`.
+- client-v2 is not just a new bundle name. It changes how UI blocks, actions,
+  fields, settings pages, layout, routes, and designer settings are registered.
+
+## Runtime And Bundle Map
+
+Common plugin files:
+
+```text
+src/index.ts                  server package entry, usually exports ./server
+src/server/index.ts           server export wrapper
+src/server/plugin.ts          server Plugin class
+src/client/index.ts(x)        legacy v1 client plugin
+src/client-v2/index.ts(x)     client-v2 plugin entry
+src/client-v2/plugin.tsx      client-v2 Plugin class
+client.js                     root marker/wrapper for dist/client/index.js
+client.d.ts                   root type wrapper for v1 client
+client-v2.js                  root runtime marker/wrapper for dist/client-v2/index.js
+client-v2.d.ts                root type wrapper for v2 client
+server.js                     root wrapper for dist/server/index.js
+server.d.ts                   root type wrapper for server
+```
+
+The server exposes client bundles by lane:
+
+- v1 remote list: `pm:listEnabled`
+- v2 remote list: `pm:listEnabledV2`
+- v1 static entry: `dist/client/index.js`, marker `client.js`
+- v2 static entry: `dist/client-v2/index.js`, marker `client-v2.js`
+- v1 module id: package name and `<packageName>/client`
+- v2 module id: `<packageName>/client-v2`
+
+`pm:listEnabledV2` filters out plugins that do not have the `client-v2.js`
+runtime marker or an app-dev v2 URL. A plugin can be enabled on the server and
+still not load in client-v2 if it only ships `client.js`.
 
 ## Plugin Lifecycle
 
-Client plugins extend `Plugin` from `@nocobase/client`. The constructor receives `options` and `app`. The base lifecycle hooks are `afterAdd()`, `beforeLoad()`, and `load()`. `PluginManager.add()` creates an instance, registers aliases by `name` and `packageName`, then calls `afterAdd()`. During client application startup, the manager calls `beforeLoad()` for all plugins first, then calls `load()` for each plugin and dispatches `plugin:<name>:loaded`.
+### Client v1 And client-v2
 
-Server plugins extend `Plugin` from `@nocobase/server`. In addition to `afterAdd()`, `beforeLoad()`, and `load()`, server plugins also support `install()`, `upgrade()`, `beforeEnable()`, `afterEnable()`, `beforeDisable()`, `afterDisable()`, `beforeRemove()`, `afterRemove()`, and `handleSyncMessage()`. Server `PluginManager.load()` only runs enabled plugins: it calls `beforeLoad()`, then `loadCollections()` (auto-imports collections from `server/collections/`), `loadAI()` (auto-loads AI tools from `ai/` directory), and `load()`. `install()` runs after `db.sync()` during install/enable flows. Therefore, DB schema, model, migration, and event-hook registration typically belongs in `beforeLoad()`, while resource/action/ACL/middleware registration and service wiring typically belongs in `load()`.
+Both client plugin classes use constructor order `(options, app)` and support:
 
-`src/index.ts` is the server-package entrypoint for most plugins. It usually exports from `./server` with `export * from './server'` and `export { default } from './server'`, or points to `./server/plugin`. The client package is exposed through the `@nocobase/plugin-xxx/client` alias into `src/client`.
+- `afterAdd()`
+- `beforeLoad()`
+- `load()`
 
-## Client Architecture Pattern
+The client plugin manager:
 
-Client plugins commonly use the following registration surfaces:
+1. creates plugin instances;
+2. registers aliases by `options.name` and `options.packageName`;
+3. calls `afterAdd()` when a plugin is added;
+4. calls `beforeLoad()` for all plugins;
+5. calls `load()` for each plugin;
+6. dispatches `plugin:<name>:loaded`.
 
-- UI component/scope/provider: `app.addComponents`, `app.addScopes`, `app.addProvider(s)`.
-- Router/settings: `router.add`, `pluginSettingsManager.add`.
-- Schema extension: `schemaInitializerManager.add/addItem`, `schemaSettingsManager.add/addItem`.
-- Flow engine: `flowEngine.registerModels`, `flowEngine.registerActions`, workflow client `registerTrigger`, `registerInstruction`, `registerInstructionGroup`, `registerSystemVariable`.
-- Data source UI: `dataSourceManager.addFieldInterfaces`, `addCollectionFieldInterface`, or hidden collection registration into the flow/data-source layer.
-- Cross-plugin wiring: `pm.get(...)` to extend another plugin and `pm.add(...)` to load a supporting plugin.
+### Server
 
-UI-only plugins usually have no server logic, or their server class only contains lifecycle placeholders. Block/action/field plugins primarily register schema initializers, schema settings, and components. `workflow-*` plugins usually extend the workflow plugin with instructions, triggers, or task types instead of owning a large standalone UI.
+Server plugins use constructor order `(app, options)` and support:
 
-## Server Architecture Pattern
+- `afterAdd()`
+- `beforeLoad()`
+- `load()`
+- `install()`
+- `upgrade()`
+- `beforeEnable()` / `afterEnable()`
+- `beforeDisable()` / `afterDisable()`
+- `beforeRemove()` / `afterRemove()`
+- `handleSyncMessage(message)`
 
-Server plugins commonly use the following registration surfaces:
+During server plugin load, only enabled plugins run. The manager calls:
 
-- Database: `db.registerModels`, `db.registerRepositories`, `db.registerOperators`, `db.addMigrations`, `db.on(...)`, automatic collection import through `loadCollections()`.
-- Resource/action: `app.resourceManager.define`, registerActionHandler(s). Note: `app.resourcer` is deprecated; use `app.resourceManager` instead.
-- Data source hooks: `app.dataSourceManager.afterAddDataSource(callback)`, `app.dataSourceManager.beforeAddDataSource(callback)` — register per-data-source resources, actions, ACL, or middleware when a new data source is added.
-- ACL: `acl.registerSnippet`, `acl.allow`, `acl.use`, fixed params, and permission-checking middleware.
-- Middleware: `resourceManager.use`, `dataSource.resourceManager.use`, Koa/application middleware, or data-source ACL middleware.
-- Events/sync: `app.on`, `db.on`, `sendSyncMessage`, `handleSyncMessage`, cache invalidation events.
-- Plugin-to-plugin service: `pm.get('workflow')`, `pm.get('file-manager')`, `pm.get('user-data-sync')`, and similar integrations.
+1. `beforeLoad()` for every enabled plugin;
+2. then for each enabled plugin, `loadCollections()`;
+3. `loadAI()`;
+4. `load()`;
+5. marks `plugin.state.loaded = true`.
 
-Larger plugins usually split implementation into `actions/`, `resources/` or `resourcers/`, `middlewares/`, `models/`, `collections/`, and `migrations/`. The server entrypoint only composes those modules into the plugin lifecycle.
+`install()` runs after `db.sync()` during install/enable flows. Migration
+loading is handled by the plugin manager through `server/migrations`.
 
-## Representative Patterns
+## Client-v2 Architecture
 
-- `plugin-acl`: server `beforeLoad()` registers migrations, models, ACL snippets, resources, action handlers, database hooks, and association-checking middleware. This is the clearest example of a core permission plugin.
-- `plugin-data-source-main`: server `beforeLoad()` registers repositories, models, operators, and hooks for collection/field management, plus sync messages when collections or fields change.
-- `plugin-workflow`: client and server both maintain registries for triggers, instructions, and functions. `workflow-*` plugins extend those registries through `pm.get('workflow')`.
-- `plugin-ai`: client and server both provide an AI manager, provider/tool registries, and workflow integration. The server defines resources, ACL, cron jobs, dynamic tools, and conversation-abort sync handling.
-- `plugin-file-manager`: the server registers the storage-type registry, upload/storage actions, file-deletion hooks, storage cache, and storage reload sync.
-- `plugin-block-template`: the client patches schemas at runtime, adds initializers/settings, installs API-client interceptors, and adjusts schema settings after other plugins have loaded.
-- `plugin-public-forms`: the server implements a public-token flow with resource/action handlers, token-parsing middleware, and tightly scoped ACL bypass on data sources.
+client-v2 is centered on `FlowEngine`:
+
+- `Application` creates one root `FlowEngine`.
+- `PluginFlowEngine` sets `FlowModelRepository`, registers core model classes,
+  registers global flow actions, and registers flow settings components.
+- `Application.load()` runs `pm.load()` and then `flowEngine.flowSettings.load()`.
+- `dataSourceManager` is taken from `flowEngine.context.dataSourceManager`.
+- auth and data-source metadata are bootstrapped before admin runtime routes
+  render.
+- the admin shell is a layout registered through `layoutManager.registerLayout`.
+
+The main client-v2 extension surfaces are:
+
+- `flowEngine.registerModels(...)`
+- `flowEngine.registerModelLoaders(...)`
+- `flowEngine.registerActions(...)`
+- `flowEngine.flowSettings.registerComponents(...)`
+- `flowEngine.flowSettings.registerScopes(...)`
+- `pluginSettingsManager.addMenuItem(...)`
+- `pluginSettingsManager.addPageTabItem(...)`
+- `layoutManager.registerLayout(...)`
+- `app.addFieldInterfaces(...)`
+- `dataSourceManager` and collection template managers exposed by related
+  plugins
+
+Use `registerModelLoaders(...)` for models with heavier UI or many dependencies.
+The template and example plugins use this pattern for blocks, fields, and
+actions.
+
+## Client v1 Architecture
+
+Legacy v1 client still exists and still powers plugins that only have
+`src/client`.
+
+Main v1 extension surfaces remain:
+
+- `app.addComponents(...)`
+- `app.addScopes(...)`
+- `app.use(...)`
+- `router.add(...)`
+- `pluginSettingsManager.add(...)`
+- `schemaInitializerManager.add(...)`
+- `schemaInitializerManager.addItem(...)`
+- `schemaSettingsManager.add(...)`
+- `schemaSettingsManager.addItem(...)`
+- `dataSourceManager.addFieldInterfaces(...)`
+
+Do not copy v1 schema initializer/settings code into `src/client-v2` unless the
+target app explicitly provides those managers. client-v2's built-in plugin
+intentionally skips the old schema initializer layer.
+
+## Server Architecture
+
+Server plugin patterns are mostly stable from 2.0.x:
+
+- Database: `db.registerModels`, `db.registerRepositories`,
+  `db.registerOperators`, early DB hooks, data-source hooks.
+- Collections: standard files under `src/server/collections` are auto-imported
+  through `loadCollections()`.
+- Migrations: standard files under `src/server/migrations` are auto-loaded by
+  the plugin migration path. Use `db.addMigrations(...)` for non-standard dirs
+  or special context only.
+- Resources/actions: `app.resourceManager.define(...)`,
+  `app.resourceManager.registerActionHandlers(...)`,
+  `dataSource.resourceManager.registerActionHandler(...)`.
+- ACL: `acl.registerSnippet`, `acl.allow`, `acl.use`, available actions, fixed
+  params, permission middleware.
+- Middleware: `resourceManager.use`, `dataSource.resourceManager.use`, Koa
+  middleware, data-source ACL middleware.
+- AI: `loadAI()` now scans the plugin `ai/` directory for tools, MCP entries,
+  skills, and AI employees.
+- Sync/cache/runtime state: `sendSyncMessage`, `handleSyncMessage`, PubSub,
+  Redis keys, events, and explicit invalidation.
+
+Use `app.resourceManager`, not deprecated `app.resourcer`, for new code.
 
 ## Cookbook Code Samples
 
-The examples below are skeletons for creating a new plugin or extending an existing one. When adapting them to a real plugin, keep lifecycle responsibilities clear: DB/migration/model declarations should live in `beforeLoad()`, runtime-manager or cross-plugin wiring should live in `load()`, and initial seed data should live in `install()`.
-
-### 1. Minimal Plugin Structure
+### 1. Minimal 2.1.x Plugin
 
 ```ts
 // src/index.ts
@@ -68,256 +219,292 @@ export { default } from './server';
 ```
 
 ```ts
-// src/server/index.ts or src/server/plugin.ts
+// src/server/plugin.ts
+import type { Transactionable } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 
-export class PluginExampleServer extends Plugin {
+export default class PluginExampleServer extends Plugin {
   async beforeLoad() {
-    // Register models, repositories, migrations, collections, early DB hooks.
+    // Register models, repositories, operators, early hooks.
   }
 
   async load() {
-    // Register resources, actions, ACL, middleware, cross-plugin integration.
+    // Register resources, actions, ACL, middleware, runtime wiring.
   }
 
   async install() {
-    // Seed default records after db.sync().
+    // Seed default records after db.sync(); keep it idempotent.
   }
 }
-
-export default PluginExampleServer;
 ```
 
 ```tsx
-// src/client/index.tsx
-import { Plugin } from '@nocobase/client';
+// src/client-v2/plugin.tsx
+import { Plugin } from '@nocobase/client-v2';
 
-export class PluginExampleClient extends Plugin {
+export default class PluginExampleClientV2 extends Plugin {
   async load() {
-    // Register settings, routes, schema initializers, components, scopes.
+    // Register FlowModels, settings pages, field interfaces, providers.
   }
 }
-
-export default PluginExampleClient;
 ```
 
-Important notes:
-
-- The server constructor is `new Plugin(app, options)`, while the client constructor is `new Plugin(options, app)`. Do not override the constructor unless necessary.
-- `options.name` and `options.packageName` are used by the plugin manager as aliases for `pm.get(...)`.
-- Server `loadCollections()` automatically imports collection definitions from `server/collections/`. Server `loadAI()` automatically loads tools from the `ai/` directory using `ToolsLoader`.
-- If another plugin needs to extend your plugin, expose public methods or registries on the plugin class, following patterns such as `workflow.registerInstruction(...)`, `fileManager.registerStorageType(...)`, or `notification.registerChannelType(...)`.
-
-### 2. Register Client Plugin Settings, Routes, And Components
-
-Use this pattern for `plugin-api-doc`, `plugin-auth`, `plugin-ai`, `plugin-localization`, `plugin-system-settings`, `plugin-theme-editor`, and `plugin-graph-collection-manager`.
-
 ```tsx
-import { Plugin, lazy } from '@nocobase/client';
-import { tval } from '@nocobase/utils/client'; // deprecated: use tExpr from @nocobase/flow-engine instead
-
-const { ExampleSettingsPage } = lazy(() => import('./ExampleSettingsPage'), 'ExampleSettingsPage');
-const NAMESPACE = '@nocobase/plugin-example';
+// src/client/plugin.tsx, only if the legacy v1 client is needed
+import { Plugin } from '@nocobase/client';
 
 export default class PluginExampleClient extends Plugin {
   async load() {
-    this.app.addComponents({
-      ExampleInlineWidget: lazy(() => import('./ExampleInlineWidget'), 'ExampleInlineWidget').ExampleInlineWidget,
-    });
+    // Register legacy SchemaComponent UI, initializers, settings.
+  }
+}
+```
 
-    this.app.pluginSettingsManager.add('example', {
+### 2. client-v2 Settings/Admin Page
+
+```tsx
+import { Plugin } from '@nocobase/client-v2';
+
+export default class PluginExampleClientV2 extends Plugin {
+  async load() {
+    this.pluginSettingsManager.addMenuItem({
+      key: 'example',
+      title: this.t('Example'),
       icon: 'SettingOutlined',
-      title: tval('Example', { ns: NAMESPACE }),
-      Component: ExampleSettingsPage,
       aclSnippet: 'pm.example.configuration',
-      isPinned: true,
       sort: 500,
     });
 
-    this.router.add('admin.example.detail', {
-      path: '/admin/settings/example/:id',
-      Component: ExampleSettingsPage,
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'example',
+      key: 'index',
+      title: this.t('Overview'),
+      componentLoader: () => import('./pages/OverviewPage'),
+      aclSnippet: 'pm.example.configuration',
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'example',
+      key: 'advanced',
+      title: this.t('Advanced'),
+      componentLoader: () => import('./pages/AdvancedPage'),
     });
   }
 }
 ```
 
-Important notes:
+Notes:
 
-- `aclSnippet` must match the snippet registered on the server; otherwise the menu may render but remain inaccessible.
-- Name routes according to the existing route tree (`admin.*`, `mobile.*`) to avoid collisions.
-- Use `lazy(...)` for large pages so they do not inflate the main bundle.
+- Register the menu before page tabs.
+- `menuKey` cannot contain `.`.
+- `key: 'index'` maps to `/admin/settings/<menuKey>`.
+- Register matching server ACL snippets if the page should be protected.
 
-### 3. Register A Block Plugin
-
-Use this pattern for `plugin-block-*`, `plugin-calendar`, `plugin-kanban`, `plugin-gantt`, and `plugin-map`.
-
-```tsx
-import { Plugin } from '@nocobase/client';
-import { ExampleBlockProvider } from './ExampleBlockProvider';
-import { exampleBlockSettings } from './schemaSettings';
-import { ExampleBlockModel } from './models/ExampleBlockModel';
-
-export default class PluginExampleBlockClient extends Plugin {
-  async load() {
-    this.app.use(ExampleBlockProvider);
-    this.app.schemaSettingsManager.add(exampleBlockSettings);
-
-    this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.example', {
-      title: '{{t("Example block")}}',
-      Component: 'ExampleBlockInitializer',
-    });
-
-    this.app.schemaInitializerManager.addItem('mobile:addBlock', 'otherBlocks.example', {
-      title: '{{t("Example block")}}',
-      Component: 'ExampleBlockInitializer',
-    });
-
-    this.flowEngine.registerModels({
-      ExampleBlockModel,
-    });
-  }
-}
-```
-
-Important notes:
-
-- If the block must be available in multiple insertion points, register it for `page:addBlock`, `popup:addNew:addBlock`, `popup:common:addBlock`, and `mobile:addBlock`.
-- Blocks should define their own `schemaSettings` instead of mutating another block's settings directly, except for global-intervention cases such as `plugin-block-template`.
-- If the block generates dynamic schema, place that logic in a dedicated initializer/provider and keep the client entrypoint as composition code.
-
-### 4. Register An Action Plugin
-
-Use this pattern for `plugin-action-*`: bulk edit/update, duplicate, import/export, print, and custom request.
+### 3. client-v2 Block Plugin
 
 ```tsx
-import { Plugin, useActionAvailable } from '@nocobase/client';
-import { ExampleActionDecorator } from './ExampleActionDecorator';
-import { ExampleActionInitializer } from './ExampleActionInitializer';
-import { exampleActionSettings } from './ExampleAction.Settings';
-import { useExampleActionProps } from './hooks';
+// src/client-v2/plugin.tsx
+import { Plugin } from '@nocobase/client-v2';
 
-export default class PluginExampleActionClient extends Plugin {
+export default class PluginExampleBlockClientV2 extends Plugin {
   async load() {
-    this.app.addComponents({ ExampleActionDecorator });
-    this.app.addScopes({ useExampleActionProps });
-    this.app.schemaSettingsManager.add(exampleActionSettings);
-
-    const initializer = {
-      type: 'item',
-      name: 'exampleAction',
-      title: '{{t("Example action")}}',
-      Component: ExampleActionInitializer,
-      schema: {
-        'x-align': 'right',
-        'x-decorator': 'ExampleActionDecorator',
-        'x-action': 'customize:example',
-        'x-toolbar': 'ActionSchemaToolbar',
-        'x-settings': 'actionSettings:example',
-        'x-acl-action': 'update',
-        'x-acl-action-props': { skipScopeCheck: true },
+    this.flowEngine.registerModelLoaders({
+      ExampleBlockModel: {
+        loader: () => import('./models/ExampleBlockModel'),
       },
-      useVisible: () => useActionAvailable('update'),
-    };
-
-    this.app.schemaInitializerManager.addItem('table:configureActions', 'customize.example', initializer);
-  }
-}
-```
-
-If the action needs a custom backend endpoint:
-
-```ts
-import { Plugin } from '@nocobase/server';
-
-async function runExample(ctx, next) {
-  const { filterByTk } = ctx.action.params;
-  ctx.body = await ctx.db.getRepository('examples').findOne({ filterByTk });
-  await next();
-}
-
-export default class PluginExampleActionServer extends Plugin {
-  async load() {
-    this.app.resourceManager.registerActionHandlers({
-      'examples:runExample': runExample,
-    });
-
-    this.app.acl.registerSnippet({
-      name: `pm.${this.name}.actions`,
-      actions: ['examples:runExample'],
     });
   }
 }
 ```
-
-Important notes:
-
-- Client schema should set `x-acl-action` to the corresponding backend action (`view`, `update`, `destroy`, or a custom action).
-- For batch actions, consider `skipScopeCheck`, as bulk edit does, when per-record scope checks do not apply directly.
-- Backend action handlers should read `ctx.action.params` instead of manually parsing URLs.
-
-### 5. Register Field Interfaces And Collection Templates
-
-Use this pattern for `plugin-field-*` and parts of `plugin-file-manager`.
 
 ```tsx
-import { Plugin } from '@nocobase/client';
-import { ExampleField } from './ExampleField';
-import { exampleFieldInterface } from './interfaces/example';
-import { exampleFieldSettings } from './settings';
-import { useExampleFieldProps } from './hooks';
+// src/client-v2/models/ExampleBlockModel.tsx
+import React from 'react';
+import { BlockModel } from '@nocobase/client-v2';
+import { tExpr } from '../locale';
 
-export default class PluginExampleFieldClient extends Plugin {
+export class ExampleBlockModel extends BlockModel {
+  renderComponent() {
+    return <div>{this.props.text}</div>;
+  }
+}
+
+ExampleBlockModel.define({
+  label: tExpr('Example block'),
+  group: tExpr('Content'),
+  createModelOptions: {
+    use: 'ExampleBlockModel',
+    props: {
+      text: 'Example',
+    },
+  },
+});
+
+ExampleBlockModel.registerFlow({
+  key: 'exampleSettings',
+  title: tExpr('Example settings'),
+  steps: {
+    editText: {
+      title: tExpr('Text'),
+      uiSchema: {
+        text: {
+          type: 'string',
+          title: tExpr('Text'),
+          'x-decorator': 'FormItem',
+          'x-component': 'Input',
+        },
+      },
+      handler(ctx, params) {
+        ctx.model.setProps({ text: params.text });
+      },
+    },
+  },
+});
+```
+
+For collection-backed blocks, extend `CollectionBlockModel`, set `static scene`
+when needed, implement `static filterCollection(collection)` if only some
+collections should show the block, and put default sub-models in
+`define({ createModelOptions })`.
+
+### 4. client-v2 Action Plugin
+
+```tsx
+import { ActionModel, ActionSceneEnum } from '@nocobase/client-v2';
+import { tExpr } from '@nocobase/flow-engine';
+import type { ButtonProps } from 'antd/es/button';
+
+export class ExampleActionModel extends ActionModel {
+  static scene = ActionSceneEnum.record;
+
+  defaultProps: ButtonProps = {
+    title: tExpr('Example action'),
+    type: 'link',
+  };
+
+  getAclActionName() {
+    return 'update';
+  }
+}
+
+ExampleActionModel.define({
+  label: tExpr('Example action'),
+  sort: 100,
+});
+
+ExampleActionModel.registerFlow({
+  key: 'clickFlow',
+  title: tExpr('Example action'),
+  on: 'click',
+  steps: {
+    run: {
+      async handler(ctx) {
+        await ctx.api.resource(ctx.collection.name).update({
+          filterByTk: ctx.inputArgs.filterByTk,
+          values: { updatedByAction: true },
+        });
+        ctx.blockModel?.resource?.refresh?.();
+        ctx.message.success(ctx.t('Saved successfully'));
+      },
+    },
+  },
+});
+```
+
+```tsx
+// src/client-v2/plugin.tsx
+import { Plugin } from '@nocobase/client-v2';
+import { ExampleActionModel } from './models/ExampleActionModel';
+
+export default class PluginExampleActionClientV2 extends Plugin {
   async load() {
-    this.app.dataSourceManager.addFieldInterfaces([exampleFieldInterface]);
-    this.app.schemaSettingsManager.add(exampleFieldSettings);
-    this.app.addComponents({ ExampleField });
-    this.app.addScopes({ useExampleFieldProps });
+    this.flowEngine.registerModels({ ExampleActionModel });
   }
 }
 ```
 
-```ts
-// src/client/interfaces/example.ts
-export const exampleFieldInterface = {
-  name: 'example',
-  type: 'object',
-  group: 'basic',
-  title: '{{t("Example")}}',
-  default: {
-    type: 'string',
+Notes:
+
+- `static scene` decides whether the action belongs to collection, record, or
+  both scenes.
+- `getAclActionName()` feeds the v2 ACL flow.
+- `registerFlow({ on: 'click' })` is the click behavior.
+- Another `registerFlow(...)` without `on` or with `manual: true` is commonly
+  used for settings.
+- For custom action groups or popup/sub-form contexts, register the model with
+  the relevant group, for example
+  `RecordActionGroupModel.registerActionModels({ ExampleActionModel })`.
+
+### 5. client-v2 Field Plugin
+
+```tsx
+// src/client-v2/interface.tsx
+import { CollectionFieldInterface } from '@nocobase/client-v2';
+
+export class ExampleFieldInterface extends CollectionFieldInterface {
+  name = 'example';
+  type = 'object';
+  group = 'advanced';
+  title = '{{t("Example")}}';
+  default = {
+    interface: 'example',
+    type: 'text',
     uiSchema: {
       type: 'string',
-      'x-component': 'ExampleField',
+      'x-component': 'Input.TextArea',
     },
-  },
-  properties: {
-    required: {
-      type: 'boolean',
-      title: '{{t("Required")}}',
-      'x-component': 'Checkbox',
-    },
-  },
-};
+  };
+  availableTypes = ['text', 'string'];
+  filterable = {
+    operators: 'bigField',
+  };
+}
 ```
 
-Important notes:
+```tsx
+// src/client-v2/models/ExampleFieldModel.tsx
+import React from 'react';
+import { FieldModel } from '@nocobase/client-v2';
+import { DisplayItemModel, EditableItemModel, FilterableItemModel } from '@nocobase/flow-engine';
 
-- The interface name is a long-lived contract; changing it affects fields that have already been created.
-- If the field needs database behavior, add the corresponding server migration or hook; do not only register a client component.
-- If the field depends on file upload/storage, retrieve `PluginFileManagerClient` through `pm.get(...)` instead of calling upload APIs directly.
+export class ExampleFieldModel extends FieldModel {
+  render() {
+    return <textarea value={this.props.value || ''} readOnly={this.props.readOnly} />;
+  }
+}
 
-### 6. Create A Standard Collection
+EditableItemModel.bindModelToInterface('ExampleFieldModel', ['example'], { isDefault: true });
+DisplayItemModel.bindModelToInterface('ExampleFieldModel', ['example'], { isDefault: true });
+FilterableItemModel.bindModelToInterface('InputFieldModel', ['example'], { isDefault: true });
+```
 
-Use this pattern for any plugin with its own data model: `plugin-ai`, `plugin-api-keys`, `plugin-public-forms`, `plugin-file-manager`, `plugin-notification-manager`, `plugin-ui-schema-storage`, and `plugin-workflow`.
+```tsx
+// src/client-v2/plugin.tsx
+import { Plugin } from '@nocobase/client-v2';
+import { ExampleFieldInterface } from './interface';
+
+export default class PluginExampleFieldClientV2 extends Plugin {
+  async load() {
+    this.app.addFieldInterfaces([ExampleFieldInterface]);
+    this.flowEngine.registerModelLoaders({
+      ExampleFieldModel: {
+        loader: () => import('./models/ExampleFieldModel'),
+      },
+    });
+  }
+}
+```
+
+If the field needs database behavior, add a server `Field` subclass and
+register it in `beforeLoad()` or through `beforeAddDataSource()` for each
+Sequelize data source.
+
+### 6. Collections And Migrations
 
 ```ts
 // src/server/collections/examples.ts
 export default {
   name: 'examples',
-  title: '{{t("Examples")}}',
-  sortable: 'sort',
-  model: 'ExampleModel',
   fields: [
     {
       type: 'uid',
@@ -327,27 +514,11 @@ export default {
     {
       type: 'string',
       name: 'title',
-      allowNull: false,
       uiSchema: {
         type: 'string',
         title: '{{t("Title")}}',
         'x-component': 'Input',
       },
-    },
-    {
-      type: 'belongsTo',
-      name: 'createdBy',
-      target: 'users',
-      foreignKey: 'createdById',
-      targetKey: 'id',
-    },
-    {
-      type: 'datetime',
-      name: 'createdAt',
-    },
-    {
-      type: 'datetime',
-      name: 'updatedAt',
     },
   ],
 };
@@ -355,445 +526,68 @@ export default {
 
 ```ts
 // src/server/plugin.ts
-import path from 'path';
 import { Plugin } from '@nocobase/server';
 import { ExampleModel } from './models/ExampleModel';
 
 export default class PluginExampleServer extends Plugin {
   async beforeLoad() {
     this.db.registerModels({ ExampleModel });
-
-    this.db.addMigrations({
-      namespace: this.name,
-      directory: path.resolve(__dirname, './migrations'),
-      context: { plugin: this },
-    });
-
-    // If you do not rely on automatic loadCollections(), import manually:
-    this.db.import({
-      directory: path.resolve(__dirname, './collections'),
-      from: this.options.packageName,
-    });
   }
 }
 ```
 
-Important notes:
+Standard collection files in `server/collections` are auto-imported during
+plugin load. Standard migrations in `server/migrations` are loaded through the
+plugin migration path.
 
-- If collections are placed under `server/collections`, the server base plugin can load them automatically through `loadCollections()` during plugin-manager load.
-- Use `from: this.options.packageName` to keep collection provenance explicit.
-- If the collection is UI-managed, do not remove/drop it from destroy hooks; follow the guard pattern in `plugin-data-source-main`.
-
-### 7. Migrations And Install Seeds
-
-```ts
-// src/server/migrations/20260101000000-seed-examples.ts
-import { Migration } from '@nocobase/server';
-
-export default class extends Migration {
-  async up() {
-    const repo = this.context.plugin.db.getRepository('examples');
-    await repo.updateOrCreate({
-      filterKeys: ['key'],
-      values: {
-        key: 'default',
-        title: 'Default example',
-      },
-    });
-  }
-
-  async down() {}
-}
-```
-
-```ts
-// src/server/plugin.ts
-export default class PluginExampleServer extends Plugin {
-  async install() {
-    const repo = this.db.getRepository('examples');
-    const existed = await repo.findOne({ filter: { key: 'default' } });
-    if (!existed) {
-      await repo.create({ values: { key: 'default', title: 'Default example' } });
-    }
-  }
-}
-```
-
-Important notes:
-
-- Use migrations for schema/data changes that must run during upgrades.
-- Use `install()` for default seed data after collections have been synced.
-- Seeds should be idempotent: use `findOne`, `updateOrCreate`, or `filterKeys`.
-
-### 8. Register Resources, Actions, ACL, And Middleware
-
-Use this pattern for `plugin-api-keys`, `plugin-ai`, `plugin-public-forms`, `plugin-backup-restore`, `plugin-user-data-sync`, and `plugin-theme-editor`.
+### 7. Server Resource, Action, ACL, Middleware
 
 ```ts
 import { Plugin } from '@nocobase/server';
 
-async function createExample(ctx, next) {
+async function runExample(ctx, next) {
   const repo = ctx.db.getRepository('examples');
-  ctx.body = await repo.create({
-    values: {
-      ...ctx.action.params.values,
-      createdById: ctx.auth?.user?.id,
-    },
+  ctx.body = await repo.findOne({
+    filterByTk: ctx.action.params.filterByTk,
   });
   await next();
 }
 
 export default class PluginExampleServer extends Plugin {
-  async beforeLoad() {
+  async load() {
     this.app.resourceManager.define({
       name: 'examples',
-      only: ['list', 'get', 'create', 'update', 'destroy'],
       actions: {
-        create: createExample,
+        runExample,
       },
     });
-    // Note: app.resourcer is deprecated — use app.resourceManager instead
 
     this.app.acl.registerSnippet({
-      name: `pm.${this.name}.configuration`,
-      actions: ['examples:*'],
-    });
-  }
-
-  async load() {
-    this.app.acl.allow('examples', 'publicGet', 'public');
-    this.app.acl.allow('examples', 'listMine', 'loggedIn');
-
-    this.app.resourceManager.use(
-      async (ctx, next) => {
-        if (ctx.action.resourceName === 'examples' && ctx.action.actionName === 'listMine') {
-          ctx.action.mergeParams({
-            filter: { createdById: ctx.auth.user.id },
-          });
-        }
-        await next();
-      },
-      { group: 'examples', after: 'auth', before: 'acl' },
-    );
-  }
-}
-```
-
-Important notes:
-
-- `registerSnippet` serves UI permissions/settings; `acl.allow` grants runtime access for public/loggedIn/system actors.
-- `app.resourcer` is deprecated; use `app.resourceManager` instead for resource definitions and middleware.
-- Data-filtering middleware should run after `auth` and before `acl`, following the `plugin-api-keys` pattern.
-- Action names should follow `resource:action`; audit and workflow integrations often depend on that naming.
-
-### 9. Connect To Other Plugins With `pm.get`
-
-Use this pattern for extension plugins: `plugin-ai-gigachat`, `plugin-workflow-*`, `plugin-notification-email`, `plugin-file-previewer-office`, and `plugin-departments`.
-
-```ts
-import { Plugin } from '@nocobase/server';
-import PluginWorkflowServer from '@nocobase/plugin-workflow';
-import { ExampleInstruction } from './ExampleInstruction';
-
-export default class PluginExampleServer extends Plugin {
-  async load() {
-    const workflow = this.pm.get(PluginWorkflowServer) as PluginWorkflowServer;
-    if (!workflow) {
-      this.log.warn('workflow plugin is not loaded');
-      return;
-    }
-
-    workflow.registerInstruction('example', ExampleInstruction);
-  }
-}
-```
-
-```tsx
-import { Plugin } from '@nocobase/client';
-import PluginWorkflowClient from '@nocobase/plugin-workflow/client';
-import { ExampleInstruction } from './ExampleInstruction';
-
-export default class PluginExampleClient extends Plugin {
-  async load() {
-    const workflow = this.pm.get(PluginWorkflowClient) as PluginWorkflowClient;
-    workflow?.registerInstruction('example', ExampleInstruction);
-  }
-}
-```
-
-Important notes:
-
-- For mandatory peer dependencies, declare them in `package.json` and fail explicitly when `pm.get` cannot resolve the plugin.
-- For optional integrations, use guards so the plugin can still load when the dependency is not enabled.
-- The client can resolve plugins by class or string alias; the server usually uses an imported class or alias name.
-
-### 10. Workflow instruction/trigger plugin
-
-Use this pattern for almost all `plugin-workflow-*` plugins.
-
-```ts
-// src/server/plugin.ts
-import { Plugin } from '@nocobase/server';
-import WorkflowPlugin from '@nocobase/plugin-workflow';
-import ExampleInstruction from './ExampleInstruction';
-
-export default class extends Plugin {
-  async load() {
-    const workflow = this.app.pm.get(WorkflowPlugin) as WorkflowPlugin;
-    workflow.registerInstruction('example', ExampleInstruction);
-  }
-}
-```
-
-```ts
-// src/client/index.ts
-import { Plugin } from '@nocobase/client';
-import WorkflowPlugin from '@nocobase/plugin-workflow/client';
-import ExampleInstruction from './ExampleInstruction';
-
-export default class extends Plugin {
-  async load() {
-    const workflow = this.app.pm.get('workflow') as WorkflowPlugin;
-    workflow.registerInstructionGroup('extended', {
-      key: 'extended',
-      label: '{{t("Extended types", { ns: "workflow" })}}',
-    });
-    workflow.registerInstruction('example', ExampleInstruction);
-  }
-}
-```
-
-If it is a trigger:
-
-```ts
-workflow.registerTrigger('example-trigger', ExampleTrigger);
-```
-
-Important notes:
-
-- Server and client must register the same `type`; otherwise the UI may render without server execution, or the server may support a type that the UI cannot configure.
-- Instructions should live in dedicated files, with only the plugin entrypoint calling `registerInstruction`.
-- If the instruction needs dedicated permissions/resources, register additional ACL/actions in the server plugin.
-
-### 11. Notification channel plugin
-
-Use this pattern for `plugin-notification-email` and `plugin-notification-in-app-message`.
-
-```tsx
-// src/client/index.tsx
-import { Plugin } from '@nocobase/client';
-import PluginNotificationManagerClient from '@nocobase/plugin-notification-manager/client';
-import { tval } from '@nocobase/utils/client';
-import { ChannelConfigForm } from './ChannelConfigForm';
-import { MessageConfigForm } from './MessageConfigForm';
-
-export default class PluginExampleNotificationClient extends Plugin {
-  async load() {
-    const notification = this.pm.get(PluginNotificationManagerClient);
-    notification.registerChannelType({
-      type: 'example',
-      title: tval('Example channel', { ns: '@nocobase/plugin-example-notification' }),
-      components: {
-        ChannelConfigForm,
-        MessageConfigForm,
-      },
+      name: 'pm.example.configuration',
+      actions: ['examples:runExample'],
     });
   }
 }
 ```
 
-```ts
-// src/server/plugin.ts
-import { Plugin } from '@nocobase/server';
-import PluginNotificationManagerServer from '@nocobase/plugin-notification-manager';
-import { ExampleNotificationChannel } from './ExampleNotificationChannel';
-
-export default class PluginExampleNotificationServer extends Plugin {
-  async load() {
-    const notification = this.pm.get(PluginNotificationManagerServer) as PluginNotificationManagerServer;
-    notification.registerChannelType({
-      type: 'example',
-      Channel: ExampleNotificationChannel,
-    });
-  }
-}
-```
-
-Important notes:
-
-- Client and server `type` values must match.
-- The client registers configuration forms; the server registers the execution class that sends notifications.
-- If the channel is invoked by workflow, add a peer dependency on `plugin-workflow` or `plugin-notification-manager`, depending on the integration layer.
-
-### 12. File manager storage extension
-
-Use this pattern when adding storage similar to S3/COS/OSS, a previewer, or a file field.
+For per-data-source actions:
 
 ```ts
-// src/server/plugin.ts
-import { Plugin } from '@nocobase/server';
-import PluginFileManagerServer from '@nocobase/plugin-file-manager';
-import { ExampleStorageType } from './storages/example';
-
-export default class PluginExampleStorageServer extends Plugin {
-  async load() {
-    const fileManager = this.pm.get(PluginFileManagerServer) as PluginFileManagerServer;
-    fileManager.registerStorageType('example', ExampleStorageType);
-  }
-}
+this.app.dataSourceManager.afterAddDataSource((dataSource) => {
+  dataSource.resourceManager.registerActionHandler('exampleAction', handler);
+  dataSource.acl.setAvailableAction('exampleAction', {
+    displayName: '{{t("Example action")}}',
+  });
+});
 ```
 
-```tsx
-// src/client/index.tsx
-import { Plugin } from '@nocobase/client';
-import PluginFileManagerClient from '@nocobase/plugin-file-manager/client';
-import { exampleStorageType } from './storageType';
-
-export default class PluginExampleStorageClient extends Plugin {
-  async load() {
-    const fileManager = this.pm.get(PluginFileManagerClient) as PluginFileManagerClient;
-    fileManager.registerStorageType('example', exampleStorageType);
-  }
-}
-```
-
-Important notes:
-
-- Server storage types handle upload/delete/presigned URL behavior; client storage types handle configuration forms and upload customization.
-- If storage cache changes, send a sync message or emit an event so file-manager can reload its storage cache.
-- Do not delete files from a separate plugin when file-manager already owns the deletion lifecycle.
-
-### 13. AI provider/tool plugin
-
-Use this pattern for `plugin-ai-gigachat` and AI extension plugins.
-
-```ts
-// src/server/plugin.ts
-import { Plugin } from '@nocobase/server';
-import PluginAIServer from '@nocobase/plugin-ai';
-import { exampleProviderOptions } from './llm-provider';
-import { exampleTool } from './tools/exampleTool';
-
-export default class PluginExampleAIServer extends Plugin {
-  async load() {
-    const ai = this.pm.get(PluginAIServer) as PluginAIServer;
-    ai.aiManager.registerLLMProvider('example', exampleProviderOptions);
-    this.ai.toolsManager.registerTools([exampleTool]);
-  }
-}
-```
-
-```tsx
-// src/client/index.tsx
-import { Plugin } from '@nocobase/client';
-import PluginAIClient from '@nocobase/plugin-ai/client';
-import { exampleProviderOptions } from './llm-provider';
-
-export default class PluginExampleAIClient extends Plugin {
-  async load() {
-    const ai = this.pm.get(PluginAIClient) as PluginAIClient;
-    ai.aiManager.registerLLMProvider('example', exampleProviderOptions);
-  }
-}
-```
-
-Important notes:
-
-- Provider IDs must be stable because LLM configuration records store this ID.
-- Server tools perform real execution; client tools should only support UX/context when needed.
-- If a tool requires admin privileges, enforce ACL in server resources/actions; do not only hide the UI.
-
-### 14. Mobile extension
-
-Use this pattern for `plugin-mobile`, `plugin-mobile-client`, `plugin-block-template`, and `plugin-workflow`.
-
-```tsx
-import { Plugin } from '@nocobase/client';
-import PluginMobileClient from '@nocobase/plugin-mobile/client';
-import { MobileExamplePage } from './MobileExamplePage';
-
-export default class PluginExampleMobileClient extends Plugin {
-  async load() {
-    const mobile = this.pm.get(PluginMobileClient);
-
-    this.app.schemaInitializerManager.addItem('mobile:tab-bar', 'example', {
-      type: 'item',
-      name: 'example',
-      title: '{{t("Example")}}',
-      Component: 'MobileTabBarExampleItem',
-    });
-
-    mobile?.mobileRouter?.add('mobile.page.example', {
-      path: '/page/example',
-      Component: MobileExamplePage,
-    });
-  }
-}
-```
-
-Important notes:
-
-- Check `mobile?.mobileRouter` because the mobile plugin may not be enabled.
-- Register an initializer as well if users need to add the item to a mobile tab/page.
-- Mobile routes should live under `/page/...`, following the workflow tasks pattern.
-
-### 15. Public route/form plugin
-
-Use this pattern for `plugin-public-forms`, `plugin-embed`, and `plugin-custom-subpath`.
-
-```ts
-import { Plugin } from '@nocobase/server';
-
-export default class PluginExamplePublicServer extends Plugin {
-  parseToken = async (ctx, next) => {
-    const token = ctx.get('X-Example-Token');
-    if (token) {
-      const payload = await this.app.authManager.jwt.decode(token);
-      ctx.ExamplePublic = payload;
-      ctx.skipAuthCheck = true;
-    }
-    await next();
-  };
-
-  parseACL = async (ctx, next) => {
-    if (ctx.ExamplePublic && ctx.action.resourceName === 'examples' && ctx.action.actionName === 'create') {
-      ctx.permission = { skip: true };
-    }
-    await next();
-  };
-
-  async load() {
-    this.app.acl.allow('examples', 'getPublicMeta', 'public');
-    this.app.resourceManager.registerActionHandlers({
-      'examples:getPublicMeta': async (ctx, next) => {
-        ctx.body = { token: this.app.authManager.jwt.sign({ scope: 'example' }, { expiresIn: '1h' }) };
-        await next();
-      },
-    });
-
-    this.app.dataSourceManager.afterAddDataSource((dataSource) => {
-      dataSource.resourceManager.use(this.parseToken, { before: 'auth' });
-      dataSource.acl.use(this.parseACL, { before: 'core' });
-    });
-  }
-}
-```
-
-Important notes:
-
-- Public APIs must use explicit tokens/scopes when they write data.
-- Only set `ctx.permission = { skip: true }` for specific resources/actions.
-- If workflow should capture create/update events, remap `ctx.action.actionName` to the core action, as public forms does with `publicSubmit`.
-
-### 16. Sync Messages, Cache, And Runtime State
-
-Use this pattern for `plugin-acl`, `plugin-data-source-main`, `plugin-file-manager`, `plugin-localization`, `plugin-workflow`, and `plugin-environment-variables`.
+### 8. Runtime Cache And Sync
 
 ```ts
 import { Plugin } from '@nocobase/server';
 
 export default class PluginExampleServer extends Plugin {
-  private cache = new Map<string, any>();
+  private cache = new Map<string, unknown>();
 
   async handleSyncMessage(message) {
     if (message.type === 'example:reload') {
@@ -803,109 +597,122 @@ export default class PluginExampleServer extends Plugin {
   }
 
   async load() {
-    this.db.on('examples.afterSaveWithAssociations', async (model, { transaction }) => {
+    this.db.on('examples.afterSaveWithAssociations', async (_model, { transaction }) => {
       await this.reloadRuntimeData({ transaction });
-      await this.sendSyncMessage(
-        {
-          type: 'example:reload',
-          key: model.get('key'),
-        },
-        { transaction },
-      );
+      await this.sendSyncMessage({ type: 'example:reload' }, { transaction });
     });
   }
 
-  async reloadRuntimeData(options: any = {}) {
-    const rows = await this.db.getRepository('examples').find({ transaction: options.transaction });
-    this.cache = new Map(rows.map((row) => [row.get('key'), row]));
+  async reloadRuntimeData(options: Transactionable = {}) {
+    const rows = await this.db.getRepository('examples').find({
+      transaction: options.transaction,
+    });
+    this.cache = new Map(rows.map((row) => [row.get('id'), row]));
   }
 }
 ```
 
-Important notes:
-
-- Use `sendSyncMessage` when multiple server instances need to reload runtime state.
-- If a message is emitted inside a transaction, pass `{ transaction }` to preserve commit/sync ordering.
-- `handleSyncMessage` should be idempotent and tolerate records that may already have been deleted.
-
-### 17. Localization/i18n trong plugin
-
-```tsx
-import { Plugin } from '@nocobase/client';
-import { tval } from '@nocobase/utils/client'; // deprecated: use tExpr from @nocobase/flow-engine instead
-
-const NAMESPACE = '@nocobase/plugin-example';
-
-export default class PluginExampleClient extends Plugin {
-  async load() {
-    this.app.pluginSettingsManager.add('example', {
-      title: tval('Example', { ns: NAMESPACE }),
-      Component: ExampleSettingsPage,
-    });
-  }
-// inside a server/client Plugin class
-```
+### 9. Cross-Plugin Extension
 
 ```ts
-// inside a server/client Plugin class
-this.t('Example message');
+const workflow = this.pm.get('workflow');
+workflow?.registerInstruction?.('example', ExampleInstruction);
 ```
 
-Important notes:
+```tsx
+const calendar = this.pm.get('calendar');
+calendar?.registerDateTimeFieldInterface?.('exampleDate');
+```
 
-- `this.t(...)` automatically uses the namespace from `options.packageName`.
-- For configuration objects stored in schemas, use the `{{t("Text", { ns: "..." })}}` template or `tval(...)`.
-- `tval` from `@nocobase/utils/client` is deprecated; use `tExpr` from `@nocobase/flow-engine` for new code.
-- If a plugin provides settings or menus, keep the locale namespace consistent with the package name.
+Rules:
 
-### 18. Pattern Selection Checklist By Plugin Type
+- For mandatory peers, declare the peer dependency and fail clearly when missing.
+- For optional peers, guard the integration.
+- Keep stable IDs and `type` values identical across client/server.
 
-| Plugin type | Client responsibilities | Server responsibilities |
+### 10. Workflow, Notification, File, AI
+
+These extension families still use a base-manager plugin plus small extension
+plugins:
+
+- workflow: register instruction/trigger/function on both sides when needed.
+- notification: register channel forms on the client and execution class on the
+  server.
+- file manager: register storage/preview behavior through file-manager APIs.
+- AI: register LLM providers/tools through `aiManager`; server `loadAI()` also
+  discovers standard plugin AI assets under `ai/`.
+
+### 11. Mobile/Public/Embed
+
+For v2 routes and layouts, prefer `router.add(...)` and
+`layoutManager.registerLayout(...)` patterns in client-v2. Public routes still
+need explicit server token/ACL handling and must not rely on hidden UI alone.
+
+### 12. Localization
+
+- `this.t(...)` uses the plugin package namespace.
+- For persisted configuration/schema strings, use template strings such as
+  `{{t("Text", { ns: "..." })}}` or `tExpr(...)`.
+- For client-v2 model labels and flow setting labels, prefer `tExpr` from
+  `@nocobase/flow-engine`.
+- Add locale keys for user-facing strings when introducing new UI.
+
+### 13. Legacy v1 Schema Initializers
+
+Use this only inside `src/client`.
+
+```tsx
+this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.example', {
+  name: 'example',
+  title: '{{t("Example block")}}',
+  Component: 'ExampleBlockInitializer',
+});
+```
+
+If a legacy v1 initializer item does not appear in the menu, test whether
+removing `type: 'item'` fixes it. This is an old compatibility issue and is not
+a client-v2 rule.
+
+## Pattern Selection Checklist
+
+| Plugin type | client-v2 responsibilities | Server responsibilities |
 | --- | --- | --- |
-| Settings/admin page | `pluginSettingsManager.add`, `router.add`, lazy page | `acl.registerSnippet`, resource settings when needed |
-| Block | component/provider, block initializer, schema settings, flow models | only needs server code when the block has its own data/actions |
-| Action | action initializer, action schema settings, decorator, scopes | custom resource action, ACL action, audit/workflow metadata when needed |
-| Field | field interface, field component, schema settings, scopes | model/hook/migration when the field needs DB behavior |
-| Collection/data source | collection template/interface UI | collections, migrations, model/repository/operator/hook |
-| Workflow extension | register instruction/trigger UI | register instruction/trigger executor |
-| Notification channel | register channel forms | register the channel execution class |
-| File/storage | storage config UI, upload override | register storage type, upload/delete implementation |
-| AI extension | provider/tool UI/context | provider/tool executor, resource/ACL when the tool calls backend APIs |
-| Public/embed | public route/page | token, public ACL allow, scoped ACL bypass middleware |
-| Mobile | mobile initializer, mobile route | only needs server code when it owns data/actions |
-| Infrastructure | little or no UI | middleware, events, cache, sync messages |
+| Settings/admin page | `addMenuItem`, `addPageTabItem`, lazy page loaders | ACL snippet and config resources if needed |
+| Block | `BlockModel`/`CollectionBlockModel`, `define`, `registerFlow`, model loader | only when block owns data/actions |
+| Action | `ActionModel`, scene, ACL action, flows, action group registration if needed | custom resource action or per-data-source action if needed |
+| Field | `CollectionFieldInterface`, renderer models, interface bindings | field type, hooks, import/export interface if needed |
+| Collection/data source | collection templates/interfaces in relevant manager | collections, models, repositories, operators, hooks |
+| Workflow extension | register instruction/trigger UI | register executor |
+| Notification channel | register channel forms | register channel sender |
+| File/storage | storage config and upload UX | storage type implementation and cache sync |
+| AI extension | provider/tool UX/context | provider/tool execution, resources, ACL |
+| Infrastructure | little or no UI | middleware, events, cache, sync, locks |
 
-## Condensed Inventory By Pattern
+## Plugins To Inspect Carefully
 
-Instead of repeating the same description for 106 plugins, this table groups plugins that share the same setup pattern. The `Cookbook` column points to the relevant sample code above.
-
-| Pattern | Plugins | Cookbook | Distinguishing notes |
-| --- | --- | --- | --- |
-| Core ACL/auth/user | `plugin-acl`, `plugin-auth`, `plugin-auth-sms`, `plugin-users`, `plugin-departments`, `plugin-user-data-sync`, `plugin-verification`, `plugin-api-keys` | 2, 6, 8, 9, 16 | Server-heavy: models/repositories/actions/ACL/events/cache; the client mainly provides settings, routes, forms, or integration glue. |
-| Core app/settings/system | `plugin-client`, `plugin-system-settings`, `plugin-localization`, `plugin-logger`, `plugin-environment-variables`, `plugin-license`, `plugin-disable-pm-add`, `plugin-locale-tester`, `plugin-hello` | 1, 2, 8, 16, 17 | These plugins provide administration surfaces, localization/logger/configuration support, or sample plugin behavior. |
-| Admin tool/resource | `plugin-api-doc`, `plugin-backup-restore`, `plugin-async-task-manager`, `plugin-audit-logs`, `plugin-theme-editor`, `plugin-graph-collection-manager`, `plugin-mock-collections`, `plugin-error-handler` | 2, 8, 16 | Resource/ACL/middleware registration is the main concern; some plugins only add UI or infrastructure middleware. |
-| Action UI extension | `plugin-action-bulk-edit`, `plugin-action-bulk-update`, `plugin-action-custom-request`, `plugin-action-duplicate`, `plugin-action-export`, `plugin-action-import`, `plugin-action-print` | 4, 8 | The client registers action initializers/settings/decorators/scopes; the server is only required for custom endpoints or ACL. |
-| Block UI extension | `plugin-block-grid-card`, `plugin-block-iframe`, `plugin-block-list`, `plugin-block-markdown`, `plugin-block-multi-step-form`, `plugin-block-template`, `plugin-block-tree`, `plugin-block-workbench`, `plugin-calendar`, `plugin-gantt`, `plugin-kanban`, `plugin-map`, `plugin-comments`, `plugin-form-drafts` | 3, 4, 14 | Primarily schema initializers/settings/components/providers; `block-template` deeply patches schemas and global settings. |
-| Field/data type extension | `plugin-field-attachment-url`, `plugin-field-china-region`, `plugin-field-code`, `plugin-field-formula`, `plugin-field-m2m-array`, `plugin-field-markdown-vditor`, `plugin-field-sequence`, `plugin-field-sort`, `plugin-snapshot-field`, `plugin-text-copy`, `plugin-multi-keyword-filter` | 5, 6, 7, 8 | The client registers field interfaces/components/settings; the server adds migrations/hooks/resources when the field has DB behavior. |
-| Data source/collection | `plugin-data-source-main`, `plugin-data-source-manager`, `plugin-collection-fdw`, `plugin-collection-sql`, `plugin-collection-tree`, `plugin-multi-app-manager`, `plugin-multi-app-share-collection` | 6, 7, 8, 9, 16 | Focused on collection/field managers, data-source resources, ACL bridging, sync messages, and multi-app wiring. |
-| Visualization/chart | `plugin-charts`, `plugin-data-visualization`, `plugin-data-visualization-echarts` | 2, 3, 8, 9, 13 | Combines UI builders, renderer extensions, resources/ACL, and AI/data-source integration. |
-| File/storage | `plugin-file-manager`, `plugin-file-previewer-office` | 5, 8, 12, 16 | `file-manager` is the base registry/storage/cache/upload layer; previewers are extensions based on events or client hooks. |
-| Workflow core/extension | `plugin-flow-engine`, `plugin-workflow`, `plugin-workflow-action-trigger`, `plugin-workflow-aggregate`, `plugin-workflow-cc`, `plugin-workflow-custom-action-trigger`, `plugin-workflow-date-calculation`, `plugin-workflow-delay`, `plugin-workflow-dynamic-calculation`, `plugin-workflow-javascript`, `plugin-workflow-json-query`, `plugin-workflow-json-variable-mapping`, `plugin-workflow-loop`, `plugin-workflow-mailer`, `plugin-workflow-manual`, `plugin-workflow-notification`, `plugin-workflow-parallel`, `plugin-workflow-request`, `plugin-workflow-request-interceptor`, `plugin-workflow-response-message`, `plugin-workflow-sql`, `plugin-workflow-test`, `plugin-workflow-variable` | 9, 10, 16 | `plugin-workflow` owns the registries and dispatcher; `workflow-*` plugins usually only call `pm.get('workflow')` and register an instruction or trigger. |
-| Notification | `plugin-notification-manager`, `plugin-notification-email`, `plugin-notification-in-app-message`, `plugin-notifications` | 2, 8, 9, 11 | The manager owns the channel registry; channel plugins register client forms and server sender classes. |
-| AI | `plugin-ai`, `plugin-ai-gigachat` | 2, 8, 9, 10, 13, 16 | `plugin-ai` is the base layer for providers/tools/employees/workflow integration; `ai-gigachat` is a small provider extension. |
-| Mobile/public/embed | `plugin-mobile`, `plugin-mobile-client`, `plugin-public-forms`, `plugin-embed`, `plugin-custom-subpath` | 2, 14, 15 | Mobile plugins add routers/initializers; public/embed plugins need public routes plus tightly scoped token/ACL bypass. |
-| UI templates/schema storage | `plugin-ui-schema-storage`, `plugin-ui-templates`, `plugin-block-template`, `plugin-custom-variables` | 2, 3, 6, 8, 16 | UI schema storage is the backend foundation; templates/custom variables mostly extend schemas, settings, and runtime patches. |
-
-## Plugins To Inspect Carefully Before Editing
-
-- `plugin-acl`, `plugin-data-source-main`, `plugin-users`, `plugin-workflow`, `plugin-ai`, and `plugin-file-manager`: these contain many runtime hooks, cache/sync behavior, or registries that other plugins depend on.
-- `plugin-block-template`, `plugin-ui-schema-storage`, `plugin-public-forms`, and `plugin-multi-app-share-collection`: these have special flows or cross-plugin interventions, so do not rely on skeleton patterns alone.
-- For `plugin-workflow-*`, `plugin-notification-*`, `plugin-ai-*`, and `plugin-file-*`, always check both client and server to ensure registered types/IDs match.
+- `plugin-acl`, `plugin-data-source-main`, `plugin-users`, `plugin-workflow`,
+  `plugin-ai`, and `plugin-file-manager`: many other plugins depend on their
+  registries, hooks, ACL, or cache behavior.
+- `plugin-block-template`, `plugin-ui-schema-storage`,
+  `plugin-public-forms`, and multi-app/data-source plugins: they have special
+  runtime flows and cross-plugin interventions.
+- Any plugin with both `src/client` and `src/client-v2`: update the correct
+  runtime and keep shared constants/types in neutral files.
+- Any plugin with only `src/client`: it is legacy-only from a v2 perspective
+  until a v2 lane is added.
 
 ## Guidance For Adding Or Editing Plugins
 
-1. Identify the relevant pattern in the inventory first, then use the matching cookbook section instead of creating a new flow.
-2. If the plugin only adds UI/schema behavior, prioritize `src/client/index.ts(x)` and register through existing managers: components, scopes, schema initializers/settings, and plugin settings.
-3. If the plugin adds collections/models/resources/ACL, put DB/migration/model registration in server `beforeLoad()`; put resources/actions/ACL/middleware in `load()` when they depend on the initialized database.
-4. If extending another plugin, use `this.app.pm.get(...)`; for workflow/notification/file/AI extensions, keep the `type` or provider ID identical on both client and server.
-5. If runtime state or cache is involved, provide a sync path through `sendSyncMessage/handleSyncMessage` or cache-invalidation events.
+1. Choose the runtime first: server, legacy v1 client, or client-v2.
+2. In client-v2, model the UI as `FlowModel` classes and settings flows, not as
+   persisted v1 schema initializer/settings code.
+3. Use model loaders for heavy client-v2 model modules.
+4. Keep field interface names, action model names, provider IDs, workflow types,
+   and server resource action names stable.
+5. Put database and data-source registration early in server `beforeLoad()`.
+6. Put resources/actions/ACL/middleware and runtime service wiring in server
+   `load()`.
+7. Provide sync or invalidation for runtime state that can change in another
+   process.
+8. After client-v2 changes, verify the plugin build produces
+   `dist/client-v2/index.js` and the root `client-v2.js` marker exists.

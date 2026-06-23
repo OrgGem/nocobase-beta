@@ -162,7 +162,7 @@ export const AgentRunsTab: React.FC = () => {
         url: 'agentMonitor:get',
         params: { filterByTk: record.id },
       });
-      setSelectedRun((res as any)?.data?.data || (res as any)?.data || record);
+      setSelectedRun((res as any)?.data?.data?.data || (res as any)?.data?.data || record);
     } finally {
       setDetailLoading(false);
     }

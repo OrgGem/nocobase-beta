@@ -1,2 +1,9 @@
 {
+  "AWS S3 (Private)": "AWS S3 (Private)",
+  "The field value is required": "The field value is required",
+  "Region": "Region",
+  "AccessKey ID": "AccessKey ID",
+  "AccessKey Secret": "AccessKey Secret",
+  "Bucket": "Bucket",
+  "Endpoint": "Endpoint"
 }

@@ -1,154 +1,230 @@
-# Kien truc plugin action, field va custom block trong NocoBase
+# Kien truc plugin action, field va custom block trong NocoBase 2.1.x
 
-Tai lieu nay la nguon tham khao nhanh de agent tao plugin moi theo cac pattern da co trong repo. Noi dung tong hop tu:
+Tai lieu nay la nguon tham khao nhanh de tao hoac sua plugin action, field va
+custom block trong repo NocoBase 2.1.x. Kien truc 2.0.x cu van dung cho
+legacy client v1, nhung client-v2 da doi sang FlowEngine/FlowModel.
 
+Nguon doi chieu chinh:
+
+- `packages/core/client-v2/src/flow/models`
+- `packages/core/flow-engine/src`
 - `packages/plugins/@nocobase/plugin-action-*`
 - `packages/plugins/@nocobase/plugin-field-*`
-- `packages/plugins/@nocobase/plugin-text-copy`
-- `packages/plugins/@nocobase-example/plugin-custom-table-block*`
+- `packages/plugins/@nocobase-example/plugin-simple-action`
+- `packages/plugins/@nocobase-example/plugin-simple-block`
+- `packages/plugins/@nocobase-example/plugin-field-simple`
+- `packages/plugins/@nocobase-example/plugin-custom-table-block-resource`
 
-Nguyen tac doc tai lieu:
+## 1. Khung chung cua plugin 2.1.x
 
-- Phan kien truc mo ta contract va extension point can dung.
-- Phan chon huong giup quyet dinh nen tao plugin action, field, custom field type, hay chi mo rong UI co san.
-- Checklist chi giu cac viec bat buoc, khong lap lai chi tiet da co o phan kien truc.
+Mot plugin co the co 3 lane rieng:
 
-## 1. Khung chung cua plugin
+| Lane | Thu muc | Import | Dung khi |
+| --- | --- | --- | --- |
+| Server | `src/server` | `@nocobase/server` | Collection, model, resource, action, ACL, middleware, hook, migration |
+| Client v1 | `src/client` | `@nocobase/client` | Legacy SchemaComponent, schema initializer/settings |
+| Client v2 | `src/client-v2` | `@nocobase/client-v2`, `@nocobase/flow-engine` | FlowModel block/action/field/settings moi |
 
-Plugin NocoBase thuong tach client/server ro rang:
+Quy tac quan trong:
 
-- `src/client/index.ts(x)`: `extends Plugin` tu `@nocobase/client`, dang ky UI, schema initializer, schema settings, component, scope, provider, flow model.
-- `src/server/index.ts` hoac `src/server/plugin.ts`: `extends Plugin` tu `@nocobase/server`, dang ky resource action, ACL, collection, migration, field type, hook du lieu.
-- `src/index.ts`: export server plugin lam default package entry.
-- `package.json`: `main` tro ve `dist/server/index.js`; client build tao `client.js`/`client.d.ts`.
+- `src/client-v2` khong import tu `@nocobase/client`.
+- Plugin co `src/client-v2` can root runtime marker `client-v2.js`; nen giu
+  `client-v2.d.ts` lam type wrapper tuong ung. Build phai tao
+  `dist/client-v2/index.js`.
+- Server load v2 client qua `pm:listEnabledV2` voi module id
+  `<packageName>/client-v2`.
+- V1 va v2 co the song song trong cung plugin, nhung khong chia se React UI bang
+  cach import nguoc v1 vao v2.
 
-Lifecycle hay gap:
+Lifecycle:
 
-- `beforeLoad()`: dung cho dang ky phai xong truoc khi datasource/collection/resource load, vi du custom field type, migration, hook `beforeAddDataSource`.
-- `load()`: dung cho dang ky UI client, resource action server, ACL, provider, settings, initializer.
-- `install()`: dung de seed du lieu ban dau, vi du `chinaRegions`.
-- `beforeAddDataSource()`/`afterAddDataSource()`: dung khi moi data source deu can field type, action handler, hoac ACL action.
+- Client v1/v2: `afterAdd()`, `beforeLoad()`, `load()`.
+- Server: `afterAdd()`, `beforeLoad()`, `load()`, `install()`, `upgrade()`,
+  enable/disable/remove hooks, `handleSyncMessage()`.
+- Server `beforeLoad()` chay cho tat ca plugin truoc khi `loadCollections()` va
+  `loadAI()` cua tung plugin.
 
-## 2. Extension point client
+## 2. Client-v2 thay gi cho action/field/block
 
-Client plugin thao tac chu yeu qua `this.app`:
+Trong v2, UI designer khong con xoay quanh viec plugin chen schema initializer
+va schema settings vao menu v1. Core su dung `FlowModel`:
 
-| API | Dung khi |
-| --- | --- |
-| `addComponents({ Name: Component })` | Schema dung component string qua `x-component` |
-| `addScopes({ useSomething })` | Schema dung hook/function qua `x-use-component-props`, `x-use-decorator-props`, expression scope |
-| `use(Provider)` | Can provider hoac `SchemaComponentOptions` theo context |
-| `dataSourceManager.addFieldInterfaces([...])` | Dang ky field interface cho Collection Manager |
-| `schemaInitializerManager.add(...)` | Tao initializer moi |
-| `schemaInitializerManager.addItem(...)` | Them item vao initializer co san |
-| `schemaSettingsManager.add(...)` | Tao settings menu moi |
-| `schemaSettingsManager.addItem(...)` | Them item vao settings co san |
-| `flowEngine.registerModels(...)` | Dang ky flow model |
-| `flowEngine.registerActions(...)` | Dang ky flow action runtime |
+- Model class mo ta block/action/field.
+- `Model.define(...)` mo ta label, group, sort, default `createModelOptions`.
+- `Model.registerFlow(...)` mo ta runtime event va settings form.
+- `flowEngine.registerModels(...)` dang ky model eager.
+- `flowEngine.registerModelLoaders(...)` dang ky model lazy.
+- `flowEngine.flowSettings` render form cau hinh flow/settings.
+- Model tree duoc luu qua `FlowModelRepository`.
 
-`this.app.addFieldInterfaces()` chi la shortcut den `this.app.dataSourceManager.collectionFieldInterfaceManager.addFieldInterfaces()`. Plugin moi nen uu tien `this.app.addFieldInterfaces(...)` hoac `this.app.dataSourceManager.addFieldInterfaces(...)`.
+Khi port plugin 2.0.x sang 2.1.x:
 
-`SchemaInitializerManager` va `SchemaSettingsManager` co hang doi tam khi add item truoc luc initializer/settings ton tai. Vi vay plugin co the chen item vao cac menu core nhu `table:configureActions`, `table:configureItemActions`, `details:configureActions`, `gantt:configureActions`, `map:configureActions`.
+- `schemaInitializerManager.addItem(...)` -> thuong thay bang
+  `FlowModel.define(...)` va subclass dung group/scene.
+- `SchemaSettings` -> thuong thay bang `Model.registerFlow(...)`.
+- `x-use-component-props`/schema hook -> thuong thay bang flow context, model
+  props, `ctx.runAction(...)`, hoac `ctx.model.setProps(...)`.
+- Field UI schema van con trong field interface, nhung renderer v2 la
+  `FieldModel`/`CollectionFieldModel` binding.
 
 ## 3. Kien truc plugin action
 
-Action plugin them nut hanh dong vao block hien co, sau do gan behavior bang mot trong cac cach:
+### 3.1. Action client-v2
 
-- UI-only action dung resource/action core co san.
-- Client flow model tu xu ly runtime bang API client.
-- Server custom resource action theo collection/data source.
-- Server global resource/config rieng cho action cau hinh duoc.
+Action moi trong client-v2 la class `ActionModel`.
 
-### 3.1. Client registration
+```tsx
+import { ActionModel, ActionSceneEnum } from '@nocobase/client-v2';
+import { tExpr } from '@nocobase/flow-engine';
+import type { ButtonProps } from 'antd/es/button';
 
-Pattern trong `PluginAction*Client.load()`:
+export class ExampleActionModel extends ActionModel {
+  static scene = ActionSceneEnum.record;
 
-1. Dang ky provider/component/scope neu schema can.
-2. Dang ky `SchemaSettings` cho nut.
-3. Dang ky `ActionModel` neu dung flow engine.
-4. Tao initializer data/schema.
-5. Chen vao initializer cua block phu hop.
+  defaultProps: ButtonProps = {
+    title: tExpr('Example action'),
+    type: 'link',
+  };
 
-Schema action thuong gom cac key:
+  getAclActionName() {
+    return 'update';
+  }
+}
 
-```ts
-{
-  type: 'void',
-  title: '{{ t("...") }}',
-  'x-component': 'Action' | 'Action.Link' | 'ImportAction' | 'CustomRequestAction',
-  'x-action': 'export' | 'importXlsx' | 'duplicate' | 'customize:bulkUpdate',
-  'x-use-component-props': 'useExportAction',
-  'x-toolbar': 'ActionSchemaToolbar',
-  'x-settings': 'actionSettings:export',
-  'x-decorator': 'ACLActionProvider',
-  'x-acl-action': 'update' | 'create' | 'importXlsx',
-  'x-acl-action-props': { skipScopeCheck: true },
-  'x-action-settings': {}
+ExampleActionModel.define({
+  label: tExpr('Example action'),
+  sort: 100,
+});
+
+ExampleActionModel.registerFlow({
+  key: 'clickFlow',
+  title: tExpr('Example action'),
+  on: 'click',
+  steps: {
+    run: {
+      async handler(ctx) {
+        await ctx.api.resource(ctx.collection.name).update({
+          filterByTk: ctx.inputArgs.filterByTk,
+          values: { touched: true },
+        });
+        ctx.blockModel?.resource?.refresh?.();
+        ctx.message.success(ctx.t('Saved successfully'));
+      },
+    },
+  },
+});
+```
+
+Dang ky trong plugin:
+
+```tsx
+import { Plugin } from '@nocobase/client-v2';
+import { ExampleActionModel } from './models/ExampleActionModel';
+
+export default class PluginExampleActionClientV2 extends Plugin {
+  async load() {
+    this.flowEngine.registerModels({ ExampleActionModel });
+  }
 }
 ```
 
-Initializer item thuong dung:
+Khi model nang hoac tach file theo lazy chunk:
 
-- `title`: label hien thi trong menu cau hinh.
-- `Component`: initializer component, la component string da dang ky hoac React component.
-- `schema`: schema mac dinh hoac phan merge vao schema cua initializer component.
-- `useVisible`: thuong dung `useActionAvailable('actionName')` de an/hien theo ACL.
-- `name`: ten item neu dung `BlockInitializer`.
+```tsx
+this.flowEngine.registerModelLoaders({
+  ExampleActionModel: {
+    loader: () => import('./models/ExampleActionModel'),
+  },
+});
+```
 
-### 3.2. Initializer variants
+### 3.2. Action scene va group
 
-| Variant | Dung khi | Vi du |
+Core action scenes:
+
+- `ActionSceneEnum.collection`: nut o cap block/collection.
+- `ActionSceneEnum.record`: nut o cap tung record/row.
+- `ActionSceneEnum.both` hoac `all`: dung cho ca hai.
+
+Neu action khong duoc auto discover trong group mong muon, dang ky vao group:
+
+```tsx
+import { RecordActionGroupModel } from '@nocobase/client-v2';
+
+RecordActionGroupModel.registerActionModels({
+  ExampleActionModel,
+});
+```
+
+Voi block dac thu, co the tao custom action group va set trong
+`customModelClasses` cua block.
+
+### 3.3. Flow cua action
+
+Mot action thuong co 2 nhom flow:
+
+- Runtime flow: `on: 'click'`, `on: { eventName: '...' }`, hoac custom event.
+- Settings flow: khong co `on` hoac `manual: true`; dung de luu props/step
+  params.
+
+Vi du settings:
+
+```tsx
+ExampleActionModel.registerFlow({
+  key: 'exampleSettings',
+  title: tExpr('Example settings'),
+  manual: true,
+  steps: {
+    confirm: {
+      use: 'confirm',
+      defaultParams: {
+        enable: false,
+        title: tExpr('Example action'),
+      },
+    },
+    mode: {
+      title: tExpr('Mode'),
+      uiSchema: {
+        value: {
+          type: 'string',
+          'x-decorator': 'FormItem',
+          'x-component': 'Radio.Group',
+          enum: [
+            { label: tExpr('Selected'), value: 'selected' },
+            { label: tExpr('All'), value: 'all' },
+          ],
+        },
+      },
+      handler(ctx, params) {
+        ctx.model.setProps({ mode: params.value });
+      },
+    },
+  },
+});
+```
+
+Context hay dung trong handler:
+
+- `ctx.model`
+- `ctx.api`
+- `ctx.collection`
+- `ctx.blockModel`
+- `ctx.record`
+- `ctx.resource`
+- `ctx.inputArgs`
+- `ctx.message`
+- `ctx.t`
+- `ctx.viewer`
+- `ctx.runAction(...)`
+
+### 3.4. Server action modes
+
+| Mode | Khi dung | Pattern |
 | --- | --- | --- |
-| `BlockInitializer` | Action tao popup/block con | bulk update, bulk edit |
-| `ActionInitializerItem` | Action link/popup co schema co dinh | duplicate |
-| `SchemaInitializerItem` | Can tinh schema hoac tao config truoc khi insert | import, export, custom request |
-
-Import/export lay danh sach field hien tai de khoi tao `x-action-settings.importSettings` hoac `exportSettings`. Custom request tao config server truoc khi insert schema, thuong dung `x-uid` lam key lien ket.
-
-### 3.3. Action settings
-
-Action settings sua schema dang duoc edit. Pattern chung:
-
-1. Lay schema bang `useFieldSchema()` hoac table column schema context.
-2. Lay designable bang `useDesignable()`.
-3. Sua `fieldSchema['x-action-settings']` hoac `fieldSchema['x-component-props']`.
-4. Goi `dn.emit('patch', { schema: { 'x-uid': ..., ... } })`.
-5. Goi `dn.refresh()`.
-
-Items thuong gap:
-
-- `ButtonEditor`/`ActionDesigner.ButtonEditor`: sua title/icon/type.
-- `SchemaSettingsLinkageRules`: hien/an/disable theo dieu kien.
-- `SchemaSettingsModalItem` hoac `type: 'actionModal'`: modal cau hinh nang cao.
-- `SecondConFirm`: xac nhan lan hai.
-- `AssignedFieldValues`: gan gia tri field cho bulk update/edit.
-- `AfterSuccess`: message, close method, redirect, refresh block.
-- `SchemaSettingAccessControl`: quyen truy cap nut.
-- `RefreshDataBlockRequest`: refresh block sau action.
-- `RemoveButton`: xoa action khoi schema.
-
-Giu settings deprecated neu schema cu da luu ten do, vi du `ActionSettings:duplicate` song song `actionSettings:duplicate`.
-
-### 3.4. Flow action model
-
-Action model mo rong `ActionModel` tu core:
-
-- `static scene = ActionSceneEnum.collection | record | all`.
-- `defaultProps`: title/icon/type mac dinh.
-- `getAclActionName()`: action ACL tuong ung.
-- `static capabilityActionName`: map kha nang nhu `updateMany`.
-- `registerFlow({ key, on: 'click', steps })`: runtime click flow.
-- `registerFlow({ key, manual: true, steps })`: flow cau hinh settings.
-
-`plugin-action-bulk-update` la mau ro: `BulkUpdateActionModel` co sub-model `AssignFormModel`, flow settings thu thap assigned values, flow `apply` goi API update tren collection hien tai va refresh block.
-
-### 3.5. Server action modes
-
-| Mode | Khi dung | Server pattern |
-| --- | --- | --- |
-| Server empty | Dung action/API core hoac client runtime flow | `load()` rong hoac khong co logic server |
-| Per data source action | Moi collection/data source can resource action moi | `afterAddDataSource`, `resourceManager.registerActionHandler`, `acl.setAvailableAction` |
-| Global resource/config | Action can config rieng khong thuoc collection action mac dinh | `resourceManager.define`, collection/config server, ACL snippet/role |
+| Client-only | Action goi API core da co | Khong can server moi |
+| Per data source action | Moi data source/collection can handler rieng | `afterAddDataSource`, `resourceManager.registerActionHandler`, `acl.setAvailableAction` |
+| Global config resource | Action co cau hinh rieng | Collection/resource config, ACL snippet, link bang uid/key |
+| Runtime service action | Action cham service rieng | `app.resourceManager.define`, middleware, ACL, cache/sync |
 
 Vi du per data source:
 
@@ -162,130 +238,171 @@ this.app.dataSourceManager.afterAddDataSource((dataSource) => {
 });
 ```
 
-`plugin-action-import` them middleware upload, action `downloadXlsxTemplate`, action `importXlsx`, ACL `type: 'new-data'`, va error handler. `plugin-action-export`/`import` dung `ctx.getCurrentRepository()`, `ctx.dataSource.collectionManager`, service rieng, va mutex tranh chay dong thoi.
+### 3.5. Action v1 legacy
 
-`plugin-action-custom-request` tao resource `customRequests`, luu cau hinh theo `x-uid`, parse bien runtime nhu `currentRecord`, `currentUser`, `$nForm`, `$env`, token, roi goi `serverRequest`.
+Trong `src/client`, action cu van dung schema initializer/settings:
 
-### 3.6. Bang action plugin
+- Dang ky component/scope/provider.
+- Dang ky `SchemaSettings`.
+- Tao initializer item.
+- Chen vao `table:configureActions`, `table:configureItemActions`,
+  `details:configureActions`, `gantt:configureActions`, ...
+- Schema dung `x-action`, `x-component`, `x-toolbar`, `x-settings`,
+  `x-acl-action`, `x-action-settings`.
 
-| Plugin | Loai action | Client | Server | Diem chinh |
-| --- | --- | --- | --- | --- |
-| `plugin-action-bulk-update` | Collection action | Initializer table/gantt/map, settings, `BulkUpdateActionModel` | Empty | Dung `updateMany`/`update`, assign values, selected/all mode |
-| `plugin-action-bulk-edit` | Collection popup action | Popup bulk edit form, custom flow models/actions | Empty | Tao popup form rieng, co field/action/block model rieng |
-| `plugin-action-custom-request` | Configurable request action | Provider, initializer, settings request/after success | Resource `customRequests` | Cau hinh request luu server, send request voi bien runtime va ACL role |
-| `plugin-action-duplicate` | Record action | Chen vao `table:configureItemActions`, popup schema, `DuplicateActionModel` | Empty | Dung quyen `create`, ho tro duplicate direct hoac copy vao form |
-| `plugin-action-export` | Collection action | Initializer table/gantt, settings fields, `ExportActionModel` | Handler `export` per datasource | Xuat XLSX, dung field interface `toString`, ACL action `export` |
-| `plugin-action-import` | Collection action | Initializer table/gantt, settings fields, `ImportActionModel` | `importXlsx`, `downloadXlsxTemplate` | Nhap XLSX, dung field interface `toValue`, middleware upload |
-| `plugin-action-print` | Detail/calendar action | Provider, settings, initializer details/calendar | Empty | Print action dung component-props hook client |
+Khong copy pattern nay vao `src/client-v2` neu khong co ly do ro rang.
 
 ## 4. Kien truc plugin field
 
-Field plugin them `CollectionFieldInterface` vao Collection Manager. Neu can behavior DB moi thi them server field type; neu chi can UI thi server co the no-op.
+### 4.1. Field interface client-v2
 
-### 4.1. CollectionFieldInterface
+Field interface v2 la class ke thua `CollectionFieldInterface`.
 
-Field interface la contract quan trong nhat o client:
+```tsx
+import { CollectionFieldInterface } from '@nocobase/client-v2';
 
-| Thuoc tinh/method | Y nghia |
-| --- | --- |
-| `name` | Ten interface, vi du `formula`, `sequence`, `attachmentURL` |
-| `type` | Kieu abstract cua interface, thuong la `object` |
-| `group`, `order` | Nhom va thu tu trong UI add field |
-| `title`, `description` | Label va mo ta |
-| `default` | Field options mac dinh, gom `type`, `uiSchema`, option rieng |
-| `availableTypes` | Server/DB field type duoc map vao interface |
-| `properties` | Form schema cau hinh field trong Collection Manager |
-| `filterable` | Operators/children cho filter va variable |
-| `sortable`, `titleUsable`, `hasDefaultValue`, `validationType` | Khai bao kha nang cua field |
-| `isAssociation` | Danh dau field relation/association |
-| `schemaInitialize(schema, data)` | Dieu chinh UI schema theo block/readPretty/target collection |
-| `initialize(values)` | Bo sung options khi tao field |
-| `validateSchema(fieldSchema)` | Them validation config rieng |
+export class ExampleFieldInterface extends CollectionFieldInterface {
+  name = 'example';
+  type = 'object';
+  group = 'advanced';
+  order = 10;
+  title = '{{t("Example")}}';
+  description = '{{t("Example field")}}';
+  default = {
+    interface: 'example',
+    type: 'text',
+    uiSchema: {
+      type: 'string',
+      'x-component': 'Input.TextArea',
+    },
+  };
+  availableTypes = ['text', 'string'];
+  filterable = {
+    operators: 'bigField',
+  };
+  titleUsable = false;
+  configure = {
+    items: [
+      {
+        name: 'uiSchema.x-component-props.mode',
+        title: '{{t("Mode")}}',
+        component: 'Select',
+        options: [
+          { label: 'Plain', value: 'plain' },
+          { label: 'Rich', value: 'rich' },
+        ],
+      },
+    ],
+  };
+}
+```
 
 Dang ky:
 
-```ts
-this.app.dataSourceManager.addFieldInterfaces([MyFieldInterface]);
+```tsx
+this.app.addFieldInterfaces([ExampleFieldInterface]);
 ```
 
-### 4.2. UI component, scope, provider, settings
+API bo sung trong v2:
 
-Neu `default.uiSchema['x-component']` la component moi, dang ky component:
+- `addFieldInterfaceGroups(...)`
+- `addFieldInterfaceComponentOption(...)`
+- `addFieldInterfaceOperator(...)`
+- `registerFieldFilterOperator(...)`
+- `registerFieldFilterOperatorGroup(...)`
+- `registerFieldValidationConfigure(...)`
+- `registerFieldInterfaceConfigure(...)` tren manager
 
-```ts
-this.app.addComponents({ CodeEditor });
-```
+### 4.2. Field renderer model
 
-Neu schema dung hook:
+Renderer v2 la `FieldModel` hoac subclass phu hop.
 
-```ts
-{
-  'x-use-component-props': 'useAttachmentUrlFieldProps'
-}
-```
+```tsx
+import React from 'react';
+import { FieldModel } from '@nocobase/client-v2';
+import { DisplayItemModel, EditableItemModel, FilterableItemModel } from '@nocobase/flow-engine';
 
-dang ky scope:
-
-```ts
-this.app.addScopes({ useAttachmentUrlFieldProps });
-```
-
-Neu field can context rieng, boc provider bang `this.app.use(SequenceFieldProvider)`.
-
-Field component settings thuong dat ten theo component:
-
-```ts
-new SchemaSettings({
-  name: 'fieldSettings:component:CodeEditor',
-  items: [...],
-});
-```
-
-Hoac mo rong settings co san:
-
-```ts
-this.app.schemaSettingsManager.addItem(
-  'fieldSettings:component:MarkdownVditor',
-  'editMode',
-  editModeSettingsItem,
-);
-```
-
-Settings thuong sua `x-component-props`, vi du height/indent cua CodeEditor, quick upload/select file cua AttachmentUrl, edit mode cua MarkdownVditor, number display format cua Formula.Result.
-
-### 4.3. Flow field model
-
-Neu field can renderer moi trong flow engine, tao model mo rong `FieldModel` hoac model co san:
-
-```ts
-export class SortFieldModel extends FieldModel {
+export class ExampleFieldModel extends FieldModel {
   render() {
-    return <InputNumber {...this.props} />;
+    return <input value={this.props.value || ''} readOnly={this.props.readOnly} />;
   }
 }
 
-EditableItemModel.bindModelToInterface('SortFieldModel', ['sort'], { isDefault: true });
-DisplayItemModel.bindModelToInterface('DisplayNumberFieldModel', ['sort'], { isDefault: true });
+ExampleFieldModel.define({
+  label: '{{t("Example")}}',
+});
+
+EditableItemModel.bindModelToInterface('ExampleFieldModel', ['example'], { isDefault: true });
+DisplayItemModel.bindModelToInterface('ExampleFieldModel', ['example'], { isDefault: true });
+FilterableItemModel.bindModelToInterface('InputFieldModel', ['example'], { isDefault: true });
+```
+
+Dang ky lazy:
+
+```tsx
+this.flowEngine.registerModelLoaders({
+  ExampleFieldModel: {
+    loader: () => import('./models/ExampleFieldModel'),
+  },
+});
 ```
 
 Binding hay gap:
 
 - `EditableItemModel.bindModelToInterface(...)`: form/edit mode.
-- `DisplayItemModel.bindModelToInterface(...)`: details/table read-pretty mode.
+- `DisplayItemModel.bindModelToInterface(...)`: table/detail read mode.
 - `FilterableItemModel.bindModelToInterface(...)`: filter form.
-- `DetailsItemModel`/`FormItemModel`: truong hop association/detail/form phuc tap.
+- `FormItemModel.bindModelToInterface(...)`: form item/block-specific fields.
+- `DetailsItemModel.bindModelToInterface(...)`: details block.
 
-Model co the `registerFlow(...)` de them settings runtime, vi du formula number/date format hoac markdown content render mode.
+### 4.3. Field settings v2
 
-### 4.4. Server field type va import/export interface
+Dung `registerFlow(...)` tren model, khong tao `SchemaSettings` v1:
 
-Tao server `Field` subclass khi field can behavior DB: tinh toan, sinh gia tri, validate, reorder, relation custom, hoac side effect.
+```tsx
+ExampleFieldModel.registerFlow({
+  key: 'exampleFieldSettings',
+  title: '{{t("Example settings")}}',
+  steps: {
+    height: {
+      title: '{{t("Height")}}',
+      uiSchema: {
+        height: {
+          type: 'number',
+          'x-decorator': 'FormItem',
+          'x-component': 'InputNumber',
+        },
+      },
+      defaultParams(ctx) {
+        return { height: ctx.model.props.height || 120 };
+      },
+      handler(ctx, params) {
+        ctx.model.setProps({ height: params.height });
+      },
+    },
+  },
+});
+```
 
-Dang ky tren DB mac dinh:
+Mot so field hien tai dung `uiMode(ctx)` thay `uiSchema` de tao control gon hon
+cho flow settings.
+
+### 4.4. Server field type va import/export
+
+Tao server `Field` subclass khi field can logic DB:
+
+- tinh toan gia tri;
+- sinh ma/sequence;
+- validate server;
+- relation dac thu;
+- reorder/sort;
+- side effect khi save/sync.
+
+Dang ky tren DB chinh:
 
 ```ts
 this.db.registerFieldTypes({
-  formula: FormulaField,
+  example: ExampleField,
 });
 ```
 
@@ -295,236 +412,228 @@ Dang ky cho moi Sequelize data source:
 this.app.dataSourceManager.beforeAddDataSource((dataSource) => {
   if (dataSource.collectionManager instanceof SequelizeCollectionManager) {
     dataSource.collectionManager.registerFieldTypes({
-      belongsToArray: BelongsToArrayField,
+      example: ExampleField,
     });
   }
 });
 ```
 
-Field subclass thuong:
-
-- `extends Field` cho column field.
-- `extends RelationField` cho association field.
-- Dinh nghia `get dataType()`.
-- Override `bind()`/`unbind()` de gan/thao hook nhu `beforeSave`, `beforeCreate`, `beforeBulkCreate`, `afterSync`.
-- Dung transaction tu hook options.
-
-Import/export dung server `BaseInterface` khi string trong XLSX khong map truc tiep voi DB value:
+Import/export dac thu dung server interface:
 
 ```ts
-this.app.db.interfaceManager.registerInterfaceType('chinaRegion', ChinaRegionInterface);
+this.app.db.interfaceManager.registerInterfaceType('example', ExampleInterface);
 ```
 
-Interface implement:
+`field.options.interface` o client phai khop type server interface de services
+goi `toValue()` va `toString()` dung cach.
 
-- `toValue(str, ctx)`: string -> DB value khi import.
-- `toString(value, ctx)`: DB value -> string khi export.
+### 4.5. Field v1 legacy
 
-Import/export services lay interface theo `field.options.interface`, nen client interface name phai khop server interface type.
+Trong `src/client`, pattern cu van dung:
 
-### 4.5. Bang field plugin
+- `app.dataSourceManager.addFieldInterfaces(...)`
+- `app.addComponents(...)`
+- `app.addScopes(...)`
+- `schemaSettingsManager.add(...)`
+- `schemaSettingsManager.addItem(...)`
+- Patch schema bang `x-uid` va `dn.emit('patch', ...)`
 
-| Plugin | Interface/client | Storage/server | Diem chinh |
-| --- | --- | --- | --- |
-| `plugin-field-attachment-url` | `AttachmentURLFieldInterface`, component `AttachmentUrl`, scope props, settings quick upload/select file | `string`/`text`; server action list public file collections | UI upload/preview bang URL, model mo rong `UploadFieldModel` |
-| `plugin-field-china-region` | `ChinaRegionFieldInterface`, `Cascader`, scopes load data | `belongsToMany` den `chinaRegions`; seed du lieu; `ChinaRegionInterface` | Association field chon tinh/thanh/quan, list-only ACL |
-| `plugin-field-code` | `CodeFieldInterface`, component `CodeEditor`, settings height/indent/language | `text`; server no-op | UI code editor voi syntax highlighting |
-| `plugin-field-formula` | `FormulaFieldInterface`, `Formula.Result`, settings number format, `FormulaFieldModel` | Custom `FormulaField`, type `formula`, hooks, migrations | Luu ket qua tinh toan theo expression va dataType |
-| `plugin-field-m2m-array` | `MBMFieldInterface`, config components `MBMForeignKey`, `MBMTargetKey` | Custom `BelongsToArrayField`, hooks tao/xoa foreign key | Many-to-many luu mang target key trong foreignKey |
-| `plugin-field-markdown-vditor` | `MarkdownVditorFieldInterface`, component `MarkdownVditor`, editable/display models | `text`/`json`/`string`; resource `vditor:check`, copy asset | Markdown editor nang cao, upload file check theo storage |
-| `plugin-field-sequence` | `SequenceFieldInterface`, provider, rule config UI, bind model co san | Custom `SequenceField`, collection `sequences`, migrations, repair hook | Tu sinh ma theo rule va reset cycle |
-| `plugin-field-sort` | `SortFieldInterface`, `SortFieldModel` | Custom `SortField` BIGINT, action `move`, lock manager | Drag/drop sorting va grouped sorting |
+Trong `src/client-v2`, uu tien field interface class + model binding + flow
+settings.
 
-### 4.6. Mo rong field co san: `plugin-text-copy`
+## 5. Custom block va custom table block
 
-Dung pattern nay khi chi them behavior/UI vao field co san, khong tao field interface moi va khong tao server field type.
+### 5.1. Block client-v2 don gian
 
-`PluginTextCopyClient` lam hai viec:
+```tsx
+import React from 'react';
+import { BlockModel } from '@nocobase/client-v2';
+import { tExpr } from '../locale';
 
-- Them setting `enableCopier` vao `fieldSettings:component:Input`.
-- Them flow setting vao `DisplayTextFieldModel` va patch renderer de hien copy button o read-pretty.
-
-Diem can giu khi lam plugin tuong tu:
-
-- `addScopes({ TextCopyButton })` neu schema luu expression nhu `{{TextCopyButton}}`.
-- Uu tien `useColumnSchema()` (import tu `@nocobase/client`) khi field nam trong table column; fallback `useFieldSchema()`.
-- Khi settings thay doi, patch persisted schema bang `x-uid` va cap nhat runtime props neu can.
-- Prototype patch chi nen dung khi khong co extension point sach hon.
-- Luon bao ve prototype patch bang flag/Symbol de idempotent khi plugin reload.
-- Test ca form/detail/table read-pretty vi schema settings va flow model co the di qua hai renderer khac nhau.
-
-Server `PluginTextCopyServer` no-op.
-
-## 5. Kien truc custom table block model
-
-`packages/plugins/@nocobase-example/plugin-custom-table-block` la example tao bien the table block bang flow model, khong can server behavior.
-
-Client entry chi can dang ky models:
-
-```ts
-export class PluginCustomTableBlockClient extends Plugin {
-  async load() {
-    this.flowEngine.registerModels(models);
+export class SimpleBlockModel extends BlockModel {
+  renderComponent() {
+    return <div dangerouslySetInnerHTML={{ __html: this.props.html }} />;
   }
 }
+
+SimpleBlockModel.define({
+  label: tExpr('Simple block'),
+  group: tExpr('Content'),
+  createModelOptions: {
+    use: 'SimpleBlockModel',
+    props: {
+      html: '<h3>Simple block</h3>',
+    },
+  },
+});
 ```
 
-Model chinh:
+### 5.2. Collection block
 
-```ts
+Dung `CollectionBlockModel` khi block can collection/resource:
+
+```tsx
+import { BlockSceneEnum, CollectionBlockModel } from '@nocobase/client-v2';
+
+export class TodoBlockModel extends CollectionBlockModel {
+  static scene = BlockSceneEnum.many;
+
+  static filterCollection(collection) {
+    return collection.name === 'todoItems';
+  }
+}
+
+TodoBlockModel.define({
+  label: 'Todo block',
+  createModelOptions: {
+    use: 'TodoBlockModel',
+  },
+});
+```
+
+Scene thuong gap:
+
+- `BlockSceneEnum.many`: list/table/calendar/kanban style.
+- `BlockSceneEnum.one`: current record/details style.
+- `BlockSceneEnum.new`: popup/new record context.
+- `BlockSceneEnum.select`: picker/select context.
+
+### 5.3. Custom table block
+
+2.1.x van dung y tuong `customModelClasses`, nhung tren model v2:
+
+```tsx
+import { TableBlockModel } from '@nocobase/client-v2';
+
 export class CustomTableBlockModel extends TableBlockModel {
   customModelClasses = {
-    CollectionActionGroupModel: 'CustomTableCollectionActionGroupModel',
-    RecordActionGroupModel: 'CustomTableRecordActionGroupModel',
+    CollectionActionGroupModel: 'CustomCollectionActionGroupModel',
+    RecordActionGroupModel: 'CustomRecordActionGroupModel',
     TableColumnModel: 'CustomTableColumnModel',
     TableAssociationFieldGroupModel: null,
   };
 }
 ```
 
-`customModelClasses` thay sub-model ma `TableBlockModel` tao ra. Gia tri `null` vo hieu hoa sub-model do. Tat ca class name khac `null` phai duoc export va register vao `flowEngine`.
+Quy tac:
 
-Custom table block example chi register model, khong tu hien trong UI. Plugin san pham muon nguoi dung chen block can them mot trong cac cach:
-
-- `CustomTableBlockModel.define({ label, group, createModelOptions, sort })`.
-- `schemaInitializerManager.addItem(...)`.
-- Initializer rieng tao schema/model voi `use: 'CustomTableBlockModel'`.
-
-Dung pattern nay khi can table giong table core nhung co composition khac: gioi han action group, thay renderer cot mac dinh, an association/custom column group, hoac them settings rieng ma khong anh huong table core.
+- Moi class name khac `null` phai duoc register vao FlowEngine.
+- `null` nghia la bo sub-model do khoi composition.
+- `define({ createModelOptions })` quyet dinh block co hien trong menu tao block
+  va tao model tree mac dinh nhu the nao.
+- Neu chi register model ma khong `define(...)`/khong co parent group nao goi
+  den, nguoi dung co the khong thay block trong UI.
 
 ## 6. Chon kien truc cho plugin moi
 
-### 6.1. Field moi
+### 6.1. Action moi
 
 | Nhu cau | Nen lam |
 | --- | --- |
-| UI moi tren DB type co san (`string`, `text`, `json`, `integer`) | Tao `CollectionFieldInterface`, component/scope/settings can thiet, server no-op hoac resource phu tro |
-| Gia tri tinh toan, sinh tu dong, validate server, reorder, side effect | Tao server `Field` subclass, register field type som, them hook va migration neu can |
-| Association dac thu | Set `isAssociation`, default relation type, target/key options, server `RelationField` neu relation khong co san |
-| Import/export can mapping rieng | Them server `BaseInterface`, khop `field.options.interface`, implement `toValue`/`toString` |
-| Chi them option nho vao field/renderer co san | Dung `schemaSettingsManager.addItem(...)`, `registerFlow(...)` tren model co san; patch prototype chi khi bat buoc |
+| Nut moi trong client-v2 | Tao `ActionModel`, set scene, `define`, `registerFlow` |
+| Nut goi API core da co | Client-v2 action only, server co the no-op |
+| Action can resource custom | Them server resource/action/ACL |
+| Action can moi data source | `afterAddDataSource`, register handler va available action |
+| Action co popup/form con | Dung flow `openView`, subModels, hoac custom view content |
+| Plugin chi sua legacy client | Dung schema initializer/settings trong `src/client` |
 
-Vi du:
-
-- UI-only: code, attachment-url, markdown-vditor.
-- Server field type: formula, sequence, sort.
-- Association: china-region, m2m-array.
-- Existing renderer extension: text-copy.
-
-### 6.2. Action moi
+### 6.2. Field moi
 
 | Nhu cau | Nen lam |
 | --- | --- |
-| Goi collection API/action core co san | Client initializer + schema action + settings; server co the empty |
-| Resource action moi tren moi collection/data source | `afterAddDataSource`, `registerActionHandler`, `acl.setAvailableAction`, client `useActionAvailable` |
-| Action co config rieng | Server collection/resource config, ACL snippet, lien ket config voi schema bang `x-uid` |
-| Action mo popup/block con | Nested schema (`Action.Container`, tabs/grid/block con), initializer/settings rieng, flow sub-model neu dung engine moi |
+| UI moi tren DB type co san | `CollectionFieldInterface` + `FieldModel` bindings |
+| Can renderer read/edit/filter rieng | Tao cac model rieng va bind vao interface |
+| Can validation/config form field | Dung `configure`, validation configure, flow settings |
+| Can DB behavior | Server `Field` subclass va hook/migration neu can |
+| Can import/export mapping | Server `BaseInterface` khop interface name |
+| Chi them option vao field co san | V2: register configure/operator/flow; v1: schema settings item |
 
-Vi du:
+### 6.3. Custom block
 
-- Core/API co san: bulk-update, duplicate, print.
-- Per data source: import, export.
-- Global config: custom-request.
-- Popup/block con: bulk-edit, duplicate.
+| Nhu cau | Nen lam |
+| --- | --- |
+| Block UI don gian | `BlockModel` + `renderComponent` |
+| Block co collection/resource | `CollectionBlockModel` |
+| Bien the table/list co composition moi | Extend `TableBlockModel` va set `customModelClasses` |
+| Can data/action server rieng | Them server collection/resource/action/ACL |
 
-### 6.3. Custom table block moi
+## 7. Checklist tao plugin action client-v2
 
-Dung custom table block khi behavior nam o composition/rendering cua block, khong phai field/action rieng le. Can tao `Custom<Table>BlockModel`, set `customModelClasses`, register tat ca sub-model, va expose block vao UI neu nguoi dung can chen tu designer.
+1. Tao `src/client-v2/plugin.tsx`.
+2. Import `Plugin` tu `@nocobase/client-v2`.
+3. Tao `ActionModel` subclass.
+4. Set `static scene`.
+5. Set `defaultProps`.
+6. Implement `getAclActionName()` neu can ACL.
+7. Goi `ActionModel.define(...)`.
+8. Goi `ActionModel.registerFlow(...)` cho click/runtime.
+9. Goi `registerFlow(...)` rieng cho settings neu can.
+10. Dang ky model bang `registerModels` hoac `registerModelLoaders`.
+11. Neu can server action, dang ky resource/action/ACL o server.
+12. Test scene collection/record va ACL.
 
-## 7. Checklist ngan
+## 8. Checklist tao plugin field client-v2
 
-### 7.1. Tao plugin field
+1. Tao `CollectionFieldInterface` class.
+2. Khai bao `name`, `group`, `title`, `default.interface`,
+   `default.type`, `default.uiSchema`.
+3. Khai bao `availableTypes`, `filterable`, `titleUsable`, `configure` neu can.
+4. Dang ky bang `app.addFieldInterfaces([...])`.
+5. Tao renderer model cho edit/display/filter neu can.
+6. Bind model vao interface.
+7. Dang ky model bang loader neu module nang.
+8. Them server field type neu co DB behavior.
+9. Them server interface neu import/export can mapping.
+10. Test tao field, render form/table/detail/filter, import/export neu co.
 
-1. Dat package `plugin-field-<name>`.
-2. Tao `src/client/index.tsx` voi `PluginField<Name>Client extends Plugin`.
-3. Tao `FieldInterface extends CollectionFieldInterface`.
-4. Khai bao `name`, `group`, `title`, `default.type`, `default.uiSchema`, `availableTypes`, `properties`, `filterable`.
-5. Dang ky interface trong `load()`.
-6. Dang ky component/scope/provider/settings neu schema can.
-7. Neu dung flow renderer moi, tao model, bind vao interface, register model.
-8. Neu can DB behavior, tao server field type va register trong lifecycle phu hop.
-9. Neu can XLSX conversion, tao server `BaseInterface`.
-10. Them test cho hook/action server va UI designer path co lien quan.
+## 9. Checklist tao custom block client-v2
 
-### 7.2. Tao plugin action
+1. Chon `BlockModel`, `CollectionBlockModel`, hoac `TableBlockModel`.
+2. Implement `renderComponent()` neu la block render truc tiep.
+3. Set `static scene` neu block phu thuoc context.
+4. Implement `filterCollection()` neu can gioi han collection.
+5. Set `customModelClasses` neu thay composition con.
+6. Goi `define({ label, group, createModelOptions, sort })`.
+7. Dang ky model/sub-model vao FlowEngine.
+8. Neu co settings, dung `registerFlow(...)`.
+9. Neu co data/action server, dang ky server resource/ACL.
 
-1. Dat package `plugin-action-<name>`.
-2. Tao `src/client/index.ts(x)` voi `PluginAction<Name>Client extends Plugin`.
-3. Xac dinh scene: collection, record, details, popup, hay global config.
-4. Tao initializer component neu can logic truoc khi insert schema.
-5. Chen initializer vao dung menu block.
-6. Dat schema action gom `x-action`, `x-component`, `x-toolbar`, `x-settings`, `x-acl-action`, `x-action-settings`.
-7. Tao `SchemaSettings` ten `actionSettings:<name>`.
-8. Dung `useActionAvailable('<serverAction>')` neu action phu thuoc ACL server.
-9. Neu dung flow engine, tao `ActionModel`, set scene/default props/ACL, register flow.
-10. Neu can server action/config, register resource/action/ACL va lien ket schema bang key on dinh.
-11. Them test cho initializer/settings va server action/ACL neu co.
+## 10. File tham khao nhanh
 
-### 7.3. Tao custom table block
+Action v2:
 
-1. Tao `Custom<Table>BlockModel extends TableBlockModel`.
-2. Set `customModelClasses` cho sub-model can thay.
-3. Tao va export cac class sub-model thay the.
-4. Register model map bang `this.flowEngine.registerModels(models)`.
-5. Expose block vao UI bang `define(...)` hoac schema initializer neu can.
-6. Neu muon bo sub-model, set key do ve `null`.
-7. Server co the no-op neu block chi thay UI/flow model.
+- `packages/plugins/@nocobase-example/plugin-simple-action/src/client-v2/models/SimpleCollectionActionModel.tsx`
+- `packages/plugins/@nocobase/plugin-action-bulk-update/src/client-v2/BulkUpdateActionModel.tsx`
+- `packages/plugins/@nocobase/plugin-action-export/src/client-v2/ExportActionModel.tsx`
+- `packages/plugins/@nocobase/plugin-action-duplicate/src/client-v2/DuplicateActionModel.tsx`
 
-## 8. Quy tac thuc dung
+Field v2:
 
-- Dang ky custom field type som bang `beforeLoad()` hoac `beforeAddDataSource()` neu collection manager phai biet type khi load collection.
-- Dang ky action handler theo datasource bang `afterAddDataSource()` khi handler can gan vao moi resource manager.
-- Plugin chi them UI field tren DB type co san thi tranh tao server `Field` subclass.
-- Ten `x-settings` phai khop `SchemaSettings.name`.
-- Settings sua schema phai patch bang `x-uid` va refresh designable.
-- Schema dung `x-use-component-props` thi hook phai duoc dang ky bang `addScopes` hoac provider `SchemaComponentOptions`.
-- Schema dung component string thi component phai duoc dang ky bang `addComponents` hoac provider `SchemaComponentOptions`.
-- Import/export dac thu phai co server `BaseInterface` vi services goi `toValue`/`toString` theo field interface.
-- Multi data source ben server nen dung `this.app.dataSourceManager.beforeAddDataSource(callback)` / `afterAddDataSource(callback)` de register resource/action/ACL handler cho tung data source, khong chi thao tac `this.db` (main database).
-- Giu deprecated settings/initializer name neu schema cu da tung luu ten do.
-- Mo rong field/component co san thi uu tien `schemaSettingsManager.addItem(...)` va `registerFlow(...)` tren model co san.
-- Prototype patch phai idempotent bang flag/Symbol va nen la lua chon cuoi.
-- Custom block model: `registerModels` chi dang ky class; muon hien trong UI phai co `define(...)` hoac schema initializer.
-- Moi class name trong `customModelClasses` phai ton tai trong model registry; `null` nghia la loai sub-model khoi luong tao con.
+- `packages/plugins/@nocobase/plugin-field-code/src/client-v2/interface.tsx`
+- `packages/plugins/@nocobase/plugin-field-code/src/client-v2/models/CodeFieldModel.tsx`
+- `packages/plugins/@nocobase/plugin-field-code/src/client-v2/models/DisplayCodeFieldModel.tsx`
+- `packages/core/client-v2/src/collection-field-interface/CollectionFieldInterface.ts`
+- `packages/core/flow-engine/src/models/CollectionFieldModel.tsx`
 
-## 9. File tham khao nhanh
+Block v2:
 
-Action:
+- `packages/plugins/@nocobase-example/plugin-simple-block/src/client-v2/models/SimpleBlockModel.tsx`
+- `packages/plugins/@nocobase-example/plugin-custom-table-block-resource/src/client-v2/models/TodoBlockModel.tsx`
+- `packages/plugins/@nocobase/plugin-calendar/src/client-v2/models/CalendarBlockModel.tsx`
+- `packages/core/client-v2/src/flow/models/base/BlockModel.tsx`
+- `packages/core/client-v2/src/flow/models/base/CollectionBlockModel.tsx`
+- `packages/core/client-v2/src/flow/models/blocks/table/TableBlockModel.tsx`
+
+Legacy v1:
 
 - `packages/plugins/@nocobase/plugin-action-bulk-update/src/client/index.tsx`
-- `packages/plugins/@nocobase/plugin-action-bulk-update/src/client/BulkUpdateActionModel.tsx`
-- `packages/plugins/@nocobase/plugin-action-bulk-edit/src/client/index.tsx`
-- `packages/plugins/@nocobase/plugin-action-duplicate/src/client/DuplicateActionInitializer.tsx`
+- `packages/plugins/@nocobase/plugin-field-code/src/client/interface.tsx`
+- `packages/plugins/@nocobase/plugin-text-copy/src/client/index.tsx`
+
+Server:
+
 - `packages/plugins/@nocobase/plugin-action-export/src/server/index.ts`
 - `packages/plugins/@nocobase/plugin-action-import/src/server/index.ts`
-- `packages/plugins/@nocobase/plugin-action-custom-request/src/server/plugin.ts`
-
-Field:
-
-- `packages/plugins/@nocobase/plugin-field-code/src/client/interface.tsx`
-- `packages/plugins/@nocobase/plugin-field-formula/src/client/interfaces/formula.tsx`
 - `packages/plugins/@nocobase/plugin-field-formula/src/server/formula-field.ts`
-- `packages/plugins/@nocobase/plugin-field-sequence/src/client/sequence.tsx`
 - `packages/plugins/@nocobase/plugin-field-sequence/src/server/fields/sequence-field.ts`
-- `packages/plugins/@nocobase/plugin-field-sort/src/server/sort-field.ts`
 - `packages/plugins/@nocobase/plugin-field-china-region/src/server/interfaces/china-region-interface.ts`
-- `packages/plugins/@nocobase/plugin-text-copy/src/client/index.tsx`
-- `packages/plugins/@nocobase/plugin-text-copy/src/client/textCopyDisplayField.tsx`
-
-Custom block:
-
-- `packages/plugins/@nocobase-example/plugin-custom-table-block/src/client/plugin.tsx`
-- `packages/plugins/@nocobase-example/plugin-custom-table-block/src/client/models/CustomTableBlockModel.tsx`
-- `packages/plugins/@nocobase-example/plugin-custom-table-block-action-group/src/client/models/CustomTableBlockModel.tsx`
-- `packages/plugins/@nocobase-example/plugin-custom-table-block-field/src/client/models/CustomTable3BlockModel.tsx`
-
-Core:
-
-- `packages/core/client/src/data-source/collection-field-interface/CollectionFieldInterface.ts`
-- `packages/core/client/src/application/schema-initializer/SchemaInitializerManager.ts`
-- `packages/core/client/src/application/schema-settings/SchemaSettingsManager.tsx`
-- `packages/core/client/src/flow/models/base/ActionModel.tsx`
-- `packages/core/client/src/flow/models/base/FieldModel.tsx`
-- `packages/core/client/src/flow/models/base/BlockModel.tsx`
-- `packages/core/client/src/flow/models/blocks/table/TableBlockModel.tsx`
-- `packages/core/client/src/flow/models/blocks/table/TableColumnModel.tsx`

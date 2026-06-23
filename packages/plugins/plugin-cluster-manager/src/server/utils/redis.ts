@@ -3,15 +3,52 @@ import { createClient } from 'redis';
 
 let globalRedisClient: any = null;
 
+const CLUSTER_REDIS_CONNECTION = 'cluster-manager:registry';
+
+const CLUSTER_REDIS_ENV_CANDIDATES = [
+  'NODE_REGISTRY_REDIS_URL',
+  'CLUSTER_MANAGER_REDIS_URL',
+  'REDIS_URL',
+  'CACHE_REDIS_URL',
+  'PUBSUB_ADAPTER_REDIS_URL',
+  'QUEUE_ADAPTER_REDIS_URL',
+  'LOCK_ADAPTER_REDIS_URL',
+];
+
+export function getClusterRedisUrl() {
+  for (const key of CLUSTER_REDIS_ENV_CANDIDATES) {
+    const value = process.env[key];
+    if (value?.trim()) {
+      return value.trim();
+    }
+  }
+  return '';
+}
+
+export function isClusterRedisConfigured(app?: any) {
+  if (getClusterRedisUrl()) {
+    return true;
+  }
+
+  const manager = app?.redisConnectionManager;
+  return Boolean(manager?.getConnection?.());
+}
+
 export function getRedisClient(app?: any) {
   if (globalRedisClient) return globalRedisClient;
 
+  const url = getClusterRedisUrl();
+
   if (app?.redisConnectionManager) {
+    if (url) {
+      const conn = app.redisConnectionManager.getConnection(CLUSTER_REDIS_CONNECTION, { connectionString: url });
+      if (conn) return conn;
+    }
+
     const conn = app.redisConnectionManager.getConnection();
     if (conn) return conn;
   }
 
-  const url = process.env.REDIS_URL || process.env.CACHE_REDIS_URL || process.env.PUBSUB_ADAPTER_REDIS_URL;
   if (!url) return null;
 
   globalRedisClient = createClient({ url });
@@ -53,9 +90,7 @@ export async function scanKeys(redis: any, pattern: string, batchSize = 200): Pr
   let cursor = '0';
 
   do {
-    const result = await redis.sendCommand([
-      'SCAN', cursor, 'MATCH', pattern, 'COUNT', String(batchSize),
-    ]);
+    const result = await redis.sendCommand(['SCAN', cursor, 'MATCH', pattern, 'COUNT', String(batchSize)]);
 
     // result is [nextCursor, [...keys]]
     cursor = String(result[0]);

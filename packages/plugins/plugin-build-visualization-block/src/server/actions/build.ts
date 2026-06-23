@@ -80,6 +80,10 @@ export const WORKER_JOB_BUILD_VISUALIZATION_PROCESS = 'build-visualization:proce
 
 /** The in-process event-queue channel builds are published to. */
 const BUILD_VISUALIZATION_QUEUE_CHANNEL = 'plugin-build-visualization-block.build';
+const BUILD_VISUALIZATION_WORKER_ALIASES = [
+  BUILD_VISUALIZATION_QUEUE_CHANNEL,
+  'plugin-build-visualization-block:build:queue',
+];
 /** The pub/sub channel used to wake idle worker pollers when a build arrives. */
 const BUILD_VISUALIZATION_QUEUE_WAKE_CHANNEL = 'plugin-build-visualization-block.build.wake';
 /** The named Redis connection used for the cross-node build queue. */
@@ -89,9 +93,7 @@ const BUILD_VISUALIZATION_QUEUE_REDIS_CONNECTION = 'plugin-build-visualization-b
 const BUILD_VISUALIZATION_QUEUE_CONCURRENCY = Math.max(
   1,
   Number.parseInt(
-    process.env.BUILD_VISUALIZATION_QUEUE_CONCURRENCY ||
-      process.env.BUILD_VISUALIZATION_MAX_CONCURRENCY ||
-      '1',
+    process.env.BUILD_VISUALIZATION_QUEUE_CONCURRENCY || process.env.BUILD_VISUALIZATION_MAX_CONCURRENCY || '1',
     10,
   ) || 1,
 );
@@ -143,10 +145,7 @@ interface RedisLikeConnection {
 
 /** The minimal Redis connection manager surface (resolved off the app). */
 interface RedisConnectionManagerLike {
-  getConnectionSync(
-    name: string,
-    options?: { connectionString?: string },
-  ): Promise<RedisLikeConnection>;
+  getConnectionSync(name: string, options?: { connectionString?: string }): Promise<RedisLikeConnection>;
 }
 
 /** The pub/sub wake handler signature. */
@@ -170,10 +169,7 @@ interface EventQueueAdapterLike {
  * conditional `update` so the stale-run guard stays typed.
  */
 interface UpdatableModel {
-  update(
-    values: Record<string, unknown>,
-    options: { where: Record<string, unknown> },
-  ): Promise<[number, ...unknown[]]>;
+  update(values: Record<string, unknown>, options: { where: Record<string, unknown> }): Promise<[number, ...unknown[]]>;
 }
 
 /** Resolve the optional pub/sub manager without leaking `any` into call sites. */
@@ -183,14 +179,14 @@ function getPubSubManager(app: Application): PubSubManagerLike | undefined {
 
 /** Resolve the optional Redis connection manager. */
 function getRedisConnectionManager(app: Application): RedisConnectionManagerLike | undefined {
-  return (app as unknown as { redisConnectionManager?: RedisConnectionManagerLike })
-    .redisConnectionManager;
+  return (app as unknown as { redisConnectionManager?: RedisConnectionManagerLike }).redisConnectionManager;
 }
 
 /** Access the event-queue adapter internals (for local memory-queue cleanup). */
-function getEventQueueInternals(
-  app: Application,
-): { adapter?: EventQueueAdapterLike; getFullChannel?(channel: string): string } {
+function getEventQueueInternals(app: Application): {
+  adapter?: EventQueueAdapterLike;
+  getFullChannel?(channel: string): string;
+} {
   return app.eventQueue as unknown as {
     adapter?: EventQueueAdapterLike;
     getFullChannel?(channel: string): string;
@@ -245,17 +241,26 @@ class StaleBuildRunError extends Error {
  * ----------------------------------------------------------------------- */
 
 /**
- * Whether this node should process builds. True on a dedicated worker node
- * (serving the build job, `WORKER_MODE` worker/task, or `APP_ROLE=worker`).
+ * Whether this node should process builds. Explicit WORKER_MODE queues take
+ * precedence; legacy generic worker/task modes still process these jobs.
  */
 function isBuildVisualizationWorker(app: Application): boolean {
+  return app.serving(WORKER_JOB_BUILD_VISUALIZATION_PROCESS) || workerModeServesBuildVisualization();
+}
+
+function workerModeServesBuildVisualization(): boolean {
   const workerMode = process.env.WORKER_MODE || '';
-  return (
-    app.serving(WORKER_JOB_BUILD_VISUALIZATION_PROCESS) ||
-    workerMode === 'worker' ||
-    workerMode === 'task' ||
-    process.env.APP_ROLE === 'worker'
-  );
+  const workerModes = workerMode
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  return workerModes.some((mode) => {
+    if (mode === '*' || mode === 'worker' || mode === 'task' || mode === WORKER_JOB_BUILD_VISUALIZATION_PROCESS) {
+      return true;
+    }
+    return BUILD_VISUALIZATION_WORKER_ALIASES.some((alias) => mode === alias || mode.endsWith(`:${alias}`));
+  });
 }
 
 /** A stable identifier for the worker that claims a run. */
@@ -332,10 +337,7 @@ async function claimBuildRun(app: Application, run: BuildRunContext, workerId: s
 function startBuildHeartbeat(app: Application, run: BuildRunContext): () => void {
   const timer = setInterval(() => {
     updateRecordForRun(app, run, { buildHeartbeatAt: new Date() }, true).catch((error) => {
-      app.log?.warn?.(
-        `[plugin-build-visualization-block] Failed to update heartbeat for build ${run.runId}`,
-        error,
-      );
+      app.log?.warn?.(`[plugin-build-visualization-block] Failed to update heartbeat for build ${run.runId}`, error);
     });
   }, BUILD_HEARTBEAT_INTERVAL_MS);
 
@@ -458,9 +460,7 @@ function clearLocalBuildMemoryQueue(app: Application): void {
 export function startBuildQueueProcessor(app: Application): void {
   const state = getBuildQueueState(app);
   if (!isBuildVisualizationWorker(app)) {
-    app.log?.debug?.(
-      '[plugin-build-visualization-block] Build queue processor disabled on non-worker node',
-    );
+    app.log?.debug?.('[plugin-build-visualization-block] Build queue processor disabled on non-worker node');
     return;
   }
   if (state.timer) return;
@@ -469,10 +469,7 @@ export function startBuildQueueProcessor(app: Application): void {
     scheduleBuildQueueTick(app, 0);
   };
 
-  const subscribe = getPubSubManager(app)?.subscribe?.(
-    BUILD_VISUALIZATION_QUEUE_WAKE_CHANNEL,
-    state.wakeHandler,
-  );
+  const subscribe = getPubSubManager(app)?.subscribe?.(BUILD_VISUALIZATION_QUEUE_WAKE_CHANNEL, state.wakeHandler);
   if (subscribe instanceof Promise) {
     subscribe.catch((error: unknown) => {
       app.log?.debug?.(
@@ -483,10 +480,7 @@ export function startBuildQueueProcessor(app: Application): void {
     });
   }
 
-  state.timer = setInterval(
-    () => scheduleBuildQueueTick(app, 0),
-    BUILD_VISUALIZATION_QUEUE_POLL_INTERVAL_MS,
-  );
+  state.timer = setInterval(() => scheduleBuildQueueTick(app, 0), BUILD_VISUALIZATION_QUEUE_POLL_INTERVAL_MS);
   state.timer.unref?.();
   scheduleBuildQueueTick(app, 1000);
   app.log?.info?.(
@@ -506,10 +500,7 @@ function stopBuildVisualizationQueueProcessor(app: Application): void {
     state.kickTimer = null;
   }
   if (state.wakeHandler) {
-    const unsubscribe = getPubSubManager(app)?.unsubscribe?.(
-      BUILD_VISUALIZATION_QUEUE_WAKE_CHANNEL,
-      state.wakeHandler,
-    );
+    const unsubscribe = getPubSubManager(app)?.unsubscribe?.(BUILD_VISUALIZATION_QUEUE_WAKE_CHANNEL, state.wakeHandler);
     if (unsubscribe instanceof Promise) {
       unsubscribe.catch(() => undefined);
     }
@@ -557,9 +548,7 @@ async function runBuildQueueTick(app: Application): Promise<void> {
 }
 
 /** Build a queue message from a persisted, still-queued record. */
-function createBuildQueueMessageFromRecord(record: {
-  get(key: string): unknown;
-}): BuildQueueMessage | null {
+function createBuildQueueMessageFromRecord(record: { get(key: string): unknown }): BuildQueueMessage | null {
   const runId = record.get('buildRunId');
   if (!runId) return null;
   const queuedAtRaw = record.get('buildQueuedAt');
@@ -567,8 +556,7 @@ function createBuildQueueMessageFromRecord(record: {
   return {
     buildId: String(record.get('id')),
     runId: String(runId),
-    userId:
-      typeof createdById === 'number' || typeof createdById === 'string' ? createdById : null,
+    userId: typeof createdById === 'number' || typeof createdById === 'string' ? createdById : null,
     queuedAt: queuedAtRaw ? new Date(queuedAtRaw as string).toISOString() : new Date().toISOString(),
   };
 }
@@ -591,10 +579,7 @@ async function processQueuedBuildsFromDb(app: Application, count: number): Promi
 }
 
 /** Process a batch of queue messages concurrently. */
-async function processBuildQueueMessages(
-  app: Application,
-  messages: BuildQueueMessage[],
-): Promise<void> {
+async function processBuildQueueMessages(app: Application, messages: BuildQueueMessage[]): Promise<void> {
   if (!messages.length) return;
   await Promise.all(messages.map((message) => processQueuedBuild(app, message)));
 }
@@ -684,9 +669,7 @@ async function runBuild(app: Application, db: Application['db'], run: BuildRunCo
   // generate from the grounded fallback spec, which is guaranteed to validate
   // and produce an insertable schema. Otherwise generate from the validated
   // spec and let the generator fall back on its own if unproducible.
-  const specForGeneration = validation.usedFallback
-    ? buildFallbackSpec(summary)
-    : validation.spec;
+  const specForGeneration = validation.usedFallback ? buildFallbackSpec(summary) : validation.spec;
 
   // Phase → generating (Req 10.2).
   await updateRecordForRun(app, run, {
@@ -715,25 +698,15 @@ async function runBuild(app: Application, db: Application['db'], run: BuildRunCo
     blockSchema: result.schema,
     adjustments: validation.adjustments,
     usedFallback,
-    buildLog: usedFallback
-      ? 'Build completed using the fallback specification'
-      : 'Build completed successfully',
+    buildLog: usedFallback ? 'Build completed using the fallback specification' : 'Build completed successfully',
     errorMessage: null,
     buildHeartbeatAt: new Date(),
   });
 }
 
 /** Serialize claim + processing of a single record across the cluster. */
-async function withBuildRunLock<T>(
-  app: Application,
-  buildId: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  return app.lockManager.runExclusive(
-    `build-visualization:run:${buildId}`,
-    fn,
-    BUILD_RUN_LOCK_TTL_MS,
-  );
+async function withBuildRunLock<T>(app: Application, buildId: string, fn: () => Promise<T>): Promise<T> {
+  return app.lockManager.runExclusive(`build-visualization:run:${buildId}`, fn, BUILD_RUN_LOCK_TTL_MS);
 }
 
 /**
@@ -770,9 +743,7 @@ export async function processQueuedBuild(app: Application, message: BuildQueueMe
     const repository = app.db.getRepository(COLLECTION_NAME) as Repository;
     const record = await repository.findById(buildId);
     if (!record) {
-      app.log?.warn?.(
-        `[plugin-build-visualization-block] Build record "${buildId}" not found; skipping queued build`,
-      );
+      app.log?.warn?.(`[plugin-build-visualization-block] Build record "${buildId}" not found; skipping queued build`);
       return;
     }
     if (record.get('status') !== 'building') {
@@ -898,7 +869,6 @@ export function registerBuildQueue(app: Application): void {
   }
 }
 
-
 /**
  * Unregister the build queue: unsubscribe the channel and stop the poller.
  * Called from the plugin's `beforeStop`/`beforeDestroy` (task 7.4).
@@ -1001,8 +971,7 @@ export async function failTimedOutBuilds(app: Application): Promise<void> {
   let failed = 0;
   for (const record of records) {
     const heartbeatRaw = record.get('buildHeartbeatAt');
-    const heartbeatStale =
-      !heartbeatRaw || new Date(heartbeatRaw as string).getTime() < staleBefore.getTime();
+    const heartbeatStale = !heartbeatRaw || new Date(heartbeatRaw as string).getTime() < staleBefore.getTime();
     if (!heartbeatStale) {
       continue;
     }
@@ -1131,10 +1100,7 @@ function validateInput(ctx: Context, values: BuildActionParamsValues): Validated
     ctx.throw(400, t(ctx, 'A requirement is required'));
   }
   if (requirement.length > MAX_REQUIREMENT_CHARS) {
-    ctx.throw(
-      400,
-      t(ctx, 'The requirement must be {{max}} characters or fewer', { max: MAX_REQUIREMENT_CHARS }),
-    );
+    ctx.throw(400, t(ctx, 'The requirement must be {{max}} characters or fewer', { max: MAX_REQUIREMENT_CHARS }));
   }
 
   // Req 4.3 — both an LLM service and a model must be selected.

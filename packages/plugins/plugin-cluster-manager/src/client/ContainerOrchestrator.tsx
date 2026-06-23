@@ -38,6 +38,12 @@ import {
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
+import {
+  getCommonWorkerProcesses,
+  normalizeWorkerMode,
+  resolveWorkerProcessName,
+  workerModeTokens,
+} from '../shared/worker-processes';
 
 const { Text, Title } = Typography;
 
@@ -58,6 +64,7 @@ interface StackInfo {
   image: string;
   command?: string;
   envVars?: Record<string, string>;
+  workerMode?: string;
   resourceLimits?: Record<string, string>;
   replicas: number;
   desiredReplicas: number;
@@ -71,6 +78,15 @@ interface StackInfo {
   k8sEnvFrom?: Record<string, any>[];
   k8sVolumeMounts?: Record<string, any>[];
   k8sVolumes?: Record<string, any>[];
+}
+
+interface DiscoveredQueue {
+  name: string;
+  label: string;
+  description: string;
+  type: 'event-queue' | 'redis-list';
+  pending: number | null;
+  workerProcessName?: string;
 }
 
 const DEFAULT_WORKER_COMMAND = `export NOCOBASE_RUNNING_IN_DOCKER=true
@@ -98,9 +114,14 @@ while [ $WAITED -lt $MAX_WAIT ]; do
 done
 exec yarn --cwd /app/nocobase start`;
 
+const DEFAULT_WORKER_MODE = 'workflow:process,async-task:process';
+
+const COMMON_WORKER_MODES = getCommonWorkerProcesses();
+const ALL_WORKER_MODE = { name: '*', label: 'All processes', description: 'Consume every worker process' };
+
 const DEFAULT_WORKER_ENV = {
   APP_ROLE: 'worker',
-  WORKER_MODE: '*',
+  WORKER_MODE: DEFAULT_WORKER_MODE,
   APP_PORT: '13000',
   SKILL_HUB_SANDBOX: 'false',
 };
@@ -161,6 +182,21 @@ function parseJsonText(value: string | undefined, fallback: any, label: string) 
   }
 }
 
+function splitWorkerMode(value?: string): string[] {
+  return workerModeTokens(value);
+}
+
+function getStackWorkerMode(stack?: StackInfo | null, fallback = '*'): string {
+  return normalizeWorkerMode(stack?.workerMode || stack?.envVars?.WORKER_MODE || fallback) || '';
+}
+
+function shortWorkerMode(workerMode: string): string {
+  if (workerMode.length <= 46) {
+    return workerMode;
+  }
+  return `${workerMode.slice(0, 43)}...`;
+}
+
 function stackToFormValues(stack?: StackInfo | null) {
   if (!stack) {
     return {
@@ -168,6 +204,7 @@ function stackToFormValues(stack?: StackInfo | null) {
       adapter: 'kubernetes',
       image: 'nocobase/nocobase:2.1.6-full',
       command: DEFAULT_WORKER_COMMAND,
+      workerMode: splitWorkerMode(DEFAULT_WORKER_MODE),
       envVars: jsonText(DEFAULT_WORKER_ENV, {}),
       resourceLimits: jsonText({ memory: '1536Mi' }, {}),
       desiredReplicas: 1,
@@ -187,6 +224,7 @@ function stackToFormValues(stack?: StackInfo | null) {
 
   return {
     ...stack,
+    workerMode: splitWorkerMode(getStackWorkerMode(stack)),
     envVars: jsonText(stack.envVars, {}),
     resourceLimits: jsonText(stack.resourceLimits, {}),
     k8sEnv: jsonText(stack.k8sEnv, []),
@@ -197,9 +235,25 @@ function stackToFormValues(stack?: StackInfo | null) {
 }
 
 function formValuesToStack(values: any) {
+  const workerMode = normalizeWorkerMode(values.workerMode);
+  if (!workerMode) {
+    throw new Error('Select at least one process or queue');
+  }
+  if (workerMode.split(',').includes('!')) {
+    throw new Error('Container worker stacks cannot include app process "!"');
+  }
+
+  const envVars = parseJsonText(values.envVars, {}, 'Environment variables');
+  envVars.APP_ROLE = envVars.APP_ROLE || 'worker';
+  envVars.WORKER_MODE = workerMode;
+  if (envVars.SKILL_HUB_SANDBOX === undefined) {
+    envVars.SKILL_HUB_SANDBOX = 'false';
+  }
+
   return {
     ...values,
-    envVars: parseJsonText(values.envVars, {}, 'Environment variables'),
+    workerMode,
+    envVars,
     resourceLimits: parseJsonText(values.resourceLimits, {}, 'Resource limits'),
     k8sEnv: parseJsonText(values.k8sEnv, [], 'Kubernetes env'),
     k8sEnvFrom: parseJsonText(values.k8sEnvFrom, [], 'Kubernetes envFrom'),
@@ -237,6 +291,21 @@ export function ContainerOrchestrator() {
   const [settingsForm] = Form.useForm();
   const [stackForm] = Form.useForm();
   const [dockerNetworks, setDockerNetworks] = useState<{ id: string; name: string }[]>([]);
+  const [queueOptions, setQueueOptions] = useState<DiscoveredQueue[]>([]);
+  const [queuesLoading, setQueuesLoading] = useState(false);
+
+  const fetchQueues = useCallback(async () => {
+    setQueuesLoading(true);
+    try {
+      const res = await api.request({ url: '/workerQueueMappings:scanQueues' });
+      const data = res.data?.data || res.data;
+      setQueueOptions(Array.isArray(data?.discovered) ? data.discovered : []);
+    } catch {
+      setQueueOptions([]);
+    } finally {
+      setQueuesLoading(false);
+    }
+  }, [api]);
 
   // Fetch Docker networks
   const fetchNetworks = useCallback(async () => {
@@ -329,6 +398,7 @@ export function ContainerOrchestrator() {
     setStackModal({ visible: true, stack: stack || null });
     stackForm.setFieldsValue(stackToFormValues(stack));
     fetchNetworks();
+    fetchQueues();
   };
 
   const closeStackModal = () => {
@@ -370,7 +440,8 @@ export function ContainerOrchestrator() {
     fetchPing();
     fetchStacks();
     fetchSettings();
-  }, [fetchPing, fetchStacks, fetchSettings]);
+    fetchQueues();
+  }, [fetchPing, fetchStacks, fetchSettings, fetchQueues]);
 
   // Load containers for each stack and poll every 10s
   useEffect(() => {
@@ -517,6 +588,8 @@ export function ContainerOrchestrator() {
       width: 160,
       render: (_: any, record: ContainerInfo & { _stackId?: number }) => {
         const isK8s = pingResult?.adapter === 'kubernetes';
+        const stackId = record._stackId;
+        if (!stackId) return null;
         return (
           <Space size="small">
             {!isK8s &&
@@ -526,7 +599,7 @@ export function ContainerOrchestrator() {
                     size="small"
                     type="text"
                     icon={<PauseCircleOutlined />}
-                    onClick={() => handleAction('stop', record.id, record._stackId!)}
+                    onClick={() => handleAction('stop', record.id, stackId)}
                   />
                 </Tooltip>
               ) : (
@@ -535,7 +608,7 @@ export function ContainerOrchestrator() {
                     size="small"
                     type="text"
                     icon={<PlayCircleOutlined style={{ color: '#52c41a' }} />}
-                    onClick={() => handleAction('start', record.id, record._stackId!)}
+                    onClick={() => handleAction('start', record.id, stackId)}
                   />
                 </Tooltip>
               ))}
@@ -544,12 +617,12 @@ export function ContainerOrchestrator() {
                 size="small"
                 type="text"
                 icon={<FileTextOutlined />}
-                onClick={() => handleViewLogs(record.id, record._stackId!)}
+                onClick={() => handleViewLogs(record.id, stackId)}
               />
             </Tooltip>
             <Popconfirm
               title={t('Remove this container?')}
-              onConfirm={() => handleAction('remove', record.id, record._stackId!)}
+              onConfirm={() => handleAction('remove', record.id, stackId)}
             >
               <Tooltip title={t('Remove')}>
                 <Button size="small" type="text" danger icon={<DeleteOutlined />} />
@@ -560,6 +633,23 @@ export function ContainerOrchestrator() {
       },
     },
   ];
+
+  const workerModeSelectOptions = Array.from(
+    new Map(
+      [ALL_WORKER_MODE, ...COMMON_WORKER_MODES, ...queueOptions].map((queue) => {
+        const workerProcessName = 'workerProcessName' in queue ? queue.workerProcessName : undefined;
+        const processName = workerProcessName || resolveWorkerProcessName(queue.name);
+        return [
+          processName,
+          {
+            value: processName,
+            label: `${queue.label} (${processName})`,
+            title: queue.name === processName ? queue.description : `${queue.description} - alias: ${queue.name}`,
+          },
+        ];
+      }),
+    ).values(),
+  );
 
   if (!pingResult) {
     return (
@@ -646,6 +736,7 @@ export function ContainerOrchestrator() {
           {stacks.map((stack) => {
             const stackContainers = (containers[stack.id] || []).map((c) => ({ ...c, _stackId: stack.id }));
             const meta = containerMeta[stack.id] || {};
+            const workerMode = getStackWorkerMode(stack);
 
             return (
               <Card
@@ -655,6 +746,9 @@ export function ContainerOrchestrator() {
                     <CloudServerOutlined />
                     <span>{stack.name}</span>
                     <Tag>{stack.adapter}</Tag>
+                    <Tooltip title={workerMode}>
+                      <Tag color={workerMode === '*' ? 'orange' : 'geekblue'}>{shortWorkerMode(workerMode)}</Tag>
+                    </Tooltip>
                   </Space>
                 }
                 extra={
@@ -830,6 +924,46 @@ export function ContainerOrchestrator() {
             </Col>
           </Row>
 
+          <Form.Item
+            name="workerMode"
+            label={t('Processes / queues')}
+            extra={t('Saved as WORKER_MODE. Use tags for custom process keys that are not discovered yet.')}
+            rules={[
+              {
+                validator: (_: unknown, value: string[] | string | undefined) =>
+                  normalizeWorkerMode(value)
+                    ? Promise.resolve()
+                    : Promise.reject(new Error(t('Select at least one process or queue'))),
+              },
+            ]}
+          >
+            <Select
+              mode="tags"
+              loading={queuesLoading}
+              options={workerModeSelectOptions}
+              placeholder={DEFAULT_WORKER_MODE}
+              tokenSeparators={[',']}
+              showSearch
+            />
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.workerMode !== curr.workerMode}>
+            {() => {
+              const workerMode = normalizeWorkerMode(stackForm.getFieldValue('workerMode')) || '';
+              if (!workerMode.includes('*')) {
+                return null;
+              }
+              return (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message={t('WORKER_MODE=* makes this stack consume every queue. Prefer explicit queues in HA.')}
+                />
+              );
+            }}
+          </Form.Item>
+
           {/* Row 3: Deployment name | Service account | Image pull policy */}
           <Row gutter={12}>
             <Col span={8}>
@@ -899,7 +1033,11 @@ export function ContainerOrchestrator() {
 
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="envVars" label={t('Environment variables JSON')}>
+              <Form.Item
+                name="envVars"
+                label={t('Environment variables JSON')}
+                extra={t('WORKER_MODE is managed by Processes / queues above.')}
+              >
                 <Input.TextArea rows={8} />
               </Form.Item>
             </Col>

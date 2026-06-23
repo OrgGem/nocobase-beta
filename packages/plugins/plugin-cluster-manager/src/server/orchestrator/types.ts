@@ -24,8 +24,8 @@ export interface ScaleResult {
 }
 
 export interface ContainerStats {
-  cpu: number;       // percentage 0-100
-  memory: number;    // bytes
+  cpu: number; // percentage 0-100
+  memory: number; // bytes
   memoryLimit: number;
   networkRx: number; // bytes
   networkTx: number; // bytes
@@ -38,11 +38,12 @@ export interface StackConfig {
   image: string;
   command?: string;
   envVars?: Record<string, string>;
+  workerMode?: string;
   volumes?: string[];
   networks?: string[];
   resourceLimits?: {
-    memory?: string;  // "1536Mi" | "2Gi"
-    cpu?: string;     // "1" | "500m"
+    memory?: string; // "1536Mi" | "2Gi"
+    cpu?: string; // "1" | "500m"
   };
   replicas: number;
   desiredReplicas: number;

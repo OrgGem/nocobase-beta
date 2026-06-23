@@ -165,8 +165,8 @@ export class NativeSubAgentObserver {
       return originalRun(task);
     }
 
-    const parentSessionId = this.resolveParentSessionId(task);
-    const subSessionId = task.sessionId;
+    const parentSessionId = this.resolveParentSessionId(task) || undefined;
+    const subSessionId = normalizeString(task.sessionId) || undefined;
     const employeeUsername = modelUsername(task.employee);
     const userId = currentUserId(task.ctx) || task.ctx?.auth?.user?.id;
     const dispatchToolMessage = await this.resolveDispatchToolMessage(task.ctx, parentSessionId, subSessionId);
@@ -335,8 +335,8 @@ export class NativeSubAgentObserver {
         rootRunId: state.rootRunId,
         parentSpanId: state.rootSpanId ? String(state.rootSpanId) : undefined,
         source: NATIVE_SOURCE,
-        parentSessionId: state.parentSessionId,
-        subSessionId: normalizeString(conversation.sessionId) || state.subSessionId,
+        parentSessionId: state.parentSessionId || undefined,
+        subSessionId: normalizeString(conversation.sessionId) || state.subSessionId || undefined,
         toolCallId,
         type: normalizeString(toolCall.name) === 'dispatch-sub-agent-task' ? 'dispatch' : 'tool',
         status: 'running',
@@ -395,7 +395,7 @@ export class NativeSubAgentObserver {
 
   private resolveParentSessionId(task: NativeSubAgentTask) {
     const values = task.ctx?.action?.params?.values || {};
-    return normalizeString(values.sessionId);
+    return normalizeString(values.sessionId) || undefined;
   }
 
   private async resolveLeaderUsername(ctx: NativeSubAgentTask['ctx'], parentSessionId?: string) {

@@ -6,7 +6,7 @@
   "description": "Generate a NocoBase chart, table or form block from a natural-language requirement and selected collections using AI.",
   "description.zh-CN": "使用 AI 根据自然语言需求和所选数据表生成 NocoBase 图表、表格或表单区块。",
   "description.vi-VN": "Sử dụng AI để tạo khối biểu đồ, bảng hoặc biểu mẫu NocoBase từ yêu cầu bằng ngôn ngữ tự nhiên và các bộ sưu tập đã chọn.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

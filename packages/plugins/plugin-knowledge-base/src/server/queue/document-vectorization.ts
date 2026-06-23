@@ -2,6 +2,7 @@ import type { Application } from '@nocobase/server';
 import type PluginKnowledgeBaseServer from '../plugin';
 
 export const KB_DOCUMENT_VECTORIZE_QUEUE = 'knowledge-base:document-vectorize';
+const KB_DOCUMENT_VECTORIZE_WORKER_ALIASES = [KB_DOCUMENT_VECTORIZE_QUEUE];
 
 export type KnowledgeBaseDocumentQueueMessage = {
   documentId: string;
@@ -19,13 +20,22 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
 }
 
 function isKnowledgeBaseDocumentWorker(app: Application): boolean {
+  return app.serving(KB_DOCUMENT_VECTORIZE_QUEUE) || workerModeServesKnowledgeBaseDocument();
+}
+
+function workerModeServesKnowledgeBaseDocument(): boolean {
   const workerMode = process.env.WORKER_MODE || '';
-  return (
-    app.serving(KB_DOCUMENT_VECTORIZE_QUEUE) ||
-    workerMode === 'worker' ||
-    workerMode === 'task' ||
-    process.env.APP_ROLE === 'worker'
-  );
+  const workerModes = workerMode
+    .split(',')
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+
+  return workerModes.some((mode) => {
+    if (mode === '*' || mode === 'worker' || mode === 'task' || mode === KB_DOCUMENT_VECTORIZE_QUEUE) {
+      return true;
+    }
+    return KB_DOCUMENT_VECTORIZE_WORKER_ALIASES.includes(mode);
+  });
 }
 
 async function withDocumentLock<T>(app: Application, documentId: string, fn: () => Promise<T>): Promise<T> {

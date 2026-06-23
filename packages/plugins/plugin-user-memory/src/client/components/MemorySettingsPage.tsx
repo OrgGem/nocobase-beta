@@ -94,7 +94,8 @@ const MemorySettingsPage: React.FC = () => {
     if (!isAdmin) return;
     try {
       const { data } = await api.request({ url: 'userMemoryAdmin:listProfiles' });
-      setProfiles(data?.data?.rows || []);
+      const rows = Array.isArray(data?.data) ? data.data : (data?.data?.rows || []);
+      setProfiles(rows);
     } catch (e) {
       // silently ignore for non-admin
     }
@@ -104,7 +105,8 @@ const MemorySettingsPage: React.FC = () => {
   const loadSyncLogs = useCallback(async () => {
     try {
       const { data } = await api.request({ url: 'userMemory:getSyncLogs' });
-      setSyncLogs(data?.data?.rows || []);
+      const rows = Array.isArray(data?.data) ? data.data : (data?.data?.rows || []);
+      setSyncLogs(rows);
     } catch (e) {
       console.warn('Failed to load sync logs:', e);
     }

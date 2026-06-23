@@ -5,8 +5,8 @@
  * When a stack has assigned queues, the orchestrator adapter sets
  * WORKER_MODE=<comma-separated-queue-names> on new containers.
  *
- * If no mappings exist for a stack, WORKER_MODE=* is preserved
- * (backwards compatibility).
+ * Explicit orchestratorStacks.workerMode takes precedence. If no explicit
+ * mode exists, mappings can still provide WORKER_MODE for legacy stacks.
  */
 export default {
   name: 'workerQueueMappings',
@@ -67,7 +67,7 @@ export default {
         'x-component': 'Select',
         'x-component-props': {
           allowClear: true,
-          placeholder: 'Unassigned (worker runs all queues)',
+          placeholder: 'Unassigned (fallback only)',
         },
       },
     },

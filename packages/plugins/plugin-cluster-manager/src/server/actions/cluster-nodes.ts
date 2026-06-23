@@ -181,10 +181,13 @@ function getReferenceVersion(nodes: ClusterNodeRecord[]) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 }
 
-async function getClusterNodes(ctx: Context): Promise<ClusterNodeRecord[]> {
+function getClusterRegistry(ctx: Context): RedisNodeRegistry {
   const plugin = (ctx.app as any).pm?.get?.('plugin-cluster-manager') as any;
-  const registry = plugin?.nodeRegistry ?? new RedisNodeRegistry(ctx.app);
-  return registry.getNodes();
+  return plugin?.nodeRegistry ?? new RedisNodeRegistry(ctx.app);
+}
+
+async function getClusterNodes(ctx: Context): Promise<ClusterNodeRecord[]> {
+  return getClusterRegistry(ctx).getNodes();
 }
 
 async function getExpectedPackages(ctx: Context): Promise<NormalizedPackages> {
@@ -267,6 +270,8 @@ export async function readLocalLogs(app: any, maxLines: number) {
     hostname: os.hostname(),
     pid: process.pid,
     workerMode: process.env.WORKER_MODE || 'main',
+    appRole: process.env.APP_ROLE || '',
+    isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
   };
 
   if (logFiles.length === 0) {
@@ -301,7 +306,12 @@ export const clusterActions = {
    */
   async current(ctx: Context, next: () => Promise<void>) {
     const currentMode = process.env.WORKER_MODE || 'main';
-    const isApp = !isWorkerMode(process.env.WORKER_MODE);
+    const isApp =
+      getNodeRoleFrom({
+        workerMode: process.env.WORKER_MODE,
+        appRole: process.env.APP_ROLE,
+        isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
+      }) === 'app';
 
     if (isApp) {
       // This process IS the APP node — return local data directly
@@ -315,6 +325,8 @@ export const clusterActions = {
           arch: process.arch,
           uptime: process.uptime(),
           workerMode: currentMode,
+          appRole: process.env.APP_ROLE || '',
+          isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
           appPort: process.env.APP_PORT || '',
           clusterMode: process.env.CLUSTER_MODE || '',
         },
@@ -337,7 +349,9 @@ export const clusterActions = {
       const plugin = (ctx.app as any).pm?.get?.('plugin-cluster-manager') as any;
       const registry = plugin?.nodeRegistry ?? new RedisNodeRegistry(ctx.app);
       const nodes = await registry.getNodes();
-      const appNode = nodes.find((n: any) => n.workerMode === 'main' || n.workerMode === '' || n.workerMode === 'app');
+      const appNode = nodes.find(
+        (n: any) => getNodeRoleFrom({ workerMode: n.workerMode, appRole: n.appRole, isSandbox: n.isSandbox }) === 'app',
+      );
 
       if (appNode?.nodeDetails) {
         ctx.body = appNode.nodeDetails;
@@ -353,6 +367,8 @@ export const clusterActions = {
             arch: process.arch,
             uptime: process.uptime(),
             workerMode: currentMode,
+            appRole: process.env.APP_ROLE || '',
+            isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
             appPort: process.env.APP_PORT || '',
             clusterMode: process.env.CLUSTER_MODE || '',
           },
@@ -385,7 +401,10 @@ export const clusterActions = {
   async list(ctx: Context, next: () => Promise<void>) {
     const environments: any[] = [];
 
-    const nodes = await getClusterNodes(ctx);
+    const registry = getClusterRegistry(ctx);
+    const nodes = await registry.getNodes();
+    const registryStatus = registry.getStatus();
+    let fallback = false;
 
     if (nodes && nodes.length > 0) {
       for (const env of nodes) {
@@ -399,6 +418,7 @@ export const clusterActions = {
           lastHeartbeatAt: env.lastHeartbeatAt ? new Date(env.lastHeartbeatAt).toISOString() : null,
           status: env.status || 'online',
           workerMode: env.workerMode,
+          appRole: env.appRole,
           isSandbox: env.isSandbox,
           pid: env.pid,
         });
@@ -407,18 +427,33 @@ export const clusterActions = {
 
     // If no discovery adapter or empty, at least return current node
     if (environments.length === 0) {
+      fallback = true;
+      const currentMode = process.env.WORKER_MODE || 'main';
+      const appName = process.env.APP_NAME || (ctx.app as any).name || 'main';
       environments.push({
-        name: os.hostname(),
+        id: getLocalNodeId(ctx.app),
+        name: `${appName} (${os.hostname()})`,
         hostname: os.hostname(),
         url: null,
         available: true,
         appVersion: null,
         lastHeartbeatAt: new Date().toISOString(),
         status: 'online',
+        workerMode: currentMode,
+        appRole: process.env.APP_ROLE || '',
+        isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
+        pid: process.pid,
       });
     }
 
-    ctx.body = { data: environments, meta: { count: environments.length } };
+    ctx.body = {
+      data: environments,
+      meta: {
+        count: environments.length,
+        fallback,
+        registry: registryStatus,
+      },
+    };
     await next();
   },
 

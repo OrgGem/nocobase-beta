@@ -58,7 +58,9 @@ export class SkillExecutionTask {
     const skill = this.execution.get('skill') || this.execution.skill;
     const execId = String(this.execution.get('id'));
 
-    await this.execution.update({ status: 'running' });
+    if (this.execution.get('status') !== 'running') {
+      await this.execution.update({ status: 'running' });
+    }
 
     // Set up abort controller — listens for cancel from main server via PubSub
     const abortController = new TaskAbortController();

@@ -35,6 +35,7 @@ interface DiscoveredQueue {
   description: string;
   type: 'event-queue' | 'redis-list';
   pending: number | null;
+  workerProcessName?: string;
 }
 
 interface RegisteredMapping {
@@ -208,7 +209,12 @@ export function QueueAssignment() {
           ) : (
             <MinusCircleOutlined style={{ color: '#52c41a' }} />
           )}
-          <Text code>{name}</Text>
+          <Space direction="vertical" size={0}>
+            <Text code>{name}</Text>
+            {record.workerProcessName && record.workerProcessName !== name ? (
+              <Text type="secondary">{record.workerProcessName}</Text>
+            ) : null}
+          </Space>
         </Space>
       ),
     },
@@ -306,7 +312,9 @@ export function QueueAssignment() {
           <Col>
             <Space>
               <Text strong>{t('Queue Assignment')}</Text>
-              <Text type="secondary">{t('Map queues to worker stacks. Unassigned queues run on all workers.')}</Text>
+              <Text type="secondary">
+                {t('Fallback mapping for legacy stacks without explicit Processes / queues.')}
+              </Text>
             </Space>
           </Col>
           <Col>
