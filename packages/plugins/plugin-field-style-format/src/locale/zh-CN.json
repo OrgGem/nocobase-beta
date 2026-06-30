@@ -1,0 +1,15 @@
+{
+  "Field style format": "\u5b57\u6bb5\u6837\u5f0f\u683c\u5f0f",
+  "Cell style format": "\u5355\u5143\u683c\u6837\u5f0f\u683c\u5f0f",
+  "Padding": "\u5185\u8fb9\u8ddd",
+  "Margin": "\u5916\u8fb9\u8ddd",
+  "Horizontal align": "\u6c34\u5e73\u5bf9\u9f50",
+  "Vertical align": "\u5782\u76f4\u5bf9\u9f50",
+  "Default": "\u9ed8\u8ba4",
+  "Left": "\u5de6\u5bf9\u9f50",
+  "Center": "\u5c45\u4e2d",
+  "Right": "\u53f3\u5bf9\u9f50",
+  "Top": "\u9876\u90e8\u5bf9\u9f50",
+  "Middle": "\u5782\u76f4\u5c45\u4e2d",
+  "Bottom": "\u5e95\u90e8\u5bf9\u9f50"
+}

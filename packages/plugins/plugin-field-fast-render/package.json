@@ -1,0 +1,29 @@
+{
+  "name": "plugin-field-fast-render",
+  "displayName": "Plugin: Field fast render",
+  "description": "Adds an opt-in table column setting to render primitive field cells through a lightweight fast path.",
+  "version": "1.0.0",
+  "main": "dist/server/index.js",
+  "peerDependencies": {
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x",
+    "react": "^18.0.0"
+  },
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "files": [
+    "dist",
+    "src",
+    "client-v2.js",
+    "server.js",
+    "client.d.ts",
+    "client-v2.d.ts",
+    "server.d.ts"
+  ]
+}

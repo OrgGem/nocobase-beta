@@ -338,14 +338,12 @@ export class PluginFilePreviewAuthServer extends Plugin {
             await this.assertCanAccessAttachment(ctx, attachment);
           }
 
+          let attachmentObj: any;
+          let storageModel: any;
           try {
-            const attachmentObj = await this.prepareAttachmentForFileManager(
-              attachment,
-              fileManager,
-              attachmentCollection,
-            );
+            attachmentObj = await this.prepareAttachmentForFileManager(attachment, fileManager, attachmentCollection);
 
-            const storageModel = getStorageFromCache(fileManager.storagesCache, attachmentObj.storageId);
+            storageModel = getStorageFromCache(fileManager.storagesCache, attachmentObj.storageId);
             this.log.debug(
               `[FilePreviewAuth] Attachment prepared for stream ${safeDebugJson({
                 ...summarizeAttachmentForLog(attachmentObj, attachmentCollection),
@@ -353,39 +351,10 @@ export class PluginFilePreviewAuthServer extends Plugin {
                 storageCache: summarizeStorageCache(fileManager.storagesCache),
               })}`,
             );
-            // S3 Private Bucket Handler
-            if (
-              storageModel &&
-              (storageModel.type === 's3' || storageModel.type === 'aws-s3' || storageModel.type === 's3-private')
-            ) {
-              const StorageTypeClass = fileManager.storageTypes.get(storageModel.type);
-              const storageInstance = new StorageTypeClass(storageModel);
-              const s3Client =
-                storageInstance.client ||
-                (typeof storageInstance.getS3Client === 'function' ? storageInstance.getS3Client() : null);
-              if (s3Client) {
-                const { GetObjectCommand } = require('@aws-sdk/client-s3');
-                const key = storageInstance.getFileKey(attachmentObj);
-                const getCommand = new GetObjectCommand({
-                  Bucket: storageModel.options.bucket,
-                  Key: key,
-                });
-                const response = await s3Client.send(getCommand);
-                ctx.type = response.ContentType || attachmentObj.mimetype || 'application/octet-stream';
-                ctx.attachment(attachmentObj.filename);
-                // The AWS SDK Body is a readable stream in Node.js
-                ctx.body = response.Body;
-                await next();
-                return;
-              }
-            }
-
-            // Local storage / Other storage fallback
             const { stream, contentType } = await fileManager.getFileStream(attachmentObj);
             ctx.type = contentType || attachmentObj.mimetype || 'application/octet-stream';
             ctx.attachment(attachmentObj.filename);
             ctx.body = stream;
-            // S3 Private Bucket Handler
           } catch (err: any) {
             this.log.error(`[FilePreviewAuth] Error fetching stream for URL ${url}: ${err.message}`);
             try {
@@ -587,14 +556,17 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
   private async resolveAttachment(ctx: any, input: any) {
     const file = input?.file || input || {};
-    const collectionNames = [file.collectionName, 'attachments', 'aiFiles'].filter(Boolean);
+    const streamParams = getAttachmentStreamParams(file.url || file.preview || file.path);
+    const collectionNames = Array.from(
+      new Set([streamParams.collection, file.collectionName, 'attachments', 'aiFiles'].filter(Boolean)),
+    );
 
-    const ids = [file.id, file.uid].filter((value) => isLikelyRecordId(value));
+    const ids = [file.id, file.uid, streamParams.filterByTk].filter((value) => isLikelyRecordId(value));
     for (const collectionName of collectionNames) {
       if (!ctx.db.getCollection(collectionName)) continue;
       const repo = ctx.db.getRepository(collectionName);
       for (const id of ids) {
-        const record = await repo.findOne({ filter: { id } });
+        const record = (await repo.findOne({ filterByTk: id })) || (await repo.findOne({ filter: { id } }));
         if (record) return record;
       }
     }
@@ -921,8 +893,9 @@ export class PluginFilePreviewAuthServer extends Plugin {
     await this.ensureFileFields(attachment, attachmentObj, collection);
     this.copyFileFieldsFromRecord(attachment, attachmentObj);
 
-    // Extract filename and path relative to storage.baseUrl if they are missing/invalid in the attachment object
-    if (attachmentObj.storageId && attachmentObj.url) {
+    // Extract filename and path relative to storage.baseUrl if they are missing/invalid in the attachment object.
+    // Internal stream URLs are route URLs, not storage object keys.
+    if (attachmentObj.storageId && attachmentObj.url && !isInternalStreamUrl(attachmentObj.url)) {
       const storageModel = getStorageFromCache(fileManager.storagesCache, attachmentObj.storageId);
       if (storageModel) {
         const baseUrl = storageModel.baseUrl || '';
@@ -1447,6 +1420,29 @@ function normalizeOcrAttachmentId(value: unknown): string | number | null {
   }
 
   return null;
+}
+
+function isInternalStreamUrl(value: any): boolean {
+  if (!value) return false;
+  try {
+    const parsed = new URL(decodePossiblyEncodedUrl(String(value)), 'http://local');
+    return parsed.pathname.includes('/api/attachments:stream');
+  } catch {
+    return false;
+  }
+}
+
+function getAttachmentStreamParams(value: any): { filterByTk?: string; collection?: string } {
+  if (!isInternalStreamUrl(value)) return {};
+  try {
+    const parsed = new URL(decodePossiblyEncodedUrl(String(value)), 'http://local');
+    return {
+      filterByTk: parsed.searchParams.get('filterByTk') || undefined,
+      collection: parsed.searchParams.get('collection') || undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 function getUrlCandidates(value: any): string[] {

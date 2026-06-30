@@ -2,23 +2,25 @@ import React from 'react';
 import { Select } from 'antd';
 import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
+import { getWrappedListPayload } from '../apiResponse';
 
-function normalizeRecords(response: any) {
-  const records = response?.data?.data || response?.data || response || [];
-  return Array.isArray(records) ? records : [];
-}
+type DiagramOptionRecord = {
+  id: string;
+  title?: string;
+};
 
 export const DiagramSelect = (props: any) => {
   const api = useApp().apiClient;
-  const { data, loading } = useRequest<any>(() =>
+  const { data, loading } = useRequest(() =>
     api.resource('aiDiagrams').list({
       pageSize: 200,
       sort: ['-updatedAt'],
     }),
   );
 
+  const { rows } = getWrappedListPayload<DiagramOptionRecord>(data);
   const options =
-    normalizeRecords(data).map((item: any) => ({
+    rows.map((item) => ({
       label: item.title || item.id,
       value: item.id,
     })) || [];

@@ -14,10 +14,12 @@ import {
   Select,
   Tag,
 } from 'antd';
+import type { TableProps } from 'antd';
 import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from './locale';
 import { DrawioBlock } from './DrawioBlock';
+import { getWrappedData, getWrappedListPayload } from './apiResponse';
 
 const { Text } = Typography;
 
@@ -26,7 +28,30 @@ const diagramModeOptions = [
   { label: 'Readonly', value: 'readonly' },
 ];
 
-function getUserDisplayName(user: any) {
+type UserRecord = {
+  id?: string | number;
+  nickname?: string;
+  name?: string;
+  username?: string;
+  email?: string;
+};
+
+type DrawioConfig = {
+  drawioBaseUrl?: string;
+  fromEnv?: boolean;
+};
+
+type DiagramRecord = {
+  id: string;
+  title?: string;
+  description?: string;
+  mode?: string;
+  createdById?: string | number;
+  createdBy?: UserRecord;
+  updatedAt?: string;
+};
+
+function getUserDisplayName(user?: UserRecord) {
   return user?.nickname || user?.name || user?.username || user?.email || user?.id || '-';
 }
 
@@ -35,12 +60,13 @@ const SettingsTab: React.FC = () => {
   const api = useApp().apiClient;
   const { message } = AntApp.useApp();
   const [form] = Form.useForm();
-  const { data, refresh, loading } = useRequest<any>(() => api.resource('aiDrawio').getConfig());
+  const { data, refresh, loading } = useRequest(() => api.resource('aiDrawio').getConfig());
   const [saving, setSaving] = useState(false);
+  const config = getWrappedData<DrawioConfig>(data);
 
   useEffect(() => {
-    form.setFieldsValue({ drawioBaseUrl: data?.data?.drawioBaseUrl || '' });
-  }, [data, form]);
+    form.setFieldsValue({ drawioBaseUrl: config?.drawioBaseUrl || '' });
+  }, [config?.drawioBaseUrl, form]);
 
   const onSave = async () => {
     try {
@@ -53,9 +79,9 @@ const SettingsTab: React.FC = () => {
       });
       message.success(t('Saved successfully'));
       refresh();
-    } catch (err: any) {
-      if (err?.errorFields) return; // form validation
-      message.error(err?.message || t('Save failed'));
+    } catch (err: unknown) {
+      if (typeof err === 'object' && err !== null && 'errorFields' in err) return;
+      message.error(err instanceof Error ? err.message : t('Save failed'));
     } finally {
       setSaving(false);
     }
@@ -67,7 +93,7 @@ const SettingsTab: React.FC = () => {
         <Form.Item
           label={t('Drawio base URL')}
           name="drawioBaseUrl"
-          rules={[{ required: true, type: 'url', message: 'Invalid URL' }]}
+          rules={[{ required: true, type: 'url', message: t('Invalid URL') }]}
           extra={t('Drawio base URL is the self-hosted drawio editor URL (e.g. https://drawio.example.com)')}
         >
           <Input placeholder="https://drawio.example.com" />
@@ -78,8 +104,8 @@ const SettingsTab: React.FC = () => {
           </Button>
         </Form.Item>
       </Form>
-      {data?.data?.fromEnv && (
-        <Text type="secondary">Currently sourced from DRAWIO_BASE_URL env var. Saving will override.</Text>
+      {config?.fromEnv && (
+        <Text type="secondary">{t('Currently sourced from DRAWIO_BASE_URL env var. Saving will override.')}</Text>
       )}
     </Card>
   );
@@ -89,20 +115,25 @@ const DiagramsTab: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
   const { message, modal } = AntApp.useApp();
-  const [editing, setEditing] = useState<any | null>(null);
+  const [editing, setEditing] = useState<Partial<DiagramRecord> | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [createForm] = Form.useForm();
   const [creating, setCreating] = useState(false);
-  const { data, refresh, loading } = useRequest<any>(() =>
-    api.resource('aiDiagrams').list({
-      pageSize: 100,
-      sort: ['-updatedAt'],
-      fields: ['id', 'title', 'description', 'mode', 'createdById', 'updatedAt'],
-      appends: ['createdBy'],
-    }),
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const { data, refresh, loading } = useRequest(
+    () =>
+      api.resource('aiDiagrams').list({
+        page,
+        pageSize,
+        sort: ['-updatedAt'],
+        fields: ['id', 'title', 'description', 'mode', 'createdById', 'updatedAt'],
+        appends: ['createdBy'],
+      }),
+    { refreshDeps: [page, pageSize] },
   );
 
-  const records = data?.data?.data || data?.data || [];
+  const { rows: records, meta } = getWrappedListPayload<DiagramRecord>(data);
 
   const onCreate = async () => {
     try {
@@ -113,17 +144,21 @@ const DiagramsTab: React.FC = () => {
       createForm.resetFields();
       setEditing(null);
       refresh();
-      const newId = res?.data?.data?.id;
+      const newRecord = getWrappedData<DiagramRecord>(res);
+      const newId = newRecord?.id;
       if (newId) setOpenId(newId);
-    } catch (err: any) {
-      if (err?.errorFields) return;
-      message.error(err?.message || t('Save failed'));
+    } catch (err: unknown) {
+      if (typeof err === 'object' && err !== null && 'errorFields' in err) return;
+      message.error(err instanceof Error ? err.message : t('Save failed'));
     } finally {
       setCreating(false);
     }
   };
 
   const onUpdate = async () => {
+    if (!editing?.id) {
+      return;
+    }
     try {
       const values = await createForm.validateFields();
       setCreating(true);
@@ -132,16 +167,16 @@ const DiagramsTab: React.FC = () => {
       createForm.resetFields();
       setEditing(null);
       refresh();
-    } catch (err: any) {
-      if (err?.errorFields) return;
-      message.error(err?.message || t('Save failed'));
+    } catch (err: unknown) {
+      if (typeof err === 'object' && err !== null && 'errorFields' in err) return;
+      message.error(err instanceof Error ? err.message : t('Save failed'));
     } finally {
       setCreating(false);
     }
   };
 
   const onDelete = useCallback(
-    (record: any) => {
+    (record: DiagramRecord) => {
       modal.confirm({
         title: t('Delete'),
         content: record.title || record.id,
@@ -155,7 +190,7 @@ const DiagramsTab: React.FC = () => {
     [api, message, modal, refresh, t],
   );
 
-  const columns = useMemo(
+  const columns = useMemo<TableProps<DiagramRecord>['columns']>(
     () => [
       { title: t('Title'), dataIndex: 'title', key: 'title' },
       { title: t('Description'), dataIndex: 'description', key: 'description', ellipsis: true },
@@ -178,14 +213,14 @@ const DiagramsTab: React.FC = () => {
         dataIndex: 'createdBy',
         key: 'createdBy',
         width: 180,
-        render: (_: any, record: any) => getUserDisplayName(record.createdBy) || record.createdById || '-',
+        render: (_: unknown, record) => getUserDisplayName(record.createdBy) || record.createdById || '-',
       },
       { title: t('Updated at'), dataIndex: 'updatedAt', key: 'updatedAt', width: 200 },
       {
         title: t('Actions'),
         key: 'actions',
         width: 260,
-        render: (_: any, record: any) => (
+        render: (_: unknown, record) => (
           <Space>
             <Button size="small" onClick={() => setOpenId(record.id)}>
               {t('Open in fullscreen')}
@@ -230,9 +265,18 @@ const DiagramsTab: React.FC = () => {
       <Table
         rowKey="id"
         dataSource={records}
-        columns={columns as any}
+        columns={columns}
         loading={loading}
-        pagination={{ pageSize: 20 }}
+        pagination={{
+          current: meta.page || page,
+          pageSize: meta.pageSize || pageSize,
+          total: meta.count || records.length,
+          showSizeChanger: true,
+        }}
+        onChange={(pagination) => {
+          setPage(pagination.current || 1);
+          setPageSize(pagination.pageSize || 20);
+        }}
       />
 
       <Modal
@@ -259,7 +303,7 @@ const DiagramsTab: React.FC = () => {
         open={!!openId}
         onClose={() => setOpenId(null)}
         width={'100%'}
-        title={records.find((r: any) => r.id === openId)?.title || t('Drawio Diagram')}
+        title={records.find((record) => record.id === openId)?.title || t('Drawio Diagram')}
         destroyOnClose
         styles={{ body: { padding: 0 } }}
       >
@@ -285,9 +329,9 @@ const SystemPromptTab: React.FC = () => {
         if (cancelled) return;
         const body = res?.data;
         setPrompt(typeof body === 'string' ? body : String(body ?? ''));
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (cancelled) return;
-        message.error(err?.message || t('Save failed'));
+        message.error(err instanceof Error ? err.message : t('Save failed'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -302,8 +346,8 @@ const SystemPromptTab: React.FC = () => {
     try {
       await navigator.clipboard.writeText(prompt);
       message.success(t('Saved successfully'));
-    } catch (err: any) {
-      message.error(err?.message || 'Copy failed');
+    } catch (err: unknown) {
+      message.error(err instanceof Error ? err.message : t('Copy failed'));
     }
   };
 

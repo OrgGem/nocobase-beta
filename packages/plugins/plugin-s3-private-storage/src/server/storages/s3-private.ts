@@ -9,8 +9,10 @@
 
 import path from 'path';
 import { Readable, Transform, TransformCallback } from 'stream';
-import { StorageType, cloudFilenameGetter } from '@nocobase/plugin-file-manager';
+import { StorageType, cloudFilenameGetter, type StorageModel } from '@nocobase/plugin-file-manager';
+import type { S3Client as AwsS3Client } from '@aws-sdk/client-s3';
 import { STORAGE_TYPE_S3_PRIVATE } from '../../constants';
+import { getPrivateS3StreamUrl } from './get-file-url';
 
 /**
  * Transform stream that counts bytes passing through.
@@ -28,8 +30,12 @@ class CountingStream extends Transform {
 export default class S3PrivateStorage extends StorageType {
   static filenameKey = 'key';
 
-  // @ts-ignore
-  declare storage: any;
+  client: AwsS3Client;
+
+  constructor(storage: StorageModel) {
+    super(storage);
+    this.client = this.createS3Client();
+  }
 
   static defaults() {
     return {
@@ -47,28 +53,47 @@ export default class S3PrivateStorage extends StorageType {
   }
 
   getS3Client() {
-    let S3ClientClass;
+    return this.client;
+  }
+
+  private createS3Client() {
+    let S3ClientClass: typeof import('@aws-sdk/client-s3').S3Client;
     try {
       S3ClientClass = require('@aws-sdk/client-s3').S3Client;
     } catch (e) {
       throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
     }
-    const { accessKeyId, secretAccessKey, region, endpoint, ...otherOptions } = this.storage.options;
-    const clientConfig: any = {
+
+    const storageOptions = { ...this.storage.options };
+    const { accessKeyId, secretAccessKey, region, endpoint } = storageOptions;
+    delete storageOptions.accessKeyId;
+    delete storageOptions.secretAccessKey;
+    delete storageOptions.region;
+    delete storageOptions.endpoint;
+    delete storageOptions.bucket;
+    delete storageOptions.acl;
+    const clientConfig: ConstructorParameters<typeof S3ClientClass>[0] = {
       region,
-      credentials: {
+      ...storageOptions,
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+    };
+
+    if (accessKeyId && secretAccessKey) {
+      clientConfig.credentials = {
         accessKeyId,
         secretAccessKey,
-      },
-      ...otherOptions,
-    };
+      };
+    }
 
     if (endpoint) {
       clientConfig.endpoint = endpoint;
       clientConfig.forcePathStyle = true;
     }
 
-    return new S3ClientClass(clientConfig);
+    const client = new S3ClientClass(clientConfig);
+    client.middlewareStack.remove('flexibleChecksumsMiddleware');
+    client.middlewareStack.remove('flexibleChecksumsInputMiddleware');
+    return client;
   }
 
   /**
@@ -187,7 +212,7 @@ export default class S3PrivateStorage extends StorageType {
    * Delete files from S3
    */
   async delete(records) {
-    const s3 = this.getS3Client();
+    const s3 = this.client;
     const bucket = this.storage.options.bucket;
 
     let DeleteObjectCommandClass;
@@ -221,7 +246,7 @@ export default class S3PrivateStorage extends StorageType {
    * This bypasses public URLs and works with private buckets
    */
   async getFileStream(file) {
-    const s3 = this.getS3Client();
+    const s3 = this.client;
     const key = this.getFileKey(file);
 
     let GetObjectCommandClass;
@@ -281,12 +306,6 @@ export default class S3PrivateStorage extends StorageType {
    * The proxy endpoint will handle ACL and streaming.
    */
   getFileURL(file, preview) {
-    const fileId = (file as any).id;
-    if (!fileId) {
-      return '';
-    }
-    const collectionName = file.constructor?.collection?.name || 'attachments';
-    const mode = preview ? 'inline' : 'attachment';
-    return `/api/attachments:stream?filterByTk=${fileId}&mode=${mode}&collection=${collectionName}`;
+    return getPrivateS3StreamUrl(file, preview);
   }
 }

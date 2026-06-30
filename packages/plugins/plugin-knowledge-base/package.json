@@ -6,7 +6,7 @@
   "description": "Provides Knowledge Base management, Vector Store, Vector Database (PGVector), and RAG retrieval capabilities for AI Employees.",
   "description.vi-VN": "Cung cấp quản lý Cơ sở tri thức, Vector Store, Vector Database (PGVector), và khả năng truy xuất RAG cho nhân viên AI.",
   "description.zh-CN": "为 AI 员工提供知识库管理、向量存储、向量数据库 (PGVector) 和 RAG 检索功能。",
-  "version": "1.2.14",
+  "version": "1.2.15",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [

@@ -1,4 +1,11 @@
 {
-  "Set field selection filter": "设置字段选择过滤器",
-  "Field selection filter": "字段选择过滤器"
+  "Set field selection filter": "\u8bbe\u7f6e\u5b57\u6bb5\u9009\u62e9\u8fc7\u6ee4\u5668",
+  "Field selection filter": "\u5b57\u6bb5\u9009\u62e9\u8fc7\u6ee4\u5668",
+  "Set enum option filter": "\u8bbe\u7f6e\u679a\u4e3e\u9009\u9879\u8fc7\u6ee4\u5668",
+  "Enum option filter": "\u679a\u4e3e\u9009\u9879\u8fc7\u6ee4\u5668",
+  "Source field path": "\u6e90\u5b57\u6bb5\u8def\u5f84",
+  "Option scope path": "\u9009\u9879\u4f5c\u7528\u57df\u8def\u5f84",
+  "Example: city or city.id": "\u793a\u4f8b\uff1acity \u6216 city.id",
+  "Example: city or cityId on each enum option": "\u793a\u4f8b\uff1a\u6bcf\u4e2a\u679a\u4e3e\u9009\u9879\u4e0a\u7684 city \u6216 cityId",
+  "Clear value when it is outside the filtered options": "\u5f53\u5f53\u524d\u503c\u4e0d\u5728\u8fc7\u6ee4\u9009\u9879\u4e2d\u65f6\u6e05\u7a7a"
 }

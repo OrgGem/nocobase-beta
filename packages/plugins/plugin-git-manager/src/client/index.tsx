@@ -1,17 +1,13 @@
 import { Plugin } from '@nocobase/client';
 import React from 'react';
-import {
-  GitRepositoryWorkContext,
-  GitMergeRequestWorkContext,
-  GitCommitWorkContext,
-} from './ai-context';
+import { GitRepositoryWorkContext, GitMergeRequestWorkContext, GitCommitWorkContext } from './ai-context';
 
 const GitManagerSettings = React.lazy(() =>
   import('./components/GitManagerSettings').then((m) => ({ default: m.GitManagerSettings })),
 );
 
 const RepositoryConfig = React.lazy(() =>
-  import('./components/RepositoryConfig').then((m) => ({ default: m.RepositoryConfig })),
+  import('./components/RepositoryConfig').then((m) => ({ default: m.RepositoryConfigSettings })),
 );
 
 import PluginACLClient from '@nocobase/plugin-acl/client';

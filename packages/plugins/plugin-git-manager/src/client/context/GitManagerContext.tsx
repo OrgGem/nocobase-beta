@@ -23,10 +23,14 @@ interface GitManagerContextType {
   refreshBranches: () => Promise<void>;
 }
 
-const GitManagerContext = createContext<GitManagerContextType>(null);
+const GitManagerContext = createContext<GitManagerContextType | null>(null);
 
 export function useGitManager() {
-  return useContext(GitManagerContext);
+  const context = useContext(GitManagerContext);
+  if (!context) {
+    throw new Error('useGitManager must be used within GitManagerProvider');
+  }
+  return context;
 }
 
 export const GitManagerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -79,7 +83,9 @@ export const GitManagerProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   }, [api]);
 
   return (
-    <GitManagerContext.Provider value={{ repos, selectedRepo, loading, branches, currentBranch, setSelectedRepo, refreshRepos, refreshBranches }}>
+    <GitManagerContext.Provider
+      value={{ repos, selectedRepo, loading, branches, currentBranch, setSelectedRepo, refreshRepos, refreshBranches }}
+    >
       {children}
     </GitManagerContext.Provider>
   );

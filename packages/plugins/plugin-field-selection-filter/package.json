@@ -1,5 +1,4 @@
 {
-  "private": true,
   "name": "plugin-field-selection-filter",
   "displayName": "Plugin: Field selection filter",
   "description": "Adds a table column field setting to filter selectable association records with data-scope conditions.",

@@ -1,4 +1,11 @@
 {
   "Set field selection filter": "Set field selection filter",
-  "Field selection filter": "Field selection filter"
+  "Field selection filter": "Field selection filter",
+  "Set enum option filter": "Set enum option filter",
+  "Enum option filter": "Enum option filter",
+  "Source field path": "Source field path",
+  "Option scope path": "Option scope path",
+  "Example: city or city.id": "Example: city or city.id",
+  "Example: city or cityId on each enum option": "Example: city or cityId on each enum option",
+  "Clear value when it is outside the filtered options": "Clear value when it is outside the filtered options"
 }

@@ -67,20 +67,29 @@ export default {
     async list(ctx: Context, next: Function) {
       const repo = ctx.db.getRepository('aiDiagrams');
       const { filter = {}, fields, sort, page, pageSize, appends } = ctx.action.params;
+      const currentPage = Number(page) > 0 ? Number(page) : 1;
+      const currentPageSize = Number(pageSize) > 0 ? Number(pageSize) : 20;
 
       const access = await resolveAccessContext(ctx, ctx.db);
       const effectiveFilter = access.isAdmin ? filter : { $and: [{ ...filter }, buildAccessibleDiagramFilter(access)] };
 
+      const count = await repo.count({ filter: effectiveFilter });
       const records = await repo.find({
         filter: effectiveFilter,
         fields,
         appends,
         sort: sort ?? ['-updatedAt'],
-        limit: pageSize,
-        offset: page ? (page - 1) * (pageSize || 20) : 0,
+        limit: currentPageSize,
+        offset: (currentPage - 1) * currentPageSize,
       });
 
-      ctx.body = records;
+      ctx.body = {
+        rows: records,
+        count,
+        page: currentPage,
+        pageSize: currentPageSize,
+        totalPage: Math.ceil(count / currentPageSize),
+      };
       await next();
     },
 

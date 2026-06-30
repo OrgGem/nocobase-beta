@@ -3,6 +3,38 @@ import path from 'path';
 
 export const WORKER_JOB_FILE_PREVIEW_OCR_PROCESS = 'file-preview-auth:ocr';
 export const FILE_PREVIEW_OCR_QUEUE_REDIS_KEY = 'file-preview-auth.ocr.queue';
+const FILE_PREVIEW_OCR_QUEUE_REDIS_CONNECTION = 'plugin-file-preview-auth.ocr.queue';
+const FILE_PREVIEW_OCR_QUEUE_POLL_INTERVAL_MS = Math.max(
+  1000,
+  Number.parseInt(process.env.FILE_PREVIEW_OCR_QUEUE_POLL_INTERVAL_MS || '', 10) || 5000,
+);
+const FILE_PREVIEW_OCR_QUEUE_CONCURRENCY = Math.max(
+  1,
+  Number.parseInt(process.env.FILE_PREVIEW_OCR_QUEUE_CONCURRENCY || '', 10) || 1,
+);
+const FILE_PREVIEW_OCR_PROCESS_LOCK_TTL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.FILE_PREVIEW_OCR_PROCESS_LOCK_TTL_MS || '', 10) || 10 * 60 * 1000,
+);
+
+interface RedisLikeConnection {
+  sendCommand(command: string[]): Promise<unknown>;
+}
+
+interface RedisConnectionManagerLike {
+  getConnectionSync?: (
+    name: string,
+    options?: { connectionString?: string },
+  ) => Promise<RedisLikeConnection> | RedisLikeConnection;
+  getConnection?: (
+    name?: string,
+    options?: { connectionString?: string },
+  ) => Promise<RedisLikeConnection> | RedisLikeConnection;
+}
+
+interface LockManagerLike {
+  runExclusive<T>(key: string, fn: () => Promise<T>, ttl?: number): Promise<T>;
+}
 
 export class TesseractWorker {
   private app: any;
@@ -11,6 +43,8 @@ export class TesseractWorker {
   private runner: TesseractRunner;
   private isRunning = false;
   private pollTimer: NodeJS.Timeout | null = null;
+  private kickTimer: NodeJS.Timeout | null = null;
+  private isProcessing = false;
   private redisKey = FILE_PREVIEW_OCR_QUEUE_REDIS_KEY;
 
   constructor(app: any) {
@@ -27,17 +61,7 @@ export class TesseractWorker {
     if (this.isRunning) return;
     this.isRunning = true;
     this.log.info('[TesseractWorker] OCR background worker started.');
-
-    // 1. Hãy thử kết nối với hàng đợi Redis nếu có
-    const redis = await this.getRedisClient();
-    if (redis) {
-      this.log.info('[TesseractWorker] Redis queue is active. Waiting for push jobs.');
-      this.listenRedisQueue(redis);
-    } else {
-      // 2. Chế độ Fallback: Polling Cơ sở dữ liệu định kỳ mỗi 5 giây
-      this.log.info('[TesseractWorker] Redis is unavailable. Falling back to DB polling (every 5s).');
-      this.startDbPolling();
-    }
+    this.startQueueProcessor();
   }
 
   /**
@@ -49,6 +73,11 @@ export class TesseractWorker {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.kickTimer) {
+      clearTimeout(this.kickTimer);
+      this.kickTimer = null;
+    }
+    this.isProcessing = false;
     this.log.info('[TesseractWorker] OCR background worker stopped.');
   }
 
@@ -61,71 +90,147 @@ export class TesseractWorker {
       try {
         await redis.sendCommand(['RPUSH', this.redisKey, String(attachmentId)]);
         this.log.debug(`[TesseractWorker] Enqueued attachment ${attachmentId} to Redis`);
+        this.scheduleQueueTick(0);
         return true;
-      } catch (err: any) {
-        this.log.warn(`[TesseractWorker] Redis push failed: ${err.message}. Falling back to DB state.`);
+      } catch (err: unknown) {
+        this.log.warn(
+          `[TesseractWorker] Redis push failed: ${getErrorMessage(err)}. Falling back to DB pending queue.`,
+        );
       }
     }
-    // Fallback: Status is already pending-ocr in DB, DB Polling will automatically pick it up!
+    this.scheduleQueueTick(0);
     return false;
   }
 
-  private async getRedisClient(): Promise<any | null> {
+  private async getRedisClient(): Promise<RedisLikeConnection | null> {
     try {
-      // NocoBase Redis Connection Manager
-      const manager = (this.app as any).redisConnectionManager;
-      if (manager && typeof manager.getConnection === 'function') {
-        const client = await manager.getConnection('default');
+      const manager = (this.app as { redisConnectionManager?: RedisConnectionManagerLike }).redisConnectionManager;
+      const connectionString = process.env.QUEUE_ADAPTER_REDIS_URL || process.env.REDIS_URL;
+      if (manager?.getConnectionSync) {
+        const client = await manager.getConnectionSync(
+          FILE_PREVIEW_OCR_QUEUE_REDIS_CONNECTION,
+          connectionString ? { connectionString } : undefined,
+        );
         if (client) return client;
       }
-    } catch {
-      // Redis plugin not installed or inactive
+      if (manager?.getConnection) {
+        const client = await manager.getConnection(
+          FILE_PREVIEW_OCR_QUEUE_REDIS_CONNECTION,
+          connectionString ? { connectionString } : undefined,
+        );
+        if (client) return client;
+      }
+    } catch (err: unknown) {
+      this.log.debug?.(
+        `[TesseractWorker] Redis queue unavailable; DB polling fallback active: ${getErrorMessage(err)}`,
+      );
     }
     return null;
   }
 
-  private async listenRedisQueue(redis: any) {
-    while (this.isRunning) {
-      try {
-        // BLPOP chặn để không tốn CPU (Chờ 5 giây)
-        const result = await redis.sendCommand(['BLPOP', this.redisKey, '5']);
-        if (result && Array.isArray(result) && result.length >= 2) {
-          const attachmentId = parseInt(result[1], 10);
-          if (Number.isFinite(attachmentId)) {
-            await this.processJob(attachmentId);
-          }
-        }
-      } catch (err: any) {
-        // Tránh vòng lặp lỗi nhanh, chờ 3 giây nếu lỗi kết nối xảy ra
-        this.log.error(`[TesseractWorker] Redis POP error: ${err.message}`);
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-      }
+  private startQueueProcessor() {
+    if (this.pollTimer) return;
+    this.log.info(
+      `[TesseractWorker] OCR queue processor started (interval ${FILE_PREVIEW_OCR_QUEUE_POLL_INTERVAL_MS}ms).`,
+    );
+    this.pollTimer = setInterval(() => this.scheduleQueueTick(0), FILE_PREVIEW_OCR_QUEUE_POLL_INTERVAL_MS);
+    this.pollTimer.unref?.();
+    this.scheduleQueueTick(1000);
+  }
+
+  private scheduleQueueTick(delayMs: number) {
+    if (!this.isRunning || this.kickTimer) return;
+    this.kickTimer = setTimeout(() => {
+      this.kickTimer = null;
+      this.runQueueTick().catch((err: unknown) =>
+        this.log.error(`[TesseractWorker] OCR queue processor tick failed: ${getErrorMessage(err)}`),
+      );
+    }, delayMs);
+    this.kickTimer.unref?.();
+  }
+
+  private async runQueueTick() {
+    if (this.isProcessing || !this.isRunning) return;
+
+    this.isProcessing = true;
+    try {
+      const redisJobs = await this.drainRedisQueue(FILE_PREVIEW_OCR_QUEUE_CONCURRENCY);
+      await this.processAttachmentIds(redisJobs);
+
+      const remaining = Math.max(1, FILE_PREVIEW_OCR_QUEUE_CONCURRENCY - redisJobs.length);
+      await this.processPendingDbJobs(remaining);
+    } finally {
+      this.isProcessing = false;
     }
   }
 
-  private startDbPolling() {
-    this.pollTimer = setInterval(async () => {
-      if (!this.isRunning) return;
-      try {
-        const repo = this.db.getRepository('attachmentOcrResults');
-        if (!repo) return;
+  private async drainRedisQueue(count: number): Promise<Array<number | string>> {
+    const redis = await this.getRedisClient();
+    if (!redis) return [];
 
-        // Tìm 1 bản ghi duy nhất đang ở trạng thái pending-ocr để xử lý tuần tự
-        const record = await repo.findOne({
-          filter: { status: 'pending-ocr' },
-          sort: ['createdAt'],
-        });
-
-        if (record) {
-          const attachmentId = record.get('attachmentId');
-          if (attachmentId != null) {
-            await this.processJob(attachmentId);
-          }
+    const attachmentIds: Array<number | string> = [];
+    try {
+      for (let i = 0; i < count; i += 1) {
+        const raw = await redis.sendCommand(['LPOP', this.redisKey]);
+        if (!raw) break;
+        const attachmentId = parseAttachmentId(raw);
+        if (attachmentId === null) {
+          this.log.warn(`[TesseractWorker] Dropped invalid Redis OCR message: ${String(raw)}`);
+          continue;
         }
-      } catch (err: any) {
-        this.log.error(`[TesseractWorker] DB Polling error: ${err.message}`);
+        attachmentIds.push(attachmentId);
       }
-    }, 5000);
+    } catch (err: unknown) {
+      this.log.debug?.(
+        `[TesseractWorker] Redis queue drain failed; DB polling fallback active: ${getErrorMessage(err)}`,
+      );
+    }
+    return attachmentIds;
+  }
+
+  private async processPendingDbJobs(count: number) {
+    try {
+      const repo = this.db.getRepository('attachmentOcrResults');
+      if (!repo) return;
+
+      const records = await repo.find({
+        filter: { status: 'pending-ocr' },
+        sort: ['createdAt'],
+        limit: count,
+      });
+
+      const attachmentIds: Array<number | string> = [];
+      for (const record of records || []) {
+        const attachmentId = record.get('attachmentId');
+        if (attachmentId != null) {
+          attachmentIds.push(attachmentId);
+        }
+      }
+
+      await this.processAttachmentIds(attachmentIds);
+    } catch (err: unknown) {
+      this.log.error(`[TesseractWorker] DB polling error: ${getErrorMessage(err)}`);
+    }
+  }
+
+  private async processAttachmentIds(attachmentIds: Array<number | string>) {
+    for (const attachmentId of attachmentIds) {
+      await this.processJobWithLock(attachmentId);
+    }
+  }
+
+  private async processJobWithLock(attachmentId: number | string) {
+    const lockManager = (this.app as { lockManager?: LockManagerLike }).lockManager;
+    const lockKey = `file-preview-auth:ocr:process:${attachmentId}`;
+    if (lockManager?.runExclusive) {
+      await lockManager.runExclusive(
+        lockKey,
+        () => this.processJob(attachmentId),
+        FILE_PREVIEW_OCR_PROCESS_LOCK_TTL_MS,
+      );
+      return;
+    }
+    await this.processJob(attachmentId);
   }
 
   private async processJob(attachmentId: number | string) {
@@ -145,6 +250,14 @@ export class TesseractWorker {
     }
 
     try {
+      const ocrRecord = await ocrRepo.findOne({ filter: { attachmentId } });
+      if (ocrRecord && ocrRecord.get('status') !== 'pending-ocr') {
+        this.log.debug?.(
+          `[TesseractWorker] Attachment ${attachmentId} OCR status is ${ocrRecord.get('status')}, skipping stale job.`,
+        );
+        return;
+      }
+
       // Lấy đường dẫn file vật lý trên server (NocoBase lưu trữ)
       const fileManager = this.app.pm.get('@nocobase/plugin-file-manager') as any;
       if (!fileManager) {
@@ -235,4 +348,18 @@ function getStorageFromCache(cache: Map<any, any>, storageId: any) {
     }
   }
   return undefined;
+}
+
+function parseAttachmentId(value: unknown): number | string | null {
+  const text = String(value);
+  const numeric = Number.parseInt(text, 10);
+  if (Number.isFinite(numeric) && String(numeric) === text) {
+    return numeric;
+  }
+  return text ? text : null;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }

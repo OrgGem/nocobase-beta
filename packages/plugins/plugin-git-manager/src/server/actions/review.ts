@@ -744,6 +744,13 @@ async function runReview(app: Application, args: RunReviewArgs) {
     });
 
     const prompt = buildReviewPrompt(args);
+    const currentRoles = await resolveBackgroundReviewRoles(db, args.userId);
+    const currentUser = args.userId
+      ? {
+          id: args.userId,
+          roles: currentRoles.map((name) => ({ name })),
+        }
+      : null;
 
     // Synthesize a minimal ctx-shaped object that AIEmployee accepts.
     // It needs `app`, `db`, `state.currentUser`, `get(headerName)`, `req.headers`,
@@ -754,8 +761,12 @@ async function runReview(app: Application, args: RunReviewArgs) {
       db,
       isBackgroundReview: true,
       reviewTargetRepositoryId: args.repo.get('id'),
-      state: { currentUser: args.userId ? { id: args.userId } : null },
-      auth: { user: args.userId ? { id: args.userId } : { id: null } },
+      state: {
+        currentUser,
+        currentRole: currentRoles[0],
+        currentRoles,
+      },
+      auth: { user: currentUser || { id: null } },
       req: { headers: { 'x-timezone': '+00:00', 'x-locale': 'en-US' } },
       // AIEmployee.getSystemPrompt reads ctx.action.params.values.important
       action: { params: { values: {} } },
@@ -805,16 +816,16 @@ async function runReview(app: Application, args: RunReviewArgs) {
     const model = args.flow.get('model') as string | null;
     const modelRef = llmService && model ? { llmService, model } : undefined;
 
-    const aiEmployee = new AIEmployee(
-      syntheticCtx,
-      employeeRecord,
+    const aiEmployee = new AIEmployee({
+      ctx: syntheticCtx,
+      employee: employeeRecord,
       sessionId,
-      undefined,
-      undefined,
-      false,
-      modelRef,
-      false,
-    );
+      systemMessage: undefined,
+      skillSettings: undefined,
+      webSearch: false,
+      model: modelRef,
+      legacy: false,
+    });
 
     // H-4 fix: enforce a timeout on AI review execution to prevent stuck reviews
     const REVIEW_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
@@ -894,6 +905,7 @@ async function runReview(app: Application, args: RunReviewArgs) {
     // Redact PAT before persisting the error — simple-git / fetch errors
     // can echo back the authenticated remote URL in their messages.
     const safeMessage = redactPat(err?.message || String(err));
+    app.log?.error?.(`git review ${args.reviewId} failed: ${safeMessage}`, err);
     await reviewsRepo.update({
       filterByTk: args.reviewId,
       values: {
@@ -909,6 +921,36 @@ async function runReview(app: Application, args: RunReviewArgs) {
         .catch(() => undefined);
     }
   }
+}
+
+async function resolveBackgroundReviewRoles(db: any, userId?: number | string | null): Promise<string[]> {
+  if (!userId) return ['admin'];
+
+  try {
+    const roles = await db.getRepository('users.roles', userId).find({ raw: true });
+    const roleNames = (Array.isArray(roles) ? roles : [])
+      .map((role: any) => role?.name)
+      .filter((name: unknown): name is string => typeof name === 'string' && !!name);
+    if (roleNames.length) return roleNames;
+  } catch {
+    // Fall back to the through table below for apps where the association
+    // repository is unavailable in a background worker context.
+  }
+
+  try {
+    const mappings = await db.getRepository('rolesUsers').find({
+      filter: { userId },
+      raw: true,
+    });
+    const roleNames = (Array.isArray(mappings) ? mappings : [])
+      .map((mapping: any) => mapping?.roleName)
+      .filter((name: unknown): name is string => typeof name === 'string' && !!name);
+    if (roleNames.length) return roleNames;
+  } catch {
+    // Keep the synthetic ctx valid even if role lookup is unavailable.
+  }
+
+  return ['admin'];
 }
 
 function buildReviewPrompt(args: RunReviewArgs): string {

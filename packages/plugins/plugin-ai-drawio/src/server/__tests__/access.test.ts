@@ -4,7 +4,6 @@ import {
   canManageDiagram,
   canReadDiagram,
   canWriteDiagramContent,
-  canWriteDiagramContent,
   getDiagramAccessLevel,
   getDiagramAgentAccess,
   hasAnyRole,

@@ -17,8 +17,21 @@ const TEMPLATE_RE = /\{\{\s*t\(\s*(['"])(.*?)\1\s*(?:,\s*(\{.*?\}))?\)\s*\}\}/;
  * Resolve a possibly-`{{t("...")}}`-wrapped label to a display string using the
  * v2 app i18n instance.
  */
+function stringifyLabel(value: any, fallback: string): string {
+  if (typeof value === 'string') return value || fallback;
+  if (typeof value === 'number') return String(value);
+  if (Array.isArray(value)) {
+    const label = value.map((item) => stringifyLabel(item, '')).join('');
+    return label || fallback;
+  }
+  if (React.isValidElement(value)) {
+    return stringifyLabel(value.props.children, fallback);
+  }
+  return fallback;
+}
+
 function compileLabel(app: any, value: any, fallback: string): string {
-  if (typeof value !== 'string') return value || fallback;
+  if (typeof value !== 'string') return stringifyLabel(value, fallback);
   const match = value.match(TEMPLATE_RE);
   if (!match) return value || fallback;
   const key = match[2];
@@ -31,7 +44,7 @@ function compileLabel(app: any, value: any, fallback: string): string {
     }
   }
   const translated = app?.i18n?.t?.(key, options);
-  return typeof translated === 'string' && translated ? translated : fallback;
+  return stringifyLabel(translated, fallback);
 }
 
 function isRenderablePage(page: any): boolean {
@@ -122,7 +135,7 @@ export function useEnabledEmbedSettingsPluginOptions() {
       .filter((option) => allowedTitles.has(option.value))
       .map((option) => ({
         ...option,
-        label: allowedTitles.get(option.value) || option.label,
+        label: stringifyLabel(allowedTitles.get(option.value), option.label),
       }));
   }, [app, records]);
 

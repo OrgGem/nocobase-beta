@@ -7,6 +7,7 @@ import { useT } from './locale';
 import { DrawioBridge, buildDrawioEmbedUrl } from './lib/drawioBridge';
 import { registerActiveHandle, setActiveBlockUid } from './lib/activeRegistry';
 import { notifyDiagramXmlUpdated, subscribeDiagramXmlUpdated } from './diagramEvents';
+import { getWrappedData } from './apiResponse';
 
 type Props = {
   diagramId?: string;
@@ -15,13 +16,18 @@ type Props = {
   baseUrlOverride?: string;
 };
 
+type DrawioConfig = {
+  drawioBaseUrl?: string;
+};
+
+type DiagramMeta = {
+  title?: string;
+  mode?: string;
+};
+
 function getXmlFromResponse(response: unknown): string {
-  if (typeof response === 'string') return response;
-  if (response && typeof response === 'object' && 'data' in response) {
-    const data = (response as { data?: unknown }).data;
-    if (typeof data === 'string') return data;
-  }
-  return '';
+  const xml = getWrappedData<string>(response);
+  return typeof xml === 'string' ? xml : '';
 }
 
 export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'kennedy', baseUrlOverride }) => {
@@ -37,27 +43,26 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   const xmlRef = useRef<string>('');
   const [iframeReady, setIframeReady] = useState(false);
 
-  const { data: settingsData } = useRequest<any>(
-    () => api.resource('aiDrawio').getConfig(),
-    { manual: !!baseUrlOverride },
-  );
+  const { data: settingsData } = useRequest(() => api.resource('aiDrawio').getConfig(), { manual: !!baseUrlOverride });
 
-  const baseUrl = baseUrlOverride || settingsData?.data?.drawioBaseUrl || 'https://embed.diagrams.net';
+  const settings = getWrappedData<DrawioConfig>(settingsData);
+  const baseUrl = baseUrlOverride || settings?.drawioBaseUrl || 'https://embed.diagrams.net';
 
   const embedUrl = useMemo(() => buildDrawioEmbedUrl(baseUrl, { ui }), [baseUrl, ui]);
 
-  const { data: xmlData, loading: loadingXml } = useRequest<any>(
+  const { data: xmlData, loading: loadingXml } = useRequest(
     () => api.resource('aiDiagrams').loadXml({ filterByTk: diagramId }),
     { refreshDeps: [diagramId], manual: !diagramId },
   );
 
-  const { data: metaData } = useRequest<any>(
-    () => api.resource('aiDiagrams').getMeta({ filterByTk: diagramId }),
-    { refreshDeps: [diagramId], manual: !diagramId },
-  );
+  const { data: metaData } = useRequest(() => api.resource('aiDiagrams').getMeta({ filterByTk: diagramId }), {
+    refreshDeps: [diagramId],
+    manual: !diagramId,
+  });
 
-  const diagramTitle: string | undefined = metaData?.data?.title;
-  const diagramMode: string = metaData?.data?.mode || 'editable';
+  const diagramMeta = getWrappedData<DiagramMeta>(metaData);
+  const diagramTitle = diagramMeta?.title;
+  const diagramMode = diagramMeta?.mode || 'editable';
   const readonly = diagramMode === 'readonly';
 
   const initialXml = getXmlFromResponse(xmlData);
@@ -79,8 +84,8 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
         });
         xmlRef.current = xml;
         notifyDiagramXmlUpdated({ diagramId, xml, sourceBlockUid: blockUid });
-      } catch (err: any) {
-        message.error(err?.message || t('Save failed'));
+      } catch (err: unknown) {
+        message.error(err instanceof Error ? err.message : t('Save failed'));
       }
     },
     [api, blockUid, diagramId, message, readonly, t],

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, Switch, Tooltip, Select, message } from 'antd';
 import { PlusOutlined, DeleteOutlined, LinkOutlined, RobotOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import { useGitManager } from '../context/GitManagerContext';
+import { GitManagerProvider, useGitManager } from '../context/GitManagerContext';
 import { useT } from '../locale';
 
 export const RepositoryConfig: React.FC = () => {
@@ -32,6 +32,10 @@ export const RepositoryConfig: React.FC = () => {
   useEffect(() => {
     loadReviewFlows().catch(() => undefined);
   }, [loadReviewFlows]);
+
+  useEffect(() => {
+    refreshRepos().catch(() => undefined);
+  }, [refreshRepos]);
 
   const getAutoFlowOptions = (repoId: number) =>
     reviewFlows
@@ -102,9 +106,7 @@ export const RepositoryConfig: React.FC = () => {
       title: t('Repository Name'),
       dataIndex: 'name',
       key: 'name',
-      render: (text: string, record: any) => (
-        <a onClick={() => setSelectedRepo(record)}>{text}</a>
-      ),
+      render: (text: string, record: any) => <a onClick={() => setSelectedRepo(record)}>{text}</a>,
     },
     { title: t('Repository URL'), dataIndex: 'repoUrl', key: 'repoUrl', ellipsis: true },
     { title: t('Local Path'), dataIndex: 'localPath', key: 'localPath', ellipsis: true },
@@ -134,7 +136,8 @@ export const RepositoryConfig: React.FC = () => {
                 params: { filterByTk: record.id },
                 data: {
                   autoReview: checked,
-                  autoReviewFlowId: checked && !record.autoReviewFlowId ? options[0]?.value ?? null : record.autoReviewFlowId,
+                  autoReviewFlowId:
+                    checked && !record.autoReviewFlowId ? options[0]?.value ?? null : record.autoReviewFlowId,
                 },
               });
               await refreshRepos();
@@ -269,7 +272,12 @@ export const RepositoryConfig: React.FC = () => {
           <Form.Item name="repoUrl" label={t('Repository URL')} rules={[{ required: true }]}>
             <Input placeholder="https://gitlab.com/user/repo.git" />
           </Form.Item>
-          <Form.Item name="username" label={t('Username')} rules={[{ required: true }]} extra={t('GitLab username for PAT authentication')}>
+          <Form.Item
+            name="username"
+            label={t('Username')}
+            rules={[{ required: true }]}
+            extra={t('GitLab username for PAT authentication')}
+          >
             <Input placeholder="gitlab-username" />
           </Form.Item>
           <Form.Item name="localPath" label={t('Local Path')} rules={[{ required: true }]}>
@@ -281,7 +289,11 @@ export const RepositoryConfig: React.FC = () => {
           <Form.Item name="defaultBranch" label={t('Default Branch')}>
             <Input placeholder="main" />
           </Form.Item>
-          <Form.Item name="autoReviewFlowId" label={t('Primary Auto Review Flow')} extra={t('Only flows with automatic trigger modes are shown')}>
+          <Form.Item
+            name="autoReviewFlowId"
+            label={t('Primary Auto Review Flow')}
+            extra={t('Only flows with automatic trigger modes are shown')}
+          >
             <Select
               allowClear
               placeholder={t('Select a flow')}
@@ -294,3 +306,9 @@ export const RepositoryConfig: React.FC = () => {
     </div>
   );
 };
+
+export const RepositoryConfigSettings: React.FC = () => (
+  <GitManagerProvider>
+    <RepositoryConfig />
+  </GitManagerProvider>
+);

@@ -9,6 +9,7 @@ import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
+import { getListRows } from '../utils/apiResponse';
 
 export const InstanceManager: React.FC = () => {
   const t = useT();
@@ -19,11 +20,9 @@ export const InstanceManager: React.FC = () => {
   const [testing, setTesting] = useState<number | null>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>(() =>
-    api.resource('uipathInstances').list({ pageSize: 100 }),
-  );
+  const { data, loading, refresh } = useRequest<any>(() => api.resource('uipathInstances').list({ pageSize: 100 }));
 
-  const instances = Array.isArray(data?.data) ? data.data : [];
+  const instances = getListRows<Record<string, unknown>>(data);
   const isMaskedSecret = (value: any) =>
     typeof value === 'string' && (value === '********' || value.includes('•') || value.includes('封'));
 

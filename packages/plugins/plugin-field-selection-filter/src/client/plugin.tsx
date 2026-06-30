@@ -2,11 +2,12 @@ import {
   FilterGroup,
   Plugin,
   QuickEditFormModel,
+  SelectFieldModel,
   TableColumnModel,
   TableSelectModel,
   VariableFilterItem,
 } from '@nocobase/client-v2';
-import { defineAction, FlowModel, useFlowSettingsContext } from '@nocobase/flow-engine';
+import { defineAction, FlowEngine, FlowModel, useFlowSettingsContext } from '@nocobase/flow-engine';
 import React from 'react';
 import { tExpr } from './locale';
 
@@ -18,10 +19,19 @@ type FieldSelectionFilterParams = {
   filter?: FilterValue;
 };
 
+type FieldSelectionOptionScopeParams = {
+  sourceFieldPath?: string;
+  optionPath?: string;
+  clearInvalidValue?: boolean;
+};
+
 type CollectionFieldLike = {
   interface?: string;
   target?: string;
   targetCollection?: { name?: string };
+  uiSchema?: {
+    enum?: Array<Record<string, JsonValue>>;
+  };
   isAssociationField?: () => boolean;
 };
 
@@ -37,6 +47,20 @@ type TableColumnModelLike = TableColumnModel & {
   };
 };
 
+type FlowRuntimeContextLike<TModel = FlowModel> = {
+  model: TModel;
+  engine?: {
+    getModel?: (uid: string, useCache?: boolean) => FlowModel | undefined;
+  };
+  inputArgs?: Record<string, unknown>;
+  item?: { value?: unknown };
+  record?: unknown;
+  runAction?: (key: string, params?: unknown) => Promise<unknown>;
+  view?: {
+    inputArgs?: Record<string, unknown>;
+  };
+};
+
 type SubModelContainerLike = FlowModel & {
   subModels?: Record<string, FlowModel | FlowModel[] | undefined>;
 };
@@ -45,6 +69,8 @@ const EMPTY_FILTER: FilterValue = { logic: '$and', items: [] };
 const TABLE_COLUMN_FLOW_KEY = 'fieldSelectionFilterSettings';
 const FIELD_DATA_SCOPE_FLOW_KEY = 'selectSettings';
 const FIELD_DATA_SCOPE_STEP_KEY = 'dataScope';
+const FIELD_OPTION_SCOPE_FLOW_KEY = 'fieldSelectionOptionFilterSettings';
+const FIELD_OPTION_SCOPE_STEP_KEY = 'optionScope';
 const ASSOCIATION_INTERFACES = [
   'obo',
   'oho',
@@ -58,10 +84,12 @@ const ASSOCIATION_INTERFACES = [
   'updatedBy',
   'mbm',
 ];
+const ENUM_SELECTION_INTERFACES = ['select', 'multipleSelect', 'radioGroup', 'checkboxGroup'];
+const originalOptionCache = new WeakMap<FlowModel, Array<Record<string, JsonValue>>>();
 
 function getColumnFieldModel(model?: FlowModel): FieldModelLike | undefined {
   const field = (model as TableColumnModelLike | undefined)?.subModels?.field;
-  return field instanceof FlowModel ? field : undefined;
+  return field instanceof FlowModel ? (field as FieldModelLike) : undefined;
 }
 
 function getCollectionField(model?: FlowModel): CollectionFieldLike | undefined {
@@ -98,7 +126,7 @@ function isAssociationSelectionField(collectionField?: CollectionFieldLike) {
   return !collectionField?.interface || ASSOCIATION_INTERFACES.includes(collectionField.interface);
 }
 
-function isSelectableTableColumn(model?: FlowModel) {
+function isAssociationSelectionTableColumn(model?: FlowModel) {
   const columnModel = model as TableColumnModelLike | undefined;
   if (!columnModel || columnModel.use !== 'TableColumnModel') {
     return false;
@@ -111,12 +139,37 @@ function isSelectableTableColumn(model?: FlowModel) {
   return isAssociationSelectionField(getCollectionField(columnModel));
 }
 
+function isEnumSelectionField(collectionField?: CollectionFieldLike) {
+  return !!collectionField?.interface && ENUM_SELECTION_INTERFACES.includes(collectionField.interface);
+}
+
+function isEnumSelectionTableColumn(model?: FlowModel) {
+  const columnModel = model as TableColumnModelLike | undefined;
+  if (!columnModel || columnModel.use !== 'TableColumnModel') {
+    return false;
+  }
+
+  if (!getColumnFieldModel(columnModel)) {
+    return false;
+  }
+
+  return isEnumSelectionField(getCollectionField(columnModel));
+}
+
 function cloneFilterParams(params?: FieldSelectionFilterParams): FieldSelectionFilterParams {
   return JSON.parse(JSON.stringify(params || { filter: EMPTY_FILTER })) as FieldSelectionFilterParams;
 }
 
+function cloneOptionScopeParams(params?: FieldSelectionOptionScopeParams): FieldSelectionOptionScopeParams {
+  return JSON.parse(JSON.stringify(params || {})) as FieldSelectionOptionScopeParams;
+}
+
 function getFieldDataScopeParams(fieldModel?: FieldModelLike): FieldSelectionFilterParams | undefined {
   return fieldModel?.getStepParams?.(FIELD_DATA_SCOPE_FLOW_KEY, FIELD_DATA_SCOPE_STEP_KEY);
+}
+
+function getFieldOptionScopeParams(fieldModel?: FieldModelLike): FieldSelectionOptionScopeParams | undefined {
+  return fieldModel?.getStepParams?.(FIELD_OPTION_SCOPE_FLOW_KEY, FIELD_OPTION_SCOPE_STEP_KEY);
 }
 
 function getTableColumnDataScopeParams(model?: FlowModel): FieldSelectionFilterParams | undefined {
@@ -135,6 +188,14 @@ function syncFieldDataScopeParams(fieldModel: FieldModelLike | undefined, params
   fieldModel.setStepParams(FIELD_DATA_SCOPE_FLOW_KEY, FIELD_DATA_SCOPE_STEP_KEY, cloneFilterParams(params));
 }
 
+function syncFieldOptionScopeParams(fieldModel: FieldModelLike | undefined, params?: FieldSelectionOptionScopeParams) {
+  if (!fieldModel) {
+    return;
+  }
+
+  fieldModel.setStepParams(FIELD_OPTION_SCOPE_FLOW_KEY, FIELD_OPTION_SCOPE_STEP_KEY, cloneOptionScopeParams(params));
+}
+
 function createFilterContextModel(sourceModel: FlowModel, collectionField?: CollectionFieldLike) {
   const filterModel = new FlowModel({
     uid: `${sourceModel.uid}-field-selection-filter-context`,
@@ -146,6 +207,75 @@ function createFilterContextModel(sourceModel: FlowModel, collectionField?: Coll
     cache: false,
   });
   return filterModel;
+}
+
+function readPath(source: unknown, path?: string): unknown {
+  if (!path) {
+    return undefined;
+  }
+
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (!current || typeof current !== 'object') {
+      return undefined;
+    }
+    return (current as Record<string, unknown>)[key];
+  }, source);
+}
+
+function normalizeCompareValue(value: unknown): unknown {
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
+function optionMatchesScope(optionValue: unknown, sourceValue: unknown) {
+  if (Array.isArray(sourceValue)) {
+    return sourceValue.map(normalizeCompareValue).includes(normalizeCompareValue(optionValue));
+  }
+
+  return normalizeCompareValue(optionValue) === normalizeCompareValue(sourceValue);
+}
+
+function getFieldOriginalOptions(model: FlowModel, collectionField?: CollectionFieldLike) {
+  const enumOptions = collectionField?.uiSchema?.enum;
+  if (Array.isArray(enumOptions)) {
+    return enumOptions.map((option) => ({ ...option }));
+  }
+
+  const cached = originalOptionCache.get(model);
+  if (cached) {
+    return cached.map((option) => ({ ...option }));
+  }
+
+  const propsOptions = (model as FieldModelLike).props?.options;
+  if (Array.isArray(propsOptions)) {
+    const cloned = propsOptions.map((option) => ({ ...option }));
+    originalOptionCache.set(model, cloned);
+    return cloned.map((option) => ({ ...option }));
+  }
+
+  return [];
+}
+
+function getRuntimeRecord(ctx: Record<string, unknown>, model: FieldModelLike) {
+  const item = ctx.item as { value?: unknown } | undefined;
+  return ctx.record || item?.value || model.context?.record;
+}
+
+function getOptionValue(option: Record<string, JsonValue>, optionPath?: string) {
+  if (!optionPath) {
+    return undefined;
+  }
+  return readPath(option, optionPath);
+}
+
+function valueExistsInOptions(value: unknown, options: Array<Record<string, JsonValue>>) {
+  const optionValues = options.map((option) => option.value);
+  if (Array.isArray(value)) {
+    return value.every((item) => optionValues.includes(item));
+  }
+  return optionValues.includes(value as JsonValue);
 }
 
 const fieldSelectionDataScope = defineAction<TableColumnModelLike>({
@@ -161,7 +291,10 @@ const fieldSelectionDataScope = defineAction<TableColumnModelLike>({
     filter: {
       type: 'object',
       'x-decorator': 'FormItem',
-      'x-component': function FieldSelectionFilterComponent(props) {
+      'x-component': function FieldSelectionFilterComponent(props: {
+        value?: FilterValue;
+        onChange?: (value: FilterValue) => void;
+      }) {
         const flowContext = useFlowSettingsContext<TableColumnModelLike>();
         const fieldModel = getColumnFieldModel(flowContext.model);
         const sourceModel = fieldModel || flowContext.model;
@@ -175,7 +308,7 @@ const fieldSelectionDataScope = defineAction<TableColumnModelLike>({
           <FilterGroup
             value={props.value}
             onChange={props.onChange}
-            FilterItem={(filterItemProps) => (
+            FilterItem={(filterItemProps: Record<string, unknown>) => (
               <VariableFilterItem {...filterItemProps} model={filterModel} rightAsVariable />
             )}
           />
@@ -199,10 +332,102 @@ const fieldSelectionDataScope = defineAction<TableColumnModelLike>({
   },
 });
 
+const fieldSelectionOptionScope = defineAction<TableColumnModelLike>({
+  name: 'fieldSelectionOptionScope',
+  title: tExpr('Set enum option filter'),
+  uiMode: {
+    type: 'dialog',
+    props: {
+      width: 520,
+    },
+  },
+  uiSchema: {
+    sourceFieldPath: {
+      type: 'string',
+      title: tExpr('Source field path'),
+      'x-decorator': 'FormItem',
+      'x-component': 'Input',
+      required: true,
+      description: tExpr('Example: city or city.id'),
+    },
+    optionPath: {
+      type: 'string',
+      title: tExpr('Option scope path'),
+      'x-decorator': 'FormItem',
+      'x-component': 'Input',
+      required: true,
+      description: tExpr('Example: city or cityId on each enum option'),
+    },
+    clearInvalidValue: {
+      type: 'boolean',
+      title: tExpr('Clear value when it is outside the filtered options'),
+      'x-decorator': 'FormItem',
+      'x-component': 'Switch',
+    },
+  },
+  defaultParams: {
+    clearInvalidValue: true,
+  },
+  useRawParams: true,
+  async handler(ctx, params: FieldSelectionOptionScopeParams) {
+    const fieldModel = getColumnFieldModel(ctx.model);
+    syncFieldOptionScopeParams(fieldModel, params);
+    if (fieldModel?.getFlow(FIELD_OPTION_SCOPE_FLOW_KEY)) {
+      await fieldModel.applyFlow(FIELD_OPTION_SCOPE_FLOW_KEY);
+    }
+  },
+});
+
 export class PluginFieldSelectionFilterClient extends Plugin {
+  declare flowEngine: FlowEngine;
+
   async load() {
     this.flowEngine.registerActions({
       fieldSelectionDataScope,
+      fieldSelectionOptionScope,
+    });
+
+    SelectFieldModel.registerFlow({
+      key: FIELD_OPTION_SCOPE_FLOW_KEY,
+      sort: 805,
+      on: {
+        eventName: 'beforeRender',
+        phase: 'afterAllFlows',
+      },
+      steps: {
+        optionScope: {
+          title: tExpr('Enum option filter'),
+          async handler(ctx: FlowRuntimeContextLike<FieldModelLike>, params: FieldSelectionOptionScopeParams) {
+            const fieldModel = ctx.model as FieldModelLike;
+            const config = params || getFieldOptionScopeParams(fieldModel);
+            if (!config?.sourceFieldPath || !config?.optionPath) {
+              return;
+            }
+
+            const record = getRuntimeRecord(ctx as Record<string, unknown>, fieldModel);
+            const sourceValue = readPath(record, config.sourceFieldPath);
+            const originalOptions = getFieldOriginalOptions(fieldModel, getCollectionField(fieldModel));
+
+            if (sourceValue === undefined || sourceValue === null || sourceValue === '') {
+              fieldModel.setProps({ options: originalOptions });
+              return;
+            }
+
+            const filteredOptions = originalOptions.filter((option) =>
+              optionMatchesScope(getOptionValue(option, config.optionPath), sourceValue),
+            );
+            fieldModel.setProps({ options: filteredOptions });
+
+            if (
+              config.clearInvalidValue !== false &&
+              fieldModel.props?.value !== undefined &&
+              !valueExistsInOptions(fieldModel.props.value, filteredOptions)
+            ) {
+              fieldModel.props?.onChange?.(Array.isArray(fieldModel.props.value) ? [] : undefined);
+            }
+          },
+        },
+      },
     });
 
     TableColumnModel.registerFlow({
@@ -212,15 +437,15 @@ export class PluginFieldSelectionFilterClient extends Plugin {
         dataScope: {
           use: 'fieldSelectionDataScope',
           title: tExpr('Set field selection filter'),
-          hideInSettings(ctx) {
-            return !isSelectableTableColumn(ctx.model);
+          hideInSettings(ctx: FlowRuntimeContextLike) {
+            return !isAssociationSelectionTableColumn(ctx.model);
           },
-          async beforeParamsSave(ctx, params: FieldSelectionFilterParams) {
+          async beforeParamsSave(ctx: FlowRuntimeContextLike, params: FieldSelectionFilterParams) {
             const fieldModel = getColumnFieldModel(ctx.model);
             syncFieldDataScopeParams(fieldModel, params);
             await fieldModel?.saveStepParams?.();
           },
-          async handler(ctx, params: FieldSelectionFilterParams) {
+          async handler(ctx: FlowRuntimeContextLike, params: FieldSelectionFilterParams) {
             const fieldModel = getColumnFieldModel(ctx.model);
             if (!hasSelectionFilterConfig(ctx.model, fieldModel)) {
               return;
@@ -228,6 +453,25 @@ export class PluginFieldSelectionFilterClient extends Plugin {
             syncFieldDataScopeParams(fieldModel, params);
             if (fieldModel?.getFlow(FIELD_DATA_SCOPE_FLOW_KEY)) {
               await fieldModel.applyFlow(FIELD_DATA_SCOPE_FLOW_KEY);
+            }
+          },
+        },
+        optionScope: {
+          use: 'fieldSelectionOptionScope',
+          title: tExpr('Set enum option filter'),
+          hideInSettings(ctx: FlowRuntimeContextLike) {
+            return !isEnumSelectionTableColumn(ctx.model);
+          },
+          async beforeParamsSave(ctx: FlowRuntimeContextLike, params: FieldSelectionOptionScopeParams) {
+            const fieldModel = getColumnFieldModel(ctx.model);
+            syncFieldOptionScopeParams(fieldModel, params);
+            await fieldModel?.saveStepParams?.();
+          },
+          async handler(ctx: FlowRuntimeContextLike, params: FieldSelectionOptionScopeParams) {
+            const fieldModel = getColumnFieldModel(ctx.model);
+            syncFieldOptionScopeParams(fieldModel, params);
+            if (fieldModel?.getFlow(FIELD_OPTION_SCOPE_FLOW_KEY)) {
+              await fieldModel.applyFlow(FIELD_OPTION_SCOPE_FLOW_KEY);
             }
           },
         },
@@ -245,19 +489,25 @@ export class PluginFieldSelectionFilterClient extends Plugin {
       steps: {
         dataScope: {
           title: tExpr('Field selection filter'),
-          async handler(ctx) {
+          async handler(ctx: FlowRuntimeContextLike<SubModelContainerLike>) {
             const sourceFieldModelUid = ctx.inputArgs?.sourceFieldModelUid;
             const sourceFieldModel =
-              typeof sourceFieldModelUid === 'string'
+              typeof sourceFieldModelUid === 'string' && ctx.engine?.getModel
                 ? (ctx.engine.getModel(sourceFieldModelUid, true) as FieldModelLike | undefined)
                 : undefined;
             const params = getFieldDataScopeParams(sourceFieldModel);
-            if (!params) {
+            const optionParams = getFieldOptionScopeParams(sourceFieldModel);
+            if (!params && !optionParams) {
               return;
             }
 
             const quickEditField = getFirstSubModel(ctx.model as SubModelContainerLike, 'fields');
-            syncFieldDataScopeParams(quickEditField, params);
+            if (params) {
+              syncFieldDataScopeParams(quickEditField, params);
+            }
+            if (optionParams) {
+              syncFieldOptionScopeParams(quickEditField, optionParams);
+            }
             await quickEditField?.dispatchEvent?.('beforeRender', undefined, { useCache: false });
           },
         },
@@ -270,14 +520,14 @@ export class PluginFieldSelectionFilterClient extends Plugin {
       steps: {
         dataScope: {
           title: tExpr('Field selection filter'),
-          async handler(ctx) {
+          async handler(ctx: FlowRuntimeContextLike) {
             const sourceFieldModelUid = ctx.view?.inputArgs?.parentId;
             const sourceFieldModel =
-              typeof sourceFieldModelUid === 'string'
+              typeof sourceFieldModelUid === 'string' && ctx.engine?.getModel
                 ? (ctx.engine.getModel(sourceFieldModelUid, true) as FieldModelLike | undefined)
                 : undefined;
             const params = getFieldDataScopeParams(sourceFieldModel);
-            if (params) {
+            if (params && ctx.runAction) {
               await ctx.runAction('dataScope', params);
             }
           },

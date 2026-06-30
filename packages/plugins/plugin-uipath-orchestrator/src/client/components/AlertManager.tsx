@@ -9,6 +9,7 @@ import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
+import { getListRows } from '../utils/apiResponse';
 
 const SCOPES = ['jobs', 'sessions'];
 const METRICS = [
@@ -34,7 +35,7 @@ export const AlertManager: React.FC = () => {
     { ready: !!instanceId, refreshDeps: [instanceId] },
   );
 
-  const rules = Array.isArray(data?.data) ? data.data : [];
+  const rules = getListRows<Record<string, unknown>>(data);
 
   const handleSave = async () => {
     try {
