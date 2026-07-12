@@ -97,9 +97,8 @@ export function registerAgentLoopResource(plugin: Plugin, service: AgentLoopServ
           return;
         }
         ctx.body = {
-          data: await service.approvePlanAndExecute(runId, {
+          data: await service.approvePlan(runId, {
             userId: currentUserId(ctx),
-            ctx,
             reason: body.reason,
           }),
         };

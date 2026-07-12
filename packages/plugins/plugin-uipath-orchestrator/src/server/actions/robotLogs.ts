@@ -9,6 +9,7 @@ import type { Context, Next } from '@nocobase/actions';
 import type { PluginUiPathOrchestratorServer } from '../plugin';
 import { handleError, extractFolderContext, extractODataFilter } from './shared';
 import { fetch as undiciFetch } from 'undici';
+import { UiPathCorrelationService } from '../services/UiPathCorrelationService';
 
 const MAX_RESOLVED_JOB_KEYS = 10;
 const DEFAULT_ES_INDEX = 'default-robotlogs-*';
@@ -381,40 +382,8 @@ export function createRobotLogActions(plugin: PluginUiPathOrchestratorServer) {
         const { instanceId, logId, timeStamp, jobKey } = ctx.action.params;
         const client = await plugin.getApiClient(instanceId);
         const folder = extractFolderContext(ctx.action.params);
-
-        let targetTimeStamp = timeStamp;
-        let targetJobKey = jobKey;
-
-        if (logId && (!targetTimeStamp || !targetJobKey)) {
-          const logData = await client.get(`/odata/RobotLogs(${logId})`, { folder });
-          if (logData) {
-            targetTimeStamp = logData.TimeStamp;
-            targetJobKey = logData.JobKey;
-          }
-        }
-
-        if (!targetTimeStamp) {
-          throw new Error('TimeStamp is required for queue item correlation');
-        }
-
-        // Correlate: Find queue items processed during this timestamp
-        // StartProcessing <= targetTimeStamp <= EndProcessing
-        const queueFilter = `StartProcessing le ${targetTimeStamp} and EndProcessing ge ${targetTimeStamp}`;
-
-        const queueData = await client.get('/odata/QueueItems', {
-          query: {
-            $top: 10,
-            $filter: queueFilter,
-            $expand: 'Robot',
-            $orderby: 'StartProcessing desc',
-          },
-          folder,
-        });
-
-        ctx.body = {
-          log: { TimeStamp: targetTimeStamp, JobKey: targetJobKey },
-          queueItems: queueData.value || [],
-        };
+        const service = new UiPathCorrelationService(client, plugin.app.logger);
+        ctx.body = await service.fromLog({ logId, timeStamp, jobKey, folder });
       } catch (error) {
         handleError(ctx, error);
       }

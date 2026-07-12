@@ -61,6 +61,13 @@ export interface StackConfig {
   // Docker specific
   networkMode?: string;
   restartPolicy?: string;
+  /** Raw dockerode HostConfig.SecurityOpt; undefined keeps the default ['no-new-privileges:true']. */
+  dockerSecurityOpt?: string[];
+  dockerCapAdd?: string[];
+  dockerCapDrop?: string[];
+  // Raw K8s securityContext passthrough (same convention as k8sEnv/k8sVolumes)
+  k8sSecurityContext?: Record<string, any>;
+  k8sPodSecurityContext?: Record<string, any>;
 }
 
 export interface IOrchestratorAdapter {

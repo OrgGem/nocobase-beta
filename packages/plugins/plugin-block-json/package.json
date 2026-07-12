@@ -1,0 +1,26 @@
+{
+  "name": "plugin-block-json",
+  "displayName": "Block: JSON",
+  "displayName.zh-CN": "JSON 区块",
+  "description": "Provide a record JSON preview block",
+  "description.zh-CN": "提供记录 JSON 预览区块",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "Blocks"
+  ],
+  "files": [
+    "dist"
+  ],
+  "nocobase": {
+    "supportedVersions": "2.x",
+    "editionLevel": "community"
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x"
+  }
+}

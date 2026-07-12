@@ -2,7 +2,7 @@
   "name": "plugin-data-source-elasticsearch",
   "displayName": "Data source: Elasticsearch",
   "displayName.zh-CN": "数据源：Elasticsearch",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Connect to Elasticsearch servers and browse indices as collections with full CRUD support.",
   "description.zh-CN": "连接 Elasticsearch 服务器，将索引作为数据表浏览，支持完整的 CRUD 操作。",
   "license": "Apache-2.0",

@@ -3,6 +3,7 @@ import { Spin, Table, Tag, Alert, Descriptions, Empty, Space } from 'antd';
 import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
+import { getActionResponseBody } from '../utils/apiResponse';
 
 export const QueueItemTracePanel: React.FC<{ itemId: number }> = ({ itemId }) => {
   const t = useT();
@@ -18,17 +19,17 @@ export const QueueItemTracePanel: React.FC<{ itemId: number }> = ({ itemId }) =>
     setError(null);
     api
       .request({
-        url: 'uipathQueues:traceLogs',
+        url: 'uipathCorrelations:fromQueueItem',
         params: {
           instanceId,
           folderId,
           folderKey,
-          filterByTk: itemId,
+          queueItemId: itemId,
         },
       })
       .then((res) => {
         if (active) {
-          setData(res.data);
+          setData(getActionResponseBody(res));
           setLoading(false);
         }
       })

@@ -7,42 +7,90 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useCallback, useState } from 'react';
 import { Checkbox, Form, Input, Select } from 'antd';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
+type CollectionOption = {
+  label: string;
+  value: string;
+};
 
 interface ElasticsearchConfigFormProps {
   mode: 'create' | 'edit';
-  type: Record<string, any>;
-  initialValues?: Record<string, any>;
-  loadCollections: (key: string) => Promise<any>;
+  type: Record<string, unknown>;
+  initialValues?: Record<string, unknown>;
+  loadCollections: (key?: string) => Promise<unknown>;
+  loadCollectionsFromValues?: (values: Record<string, unknown>) => Promise<unknown>;
 }
 
-function toCollectionOptions(result: any): { label: string; value: string }[] {
-  const list = result?.data?.data ?? result?.data ?? result ?? [];
-  if (!Array.isArray(list)) return [];
-  return list.map((item: any) => {
-    const name = typeof item === 'string' ? item : item?.name;
-    return { label: name, value: name };
-  });
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
-export const ElasticsearchConfigForm: React.FC<ElasticsearchConfigFormProps> = ({ initialValues, loadCollections }) => {
+export function toCollectionOptions(result: unknown): CollectionOption[] {
+  const data = isRecord(result) ? result.data : undefined;
+  const nestedData = isRecord(data) ? data.data : undefined;
+  const list = Array.isArray(nestedData)
+    ? nestedData
+    : Array.isArray(data)
+      ? data
+      : Array.isArray(result)
+        ? result
+        : [];
+
+  return list
+    .map((item) => {
+      const name = typeof item === 'string' ? item : isRecord(item) && typeof item.name === 'string' ? item.name : '';
+      return name ? { label: name, value: name } : undefined;
+    })
+    .filter((item): item is CollectionOption => !!item);
+}
+
+function getInitialSelectedCollections(initialValues?: Record<string, unknown>): string[] {
+  const options = isRecord(initialValues?.options) ? initialValues.options : {};
+  const selectedCollections = options.selectedCollections;
+  return Array.isArray(selectedCollections)
+    ? selectedCollections.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+export const ElasticsearchConfigForm: React.FC<ElasticsearchConfigFormProps> = ({
+  mode,
+  initialValues,
+  loadCollections,
+  loadCollectionsFromValues,
+}) => {
   const { t } = useTranslation();
   const form = Form.useFormInstance();
-  const addAllCollections = Form.useWatch('addAllCollections', form);
-  const [collectionOptions, setCollectionOptions] = useState<{ label: string; value: string }[]>([]);
+  const addAllCollections = Form.useWatch(['options', 'addAllCollections'], form);
+  const [collectionOptions, setCollectionOptions] = useState<CollectionOption[]>([]);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (mode !== 'edit') {
+      return;
+    }
+
+    const selectedCollections = getInitialSelectedCollections(initialValues);
+    if (selectedCollections.length && !form.getFieldValue('collections')) {
+      form.setFieldValue('collections', selectedCollections);
+    }
+  }, [form, initialValues, mode]);
 
   const handleLoadCollections = useCallback(async () => {
     setLoading(true);
     try {
-      const result = await loadCollections(initialValues?.key);
+      const values = form.getFieldsValue(true);
+      const result =
+        mode === 'create' && loadCollectionsFromValues
+          ? await loadCollectionsFromValues(values)
+          : await loadCollections((initialValues?.key as string | undefined) || (values.key as string | undefined));
       setCollectionOptions(toCollectionOptions(result));
     } finally {
       setLoading(false);
     }
-  }, [loadCollections, initialValues?.key]);
+  }, [form, initialValues?.key, loadCollections, loadCollectionsFromValues, mode]);
 
   return (
     <>
@@ -79,7 +127,12 @@ export const ElasticsearchConfigForm: React.FC<ElasticsearchConfigFormProps> = (
       >
         <Input placeholder="*" />
       </Form.Item>
-      <Form.Item name="addAllCollections" label={t('Load all collections')} valuePropName="checked" initialValue={true}>
+      <Form.Item
+        name={['options', 'addAllCollections']}
+        label={t('Load all collections')}
+        valuePropName="checked"
+        initialValue={true}
+      >
         <Checkbox />
       </Form.Item>
       {!addAllCollections ? (

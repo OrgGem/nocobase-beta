@@ -1,10 +1,30 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Table, Tag, Drawer, Space, Button, Typography, Empty, Tooltip, Popconfirm, message, Select, Tabs, Input, Alert, theme,
+  Table,
+  Tag,
+  Drawer,
+  Space,
+  Button,
+  Typography,
+  Empty,
+  Tooltip,
+  Popconfirm,
+  message,
+  Select,
+  Tabs,
+  Input,
+  Alert,
+  theme,
 } from 'antd';
 import {
-  RobotOutlined, ReloadOutlined, CheckOutlined, CloseOutlined, ClockCircleOutlined,
-  FileTextOutlined, ExportOutlined, EditOutlined,
+  RobotOutlined,
+  ReloadOutlined,
+  CheckOutlined,
+  CloseOutlined,
+  ClockCircleOutlined,
+  FileTextOutlined,
+  ExportOutlined,
+  EditOutlined,
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
@@ -30,9 +50,7 @@ const POST_STATUS_COLOR: Record<string, string> = {
   rejected: 'red',
 };
 
-export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval' }> = ({
-  initialFilter = 'all',
-}) => {
+export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval' }> = ({ initialFilter = 'all' }) => {
   const t = useT();
   const { token } = useToken();
   const api = useApp().apiClient;
@@ -40,7 +58,9 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
   const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [postFilter, setPostFilter] = useState<string>(initialFilter === 'pending_approval' ? 'pending_approval' : 'all');
+  const [postFilter, setPostFilter] = useState<string>(
+    initialFilter === 'pending_approval' ? 'pending_approval' : 'all',
+  );
   const [triggerFilter, setTriggerFilter] = useState<string>('all');
   const [selected, setSelected] = useState<any | null>(null);
   const [editing, setEditing] = useState(false);
@@ -151,6 +171,15 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
               <Text type="secondary" style={{ fontFamily: 'monospace' }}>
                 {String(record.commitSha || '').slice(0, 7)}
               </Text>
+            </Space>
+          );
+        }
+        if (record.targetType === 'folder') {
+          return (
+            <Space size={4}>
+              <Text strong>{repoName}</Text>
+              <Text type="secondary">{record.folderPath || '/'}</Text>
+              {record.branch && <Tag style={{ fontSize: 11 }}>{record.branch}</Tag>}
             </Space>
           );
         }
@@ -497,12 +526,19 @@ const ReviewDetailView: React.FC<{
                 <Meta label={t('Status')} value={review.status} />
                 <Meta label={t('Post Status')} value={review.postStatus} />
                 <Meta label={t('Trigger Type')} value={review.targetType} />
+                {review.targetType === 'folder' && <Meta label={t('Folder')} value={review.folderPath || '/'} />}
                 <Meta label={t('Triggered By')} value={review.triggeredBy} />
                 <Meta label={t('Reviewed SHA')} value={review.headSha || '—'} />
                 <Meta label={t('Latest SHA')} value={review.latestSha || '—'} />
                 <Meta label={t('Started At')} value={review.startedAt && new Date(review.startedAt).toLocaleString()} />
-                <Meta label={t('Finished At')} value={review.finishedAt && new Date(review.finishedAt).toLocaleString()} />
-                <Meta label={t('Duration')} value={review.durationMs ? `${(review.durationMs / 1000).toFixed(1)}s` : '—'} />
+                <Meta
+                  label={t('Finished At')}
+                  value={review.finishedAt && new Date(review.finishedAt).toLocaleString()}
+                />
+                <Meta
+                  label={t('Duration')}
+                  value={review.durationMs ? `${(review.durationMs / 1000).toFixed(1)}s` : '—'}
+                />
                 <Meta label={t('Posted Note ID')} value={review.postedNoteId || '—'} />
                 <Meta label={t('Approved By')} value={review.approvedBy || '—'} />
                 <Meta

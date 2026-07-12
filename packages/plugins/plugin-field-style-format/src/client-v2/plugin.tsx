@@ -161,7 +161,7 @@ function applyFieldStyleFormat(model: TableColumnModelLike, params?: FieldStyleF
   });
 }
 
-function ensureStyleElement() {
+export function ensureFieldStyleFormatStyleElement() {
   if (typeof document === 'undefined' || document.getElementById(STYLE_ELEMENT_ID)) {
     return;
   }
@@ -192,22 +192,24 @@ TableColumnModel.registerFlow({
           type: 'number',
           title: tExpr('Padding'),
           'x-decorator': 'FormItem',
-          'x-component': 'InputNumber',
+          'x-component': 'NumberPicker',
           'x-component-props': {
             min: 0,
             precision: 0,
             addonAfter: 'px',
+            style: { width: '100%' },
           },
         },
         margin: {
           type: 'number',
           title: tExpr('Margin'),
           'x-decorator': 'FormItem',
-          'x-component': 'InputNumber',
+          'x-component': 'NumberPicker',
           'x-component-props': {
             min: 0,
             precision: 0,
             addonAfter: 'px',
+            style: { width: '100%' },
           },
         },
         horizontalAlign: {
@@ -250,7 +252,7 @@ TableColumnModel.registerFlow({
 
 export class PluginFieldStyleFormatClientV2 extends Plugin {
   async load() {
-    ensureStyleElement();
+    ensureFieldStyleFormatStyleElement();
   }
 }
 

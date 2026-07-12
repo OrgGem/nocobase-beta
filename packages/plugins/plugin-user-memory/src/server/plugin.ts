@@ -12,17 +12,25 @@ import { MemorySyncJob } from './cron/memory-sync-job';
 import * as userMemoryActions from './actions/user-memory';
 import * as userMemoryAdminActions from './actions/user-memory-admin';
 import { createRememberToolProvider } from './tools/remember-tool';
+import { installUserMemoryDbSyncRaceGuard } from './utils/db-sync-race-guard';
+
+type CronJobLike = {
+  start(): void;
+  stop(): void;
+};
 
 export class PluginUserMemoryServer extends Plugin {
   memoryInjector: MemoryInjector;
   syncJob: MemorySyncJob;
-  private _cronJobInstance: any = null;
+  private _cronJobInstance: CronJobLike | null = null;
   private readonly autoSyncCooldownMs = 5 * 60 * 1000;
   private readonly autoSyncLastRun = new Map<number, number>();
 
   async afterAdd() {}
 
-  async beforeLoad() {}
+  async beforeLoad() {
+    installUserMemoryDbSyncRaceGuard(this.db, this.app.logger);
+  }
 
   async load() {
     await this.importCollections(resolve(__dirname, 'collections'));
@@ -174,6 +182,11 @@ export class PluginUserMemoryServer extends Plugin {
   }
 
   private async scheduleSyncJob(overrideCronTime?: string): Promise<void> {
+    if (!this.app.serving()) {
+      this.app.logger.info('[UserMemory] Scheduled sync job skipped in worker-only mode');
+      return;
+    }
+
     // Remove the existing job before re-adding (for reschedule support)
     if (this._cronJobInstance) {
       try {

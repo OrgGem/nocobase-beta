@@ -78,6 +78,11 @@ interface StackInfo {
   k8sEnvFrom?: Record<string, any>[];
   k8sVolumeMounts?: Record<string, any>[];
   k8sVolumes?: Record<string, any>[];
+  dockerSecurityOpt?: string[];
+  dockerCapAdd?: string[];
+  dockerCapDrop?: string[];
+  k8sSecurityContext?: Record<string, any>;
+  k8sPodSecurityContext?: Record<string, any>;
 }
 
 interface DiscoveredQueue {
@@ -219,6 +224,11 @@ function stackToFormValues(stack?: StackInfo | null) {
       k8sVolumeMounts: jsonText(DEFAULT_K8S_VOLUME_MOUNTS, []),
       k8sVolumes: jsonText(DEFAULT_K8S_VOLUMES, []),
       networkMode: '',
+      dockerSecurityOpt: '',
+      dockerCapAdd: jsonText([], []),
+      dockerCapDrop: jsonText([], []),
+      k8sSecurityContext: jsonText({}, {}),
+      k8sPodSecurityContext: jsonText({}, {}),
     };
   }
 
@@ -231,6 +241,12 @@ function stackToFormValues(stack?: StackInfo | null) {
     k8sEnvFrom: jsonText(stack.k8sEnvFrom, []),
     k8sVolumeMounts: jsonText(stack.k8sVolumeMounts, []),
     k8sVolumes: jsonText(stack.k8sVolumes, []),
+    // Empty textarea keeps the server default (no-new-privileges:true) intact.
+    dockerSecurityOpt: stack.dockerSecurityOpt == null ? '' : jsonText(stack.dockerSecurityOpt, []),
+    dockerCapAdd: jsonText(stack.dockerCapAdd, []),
+    dockerCapDrop: jsonText(stack.dockerCapDrop, []),
+    k8sSecurityContext: jsonText(stack.k8sSecurityContext, {}),
+    k8sPodSecurityContext: jsonText(stack.k8sPodSecurityContext, {}),
   };
 }
 
@@ -259,6 +275,13 @@ function formValuesToStack(values: any) {
     k8sEnvFrom: parseJsonText(values.k8sEnvFrom, [], 'Kubernetes envFrom'),
     k8sVolumeMounts: parseJsonText(values.k8sVolumeMounts, [], 'Kubernetes volume mounts'),
     k8sVolumes: parseJsonText(values.k8sVolumes, [], 'Kubernetes volumes'),
+    // null (not [] or undefined) when blank: null survives JSON serialization and
+    // clears a stored override on update, so the adapter's hardening default applies.
+    dockerSecurityOpt: parseJsonText(values.dockerSecurityOpt, null, 'Docker security options'),
+    dockerCapAdd: parseJsonText(values.dockerCapAdd, [], 'Docker capabilities add'),
+    dockerCapDrop: parseJsonText(values.dockerCapDrop, [], 'Docker capabilities drop'),
+    k8sSecurityContext: parseJsonText(values.k8sSecurityContext, {}, 'Kubernetes security context'),
+    k8sPodSecurityContext: parseJsonText(values.k8sPodSecurityContext, {}, 'Kubernetes pod security context'),
     desiredReplicas: Number(values.desiredReplicas || 0),
     replicas: Number(values.replicas || 0),
   };
@@ -1027,6 +1050,39 @@ export function ContainerOrchestrator() {
             </Col>
           </Row>
 
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.adapter !== curr.adapter}>
+            {() => {
+              if (stackForm.getFieldValue('adapter') !== 'docker') {
+                return null;
+              }
+              return (
+                <Row gutter={12}>
+                  <Col span={8}>
+                    <Form.Item
+                      name="dockerSecurityOpt"
+                      label={t('Docker security options JSON')}
+                      extra={t(
+                        'Leave empty to keep the default no-new-privileges:true. Set [] only for stacks that need the bubblewrap setuid fallback (skill-hub sandbox).',
+                      )}
+                    >
+                      <Input.TextArea rows={4} placeholder='["no-new-privileges:true"]' />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item name="dockerCapAdd" label={t('Docker capabilities to add JSON')}>
+                      <Input.TextArea rows={4} placeholder='["SYS_ADMIN"]' />
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item name="dockerCapDrop" label={t('Docker capabilities to drop JSON')}>
+                      <Input.TextArea rows={4} placeholder='["ALL"]' />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              );
+            }}
+          </Form.Item>
+
           <Form.Item name="command" label={t('Command')}>
             <Input.TextArea rows={10} />
           </Form.Item>
@@ -1073,6 +1129,28 @@ export function ContainerOrchestrator() {
               </Form.Item>
             </Col>
           </Row>
+
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.adapter !== curr.adapter}>
+            {() => {
+              if (stackForm.getFieldValue('adapter') !== 'kubernetes') {
+                return null;
+              }
+              return (
+                <Row gutter={12}>
+                  <Col span={12}>
+                    <Form.Item name="k8sSecurityContext" label={t('Kubernetes security context JSON')}>
+                      <Input.TextArea rows={6} placeholder='{"allowPrivilegeEscalation": false}' />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item name="k8sPodSecurityContext" label={t('Kubernetes pod security context JSON')}>
+                      <Input.TextArea rows={6} placeholder='{"runAsNonRoot": true}' />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              );
+            }}
+          </Form.Item>
         </Form>
       </Modal>
 

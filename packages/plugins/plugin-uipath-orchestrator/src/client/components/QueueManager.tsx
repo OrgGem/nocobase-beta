@@ -3,13 +3,13 @@
  */
 
 import React, { useState } from 'react';
-import { Alert, Table, Tag, Tabs, Space, Button, Select, Drawer, Descriptions, Popconfirm, message } from 'antd';
+import { Alert, Table, Tag, Tabs, Space, Button, Select, Drawer, Descriptions, Input, Switch } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
 import { QueueItemTracePanel } from './QueueItemTracePanel';
+import { combineFilters, containsFilter, dateRangeFilter, equalsFilter } from '../utils/odataFilters';
 
 const statusColors: Record<string, string> = {
   New: 'blue',
@@ -20,40 +20,54 @@ const statusColors: Record<string, string> = {
   Retried: 'orange',
   Deleted: 'default',
 };
+const QUEUE_PRIORITIES = ['Low', 'Normal', 'High'];
+const QUEUE_DATE_FIELDS = ['CreationTime', 'StartProcessing', 'EndProcessing'];
 
 export const QueueManager: React.FC = () => {
   const t = useT();
-  const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey } = useCurrentInstance();
+  const { dateRange, queueFilter } = useCurrentInstance();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  const [priorityFilter, setPriorityFilter] = useState<string | undefined>();
+  const [queueDefinitionId, setQueueDefinitionId] = useState<number | undefined>();
+  const [reference, setReference] = useState('');
+  const [exceptionOnly, setExceptionOnly] = useState(false);
+  const [dateField, setDateField] = useState('CreationTime');
   const [selectedItem, setSelectedItem] = useState<any>(null);
 
-  const { data: defs, loading: defsLoading, error: defsError } = useUiPathRequest('uipathQueues', 'definitions');
+  const definitionFilter = containsFilter('Name', queueFilter);
+  const itemFilter = combineFilters([
+    equalsFilter('Status', statusFilter),
+    equalsFilter('Priority', priorityFilter),
+    equalsFilter('QueueDefinitionId', queueDefinitionId),
+    queueFilter && /^\d+$/.test(queueFilter.trim())
+      ? equalsFilter('QueueDefinitionId', Number(queueFilter.trim()))
+      : containsFilter('Reference', queueFilter),
+    containsFilter('Reference', reference),
+    exceptionOnly ? 'ProcessingExceptionType ne null' : undefined,
+    dateRangeFilter(dateField, dateRange),
+  ]);
+
+  const {
+    data: defs,
+    loading: defsLoading,
+    error: defsError,
+  } = useUiPathRequest('uipathQueues', 'definitions', {
+    filter: definitionFilter,
+    top: 100,
+    orderby: 'Name asc',
+  });
   const {
     data: items,
     loading: itemsLoading,
     error: itemsError,
     refresh,
   } = useUiPathRequest('uipathQueues', 'items', {
-    filter: statusFilter ? `Status eq '${statusFilter}'` : undefined,
+    filter: itemFilter,
     top: 50,
     count: true,
   });
   const definitions = toUiPathArray(defs);
   const queueItems = toUiPathArray(items);
-
-  const handleRetry = async (itemId: number) => {
-    try {
-      await api.request({
-        url: 'uipathQueues:retry',
-        params: { instanceId, folderId, folderKey, filterByTk: itemId },
-      });
-      message.success(t('Retry requested'));
-      refresh();
-    } catch (err: any) {
-      message.error(err.message);
-    }
-  };
 
   const defColumns = [
     { title: t('Name'), dataIndex: 'Name' },
@@ -87,18 +101,11 @@ export const QueueManager: React.FC = () => {
     { title: t('Retry'), dataIndex: 'RetryNumber', width: 60 },
     {
       title: t('Actions'),
-      width: 140,
+      width: 100,
       render: (_: any, rec: any) => (
-        <Space size="small">
-          {rec.Status === 'Failed' && (
-            <Popconfirm title={t('Retry this item?')} onConfirm={() => handleRetry(rec.Id)}>
-              <Button size="small">{t('Retry')}</Button>
-            </Popconfirm>
-          )}
-          <Button size="small" onClick={() => setSelectedItem(rec)}>
-            {t('Detail')}
-          </Button>
-        </Space>
+        <Button size="small" onClick={() => setSelectedItem(rec)}>
+          {t('Detail')}
+        </Button>
       ),
     },
   ];
@@ -139,7 +146,20 @@ export const QueueManager: React.FC = () => {
                     style={{ marginBottom: 16 }}
                   />
                 ) : null}
-                <Space style={{ marginBottom: 16 }}>
+                <Space style={{ marginBottom: 16 }} wrap>
+                  <Select
+                    placeholder={t('Queue')}
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    style={{ width: 220 }}
+                    value={queueDefinitionId}
+                    onChange={setQueueDefinitionId}
+                    options={definitions.map((definition: any) => ({
+                      label: definition.Name,
+                      value: definition.Id,
+                    }))}
+                  />
                   <Select
                     placeholder={t('Status')}
                     allowClear
@@ -151,6 +171,31 @@ export const QueueManager: React.FC = () => {
                       value: s,
                     }))}
                   />
+                  <Select
+                    placeholder={t('Priority')}
+                    allowClear
+                    style={{ width: 120 }}
+                    value={priorityFilter}
+                    onChange={setPriorityFilter}
+                    options={QUEUE_PRIORITIES.map((value) => ({ label: value, value }))}
+                  />
+                  <Input
+                    placeholder={t('Reference')}
+                    style={{ width: 180 }}
+                    value={reference}
+                    onChange={(event) => setReference(event.target.value)}
+                    allowClear
+                  />
+                  <Select
+                    value={dateField}
+                    style={{ width: 160 }}
+                    onChange={setDateField}
+                    options={QUEUE_DATE_FIELDS.map((value) => ({ label: value, value }))}
+                  />
+                  <Space>
+                    <Switch checked={exceptionOnly} onChange={setExceptionOnly} />
+                    <span>{t('Exceptions only')}</span>
+                  </Space>
                   <Button onClick={() => refresh()} icon={<ReloadOutlined />}>
                     {t('Refresh')}
                   </Button>

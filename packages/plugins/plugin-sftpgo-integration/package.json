@@ -1,0 +1,40 @@
+{
+  "name": "plugin-sftpgo-integration",
+  "displayName": "SFTPGo Integration",
+  "displayName.zh-CN": "SFTPGo 集成",
+  "description": "Connect to SFTPGo servers and manage Users, Folders and API Keys from NocoBase.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "sftpgo",
+    "sftp",
+    "file-transfer"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "client-v2.js",
+    "server.js",
+    "client.d.ts",
+    "client-v2.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/utils": "2.x"
+  }
+}

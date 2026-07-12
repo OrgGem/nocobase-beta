@@ -146,6 +146,7 @@ const contentStyle = {
 
 const pageContentStyle: React.CSSProperties = {
   flex: 1,
+  minHeight: 0,
   overflowY: 'auto',
 };
 
@@ -181,7 +182,7 @@ const ShowTipWhenNoPages = () => {
 
 const LayoutContent = () => {
   return (
-    <div className={layoutContentClass}>
+    <div className={layoutContentClass} style={{ minHeight: 'calc(100vh - var(--nb-header-height))' }}>
       <div style={pageContentStyle}>
         <Outlet />
         <ShowTipWhenNoPages />

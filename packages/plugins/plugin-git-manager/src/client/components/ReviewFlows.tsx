@@ -1,6 +1,18 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Table, Button, Space, Modal, Form, Input, Select, Switch, Tag, Popconfirm, message, Empty, Tooltip,
+  Table,
+  Button,
+  Space,
+  Modal,
+  Form,
+  Input,
+  Select,
+  Switch,
+  Tag,
+  Popconfirm,
+  message,
+  Empty,
+  Tooltip,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BranchesOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
@@ -8,6 +20,7 @@ import { useGitManager } from '../context/GitManagerContext';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
 import { LLMServiceSelect } from './LLMServiceSelect';
 import { LLMModelSelect } from './LLMModelSelect';
+import { REVIEW_PROMPT_TEMPLATES } from '../promptTemplates';
 import { useT } from '../locale';
 
 const TRIGGER_LABELS: Record<string, string> = {
@@ -22,15 +35,6 @@ const POST_LABELS: Record<string, string> = {
   disabled: 'Disabled',
 };
 
-const DEFAULT_INSTRUCTION = `Please review the code changes with a focus on:
-1. Best Practices & Style:
-   - C#/VB.NET: Follow standard naming conventions (PascalCase for methods/properties, camelCase for fields). Ensure proper use of async/await (avoid .Result/.Wait()). Use LINQ efficiently.
-   - JS/TS: Use strict equality (===), prefer const/let. Ensure TypeScript types are explicit and avoid 'any'.
-2. Performance: Watch out for N+1 queries, unnecessary loops, and memory leaks.
-3. Security: Identify potential SQL injections, XSS vulnerabilities, and improper data validation.
-4. Maintainability: Check for readability, SOLID principles, and DRY. Ensure meaningful naming.
-5. Error Handling: Verify that exceptions are properly caught, handled, and logged.`;
-
 export const ReviewFlows: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
@@ -39,6 +43,7 @@ export const ReviewFlows: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
   const [open, setOpen] = useState(false);
+  const [templateKey, setTemplateKey] = useState<string | undefined>();
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -76,6 +81,7 @@ export const ReviewFlows: React.FC = () => {
       }
       setOpen(false);
       setEditing(null);
+      setTemplateKey(undefined);
       form.resetFields();
       load();
     } catch (err: any) {
@@ -97,17 +103,19 @@ export const ReviewFlows: React.FC = () => {
   const openCreate = () => {
     setEditing(null);
     form.resetFields();
+    setTemplateKey('application');
     form.setFieldsValue({
       enabled: true,
       triggerMode: 'manual',
       postMode: 'manual',
-      instructions: DEFAULT_INSTRUCTION,
+      instructions: REVIEW_PROMPT_TEMPLATES.find((tpl) => tpl.key === 'application')?.text,
     });
     setOpen(true);
   };
 
   const openEdit = (record: any) => {
     setEditing(record);
+    setTemplateKey(undefined);
     form.setFieldsValue(record);
     setOpen(true);
   };
@@ -200,6 +208,7 @@ export const ReviewFlows: React.FC = () => {
         onCancel={() => {
           setOpen(false);
           setEditing(null);
+          setTemplateKey(undefined);
           form.resetFields();
         }}
         onOk={handleSave}
@@ -267,6 +276,19 @@ export const ReviewFlows: React.FC = () => {
           </Form.Item>
           <Form.Item name="branchFilter" label={t('Branch Filter (regex, optional)')}>
             <Input placeholder="^(feature|hotfix)/.*$" />
+          </Form.Item>
+          <Form.Item label={t('Prompt template')} extra={t('Selecting a template replaces the instructions text')}>
+            <Select
+              allowClear
+              value={templateKey}
+              placeholder={t('Load a default prompt by code type')}
+              options={REVIEW_PROMPT_TEMPLATES.map((tpl) => ({ value: tpl.key, label: t(tpl.label) }))}
+              onChange={(key) => {
+                setTemplateKey(key);
+                const tpl = REVIEW_PROMPT_TEMPLATES.find((item) => item.key === key);
+                if (tpl) form.setFieldsValue({ instructions: tpl.text });
+              }}
+            />
           </Form.Item>
           <Form.Item name="instructions" label={t('Additional Instructions (optional)')}>
             <Input.TextArea rows={8} placeholder={t('Extra guidance appended to every review prompt')} />

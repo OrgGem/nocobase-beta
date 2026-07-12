@@ -1,0 +1,40 @@
+{
+  "name": "plugin-data-source-mssql-v2",
+  "displayName": "MSSQL Data Source V2",
+  "displayName.zh-CN": "MSSQL 数据源 V2",
+  "displayName.vi-VN": "Nguồn dữ liệu MSSQL V2",
+  "description": "NocoBase MSSQL external data source plugin using direct tedious driver (forked from dbgate)",
+  "description.zh-CN": "基于 tedious 驱动的 MSSQL 外部数据源插件",
+  "description.vi-VN": "Plugin nguồn dữ liệu MSSQL dùng trực tiếp tedious driver (fork từ dbgate)",
+  "version": "1.0.0",
+  "license": "AGPL-3.0",
+  "main": "dist/server/index.js",
+  "keywords": ["nocobase", "mssql", "sqlserver", "datasource"],
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "server.js",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": ">=1.5.0",
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/actions": "workspace:*",
+    "@nocobase/client": "workspace:*",
+    "@nocobase/client-v2": "workspace:*",
+    "@nocobase/data-source-manager": "workspace:*",
+    "@nocobase/logger": "workspace:*",
+    "@nocobase/plugin-data-source-manager": "workspace:*",
+    "@nocobase/server": "workspace:*",
+    "@nocobase/utils": "workspace:*"
+  },
+  "dependencies": {
+    "tedious": "^18.6.1",
+    "lodash": "^4.17.21"
+  }
+}

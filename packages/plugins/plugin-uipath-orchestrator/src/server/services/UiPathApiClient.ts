@@ -7,7 +7,8 @@
  * Design decisions:
  * - Does NOT depend on the @uipath/orchestrator-nodejs package (outdated, uses legacy auth).
  * - Owns its own OAuth2 client_credentials flow with 60s pre-expiry refresh.
- * - On-prem folder context prefers OrganizationUnitId; cloud prefers FolderKey.
+ * - Folder context prefers FolderKey (modern folders) for both cloud and on-prem;
+ *   OrganizationUnitId is the fallback for classic folders / Organization Units.
  * - Default folder context is only sent to endpoints that support UiPath folder headers.
  * - OData query builder for $top/$skip/$filter/$select/$expand/$orderby/$count.
  * - Uses undici's fetch (not global fetch) so the `dispatcher` option works correctly
@@ -26,6 +27,7 @@ export const DEFAULT_UIPATH_SCOPES = 'OR.Default OR.Administration OR.Execution 
 const FOLDER_SCOPED_ENDPOINTS = [
   /^\/odata\/Assets(?:[(/]|$)/i,
   /^\/odata\/Jobs(?:[(/]|$)/i,
+  /^\/odata\/ProcessSchedules(?:[(/]|$)/i,
   /^\/odata\/QueueDefinitions(?:[(/]|$)/i,
   /^\/odata\/QueueItems(?:[(/]|$)/i,
   /^\/odata\/Queues(?:[(/]|$)/i,
@@ -75,28 +77,43 @@ export class UiPathApiClient {
 
   private buildApiBaseUrl(config: UiPathInstanceConfig): string {
     const base = (config.baseUrl || '').replace(/\/+$/, '');
+    if (!base) return '';
+
     if (config.deploymentType === 'onPrem') {
-      if (/\/orchestrator_?$/i.test(base)) {
-        return base;
-      }
-      return `${base}/orchestrator`;
+      // Use baseUrl as-is; don't assume a /orchestrator sub-path.
+      // On-prem deployments may serve Orchestrator at root, under a custom
+      // virtual directory, or behind a reverse proxy with arbitrary path mapping.
+      return base;
     }
+
     // Cloud: https://cloud.uipath.com/{accountLogicalName}/{tenantLogicalName}/orchestrator_
-    const cloudBase = (config.baseUrl || DEFAULT_CLOUD_BASE_URL).replace(/\/+$/, '');
-    return `${cloudBase}/${config.accountLogicalName}/${config.tenantLogicalName}/orchestrator_`;
+    if (config.accountLogicalName && config.tenantLogicalName) {
+      const cloudBase = (config.baseUrl || DEFAULT_CLOUD_BASE_URL).replace(/\/+$/, '');
+      return `${cloudBase}/${config.accountLogicalName}/${config.tenantLogicalName}/orchestrator_`;
+    }
+
+    return base;
   }
 
   private buildTokenUrl(config: UiPathInstanceConfig): string {
     const base = (config.baseUrl || DEFAULT_CLOUD_BASE_URL).replace(/\/+$/, '');
+
     if (config.deploymentType === 'onPrem') {
       if (/\/identity\/connect\/token$/i.test(base)) return base;
       if (/\/identity$/i.test(base)) return `${base}/connect/token`;
 
-      // The Base URL field is usually the Orchestrator URL. For standalone/on-prem
-      // deployments, Identity is a sibling of Orchestrator, not a child route.
+      // Identity is a sibling of Orchestrator on the same host. Strip any
+      // /orchestrator suffix to reach the Identity server root.
       const identityBase = base.replace(/\/orchestrator_?$/i, '');
       return `${identityBase}/identity/connect/token`;
     }
+
+    // Cloud: the identity_ service is scoped to account + tenant.
+    // https://cloud.uipath.com/{account}/{tenant}/identity_/connect/token
+    if (config.accountLogicalName && config.tenantLogicalName) {
+      return `${base}/${config.accountLogicalName}/${config.tenantLogicalName}/identity_/connect/token`;
+    }
+
     return `${base}/identity_/connect/token`;
   }
 
@@ -263,9 +280,9 @@ export class UiPathApiClient {
 
     const headers: Record<string, string> = {};
 
-    if (this.config.deploymentType === 'onPrem' && ctx.folderId) {
-      headers['X-UIPATH-OrganizationUnitId'] = String(ctx.folderId);
-    } else if (ctx.folderKey) {
+    // FolderKey works for both cloud and on-prem modern folders (2020.10+).
+    // OrganizationUnitId is the fallback for classic folders / Organization Units.
+    if (ctx.folderKey) {
       headers['X-UIPATH-FolderKey'] = ctx.folderKey;
     } else if (ctx.folderId) {
       headers['X-UIPATH-OrganizationUnitId'] = String(ctx.folderId);

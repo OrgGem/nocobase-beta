@@ -53,6 +53,14 @@ export default defineCollection({
       name: 'generatedMarkdown',
     },
     {
+      type: 'json',
+      name: 'searchMetadata',
+    },
+    {
+      type: 'text',
+      name: 'searchText',
+    },
+    {
       type: 'text',
       name: 'buildLog',
     },

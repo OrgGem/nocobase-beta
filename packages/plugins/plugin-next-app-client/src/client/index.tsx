@@ -22,7 +22,7 @@ const { NextAppSettings } = lazy(() => import('./NextAppSettings'), 'NextAppSett
 
 export class PluginNextAppClient extends Plugin {
   nextAppRouter?: RouterManager;
-  nextAppPath = '/apps';
+  nextAppPath = '/next-app';
 
   async beforeLoad() {}
 
@@ -36,7 +36,7 @@ export class PluginNextAppClient extends Plugin {
   /**
    * Create (or recreate) the sub-router with the given path segment.
    */
-  setupRouter(pathSegment = 'apps') {
+  setupRouter(pathSegment = 'next-app') {
     this.nextAppPath = `/${pathSegment.replace(/^\//, '')}`;
     const segment = this.nextAppPath.replace(/^\//, '');
     const base = this.router.getBasename() || '/';
@@ -69,7 +69,7 @@ export class PluginNextAppClient extends Plugin {
 
   /**
    * Register routes inside the separate sub-router.
-   * Paths are relative to the sub-router's basename (/apps).
+   * Paths are relative to the sub-router's basename (/next-app).
    * Cấu trúc: /:appPath/[:pageName]
    */
   addSubRoutes() {

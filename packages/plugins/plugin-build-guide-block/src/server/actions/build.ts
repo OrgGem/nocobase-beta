@@ -137,6 +137,17 @@ type GuidePlan = {
   chapters: GuidePlanItem[];
 };
 
+type GuideSearchMetadata = {
+  title: string;
+  slug: string;
+  goal?: string;
+  guideTitle?: string;
+  sourceHints: string[];
+  headings: string[];
+  keywords: string[];
+  summary?: string;
+};
+
 type BuildGuideQueueMessage = {
   spaceId: string;
   runId: string;
@@ -348,6 +359,156 @@ function slugify(text: string, fallback: string) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
   return slug || fallback;
+}
+
+function normalizeSearchText(text: string) {
+  return text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s-]+/g, ' ')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function uniqueValues(values: string[], limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) continue;
+    const key = normalizeSearchText(normalized);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    result.push(normalized);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function extractMarkdownHeadings(markdown: string) {
+  return uniqueValues(
+    markdown
+      .split(/\r?\n/)
+      .map((line) => line.match(/^\s{0,3}#{1,4}\s+(.+?)\s*#*\s*$/)?.[1] || '')
+      .filter(Boolean),
+    12,
+  );
+}
+
+function stripMarkdownForSearch(markdown: string) {
+  return markdown
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[[^\]]*]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]+)]\([^)]*\)/g, '$1')
+    .replace(/[#>*_~|`-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractKeywords(...parts: string[]) {
+  const stopWords = new Set([
+    'about',
+    'after',
+    'before',
+    'chapter',
+    'configuration',
+    'guide',
+    'into',
+    'this',
+    'that',
+    'the',
+    'and',
+    'for',
+    'with',
+    'from',
+    'how',
+    'what',
+    'when',
+    'where',
+    'which',
+    'a',
+    'an',
+    'to',
+    'of',
+    'in',
+    'on',
+    'by',
+    'or',
+    'is',
+    'are',
+    'be',
+    'can',
+    'cach',
+    'cac',
+    'cho',
+    'cua',
+    'duoc',
+    'huong',
+    'dan',
+    'la',
+    'mot',
+    'nguoi',
+    'nhung',
+    'tao',
+    'thiet',
+    'trong',
+    'va',
+    'voi',
+  ]);
+  const tokens = normalizeSearchText(parts.join(' '))
+    .split(' ')
+    .filter((token) => token.length >= 3 && !stopWords.has(token));
+  return uniqueValues(tokens, 40);
+}
+
+function createGuideSearchMetadata(params: {
+  chapter: GuidePlanItem;
+  guideTitle?: string;
+  markdown?: string;
+  slug: string;
+}): { metadata: GuideSearchMetadata; searchText: string } {
+  const markdown = params.markdown || '';
+  const headings = extractMarkdownHeadings(markdown);
+  const plainText = stripMarkdownForSearch(markdown);
+  const sourceHints = uniqueValues(params.chapter.sourceHints || [], 20);
+  const summary = plainText.slice(0, 500);
+  const keywords = extractKeywords(
+    params.guideTitle || '',
+    params.chapter.title,
+    params.chapter.goal || '',
+    sourceHints.join(' '),
+    headings.join(' '),
+    plainText.slice(0, 4000),
+  );
+  const metadata: GuideSearchMetadata = {
+    title: params.chapter.title,
+    slug: params.slug,
+    goal: params.chapter.goal,
+    guideTitle: params.guideTitle,
+    sourceHints,
+    headings,
+    keywords,
+    summary,
+  };
+  const searchText = normalizeSearchText(
+    [
+      params.guideTitle,
+      params.chapter.title,
+      params.chapter.goal,
+      params.slug,
+      ...sourceHints,
+      ...headings,
+      ...keywords,
+      summary,
+    ]
+      .filter(Boolean)
+      .join(' '),
+  );
+
+  return { metadata, searchText };
 }
 
 function createFallbackPlan(guideTitle: string, targetChapterCount: number): GuidePlan {
@@ -661,14 +822,22 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
 
   const pageRecords = [];
   for (const [index, chapter] of plan.chapters.entries()) {
+    const chapterSlug = slugify(chapter.title, `chapter-${index + 1}`);
+    const { metadata, searchText } = createGuideSearchMetadata({
+      chapter,
+      guideTitle: plan.title || space.get('title'),
+      slug: chapterSlug,
+    });
     const page = await pageRepo.create({
       values: {
         spaceId: run.spaceId,
         sort: index + 1,
         title: chapter.title,
-        slug: slugify(chapter.title, `chapter-${index + 1}`),
+        slug: chapterSlug,
         goal: chapter.goal,
         planItem: chapter,
+        searchMetadata: metadata,
+        searchText,
         status: 'pending',
       },
     });
@@ -693,12 +862,20 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
     try {
       const markdown = await buildPageMarkdown(provider, space, plan, chapter, documentsText);
       const html = await markdownToCleanHtml(markdown);
+      const { metadata, searchText } = createGuideSearchMetadata({
+        chapter,
+        guideTitle: plan.title || space.get('title'),
+        markdown,
+        slug: page.get('slug'),
+      });
       await pageRepo.update({
         filterByTk: pageId,
         values: {
           status: 'completed',
           generatedMarkdown: markdown,
           generatedHtml: html,
+          searchMetadata: metadata,
+          searchText,
           buildLog: null,
         },
       });

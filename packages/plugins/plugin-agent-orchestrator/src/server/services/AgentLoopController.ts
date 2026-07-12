@@ -272,6 +272,45 @@ export class AgentLoopController {
     return this.getRunDetail(run.id);
   }
 
+  async approvePlan(
+    runId: string | number,
+    options: { userId?: string | number; reason?: string } = {},
+  ) {
+    const run = await this.repository.requireRun(runId);
+    if (TERMINAL_RUN_STATUSES.has(run.status)) {
+      throw new Error(`Agent loop run ${run.id} is already ${run.status}.`);
+    }
+    if (!['waiting_plan_approval', 'approved', 'needs_replan'].includes(run.status)) {
+      throw new Error(`Run ${run.id} is not waiting for plan approval.`);
+    }
+
+    await this.repository.updateRun(run.id, {
+      status: 'approved',
+      approvalStatus: 'approved',
+      approvedById: options.userId,
+      approvedAt: now(),
+      rejectionReason: '',
+      changeRequest: '',
+      updatedAt: now(),
+    });
+
+    await this.repository.createEvent({
+      runId: run.id,
+      type: 'plan_approved',
+      title: 'Plan approved',
+      content: options.reason || '',
+      status: 'approved',
+      userId: options.userId,
+      payload: { planVersion: run.planVersion || 1 },
+    });
+
+    return this.getRunDetail(run.id);
+  }
+
+  /**
+   * @deprecated Use approvePlan() instead. Auto-execution via AgentHarness is retired;
+   * step execution is now driven by the AI via agent_loop_update_step tools.
+   */
   async approvePlanAndExecute(
     runId: string | number,
     options: { userId?: string | number; ctx?: any; reason?: string } = {},
@@ -602,6 +641,11 @@ export class AgentLoopController {
       userId: options.userId,
     });
 
+    // Circuit breaker: record success for sub_agent steps
+    if (step.type === 'sub_agent' && step.target && run.leaderUsername) {
+      getCircuitBreaker().recordSuccess(subAgentCircuitKey(run.leaderUsername, step.target));
+    }
+
     return this.getRunSnapshot(run.id);
   }
 
@@ -643,6 +687,11 @@ export class AgentLoopController {
         retryable: Number(step.attempt || 0) < Number(step.maxAttempts || policy.maxStepAttempts),
       },
     });
+
+    // Circuit breaker: record failure for sub_agent steps
+    if (step.type === 'sub_agent' && step.target && run.leaderUsername) {
+      getCircuitBreaker().recordFailure(subAgentCircuitKey(run.leaderUsername, step.target));
+    }
 
     return this.getRunSnapshot(run.id);
   }
@@ -786,7 +835,7 @@ export class AgentLoopController {
     });
 
     if (options.approved) {
-      return this.executeApprovedPlan(run.id, { userId: options.userId, ctx: options.ctx });
+      return this.getRunSnapshot(run.id);
     }
     return this.getRunSnapshot(run.id);
   }

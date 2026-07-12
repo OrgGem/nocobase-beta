@@ -42,10 +42,7 @@ export function registerGitReviewAiTools(app: Application) {
     }
     const acl = ctx.app?.acl;
     if (!acl?.can) return; // ACL not available — fail-open is acceptable for legacy contexts
-    const role =
-      ctx?.state?.currentRole ||
-      (Array.isArray(user.roles) && user.roles[0]?.name) ||
-      null;
+    const role = ctx?.state?.currentRole || (Array.isArray(user.roles) && user.roles[0]?.name) || null;
     if (!role) {
       const err: any = new Error('AI tool requires a resolvable role on the current user');
       err.status = 403;
@@ -241,6 +238,37 @@ export function registerGitReviewAiTools(app: Application) {
           action: 'fileContent',
         });
         return body?.data ?? body;
+      },
+    },
+    {
+      scope: 'GENERAL',
+      execution: 'backend',
+      defaultPermission: 'ALLOW',
+      silence: false,
+      introduction: { title: 'Git: List files' },
+      definition: {
+        name: 'git_list_files',
+        description:
+          'List files and folders of a cloned repository at a given ref. Set recursive=true with a treePath to enumerate every file under a folder, e.g. when reviewing the full code of a folder.',
+        schema: z.object({
+          repositoryId: z.number(),
+          treePath: z.string().optional().describe('Folder path relative to repo root; omit for the root'),
+          ref: z.string().optional().describe('Branch, tag or commit SHA; defaults to HEAD'),
+          recursive: z.boolean().optional().describe('true to list all files under treePath recursively'),
+        }),
+      },
+      invoke: async (ctx: any, args: any) => {
+        const body = await runResourceAction(ctx, gitActions.fileTree, args, {
+          resource: 'gitManager',
+          action: 'fileTree',
+        });
+        const files = (body?.data ?? body ?? []) as unknown[];
+        const list = Array.isArray(files) ? files : [];
+        const MAX_ENTRIES = 500;
+        if (list.length > MAX_ENTRIES) {
+          return { files: list.slice(0, MAX_ENTRIES), totalCount: list.length, truncated: true };
+        }
+        return { files: list, totalCount: list.length, truncated: false };
       },
     },
     {

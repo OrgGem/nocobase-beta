@@ -169,8 +169,8 @@ export const NextAppSettings: React.FC = () => {
       render: (value: string) => (
         <Space>
           <LinkOutlined />
-          <a href={`/apps/${value.replace(/^\//, '')}`} target="_blank" rel="noopener noreferrer">
-            /apps/{value.replace(/^\//, '')}
+          <a href={`/next-app/${value.replace(/^\//, '')}`} target="_blank" rel="noopener noreferrer">
+            /next-app/{value.replace(/^\//, '')}
           </a>
         </Space>
       ),
@@ -255,7 +255,7 @@ export const NextAppSettings: React.FC = () => {
 
         <Alert
           message={t(
-            'Each app is accessible under /apps/{path}. You can configure separate menus and permissions for each.',
+            'Each app is accessible under /next-app/{path}. You can configure separate menus and permissions for each.',
           )}
           type="info"
           showIcon
@@ -305,7 +305,7 @@ export const NextAppSettings: React.FC = () => {
             ]}
             help={t('A unique identifier for this app (e.g. portal, dashboard)')}
           >
-            <Input addonBefore="/apps/" placeholder="my-portal" disabled={!!editing} />
+            <Input addonBefore="/next-app/" placeholder="my-portal" disabled={!!editing} />
           </Form.Item>
 
           <Form.Item

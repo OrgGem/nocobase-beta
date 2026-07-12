@@ -25,6 +25,8 @@ import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
 import { QueueItemTracePanel } from './QueueItemTracePanel';
+import { getActionResponseBody } from '../utils/apiResponse';
+import { combineFilters, containsFilter, dateRangeFilter } from '../utils/odataFilters';
 
 const levelColors: Record<string, string> = {
   Error: 'red',
@@ -39,7 +41,7 @@ const LOG_LEVELS = ['Trace', 'Info', 'Warn', 'Error', 'Fatal'];
 export const LogExplorer: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey } = useCurrentInstance();
+  const { instanceId, folderId, folderKey, dateRange, processFilter, queueFilter } = useCurrentInstance();
 
   const [level, setLevel] = useState<string | undefined>();
   const [search, setSearch] = useState('');
@@ -60,7 +62,7 @@ export const LogExplorer: React.FC = () => {
     setTraceLoading(true);
     api
       .request({
-        url: 'uipathRobotLogs:traceQueueItem',
+        url: 'uipathCorrelations:fromLog',
         params: {
           instanceId,
           folderId,
@@ -71,7 +73,7 @@ export const LogExplorer: React.FC = () => {
         },
       })
       .then((res) => {
-        setTraceData(res.data);
+        setTraceData(getActionResponseBody(res));
         setTraceLoading(false);
       })
       .catch((err) => {
@@ -84,7 +86,8 @@ export const LogExplorer: React.FC = () => {
     level,
     jobKey: jobKey || undefined,
     message: search || undefined,
-    queueItem: queueItem || undefined,
+    queueItem: queueItem || queueFilter || undefined,
+    filter: combineFilters([containsFilter('ProcessName', processFilter), dateRangeFilter('TimeStamp', dateRange)]),
     top: 100,
     count: true,
     orderby: 'TimeStamp desc',
@@ -192,31 +195,60 @@ export const LogExplorer: React.FC = () => {
           </div>
         ) : traceData?.queueItems?.length > 0 ? (
           <div>
+            {traceData.jobs?.length ? (
+              <div style={{ marginBottom: 16 }}>
+                <h4 style={{ marginBottom: 8 }}>{t('Correlated Jobs')}</h4>
+                <List
+                  size="small"
+                  dataSource={traceData.jobs}
+                  renderItem={(candidate: any) => {
+                    const job = candidate.record || candidate;
+                    return (
+                      <List.Item>
+                        <Space>
+                          <Tag>{candidate.confidence || 'match'}</Tag>
+                          <span>{job.ReleaseName || job.Key}</span>
+                          <Tag>{job.State}</Tag>
+                        </Space>
+                      </List.Item>
+                    );
+                  }}
+                />
+              </div>
+            ) : null}
             <h4 style={{ marginBottom: 16 }}>{t('Correlated Queue Items at Log Timestamp')}</h4>
             <List
               dataSource={traceData.queueItems}
-              renderItem={(item: any) => (
-                <List.Item
-                  actions={[
-                    <Button key="trace" type="link" onClick={() => setSelectedQueueItem(item)}>
-                      {t('Detail & TraceLogs')}
-                    </Button>,
-                  ]}
-                >
-                  <List.Item.Meta
-                    title={`Queue Item ID: ${item.Id}`}
-                    description={
-                      <Space>
-                        <Tag color={item.Status === 'Failed' ? 'red' : item.Status === 'Successful' ? 'green' : 'blue'}>
-                          {item.Status}
-                        </Tag>
-                        {item.Reference && <span>Ref: {item.Reference}</span>}
-                        <span>Start: {new Date(item.StartProcessing).toLocaleTimeString()}</span>
-                      </Space>
-                    }
-                  />
-                </List.Item>
-              )}
+              renderItem={(candidate: any) => {
+                const item = candidate.record || candidate;
+                return (
+                  <List.Item
+                    actions={[
+                      <Button key="trace" type="link" onClick={() => setSelectedQueueItem(item)}>
+                        {t('Detail & TraceLogs')}
+                      </Button>,
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={`Queue Item ID: ${item.Id}`}
+                      description={
+                        <Space>
+                          <Tag>{candidate.confidence || 'match'}</Tag>
+                          <Tag
+                            color={item.Status === 'Failed' ? 'red' : item.Status === 'Successful' ? 'green' : 'blue'}
+                          >
+                            {item.Status}
+                          </Tag>
+                          {item.Reference && <span>Ref: {item.Reference}</span>}
+                          <span>
+                            Start: {item.StartProcessing ? new Date(item.StartProcessing).toLocaleTimeString() : '-'}
+                          </span>
+                        </Space>
+                      }
+                    />
+                  </List.Item>
+                );
+              }}
             />
 
             {selectedQueueItem && (

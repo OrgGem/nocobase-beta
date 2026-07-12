@@ -156,9 +156,7 @@ export class PluginGitManagerServer extends Plugin {
     // Repositories config — CRUD on gitRepositories only (no operations)
     (this as any).app.acl.registerSnippet({
       name: `pm.${(this as any).name}.repositories`,
-      actions: [
-        'gitRepositories:*',
-      ],
+      actions: ['gitRepositories:*'],
     });
 
     // Full management — all git manager actions
@@ -229,14 +227,24 @@ export async function ensureAutoReviewFlowSchema(app: any) {
   if (!queryInterface) return;
 
   const tablePrefix = app.db.options?.tablePrefix || '';
-  const tableName = `${tablePrefix}gitRepositories`;
-  const tableInfo = await queryInterface.describeTable(tableName).catch(() => null);
-  if (!tableInfo || tableInfo.autoReviewFlowId) return;
 
-  await queryInterface.addColumn(tableName, 'autoReviewFlowId', {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-  });
+  const repoTable = `${tablePrefix}gitRepositories`;
+  const repoInfo = await queryInterface.describeTable(repoTable).catch(() => null);
+  if (repoInfo && !repoInfo.autoReviewFlowId) {
+    await queryInterface.addColumn(repoTable, 'autoReviewFlowId', {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    });
+  }
+
+  const reviewTable = `${tablePrefix}gitCodeReviews`;
+  const reviewInfo = await queryInterface.describeTable(reviewTable).catch(() => null);
+  if (reviewInfo && !reviewInfo.folderPath) {
+    await queryInterface.addColumn(reviewTable, 'folderPath', {
+      type: DataTypes.STRING,
+      allowNull: true,
+    });
+  }
 }
 
 export default PluginGitManagerServer;

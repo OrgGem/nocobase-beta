@@ -7,9 +7,11 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { Client } from '@elastic/elasticsearch';
+import type { ClientOptions } from '@elastic/elasticsearch';
 import { DataSource } from '@nocobase/data-source-manager';
+import type { CollectionOptions, FieldOptions, PartialCollectionOptions } from '@nocobase/data-source-manager';
 import { ElasticsearchCollectionManager } from './ElasticsearchCollectionManager';
-import { Client, ClientOptions } from '@elastic/elasticsearch';
 
 export type ElasticsearchDataSourceOptions = {
   name?: string;
@@ -20,13 +22,77 @@ export type ElasticsearchDataSourceOptions = {
   rejectUnauthorized?: boolean;
   indexPattern?: string;
   addAllCollections?: boolean;
-  [key: string]: any;
+  selectedCollections?: string[];
+  options?: ElasticsearchDataSourceOptions;
+  [key: string]: unknown;
 };
 
-/**
- * Map an Elasticsearch field type to a NocoBase-compatible field type.
- */
-function mapEsType(esType: string): { type: string; interface?: string; uiSchema?: any } {
+type ElasticsearchIndexInfo = {
+  name: string;
+};
+
+type ElasticsearchFieldMapping = {
+  type?: string;
+  [key: string]: unknown;
+};
+
+type ElasticsearchLocalData = Record<string, PartialCollectionOptions | undefined>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function toOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+export function normalizeElasticsearchCollectionNames(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const names = value
+    .map((item) => {
+      if (typeof item === 'string') {
+        return item.trim();
+      }
+
+      if (!isRecord(item)) {
+        return '';
+      }
+
+      if (item.selected === false) {
+        return '';
+      }
+
+      return toOptionalString(item.name) || toOptionalString(item.value) || '';
+    })
+    .filter(Boolean);
+
+  return [...new Set(names)];
+}
+
+export function getElasticsearchConnectionOptions(options?: unknown): ElasticsearchDataSourceOptions {
+  if (!isRecord(options)) {
+    return {};
+  }
+
+  if (typeof options.nodes === 'string') {
+    return options as ElasticsearchDataSourceOptions;
+  }
+
+  if (isRecord(options.options)) {
+    return options.options as ElasticsearchDataSourceOptions;
+  }
+
+  return options as ElasticsearchDataSourceOptions;
+}
+
+function mapEsType(esType: string): Pick<FieldOptions, 'type' | 'interface' | 'uiSchema'> {
   switch (esType) {
     case 'text':
     case 'keyword':
@@ -68,41 +134,26 @@ function mapEsType(esType: string): { type: string; interface?: string; uiSchema
   }
 }
 
-/**
- * Normalise an API key to the base64-encoded "id:api_key" form that
- * @elastic/elasticsearch expects when auth.apiKey is a string.
- *
- * Accepted input forms:
- *   1. Already base64-encoded string (the "encoded" value from ES API key creation)
- *   2. "id:api_key" plain-text format  →  auto-encode to base64
- */
 function normaliseApiKey(raw: string): string {
   const trimmed = raw.trim();
 
-  // If the value contains a colon it is most likely the plain "id:api_key" form.
-  // Base64-encoded strings never contain colons, so we can safely detect this case.
   if (trimmed.includes(':')) {
     return Buffer.from(trimmed).toString('base64');
   }
 
-  // Assume it is already base64-encoded.
   return trimmed;
 }
 
-/**
- * Build @elastic/elasticsearch ClientOptions from plugin options.
- */
 function buildClientOptions(options: ElasticsearchDataSourceOptions): ClientOptions {
   const nodes = (options.nodes || 'http://localhost:9200')
     .split(',')
-    .map((n) => n.trim())
+    .map((node) => node.trim())
     .filter(Boolean);
 
   const clientOpts: ClientOptions = {
     nodes,
   };
 
-  // Auth: API key takes priority over username/password
   if (options.apiKey) {
     clientOpts.auth = { apiKey: normaliseApiKey(options.apiKey) };
   } else if (options.username) {
@@ -112,7 +163,6 @@ function buildClientOptions(options: ElasticsearchDataSourceOptions): ClientOpti
     };
   }
 
-  // TLS
   if (options.rejectUnauthorized === false) {
     clientOpts.tls = { rejectUnauthorized: false };
   }
@@ -120,18 +170,30 @@ function buildClientOptions(options: ElasticsearchDataSourceOptions): ClientOpti
   return clientOpts;
 }
 
-/**
- * Introspect a single ES index and return a collection definition.
- */
-async function introspectIndex(
-  client: Client,
-  indexName: string,
-): Promise<{ name: string; fields: any[]; [key: string]: any }> {
-  const mappingResult = await client.indices.getMapping({ index: indexName });
-  const mapping = mappingResult[indexName]?.mappings?.properties || {};
+async function readIndexNames(client: Client, options: ElasticsearchDataSourceOptions): Promise<string[]> {
+  const indexPattern = options.indexPattern || '*';
+  const catResult = await client.cat.indices({
+    index: indexPattern,
+    format: 'json',
+    h: 'index',
+  });
 
-  // Build fields from mapping
-  const fields: any[] = [
+  if (!Array.isArray(catResult)) {
+    return [];
+  }
+
+  return catResult
+    .map((item) => (isRecord(item) ? toOptionalString(item.index) : undefined))
+    .filter((indexName): indexName is string => !!indexName && !indexName.startsWith('.'));
+}
+
+async function introspectIndex(client: Client, indexName: string): Promise<CollectionOptions> {
+  const mappingResult = await client.indices.getMapping({ index: indexName });
+  const mappingRoot = isRecord(mappingResult) ? mappingResult[indexName] : undefined;
+  const mappings = isRecord(mappingRoot) ? mappingRoot.mappings : undefined;
+  const properties = isRecord(mappings) && isRecord(mappings.properties) ? mappings.properties : {};
+
+  const fields: FieldOptions[] = [
     {
       name: '_id',
       field: '_id',
@@ -150,8 +212,8 @@ async function introspectIndex(
     },
   ];
 
-  for (const [fieldName, fieldMeta] of Object.entries(mapping)) {
-    const meta = fieldMeta as any;
+  for (const [fieldName, fieldMeta] of Object.entries(properties)) {
+    const meta: ElasticsearchFieldMapping = isRecord(fieldMeta) ? fieldMeta : {};
     const esType = meta.type || 'object';
     const mapped = mapEsType(esType);
 
@@ -182,37 +244,66 @@ async function introspectIndex(
   };
 }
 
-/**
- * Elasticsearch DataSource for NocoBase.
- * Each Elasticsearch index is mapped to a NocoBase collection.
- */
+function mergeFieldOptions(introspected: FieldOptions, local?: Partial<FieldOptions>): FieldOptions {
+  if (!local) {
+    return introspected;
+  }
+
+  return {
+    ...introspected,
+    ...local,
+    name: introspected.name,
+    field: local.field || introspected.field,
+    rawType: introspected.rawType,
+    type: local.type || introspected.type,
+    interface: local.interface || introspected.interface,
+    uiSchema: {
+      ...(introspected.uiSchema || {}),
+      ...(local.uiSchema || {}),
+    },
+  };
+}
+
+function mergeCollectionOptions(
+  introspected: CollectionOptions,
+  localOptions?: PartialCollectionOptions,
+): CollectionOptions {
+  if (!localOptions) {
+    return introspected;
+  }
+
+  const localFields = Array.isArray(localOptions.fields) ? localOptions.fields : [];
+  const localFieldsByName = new Map(localFields.map((field) => [field.name, field]));
+  const introspectedFieldNames = new Set(introspected.fields.map((field) => field.name));
+  const mergedFields = introspected.fields.map((field) => mergeFieldOptions(field, localFieldsByName.get(field.name)));
+  const extraFields = localFields.filter(
+    (field): field is FieldOptions => !!field.name && !introspectedFieldNames.has(field.name),
+  );
+
+  return {
+    ...introspected,
+    ...localOptions,
+    name: introspected.name,
+    tableName: introspected.tableName,
+    fields: [...mergedFields, ...extraFields],
+    filterTargetKey: '_id',
+    repository: 'elasticsearch-repo',
+    timestamps: false,
+    introspected: true,
+    simplePaginate: true,
+  };
+}
+
 export class ElasticsearchDataSource extends DataSource {
-  // DO NOT declare esClient as a class field!
-  // TypeScript class fields compile to JS class field declarations that run AFTER super(),
-  // which would overwrite the value set during createCollectionManager() with undefined.
-
   private get esClient(): Client {
-    return (this.collectionManager as any)?.esClient;
+    return (this.collectionManager as ElasticsearchCollectionManager | undefined)?.esClient;
   }
 
-  /**
-   * Extract connection options regardless of how they are passed:
-   * - Lifecycle (init): { name, type, options: { nodes, username, ... } }
-   * - Factory (load-tables): { name, nodes, username, ... } (flat)
-   */
-  private getConnectionOptions(options?: any): ElasticsearchDataSourceOptions {
-    const opts = options || this.options || {};
-    // If 'nodes' exists at top level, it's flat; otherwise check nested 'options'
-    if (opts.nodes) {
-      return opts;
-    }
-    if (opts.options && typeof opts.options === 'object') {
-      return opts.options;
-    }
-    return opts;
+  private getConnectionOptions(options?: unknown): ElasticsearchDataSourceOptions {
+    return getElasticsearchConnectionOptions(options || this.options);
   }
 
-  createCollectionManager(options: any = {}) {
+  createCollectionManager(options: unknown = {}) {
     const connectionOptions = this.getConnectionOptions(options);
     const clientOpts = buildClientOptions(connectionOptions);
     const esClient = new Client(clientOpts);
@@ -222,13 +313,8 @@ export class ElasticsearchDataSource extends DataSource {
     });
   }
 
-  /**
-   * Load: connect to ES, introspect indices, create collections.
-   * Called by DataSourceManager.add() with { localData } from persisted metadata.
-   */
-  async load(options: any = {}) {
+  async load(options: { localData?: ElasticsearchLocalData } = {}) {
     try {
-      // Verify connection
       const pingResult = await this.esClient.ping();
       if (!pingResult) {
         throw new Error('Elasticsearch cluster is not responding');
@@ -239,44 +325,23 @@ export class ElasticsearchDataSource extends DataSource {
       throw error;
     }
 
-    // Introspect indices
     try {
-      const connectionOptions = this.getConnectionOptions();
-      const indexPattern = connectionOptions.indexPattern || '*';
-      const catResult = await this.esClient.cat.indices({
-        index: indexPattern,
-        format: 'json',
-        h: 'index,docs.count,status,health',
-      });
+      const indexNames = await this.getIndexNamesForLoad();
 
-      // Filter out system/internal indices (starting with .)
-      const indices = (catResult as any[]).filter((idx: any) => idx.index && !idx.index.startsWith('.'));
-
-      this.logger?.info?.(`[Elasticsearch] Found ${indices.length} indices`);
+      this.logger?.info?.(`[Elasticsearch] Loading ${indexNames.length} indices`);
 
       let loaded = 0;
-      const total = indices.length;
+      const total = indexNames.length;
 
-      for (const indexInfo of indices) {
-        const indexName = indexInfo.index;
-
+      for (const indexName of indexNames) {
         try {
-          const collectionOptions = await introspectIndex(this.esClient, indexName);
+          const collectionOptions = mergeCollectionOptions(
+            await introspectIndex(this.esClient, indexName),
+            options.localData?.[indexName],
+          );
 
-          this.collectionManager.defineCollection(collectionOptions as any);
-
-          // Mark unsupported actions on the collection
-          const collection = this.collectionManager.getCollection(indexName);
-          if (collection) {
-            (collection as any).unavailableActions = () => [
-              'add',
-              'remove',
-              'set',
-              'toggle',
-              'firstOrCreate',
-              'updateOrCreate',
-            ];
-          }
+          this.collectionManager.defineCollection(collectionOptions);
+          this.markUnsupportedActions(indexName);
 
           loaded++;
           this.emitLoadingProgress({ total, loaded });
@@ -292,43 +357,37 @@ export class ElasticsearchDataSource extends DataSource {
     }
   }
 
-  /**
-   * Read all available indices from Elasticsearch.
-   * Called by the data-source-manager's loadDataSourceTablesIntoCollections
-   * middleware when `addAllCollections` is true.
-   * Returns objects with { name } for the CollectionsTable UI component.
-   */
-  async readTables(): Promise<any> {
+  private async getIndexNamesForLoad(): Promise<string[]> {
+    const connectionOptions = this.getConnectionOptions();
+
+    if (connectionOptions.addAllCollections === false) {
+      const selectedCollections = normalizeElasticsearchCollectionNames(connectionOptions.selectedCollections);
+      return selectedCollections.filter((name) => !name.startsWith('.'));
+    }
+
+    return readIndexNames(this.esClient, connectionOptions);
+  }
+
+  private markUnsupportedActions(collectionName: string) {
+    const collection = this.collectionManager.getCollection(collectionName);
+    if (!collection) {
+      return;
+    }
+
+    collection.unavailableActions = () => ['add', 'remove', 'set', 'toggle', 'firstOrCreate', 'updateOrCreate'];
+  }
+
+  async readTables(): Promise<ElasticsearchIndexInfo[]> {
     try {
-      const connectionOptions = this.getConnectionOptions();
-      const indexPattern = connectionOptions.indexPattern || '*';
-      const catResult = await this.esClient.cat.indices({
-        index: indexPattern,
-        format: 'json',
-        h: 'index',
-      });
-
-      const indices = (catResult as any[])
-        .filter((idx: any) => idx.index && !idx.index.startsWith('.'))
-        .map((idx: any) => ({ name: idx.index }));
-
-      return indices;
+      return ElasticsearchDataSource.readIndices(this.getConnectionOptions(), this.esClient);
     } catch (error) {
       this.logger?.error?.('[Elasticsearch] readTables failed:', error);
       return [];
     }
   }
 
-  /**
-   * Load specific indices from Elasticsearch as collections.
-   * Called by the data-source-manager's loadDataSourceTablesIntoCollections
-   * middleware during data source creation/update.
-   *
-   * The middleware persists the selected collections to the
-   * `dataSourcesCollections` table after this method returns.
-   */
-  async loadTables(ctx: any, tables: string[]): Promise<any> {
-    if (!tables || tables.length === 0) {
+  async loadTables(ctx: unknown, tables: string[]): Promise<void> {
+    if (!tables?.length) {
       return;
     }
 
@@ -338,20 +397,8 @@ export class ElasticsearchDataSource extends DataSource {
       try {
         const collectionOptions = await introspectIndex(this.esClient, indexName);
 
-        this.collectionManager.defineCollection(collectionOptions as any);
-
-        // Mark unsupported actions on the collection
-        const collection = this.collectionManager.getCollection(indexName);
-        if (collection) {
-          (collection as any).unavailableActions = () => [
-            'add',
-            'remove',
-            'set',
-            'toggle',
-            'firstOrCreate',
-            'updateOrCreate',
-          ];
-        }
+        this.collectionManager.defineCollection(collectionOptions);
+        this.markUnsupportedActions(indexName);
 
         this.logger?.debug?.(`[Elasticsearch] Loaded index ${indexName} as collection`);
       } catch (error) {
@@ -361,31 +408,42 @@ export class ElasticsearchDataSource extends DataSource {
     }
   }
 
-  /**
-   * Return public connection options (safe to expose to client — no password/apiKey).
-   */
   publicOptions() {
     const opts = this.getConnectionOptions();
     return {
       nodes: opts.nodes,
       username: opts.username,
       indexPattern: opts.indexPattern,
+      rejectUnauthorized: opts.rejectUnauthorized,
+      addAllCollections: opts.addAllCollections,
+      selectedCollections: opts.selectedCollections,
       isExternal: true,
     };
   }
 
-  /**
-   * Close the Elasticsearch client.
-   */
   async close() {
     if (this.esClient) {
       await this.esClient.close();
     }
   }
 
-  /**
-   * Test connection to an Elasticsearch cluster.
-   */
+  static async readIndices(
+    options?: ElasticsearchDataSourceOptions,
+    existingClient?: Client,
+  ): Promise<ElasticsearchIndexInfo[]> {
+    const connectionOptions = getElasticsearchConnectionOptions(options);
+    const client = existingClient || new Client(buildClientOptions(connectionOptions));
+
+    try {
+      const indexNames = await readIndexNames(client, connectionOptions);
+      return indexNames.map((name) => ({ name }));
+    } finally {
+      if (!existingClient) {
+        await client.close();
+      }
+    }
+  }
+
   static async testConnection(options?: ElasticsearchDataSourceOptions): Promise<boolean> {
     if (!options) {
       throw new Error('Connection options are required');
@@ -405,7 +463,6 @@ export class ElasticsearchDataSource extends DataSource {
         throw new Error('Elasticsearch cluster did not respond to ping');
       }
 
-      // Also get cluster health for additional validation
       const health = await client.cluster.health();
       if (!health || !health.cluster_name) {
         throw new Error('Unable to retrieve cluster health');
@@ -413,8 +470,7 @@ export class ElasticsearchDataSource extends DataSource {
 
       return true;
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to connect to Elasticsearch: ${message}`);
+      throw new Error(`Failed to connect to Elasticsearch: ${getErrorMessage(error)}`);
     } finally {
       await client.close();
     }

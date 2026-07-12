@@ -1,4 +1,4 @@
-import { Plugin, Application } from '@nocobase/client-v2';
+import { Application, Plugin } from '@nocobase/client-v2';
 import PluginDataSourceManagerClientV2 from '@nocobase/plugin-data-source-manager/client-v2';
 import React from 'react';
 
@@ -8,9 +8,19 @@ export class PluginDataSourceElasticsearchClient extends Plugin<Record<string, n
     if (manager) {
       manager.registerType('elasticsearch', {
         label: 'Elasticsearch',
-        SettingsForm: React.lazy(() => import('../client/components/ElasticsearchConfigForm').then(m => ({ default: m.ElasticsearchConfigForm }))),
+        SettingsForm: React.lazy(() => import('./ElasticsearchSettingsForm')),
         disableTestConnection: false,
         disableAddFields: true,
+        normalizeValues: (values) => {
+          const options = values.options || {};
+          return {
+            ...values,
+            options: {
+              ...options,
+              addAllCollections: options.addAllCollections !== false,
+            },
+          };
+        },
       });
     }
   }

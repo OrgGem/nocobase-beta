@@ -24,6 +24,9 @@ import { createQueueActions } from './actions/queues';
 import { createProcessActions } from './actions/processes';
 import { createAssetActions } from './actions/assets';
 import { createStatsActions } from './actions/stats';
+import { createTriggerActions } from './actions/triggers';
+import { createCorrelationActions } from './actions/correlations';
+import { createProcessMonitorActions } from './actions/processMonitor';
 import {
   createUsersActions,
   createRobotActions,
@@ -184,11 +187,14 @@ export class PluginUiPathOrchestratorServer extends Plugin {
     this.app.resourceManager.define({ name: 'uipathProcesses', actions: createProcessActions(this) });
     this.app.resourceManager.define({ name: 'uipathAssets', actions: createAssetActions(this) });
     this.app.resourceManager.define({ name: 'uipathStats', actions: createStatsActions(this) });
+    this.app.resourceManager.define({ name: 'uipathTriggers', actions: createTriggerActions(this) });
     this.app.resourceManager.define({ name: 'uipathUsers', actions: createUsersActions(this) });
     this.app.resourceManager.define({ name: 'uipathRobots', actions: createRobotActions(this) });
     this.app.resourceManager.define({ name: 'uipathMachines', actions: createMachineActions(this) });
     this.app.resourceManager.define({ name: 'uipathSessions', actions: createSessionActions(this) });
     this.app.resourceManager.define({ name: 'uipathCustomApi', actions: createCustomApiActions(this) });
+    this.app.resourceManager.define({ name: 'uipathCorrelations', actions: createCorrelationActions(this) });
+    this.app.resourceManager.define({ name: 'uipathProcessMonitor', actions: createProcessMonitorActions(this) });
     this.registerWebhookRawBodyMiddleware();
 
     // ACL
@@ -198,21 +204,45 @@ export class PluginUiPathOrchestratorServer extends Plugin {
         'uipathInstances:*',
         'uipathFoldersCache:*',
         'uipathAlertRules:*',
+        'uipathMonitorProcesses:*',
+        'uipathMonitorProcessSteps:*',
         'uipathWebhookEvents:list',
         'uipathAuditLogs:list',
-        'uipathInstanceActions:*',
-        'uipathFolders:*',
-        'uipathJobs:*',
-        'uipathRobotLogs:*',
-        'uipathQueues:*',
-        'uipathProcesses:*',
-        'uipathAssets:*',
-        'uipathStats:*',
-        'uipathUsers:*',
-        'uipathRobots:*',
-        'uipathMachines:*',
-        'uipathSessions:*',
-        'uipathCustomApi:*',
+        'uipathInstanceActions:testConnection',
+        'uipathFolders:list',
+        'uipathFolders:sync',
+        'uipathFolders:setDefault',
+        'uipathJobs:list',
+        'uipathJobs:get',
+        'uipathRobotLogs:list',
+        'uipathRobotLogs:search',
+        'uipathRobotLogs:count',
+        'uipathRobotLogs:traceQueueItem',
+        'uipathQueues:definitions',
+        'uipathQueues:items',
+        'uipathQueues:getItem',
+        'uipathQueues:processingHistory',
+        'uipathQueues:traceLogs',
+        'uipathProcesses:list',
+        'uipathProcesses:get',
+        'uipathProcesses:getArgs',
+        'uipathAssets:list',
+        'uipathAssets:get',
+        'uipathStats:dashboard',
+        'uipathStats:jobsStats',
+        'uipathStats:sessionsStats',
+        'uipathStats:countStats',
+        'uipathStats:licenseStats',
+        'uipathTriggers:processSchedules',
+        'uipathUsers:list',
+        'uipathRobots:list',
+        'uipathMachines:list',
+        'uipathSessions:list',
+        'uipathCustomApi:proxy',
+        'uipathCorrelations:fromLog',
+        'uipathCorrelations:fromQueueItem',
+        'uipathCorrelations:fromJob',
+        'uipathProcessMonitor:snapshot',
       ],
     });
     this.app.acl.allow('uipathWebhooks', 'receive', 'public');

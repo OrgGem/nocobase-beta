@@ -17,7 +17,7 @@
  * Also syncs routes into FlowEngine's routeRepository so that schema editing
  * (page references, flow actions) works correctly within the NextApp scope.
  */
-import React, { createContext, FC, useContext, useMemo, useRef } from 'react';
+import React, { createContext, FC, useContext, useEffect, useMemo, useRef } from 'react';
 import { useRequest, NocoBaseDesktopRouteType } from '@nocobase/client';
 import { useFlowEngineContext } from '@nocobase/flow-engine';
 import { useParams } from 'react-router-dom';
@@ -70,8 +70,10 @@ export const useNextAppAllAccessRoutes = () => {
 export const NextAppRoutesRequestProvider: FC = ({ children }) => {
   const mountedRef = useRef(false);
   const ctx = useFlowEngineContext();
+  const appPathRef = useRef<string | undefined>();
 
   const { appPath } = useParams();
+  appPathRef.current = appPath;
   const { data, refresh, loading } = useRequest<any>(
     {
       url: `/nextAppRoutes:listAccessible`,
@@ -98,6 +100,35 @@ export const NextAppRoutesRequestProvider: FC = ({ children }) => {
       refresh,
     };
   }, [data?.data, refresh]);
+
+  useEffect(() => {
+    const routeRepository = ctx?.routeRepository;
+
+    if (!routeRepository || typeof routeRepository.refreshAccessible !== 'function') {
+      return;
+    }
+
+    const originalRefreshAccessible = routeRepository.refreshAccessible.bind(routeRepository);
+    routeRepository.refreshAccessible = async () => {
+      const response = await ctx.api.request({
+        url: `/nextAppRoutes:listAccessible`,
+        params: {
+          tree: true,
+          sort: 'sort',
+          filter: {
+            appPath: appPathRef.current,
+          },
+        },
+      });
+      const routes = response?.data?.data || emptyArray;
+      routeRepository.setRoutes(routes);
+      return routes;
+    };
+
+    return () => {
+      routeRepository.refreshAccessible = originalRefreshAccessible;
+    };
+  }, [ctx]);
 
   // Only block on first load
   if (loading && !mountedRef.current) {

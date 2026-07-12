@@ -6,6 +6,12 @@ import type { Context, Next } from '@nocobase/actions';
 import { UiPathWebhookVerifier } from '../services/UiPathWebhookVerifier';
 import { DEFAULT_UIPATH_SCOPES, UiPathApiClient } from '../services/UiPathApiClient';
 import { createProcessActions } from '../actions/processes';
+import { createJobActions } from '../actions/jobs';
+import { createQueueActions } from '../actions/queues';
+import { createAssetActions } from '../actions/assets';
+import { createCustomApiActions } from '../actions/customApi';
+import { UiPathCorrelationService } from '../services/UiPathCorrelationService';
+import { buildDateRangeFilter, combineODataFilters, escapeODataString } from '../utils/odata';
 import { PluginUiPathOrchestratorServer } from '../plugin';
 
 describe('UiPath Orchestrator plugin', () => {
@@ -82,6 +88,59 @@ describe('UiPathApiClient OData query builder', () => {
   it('returns empty params for null query', () => {
     const params = UiPathApiClient.buildODataParams();
     expect(params.toString()).toBe('');
+  });
+});
+
+describe('UiPath monitoring filter helpers', () => {
+  it('escapes OData strings and combines filters', () => {
+    expect(escapeODataString("A 'quoted' value")).toBe("A ''quoted'' value");
+    expect(combineODataFilters(["State eq 'Faulted'", undefined, 'CreationTime ge 2026-01-01T00:00:00.000Z'])).toBe(
+      "(State eq 'Faulted') and (CreationTime ge 2026-01-01T00:00:00.000Z)",
+    );
+  });
+
+  it('builds date range filters', () => {
+    expect(
+      buildDateRangeFilter('TimeStamp', {
+        from: '2026-01-01T00:00:00.000Z',
+        to: '2026-01-02T00:00:00.000Z',
+      }),
+    ).toBe('(TimeStamp ge 2026-01-01T00:00:00.000Z) and (TimeStamp le 2026-01-02T00:00:00.000Z)');
+  });
+});
+
+describe('UiPath read-only action surface', () => {
+  it('does not expose mutating Orchestrator actions', () => {
+    const plugin = {} as PluginUiPathOrchestratorServer;
+    expect(createJobActions(plugin)).not.toHaveProperty('start');
+    expect(createJobActions(plugin)).not.toHaveProperty('stop');
+    expect(createJobActions(plugin)).not.toHaveProperty('kill');
+    expect(createJobActions(plugin)).not.toHaveProperty('restart');
+    expect(createQueueActions(plugin)).not.toHaveProperty('addItem');
+    expect(createQueueActions(plugin)).not.toHaveProperty('setTransactionResult');
+    expect(createQueueActions(plugin)).not.toHaveProperty('retry');
+    expect(createAssetActions(plugin)).not.toHaveProperty('create');
+    expect(createAssetActions(plugin)).not.toHaveProperty('update');
+    expect(createAssetActions(plugin)).not.toHaveProperty('destroy');
+  });
+
+  it('rejects non-GET custom API proxy calls', async () => {
+    const plugin = {
+      getApiClient: async () => ({ request: vi.fn() }),
+    } as unknown as PluginUiPathOrchestratorServer;
+    const actions = createCustomApiActions(plugin);
+    const ctx = {
+      action: { params: { instanceId: 1, method: 'POST', endpoint: '/odata/Jobs', body: { x: 1 } } },
+    } as unknown as Context;
+    const next = vi.fn();
+
+    await actions.proxy(ctx, next as unknown as Next);
+
+    expect(ctx.status).toBe(405);
+    expect(ctx.body).toEqual({
+      errors: [{ message: 'Custom UiPath API proxy is read-only. Only GET is allowed.' }],
+    });
+    expect(next).toHaveBeenCalled();
   });
 });
 
@@ -211,6 +270,110 @@ describe('PluginUiPathOrchestratorServer instance lookup', () => {
     await expect(plugin.getApiClient(404)).rejects.toThrow('UiPath instance not found: 404');
     expect(findOne).toHaveBeenCalledTimes(1);
     expect(findOne).toHaveBeenCalledWith({ filter: { id: 404 } });
+  });
+});
+
+describe('UiPathCorrelationService', () => {
+  it('traces a queue item to overlapping jobs and logs cut off by processing window', async () => {
+    const calls: Array<{ endpoint: string; options?: any }> = [];
+    const client = {
+      get: vi.fn(async (endpoint: string, options?: any) => {
+        calls.push({ endpoint, options });
+        if (endpoint === '/odata/QueueItems(100)') {
+          return {
+            Id: 100,
+            Key: 'queue-key',
+            Reference: 'INV-1',
+            StartProcessing: '2026-01-01T10:00:00.000Z',
+            EndProcessing: '2026-01-01T10:05:00.000Z',
+            Robot: { Id: 7 },
+          };
+        }
+        if (endpoint === '/odata/Jobs') {
+          return { value: [{ Id: 10, Key: 'job-key', ReleaseName: 'Process A', State: 'Successful' }] };
+        }
+        if (endpoint === '/odata/RobotLogs') {
+          return { value: [{ Id: 1, JobKey: 'job-key', TimeStamp: '2026-01-01T10:02:00.000Z' }] };
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const service = new UiPathCorrelationService(client);
+    const result = await service.fromQueueItem({ queueItemId: 100 });
+
+    expect(result.job?.Key).toBe('job-key');
+    expect(result.logs).toHaveLength(1);
+    const primaryLogCall = calls.find(
+      (call) =>
+        call.endpoint === '/odata/RobotLogs' &&
+        call.options?.query?.$filter?.includes('TimeStamp ge 2026-01-01T10:00:00.000Z'),
+    );
+    expect(primaryLogCall?.options.query.$filter).toContain('TimeStamp le 2026-01-01T10:05:00.000Z');
+  });
+
+  it('traces a log to a job and queue items at the log timestamp', async () => {
+    const client = {
+      get: vi.fn(async (endpoint: string) => {
+        if (endpoint === '/odata/RobotLogs(9)') {
+          return { Id: 9, JobKey: 'job-key', TimeStamp: '2026-01-01T10:02:00.000Z' };
+        }
+        if (endpoint === '/odata/Jobs') {
+          return { value: [{ Id: 10, Key: 'job-key', State: 'Successful' }] };
+        }
+        if (endpoint === '/odata/QueueItems') {
+          return { value: [{ Id: 100, Status: 'Successful' }] };
+        }
+        if (endpoint === '/odata/RobotLogs') {
+          return { value: [{ Id: 9, JobKey: 'job-key' }] };
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const service = new UiPathCorrelationService(client);
+    const result = await service.fromLog({ logId: 9 });
+
+    expect(result.job?.Key).toBe('job-key');
+    expect(result.queueItems[0].record.Id).toBe(100);
+    expect(result.queueItems[0].confidence).toBe('medium');
+  });
+
+  it('traces a job to logs and overlapping queue items', async () => {
+    const client = {
+      get: vi.fn(async (endpoint: string) => {
+        if (endpoint === '/odata/Jobs(10)') {
+          return {
+            Id: 10,
+            Key: 'job-key',
+            StartTime: '2026-01-01T10:00:00.000Z',
+            EndTime: '2026-01-01T10:05:00.000Z',
+          };
+        }
+        if (endpoint === '/odata/RobotLogs') {
+          return {
+            value: [
+              {
+                Id: 1,
+                JobKey: 'job-key',
+                Message: 'Reference: INV-1',
+              },
+            ],
+          };
+        }
+        if (endpoint === '/odata/QueueItems') {
+          return { value: [{ Id: 100, Reference: 'INV-1', Status: 'Successful' }] };
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const service = new UiPathCorrelationService(client);
+    const result = await service.fromJob({ jobId: 10 });
+
+    expect(result.logs).toHaveLength(1);
+    expect(result.queueItems[0].record.Reference).toBe('INV-1');
+    expect(result.queueItems[0].confidence).toBe('high');
   });
 });
 

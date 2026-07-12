@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, statSync, existsSync, rmSync } from 'fs';
+import { mkdirSync, readdirSync, statSync, existsSync, rmSync, chownSync } from 'fs';
 import { resolve, join } from 'path';
 
 export interface OutputFileInfo {
@@ -50,6 +50,21 @@ export class FileManager {
 
   getOutputDir(execId: string): string {
     return resolve(this.executionsDir, execId, 'output');
+  }
+
+  /**
+   * Hand the execution directory to the dropped-privilege sandbox user so the
+   * child can read its script and write output. Requires root (chown), which
+   * matches the only case privilege drop is active.
+   */
+  chownExecDir(execId: string, uid: number, gid: number): void {
+    const dir = resolve(this.executionsDir, execId);
+    chownSync(dir, uid, gid);
+    // Direct children too (script + output dir): under a restrictive umask
+    // (e.g. 077) the root-written script would stay unreadable for the sandbox uid.
+    for (const entry of readdirSync(dir)) {
+      chownSync(resolve(dir, entry), uid, gid);
+    }
   }
 
   /**

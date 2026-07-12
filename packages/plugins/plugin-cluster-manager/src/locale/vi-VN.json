@@ -212,5 +212,11 @@
   "Cluster registry has no worker heartbeats": "Registry cụm chưa có heartbeat từ worker",
   "Cluster registry Redis is not configured": "Chưa cấu hình Redis cho registry cụm",
   "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.": "Cluster Nodes đọc heartbeat trong Redis, không đọc trực tiếp container runtime. Hãy kiểm tra worker đã boot, plugin-cluster-manager đã load, và cấu hình Redis dùng chung.",
-  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "Thiết lập REDIS_URL hoặc CLUSTER_MANAGER_REDIS_URL trên mọi app và worker để bật khám phá node trong cụm."
+  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "Thiết lập REDIS_URL hoặc CLUSTER_MANAGER_REDIS_URL trên mọi app và worker để bật khám phá node trong cụm.",
+  "Docker security options JSON": "JSON tùy chọn bảo mật Docker",
+  "Docker capabilities to add JSON": "JSON capability Docker cần thêm",
+  "Docker capabilities to drop JSON": "JSON capability Docker cần loại bỏ",
+  "Kubernetes security context JSON": "JSON security context của Kubernetes",
+  "Kubernetes pod security context JSON": "JSON security context của Pod Kubernetes",
+  "Leave empty to keep the default no-new-privileges:true. Set [] only for stacks that need the bubblewrap setuid fallback (skill-hub sandbox).": "Để trống để giữ mặc định no-new-privileges:true. Chỉ đặt [] cho các stack cần bubblewrap setuid fallback (sandbox skill-hub)."
 }

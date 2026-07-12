@@ -14,10 +14,9 @@ export class PluginNextAppClientClient extends Plugin<Record<string, never>, App
       menuKey: 'next-app-routes',
       key: 'index',
       title: this.t('Next App routes'),
-      
-      componentLoader: () => import('../client/NextAppSettings').then(m => ({ default: m.NextAppSettings })),
-    });
 
+      componentLoader: () => import('../client/NextAppSettings').then((m) => ({ default: m.NextAppSettings })),
+    });
   }
 }
 

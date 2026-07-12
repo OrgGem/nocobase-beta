@@ -34,12 +34,7 @@ async function parseValues(plugin: any, ctx: Context, values: any): Promise<stri
   }
 
   if (values.attachment) {
-    const docParserPlugin = plugin.getDocumentParserPlugin?.();
-    if (!docParserPlugin?.fetchFileBuffer) {
-      throw new Error('plugin-document-parser is required to parse an attachment object.');
-    }
-    const { buffer } = await docParserPlugin.fetchFileBuffer(ctx, values.attachment);
-    return plugin.service.convertBuffer(buffer, values.attachment);
+    return plugin.service.parseAttachment(ctx, values.attachment);
   }
 
   throw new Error('Provide either values.base64 or values.attachment.');

@@ -154,5 +154,41 @@ export default {
       type: 'string',
       defaultValue: 'unless-stopped',
     },
+    {
+      // No defaultValue on purpose: a stored [] would override the adapter's
+      // ['no-new-privileges:true'] fallback and silently disable hardening.
+      name: 'dockerSecurityOpt',
+      type: 'json',
+      interface: 'json',
+      uiSchema: { title: 'Docker Security Options' },
+    },
+    {
+      name: 'dockerCapAdd',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Docker Capabilities Add' },
+    },
+    {
+      name: 'dockerCapDrop',
+      type: 'json',
+      defaultValue: [],
+      interface: 'json',
+      uiSchema: { title: 'Docker Capabilities Drop' },
+    },
+    {
+      name: 'k8sSecurityContext',
+      type: 'json',
+      defaultValue: {},
+      interface: 'json',
+      uiSchema: { title: 'Kubernetes Security Context' },
+    },
+    {
+      name: 'k8sPodSecurityContext',
+      type: 'json',
+      defaultValue: {},
+      interface: 'json',
+      uiSchema: { title: 'Kubernetes Pod Security Context' },
+    },
   ],
 };

@@ -1,0 +1,31 @@
+import { CollectionOptions } from '@nocobase/database';
+
+export default {
+  name: 'uipathMonitorProcessSteps',
+  title: 'UiPath Monitor Process Steps',
+  fields: [
+    { name: 'id', type: 'bigInt', autoIncrement: true, primaryKey: true },
+    { name: 'processId', type: 'bigInt', index: true },
+    { name: 'process', type: 'belongsTo', target: 'uipathMonitorProcesses', foreignKey: 'processId' },
+    { name: 'stepOrder', type: 'integer', defaultValue: 1, index: true },
+    { name: 'name', type: 'string', length: 200 },
+    { name: 'folderId', type: 'bigInt', index: true },
+    { name: 'folderKey', type: 'string', length: 100, index: true },
+    { name: 'folderPath', type: 'string', length: 500 },
+    { name: 'releaseId', type: 'bigInt', index: true },
+    { name: 'releaseKey', type: 'string', length: 100, index: true },
+    { name: 'processKey', type: 'string', length: 200, index: true },
+    { name: 'processName', type: 'string', length: 300 },
+    { name: 'triggerType', type: 'string', length: 20, defaultValue: 'direct' },
+    { name: 'scheduleName', type: 'string', length: 200 },
+    { name: 'queueDefinitionId', type: 'bigInt', index: true },
+    { name: 'queueName', type: 'string', length: 200, index: true },
+    { name: 'referencePattern', type: 'string', length: 300 },
+    { name: 'expectedDurationSeconds', type: 'integer' },
+    { name: 'slaSeconds', type: 'integer' },
+    { name: 'matchRules', type: 'json' },
+    { name: 'enabled', type: 'boolean', defaultValue: true, index: true },
+    { name: 'createdAt', type: 'date' },
+    { name: 'updatedAt', type: 'date' },
+  ],
+} as CollectionOptions;

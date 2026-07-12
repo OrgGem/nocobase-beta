@@ -7,6 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { Client } from '@elastic/elasticsearch';
 import { CollectionManager } from '@nocobase/data-source-manager';
 import { ElasticsearchRepository } from './ElasticsearchRepository';
 
@@ -15,9 +16,9 @@ import { ElasticsearchRepository } from './ElasticsearchRepository';
  * Holds a reference to the ES client and registers the ES repository.
  */
 export class ElasticsearchCollectionManager extends CollectionManager {
-  public esClient: any;
+  public esClient: Client;
 
-  constructor(options: any = {}) {
+  constructor(options: { esClient: Client }) {
     super(options);
 
     this.esClient = options.esClient;

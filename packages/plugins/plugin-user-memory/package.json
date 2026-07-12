@@ -4,7 +4,7 @@
   "displayName.zh-CN": "用户记忆",
   "displayName.vi-VN": "Bộ nhớ người dùng",
   "description": "User Memory plugin — synthesizes chat history into persistent user profiles for personalized AI responses.",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

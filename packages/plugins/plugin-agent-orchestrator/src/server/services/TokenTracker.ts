@@ -206,4 +206,30 @@ export class TokenTracker {
       return { allowed: true };
     }
   }
+
+  /**
+   * Estimate tokens from text length and track on a span.
+   * Rough heuristic: ~4 chars per token for English text.
+   * Use when actual usage_metadata is not available (e.g. native plugin-ai flow).
+   */
+  async estimateAndTrack(
+    spanId: string | number | undefined,
+    input: string,
+    output: string,
+    runId?: string | number,
+  ): Promise<void> {
+    if (!spanId) return;
+    const inputTokens = Math.ceil((input || '').length / 4);
+    const outputTokens = Math.ceil((output || '').length / 4);
+    await this.trackSpan(
+      spanId,
+      {
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cost: estimateCost(inputTokens, outputTokens),
+      },
+      runId,
+    );
+  }
 }

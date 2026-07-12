@@ -32,6 +32,15 @@ export interface FileItem {
   mimetype?: string;
 }
 
+export interface PaginationMeta {
+  total: number | null;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  nextContinuationToken?: string;
+}
+
 function normalizeVirtualPath(path: string) {
   const normalized = (path || '/').replace(/\\/g, '/').replace(/\/+/g, '/');
   return normalized.startsWith('/') ? normalized : `/${normalized}`;
@@ -46,6 +55,16 @@ export function useFileBrowser() {
   const [loading, setLoading] = useState(false);
   const [dirLoading, setDirLoading] = useState(true);
   const mountedRef = useRef(true);
+
+  // Pagination state — server-driven
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalItems, setTotalItems] = useState(0);
+  const [paginationMeta, setPaginationMeta] = useState<PaginationMeta | null>(null);
+
+  // Search state — sent to server
+  const [searchText, setSearchText] = useState('');
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     return () => {
@@ -78,22 +97,40 @@ export function useFileBrowser() {
     }
   }, [api]);
 
-  // Load files in current directory + path
+  /**
+   * Load files in current directory + path with server-side pagination.
+   * @param directoryId — optional override directory ID
+   * @param path — optional override path
+   * @param page — page number (1-based), defaults to currentPage
+   * @param size — page size, defaults to current pageSize
+   * @param search — optional search/filter text sent to the server
+   */
   const loadFiles = useCallback(
-    async (directoryId?: number, path?: string) => {
+    async (directoryId?: number, path?: string, page?: number, size?: number, search?: string) => {
       const dirId = directoryId || currentDir?.id;
       const filePath = path ?? currentPath;
       if (!dirId) return;
 
+      const pg = page ?? currentPage;
+      const ps = size ?? pageSize;
+      const offset = (pg - 1) * ps;
+
       try {
         setLoading(true);
+        const params: Record<string, any> = {
+          directoryId: dirId,
+          path: filePath,
+          limit: ps,
+          offset,
+        };
+        const searchTerm = search !== undefined ? search : searchText;
+        if (searchTerm) {
+          params.search = searchTerm;
+        }
         const res = await api.request({
           url: 'extStorage:list',
           method: 'get',
-          params: {
-            directoryId: dirId,
-            path: filePath,
-          },
+          params,
         });
         if (mountedRef.current) {
           const rawData = Array.isArray(res?.data?.data?.data) ? res.data.data.data : Array.isArray(res?.data?.data) ? res.data.data : Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
@@ -112,6 +149,18 @@ export function useFileBrowser() {
             return file;
           });
           setFiles(files);
+
+          // Parse pagination metadata from response
+          const meta = res?.data?.meta;
+          if (meta) {
+            setPaginationMeta(meta);
+            if (typeof meta.total === 'number') {
+              setTotalItems(meta.total);
+            } else if (meta.hasMore !== undefined) {
+              // If no total, estimate based on hasMore
+              setTotalItems(meta.hasMore ? offset + files.length + 1 : offset + files.length);
+            }
+          }
         }
       } catch (error) {
         console.error('[ext-storage] Failed to load files:', error);
@@ -124,43 +173,56 @@ export function useFileBrowser() {
         }
       }
     },
-    [api, currentDir, currentPath],
+    [api, currentDir, currentPath, currentPage, pageSize],
   );
 
-  // Navigate to a directory or file
+  // Navigate to a directory or file — resets page to 1
   const navigateTo = useCallback(
     (item: FileItem | DirectoryInfo | string) => {
+      setCurrentPage(1);
       if (typeof item === 'string') {
         // Navigate to a path string
         setCurrentPath(item);
-        loadFiles(currentDir?.id, item);
+        loadFiles(currentDir?.id, item, 1);
       } else if ('allowedActions' in item) {
         // It's a DirectoryInfo - select directory
         setCurrentDir(item as DirectoryInfo);
         setCurrentPath('/');
-        loadFiles((item as DirectoryInfo).id, '/');
+        loadFiles((item as DirectoryInfo).id, '/', 1);
       } else {
         // It's a FileItem
         const fileItem = item as FileItem;
         if (fileItem.type === 'directory') {
           const newPath = normalizeVirtualPath(fileItem.path);
           setCurrentPath(newPath);
-          loadFiles(currentDir?.id, newPath);
+          loadFiles(currentDir?.id, newPath, 1);
         }
       }
     },
     [currentDir, loadFiles],
   );
 
-  // Navigate up one level
+  // Navigate up one level — resets page to 1
   const navigateUp = useCallback(() => {
     if (currentPath === '/' || currentPath === '') return;
     const parts = currentPath.split('/').filter(Boolean);
     parts.pop();
     const newPath = '/' + parts.join('/');
+    setCurrentPage(1);
     setCurrentPath(newPath);
-    loadFiles(currentDir?.id, newPath);
+    loadFiles(currentDir?.id, newPath, 1);
   }, [currentPath, currentDir, loadFiles]);
+
+  // Change page — triggers new API request
+  const changePage = useCallback(
+    (page: number, size?: number) => {
+      const ps = size ?? pageSize;
+      setCurrentPage(page);
+      if (size) setPageSize(size);
+      loadFiles(currentDir?.id, currentPath, page, ps);
+    },
+    [currentDir, currentPath, pageSize, searchText, loadFiles],
+  );
 
   // Download a file
   const downloadFile = useCallback(
@@ -285,6 +347,24 @@ export function useFileBrowser() {
     loadFiles();
   }, [loadFiles]);
 
+  // Debounced search: reload files when search text changes
+  useEffect(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    searchTimerRef.current = setTimeout(() => {
+      if (mountedRef.current && currentDir?.id) {
+        setCurrentPage(1);
+        loadFiles(currentDir.id, currentPath, 1, pageSize, searchText);
+      }
+    }, 300);
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+      }
+    };
+  }, [searchText]);
+
   // Initial load
   useEffect(() => {
     loadDirectories();
@@ -293,7 +373,8 @@ export function useFileBrowser() {
   // Reload files when directory changes
   useEffect(() => {
     if (currentDir) {
-      loadFiles(currentDir.id, currentPath);
+      setCurrentPage(1);
+      loadFiles(currentDir.id, currentPath, 1);
     }
   }, [currentDir?.id]);
 
@@ -304,6 +385,17 @@ export function useFileBrowser() {
     currentPath,
     loading,
     dirLoading,
+    // Pagination
+    currentPage,
+    pageSize,
+    totalItems,
+    paginationMeta,
+    changePage,
+    setPageSize,
+    // Search
+    searchText,
+    setSearchText,
+    // Actions
     navigateTo,
     navigateUp,
     downloadFile,

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo } from '
 import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
 import { getListRows } from '../utils/apiResponse';
+import type { DateRangeValue } from '../utils/odataFilters';
 
 interface UiPathInstanceRecord {
   id: number;
@@ -29,6 +30,12 @@ interface InstanceContextType {
   folders: UiPathFolderRecord[];
   foldersLoading: boolean;
   refreshFolders: () => void;
+  dateRange: DateRangeValue;
+  setDateRange: (range: DateRangeValue) => void;
+  processFilter: string;
+  setProcessFilter: (value: string) => void;
+  queueFilter: string;
+  setQueueFilter: (value: string) => void;
 }
 
 const InstanceContext = createContext<InstanceContextType>({
@@ -43,6 +50,12 @@ const InstanceContext = createContext<InstanceContextType>({
   folders: [],
   foldersLoading: false,
   refreshFolders: () => {},
+  dateRange: null,
+  setDateRange: () => {},
+  processFilter: '',
+  setProcessFilter: () => {},
+  queueFilter: '',
+  setQueueFilter: () => {},
 });
 
 export const useCurrentInstance = () => useContext(InstanceContext);
@@ -51,6 +64,9 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [instanceId, setInstanceId] = useState<number | null>(null);
   const [folderId, setFolderId] = useState<number | null>(null);
   const [folderKey, setFolderKey] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<DateRangeValue>(null);
+  const [processFilter, setProcessFilter] = useState('');
+  const [queueFilter, setQueueFilter] = useState('');
 
   const api = useApp().apiClient;
 
@@ -118,6 +134,12 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         folders,
         foldersLoading,
         refreshFolders,
+        dateRange,
+        setDateRange,
+        processFilter,
+        setProcessFilter,
+        queueFilter,
+        setQueueFilter,
       }}
     >
       {children}

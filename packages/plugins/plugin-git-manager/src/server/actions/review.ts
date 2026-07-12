@@ -25,10 +25,11 @@ const REVIEW_QUEUE_REDIS_CONNECTION = 'plugin-git-manager.review.queue';
 interface TriggerArgs {
   flowId?: number | null;
   repositoryId: number;
-  targetType: 'mr' | 'commit' | 'branch';
+  targetType: 'mr' | 'commit' | 'branch' | 'folder';
   mrIid?: number | null;
   commitSha?: string | null;
   branch?: string | null;
+  folderPath?: string | null;
   headSha?: string | null;
   extraInstructions?: string;
   triggeredBy?: 'manual' | 'poll';
@@ -47,10 +48,11 @@ interface ReviewFlowSnapshot {
 interface ReviewQueueMessage {
   reviewId: number;
   repositoryId: number;
-  targetType: 'mr' | 'commit' | 'branch';
+  targetType: 'mr' | 'commit' | 'branch' | 'folder';
   mrIid?: number | null;
   commitSha?: string | null;
   branch?: string | null;
+  folderPath?: string | null;
   headSha?: string | null;
   aiEmployeeUsername: string;
   extraInstructions?: string;
@@ -90,6 +92,9 @@ function getActionParams(ctx: Context) {
 function targetKey(args: TriggerArgs): string {
   if (args.targetType === 'mr') return `${args.repositoryId}:mr:${args.mrIid}`;
   if (args.targetType === 'commit') return `${args.repositoryId}:commit:${args.commitSha}`;
+  if (args.targetType === 'folder') {
+    return `${args.repositoryId}:folder:${args.branch || 'HEAD'}:${args.folderPath || '/'}`;
+  }
   return `${args.repositoryId}:branch:${args.branch}`;
 }
 
@@ -107,14 +112,18 @@ async function withTriggerLock<T>(app: Application, key: string, fn: () => Promi
  */
 export async function triggerReview(ctx: Context, next: () => Promise<void>) {
   const params = getActionParams(ctx);
-  const { flowId, repositoryId, targetType, mrIid, commitSha, branch, extraInstructions } = params;
+  const { flowId, repositoryId, targetType, mrIid, commitSha, branch, folderPath, extraInstructions } = params;
 
   if (!repositoryId) ctx.throw(400, 'repositoryId is required');
   if (!targetType) ctx.throw(400, 'targetType is required');
-  if (!['mr', 'commit', 'branch'].includes(targetType)) ctx.throw(400, 'invalid targetType');
+  if (!['mr', 'commit', 'branch', 'folder'].includes(targetType)) ctx.throw(400, 'invalid targetType');
   if (targetType === 'mr' && !mrIid) ctx.throw(400, 'mrIid is required for MR review');
   if (targetType === 'commit' && !commitSha) ctx.throw(400, 'commitSha is required for commit review');
   if (targetType === 'branch' && !branch) ctx.throw(400, 'branch is required for branch review');
+  if (targetType === 'folder') {
+    if (typeof folderPath !== 'string') ctx.throw(400, 'folderPath is required for folder review');
+    if (folderPath.includes('..')) ctx.throw(400, 'Invalid folder path');
+  }
 
   const userId = (ctx as any).state?.currentUser?.id;
   try {
@@ -125,6 +134,7 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
       mrIid: mrIid != null ? Number(mrIid) : null,
       commitSha: commitSha || null,
       branch: branch || null,
+      folderPath: targetType === 'folder' ? folderPath : null,
       extraInstructions,
       triggeredBy: 'manual',
       userId,
@@ -194,6 +204,10 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
   if (args.targetType === 'mr') targetFilter.mrIid = args.mrIid;
   else if (args.targetType === 'commit') targetFilter.commitSha = args.commitSha;
   else if (args.targetType === 'branch') targetFilter.branch = args.branch;
+  else if (args.targetType === 'folder') {
+    targetFilter.folderPath = args.folderPath ?? '';
+    targetFilter.branch = args.branch || null;
+  }
 
   const existing = await reviewsRepo.findOne({ filter: targetFilter });
   // Preserve a poller-tracked latestSha if we don't have a fresher one.
@@ -205,6 +219,7 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     mrIid: args.targetType === 'mr' ? args.mrIid : null,
     commitSha: args.targetType === 'commit' ? args.commitSha : null,
     branch: args.branch || null,
+    folderPath: args.targetType === 'folder' ? args.folderPath ?? '' : null,
     headSha: headSha,
     latestSha: headSha || existingLatestSha || null,
     triggeredBy: args.triggeredBy || 'manual',
@@ -254,6 +269,7 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     mrIid: args.targetType === 'mr' ? args.mrIid : null,
     commitSha: args.targetType === 'commit' ? args.commitSha : null,
     branch: args.branch || undefined,
+    folderPath: args.targetType === 'folder' ? args.folderPath ?? '' : null,
     headSha,
     aiEmployeeUsername,
     extraInstructions: args.extraInstructions,
@@ -485,14 +501,15 @@ function toNullableNumber(value: any): number | null {
 
 function createReviewQueueMessageFromReview(review: any): ReviewQueueMessage {
   const metadata = getQueuedReviewMetadata(review);
-  const targetType = review.get('targetType') as 'mr' | 'commit' | 'branch';
+  const targetType = review.get('targetType') as 'mr' | 'commit' | 'branch' | 'folder';
   return {
     reviewId: Number(review.get('id')),
     repositoryId: Number(review.get('repositoryId')),
     targetType,
     mrIid: targetType === 'mr' ? toNullableNumber(review.get('mrIid')) : null,
     commitSha: targetType === 'commit' ? (review.get('commitSha') as string | null) : null,
-    branch: targetType === 'branch' ? (review.get('branch') as string | null) : null,
+    branch: targetType === 'branch' || targetType === 'folder' ? (review.get('branch') as string | null) : null,
+    folderPath: targetType === 'folder' ? (review.get('folderPath') as string | null) ?? '' : null,
     headSha: review.get('headSha') as string | null,
     aiEmployeeUsername: metadata.aiEmployeeUsername || '',
     extraInstructions: metadata.extraInstructions || undefined,
@@ -584,7 +601,7 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
     }
 
     const metadata = getQueuedReviewMetadata(review);
-    const targetType = (message.targetType || review.get('targetType')) as 'mr' | 'commit' | 'branch';
+    const targetType = (message.targetType || review.get('targetType')) as 'mr' | 'commit' | 'branch' | 'folder';
 
     try {
       const repo = await db.getRepository('gitRepositories').findOne({
@@ -609,6 +626,8 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
         mrIid: targetType === 'mr' ? message.mrIid ?? toNullableNumber(review.get('mrIid')) : null,
         commitSha: targetType === 'commit' ? message.commitSha || (review.get('commitSha') as string) : null,
         branch: message.branch || (review.get('branch') as string | undefined),
+        folderPath:
+          targetType === 'folder' ? message.folderPath ?? (review.get('folderPath') as string | null) ?? '' : null,
         headSha: message.headSha || (review.get('headSha') as string | null),
         aiEmployeeUsername,
         extraInstructions: message.extraInstructions ?? metadata.extraInstructions ?? undefined,
@@ -699,6 +718,7 @@ interface RunReviewArgs {
   mrIid: number | null;
   commitSha: string | null;
   branch?: string;
+  folderPath?: string | null;
   headSha?: string | null;
   aiEmployeeUsername: string;
   extraInstructions?: string;
@@ -973,6 +993,28 @@ function buildReviewPrompt(args: RunReviewArgs): string {
         args.commitSha
       } to fetch the diff.`,
     );
+  } else if (args.targetType === 'folder') {
+    const folderLabel = args.folderPath || '/';
+    const ref = args.branch || 'HEAD';
+    lines.push(
+      `Target: Folder \`${folderLabel}\` at ref \`${ref}\` — review the FULL current code inside this folder (not a diff).`,
+    );
+    lines.push(
+      'The repository may contain multiple projects; only review files inside this folder and its subfolders.',
+    );
+    lines.push(
+      `First call \`git_list_files\` with repositoryId=${args.repo.get('id')}, treePath="${
+        args.folderPath || ''
+      }", ref="${ref}", recursive=true to enumerate all files.`,
+    );
+    lines.push(
+      `Then read each file worth reviewing with \`git_get_file_content\` (repositoryId=${args.repo.get(
+        'id',
+      )}, ref="${ref}").`,
+    );
+    lines.push(
+      'Prioritize source code and configuration files; skip binaries, images, lock files, and generated/vendored code. If the listing is truncated, focus on the most important files.',
+    );
   } else {
     lines.push(`Target: Branch ${args.branch}.`);
     lines.push(
@@ -1172,6 +1214,8 @@ function getFlowPostMode(flow: any): ReviewPostMode {
 function getInitialPostStatus(flow: any, targetType: string): string {
   const postMode = getFlowPostMode(flow);
   if (postMode === 'disabled') return 'skipped';
+  // Folder reviews have no MR to post to.
+  if (targetType === 'folder') return 'skipped';
   if (postMode === 'auto' && targetType !== 'mr') return 'skipped';
   return 'pending_approval';
 }

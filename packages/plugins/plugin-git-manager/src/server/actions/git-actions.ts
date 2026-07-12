@@ -314,7 +314,7 @@ export async function checkout(ctx: Context, next: () => Promise<void>) {
 export async function fileTree(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { ref = 'HEAD', treePath = '' } = ctx.action.params;
+  const { ref = 'HEAD', treePath = '', recursive } = ctx.action.params;
 
   const git = getGit(ctx, localPath);
   validateRef(ref);
@@ -322,7 +322,9 @@ export async function fileTree(ctx: Context, next: () => Promise<void>) {
     ctx.throw(400, 'Invalid tree path');
   }
 
-  const detailArgs = ['ls-tree', '-l', ref];
+  const detailArgs = ['ls-tree', '-l'];
+  if (recursive === true || recursive === 'true') detailArgs.push('-r');
+  detailArgs.push(ref);
   if (treePath) detailArgs.push(treePath + '/');
   const detailedResult = await git.raw(detailArgs);
   const items = detailedResult
@@ -343,10 +345,10 @@ export async function fileTree(ctx: Context, next: () => Promise<void>) {
         hash: match[3],
         size: match[4] === '-' ? 0 : parseInt(match[4], 10),
         name,
-        path: treePath ? `${treePath}/${name}` : name,
+        path: fullPath,
       };
     })
-    .filter(Boolean);
+    .filter((item): item is NonNullable<typeof item> => item !== null);
 
   // Sort: directories first, then files, both alphabetical
   items.sort((a, b) => {

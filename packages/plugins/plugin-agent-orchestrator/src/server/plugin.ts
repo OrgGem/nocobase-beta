@@ -3,8 +3,12 @@ import path from 'path';
 import { createExternalRagSearchTool } from './tools/external-rag-search';
 import { registerTracingResource } from './resources/tracing';
 import { registerAgentMonitorResource } from './resources/agent-monitor';
+import { registerAgentLoopResource } from './resources/agent-loop';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
+import { AgentLoopService } from './services/AgentLoopService';
+import { createAgentLoopTools } from './tools/agent-loop';
+import { PlanningPromptService } from './services/PlanningPromptService';
 import { asObject, isAdminUser, currentUserId } from './utils/ctx-utils';
 import { getAIToolsManager } from './utils/ai-manager';
 
@@ -182,6 +186,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('skillHub', 'download', 'loggedIn');
     this.app.acl.allow('skillHub', 'listTemplates', 'loggedIn');
     this.app.acl.allow('agentMonitor', ['list', 'get'], 'loggedIn');
+    this.app.acl.allow('agentLoops', ['list', 'get'], 'loggedIn');
 
     // Data scoping for skillExecutions: a logged-in non-admin user may only
     // read their own executions. Rows hold inputArgs / stdout / output files,
@@ -214,6 +219,32 @@ export class PluginAgentOrchestratorServer extends Plugin {
       { tag: 'orchestrator-agent-memory-context-policy', after: 'acl' },
     );
 
+    // --- Planning Prompt Injection ---
+    // When a user message contains plan-related keywords, prepend planning
+    // instructions so the AI agent creates a plan via agent_loop_start before
+    // executing.
+    const planningPrompt = new PlanningPromptService();
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        const { resourceName, actionName } = ctx.action || {};
+        if (resourceName === 'aiConversations' && actionName === 'sendMessages') {
+          const values = ctx.action.params.values || {};
+          const messages = values.messages;
+          if (Array.isArray(messages)) {
+            for (const msg of messages) {
+              if (msg.role === 'user' && typeof msg.content === 'string') {
+                if (planningPrompt.shouldInjectPlanningPrompt(msg.content)) {
+                  msg.content = planningPrompt.getPlanningPrefix() + msg.content;
+                }
+              }
+            }
+          }
+        }
+        await next();
+      },
+      { tag: 'orchestrator-planning-prompt', after: 'acl' },
+    );
+
     // --- Register External Tool Only ---
     // Native @nocobase/plugin-ai owns sub-agent dispatch. The orchestrator no
     // longer registers delegate_* / dispatch_subagents_* tools or controller
@@ -221,10 +252,20 @@ export class PluginAgentOrchestratorServer extends Plugin {
     const toolsManager = getAIToolsManager(this.app);
     toolsManager.registerTools(createExternalRagSearchTool(this));
 
+    // --- Register Agent Loop Tools & Resource ---
+    const agentLoopService = new AgentLoopService(this);
+    toolsManager.registerTools(createAgentLoopTools(this, agentLoopService));
+    registerAgentLoopResource(this, agentLoopService);
+
     // --- Native plugin-ai Monitor Resource ---
     registerAgentMonitorResource(this);
     this.installNativeObserver();
     this.app.on?.('afterStart', this.installNativeObserver);
+
+    // --- Crash Recovery ---
+    // On startup, scan for steps/runs left in "running" state from a previous
+    // crash and reset them so they can be retried.
+    this.app.on?.('afterStart', this.recoverAfterCrash);
 
     // --- Register Tracing Resource (Phase 5) ---
     // Custom read-only resource for the Swarm Tracing admin page.
@@ -277,9 +318,111 @@ export class PluginAgentOrchestratorServer extends Plugin {
   async beforeStop() {
     this.app.off?.('afterStart', this.installNativeObserver);
     this.app.removeListener?.('afterStart', this.installNativeObserver);
+    this.app.off?.('afterStart', this.recoverAfterCrash);
+    this.app.removeListener?.('afterStart', this.recoverAfterCrash);
     this.nativeObserver?.uninstall();
     await this.skillHub.beforeStop();
   }
+
+  // --- Crash Recovery ---
+  // Scans for agentLoopSteps stuck in "running" status from a previous crash
+  // and resets them to "pending". Also cleans up orphaned agentLoopRuns where
+  // all steps have reached terminal states but the run itself wasn't finalized.
+  private readonly recoverAfterCrash = async () => {
+    const timeoutMs = Number(process.env.ORCHESTRATOR_CRASH_RECOVERY_TIMEOUT_MS || 600000); // 10 min default
+    const cutoff = new Date(Date.now() - timeoutMs);
+
+    try {
+      const stepsRepo = this.db.getRepository('agentLoopSteps');
+      const runsRepo = this.db.getRepository('agentLoopRuns');
+
+      // 1. Reset stale running steps back to pending
+      if (stepsRepo) {
+        const staleSteps = await stepsRepo.find({
+          filter: {
+            status: 'running',
+            startedAt: { $lt: cutoff.toISOString() },
+          },
+        });
+
+        for (const step of staleSteps) {
+          const stepId = readModelValue(step, 'id');
+          const runId = readModelValue(step, 'runId');
+          await stepsRepo.update({
+            filterByTk: stepId,
+            values: {
+              status: 'pending',
+              startedAt: null,
+              error: `Recovered after crash at ${new Date().toISOString()}`,
+            },
+          });
+          this.app.logger?.warn?.(
+            `[AgentOrchestrator] Crash recovery: reset step ${stepId} (run ${runId}) from running to pending`,
+          );
+        }
+
+        if (staleSteps.length > 0) {
+          this.app.logger?.info?.(
+            `[AgentOrchestrator] Crash recovery: reset ${staleSteps.length} stale running step(s)`,
+          );
+        }
+      }
+
+      // 2. Finalize orphaned runs — runs marked "running" where all steps are terminal
+      if (runsRepo) {
+        const runningRuns = await runsRepo.find({
+          filter: { status: 'running' },
+        });
+
+        for (const run of runningRuns) {
+          const runId = readModelValue(run, 'id');
+          const steps = await stepsRepo?.find({
+            filter: { runId },
+          });
+
+          if (!steps || steps.length === 0) {
+            // No steps at all — orphaned, mark as failed
+            await runsRepo.update({
+              filterByTk: runId,
+              values: {
+                status: 'failed',
+                endedAt: new Date(),
+                summary: 'Run was orphaned after server crash (no steps found).',
+              },
+            });
+            this.app.logger?.warn?.(
+              `[AgentOrchestrator] Crash recovery: marked orphaned run ${runId} as failed (no steps)`,
+            );
+            continue;
+          }
+
+          const allTerminal = steps.every((s: any) => {
+            const st = readModelValue(s, 'status');
+            return st === 'succeeded' || st === 'failed' || st === 'skipped';
+          });
+
+          if (!allTerminal) continue;
+
+          const anyFailed = steps.some((s: any) => readModelValue(s, 'status') === 'failed');
+          const finalStatus = anyFailed ? 'failed' : 'succeeded';
+
+          await runsRepo.update({
+            filterByTk: runId,
+            values: {
+              status: finalStatus,
+              endedAt: new Date(),
+              summary: `Run finalized as ${finalStatus} after server crash recovery.`,
+            },
+          });
+          this.app.logger?.warn?.(
+            `[AgentOrchestrator] Crash recovery: finalized orphaned run ${runId} as ${finalStatus}`,
+          );
+        }
+      }
+    } catch (error) {
+      this.app.logger?.error?.('[AgentOrchestrator] Crash recovery scan failed', error);
+    }
+  };
 }
 
 export default PluginAgentOrchestratorServer;

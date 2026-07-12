@@ -9,5 +9,7 @@
   "Uncheck for self-signed certificates": "Uncheck for self-signed certificates",
   "Index Pattern": "Index Pattern",
   "Filter indices by pattern (e.g. logs-*, my-data-*)": "Filter indices by pattern (e.g. logs-*, my-data-*)",
+  "Load all collections": "Load all collections",
+  "Collections": "Collections",
   "Connection successful": "Connection successful"
 }

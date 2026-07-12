@@ -39,21 +39,16 @@ export class PluginDocumentParserServer extends Plugin {
   async beforeLoad() {
     // Excel handler — higher priority than the AI loader (prepend: true)
     this.internalParserRegistry.register(new BuiltinExcelHandler(this.fetchFileBuffer.bind(this)), { prepend: true });
-    
+
     // MarkItDown handler - uses python markitdown CLI
     this.internalParserRegistry.register(
-      new BuiltinMarkitdownHandler(
-        this.fetchFileBuffer.bind(this),
-        () => this.db.getRepository('docParserSettings')
-      ), 
-      { prepend: true }
+      new BuiltinMarkitdownHandler(this.fetchFileBuffer.bind(this), () => this.db.getRepository('docParserSettings')),
+      { prepend: true },
     );
 
     // Built-in AI document handler (lowest priority — appended last)
     // Done in beforeLoad so other plugins' load() can prepend higher-priority handlers
-    this.internalParserRegistry.register(
-      new BuiltinAIDocumentHandler(this.fetchFileBuffer.bind(this)),
-    );
+    this.internalParserRegistry.register(new BuiltinAIDocumentHandler(this.fetchFileBuffer.bind(this)));
   }
 
   async load() {
@@ -258,6 +253,14 @@ export class PluginDocumentParserServer extends Plugin {
 
     const buffer = await readFile(absPath);
     return { buffer, url };
+  }
+
+  async parseAttachmentToText(ctx: Context, attachment: AttachmentLike): Promise<string> {
+    const result = await this.internalParserRegistry.parse(attachment, ctx);
+    if (result.handled && result.text) {
+      return result.text;
+    }
+    return '';
   }
 }
 

@@ -3,12 +3,12 @@
  */
 
 import React, { useState } from 'react';
-import { Alert, Table, Tag, Button, Space, Input, Select, Drawer, Descriptions, Popconfirm, message } from 'antd';
-import { StopOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
+import { Alert, Table, Tag, Button, Space, Input, Select, Drawer, Descriptions } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { toUiPathArray, useUiPathRequest } from '../hooks/useUiPathRequest';
 import { useT } from '../locale';
+import { combineFilters, containsFilter, dateRangeFilter, equalsFilter, textAnyFilter } from '../utils/odataFilters';
 
 const stateColors: Record<string, string> = {
   Faulted: 'red',
@@ -20,40 +20,37 @@ const stateColors: Record<string, string> = {
 };
 
 const JOB_STATES = ['Pending', 'Running', 'Successful', 'Faulted', 'Stopped', 'Suspended', 'Resumed'];
-const escapeODataString = (value: string) => value.replace(/'/g, "''");
+const JOB_DATE_FIELDS = ['CreationTime', 'StartTime', 'EndTime'];
+const JOB_SOURCES = ['Manual', 'Schedule', 'Queue', 'Process', 'Trigger'];
 
 export const JobManager: React.FC = () => {
   const t = useT();
-  const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey } = useCurrentInstance();
+  const { dateRange, processFilter } = useCurrentInstance();
   const [stateFilter, setStateFilter] = useState<string | undefined>();
   const [search, setSearch] = useState('');
+  const [jobKey, setJobKey] = useState('');
+  const [source, setSource] = useState<string | undefined>();
+  const [machine, setMachine] = useState('');
+  const [dateField, setDateField] = useState('CreationTime');
   const [selectedJob, setSelectedJob] = useState<any>(null);
 
-  const filterParts: string[] = [];
-  if (stateFilter) filterParts.push(`State eq '${stateFilter}'`);
-  if (search) filterParts.push(`contains(ReleaseName, '${escapeODataString(search)}')`);
+  const filter = combineFilters([
+    equalsFilter('State', stateFilter),
+    textAnyFilter(['ReleaseName', 'ReleaseKey'], processFilter),
+    textAnyFilter(['ReleaseName', 'ReleaseKey'], search),
+    equalsFilter('Key', jobKey.trim() || undefined),
+    equalsFilter('Source', source),
+    containsFilter('HostMachineName', machine),
+    dateRangeFilter(dateField, dateRange),
+  ]);
 
   const { data, loading, error, refresh } = useUiPathRequest('uipathJobs', 'list', {
-    filter: filterParts.join(' and ') || undefined,
+    filter,
     top: 50,
     count: true,
     orderby: 'CreationTime desc',
   });
   const jobs = toUiPathArray(data);
-
-  const handleAction = async (action: string, jobId: number) => {
-    try {
-      await api.request({
-        url: `uipathJobs:${action}`,
-        params: { instanceId, folderId, folderKey, filterByTk: jobId },
-      });
-      message.success(t(`Job ${action} requested`));
-      refresh();
-    } catch (err: any) {
-      message.error(err.message);
-    }
-  };
 
   const columns = [
     { title: t('ID'), dataIndex: 'Id', width: 80 },
@@ -74,28 +71,11 @@ export const JobManager: React.FC = () => {
     { title: t('Info'), dataIndex: 'Info', ellipsis: true },
     {
       title: t('Actions'),
-      width: 180,
+      width: 100,
       render: (_: any, record: any) => (
-        <Space size="small">
-          {record.State === 'Running' && (
-            <>
-              <Popconfirm title={t('Soft stop this job?')} onConfirm={() => handleAction('stop', record.Id)}>
-                <Button size="small" icon={<StopOutlined />} />
-              </Popconfirm>
-              <Popconfirm title={t('Kill this job?')} onConfirm={() => handleAction('kill', record.Id)}>
-                <Button size="small" danger icon={<DeleteOutlined />} />
-              </Popconfirm>
-            </>
-          )}
-          {['Faulted', 'Stopped'].includes(record.State) && (
-            <Popconfirm title={t('Restart this job?')} onConfirm={() => handleAction('restart', record.Id)}>
-              <Button size="small" icon={<ReloadOutlined />} />
-            </Popconfirm>
-          )}
-          <Button size="small" onClick={() => setSelectedJob(record)}>
-            {t('Detail')}
-          </Button>
-        </Space>
+        <Button size="small" onClick={() => setSelectedJob(record)}>
+          {t('Detail')}
+        </Button>
       ),
     },
   ];
@@ -115,6 +95,34 @@ export const JobManager: React.FC = () => {
           options={JOB_STATES.map((s) => ({ label: s, value: s }))}
         />
         <Input.Search placeholder={t('Search process name')} style={{ width: 250 }} onSearch={setSearch} allowClear />
+        <Input
+          placeholder={t('Job Key')}
+          style={{ width: 180 }}
+          value={jobKey}
+          onChange={(event) => setJobKey(event.target.value)}
+          allowClear
+        />
+        <Select
+          placeholder={t('Source')}
+          allowClear
+          style={{ width: 140 }}
+          value={source}
+          onChange={setSource}
+          options={JOB_SOURCES.map((value) => ({ label: value, value }))}
+        />
+        <Input
+          placeholder={t('Machine')}
+          style={{ width: 180 }}
+          value={machine}
+          onChange={(event) => setMachine(event.target.value)}
+          allowClear
+        />
+        <Select
+          value={dateField}
+          style={{ width: 150 }}
+          onChange={setDateField}
+          options={JOB_DATE_FIELDS.map((value) => ({ label: value, value }))}
+        />
         <Button onClick={() => refresh()} icon={<ReloadOutlined />}>
           {t('Refresh')}
         </Button>

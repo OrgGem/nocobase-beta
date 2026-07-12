@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { delimiter, join, resolve } from 'path';
 import { unlink, writeFile } from 'fs/promises';
 import type { AttachmentLike, MarkItDownCheckResult, MarkItDownRuntimeInfo } from '../types';
+import type { Context } from '@nocobase/actions';
 
 const DEFAULT_SUPPORTED_EXTNAMES = [
   '.pdf',
@@ -49,6 +50,17 @@ type ProcessCandidate = {
 };
 
 export class MarkItDownService {
+  private attachmentBufferFetcher?: (
+    ctx: Context,
+    attachment: AttachmentLike,
+  ) => Promise<{ buffer: Buffer; url: string }>;
+
+  setAttachmentBufferFetcher(
+    fetcher: (ctx: Context, attachment: AttachmentLike) => Promise<{ buffer: Buffer; url: string }>,
+  ) {
+    this.attachmentBufferFetcher = fetcher;
+  }
+
   getRuntimeInfo(): MarkItDownRuntimeInfo {
     const usePythonModule =
       parseBoolean(process.env.MARKITDOWN_USE_PYTHON_MODULE) || !!process.env.MARKITDOWN_PYTHON_BIN;
@@ -110,6 +122,18 @@ export class MarkItDownService {
     } finally {
       unlink(tempPath).catch(() => {});
     }
+  }
+
+  async parseBuffer(buffer: Buffer, attachment: AttachmentLike = {}): Promise<string> {
+    return this.convertBuffer(buffer, attachment);
+  }
+
+  async parseAttachment(ctx: Context, attachment: AttachmentLike): Promise<string> {
+    if (!this.attachmentBufferFetcher) {
+      throw new Error('plugin-document-parser fetchFileBuffer is required to parse attachments.');
+    }
+    const { buffer } = await this.attachmentBufferFetcher(ctx, attachment);
+    return this.convertBuffer(buffer, attachment);
   }
 
   async convertFile(filePath: string): Promise<string> {

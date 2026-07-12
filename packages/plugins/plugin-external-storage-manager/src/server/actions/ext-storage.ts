@@ -288,6 +288,8 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       };
 
       if (Array.isArray(filesOrResult)) {
+        // Adapter returned all entries (e.g. SFTP with no pagination, or S3 with search).
+        // Sort / filter / slice on the server side.
         let files = filesOrResult.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
         if (type === 'file' || type === 'directory') {
           files = files.filter((entry) => entry.type === type);
@@ -303,14 +305,71 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
         meta.hasMore = offset + limit < sorted.length;
         meta.nextOffset = offset + limit < sorted.length ? offset + limit : null;
       } else {
-        pageData = filesOrResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+        // Adapter returned a paginated ListResult (e.g. S3 without search).
+        // Apply type/search filters (which aren't applied by the adapter for ListResult).
+        let entries = filesOrResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+        if (type === 'file' || type === 'directory') {
+          entries = entries.filter((entry) => entry.type === type);
+        }
+        if (search) {
+          entries = entries.filter((entry) => entry.name.toLowerCase().includes(search));
+        }
+
+        // If the client uses offset-based pagination but the adapter uses
+        // continuation tokens (S3), iterate through pages to reach the offset.
+        let currentResult = filesOrResult;
+        let remainingOffset = offset;
+        while (remainingOffset > 0 && entries.length > 0 && currentResult.hasMore && currentResult.nextContinuationToken) {
+          const consumed = Math.min(remainingOffset, entries.length);
+          remainingOffset -= consumed;
+
+          if (remainingOffset > 0) {
+            currentResult = await adapter.list(remotePath, {
+              ...options,
+              offset: 0,
+              continuationToken: currentResult.nextContinuationToken,
+            });
+
+            if (Array.isArray(currentResult)) {
+              // Adapter switched to array mode mid-pagination — process as array
+              let allFiles = currentResult.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+              if (type === 'file' || type === 'directory') {
+                allFiles = allFiles.filter((entry) => entry.type === type);
+              }
+              if (search) {
+                allFiles = allFiles.filter((entry) => entry.name.toLowerCase().includes(search));
+              }
+              const sorted = sortEntries(allFiles, payload.sort || 'name', payload.order || 'asc');
+              pageData = sorted.slice(remainingOffset, remainingOffset + limit);
+              meta.total = null;
+              meta.limit = limit;
+              meta.offset = offset;
+              meta.hasMore = remainingOffset + limit < sorted.length;
+              meta.nextOffset = remainingOffset + limit < sorted.length ? offset + limit : null;
+              meta.nextContinuationToken = undefined;
+              ctx.body = { data: pageData, meta };
+              return;
+            }
+
+            entries = currentResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+            if (type === 'file' || type === 'directory') {
+              entries = entries.filter((entry) => entry.type === type);
+            }
+            if (search) {
+              entries = entries.filter((entry) => entry.name.toLowerCase().includes(search));
+            }
+          }
+        }
+
+        pageData = entries.slice(remainingOffset, remainingOffset + limit);
+
         meta.limit = limit;
         meta.offset = offset;
         meta.continuationToken = payload.continuationToken;
-        meta.nextContinuationToken = filesOrResult.nextContinuationToken;
-        meta.hasMore = filesOrResult.hasMore ?? !!filesOrResult.nextContinuationToken;
-        if (filesOrResult.total !== undefined) {
-          meta.total = filesOrResult.total;
+        meta.nextContinuationToken = currentResult.nextContinuationToken;
+        meta.hasMore = currentResult.hasMore ?? !!currentResult.nextContinuationToken;
+        if (currentResult.total !== undefined) {
+          meta.total = currentResult.total;
         }
       }
 

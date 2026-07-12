@@ -3,6 +3,7 @@ import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, 
 import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import * as aiClient from '@nocobase/plugin-ai/client';
+import { REVIEW_PROMPT_TEMPLATES } from '../promptTemplates';
 import { useT } from '../locale';
 
 interface ReviewFlow {
@@ -21,7 +22,8 @@ interface ReviewFlow {
 type Target =
   | { type: 'mr'; repositoryId: number; mrIid: number; title?: string }
   | { type: 'commit'; repositoryId: number; commitSha: string; title?: string }
-  | { type: 'branch'; repositoryId: number; branch: string; title?: string };
+  | { type: 'branch'; repositoryId: number; branch: string; title?: string }
+  | { type: 'folder'; repositoryId: number; folderPath: string; ref?: string; title?: string };
 
 /**
  * Button that lets the user kick off a code review for a given target.
@@ -45,6 +47,7 @@ export const RunReviewButton: React.FC<{
   const [submitting, setSubmitting] = useState(false);
   const [asking, setAsking] = useState(false);
   const [existingReview, setExistingReview] = useState<any | null>(null);
+  const [templateKey, setTemplateKey] = useState<string | undefined>();
   const [form] = Form.useForm();
 
   const loadExistingReview = useCallback(() => {
@@ -56,6 +59,10 @@ export const RunReviewButton: React.FC<{
     if (target.type === 'mr') filter.mrIid = target.mrIid;
     if (target.type === 'commit') filter.commitSha = target.commitSha;
     if (target.type === 'branch') filter.branch = target.branch;
+    if (target.type === 'folder') {
+      filter.folderPath = target.folderPath;
+      filter.branch = target.ref || null;
+    }
 
     api
       .request({
@@ -97,13 +104,17 @@ export const RunReviewButton: React.FC<{
     return list;
   }, [api, target.repositoryId]);
 
-  const pickFlow = useCallback((list: ReviewFlow[]) => {
-    const repoFlow = list.find((f) => f.repositoryId === target.repositoryId);
-    return repoFlow ?? list[0] ?? null;
-  }, [target.repositoryId]);
+  const pickFlow = useCallback(
+    (list: ReviewFlow[]) => {
+      const repoFlow = list.find((f) => f.repositoryId === target.repositoryId);
+      return repoFlow ?? list[0] ?? null;
+    },
+    [target.repositoryId],
+  );
 
   useEffect(() => {
     if (!open) return;
+    setTemplateKey(undefined);
     let cancelled = false;
     loadFlows()
       .then((list) => {
@@ -130,6 +141,10 @@ export const RunReviewButton: React.FC<{
       if (target.type === 'mr') params.mrIid = target.mrIid;
       if (target.type === 'commit') params.commitSha = target.commitSha;
       if (target.type === 'branch') params.branch = target.branch;
+      if (target.type === 'folder') {
+        params.folderPath = target.folderPath;
+        params.branch = target.ref;
+      }
       const res = await api.request({
         url: 'gitManager:triggerReview',
         method: 'post',
@@ -175,6 +190,19 @@ export const RunReviewButton: React.FC<{
         },
       };
     }
+    if (target.type === 'folder') {
+      return {
+        type: 'git-repository',
+        uid: `${target.repositoryId}:folder:${target.folderPath}`,
+        title,
+        content: {
+          repositoryId: target.repositoryId,
+          folderPath: target.folderPath,
+          ref: target.ref,
+          title,
+        },
+      };
+    }
     return {
       type: 'git-repository',
       uid: String(target.repositoryId),
@@ -189,10 +217,19 @@ export const RunReviewButton: React.FC<{
 
   const buildChatPrompt = () => {
     if (target.type === 'mr') {
-      return `Please review merge request !${target.mrIid} (${target.title || 'untitled'}). Use the attached Git merge request context and the available git tools when you need more detail.`;
+      return `Please review merge request !${target.mrIid} (${
+        target.title || 'untitled'
+      }). Use the attached Git merge request context and the available git tools when you need more detail.`;
     }
     if (target.type === 'commit') {
-      return `Please review commit ${target.commitSha} (${target.title || 'untitled'}). Use the attached Git commit context and the available git tools when you need more detail.`;
+      return `Please review commit ${target.commitSha} (${
+        target.title || 'untitled'
+      }). Use the attached Git commit context and the available git tools when you need more detail.`;
+    }
+    if (target.type === 'folder') {
+      return `Please review the full code inside folder "${target.folderPath || '/'}" at ref ${
+        target.ref || 'HEAD'
+      }. Use git_list_files (recursive=true) to enumerate the files, then git_get_file_content to read them.`;
     }
     return `Please help me inspect branch ${target.branch}. Use the attached Git repository context and the available git tools when you need more detail.`;
   };
@@ -243,6 +280,7 @@ export const RunReviewButton: React.FC<{
   const buildContextHint = () => {
     if (target.type === 'mr') return `MR !${target.mrIid}`;
     if (target.type === 'commit') return `Commit ${String(target.commitSha).slice(0, 7)}`;
+    if (target.type === 'folder') return `${t('Folder')} ${target.folderPath || '/'}`;
     return `Branch ${target.branch}`;
   };
 
@@ -260,29 +298,36 @@ export const RunReviewButton: React.FC<{
     : t('Code Review');
   const ButtonIcon = isReReview ? ReloadOutlined : RobotOutlined;
 
-  const items = useMemo(() => [
-    {
-      key: 'run',
-      icon: <ThunderboltOutlined />,
-      label: isReReview ? t('Re-run automated review') : t('Run automated review'),
-      onClick: () => setOpen(true),
-    },
-    ...(existingReview ? [{
-      key: 'view',
-      icon: <RobotOutlined />,
-      label: t(`Status: ${existingReview.status}`) + ' - ' + t('View in Review History tab'),
-      onClick: () => {
-        message.info(t('Please switch to the "Review History" tab to see the details.'));
+  const items = useMemo(
+    () => [
+      {
+        key: 'run',
+        icon: <ThunderboltOutlined />,
+        label: isReReview ? t('Re-run automated review') : t('Run automated review'),
+        onClick: () => setOpen(true),
       },
-    }] : []),
-    {
-      key: 'chat',
-      icon: <MessageOutlined />,
-      label: t('Ask AI Employee'),
-      onClick: handleOpenChat,
-      disabled: asking,
-    },
-  ], [isReReview, existingReview, asking, handleOpenChat]);
+      ...(existingReview
+        ? [
+            {
+              key: 'view',
+              icon: <RobotOutlined />,
+              label: t(`Status: ${existingReview.status}`) + ' - ' + t('View in Review History tab'),
+              onClick: () => {
+                message.info(t('Please switch to the "Review History" tab to see the details.'));
+              },
+            },
+          ]
+        : []),
+      {
+        key: 'chat',
+        icon: <MessageOutlined />,
+        label: t('Ask AI Employee'),
+        onClick: handleOpenChat,
+        disabled: asking,
+      },
+    ],
+    [isReReview, existingReview, asking, handleOpenChat, t],
+  );
 
   return (
     <>
@@ -363,6 +408,22 @@ export const RunReviewButton: React.FC<{
                 }`,
               }))}
               placeholder={t('Select a review flow')}
+            />
+          </Form.Item>
+          <Form.Item
+            label={t('Prompt template')}
+            extra={t('Selecting a template replaces the extra instructions text')}
+          >
+            <Select
+              allowClear
+              value={templateKey}
+              placeholder={t('Load a default prompt by code type')}
+              options={REVIEW_PROMPT_TEMPLATES.map((tpl) => ({ value: tpl.key, label: t(tpl.label) }))}
+              onChange={(key) => {
+                setTemplateKey(key);
+                const tpl = REVIEW_PROMPT_TEMPLATES.find((item) => item.key === key);
+                if (tpl) form.setFieldValue('extraInstructions', tpl.text);
+              }}
             />
           </Form.Item>
           <Form.Item name="extraInstructions" label={t('Extra instructions (optional)')}>

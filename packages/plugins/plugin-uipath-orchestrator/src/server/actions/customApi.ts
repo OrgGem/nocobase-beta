@@ -1,20 +1,28 @@
 /**
  * Custom API passthrough action
  *
- * Allows the client to call any Orchestrator endpoint not covered by specific actions.
- * Restricted to admin role via ACL.
+ * Allows read-only calls to selected Orchestrator endpoints not covered by specific actions.
  */
 
 import type { Context, Next } from '@nocobase/actions';
 import type { PluginUiPathOrchestratorServer } from '../plugin';
 import { handleError, extractFolderContext } from './shared';
 
+const READ_ONLY_ENDPOINTS = [/^\/odata\/[A-Za-z0-9_.$%()/,'=-]+$/i, /^\/api\/Stats\/[A-Za-z0-9_.$%/()-]+$/i];
+
+function isAllowedReadEndpoint(endpoint: string): boolean {
+  if (endpoint.includes('..') || endpoint.includes('\\')) {
+    return false;
+  }
+
+  return READ_ONLY_ENDPOINTS.some((pattern) => pattern.test(endpoint.split('?')[0]));
+}
+
 export function createCustomApiActions(plugin: PluginUiPathOrchestratorServer) {
   return {
     proxy: async (ctx: Context, next: Next) => {
       try {
-        const { instanceId, method, endpoint, query, body } = ctx.action.params;
-        const client = await plugin.getApiClient(instanceId);
+        const { instanceId, method, endpoint, query } = ctx.action.params;
         const folder = extractFolderContext(ctx.action.params);
 
         if (!endpoint || typeof endpoint !== 'string') {
@@ -24,11 +32,23 @@ export function createCustomApiActions(plugin: PluginUiPathOrchestratorServer) {
           return;
         }
 
-        const result = await client.request(
-          (method || 'GET').toUpperCase(),
-          endpoint,
-          { query, body, folder },
-        );
+        const requestMethod = String(method || 'GET').toUpperCase();
+        if (requestMethod !== 'GET') {
+          ctx.status = 405;
+          ctx.body = { errors: [{ message: 'Custom UiPath API proxy is read-only. Only GET is allowed.' }] };
+          await next();
+          return;
+        }
+
+        if (!isAllowedReadEndpoint(endpoint)) {
+          ctx.status = 400;
+          ctx.body = { errors: [{ message: 'Endpoint is not allowed by the read-only UiPath API proxy.' }] };
+          await next();
+          return;
+        }
+
+        const client = await plugin.getApiClient(instanceId);
+        const result = await client.request(requestMethod, endpoint, { query, body: undefined, folder });
 
         await plugin.auditLog(ctx, {
           action: 'custom_api',
@@ -36,7 +56,7 @@ export function createCustomApiActions(plugin: PluginUiPathOrchestratorServer) {
           resourceId: endpoint,
           instanceId: Number(instanceId),
           folder,
-          details: { method: method || 'GET', endpoint },
+          details: { method: requestMethod, endpoint },
         });
 
         ctx.body = result;

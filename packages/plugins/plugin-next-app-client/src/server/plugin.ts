@@ -14,6 +14,45 @@ import { tval } from '@nocobase/utils';
 import _ from 'lodash';
 import { resolve } from 'path';
 
+type RoutePlainObject = Record<string, any> & {
+  id?: string | number;
+  schemaUid?: string;
+  children?: RoutePlainObject[];
+  nextAppRouteId?: string | number;
+};
+
+const toPlainRoute = (route: Model | RoutePlainObject): RoutePlainObject => {
+  if (typeof (route as Model).get === 'function') {
+    return (route as Model).get({ plain: true }) as RoutePlainObject;
+  }
+  return route as RoutePlainObject;
+};
+
+const flattenSchemaUids = (routes: RoutePlainObject[], schemaUids = new Set<string>()) => {
+  for (const route of routes) {
+    if (route.schemaUid) {
+      schemaUids.add(route.schemaUid);
+    }
+    if (Array.isArray(route.children)) {
+      flattenSchemaUids(route.children, schemaUids);
+    }
+  }
+  return schemaUids;
+};
+
+const indexRoutesBySchemaUid = (routes: RoutePlainObject[], map = new Map<string, RoutePlainObject>()) => {
+  for (const route of routes) {
+    const plain = toPlainRoute(route);
+    if (plain.schemaUid && !map.has(plain.schemaUid)) {
+      map.set(plain.schemaUid, plain);
+    }
+    if (Array.isArray(plain.children)) {
+      indexRoutesBySchemaUid(plain.children, map);
+    }
+  }
+  return map;
+};
+
 export class PluginNextAppServer extends Plugin {
   async beforeLoad() {}
 
@@ -195,6 +234,70 @@ export class PluginNextAppServer extends Plugin {
   }
 
   registerActionHandlers() {
+    const getDesktopAccessibleRoutes = async (ctx, filter?: Record<string, any>) => {
+      const desktopRoutesRepository = ctx.db.getRepository('desktopRoutes');
+      const rolesRepository = ctx.db.getRepository('roles');
+
+      if (ctx.state.currentRoles.includes('root')) {
+        return await desktopRoutesRepository.find({
+          tree: true,
+          sort: 'sort',
+          filter,
+        });
+      }
+
+      const roles = await rolesRepository.find({
+        filterByTk: ctx.state.currentRoles,
+        appends: ['desktopRoutes'],
+      });
+      const desktopRoutesId = roles.flatMap((x) => x.get('desktopRoutes')).map((item) => item.id);
+
+      if (!desktopRoutesId.length) {
+        return [];
+      }
+
+      return await desktopRoutesRepository.find({
+        tree: true,
+        sort: 'sort',
+        filter: {
+          ...filter,
+          id: desktopRoutesId,
+        },
+      });
+    };
+
+    const projectNextAppRoutesToDesktopRoutes = async (ctx, nextAppRoutes: Array<Model | RoutePlainObject>) => {
+      const nextAppPlainRoutes = nextAppRoutes.map(toPlainRoute);
+      const schemaUids = Array.from(flattenSchemaUids(nextAppPlainRoutes));
+
+      if (!schemaUids.length) {
+        return nextAppPlainRoutes;
+      }
+
+      const desktopRoutes = await getDesktopAccessibleRoutes(ctx);
+      const desktopRouteBySchemaUid = indexRoutesBySchemaUid(desktopRoutes.map(toPlainRoute));
+
+      const projectRoute = (nextAppRoute: RoutePlainObject): RoutePlainObject | null => {
+        const desktopRoute = nextAppRoute.schemaUid ? desktopRouteBySchemaUid.get(nextAppRoute.schemaUid) : null;
+
+        if (!desktopRoute) {
+          return null;
+        }
+
+        return {
+          ...desktopRoute,
+          title: nextAppRoute.title || desktopRoute.title,
+          tooltip: nextAppRoute.tooltip || desktopRoute.tooltip,
+          icon: nextAppRoute.icon || desktopRoute.icon,
+          sort: nextAppRoute.sort ?? desktopRoute.sort,
+          hideInMenu: nextAppRoute.hideInMenu ?? desktopRoute.hideInMenu,
+          nextAppRouteId: nextAppRoute.id,
+        };
+      };
+
+      return nextAppPlainRoutes.map(projectRoute).filter(Boolean);
+    };
+
     this.app.resourceManager.registerActionHandler('nextAppRoutes:listAccessible', async (ctx, next) => {
       const nextAppRoutesRepository = ctx.db.getRepository('nextAppRoutes');
       const rolesRepository = ctx.db.getRepository('roles');
@@ -207,11 +310,12 @@ export class PluginNextAppServer extends Plugin {
           actualFilter['config.path'] = appPath;
         }
 
-        ctx.body = await nextAppRoutesRepository.find({
+        const result = await nextAppRoutesRepository.find({
           tree: true,
           sort: 'sort',
           filter: actualFilter,
         });
+        ctx.body = await projectNextAppRoutesToDesktopRoutes(ctx, result);
         return await next();
       }
 
@@ -239,7 +343,7 @@ export class PluginNextAppServer extends Plugin {
           },
         });
 
-        ctx.body = result;
+        ctx.body = await projectNextAppRoutesToDesktopRoutes(ctx, result);
       } else {
         ctx.body = [];
       }

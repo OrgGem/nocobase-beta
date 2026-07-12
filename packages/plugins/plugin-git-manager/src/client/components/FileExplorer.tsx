@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Tree, Empty, Spin, Typography, Select, Space, Breadcrumb, Input, theme } from 'antd';
 import {
   FileOutlined,
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
+import { RunReviewButton } from './RunReviewButton';
 import { useT } from '../locale';
 
 const { Text } = Typography;
@@ -40,10 +41,25 @@ function getFileIcon(name: string, type: string) {
 function getLanguage(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() || '';
   const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-    json: 'json', md: 'markdown', html: 'html', css: 'css', scss: 'scss',
-    py: 'python', sh: 'bash', yml: 'yaml', yaml: 'yaml', sql: 'sql',
-    xml: 'xml', java: 'java', go: 'go', rs: 'rust', rb: 'ruby',
+    ts: 'typescript',
+    tsx: 'typescript',
+    js: 'javascript',
+    jsx: 'javascript',
+    json: 'json',
+    md: 'markdown',
+    html: 'html',
+    css: 'css',
+    scss: 'scss',
+    py: 'python',
+    sh: 'bash',
+    yml: 'yaml',
+    yaml: 'yaml',
+    sql: 'sql',
+    xml: 'xml',
+    java: 'java',
+    go: 'go',
+    rs: 'rust',
+    rb: 'ruby',
   };
   return map[ext] || 'text';
 }
@@ -67,6 +83,7 @@ export const FileExplorer: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [currentRef, setCurrentRef] = useState('HEAD');
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -81,8 +98,12 @@ export const FileExplorer: React.FC = () => {
           params: { repositoryId: selectedRepo.id, ref, treePath },
         });
         const responseData = data?.data || data || [];
-        const list = Array.isArray(responseData) ? responseData : (Array.isArray(responseData?.data) ? responseData.data : []);
-        
+        const list = Array.isArray(responseData)
+          ? responseData
+          : Array.isArray(responseData?.data)
+            ? responseData.data
+            : [];
+
         return list.map((item: any) => ({
           key: item.path,
           title: (
@@ -123,6 +144,7 @@ export const FileExplorer: React.FC = () => {
       refreshBranches();
       setFileContent(null);
       setSelectedFile(null);
+      setSelectedFolder(null);
     } else {
       setTreeData([]);
     }
@@ -149,7 +171,11 @@ export const FileExplorer: React.FC = () => {
 
   const onSelect = async (_: any, info: any) => {
     const node = info.node;
-    if (!node.isLeaf) return;
+    if (!node.isLeaf) {
+      setSelectedFolder((prev) => (prev === node.filePath ? null : node.filePath));
+      return;
+    }
+    setSelectedFolder(null);
     setContentLoading(true);
     setSelectedFile(node.filePath);
     try {
@@ -172,6 +198,16 @@ export const FileExplorer: React.FC = () => {
     debounceRef.current = setTimeout(() => setDebouncedSearch(searchText), 300);
     return () => clearTimeout(debounceRef.current);
   }, [searchText]);
+
+  const folderTarget = useMemo(
+    () => ({
+      type: 'folder' as const,
+      repositoryId: selectedRepo?.id ?? 0,
+      folderPath: selectedFolder ?? '',
+      ref: currentRef,
+    }),
+    [selectedRepo?.id, selectedFolder, currentRef],
+  );
 
   if (!selectedRepo) {
     return <Empty description={t('No repository selected')} />;
@@ -206,6 +242,7 @@ export const FileExplorer: React.FC = () => {
                 setCurrentRef(val);
                 setFileContent(null);
                 setSelectedFile(null);
+                setSelectedFolder(null);
               }}
               options={branchList.map((b) => ({ label: b, value: b }))}
               placeholder="Branch"
@@ -216,18 +253,31 @@ export const FileExplorer: React.FC = () => {
               allowClear
               onChange={(e) => setSearchText(e.target.value)}
             />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Text
+                type="secondary"
+                ellipsis
+                title={selectedFolder || t('Entire repository')}
+                style={{ flex: 1, minWidth: 0, fontSize: 12 }}
+              >
+                {selectedFolder || t('Entire repository')}
+              </Text>
+              <RunReviewButton target={folderTarget} />
+            </div>
           </Space>
         </div>
         <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
           {loading ? (
-            <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+            <div style={{ textAlign: 'center', padding: 40 }}>
+              <Spin />
+            </div>
           ) : (
             <Tree
               showIcon
               treeData={filteredTree}
               loadData={onLoadData}
               onSelect={onSelect}
-              selectedKeys={selectedFile ? [selectedFile] : []}
+              selectedKeys={selectedFile ? [selectedFile] : selectedFolder ? [selectedFolder] : []}
               style={{ fontSize: 13 }}
               blockNode
             />
@@ -260,7 +310,9 @@ export const FileExplorer: React.FC = () => {
             </div>
             <div style={{ flex: 1, overflow: 'auto' }}>
               {contentLoading ? (
-                <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+                <div style={{ textAlign: 'center', padding: 40 }}>
+                  <Spin />
+                </div>
               ) : (
                 <pre
                   style={{

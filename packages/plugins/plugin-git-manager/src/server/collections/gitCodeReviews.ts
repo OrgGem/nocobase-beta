@@ -45,6 +45,7 @@ export default defineCollection({
           { value: 'mr', label: 'Merge Request' },
           { value: 'commit', label: 'Commit' },
           { value: 'branch', label: 'Branch' },
+          { value: 'folder', label: 'Folder' },
         ],
       },
     },
@@ -65,6 +66,12 @@ export default defineCollection({
       name: 'branch',
       interface: 'input',
       uiSchema: { title: 'Branch', type: 'string', 'x-component': 'Input' },
+    },
+    {
+      type: 'string',
+      name: 'folderPath',
+      interface: 'input',
+      uiSchema: { title: 'Folder Path', type: 'string', 'x-component': 'Input' },
     },
     {
       type: 'string',

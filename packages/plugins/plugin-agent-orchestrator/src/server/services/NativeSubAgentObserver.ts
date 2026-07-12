@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 import { ExecutionSpanService } from './ExecutionSpanService';
 import { AgentMemoryContextService } from './AgentMemoryContextService';
+import { TokenTracker } from './TokenTracker';
 import { asObject, currentUserId, toPlain, trimText } from '../utils/ctx-utils';
 
 const WRAP_STATE_KEY = Symbol.for('plugin-agent-orchestrator.nativeSubAgentObserver');
@@ -108,10 +109,12 @@ function chunkCurrentConversation(chunk: Record<string, unknown>) {
 export class NativeSubAgentObserver {
   private readonly spanService: ExecutionSpanService;
   private readonly memoryService: AgentMemoryContextService;
+  private readonly tokenTracker: TokenTracker;
 
   constructor(private readonly plugin: { app: any; db: any; name?: string }) {
     this.spanService = new ExecutionSpanService(plugin);
     this.memoryService = new AgentMemoryContextService(plugin);
+    this.tokenTracker = new TokenTracker(plugin);
   }
 
   install() {
@@ -231,6 +234,12 @@ export class NativeSubAgentObserver {
           completedAt: new Date().toISOString(),
         },
       });
+      await this.tokenTracker.estimateAndTrack(
+        state.rootSpanId,
+        task.question,
+        result,
+        state.rootMetadata.agentLoopRunId ? Number(state.rootMetadata.agentLoopRunId) : undefined,
+      );
       return result;
     } catch (error) {
       await this.flushPending(state);
@@ -241,6 +250,12 @@ export class NativeSubAgentObserver {
           failedAt: new Date().toISOString(),
         },
       });
+      await this.tokenTracker.estimateAndTrack(
+        state.rootSpanId,
+        task.question,
+        errorMessage(error),
+        state.rootMetadata.agentLoopRunId ? Number(state.rootMetadata.agentLoopRunId) : undefined,
+      );
       throw error;
     }
   }
@@ -391,6 +406,12 @@ export class NativeSubAgentObserver {
         messageId: toolCall.messageId,
       },
     });
+
+    await this.tokenTracker.estimateAndTrack(
+      existing.spanId,
+      normalizeString(toolCall.name),
+      typeof output === 'string' ? output : JSON.stringify(output),
+    );
   }
 
   private resolveParentSessionId(task: NativeSubAgentTask) {

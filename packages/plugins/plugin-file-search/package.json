@@ -1,0 +1,46 @@
+{
+  "name": "plugin-file-search",
+  "displayName": "File Search",
+  "displayName.vi-VN": "Tìm kiếm tệp",
+  "displayName.zh-CN": "文件搜索",
+  "description": "Search accessible uploaded files with PageIndex-powered retrieval.",
+  "description.vi-VN": "Tìm kiếm các tệp được phép truy cập bằng PageIndex.",
+  "description.zh-CN": "使用 PageIndex 检索可访问的已上传文件。",
+  "version": "2.1.18",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "AI",
+    "file",
+    "search",
+    "PageIndex"
+  ],
+  "files": [
+    "dist",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts",
+    "src"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/plugin-ai": "2.x",
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/server": "2.x",
+    "plugin-cluster-manager": "2.x",
+    "plugin-document-parser": "2.x",
+    "plugin-markitdown-parser": "2.x"
+  },
+  "dependencies": {}
+}

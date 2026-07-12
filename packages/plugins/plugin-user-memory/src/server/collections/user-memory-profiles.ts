@@ -5,6 +5,7 @@ export default defineCollection({
   migrationRules: ['schema-only'],
   indexes: [
     {
+      name: 'user_memory_profiles_user_id',
       fields: ['userId'],
       unique: true,
     },

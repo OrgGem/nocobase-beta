@@ -57,6 +57,10 @@ export class PluginMarkItDownParserServer extends Plugin {
       return;
     }
 
+    if (docParserPlugin?.fetchFileBuffer) {
+      this.service.setAttachmentBufferFetcher(docParserPlugin.fetchFileBuffer.bind(docParserPlugin));
+    }
+
     const alreadyRegistered = registry.list?.().some((handler: any) => handler?.name === MARKITDOWN_HANDLER_NAME);
     if (alreadyRegistered) {
       this.registeredRegistry = registry;

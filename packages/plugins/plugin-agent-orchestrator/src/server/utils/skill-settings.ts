@@ -15,6 +15,7 @@ export function isOrchestratorToolName(name: string) {
     name === 'external_rag_search' ||
     name === 'skill_hub_execute' ||
     name.startsWith('skill_hub_') ||
+    name.startsWith('agent_loop_') ||
     name.startsWith('browser_') ||
     name.startsWith('drawio-')
   );

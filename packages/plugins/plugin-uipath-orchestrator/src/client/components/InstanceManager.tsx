@@ -9,7 +9,13 @@ import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
-import { getListRows } from '../utils/apiResponse';
+import { getActionResponseBody, getListRows } from '../utils/apiResponse';
+
+type ConnectionTestResult = {
+  status?: string;
+  latencyMs?: number;
+  message?: string;
+};
 
 export const InstanceManager: React.FC = () => {
   const t = useT();
@@ -61,7 +67,7 @@ export const InstanceManager: React.FC = () => {
     setTesting(id);
     try {
       const res = await api.request({ url: 'uipathInstanceActions:testConnection', params: { filterByTk: id } });
-      const result = res?.data;
+      const result = getActionResponseBody(res) as ConnectionTestResult;
       if (result?.status === 'healthy') {
         message.success(`${t('Connected')} (${result.latencyMs}ms)`);
       } else {

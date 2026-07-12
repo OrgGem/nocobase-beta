@@ -67,6 +67,8 @@ export const FileBrowser: React.FC = () => {
   const {
     directories, currentDir, files, currentPath, loading, dirLoading,
     navigateTo, navigateUp, downloadFile, uploadFiles, createFolder, deleteItem, statItem, refresh,
+    currentPage, pageSize, totalItems, changePage, setPageSize,
+    searchText, setSearchText,
   } = browser;
 
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
@@ -81,12 +83,10 @@ export const FileBrowser: React.FC = () => {
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoItem, setInfoItem] = useState<FileItem | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
-  const [searchText, setSearchText] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
 
+  // Reset selected rows when path, directory, or search changes
   React.useEffect(() => {
-    setCurrentPage(1);
+    setSelectedRowKeys([]);
   }, [currentPath, currentDir, searchText]);
 
   const canView = currentDir?.allowedActions?.includes('view') ?? false;
@@ -95,11 +95,7 @@ export const FileBrowser: React.FC = () => {
   const canDelete = currentDir?.allowedActions?.includes('delete') ?? false;
   const canMkdir = currentDir?.allowedActions?.includes('mkdir') ?? false;
 
-  const filteredFiles = useMemo(() => {
-    if (!searchText) return files;
-    const lowerSearch = searchText.toLowerCase();
-    return files.filter(file => file.name.toLowerCase().includes(lowerSearch));
-  }, [files, searchText]);
+  const filteredFiles = files; // Search is now server-side; files are already filtered
 
   const previewFiles = useMemo(
     () =>
@@ -330,12 +326,13 @@ export const FileBrowser: React.FC = () => {
               pagination={{
                 current: currentPage,
                 pageSize: pageSize,
+                total: totalItems,
                 showSizeChanger: true,
-                pageSizeOptions: ['10', '20', '50'],
+                pageSizeOptions: ['10', '20', '50', '100'],
                 showTotal: (total) => `Total ${total} items`,
                 onChange: (page, size) => {
-                  setCurrentPage(page);
-                  setPageSize(size);
+                  changePage(page, size);
+                  setSelectedRowKeys([]);
                 },
               }}
               size="middle"
@@ -351,7 +348,7 @@ export const FileBrowser: React.FC = () => {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 12 }}>
                 {loading ? <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: 40 }}><Spin /></div> :
                   filteredFiles.length === 0 ? <div style={{ gridColumn: '1 / -1' }}><Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No files" /></div> :
-                  (Array.isArray(filteredFiles) ? filteredFiles.slice((currentPage - 1) * pageSize, currentPage * pageSize) : []).map((file) => (
+                  (Array.isArray(filteredFiles) ? filteredFiles : []).map((file) => (
                     <div key={file.path} style={{ padding: 12, borderRadius: 8, border: selectedRowKeys.includes(file.path) ? '2px solid #1677ff' : '1px solid #f0f0f0', textAlign: 'center', cursor: 'pointer', position: 'relative' }}
                       onClick={(event) => {
                         if (event.ctrlKey || event.metaKey) {
@@ -374,13 +371,13 @@ export const FileBrowser: React.FC = () => {
                   <Pagination
                     current={currentPage}
                     pageSize={pageSize}
-                    total={filteredFiles.length}
+                    total={totalItems}
                     showSizeChanger
-                    pageSizeOptions={['10', '20', '50']}
+                    pageSizeOptions={['10', '20', '50', '100']}
                     showTotal={(total) => `Total ${total} items`}
                     onChange={(page, size) => {
-                      setCurrentPage(page);
-                      setPageSize(size);
+                      changePage(page, size);
+                      setSelectedRowKeys([]);
                     }}
                   />
                 </div>

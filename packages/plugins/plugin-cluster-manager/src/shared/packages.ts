@@ -11,6 +11,11 @@ export const DEFAULT_WORKER_PACKAGES = {
     'pyyaml',
     'tabulate',
     'xlsxwriter',
+    'pageindex',
+    'litellm',
+    'pymupdf',
+    'PyPDF2',
+    'python-dotenv',
   ],
   npm: ['xlsx', 'docx', 'pdfkit', 'csv-parse', 'archiver', 'sharp', 'lodash', 'dayjs'],
 };
@@ -29,7 +34,14 @@ export interface CustomPackageMap {
 
 export function normalizePackages(packages?: Array<string | undefined>): string[] {
   if (!Array.isArray(packages)) return [];
-  return Array.from(new Set(packages.filter((pkg) => typeof pkg === 'string').map((pkg) => pkg.trim()).filter(Boolean)));
+  return Array.from(
+    new Set(
+      packages
+        .filter((pkg) => typeof pkg === 'string')
+        .map((pkg) => pkg.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 export function parsePackageText(value: unknown, fallback: string[] = []): string[] {

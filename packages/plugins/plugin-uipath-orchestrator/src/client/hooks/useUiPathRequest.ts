@@ -1,5 +1,6 @@
 import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
+import { getActionResponseBody } from '../utils/apiResponse';
 import { useState, useEffect, useCallback, useRef } from 'react';
 
 type RequestParams = Record<string, unknown>;
@@ -16,7 +17,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function getErrorMessage(error: unknown): string {
   const err = error as ErrorLike;
-  const responseData = err?.response?.data;
+  const responseData = getActionResponseBody(err?.response?.data);
 
   if (isRecord(responseData)) {
     const errors = responseData.errors;
@@ -42,22 +43,24 @@ function getErrorMessage(error: unknown): string {
 }
 
 function normalizePayload(payload: unknown) {
-  if (isRecord(payload)) {
-    const errors = payload.errors;
+  const body = getActionResponseBody(payload);
+
+  if (isRecord(body)) {
+    const errors = body.errors;
     if (Array.isArray(errors) && errors.length > 0) {
-      throw new Error(getErrorMessage({ response: { data: payload } }));
+      throw new Error(getErrorMessage({ response: { data: body } }));
     }
 
-    if ('data' in payload) {
-      return { data: payload.data, meta: payload };
+    if ('data' in body) {
+      return { data: body.data, meta: body };
     }
 
-    if ('value' in payload) {
-      return { data: payload.value, meta: payload };
+    if ('value' in body) {
+      return { data: body.value, meta: body };
     }
   }
 
-  return { data: payload, meta: payload };
+  return { data: body, meta: body };
 }
 
 function stringifyParams(params: unknown): string {
@@ -66,6 +69,11 @@ function stringifyParams(params: unknown): string {
   } catch {
     return '';
   }
+}
+
+function isCanceledRequest(error: unknown): boolean {
+  const err = error as { code?: string; name?: string; message?: string };
+  return err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.message === 'canceled';
 }
 
 export function toUiPathArray<T = Record<string, unknown>>(value: unknown): T[] {
@@ -85,7 +93,6 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
   const [error, setError] = useState<Error | null>(null);
   const extraParamsRef = useRef(extraParams);
   extraParamsRef.current = extraParams;
-  const abortRef = useRef<AbortController | null>(null);
   const seqRef = useRef(0);
 
   const run = useCallback(
@@ -97,10 +104,6 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
         return undefined;
       }
 
-      // Cancel any in-flight request
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
       const seq = ++seqRef.current;
 
       setLoading(true);
@@ -115,18 +118,16 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
             ...extraParamsRef.current,
             ...overrideParams,
           },
-          signal: controller.signal,
         });
-        // Stale response guard — discard if a newer request has started
+        // Stale response guard: discard if a newer request has started.
         if (seq !== seqRef.current) return undefined;
 
-        const { data: result, meta: responseMeta } = normalizePayload(res?.data);
+        const { data: result, meta: responseMeta } = normalizePayload(res);
         setData(result);
         setMeta(responseMeta);
         return result;
       } catch (err: unknown) {
-        // AbortError means a newer request superseded this one — ignore silently
-        if ((err as any)?.name === 'AbortError' || (err as any)?.code === 'ABORT_ERR') {
+        if (isCanceledRequest(err)) {
           return undefined;
         }
         if (seq !== seqRef.current) return undefined;

@@ -220,8 +220,16 @@ export class DockerAdapter implements IOrchestratorAdapter {
           createOpts.HostConfig.NetworkMode = targetNetworks[0];
         }
 
-        // Security hardening
-        createOpts.HostConfig.SecurityOpt = ['no-new-privileges:true'];
+        // Security hardening — configurable per stack. no-new-privileges blocks
+        // setuid binaries inside the container (e.g. bwrap setuid fallback), so
+        // stacks that need it can override with [].
+        createOpts.HostConfig.SecurityOpt = stack.dockerSecurityOpt ?? ['no-new-privileges:true'];
+        if (stack.dockerCapAdd?.length) {
+          createOpts.HostConfig.CapAdd = stack.dockerCapAdd;
+        }
+        if (stack.dockerCapDrop?.length) {
+          createOpts.HostConfig.CapDrop = stack.dockerCapDrop;
+        }
 
         const container = await this.docker.createContainer(createOpts);
 

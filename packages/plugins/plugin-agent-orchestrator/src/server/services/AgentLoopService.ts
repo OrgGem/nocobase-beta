@@ -95,6 +95,10 @@ export class AgentLoopService {
     return this.controller.revisePlanGoal(runId, plan, options);
   }
 
+  async approvePlan(runId: any, options: any = {}) {
+    return this.controller.approvePlan(runId, options);
+  }
+
   async approvePlanAndExecute(runId: any, options: any = {}) {
     return this.controller.approvePlanAndExecute(runId, options);
   }

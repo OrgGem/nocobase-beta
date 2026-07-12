@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Tabs, Select, Space, Typography, TreeSelect } from 'antd';
+import { Alert, Tabs, Select, Space, Typography, TreeSelect, DatePicker, Input } from 'antd';
 import { InstanceProvider, useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
@@ -14,6 +14,7 @@ import { RobotSessionPanel } from './RobotSessionPanel';
 import { FolderUserPanel } from './FolderUserPanel';
 import { AlertManager } from './AlertManager';
 import { InstanceManager } from './InstanceManager';
+import { BusinessMonitor } from './BusinessMonitor';
 
 class UiPathTabErrorBoundary extends React.Component<
   React.PropsWithChildren<{ title: string }>,
@@ -37,7 +38,21 @@ class UiPathTabErrorBoundary extends React.Component<
 // ─── Instance + Folder Selector (Header Bar) ────────────────────────
 
 const HeaderBar: React.FC = () => {
-  const { instanceId, setInstanceId, instances, loading, folderId, setFolder, folders } = useCurrentInstance();
+  const {
+    instanceId,
+    setInstanceId,
+    instances,
+    loading,
+    folderId,
+    setFolder,
+    folders,
+    dateRange,
+    setDateRange,
+    processFilter,
+    setProcessFilter,
+    queueFilter,
+    setQueueFilter,
+  } = useCurrentInstance();
   const t = useT();
 
   return (
@@ -61,7 +76,7 @@ const HeaderBar: React.FC = () => {
         <>
           <Typography.Text strong>{t('Folder')}:</Typography.Text>
           <TreeSelect
-            value={folderId}
+            value={folderId ?? undefined}
             onChange={(val?: number) => {
               if (val == null) {
                 setFolder(null, null);
@@ -79,6 +94,29 @@ const HeaderBar: React.FC = () => {
           />
         </>
       )}
+      <Typography.Text strong>{t('Date Range')}:</Typography.Text>
+      <DatePicker.RangePicker
+        showTime
+        value={dateRange as React.ComponentProps<typeof DatePicker.RangePicker>['value']}
+        onChange={(range) => setDateRange(range)}
+        style={{ minWidth: 360 }}
+      />
+      <Input.Search
+        placeholder={t('Process / release')}
+        value={processFilter}
+        onChange={(event) => setProcessFilter(event.target.value)}
+        onSearch={setProcessFilter}
+        allowClear
+        style={{ width: 220 }}
+      />
+      <Input.Search
+        placeholder={t('Queue / reference')}
+        value={queueFilter}
+        onChange={(event) => setQueueFilter(event.target.value)}
+        onSearch={setQueueFilter}
+        allowClear
+        style={{ width: 220 }}
+      />
     </Space>
   );
 };
@@ -121,6 +159,7 @@ const UiPathSettingsContent: React.FC = () => {
     { key: 'jobs', label: t('Jobs'), children: tab(t('Jobs'), <JobManager />) },
     { key: 'logs', label: t('Robot Logs'), children: tab(t('Robot Logs'), <LogExplorer />) },
     { key: 'queues', label: t('Queues'), children: tab(t('Queues'), <QueueManager />) },
+    { key: 'business', label: t('Business Monitor'), children: tab(t('Business Monitor'), <BusinessMonitor />) },
     { key: 'processes', label: t('Processes'), children: tab(t('Processes'), <ProcessManager />) },
     { key: 'assets', label: t('Assets'), children: tab(t('Assets'), <AssetManager />) },
     { key: 'robots', label: t('Robots & Sessions'), children: tab(t('Robots & Sessions'), <RobotSessionPanel />) },

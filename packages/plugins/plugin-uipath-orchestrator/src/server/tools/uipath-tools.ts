@@ -2,7 +2,7 @@
  * UiPath AI Tools
  *
  * Optional tools for NocoBase AI plugin integration.
- * Enables AI agents to query job status, logs, queue backlog, and trigger operations.
+ * Enables AI agents to query job status, logs, and queue backlog.
  */
 
 import type { ToolsOptions } from '@nocobase/ai';
@@ -113,36 +113,6 @@ export function createUiPathTools(getApiClient: (instanceId?: number) => Promise
           },
         });
         return { status: 'success', content: JSON.stringify(data.value || []) };
-      },
-    },
-    {
-      scope: 'CUSTOM',
-      execution: 'backend',
-      defaultPermission: 'ASK',
-      introduction: {
-        title: 'UiPath: Stop/Kill Job',
-        about: 'Stop or kill a running UiPath job.',
-      },
-      definition: {
-        name: 'uipath_stop_job',
-        description: 'Stop or kill a running UiPath job. Use when user wants to stop a running automation.',
-        schema: {
-          type: 'object',
-          properties: {
-            jobId: { type: 'number', description: 'Job ID to stop' },
-            strategy: { type: 'string', description: 'SoftStop or Kill (default SoftStop)' },
-            instanceId: { type: 'number', description: 'Optional instance ID' },
-          },
-          required: ['jobId'],
-        },
-      },
-      invoke: async (_ctx, args) => {
-        const client = await getApiClient(args.instanceId);
-        const result = await client.post('/odata/Jobs/UiPath.Server.Configuration.OData.StopJobs', {
-          jobIds: [args.jobId],
-          strategy: args.strategy || 'SoftStop',
-        });
-        return { status: 'success', content: JSON.stringify(result) };
       },
     },
   ];

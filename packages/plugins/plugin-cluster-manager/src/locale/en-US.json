@@ -211,5 +211,11 @@
   "Cluster registry has no worker heartbeats": "Cluster registry has no worker heartbeats",
   "Cluster registry Redis is not configured": "Cluster registry Redis is not configured",
   "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.": "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.",
-  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery."
+  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.",
+  "Docker security options JSON": "Docker security options JSON",
+  "Docker capabilities to add JSON": "Docker capabilities to add JSON",
+  "Docker capabilities to drop JSON": "Docker capabilities to drop JSON",
+  "Kubernetes security context JSON": "Kubernetes security context JSON",
+  "Kubernetes pod security context JSON": "Kubernetes pod security context JSON",
+  "Leave empty to keep the default no-new-privileges:true. Set [] only for stacks that need the bubblewrap setuid fallback (skill-hub sandbox).": "Leave empty to keep the default no-new-privileges:true. Set [] only for stacks that need the bubblewrap setuid fallback (skill-hub sandbox)."
 }

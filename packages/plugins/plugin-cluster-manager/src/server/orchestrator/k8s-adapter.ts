@@ -91,11 +91,11 @@ export class K8sAdapter implements IOrchestratorAdapter {
       // Get pods matching the deployment's label selector
       const pods = await this.coreApi.listNamespacedPod(
         ns,
-        undefined,     // pretty
-        undefined,     // allowWatchBookmarks
-        undefined,     // _continue
-        undefined,     // fieldSelector
-        labelSelector,  // labelSelector
+        undefined, // pretty
+        undefined, // allowWatchBookmarks
+        undefined, // _continue
+        undefined, // fieldSelector
+        labelSelector, // labelSelector
       );
 
       return (pods.body.items || []).map((pod: any) => ({
@@ -135,11 +135,7 @@ export class K8sAdapter implements IOrchestratorAdapter {
       const previousReplicas = deployment.body.spec?.replicas || 0;
 
       // Update the entire deployment to apply any changes made to the stack config
-      await this.appsApi.replaceNamespacedDeployment(
-        deploymentName,
-        ns,
-        this.buildDeployment(stack, replicas)
-      );
+      await this.appsApi.replaceNamespacedDeployment(deploymentName, ns, this.buildDeployment(stack, replicas));
 
       return {
         previousReplicas,
@@ -160,7 +156,9 @@ export class K8sAdapter implements IOrchestratorAdapter {
   async stopContainer(containerId: string): Promise<void> {
     // Delete the pod — Deployment will NOT recreate if we also scale down
     // For a simple "stop", we delete the pod which K8s won't restart if replicas match
-    throw new Error('K8s does not support stopping individual pods. Use scale to reduce replicas, or use removePod to delete a specific pod.');
+    throw new Error(
+      'K8s does not support stopping individual pods. Use scale to reduce replicas, or use removePod to delete a specific pod.',
+    );
   }
 
   async removeContainer(containerId: string): Promise<void> {
@@ -199,7 +197,7 @@ export class K8sAdapter implements IOrchestratorAdapter {
       const resourceLimits = pod.body.spec?.containers?.[0]?.resources?.limits;
 
       return {
-        cpu: 0,  // Requires metrics-server API, not available in basic K8s API
+        cpu: 0, // Requires metrics-server API, not available in basic K8s API
         memory: 0,
         memoryLimit: this.parseK8sMemory(resourceLimits?.memory) || 0,
         networkRx: 0,
@@ -223,15 +221,15 @@ export class K8sAdapter implements IOrchestratorAdapter {
       const logs = await this.coreApi.readNamespacedPodLog(
         podName,
         ns,
-        undefined,  // container
-        undefined,  // follow
-        undefined,  // insecureSkipTLSVerifyBackend
-        undefined,  // limitBytes
-        undefined,  // pretty
-        undefined,  // previous
-        undefined,  // sinceSeconds
-        tail,       // tailLines
-        true,       // timestamps
+        undefined, // container
+        undefined, // follow
+        undefined, // insecureSkipTLSVerifyBackend
+        undefined, // limitBytes
+        undefined, // pretty
+        undefined, // previous
+        undefined, // sinceSeconds
+        tail, // tailLines
+        true, // timestamps
       );
       return logs.body || '';
     } catch (err: any) {
@@ -283,13 +281,14 @@ export class K8sAdapter implements IOrchestratorAdapter {
       envFrom: this.cleanArray(stack.k8sEnvFrom),
       resources: this.buildResources(stack),
       volumeMounts: this.cleanArray(stack.k8sVolumeMounts),
+      securityContext: stack.k8sSecurityContext,
     };
 
     if (stack.command?.trim()) {
       container.command = ['/bin/sh', '-c', stack.command.trim()];
     }
 
-    for (const key of ['envFrom', 'resources', 'volumeMounts']) {
+    for (const key of ['envFrom', 'resources', 'volumeMounts', 'securityContext']) {
       if (this.isEmptyValue(container[key])) {
         delete container[key];
       }
@@ -301,6 +300,9 @@ export class K8sAdapter implements IOrchestratorAdapter {
     };
     if (stack.serviceAccountName?.trim()) {
       podSpec.serviceAccountName = stack.serviceAccountName.trim();
+    }
+    if (!this.isEmptyValue(stack.k8sPodSecurityContext)) {
+      podSpec.securityContext = stack.k8sPodSecurityContext;
     }
     if (!podSpec.volumes.length) {
       delete podSpec.volumes;
@@ -342,10 +344,7 @@ export class K8sAdapter implements IOrchestratorAdapter {
   private buildContainerEnv(stack: StackConfig): any[] {
     const envVars = stack.envVars || {};
     const nativeEnv = this.cleanArray(stack.k8sEnv);
-    const names = new Set<string>([
-      ...nativeEnv.map((item) => item?.name).filter(Boolean),
-      ...Object.keys(envVars),
-    ]);
+    const names = new Set<string>([...nativeEnv.map((item) => item?.name).filter(Boolean), ...Object.keys(envVars)]);
     const env: any[] = [];
 
     if (!names.has('POD_NAME')) {
@@ -379,12 +378,15 @@ export class K8sAdapter implements IOrchestratorAdapter {
   }
 
   private buildResources(stack: StackConfig): any {
-    const limits = Object.entries(stack.resourceLimits || {}).reduce((acc, [key, value]) => {
-      if (value) {
-        acc[key] = String(value);
-      }
-      return acc;
-    }, {} as Record<string, string>);
+    const limits = Object.entries(stack.resourceLimits || {}).reduce(
+      (acc, [key, value]) => {
+        if (value) {
+          acc[key] = String(value);
+        }
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
 
     return Object.keys(limits).length ? { limits } : undefined;
   }
@@ -414,13 +416,18 @@ export class K8sAdapter implements IOrchestratorAdapter {
 
     if (!stackLabelMatches && !workerSelectorMatches) {
       throw new Error(
-        `Deployment ${deployment?.metadata?.name || stack.deploymentName || stack.name} does not match the configured worker label selector`,
+        `Deployment ${
+          deployment?.metadata?.name || stack.deploymentName || stack.name
+        } does not match the configured worker label selector`,
       );
     }
   }
 
   private joinSelectors(...selectors: Array<string | undefined>): string | undefined {
-    const joined = selectors.map((s) => s?.trim()).filter(Boolean).join(',');
+    const joined = selectors
+      .map((s) => s?.trim())
+      .filter(Boolean)
+      .join(',');
     return joined || undefined;
   }
 
@@ -430,14 +437,17 @@ export class K8sAdapter implements IOrchestratorAdapter {
       .split(',')
       .map((part) => part.trim())
       .filter(Boolean)
-      .reduce((acc, part) => {
-        const [key, ...valueParts] = part.split('=');
-        const value = valueParts.join('=');
-        if (key?.trim() && value?.trim()) {
-          acc[key.trim()] = value.trim();
-        }
-        return acc;
-      }, {} as Record<string, string>);
+      .reduce(
+        (acc, part) => {
+          const [key, ...valueParts] = part.split('=');
+          const value = valueParts.join('=');
+          if (key?.trim() && value?.trim()) {
+            acc[key.trim()] = value.trim();
+          }
+          return acc;
+        },
+        {} as Record<string, string>,
+      );
   }
 
   private labelsMatch(labels: Record<string, string>, expected: Record<string, string>): boolean {
@@ -456,11 +466,16 @@ export class K8sAdapter implements IOrchestratorAdapter {
     }
 
     switch (phase) {
-      case 'Running': return 'running';
-      case 'Pending': return 'pending';
-      case 'Succeeded': return 'exited';
-      case 'Failed': return 'error';
-      default: return 'stopped';
+      case 'Running':
+        return 'running';
+      case 'Pending':
+        return 'pending';
+      case 'Succeeded':
+        return 'exited';
+      case 'Failed':
+        return 'error';
+      default:
+        return 'stopped';
     }
   }
 
@@ -470,11 +485,16 @@ export class K8sAdapter implements IOrchestratorAdapter {
     if (!match) return parseInt(mem, 10) || 0;
     const val = parseInt(match[1], 10);
     switch (match[2]) {
-      case 'Ki': return val * 1024;
-      case 'Mi': return val * 1024 * 1024;
-      case 'Gi': return val * 1024 * 1024 * 1024;
-      case 'Ti': return val * 1024 * 1024 * 1024 * 1024;
-      default: return val;
+      case 'Ki':
+        return val * 1024;
+      case 'Mi':
+        return val * 1024 * 1024;
+      case 'Gi':
+        return val * 1024 * 1024 * 1024;
+      case 'Ti':
+        return val * 1024 * 1024 * 1024 * 1024;
+      default:
+        return val;
     }
   }
 }

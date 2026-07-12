@@ -213,5 +213,11 @@
   "Cluster registry has no worker heartbeats": "集群注册表没有 worker 心跳",
   "Cluster registry Redis is not configured": "未配置集群注册表 Redis",
   "Cluster Nodes reads Redis heartbeats, not the container runtime. Check worker boot, plugin-cluster-manager, and shared Redis configuration.": "Cluster Nodes 读取 Redis 心跳，而不是直接读取容器运行时。请检查 worker 启动、plugin-cluster-manager 加载以及共享 Redis 配置。",
-  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "请在每个 app 和 worker 上设置 REDIS_URL 或 CLUSTER_MANAGER_REDIS_URL，以启用集群节点发现。"
+  "Set REDIS_URL or CLUSTER_MANAGER_REDIS_URL on every app and worker to enable cluster node discovery.": "请在每个 app 和 worker 上设置 REDIS_URL 或 CLUSTER_MANAGER_REDIS_URL，以启用集群节点发现。",
+  "Docker security options JSON": "Docker 安全选项 JSON",
+  "Docker capabilities to add JSON": "要添加的 Docker 能力 JSON",
+  "Docker capabilities to drop JSON": "要移除的 Docker 能力 JSON",
+  "Kubernetes security context JSON": "Kubernetes 安全上下文 JSON",
+  "Kubernetes pod security context JSON": "Kubernetes Pod 安全上下文 JSON",
+  "Leave empty to keep the default no-new-privileges:true. Set [] only for stacks that need the bubblewrap setuid fallback (skill-hub sandbox).": "留空则保留默认的 no-new-privileges:true。仅在需要 bubblewrap setuid 回退（skill-hub 沙箱）的工作栈上设置 []。"
 }

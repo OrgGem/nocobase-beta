@@ -96,6 +96,15 @@ export const WORKER_PROCESS_DEFINITIONS: WorkerProcessDefinition[] = [
     common: true,
   },
   {
+    name: 'file-search:index',
+    label: 'File Search Indexing',
+    description: 'Index accessible files for PageIndex-powered search',
+    kind: 'event-queue',
+    aliases: ['plugin-file-search.index'],
+    pluginName: 'plugin-file-search',
+    common: true,
+  },
+  {
     name: 'skill-hub:sandbox',
     label: 'Skill Sandbox',
     description: 'Execute Skill Hub sandbox tasks',

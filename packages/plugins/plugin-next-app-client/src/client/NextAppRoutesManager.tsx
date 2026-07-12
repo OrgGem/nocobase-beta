@@ -61,7 +61,7 @@ const getRoutePath = (record: any, allRoutes: any[], appPath?: string): string |
     return null;
   }
 
-  const prefix = appPath ? `/apps/${appPath.replace(/^\//, '')}` : '/apps';
+  const prefix = appPath ? `/next-app/${appPath.replace(/^\//, '')}` : '/next-app';
 
   if (record.type === 'page' || record.type === 'flowPage') {
     return record.schemaUid ? `${prefix}/${record.schemaUid}` : null;
@@ -185,7 +185,7 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
     } catch (err) {
       console.error(err);
     }
-  }, [api, editingRoute, form, refresh, t]);
+  }, [api, configId, editingRoute, form, refresh, t]);
 
   const columns = [
     {
