@@ -1,0 +1,95 @@
+# Run this file on both application servers. Start exactly one profile per host:
+#   server 1: docker compose --env-file .env.app-ha -f docker-compose.app-ha.yml --profile node1 up -d
+#   server 2: docker compose --env-file .env.app-ha -f docker-compose.app-ha.yml --profile node2 up -d
+#
+# AWS ALB registers <server-1>:13000 and <server-2>:13000 in the same target group.
+# PostgreSQL and every corresponding Redis URL are external shared services.
+
+x-nocobase-env: &nocobase-env
+  APP_ENV: production
+  APP_NAME: ${APP_NAME:-main}
+  APP_KEY: ${APP_KEY:?APP_KEY must be identical on both app nodes}
+  APP_AES_SECRET_KEY: ${APP_AES_SECRET_KEY:?APP_AES_SECRET_KEY must be identical on both app nodes}
+  ENCRYPTION_FIELD_KEY: ${ENCRYPTION_FIELD_KEY:?ENCRYPTION_FIELD_KEY must be identical on both app nodes}
+  APP_PORT: 13000
+  APP_BIND: 0.0.0.0
+  APP_ROLE: app
+  # Empty means this node serves HTTP and also consumes all registered background queues.
+  WORKER_MODE: ''
+  DB_DIALECT: postgres
+  DB_HOST: ${DB_HOST:?Set the shared PostgreSQL endpoint}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_DATABASE: ${DB_DATABASE:-nocobase}
+  DB_USER: ${DB_USER:-nocobase}
+  DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+  DB_SSL: ${DB_SSL:-false}
+  DB_LOGGING: ${DB_LOGGING:-off}
+  CACHE_DEFAULT_STORE: redis
+  CACHE_REDIS_URL: ${CACHE_REDIS_URL:?Set the shared cache Redis URL}
+  PUBSUB_ADAPTER: redis
+  PUBSUB_ADAPTER_REDIS_URL: ${PUBSUB_ADAPTER_REDIS_URL:?Set the shared PubSub Redis URL}
+  QUEUE_ADAPTER: redis
+  QUEUE_ADAPTER_REDIS_URL: ${QUEUE_ADAPTER_REDIS_URL:?Set the shared queue Redis URL}
+  LOCK_ADAPTER_DEFAULT: redis
+  LOCK_ADAPTER_REDIS_URL: ${LOCK_ADAPTER_REDIS_URL:?Set the shared lock Redis URL}
+  WORKER_ID_REDIS_URL: ${WORKER_ID_REDIS_URL:?Set the shared Worker ID Redis URL}
+  # Default/fallback Redis. Keeping it equal to WORKER_ID_REDIS_URL is the simplest safe baseline.
+  REDIS_URL: ${REDIS_URL:?Set REDIS_URL, normally equal to WORKER_ID_REDIS_URL}
+  APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-plugin-cluster-manager}
+  LOGGER_LEVEL: ${LOGGER_LEVEL:-info}
+  LOGGER_TRANSPORT: ${LOGGER_TRANSPORT:-console,dailyRotateFile}
+  TZ: ${TZ:-UTC}
+
+x-app-node: &app-node
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.9-full}
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 90s
+  environment:
+    <<: *nocobase-env
+  ports:
+    - '${APP_HOST_PORT:-13000}:13000'
+  volumes:
+    # Node-local runtime files. Business attachments should use S3/object storage in HA.
+    - app-runtime:/app/nocobase/storage
+    # The same NFS export is mounted on both servers for custom plugin artifacts.
+    - shared-plugins:/app/nocobase/storage/plugins
+  healthcheck:
+    test:
+      [
+        'CMD-SHELL',
+        'node -e "require(''http'').get(''http://127.0.0.1:13000/api/clusterManagerHealth:readiness'',r=>process.exit(r.statusCode===200?0:1)).on(''error'',()=>process.exit(1))"',
+      ]
+    interval: 15s
+    timeout: 8s
+    retries: 3
+    start_period: 180s
+  logging:
+    driver: json-file
+    options:
+      max-size: ${DOCKER_LOG_MAX_SIZE:-20m}
+      max-file: ${DOCKER_LOG_MAX_FILES:-5}
+
+services:
+  app-node-1:
+    <<: *app-node
+    profiles: ['node1']
+    hostname: ${NODE_1_HOSTNAME:-nocobase-app-1}
+    container_name: ${COMPOSE_PROJECT_NAME:-nocobase-ha}-app-node-1
+
+  app-node-2:
+    <<: *app-node
+    profiles: ['node2']
+    hostname: ${NODE_2_HOSTNAME:-nocobase-app-2}
+    container_name: ${COMPOSE_PROJECT_NAME:-nocobase-ha}-app-node-2
+
+volumes:
+  app-runtime:
+    name: ${COMPOSE_PROJECT_NAME:-nocobase-ha}-app-runtime
+  shared-plugins:
+    name: ${NFS_PLUGIN_VOLUME_NAME:-nocobase-ha-shared-plugins}
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=${NFS_SERVER:?Set NFS_SERVER},rw,nfsvers=${NFS_VERSION:-4},hard,timeo=600,retrans=2
+      device: ':${NFS_PLUGIN_EXPORT:?Set NFS_PLUGIN_EXPORT}'

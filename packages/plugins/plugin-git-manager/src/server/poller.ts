@@ -1,6 +1,7 @@
 import type { Application } from '@nocobase/server';
 import { triggerReviewInternal, branchMatches } from './actions/review';
 import { parseGitLabProject } from './utils/gitlab-url';
+import { getRepoAccount } from './utils/get-repo-account';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const MR_PAGE_SIZE = 50;
@@ -89,22 +90,22 @@ async function tryAcquirePollerLock(app: Application): Promise<PollerLockHandle 
   try {
     let acquired = false;
     if (dialect === 'postgres') {
-      const [results] = await sequelize.query(
-        `SELECT pg_try_advisory_lock(${ADVISORY_LOCK_KEY}) AS locked`,
-        { transaction },
-      );
+      const [results] = await sequelize.query(`SELECT pg_try_advisory_lock(${ADVISORY_LOCK_KEY}) AS locked`, {
+        transaction,
+      });
       acquired = (results as any)?.[0]?.locked === true;
     } else {
-      const [results] = await sequelize.query(
-        `SELECT GET_LOCK('git_poller', 0) AS locked`,
-        { transaction },
-      );
+      const [results] = await sequelize.query(`SELECT GET_LOCK('git_poller', 0) AS locked`, { transaction });
       const v = (results as any)?.[0]?.locked;
       acquired = v === 1 || v === '1' || v === true;
     }
 
     if (!acquired) {
-      try { await transaction.rollback(); } catch { /* ignore */ }
+      try {
+        await transaction.rollback();
+      } catch {
+        /* ignore */
+      }
       return null;
     }
 
@@ -112,27 +113,31 @@ async function tryAcquirePollerLock(app: Application): Promise<PollerLockHandle 
       release: async () => {
         try {
           if (dialect === 'postgres') {
-            await sequelize.query(
-              `SELECT pg_advisory_unlock(${ADVISORY_LOCK_KEY})`,
-              { transaction },
-            );
+            await sequelize.query(`SELECT pg_advisory_unlock(${ADVISORY_LOCK_KEY})`, { transaction });
           } else {
-            await sequelize.query(
-              `SELECT RELEASE_LOCK('git_poller')`,
-              { transaction },
-            );
+            await sequelize.query(`SELECT RELEASE_LOCK('git_poller')`, { transaction });
           }
         } catch {
           // best-effort release — txn close still recycles the connection
         } finally {
-          try { await transaction.commit(); } catch {
-            try { await transaction.rollback(); } catch { /* ignore */ }
+          try {
+            await transaction.commit();
+          } catch {
+            try {
+              await transaction.rollback();
+            } catch {
+              /* ignore */
+            }
           }
         }
       },
     };
   } catch {
-    try { await transaction.rollback(); } catch { /* ignore */ }
+    try {
+      await transaction.rollback();
+    } catch {
+      /* ignore */
+    }
     return noop; // on error, fall back to allowing
   }
 }
@@ -199,10 +204,7 @@ async function tick(app: Application) {
 /**
  * Poll a single repo for MR changes. Returns counts.
  */
-export async function pollOneRepo(
-  app: Application,
-  repo: any,
-): Promise<{ scanned: number; triggered: number }> {
+export async function pollOneRepo(app: Application, repo: any): Promise<{ scanned: number; triggered: number }> {
   const flowsRepo = app.db.getRepository('gitReviewFlows');
   const reviewsRepo = app.db.getRepository('gitCodeReviews');
   const reposRepo = app.db.getRepository('gitRepositories');
@@ -224,11 +226,12 @@ export async function pollOneRepo(
     : null;
 
   // Need PAT to query GitLab
-  const pat = repo.get('pat') as string;
+  const account = await getRepoAccount(app.db, repo);
+  const pat = account?.pat || '';
   if (!pat) return { scanned: 0, triggered: 0 };
 
   const lastPolledAt = repo.get('lastPolledAt') as Date | null;
-  const mrs = await listMergeRequests(repo, lastPolledAt);
+  const mrs = await listMergeRequests(repo, pat, lastPolledAt);
 
   let triggered = 0;
   for (const mr of mrs) {
@@ -284,9 +287,8 @@ export async function pollOneRepo(
   return { scanned: mrs.length, triggered };
 }
 
-async function listMergeRequests(repo: any, updatedAfter: Date | null): Promise<any[]> {
+async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | null): Promise<any[]> {
   const repoUrl = repo.get('repoUrl') as string;
-  const pat = repo.get('pat') as string;
   const isGitHub = typeof repoUrl === 'string' && repoUrl.includes('github.com');
 
   if (isGitHub) {
@@ -302,10 +304,7 @@ async function listMergeRequests(repo: any, updatedAfter: Date | null): Promise<
     const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
     if (pat) headers['Authorization'] = `Bearer ${pat}`;
 
-    const response = await fetch(
-      `https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`,
-      { headers },
-    );
+    const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`, { headers });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       throw new Error(`GitHub API error ${response.status}: ${body}`);

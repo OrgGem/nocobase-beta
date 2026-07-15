@@ -6,6 +6,7 @@ import * as gitlabApi from './actions/gitlab-api';
 import * as reviewActions from './actions/review';
 import * as pollerActions from './actions/poller';
 import * as rolePermissionsActions from './actions/role-permissions';
+import * as subtreeActions from './actions/subtree';
 import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
@@ -60,6 +61,10 @@ export class PluginGitManagerServer extends Plugin {
         pollerStatus: pollerActions.pollerStatus,
         rolePermissions: rolePermissionsActions.rolePermissions,
         updateRolePermissions: rolePermissionsActions.updateRolePermissions,
+        subtreePreview: subtreeActions.subtreePreview,
+        subtreeOptions: subtreeActions.subtreeOptions,
+        subtreeRun: subtreeActions.subtreeRunOnAppProcess,
+        subtreeReplace: subtreeActions.subtreeRunOnAppProcess,
       },
     });
 
@@ -93,6 +98,9 @@ export class PluginGitManagerServer extends Plugin {
       recoverStuckReviews((this as any).app).catch(
         (err) => (this as any).app.log?.error?.('plugin-git-manager: recoverStuckReviews error', err),
       );
+      subtreeActions
+        .recoverStuckSubtreeRuns((this as any).app)
+        .catch((err) => (this as any).app.log?.error?.('plugin-git-manager: recover subtree runs error', err));
       startPoller((this as any).app);
     });
     (this as any).app.on('beforeStop', () => {
@@ -110,10 +118,16 @@ export class PluginGitManagerServer extends Plugin {
       actions: [
         'gitRepositories:list',
         'gitRepositories:get',
+        'gitAccounts:list',
+        'gitAccounts:get',
         'gitReviewFlows:list',
         'gitReviewFlows:get',
         'gitCodeReviews:list',
         'gitCodeReviews:get',
+        'gitSubtreeConfigs:list',
+        'gitSubtreeConfigs:get',
+        'gitSubtreeRuns:list',
+        'gitSubtreeRuns:get',
         'gitManager:status',
         'gitManager:log',
         'gitManager:branches',
@@ -125,6 +139,8 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:mergeRequestDetail',
         'gitManager:mergeRequestNotes',
         'gitManager:pollerStatus',
+        'gitManager:subtreePreview',
+        'gitManager:subtreeOptions',
       ],
     });
 
@@ -150,13 +166,22 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:reviewApprovePost',
         'gitManager:reviewReject',
         'gitManager:pollNow',
+        'gitSubtreeConfigs:create',
+        'gitSubtreeConfigs:update',
+        'gitSubtreeConfigs:destroy',
+        'gitManager:subtreeRun',
       ],
     });
 
-    // Repositories config — CRUD on gitRepositories only (no operations)
+    (this as any).app.acl.registerSnippet({
+      name: `pm.${(this as any).name}.subtreeReplace`,
+      actions: ['gitManager:subtreeReplace'],
+    });
+
+    // Repositories config — CRUD on gitRepositories and gitAccounts (no operations)
     (this as any).app.acl.registerSnippet({
       name: `pm.${(this as any).name}.repositories`,
-      actions: ['gitRepositories:*'],
+      actions: ['gitRepositories:*', 'gitAccounts:*'],
     });
 
     // Full management — all git manager actions
@@ -166,12 +191,57 @@ export class PluginGitManagerServer extends Plugin {
         `pm.${(this as any).name}.repositories`,
         `pm.${(this as any).name}.read`,
         `pm.${(this as any).name}.write`,
+        `pm.${(this as any).name}.subtreeReplace`,
       ],
     });
 
     // Prevent overwriting PAT with obfuscated value on updates
     (this as any).app.resourceManager.use(async (ctx, next) => {
-      if (ctx.action?.resourceName === 'gitRepositories' && ['create', 'update'].includes(ctx.action?.actionName)) {
+      const resource = ctx.action?.resourceName;
+
+      if (
+        resource === 'gitSubtreeConfigs' &&
+        ['create', 'update'].includes(ctx.action?.actionName) &&
+        ctx.action.params?.values
+      ) {
+        try {
+          subtreeActions.validateSubtreeConfigInput(ctx.action.params.values);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.throw(400, ctx.t(message, { ns: (this as any).name }));
+        }
+      }
+
+      if (resource === 'gitAccounts' && ctx.action?.actionName === 'destroy') {
+        const accounts = await ctx.db.getRepository('gitAccounts').find({
+          filterByTk: ctx.action.params?.filterByTk,
+          filter: ctx.action.params?.filter,
+          fields: ['id'],
+        });
+        const accountIds: Array<number | string> = [];
+        for (const account of accounts as Array<{ get: (attribute: string) => number | string }>) {
+          accountIds.push(account.get('id'));
+        }
+        if (accountIds.length > 0) {
+          const repositoryCount = await ctx.db.getRepository('gitRepositories').count({
+            filter: { gitAccountId: { $in: accountIds } },
+          });
+          if (repositoryCount > 0) {
+            ctx.throw(
+              409,
+              ctx.t('Cannot delete this Git account because {{count}} repositories are using it', {
+                ns: (this as any).name,
+                count: repositoryCount,
+              }),
+            );
+          }
+        }
+      }
+
+      if (
+        (resource === 'gitRepositories' || resource === 'gitAccounts') &&
+        ['create', 'update'].includes(ctx.action?.actionName)
+      ) {
         if (ctx.action.params?.values?.pat === '••••••••') {
           delete ctx.action.params.values.pat;
         }
@@ -182,9 +252,10 @@ export class PluginGitManagerServer extends Plugin {
       return next();
     });
 
-    // Strip PAT from API responses — scoped to gitRepositories only
+    // Strip PAT from API responses — scoped to gitRepositories and gitAccounts
     (this as any).app.resourceManager.use(async (ctx, next) => {
-      if (ctx.action?.resourceName !== 'gitRepositories') {
+      const resource = ctx.action?.resourceName;
+      if (resource !== 'gitRepositories' && resource !== 'gitAccounts') {
         return next();
       }
       await next();
@@ -207,7 +278,10 @@ export class PluginGitManagerServer extends Plugin {
   }
 
   async install() {
+    await (this as any).app.db.getCollection('gitAccounts')?.sync();
     await (this as any).app.db.getCollection('gitRepositories')?.sync();
+    await (this as any).app.db.getCollection('gitSubtreeConfigs')?.sync();
+    await (this as any).app.db.getCollection('gitSubtreeRuns')?.sync();
   }
 
   async beforeDisable() {

@@ -20,22 +20,23 @@ export default defineCollection({
       uiSchema: { title: 'Repository URL', type: 'string', 'x-component': 'Input' },
     },
     {
-      type: 'string',
-      name: 'username',
-      interface: 'input',
-      uiSchema: { title: 'Username', type: 'string', 'x-component': 'Input' },
+      type: 'belongsTo',
+      name: 'gitAccount',
+      target: 'gitAccounts',
+      foreignKey: 'gitAccountId',
+      onDelete: 'RESTRICT',
+      interface: 'm2o',
+      uiSchema: {
+        title: 'Git Account',
+        'x-component': 'AssociationField',
+        'x-component-props': { fieldNames: { label: 'name', value: 'id' } },
+      },
     },
     {
       type: 'string',
       name: 'localPath',
       interface: 'input',
       uiSchema: { title: 'Local Path', type: 'string', 'x-component': 'Input' },
-    },
-    {
-      type: 'string',
-      name: 'pat',
-      interface: 'password',
-      uiSchema: { title: 'Personal Access Token', type: 'string', 'x-component': 'Password' },
     },
     {
       type: 'string',

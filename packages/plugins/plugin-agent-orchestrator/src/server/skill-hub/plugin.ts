@@ -19,6 +19,11 @@ type ToolRuntimeInput = string | ToolsRuntime | undefined;
 const SKILL_TASK_POLL_INTERVAL_MS = Number.parseInt(process.env.SKILL_HUB_TASK_POLL_INTERVAL_MS || '5000', 10);
 const SKILL_TASK_POLL_LIMIT = Number.parseInt(process.env.SKILL_HUB_TASK_POLL_LIMIT || '3', 10);
 
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value || '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function normalizeToolRuntime(runtime: ToolRuntimeInput): ToolsRuntime | undefined {
   if (!runtime) return undefined;
   if (typeof runtime === 'string') {
@@ -113,6 +118,16 @@ export class SkillHubSubFeature {
     parseInt(process.env.SKILL_HUB_RATE_LIMIT_WINDOW_MS || '60000', 10),
   );
   private skillTemplates = new Map<string, any>();
+  private readonly afterStart = async () => {
+    this.registerAITools();
+    this.startCleanupInterval();
+    this.startSkillTaskPoller();
+    await this.subscribeInitEnvDone();
+    await this.skillManager.seedDefaults().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      (this as any).app.logger.error(`[skill-hub] Failed to seed default skills: ${message}`);
+    });
+  };
 
   constructor(private plugin: any) {}
 
@@ -261,30 +276,23 @@ export class SkillHubSubFeature {
     });
 
     // 5. Subscribe PubSub — worker processes skill execution tasks
-    this.skillTaskCallback = async (payload: any) => {
-      if (process.env.SKILL_HUB_SANDBOX === 'false') return;
-      await this.onQueueTask(payload);
-    };
-    (this as any).app.pubSubManager.subscribe('skill-hub.task', this.skillTaskCallback);
+    if (shouldRunSkillSandbox()) {
+      this.skillTaskCallback = async (payload: any) => {
+        await this.onQueueTask(payload);
+      };
+      (this as any).app.pubSubManager.subscribe('skill-hub.task', this.skillTaskCallback);
+    }
 
     // 5b. Subscribe PubSub — worker processes init-env tasks
-    this.initEnvTaskCallback = async (payload: any) => {
-      if (process.env.SKILL_HUB_SANDBOX === 'false') return;
-      await this.workerEnvManager.executeInit(payload);
-    };
-    (this as any).app.pubSubManager.subscribe('skill-hub.init-env', this.initEnvTaskCallback);
+    if (shouldRunSkillSandbox()) {
+      this.initEnvTaskCallback = async (payload: any) => {
+        await this.workerEnvManager.executeInit(payload);
+      };
+      (this as any).app.pubSubManager.subscribe('skill-hub.init-env', this.initEnvTaskCallback);
+    }
 
     // 6. Register AI tools + subscriptions (deferred — after all plugins loaded)
-    (this as any).app.on('afterStart', async () => {
-      this.registerAITools();
-      this.startCleanupInterval();
-      this.startSkillTaskPoller();
-      await this.subscribeInitEnvDone();
-      // Ensure any newly added built-in skills are seeded automatically on upgrade/restart
-      await this.skillManager.seedDefaults().catch((e) => {
-        (this as any).app.logger.error(`[skill-hub] Failed to seed default skills: ${e.message}`);
-      });
-    });
+    (this as any).app.on('afterStart', this.afterStart);
   }
 
   private async onQueueTask(message: { id: string }) {
@@ -319,8 +327,14 @@ export class SkillHubSubFeature {
 
   private async claimSkillExecution(id: string): Promise<boolean> {
     const model = (this as any).db.getModel('skillExecutions');
+    const now = new Date();
     const [affected] = await model.update(
-      { status: 'running' },
+      {
+        status: 'running',
+        startedAt: now,
+        heartbeatAt: now,
+        workerId: `${process.env.HOSTNAME || process.env.COMPUTERNAME || 'worker'}:${process.pid}`,
+      },
       {
         where: {
           id,
@@ -332,12 +346,12 @@ export class SkillHubSubFeature {
   }
 
   private startSkillTaskPoller() {
-    if (process.env.SKILL_HUB_SANDBOX === 'false' || this.skillTaskPoller) {
+    if (!shouldRunSkillSandbox() || this.skillTaskPoller) {
       return;
     }
 
     const tick = () => {
-      this.processPendingSkillExecutions().catch((error) => {
+      this.processSkillExecutionQueue().catch((error) => {
         (this as any).app.logger.warn(`[skill-hub] Pending task poll failed: ${error?.message || error}`);
       });
     };
@@ -345,6 +359,54 @@ export class SkillHubSubFeature {
     this.skillTaskPoller = setInterval(tick, SKILL_TASK_POLL_INTERVAL_MS);
     (this.skillTaskPoller as any).unref?.();
     setTimeout(tick, 1000);
+  }
+
+  private async processSkillExecutionQueue() {
+    await this.recoverStaleSkillExecutions();
+    await this.processPendingSkillExecutions();
+  }
+
+  private async recoverStaleSkillExecutions() {
+    const staleAfterMs = positiveInteger(process.env.SKILL_HUB_STALE_EXECUTION_MS, 120000);
+    const maxRetries = positiveInteger(process.env.SKILL_HUB_MAX_EXECUTION_RETRIES, 2);
+    const cutoff = new Date(Date.now() - staleAfterMs);
+    const repo = (this as any).db.getRepository('skillExecutions');
+    const model = (this as any).db.getModel('skillExecutions');
+    const staleExecutions = await repo.find({
+      filter: {
+        status: 'running',
+        $or: [{ heartbeatAt: null }, { heartbeatAt: { $lt: cutoff } }],
+      },
+      limit: SKILL_TASK_POLL_LIMIT,
+    });
+
+    for (const execution of staleExecutions) {
+      const id = execution.get('id');
+      const retryCount = Number(execution.get('retryCount') || 0);
+      const failed = retryCount >= maxRetries;
+      const Op = model.sequelize.Sequelize.Op;
+      const [affected] = await model.update(
+        {
+          status: failed ? 'failed' : 'pending',
+          retryCount: retryCount + 1,
+          workerId: null,
+          heartbeatAt: null,
+          stderr: failed ? `Execution abandoned after ${retryCount + 1} worker attempts.` : execution.get('stderr'),
+        },
+        {
+          where: {
+            id,
+            status: 'running',
+            [Op.or]: [{ heartbeatAt: null }, { heartbeatAt: { [Op.lt]: cutoff } }],
+          },
+        },
+      );
+      if (affected > 0) {
+        (this as any).app.logger.warn(
+          `[skill-hub] Recovered stale execution ${id}: ${failed ? 'failed' : 'returned to pending'}.`,
+        );
+      }
+    }
   }
 
   private async processPendingSkillExecutions() {
@@ -788,6 +850,7 @@ export class SkillHubSubFeature {
   }
 
   private startCleanupInterval() {
+    if (this.cleanupInterval) return;
     // Check old execution files every hour, rate limiter every 5 minutes
     const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
 
@@ -823,6 +886,8 @@ export class SkillHubSubFeature {
   }
 
   async beforeStop() {
+    (this as any).app.off?.('afterStart', this.afterStart);
+    (this as any).app.removeListener?.('afterStart', this.afterStart);
     // Unsubscribe PubSub
     if (this.skillTaskCallback) {
       try {
@@ -1014,3 +1079,21 @@ export class SkillHubSubFeature {
 }
 
 export default SkillHubSubFeature;
+export function shouldRunSkillSandbox(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.SKILL_HUB_SANDBOX === 'false') return false;
+  const workerMode = String(env.WORKER_MODE || '').trim();
+  if (!workerMode) return true;
+  if (
+    workerMode === '*' ||
+    workerMode
+      .split(',')
+      .map((value) => value.trim())
+      .includes('skill-hub:sandbox')
+  ) {
+    return true;
+  }
+  return workerMode
+    .split(',')
+    .map((value) => value.trim())
+    .includes('skill-hub.task');
+}

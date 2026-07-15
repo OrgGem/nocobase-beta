@@ -21,7 +21,7 @@ export const LLMModelSelect: React.FC<{
       setModels([]);
       return;
     }
-    
+
     setLoading(true);
     api
       .request({ url: 'ai:listModels', params: { llmService } })
@@ -36,7 +36,7 @@ export const LLMModelSelect: React.FC<{
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-      
+
     return () => {
       cancelled = true;
     };

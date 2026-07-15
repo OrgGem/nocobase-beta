@@ -2,6 +2,7 @@ import { Context } from '@nocobase/actions';
 import type { Application } from '@nocobase/server';
 import { parseGitLabProject } from '../utils/gitlab-url';
 import { redactPat } from '../utils/redact';
+import { getRepoAccount } from '../utils/get-repo-account';
 
 export const WORKER_JOB_GIT_REVIEW_PROCESS = 'git-review:process';
 const REVIEW_QUEUE_CHANNEL = 'plugin-git-manager.review';
@@ -192,7 +193,7 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
   // works regardless of whether the trigger came from poller or manual UI.
   let headSha = args.headSha || null;
   if (args.targetType === 'mr' && !headSha && args.mrIid) {
-    headSha = await fetchMrHeadSha(repo, args.mrIid).catch(() => null);
+    headSha = await fetchMrHeadSha(db, repo, args.mrIid).catch(() => null);
   }
 
   // Upsert review record (1 per MR/commit/branch target)
@@ -662,7 +663,7 @@ export async function reviewApprovePost(ctx: Context, next: () => Promise<void>)
   });
   if (!repo) ctx.throw(404, 'Repository not found');
 
-  const noteId = await postNoteToGitLab(repo, Number(review.get('mrIid')), markdown);
+  const noteId = await postNoteToGitLab(ctx.db, repo, Number(review.get('mrIid')), markdown);
 
   const userId = (ctx as any).state?.currentUser?.id;
   await reviewsRepo.update({
@@ -880,7 +881,7 @@ async function runReview(app: Application, args: RunReviewArgs) {
       postStatus = 'skipped';
     } else if (postMode === 'auto' && args.targetType === 'mr' && args.mrIid) {
       try {
-        postedNoteId = String(await postNoteToGitLab(args.repo, args.mrIid, content));
+        postedNoteId = String(await postNoteToGitLab(db, args.repo, args.mrIid, content));
         postStatus = 'posted';
       } catch (err: any) {
         autoPostError = redactPat(err?.message || String(err));
@@ -1102,11 +1103,12 @@ function extractLastAiMessageContent(result: any): string {
   return '';
 }
 
-async function fetchMrHeadSha(repo: any, mrIid: number): Promise<string | null> {
-  const repoUrl = repo.get('repoUrl') as string;
-  const pat = repo.get('pat') as string;
+async function fetchMrHeadSha(db: any, repo: any, mrIid: number): Promise<string | null> {
+  const account = await getRepoAccount(db, repo);
+  const pat = account?.pat || '';
   if (!pat) return null;
-  const isGitHub = repoUrl.includes('github.com');
+  const repoUrl = repo.get('repoUrl') as string;
+  const isGitHub = account?.provider === 'github' || repoUrl.includes('github.com');
 
   try {
     if (isGitHub) {
@@ -1131,10 +1133,11 @@ async function fetchMrHeadSha(repo: any, mrIid: number): Promise<string | null> 
   }
 }
 
-async function postNoteToGitLab(repo: any, mrIid: number, body: string): Promise<number | string> {
+async function postNoteToGitLab(db: any, repo: any, mrIid: number, body: string): Promise<number | string> {
+  const account = await getRepoAccount(db, repo);
+  const pat = account?.pat || '';
   const repoUrl = repo.get('repoUrl') as string;
-  const pat = repo.get('pat') as string;
-  const isGitHub = repoUrl.includes('github.com');
+  const isGitHub = account?.provider === 'github' || repoUrl.includes('github.com');
 
   if (isGitHub) {
     if (!pat) throw new Error('Repository has no PAT configured');

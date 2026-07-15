@@ -39,6 +39,8 @@ x-nocobase-env: &nocobase-env
   CACHE_DEFAULT_STORE: redis
   CACHE_REDIS_URL: ${CACHE_REDIS_URL:-redis://redis:6379/0}
   REDIS_URL: ${REDIS_URL:-redis://redis:6379/1}
+  # Shared allocator prevents both app/worker processes from claiming the same Worker ID.
+  WORKER_ID_REDIS_URL: ${WORKER_ID_REDIS_URL:-redis://redis:6379/1}
   # PubSub adapter (required for cluster sync across nodes)
   PUBSUB_ADAPTER: redis
   PUBSUB_ADAPTER_REDIS_URL: ${PUBSUB_ADAPTER_REDIS_URL:-redis://redis:6379/2}
@@ -140,6 +142,8 @@ services:
     depends_on:
       app-1:
         condition: service_healthy
+      app-2:
+        condition: service_healthy
     entrypoint: ['/bin/sh', '-c']
     command:
       - |
@@ -186,7 +190,9 @@ services:
                 use_temp_path=off;
 
             upstream nocobase {
-                server app-1:13000 max_fails=3 fail_timeout=30s;
+                least_conn;
+                server app-1:13000 max_fails=2 fail_timeout=10s;
+                server app-2:13000 max_fails=2 fail_timeout=10s;
                 keepalive 32;
             }
 
@@ -387,12 +393,49 @@ services:
     environment:
       <<: *nocobase-env
       APP_ROLE: 'app'
-      WORKER_MODE: '!'
+      # Empty means this node serves HTTP and consumes all worker queues.
+      WORKER_MODE: ''
       APP_PORT: 13000
       APP_BIND: 0.0.0.0
       SKILL_HUB_SANDBOX: 'false'
     ports:
       - '13000:13000'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "require(''http'').get(''http://127.0.0.1:13000/api/app:getInfo'', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+
+  app-2:
+    <<: *nocobase-base
+    container_name: app-2
+    command:
+      - /bin/sh
+      - -c
+      - |
+        if ! command -v git >/dev/null; then
+          echo "Installing git..."
+          if command -v apt-get >/dev/null; then
+            apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+          elif command -v apk >/dev/null; then
+            apk add --no-cache git
+          fi
+        fi
+        cd /app/nocobase
+        echo "module.exports={getEnvAsync:async()=>({sys:'mock',osVer:'mock',db:{id:'mock'}}),getInstanceIdWithPublicKeyAsync:async()=>'mock',getInstanceIdAsync:async()=>'mock',instanceIdDecrypt:()=>'mock',createKeyPair:()=>({publicKey:'mock',privateKey:'mock'}),encryptWithPublicKey:()=>'mock',encrypt:()=>'mock',decryptWithPrivateKey:()=>'mock',createSignature:()=>'mock',verifySignature:()=>true,keyEncrypt:()=>'mock',keyDecrypt:()=>JSON.stringify({licenseKey:{domain:'*'}})}" > node_modules/@nocobase/license-kit/index.js
+        exec yarn start
+    environment:
+      <<: *nocobase-env
+      APP_ROLE: 'app'
+      WORKER_MODE: ''
+      APP_PORT: 13000
+      APP_BIND: 0.0.0.0
+      SKILL_HUB_SANDBOX: 'false'
     healthcheck:
       test:
         [
@@ -413,7 +456,7 @@ services:
     command: >
       redis-server
       --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy noeviction
       --appendonly yes
       --appendfsync everysec
       --save 900 1

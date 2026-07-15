@@ -68,7 +68,9 @@ export const CommitHistory: React.FC = () => {
   const filteredCommits = commits.filter((commit) => {
     const keyword = searchKeyword.trim().toLowerCase();
     if (!keyword) return true;
-    return String(commit.message || commit.subject || commit.body || '').toLowerCase().includes(keyword);
+    return String(commit.message || commit.subject || commit.body || '')
+      .toLowerCase()
+      .includes(keyword);
   });
 
   const openCommitDetail = async (commit: any) => {
@@ -137,7 +139,9 @@ export const CommitHistory: React.FC = () => {
       key: 'message',
       render: (text: string, record: any) => (
         <div>
-          <Text strong style={{ fontSize: 13 }}>{text}</Text>
+          <Text strong style={{ fontSize: 13 }}>
+            {text}
+          </Text>
           <div style={{ marginTop: 2 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
               <UserOutlined style={{ marginRight: 4 }} />
@@ -215,11 +219,14 @@ export const CommitHistory: React.FC = () => {
               <Text strong>{selectedCommit.message}</Text>
               <div>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  {selectedCommit.hash?.substring(0, 7)} · {selectedCommit.author_name} · {formatDate(selectedCommit.date)}
+                  {selectedCommit.hash?.substring(0, 7)} · {selectedCommit.author_name} ·{' '}
+                  {formatDate(selectedCommit.date)}
                 </Text>
               </div>
             </div>
-          ) : 'Commit Detail'
+          ) : (
+            'Commit Detail'
+          )
         }
         open={!!selectedCommit}
         onClose={() => {
@@ -333,7 +340,16 @@ const DiffViewer: React.FC<{ content: string }> = memo(({ content }) => {
               minHeight: 20,
             }}
           >
-            <span style={{ display: 'inline-block', width: 40, color: token.colorTextQuaternary, userSelect: 'none', textAlign: 'right', marginRight: 12 }}>
+            <span
+              style={{
+                display: 'inline-block',
+                width: 40,
+                color: token.colorTextQuaternary,
+                userSelect: 'none',
+                textAlign: 'right',
+                marginRight: 12,
+              }}
+            >
               {i + 1}
             </span>
             {line}

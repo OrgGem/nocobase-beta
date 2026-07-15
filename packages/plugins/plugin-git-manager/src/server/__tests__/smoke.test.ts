@@ -9,7 +9,7 @@ describe('Git Manager plugin smoke', () => {
 
   it('loads without starting the full app', async () => {
     app = await createMockServer({
-      plugins: ["nocobase","git-manager"],
+      plugins: ['nocobase', 'git-manager'],
     });
 
     expect(app).toBeTruthy();

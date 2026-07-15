@@ -1059,7 +1059,7 @@ async function getRedisDiagnostics(app: Application) {
     const stats = info.stats || {};
     const clients = info.clients || {};
     const dbSize = Number(await redis.sendCommand(['DBSIZE'])) || 0;
-    const lockKeys = await scanKeys(redis, 'nocobase:lock:*', 200);
+    const lockKeys = await scanKeys(redis, 'nocobase:*:lock:*', 200);
     const rawSlowlog = (await redis.sendCommand(['SLOWLOG', 'GET', '10'])) as unknown[];
     const slowlog = Array.isArray(rawSlowlog)
       ? rawSlowlog.map((entry) => {
@@ -1081,6 +1081,7 @@ async function getRedisDiagnostics(app: Application) {
         usedBytes: Number(memory.used_memory || 0),
         peak: memory.used_memory_peak_human,
         fragmentationRatio: Number(memory.mem_fragmentation_ratio || 0),
+        maxMemoryPolicy: memory.maxmemory_policy || 'unknown',
       },
       clients: {
         connected: Number(clients.connected_clients || 0),
@@ -1281,6 +1282,7 @@ function buildRecommendations(params: {
   pluginLoadDrifts: number;
   packageDrifts: number;
   redisAvailable: boolean;
+  redisEvictionUnsafe: boolean;
   databaseOk: boolean;
   queueCoverageMissing?: string[];
 }) {
@@ -1290,6 +1292,13 @@ function buildRecommendations(params: {
       level: 'critical',
       code: 'redis_unavailable',
       message: 'Redis is unavailable, so cluster-wide diagnostic collection and locking are degraded.',
+    });
+  }
+  if (params.redisEvictionUnsafe) {
+    recommendations.push({
+      level: 'critical',
+      code: 'redis_eviction_unsafe_for_coordination',
+      message: 'Redis may evict queue, lock, or Worker ID keys. Use noeviction for coordination Redis.',
     });
   }
   if (!params.databaseOk) {
@@ -1376,6 +1385,9 @@ async function buildDoctorReport(app: Application, run: Record<string, unknown>,
     pluginLoadDrifts: pluginDiagnostics.loadDrifts.length,
     packageDrifts: packageDiagnostics.packageDrifts.length,
     redisAvailable: Boolean(redisDiagnostics.available),
+    redisEvictionUnsafe:
+      Boolean(redisDiagnostics.available) &&
+      !['noeviction', 'unknown'].includes(String(redisDiagnostics.memory?.maxMemoryPolicy || 'unknown')),
     databaseOk: Boolean(databaseDiagnostics.ping.ok),
     queueCoverageMissing: queueDiagnostics.coverage?.missing || [],
   });

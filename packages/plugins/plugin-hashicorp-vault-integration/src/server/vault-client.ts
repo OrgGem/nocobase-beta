@@ -22,6 +22,12 @@ export interface VaultHealth {
   version?: string;
 }
 
+export interface VaultPathEntry {
+  name: string;
+  path: string;
+  isFolder: boolean;
+}
+
 export class VaultError extends Error {
   constructor(message: string) {
     super(message);
@@ -87,6 +93,67 @@ export class VaultClient {
       return `${this.baseUrl}/v1/${mount}/${path}`;
     }
     return `${this.baseUrl}/v1/${mount}/data/${path}`;
+  }
+
+  listUrl(secretPath = ''): string {
+    const mount = this.encodePath(this.mount);
+    const path = this.encodePath(secretPath);
+    const suffix = path ? `/${path}` : '';
+    if (this.config.kvVersion === 1) {
+      return `${this.baseUrl}/v1/${mount}${suffix}`;
+    }
+    return `${this.baseUrl}/v1/${mount}/metadata${suffix}`;
+  }
+
+  async listPath(secretPath = ''): Promise<VaultPathEntry[]> {
+    if (secretPath) assertSafePath(secretPath);
+    const token = await this.authenticate();
+    let body: unknown;
+    try {
+      const res = await serverRequest<unknown>({
+        method: 'LIST',
+        url: this.listUrl(secretPath),
+        headers: this.buildHeaders(token),
+        timeout: REQUEST_TIMEOUT,
+      });
+      body = res.data;
+    } catch (err) {
+      throw new VaultError(`Failed to list Vault path "${secretPath || '/'}": ${toSafeErrorMessage(err)}`);
+    }
+
+    const keys = (body as { data?: { keys?: unknown } } | undefined)?.data?.keys;
+    if (!Array.isArray(keys)) return [];
+    const prefix = secretPath ? `${secretPath.replace(/\/+$/, '')}/` : '';
+    return keys
+      .filter((key): key is string => typeof key === 'string' && key.length > 0)
+      .map((key) => {
+        const isFolder = key.endsWith('/');
+        const name = isFolder ? key.slice(0, -1) : key;
+        return { name, path: `${prefix}${name}`, isFolder };
+      });
+  }
+
+  async listSecretKeys(secretPath: string): Promise<string[]> {
+    assertSafePath(secretPath);
+    const token = await this.authenticate();
+    let body: unknown;
+    try {
+      const res = await serverRequest<unknown>({
+        method: 'GET',
+        url: this.secretUrl(secretPath),
+        headers: this.buildHeaders(token),
+        timeout: REQUEST_TIMEOUT,
+      });
+      body = res.data;
+    } catch (err) {
+      throw new VaultError(`Failed to read keys from secret "${secretPath}": ${toSafeErrorMessage(err)}`);
+    }
+    let secretData: unknown = (body as { data?: unknown } | undefined)?.data;
+    if (this.config.kvVersion !== 1) {
+      secretData = (secretData as { data?: unknown } | undefined)?.data;
+    }
+    if (!secretData || typeof secretData !== 'object') return [];
+    return Object.keys(secretData as Record<string, unknown>).sort();
   }
 
   async authenticate(): Promise<string> {

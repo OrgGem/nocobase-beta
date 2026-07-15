@@ -19,12 +19,29 @@ type CronJobLike = {
   stop(): void;
 };
 
+interface AgentRuntimeContext {
+  userId?: number;
+  messages: Array<{ role: string; content: unknown }>;
+  metadata: Record<string, unknown>;
+}
+
+interface AgentRuntimeLifecycle {
+  registerBeforeRunHook(name: string, hook: (context: AgentRuntimeContext) => Promise<void>): () => void;
+  registerAfterRunHook(
+    name: string,
+    hook: (context: AgentRuntimeContext, result: { succeeded: boolean }) => Promise<void>,
+  ): () => void;
+}
+
 export class PluginUserMemoryServer extends Plugin {
   memoryInjector: MemoryInjector;
   syncJob: MemorySyncJob;
   private _cronJobInstance: CronJobLike | null = null;
   private readonly autoSyncCooldownMs = 5 * 60 * 1000;
   private readonly autoSyncLastRun = new Map<number, number>();
+  private runtimeHooksRegistered = false;
+  private runtimeHookCleanup: Array<() => void> = [];
+  private readonly registerRuntimeHooksAfterStart = () => this.registerRuntimeHooks();
 
   async afterAdd() {}
 
@@ -54,6 +71,8 @@ export class PluginUserMemoryServer extends Plugin {
 
     // 3. Keep memory storage fresh after successful chats
     this.registerAutoSyncAfterChat();
+    this.registerRuntimeHooks();
+    this.app.on('afterStart', this.registerRuntimeHooksAfterStart);
 
     // 4. Define API resources
     this.defineResources();
@@ -93,7 +112,11 @@ export class PluginUserMemoryServer extends Plugin {
 
   private registerRememberTool() {
     try {
-      const toolsManager = (this.app.pm.get('ai') as any)?.ai?.toolsManager;
+      const toolsManager = (
+        this.app as typeof this.app & {
+          aiManager?: { toolsManager?: { registerDynamicTools: (provider: unknown) => void } };
+        }
+      ).aiManager?.toolsManager;
       if (!toolsManager) {
         this.app.logger.warn('[UserMemory] plugin-ai toolsManager not available, skip remember tool.');
         return;
@@ -136,6 +159,50 @@ export class PluginUserMemoryServer extends Plugin {
         this.app.logger.warn('[UserMemory] Auto-sync after chat failed:', error.message);
       }
     });
+  }
+
+  private registerRuntimeHooks(): void {
+    if (this.runtimeHooksRegistered) return;
+    const lifecycle = (this.app as typeof this.app & { agentRuntimeLifecycle?: AgentRuntimeLifecycle })
+      .agentRuntimeLifecycle;
+    if (!lifecycle) return;
+
+    this.runtimeHookCleanup.push(
+      lifecycle.registerBeforeRunHook('user-memory', async (context) => {
+        if (!context.userId || context.metadata.userMemoryInjected) return;
+        const memoryContent = await this.memoryInjector.getMemoryPromptSection(context.userId);
+        if (!memoryContent) return;
+
+        context.messages.unshift({
+          role: 'system',
+          content: { type: 'text', content: memoryContent },
+        });
+        context.metadata.userMemoryInjected = true;
+      }),
+      lifecycle.registerAfterRunHook('user-memory-sync', async (context, result) => {
+        if (!result.succeeded || !context.userId) return;
+        const now = Date.now();
+        const lastRun = this.autoSyncLastRun.get(context.userId) || 0;
+        if (now - lastRun < this.autoSyncCooldownMs) return;
+
+        this.autoSyncLastRun.set(context.userId, now);
+        const userId = context.userId;
+        setImmediate(() => {
+          this.syncJob
+            .syncUser(userId, 'manual')
+            .then((syncResult) => {
+              if (syncResult !== 'error') this.invalidateMemoryCache(userId);
+            })
+            .catch((error: unknown) => {
+              this.app.logger.warn('[UserMemory] Background Agent API memory sync failed.', {
+                error: error instanceof Error ? error : new Error(String(error)),
+              });
+            });
+        });
+      }),
+    );
+    this.runtimeHooksRegistered = true;
+    this.app.logger.info('[UserMemory] Agent runtime lifecycle hooks registered.');
   }
 
   private defineResources() {
@@ -266,11 +333,24 @@ export class PluginUserMemoryServer extends Plugin {
     // Invalidate the entire cache so the disabled state is reflected immediately
     // without waiting for 5-min TTL to expire.
     this.memoryInjector?.invalidateAll();
+    this.cleanupRuntimeHooks();
     this.app.logger.info('[UserMemory] Plugin disabled — memory cache cleared');
   }
 
   async remove() {
+    this.cleanupRuntimeHooks();
     this.memoryInjector?.invalidateAll();
+  }
+
+  async beforeStop() {
+    this.app.off?.('afterStart', this.registerRuntimeHooksAfterStart);
+    this.app.removeListener?.('afterStart', this.registerRuntimeHooksAfterStart);
+    this.cleanupRuntimeHooks();
+  }
+
+  private cleanupRuntimeHooks(): void {
+    for (const cleanup of this.runtimeHookCleanup.splice(0)) cleanup();
+    this.runtimeHooksRegistered = false;
   }
 }
 

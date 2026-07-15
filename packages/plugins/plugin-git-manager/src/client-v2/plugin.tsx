@@ -1,5 +1,4 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
 
 export class PluginGitManagerClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -7,7 +6,14 @@ export class PluginGitManagerClient extends Plugin<Record<string, never>, Applic
       key: 'git-manager',
       title: this.t('Git Manager'),
       icon: 'BranchesOutlined',
-      
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'git-manager',
+      key: 'subtree-splits',
+      title: this.t('Subtree Splits'),
+      aclSnippet: 'pm.plugin-git-manager.write',
+      componentLoader: () => import('./components/SubtreeSplits'),
     });
 
     this.pluginSettingsManager.addPageTabItem({
@@ -15,7 +21,8 @@ export class PluginGitManagerClient extends Plugin<Record<string, never>, Applic
       key: 'repositories',
       title: this.t('Repositories'),
       aclSnippet: 'pm.plugin-git-manager.repositories',
-      componentLoader: () => import('../client/components/RepositoryConfig').then(m => ({ default: m.RepositoryConfig })),
+      componentLoader: () =>
+        import('../client/components/RepositoryConfig').then((m) => ({ default: m.RepositoryConfig })),
     });
 
     this.pluginSettingsManager.addPageTabItem({
@@ -23,9 +30,9 @@ export class PluginGitManagerClient extends Plugin<Record<string, never>, Applic
       key: 'manage',
       title: this.t('Manage'),
       aclSnippet: 'pm.plugin-git-manager.manage',
-      componentLoader: () => import('../client/components/GitManagerSettings').then(m => ({ default: m.GitManagerSettings })),
+      componentLoader: () =>
+        import('../client/components/GitManagerSettings').then((m) => ({ default: m.GitManagerSettings })),
     });
-
   }
 }
 

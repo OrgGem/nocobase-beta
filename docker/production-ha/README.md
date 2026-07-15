@@ -1,5 +1,49 @@
 # NocoBase Production HA Stack
 
+> For the current two-server AWS ALB deployment, use
+> [`docker-compose.app-ha.yml`](./docker-compose.app-ha.yml) with
+> [`.env.app-ha.example`](./.env.app-ha.example). The original
+> `docker-compose.yml` below remains the single-host all-in-one development and
+> operations stack.
+
+## Two application servers behind AWS ALB
+
+The new compose file is intentionally application-only. PostgreSQL, Redis and
+NFS are external shared services. Run one profile on each server:
+
+```bash
+# Both servers
+cp .env.app-ha.example .env.app-ha
+# Edit it and use identical DB, Redis and secret values on both servers.
+
+# Server 1
+docker compose --env-file .env.app-ha \
+  -f docker-compose.app-ha.yml --profile node1 up -d
+
+# Server 2
+docker compose --env-file .env.app-ha \
+  -f docker-compose.app-ha.yml --profile node2 up -d
+```
+
+Register both targets in one AWS ALB target group:
+
+```text
+server-1-private-ip:13000
+server-2-private-ip:13000
+health check path: /api/clusterManagerHealth:readiness
+success code: 200
+```
+
+Both nodes use an empty `WORKER_MODE`, so each serves HTTP/WebSocket requests
+and consumes background jobs. The corresponding Redis URL for every function
+must be identical across the two nodes. Different functions may use separate
+Redis servers or logical databases.
+
+The shared NFS export is mounted at `/app/nocobase/storage/plugins`. Publish a
+complete plugin build to a staging release directory and switch it atomically;
+do not overwrite files in place while either app is running. Restart the two
+nodes one at a time, waiting for readiness `200` before draining the other node.
+
 ## Architecture
 
 ```

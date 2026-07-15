@@ -31,12 +31,15 @@ const TYPE_LABEL_KEYS: Record<string, string> = {
   tabs: 'Tabs',
 };
 
-const RENAMABLE_TYPES = new Set(['group', 'page', 'flowPage', 'link', 'tabs']);
+const RENAMABLE_TYPES = new Set(['group', 'page', 'flowPage', 'link']);
 
-export function RouterConfigManager() {
+interface RouterConfigManagerViewProps {
+  api: ReturnType<typeof useApp>['apiClient'];
+}
+
+export function RouterConfigManagerView({ api }: RouterConfigManagerViewProps) {
   const { t } = useTranslation();
   const { message } = App.useApp();
-  const api = useApp().apiClient;
   const [routes, setRoutes] = useState<RouteRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [renameModal, setRenameModal] = useState<{
@@ -88,7 +91,12 @@ export function RouterConfigManager() {
       await api.request({
         method: 'POST',
         url: '/desktopRoutes:renamePath',
-        data: { id: renameModal.record.id, schemaUid: trimmed },
+        data: {
+          values: {
+            id: renameModal.record.id,
+            schemaUid: trimmed,
+          },
+        },
       });
       message.success(t('Path renamed successfully'));
       setRenameModal({ visible: false, record: null });
@@ -141,7 +149,8 @@ export function RouterConfigManager() {
       key: 'actions',
       width: 120,
       render: (_: unknown, record: RouteRecord) => {
-        if (!RENAMABLE_TYPES.has(record.type || '')) {
+        const isTab = record.type === 'tabs';
+        if (!isTab && !RENAMABLE_TYPES.has(record.type || '')) {
           return null;
         }
         return (
@@ -150,7 +159,8 @@ export function RouterConfigManager() {
             size="small"
             icon={<EditOutlined />}
             onClick={() => handleOpenRename(record)}
-            disabled={!record.schemaUid}
+            disabled={isTab || !record.schemaUid}
+            title={isTab ? t('Tab paths cannot be renamed') : undefined}
           >
             {t('Rename Path')}
           </Button>
@@ -223,6 +233,12 @@ export function RouterConfigManager() {
       </Modal>
     </div>
   );
+}
+
+export function RouterConfigManager() {
+  const api = useApp().apiClient;
+
+  return <RouterConfigManagerView api={api} />;
 }
 
 export default RouterConfigManager;

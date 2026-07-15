@@ -6,21 +6,26 @@ import { createDynamicPipelineToolsProvider } from './tools/document-understandi
 
 type DynamicToolsProvider = ReturnType<typeof createDynamicPipelineToolsProvider>;
 
-interface AiPluginLike {
-  ai?: {
-    toolsManager?: {
-      registerDynamicTools: (provider: DynamicToolsProvider) => void;
-    };
+interface AiManagerLike {
+  toolsManager?: {
+    registerDynamicTools: (provider: DynamicToolsProvider) => void;
   };
 }
 
-const isAiPluginLike = (plugin: unknown): plugin is AiPluginLike => {
-  const candidate = plugin as AiPluginLike;
-  return typeof candidate?.ai?.toolsManager?.registerDynamicTools === 'function';
+interface DocumentToolRuntimeState {
+  documentUnderstandingToolProviderRegistered?: boolean;
+  documentUnderstandingService?: DocumentUnderstandingService;
+}
+
+const isAiManagerLike = (manager: unknown): manager is AiManagerLike => {
+  const candidate = manager as AiManagerLike;
+  return typeof candidate?.toolsManager?.registerDynamicTools === 'function';
 };
 
 export class PluginDocumentUnderstandingServer extends Plugin {
   public service!: DocumentUnderstandingService;
+  private aiToolsRegistered = false;
+  private readonly registerAIToolsAfterStart = () => this.registerAITools();
 
   async afterAdd() {}
 
@@ -49,6 +54,7 @@ export class PluginDocumentUnderstandingServer extends Plugin {
 
     // 4. Register AI tool (graceful)
     this.registerAITools();
+    this.app.on('afterStart', this.registerAIToolsAfterStart);
 
     // 5. ACL
     this.app.acl.registerSnippet({
@@ -83,13 +89,24 @@ export class PluginDocumentUnderstandingServer extends Plugin {
   }
 
   private registerAITools() {
+    if (this.aiToolsRegistered) return;
     try {
-      const aiPlugin = this.app.pm.get('@nocobase/plugin-ai');
-      if (!isAiPluginLike(aiPlugin)) {
+      const aiManager = (this.app as typeof this.app & { aiManager?: unknown }).aiManager;
+      if (!isAiManagerLike(aiManager)) {
         this.app.logger.warn('Document Understanding: plugin-ai not available, skip AI tool registration.');
         return;
       }
-      aiPlugin.ai.toolsManager.registerDynamicTools(createDynamicPipelineToolsProvider(this.service));
+      const runtimeState = this.app as typeof this.app & DocumentToolRuntimeState;
+      runtimeState.documentUnderstandingService = this.service;
+      if (!runtimeState.documentUnderstandingToolProviderRegistered) {
+        aiManager.toolsManager.registerDynamicTools(async (register) => {
+          const currentService = runtimeState.documentUnderstandingService;
+          if (!currentService) return;
+          await createDynamicPipelineToolsProvider(currentService)(register);
+        });
+        runtimeState.documentUnderstandingToolProviderRegistered = true;
+      }
+      this.aiToolsRegistered = true;
       this.app.logger.info('Document Understanding: Dynamic pipeline tools provider registered.');
     } catch (err) {
       this.app.logger.warn('Document Understanding: Failed to register AI tools, continue without it.', err);
@@ -103,6 +120,15 @@ export class PluginDocumentUnderstandingServer extends Plugin {
   async afterDisable() {}
 
   async remove() {}
+
+  async beforeStop() {
+    this.app.off?.('afterStart', this.registerAIToolsAfterStart);
+    this.app.removeListener?.('afterStart', this.registerAIToolsAfterStart);
+    const runtimeState = this.app as typeof this.app & DocumentToolRuntimeState;
+    if (runtimeState.documentUnderstandingService === this.service) {
+      runtimeState.documentUnderstandingService = undefined;
+    }
+  }
 }
 
 export default PluginDocumentUnderstandingServer;

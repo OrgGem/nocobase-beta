@@ -65,4 +65,16 @@
   "Use letters, digits and underscores, not starting with a digit": "使用字母、数字和下划线，不能以数字开头",
   "Push value into $env on every sync": "每次同步时将值推送到 $env",
   "Allow resolving this variable from the client for logged-in users": "允许已登录用户从客户端解析此变量"
+  , "Browse Vault paths": "浏览 Vault 路径"
+  , "Browse": "浏览"
+  , "Failed to list Vault paths": "无法列出 Vault 路径"
+  , "Failed to list secret keys": "无法列出密钥字段"
+  , "Select a connection first": "请先选择连接"
+  , "Select or enter a secret key": "选择或输入密钥字段"
+  , "Enter the key manually": "手动输入字段"
+  , "Loading": "加载中"
+  , "Up": "上一级"
+  , "No paths found": "未找到路径"
+  , "Type": "类型"
+  , "Folder": "文件夹"
 }

@@ -1,8 +1,15 @@
 import React, { useEffect } from 'react';
 import { Tabs, Select, Space, Typography, Tag, theme } from 'antd';
 import {
-  BranchesOutlined, FolderOutlined, HistoryOutlined, ToolOutlined, DatabaseOutlined, MergeOutlined,
-  RobotOutlined, AuditOutlined, ClockCircleOutlined,
+  BranchesOutlined,
+  FolderOutlined,
+  HistoryOutlined,
+  ToolOutlined,
+  DatabaseOutlined,
+  MergeOutlined,
+  RobotOutlined,
+  AuditOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { GitManagerProvider, useGitManager } from '../context/GitManagerContext';
 import { FileExplorer } from './FileExplorer';
@@ -53,10 +60,7 @@ const GitManagerContent: React.FC = () => {
             label: (
               <Space>
                 {r.name}
-                <Tag
-                  color={r.status === 'connected' ? 'green' : 'default'}
-                  style={{ fontSize: 11 }}
-                >
+                <Tag color={r.status === 'connected' ? 'green' : 'default'} style={{ fontSize: 11 }}>
                   {r.status === 'connected' ? t('Connected') : t('Disconnected')}
                 </Tag>
               </Space>

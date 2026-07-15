@@ -20,7 +20,7 @@ type ConnectionTestResult = {
 export const InstanceManager: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
-  const { refreshInstances } = useCurrentInstance();
+  const { instanceId, refreshInstances, refreshFolders } = useCurrentInstance();
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<any>(null);
   const [testing, setTesting] = useState<number | null>(null);
@@ -69,6 +69,10 @@ export const InstanceManager: React.FC = () => {
       const res = await api.request({ url: 'uipathInstanceActions:testConnection', params: { filterByTk: id } });
       const result = getActionResponseBody(res) as ConnectionTestResult;
       if (result?.status === 'healthy') {
+        await api.request({ url: 'uipathFolders:sync', params: { instanceId: id } });
+        if (instanceId === id) {
+          refreshFolders();
+        }
         message.success(`${t('Connected')} (${result.latencyMs}ms)`);
       } else {
         message.error(`${t('Failed')}: ${result?.message || 'Unknown error'}`);

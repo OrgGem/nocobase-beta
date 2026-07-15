@@ -1,7 +1,7 @@
 import type { Model, Transaction } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 import type { CronJob } from 'cron';
-import { createTestConnectionAction } from './actions/vault-connections';
+import { createVaultConnectionActions } from './actions/vault-connections';
 import { createVaultActions } from './actions/vault';
 import { SecretCache } from './secret-cache';
 import { SyncService } from './sync-service';
@@ -78,8 +78,11 @@ export class PluginHashicorpVaultIntegrationServer extends Plugin {
       name: 'vault',
       actions: createVaultActions(this),
     });
+    const connectionActions = createVaultConnectionActions(this);
     this.app.resourceManager.registerActionHandlers({
-      'vaultConnections:testConnection': createTestConnectionAction(this),
+      'vaultConnections:testConnection': connectionActions.testConnection,
+      'vaultConnections:listPaths': connectionActions.listPaths,
+      'vaultConnections:listSecretKeys': connectionActions.listSecretKeys,
     });
 
     this.app.acl.allow('vault', ['resolve', 'listKeys'], 'loggedIn');

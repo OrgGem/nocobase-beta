@@ -1,6 +1,29 @@
-import { CopyOutlined, DeleteOutlined, PlusOutlined, SyncOutlined } from '@ant-design/icons';
+import {
+  ArrowLeftOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  FolderOpenOutlined,
+  FolderOutlined,
+  KeyOutlined,
+  PlusOutlined,
+  SyncOutlined,
+} from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
+import {
+  AutoComplete,
+  Button,
+  Form,
+  Input,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  Tooltip,
+  message,
+} from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useT } from '../locale';
 
@@ -33,6 +56,12 @@ interface MappingFormValues {
   syncToEnv: boolean;
 }
 
+interface VaultPathEntry {
+  name: string;
+  path: string;
+  isFolder: boolean;
+}
+
 function getErrorMessage(err: unknown, fallback: string): string {
   const e = err as { response?: { data?: { errors?: { message?: string }[] } }; message?: string };
   return e?.response?.data?.errors?.[0]?.message || e?.message || fallback;
@@ -47,6 +76,12 @@ export const VaultSecretMappings: React.FC = () => {
   const [syncing, setSyncing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<VaultSecretMapping | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserPath, setBrowserPath] = useState('');
+  const [browserEntries, setBrowserEntries] = useState<VaultPathEntry[]>([]);
+  const [browserLoading, setBrowserLoading] = useState(false);
+  const [secretKeys, setSecretKeys] = useState<string[]>([]);
+  const [keysLoading, setKeysLoading] = useState(false);
   const [form] = Form.useForm<MappingFormValues>();
 
   const loadData = useCallback(async () => {
@@ -125,6 +160,65 @@ export const VaultSecretMappings: React.FC = () => {
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to save') as string));
     }
+  };
+
+  const loadPath = async (connectionId: number, path: string) => {
+    setBrowserLoading(true);
+    try {
+      const res = await api.request({
+        url: 'vaultConnections:listPaths',
+        method: 'post',
+        params: { filterByTk: connectionId, path },
+      });
+      setBrowserPath(path);
+      setBrowserEntries(res?.data?.data?.entries || []);
+    } catch (err) {
+      message.error(getErrorMessage(err, t('Failed to list Vault paths') as string));
+    } finally {
+      setBrowserLoading(false);
+    }
+  };
+
+  const loadSecretKeys = async (connectionId: number, path: string) => {
+    if (!path) return;
+    setKeysLoading(true);
+    try {
+      const res = await api.request({
+        url: 'vaultConnections:listSecretKeys',
+        method: 'post',
+        params: { filterByTk: connectionId, path },
+      });
+      setSecretKeys(res?.data?.data?.keys || []);
+    } catch (err) {
+      setSecretKeys([]);
+      message.error(getErrorMessage(err, t('Failed to list secret keys') as string));
+    } finally {
+      setKeysLoading(false);
+    }
+  };
+
+  const openPathBrowser = async () => {
+    const connectionId = form.getFieldValue('connectionId');
+    if (!connectionId) {
+      message.warning(t('Select a connection first'));
+      return;
+    }
+    const currentSecretPath = form.getFieldValue('secretPath') || '';
+    const currentPath = currentSecretPath.split('/').slice(0, -1).join('/');
+    setBrowserOpen(true);
+    await loadPath(connectionId, currentPath);
+  };
+
+  const selectBrowserEntry = async (entry: VaultPathEntry) => {
+    const connectionId = form.getFieldValue('connectionId');
+    if (entry.isFolder) {
+      await loadPath(connectionId, entry.path);
+      return;
+    }
+    form.setFieldValue('secretPath', entry.path);
+    form.setFieldValue('secretKey', undefined);
+    setBrowserOpen(false);
+    await loadSecretKeys(connectionId, entry.path);
   };
 
   const copyVariable = async (variableKey: string) => {
@@ -289,6 +383,11 @@ export const VaultSecretMappings: React.FC = () => {
               placeholder={t('Select a connection') as string}
               options={connections.map((c) => ({ value: c.id, label: c.title || c.name }))}
               notFoundContent={t('No connection available')}
+              onChange={() => {
+                form.setFieldValue('secretPath', undefined);
+                form.setFieldValue('secretKey', undefined);
+                setSecretKeys([]);
+              }}
             />
           </Form.Item>
           <Form.Item
@@ -315,10 +414,32 @@ export const VaultSecretMappings: React.FC = () => {
             extra={t('Path under the KV mount, e.g. apps/billing')}
             rules={[{ required: true }]}
           >
-            <Input placeholder="apps/billing" />
+            <Input
+              placeholder="apps/billing"
+              addonAfter={
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<FolderOpenOutlined />}
+                  aria-label={t('Browse Vault paths') as string}
+                  onClick={openPathBrowser}
+                >
+                  {t('Browse')}
+                </Button>
+              }
+              onBlur={(event) => {
+                const connectionId = form.getFieldValue('connectionId');
+                if (connectionId && event.target.value) loadSecretKeys(connectionId, event.target.value);
+              }}
+            />
           </Form.Item>
           <Form.Item name="secretKey" label={t('Secret Key')} rules={[{ required: true }]}>
-            <Input placeholder="password" />
+            <AutoComplete
+              showSearch
+              placeholder={t('Select or enter a secret key') as string}
+              options={secretKeys.map((key) => ({ value: key, label: key }))}
+              notFoundContent={keysLoading ? t('Loading') : t('Enter the key manually')}
+            />
           </Form.Item>
           <Form.Item
             name="exposeToClient"
@@ -337,6 +458,59 @@ export const VaultSecretMappings: React.FC = () => {
             <Switch />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title={t('Browse Vault paths')}
+        open={browserOpen}
+        footer={null}
+        onCancel={() => setBrowserOpen(false)}
+        width={620}
+      >
+        <Space style={{ marginBottom: 12 }}>
+          <Button
+            icon={<ArrowLeftOutlined />}
+            disabled={!browserPath || browserLoading}
+            onClick={() => {
+              const connectionId = form.getFieldValue('connectionId');
+              const parentPath = browserPath.split('/').slice(0, -1).join('/');
+              loadPath(connectionId, parentPath);
+            }}
+          >
+            {t('Up')}
+          </Button>
+          <code>/{browserPath}</code>
+        </Space>
+        <Table<VaultPathEntry>
+          rowKey="path"
+          size="small"
+          loading={browserLoading}
+          pagination={false}
+          dataSource={browserEntries}
+          locale={{ emptyText: t('No paths found') as string }}
+          columns={[
+            {
+              title: t('Name'),
+              dataIndex: 'name',
+              render: (name: string, entry: VaultPathEntry) => (
+                <Button
+                  type="link"
+                  icon={entry.isFolder ? <FolderOutlined /> : <KeyOutlined />}
+                  onClick={() => selectBrowserEntry(entry)}
+                >
+                  {name}
+                  {entry.isFolder ? '/' : ''}
+                </Button>
+              ),
+            },
+            {
+              title: t('Type'),
+              dataIndex: 'isFolder',
+              width: 120,
+              render: (isFolder: boolean) => (isFolder ? t('Folder') : t('Secret')),
+            },
+          ]}
+        />
       </Modal>
     </div>
   );

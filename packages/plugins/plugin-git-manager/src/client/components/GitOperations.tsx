@@ -99,12 +99,12 @@ export const GitOperations: React.FC = () => {
 
   const allChangedFiles = statusData
     ? [
-        ...statusData.not_added?.map((f: string) => ({ file: f, status: 'not_added' })) || [],
-        ...statusData.modified?.map((f: string) => ({ file: f, status: 'modified' })) || [],
-        ...statusData.deleted?.map((f: string) => ({ file: f, status: 'deleted' })) || [],
-        ...statusData.renamed?.map((f: any) => ({ file: typeof f === 'string' ? f : f.to, status: 'renamed' })) || [],
-        ...statusData.conflicted?.map((f: string) => ({ file: f, status: 'conflicted' })) || [],
-        ...statusData.created?.map((f: string) => ({ file: f, status: 'created' })) || [],
+        ...(statusData.not_added?.map((f: string) => ({ file: f, status: 'not_added' })) || []),
+        ...(statusData.modified?.map((f: string) => ({ file: f, status: 'modified' })) || []),
+        ...(statusData.deleted?.map((f: string) => ({ file: f, status: 'deleted' })) || []),
+        ...(statusData.renamed?.map((f: any) => ({ file: typeof f === 'string' ? f : f.to, status: 'renamed' })) || []),
+        ...(statusData.conflicted?.map((f: string) => ({ file: f, status: 'conflicted' })) || []),
+        ...(statusData.created?.map((f: string) => ({ file: f, status: 'created' })) || []),
       ]
     : [];
 
@@ -128,12 +128,7 @@ export const GitOperations: React.FC = () => {
         >
           {t('Pull')}
         </Button>
-        <Button
-          size="large"
-          icon={<BranchesOutlined />}
-          loading={actionLoading === 'status'}
-          onClick={loadStatus}
-        >
+        <Button size="large" icon={<BranchesOutlined />} loading={actionLoading === 'status'} onClick={loadStatus}>
           {t('Status')}
         </Button>
       </Space>
@@ -162,17 +157,25 @@ export const GitOperations: React.FC = () => {
         <Card title={t('Working Directory Status')} size="small">
           <Descriptions column={3} size="small" style={{ marginBottom: 16 }}>
             <Descriptions.Item label="Branch">
-              <Tag icon={<BranchesOutlined />} color="blue">{statusData.current}</Tag>
+              <Tag icon={<BranchesOutlined />} color="blue">
+                {statusData.current}
+              </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Tracking">
               <Text>{statusData.tracking || 'N/A'}</Text>
             </Descriptions.Item>
             <Descriptions.Item label="Changes">
               <Space>
-                {statusData.ahead > 0 && <Badge count={`${statusData.ahead} ahead`} style={{ backgroundColor: token.colorPrimary }} />}
-                {statusData.behind > 0 && <Badge count={`${statusData.behind} behind`} style={{ backgroundColor: token.colorWarning }} />}
+                {statusData.ahead > 0 && (
+                  <Badge count={`${statusData.ahead} ahead`} style={{ backgroundColor: token.colorPrimary }} />
+                )}
+                {statusData.behind > 0 && (
+                  <Badge count={`${statusData.behind} behind`} style={{ backgroundColor: token.colorWarning }} />
+                )}
                 {statusData.ahead === 0 && statusData.behind === 0 && (
-                  <Tag color="green" icon={<CheckCircleOutlined />}>Up to date</Tag>
+                  <Tag color="green" icon={<CheckCircleOutlined />}>
+                    Up to date
+                  </Tag>
                 )}
               </Space>
             </Descriptions.Item>
@@ -187,14 +190,20 @@ export const GitOperations: React.FC = () => {
                 size="small"
                 dataSource={allChangedFiles}
                 renderItem={(item: any) => {
-                  const info = FILE_STATUS_MAP[item.status] || { color: 'default', icon: <QuestionCircleOutlined />, label: item.status };
+                  const info = FILE_STATUS_MAP[item.status] || {
+                    color: 'default',
+                    icon: <QuestionCircleOutlined />,
+                    label: item.status,
+                  };
                   return (
                     <List.Item style={{ padding: '4px 0' }}>
                       <Space>
                         <Tag color={info.color} style={{ minWidth: 80, textAlign: 'center' }}>
                           {info.icon} {info.label}
                         </Tag>
-                        <Text code style={{ fontSize: 13 }}>{item.file}</Text>
+                        <Text code style={{ fontSize: 13 }}>
+                          {item.file}
+                        </Text>
                       </Space>
                     </List.Item>
                   );

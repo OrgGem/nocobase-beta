@@ -94,7 +94,8 @@ export async function updateRolePermissions(ctx: any, _next: () => Promise<void>
       if (action) {
         const actionData = action.toJSON ? action.toJSON() : action;
         const actionScope = actionData.scope;
-        const actionScopeId = getRecordValue(actionScope, 'id') || actionData.scopeId || getRecordValue(action, 'scopeId');
+        const actionScopeId =
+          getRecordValue(actionScope, 'id') || actionData.scopeId || getRecordValue(action, 'scopeId');
         if (actionScopeId) {
           await ctx.db.getRepository('rolesResourcesScopes').update({
             filterByTk: actionScopeId,

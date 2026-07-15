@@ -6,13 +6,16 @@ export class RedisNodeRegistry {
   private timer: NodeJS.Timeout | null = null;
   private readonly ttlSecs = 30; // 30 seconds TTL
   private readonly intervalMs = 10000; // Heartbeat every 10 seconds
-  private readonly keyPrefix = 'cluster-manager:nodes:';
+  private readonly keyPrefix: string;
   private warnedMissingRedis = false;
   private lastHeartbeatAt: number | null = null;
   private lastHeartbeatError: string | null = null;
   private lastReadError: string | null = null;
 
-  constructor(private app: any) {}
+  constructor(private app: any) {
+    const appName = process.env.APP_NAME || app?.name || 'main';
+    this.keyPrefix = `nocobase:${appName}:cluster-manager:nodes:`;
+  }
 
   public start() {
     if (this.timer) {
@@ -71,6 +74,7 @@ export class RedisNodeRegistry {
       available: true,
       lastHeartbeatAt: Date.now(),
       status: 'online', // Implicitly online since it just reported
+      workerId: this.app.pm.get('plugin-cluster-manager')?.workerIdAllocator?.getStatus?.() || null,
       // Full node details (replicated from the `current` action shape)
       // so that any node can serve the "current" endpoint for the APP node
       nodeDetails: {

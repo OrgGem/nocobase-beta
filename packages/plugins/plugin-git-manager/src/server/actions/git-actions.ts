@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawnSync } from 'child_process';
 import { redactPat, redactError } from '../utils/redact';
+import { getRepoAccount } from '../utils/get-repo-account';
 
 // Disallow leading `-` to prevent argument-injection (e.g. `--upload-pack=...`)
 // when refs are passed as positional args to git.
@@ -14,7 +15,7 @@ const repoLocks = new Map<string, Promise<any>>();
 const GIT_BINARY = process.env.GIT_BINARY_PATH || process.env.GIT_EXECUTABLE || 'git';
 let gitAvailabilityChecked = false;
 
-function acquireLock(key: string): { promise: Promise<void>; release: () => void } {
+export function acquireLock(key: string): { promise: Promise<void>; release: () => void } {
   const prev = repoLocks.get(key) || Promise.resolve();
   let release = () => {};
   const next = new Promise<void>((resolve) => {
@@ -32,8 +33,19 @@ function validateRef(ref: string): string {
   return ref;
 }
 
-function validateBranch(branch: string): string {
-  if (!branch || !REF_PATTERN.test(branch)) {
+export function validateBranch(branch: string): string {
+  const segments = branch.split('/');
+  if (
+    !branch ||
+    !REF_PATTERN.test(branch) ||
+    branch === '@' ||
+    branch.includes('..') ||
+    branch.includes('@{') ||
+    branch.includes('//') ||
+    branch.endsWith('/') ||
+    branch.endsWith('.') ||
+    segments.some((segment) => segment.startsWith('.') || segment.toLowerCase().endsWith('.lock'))
+  ) {
     throw new Error(`Invalid branch name: ${branch}`);
   }
   return branch;
@@ -51,14 +63,15 @@ function validateRepoUrl(repoUrl: string): void {
   }
 }
 
-async function withAuth(
+export async function withAuth<T>(
   git: ReturnType<typeof simpleGit>,
   localPath: string,
   repoUrl: string,
   pat: string,
-  fn: () => Promise<any>,
+  fn: () => Promise<T>,
   username?: string,
-) {
+  remoteName = 'origin',
+): Promise<T> {
   // Lock by local working tree — that's what `git.remote('set-url', ...)`
   // mutates. Two repo records sharing a `repoUrl` but cloned to different
   // paths can run in parallel safely; conversely, two repos pointed at the
@@ -67,7 +80,7 @@ async function withAuth(
   const lock = acquireLock(lockKey);
   await lock.promise;
   const authUrl = getAuthUrl(repoUrl, pat, username);
-  await git.remote(['set-url', 'origin', authUrl]);
+  await git.remote(['set-url', remoteName, authUrl]);
   try {
     return await fn();
   } catch (err) {
@@ -76,11 +89,11 @@ async function withAuth(
   } finally {
     // H-2 fix: guard PAT cleanup — if reset fails, the PAT-embedded URL persists on disk
     try {
-      await git.remote(['set-url', 'origin', repoUrl]);
+      await git.remote(['set-url', remoteName, repoUrl]);
     } catch (cleanupErr) {
       // Critical: PAT may be persisted in .git/config — attempt one more cleanup
       try {
-        await git.remote(['set-url', 'origin', repoUrl]);
+        await git.remote(['set-url', remoteName, repoUrl]);
       } catch {
         // Log but don't throw — the original operation already completed
         console.error(
@@ -120,7 +133,7 @@ function isMissingGitError(error: any) {
   return error?.code === 'ENOENT' || /spawn .*git.*ENOENT/i.test(message);
 }
 
-function createGit(baseDir?: string): SimpleGit {
+export function createGit(baseDir?: string): SimpleGit {
   return simpleGit({ baseDir, binary: GIT_BINARY } as any);
 }
 
@@ -144,7 +157,7 @@ async function getRepo(ctx: Context) {
 }
 
 // Validate localPath to prevent path traversal
-function validateLocalPath(localPath: string): string {
+export function validateLocalPath(localPath: string): string {
   const basePath = process.env.GIT_REPOS_BASE_PATH || path.join(process.cwd(), 'storage', 'git-repos');
   const resolved = path.resolve(basePath, localPath);
 
@@ -162,9 +175,11 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
   const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
-  const pat = ((repo.get('pat') as string) || '').trim();
-  const username = ((repo.get('username') as string) || '').trim();
   const defaultBranch = ((repo.get('defaultBranch') as string) || 'main').trim() || 'main';
+
+  const account = await getRepoAccount(ctx.db, repo);
+  if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
+  const { pat, username } = account;
 
   validateRepoUrl(repoUrl);
   // Prevent argument-injection through `defaultBranch` (e.g. `--upload-pack=...`)
@@ -207,9 +222,11 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
 export async function pull(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = ((repo.get('pat') as string) || '').trim();
   const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
-  const username = ((repo.get('username') as string) || '').trim();
+
+  const account = await getRepoAccount(ctx.db, repo);
+  if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
+  const { pat, username } = account;
 
   const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.pull(), username);
@@ -221,9 +238,11 @@ export async function pull(ctx: Context, next: () => Promise<void>) {
 export async function push(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = ((repo.get('pat') as string) || '').trim();
   const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
-  const username = ((repo.get('username') as string) || '').trim();
+
+  const account = await getRepoAccount(ctx.db, repo);
+  if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
+  const { pat, username } = account;
 
   const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.push(), username);
@@ -235,9 +254,11 @@ export async function push(ctx: Context, next: () => Promise<void>) {
 export async function fetch(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const pat = ((repo.get('pat') as string) || '').trim();
   const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
-  const username = ((repo.get('username') as string) || '').trim();
+
+  const account = await getRepoAccount(ctx.db, repo);
+  if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
+  const { pat, username } = account;
 
   const git = getGit(ctx, localPath);
   const result = await withAuth(git, localPath, repoUrl, pat, () => git.fetch(), username);

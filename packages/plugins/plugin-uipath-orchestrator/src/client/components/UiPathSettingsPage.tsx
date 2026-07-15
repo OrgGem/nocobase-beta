@@ -78,17 +78,13 @@ const HeaderBar: React.FC = () => {
           <TreeSelect
             value={folderId ?? undefined}
             onChange={(val?: number) => {
-              if (val == null) {
-                setFolder(null, null);
-                return;
-              }
+              if (val == null) return;
               const f = folders.find((f: any) => f.folderId === val);
-              setFolder(val, f?.folderKey || null);
+              setFolder(val, f?.folderKey || null, f?.fullyQualifiedName || null);
             }}
             style={{ minWidth: 200 }}
             treeData={buildFolderTree(folders)}
             placeholder={t('All Folders')}
-            allowClear
             showSearch
             treeNodeFilterProp="title"
           />

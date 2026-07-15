@@ -14,10 +14,9 @@
 
 import os from 'os';
 
-const LEADER_KEY = 'cluster-manager:orchestrator:leader';
-const LEADER_TTL = 30000;       // 30s lock TTL
-const RENEW_INTERVAL = 10000;   // Renew every 10s (well within 30s TTL)
-const RETRY_INTERVAL = 15000;   // Follower retries every 15s
+const LEADER_TTL = 30000; // 30s lock TTL
+const RENEW_INTERVAL = 10000; // Renew every 10s (well within 30s TTL)
+const RETRY_INTERVAL = 15000; // Follower retries every 15s
 
 export class LeaderElection {
   private renewTimer: NodeJS.Timeout | null = null;
@@ -28,12 +27,18 @@ export class LeaderElection {
   private enabled: boolean;
   private _disabledReason = '';
   private redis: any;
+  private readonly leaderKey: string;
 
-  constructor(private app: any, options?: { standaloneMode?: boolean; enabled?: boolean; disabledReason?: string }) {
+  constructor(
+    private app: any,
+    options?: { standaloneMode?: boolean; enabled?: boolean; disabledReason?: string },
+  ) {
     this._leaderId = `${os.hostname()}:${process.pid}`;
     this.standaloneMode = options?.standaloneMode ?? process.env.ORCHESTRATOR_STANDALONE_MODE === 'true';
     this.enabled = options?.enabled ?? true;
     this._disabledReason = options?.disabledReason || '';
+    const appName = process.env.APP_NAME || app?.name || 'main';
+    this.leaderKey = `nocobase:${appName}:cluster-manager:orchestrator:leader`;
   }
 
   get isLeader(): boolean {
@@ -61,13 +66,16 @@ export class LeaderElection {
     const redis = this.app.redisConnectionManager?.getConnection();
     if (!redis) {
       if (this.standaloneMode) {
-        this.app.logger.warn('[LeaderElection] Redis not available — running in explicit standalone mode (always leader)');
+        this.app.logger.warn(
+          '[LeaderElection] Redis not available — running in explicit standalone mode (always leader)',
+        );
         this._isLeader = true;
         this._disabledReason = '';
         return true;
       }
       this._isLeader = false;
-      this._disabledReason = 'Redis is unavailable; orchestrator write operations are disabled until leader election can run.';
+      this._disabledReason =
+        'Redis is unavailable; orchestrator write operations are disabled until leader election can run.';
       this.app.logger.warn(`[LeaderElection] ${this._disabledReason}`);
       return false;
     }
@@ -102,12 +110,12 @@ export class LeaderElection {
 
     try {
       // Use native sendCommand to avoid node-redis v3/v4 eval API differences
-      const res = await this.redis.sendCommand(['SET', LEADER_KEY, this._leaderId, 'NX', 'PX', String(LEADER_TTL)]);
+      const res = await this.redis.sendCommand(['SET', this.leaderKey, this._leaderId, 'NX', 'PX', String(LEADER_TTL)]);
       if (res === 'OK') {
         this._isLeader = true;
         this._disabledReason = '';
         this.app.logger.info(`[LeaderElection] ✅ This node (${this._leaderId}) is now the LEADER`);
-        
+
         this.startRenewal();
         return true;
       }
@@ -137,7 +145,7 @@ export class LeaderElection {
     if (this._isLeader && this.redis) {
       try {
         const script = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`;
-        await this.redis.sendCommand(['EVAL', script, '1', LEADER_KEY, this._leaderId]);
+        await this.redis.sendCommand(['EVAL', script, '1', this.leaderKey, this._leaderId]);
         this.app.logger.info(`[LeaderElection] Lock released`);
       } catch {
         // Lock may have expired already
@@ -154,7 +162,14 @@ export class LeaderElection {
     this.renewTimer = setInterval(async () => {
       try {
         const script = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end`;
-        const res = await this.redis.sendCommand(['EVAL', script, '1', LEADER_KEY, this._leaderId, String(LEADER_TTL)]);
+        const res = await this.redis.sendCommand([
+          'EVAL',
+          script,
+          '1',
+          this.leaderKey,
+          this._leaderId,
+          String(LEADER_TTL),
+        ]);
         if (res !== 1) {
           throw new Error('Lock no longer held by this node');
         }
@@ -179,7 +194,14 @@ export class LeaderElection {
         return;
       }
       try {
-        const res = await this.redis.sendCommand(['SET', LEADER_KEY, this._leaderId, 'NX', 'PX', String(LEADER_TTL)]);
+        const res = await this.redis.sendCommand([
+          'SET',
+          this.leaderKey,
+          this._leaderId,
+          'NX',
+          'PX',
+          String(LEADER_TTL),
+        ]);
         if (res === 'OK') {
           this._isLeader = true;
           this.app.logger.info(`[LeaderElection] ✅ Acquired leadership (failover)`);

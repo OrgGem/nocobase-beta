@@ -17,6 +17,12 @@ import {
 } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
 import { checkEmployeeAccess } from '../middleware/role-permission';
+import {
+  AgentRuntimeContext,
+  createAIEmployeeOptions,
+  getAgentRuntimeLifecycle,
+  loadAIEmployeeConstructor,
+} from '../utils/ai-employee-runtime';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -79,7 +85,7 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
 
   // ─── Load config and validate AI Employee ─────────────────────────────────
   const config = await ctx.db.getRepository('aiApiConfig').findOne();
-  const defaultAiEmployee = config ? (config.get('defaultAiEmployee') || config.defaultAiEmployee) : null;
+  const defaultAiEmployee = config ? config.get('defaultAiEmployee') || config.defaultAiEmployee : null;
   if (!defaultAiEmployee) {
     ctx.status = 400;
     ctx.body = toOpenAIError(
@@ -127,6 +133,10 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
   }
 
   const wantStream = body.stream === true;
+  const lifecycle = getAgentRuntimeLifecycle(ctx);
+  let runtimeContext: AgentRuntimeContext | undefined;
+  let lifecycleCompleted = false;
+  let ephemeralSessionId: string | undefined;
 
   try {
     // ─── Load AI Employee record ────────────────────────────────────────────
@@ -157,6 +167,7 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
       },
     });
     const sessionId = conversation.sessionId ?? conversation.id ?? String(conversation.get('id'));
+    ephemeralSessionId = String(sessionId);
 
     // ─── Convert OpenAI messages → NocoBase AIMessageInput format ──────────
     // AIMessageInput = Omit<AIMessage, 'messageId' | 'sessionId'>
@@ -170,18 +181,23 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
       },
     }));
 
+    runtimeContext = {
+      ctx,
+      source: 'api',
+      employee: employeeRecord,
+      sessionId,
+      userId,
+      messages: userMessages,
+      metadata: {},
+    };
     const completionId = generateCompletionId();
 
     // ─── Dynamic import of AIEmployee ──────────────────────────────────────
     // Uses dynamic import() to avoid a hard compile-time path dependency.
     // plugin-ai is a peerDependency and is always available at runtime.
-    let AIEmployee: any;
+    let AIEmployee;
     try {
-      const mod = await import(
-        /* webpackIgnore: true */
-        '@nocobase/plugin-ai/dist/server/ai-employees/ai-employee.js' as any
-      );
-      AIEmployee = mod.AIEmployee;
+      AIEmployee = await loadAIEmployeeConstructor();
     } catch (importErr) {
       ctx.log.error(
         'AI API: Failed to import AIEmployee from plugin-ai. Ensure plugin-ai is installed and built.',
@@ -191,16 +207,6 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
       ctx.body = toOpenAIError(500, 'Agent mode unavailable: plugin-ai not found or not built', 'server_error');
       return;
     }
-    if (!AIEmployee) {
-      ctx.status = 500;
-      ctx.body = toOpenAIError(
-        500,
-        'Agent mode unavailable: AIEmployee class not exported by plugin-ai',
-        'server_error',
-      );
-      return;
-    }
-
     // ─── Ensure timezone/locale headers exist for AIEmployee.parseVariables ──
     // External clients don't send X-Timezone / X-Locale, but plugin-ai's
     // parseVariables() calls ctx.get('x-timezone') to resolve date variables
@@ -211,6 +217,10 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
     if (!ctx.get('x-locale')) {
       ctx.req.headers['x-locale'] = 'en-US';
     }
+
+    // Run extension hooks only after the employee runtime is available. This keeps
+    // beforeRun/afterRun symmetrical: an import/configuration failure never starts a lifecycle run.
+    await lifecycle?.runBeforeHooks(runtimeContext);
 
     if (wantStream) {
       // ── TRUE STREAMING ────────────────────────────────────────────────────
@@ -306,17 +316,18 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
 
       try {
         const aiEmployee = new AIEmployee(
-          ctx,
-          employeeRecord,
-          sessionId,
-          undefined, // systemMessage — use AI employee's default
-          undefined, // skillSettings
-          false, // webSearch
-          { llmService: service.name, model: modelId },
-          false, // legacy — use LangGraph (thread: 1)
+          createAIEmployeeOptions(ctx, employeeRecord, sessionId, {
+            llmService: service.name,
+            model: modelId,
+          }),
         );
 
         await aiEmployee.stream({ userMessages });
+        try {
+          await lifecycle?.runAfterHooks(runtimeContext, { succeeded: true });
+        } finally {
+          lifecycleCompleted = true;
+        }
       } finally {
         // Restore original write/end before sending our closing frames
         (ctx.res as any).write = originalWrite;
@@ -343,17 +354,18 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
       // The last AI message in state.messages contains the response content.
 
       const aiEmployee = new AIEmployee(
-        ctx,
-        employeeRecord,
-        sessionId,
-        undefined,
-        undefined,
-        false,
-        { llmService: service.name, model: modelId },
-        false,
+        createAIEmployeeOptions(ctx, employeeRecord, sessionId, {
+          llmService: service.name,
+          model: modelId,
+        }),
       );
 
       const result = await aiEmployee.invoke({ userMessages });
+      try {
+        await lifecycle?.runAfterHooks(runtimeContext, { succeeded: true, value: result });
+      } finally {
+        lifecycleCompleted = true;
+      }
       const content = extractLastAiMessageContent(result);
 
       ctx.status = 200;
@@ -380,22 +392,32 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
     }
 
     // ─── Cleanup: delete the ephemeral conversation (best-effort) ────────────
-    // Run after response is sent so cleanup latency doesn't affect the client.
-    setImmediate(async () => {
-      try {
-        await ctx.db.getRepository('aiConversations').destroy({
-          filterByTk: sessionId,
-        });
-      } catch {
-        // Best-effort: if cleanup fails, the conversation stays in DB.
-        // CheckpointCleaner in plugin-ai will handle stale conversations after 48h.
-      }
-    });
-  } catch (err) {
+    // Cleanup is scheduled from the outer finally block for both success and failure paths.
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (runtimeContext && !lifecycleCompleted) {
+      await lifecycle?.runAfterHooks(runtimeContext, { succeeded: false, error });
+      lifecycleCompleted = true;
+    }
     ctx.log.error('AI API agent completions error:', err);
     if (!ctx.res.headersSent) {
       ctx.status = 500;
-      ctx.body = toOpenAIError(500, err.message || 'Internal server error', 'server_error');
+      ctx.body = toOpenAIError(500, error.message || 'Internal server error', 'server_error');
+    }
+  } finally {
+    if (ephemeralSessionId) {
+      const sessionId = ephemeralSessionId;
+      setImmediate(() => {
+        ctx.db
+          .getRepository('aiConversations')
+          .destroy({ filterByTk: sessionId })
+          .catch((cleanupError: unknown) => {
+            ctx.log.warn('AI API: Failed to clean up ephemeral conversation.', {
+              sessionId,
+              error: cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError)),
+            });
+          });
+      });
     }
   }
 }

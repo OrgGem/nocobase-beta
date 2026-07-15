@@ -57,9 +57,10 @@ export class SkillExecutionTask {
   async run() {
     const skill = this.execution.get('skill') || this.execution.skill;
     const execId = String(this.execution.get('id'));
-
-    if (this.execution.get('status') !== 'running') {
-      await this.execution.update({ status: 'running' });
+    const workerId = String(this.execution.get('workerId') || '');
+    if (this.execution.get('status') !== 'running' || !workerId) {
+      (this as any).app.logger.warn(`[skill-hub] Task ${execId}: refused execution without an active worker claim.`);
+      return;
     }
 
     // Set up abort controller — listens for cancel from main server via PubSub
@@ -69,6 +70,24 @@ export class SkillExecutionTask {
       (this as any).app.logger.info(`[skill-hub] Task ${execId}: received abort signal`);
       abortController.abort();
     };
+    const configuredHeartbeat = Number.parseInt(process.env.SKILL_HUB_HEARTBEAT_INTERVAL_MS || '', 10);
+    const heartbeatIntervalMs =
+      Number.isFinite(configuredHeartbeat) && configuredHeartbeat > 0 ? configuredHeartbeat : 10000;
+    const heartbeat = setInterval(() => {
+      this.updateIfOwned(execId, workerId, { heartbeatAt: new Date() })
+        .then((updated) => {
+          if (!updated) {
+            (this as any).app.logger.warn(`[skill-hub] Task ${execId}: worker claim was lost; aborting stale worker.`);
+            abortController.abort();
+          }
+        })
+        .catch((error: unknown) => {
+          (this as any).app.logger.warn(`[skill-hub] Task ${execId}: heartbeat update failed`, {
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        });
+    }, heartbeatIntervalMs);
+    heartbeat.unref?.();
 
     try {
       // Subscribe to abort channel before starting execution
@@ -149,7 +168,10 @@ export class SkillExecutionTask {
       }
 
       const code = this.renderTemplate(rawCodeTemplate, inputArgs, execId, skillDir);
-      await this.execution.update({ executedCode: code });
+      if (!(await this.updateIfOwned(execId, workerId, { executedCode: code }))) {
+        abortController.abort();
+        return;
+      }
 
       // Load package whitelist for import validation
       let packageWhitelist: string[] = [];
@@ -256,13 +278,19 @@ export class SkillExecutionTask {
         status = result.success ? 'succeeded' : 'failed';
       }
 
-      await this.execution.update({
+      const completed = await this.updateIfOwned(execId, workerId, {
         status,
         stdout: result.stdout,
         stderr: result.stderr,
         outputFiles: stringifyJsonText(result.files, []),
         durationMs: result.durationMs,
       });
+      if (!completed) {
+        (this as any).app.logger.warn(
+          `[skill-hub] Task ${execId}: discarded result from a worker that lost its claim.`,
+        );
+        return;
+      }
 
       // Notify main server: task completed
       await (this as any).app.pubSubManager.publish(`skill-hub.done.${execId}`, {
@@ -285,10 +313,14 @@ export class SkillExecutionTask {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      await this.execution.update({
+      const failed = await this.updateIfOwned(execId, workerId, {
         status: 'failed',
         stderr: errorMessage,
       });
+      if (!failed) {
+        (this as any).app.logger.warn(`[skill-hub] Task ${execId}: discarded error from a worker that lost its claim.`);
+        return;
+      }
 
       await (this as any).app.pubSubManager.publish(`skill-hub.done.${execId}`, {
         status: 'failed',
@@ -299,6 +331,7 @@ export class SkillExecutionTask {
 
       (this as any).app.logger.error(`[skill-hub] Execution ${execId} error: ${errorMessage}`);
     } finally {
+      clearInterval(heartbeat);
       // Always cleanup abort subscription
       try {
         await (this as any).app.pubSubManager.unsubscribe(abortChannel, abortCallback);
@@ -306,6 +339,18 @@ export class SkillExecutionTask {
         // ignore cleanup errors
       }
     }
+  }
+
+  private async updateIfOwned(execId: string, workerId: string, values: Record<string, unknown>): Promise<boolean> {
+    const model = (this as any).app.db.getModel('skillExecutions');
+    const [affected] = await model.update(values, {
+      where: {
+        id: execId,
+        status: 'running',
+        workerId,
+      },
+    });
+    return affected > 0;
   }
 
   private renderTemplate(template: string, args: Record<string, any>, execId: string, skillDir?: string): string {

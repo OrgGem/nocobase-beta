@@ -1,11 +1,13 @@
-import type { Model } from '@nocobase/database';
+import type { Model, Repository } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 import { createTestConnectionAction } from './actions/sftpgo-connections';
 import { createSftpgoProxyActions } from './actions/sftpgo-proxy';
 import { assertValidAddress, SftpgoClient, SftpgoResourceType } from './sftpgo-client';
+import { maskApiKey } from './utils/mask-api-key';
 
 const MASK = '••••••••';
 const ENCRYPTED_FIELDS = ['password', 'apiKey'] as const;
+const API_KEY_SECRET_FIELD = 'encryptedSecret';
 const PROXY_RESOURCES: { name: string; type: SftpgoResourceType }[] = [
   { name: 'sftpgoUsers', type: 'users' },
   { name: 'sftpgoFolders', type: 'folders' },
@@ -34,6 +36,13 @@ export class PluginSftpgoIntegrationServer extends Plugin {
     });
     this.db.on('sftpgoConnections.afterDestroy', async (model: Model) => {
       this.clientCache.delete(model.get('id') as number);
+    });
+
+    this.db.on('sftpgoApiKeySecrets.beforeSave', async (model: Model) => {
+      if (model.changed(API_KEY_SECRET_FIELD) && model.get(API_KEY_SECRET_FIELD)) {
+        const encrypted = await this.app.aesEncryptor.encrypt(model.get(API_KEY_SECRET_FIELD) as string);
+        model.set(API_KEY_SECRET_FIELD, encrypted);
+      }
     });
   }
 
@@ -88,6 +97,45 @@ export class PluginSftpgoIntegrationServer extends Plugin {
       password,
       apiKey,
     });
+  }
+
+  async saveApiKeySecret(connectionId: number, apiKeyId: string, name: string, secret: string) {
+    const repo = this.db.getRepository('sftpgoApiKeySecrets') as Repository;
+    const existing = await repo.findOne({ filter: { connectionId, apiKeyId } });
+    if (existing) {
+      await existing.update({ name, encryptedSecret: secret });
+      return;
+    }
+    await repo.create({ values: { connectionId, apiKeyId, name, encryptedSecret: secret } });
+  }
+
+  async attachMaskedApiKeySecrets(connectionId: number, apiKeys: unknown[]): Promise<unknown[]> {
+    const repo = this.db.getRepository('sftpgoApiKeySecrets') as Repository;
+    const records = await repo.find({ filter: { connectionId } });
+    const secretsById = new Map<string, Model>();
+    for (const record of records) {
+      secretsById.set(String(record.get('apiKeyId')), record);
+    }
+
+    return Promise.all(
+      apiKeys.map(async (apiKey) => {
+        if (!apiKey || typeof apiKey !== 'object') return apiKey;
+        const item = apiKey as Record<string, unknown>;
+        const record = secretsById.get(String(item.id));
+        if (!record) return { ...item, maskedKey: null };
+        try {
+          const secret = await this.app.aesEncryptor.decrypt(record.get(API_KEY_SECRET_FIELD) as string);
+          return { ...item, maskedKey: maskApiKey(secret) };
+        } catch {
+          return { ...item, maskedKey: null };
+        }
+      }),
+    );
+  }
+
+  async deleteApiKeySecret(connectionId: number, apiKeyId: string) {
+    const repo = this.db.getRepository('sftpgoApiKeySecrets') as Repository;
+    await repo.destroy({ filter: { connectionId, apiKeyId } });
   }
 
   private registerMaskingMiddleware() {

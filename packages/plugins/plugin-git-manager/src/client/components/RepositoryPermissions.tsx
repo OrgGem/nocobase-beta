@@ -117,14 +117,7 @@ export const RepositoryPermissions = ({ activeRole }) => {
           <Typography.Text strong>{activeRole?.title || activeRole?.name}</Typography.Text>.
         </Typography.Text>
       </div>
-      <Table
-        dataSource={repositories}
-        columns={columns}
-        rowKey="id"
-        pagination={false}
-        size="small"
-        bordered
-      />
+      <Table dataSource={repositories} columns={columns} rowKey="id" pagination={false} size="small" bordered />
     </div>
   );
 };

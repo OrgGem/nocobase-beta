@@ -1,5 +1,6 @@
 import { Plugin, TableColumnModel } from '@nocobase/client-v2';
-import type React from 'react';
+import { ColorPicker } from 'antd';
+import React from 'react';
 import { tExpr } from './locale';
 
 export type HeaderAlign = 'left' | 'center' | 'right';
@@ -9,6 +10,15 @@ export type HeaderStyleFormatParams = {
   headerWrap?: boolean;
   headerAlign?: HeaderAlign | null;
 };
+
+type HeaderColorPickerProps = {
+  value?: string;
+  onChange?: (value?: string) => void;
+};
+
+function HeaderColorPicker({ value, onChange }: HeaderColorPickerProps) {
+  return <ColorPicker allowClear showText value={value} onChange={(color) => onChange?.(color?.toHexString())} />;
+}
 
 type TableColumnModelLike = TableColumnModel & {
   setProps: (keyOrProps: string | Record<string, unknown>, value?: unknown) => void;
@@ -30,9 +40,7 @@ function normalizeAlign(value: unknown): HeaderAlign | undefined {
   return value === 'left' || value === 'center' || value === 'right' ? value : undefined;
 }
 
-export function normalizeHeaderStyleFormatParams(
-  params?: HeaderStyleFormatParams,
-): HeaderStyleFormatParams {
+export function normalizeHeaderStyleFormatParams(params?: HeaderStyleFormatParams): HeaderStyleFormatParams {
   return {
     headerColor: normalizeColor(params?.headerColor),
     headerWrap: !!params?.headerWrap,
@@ -44,10 +52,7 @@ function hasActiveFormat(params: HeaderStyleFormatParams): boolean {
   return !!params.headerColor || !!params.headerWrap || !!params.headerAlign;
 }
 
-function applyHeaderStyleFormat(
-  model: TableColumnModelLike,
-  params?: HeaderStyleFormatParams,
-): void {
+function applyHeaderStyleFormat(model: TableColumnModelLike, params?: HeaderStyleFormatParams): void {
   const normalized = normalizeHeaderStyleFormatParams(params);
 
   if (!hasActiveFormat(normalized)) {
@@ -105,7 +110,7 @@ TableColumnModel.registerFlow({
           type: 'string',
           title: tExpr('Header color'),
           'x-decorator': 'FormItem',
-          'x-component': 'ColorPicker',
+          'x-component': HeaderColorPicker,
         },
         headerWrap: {
           type: 'boolean',

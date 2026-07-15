@@ -65,4 +65,16 @@
   "Use letters, digits and underscores, not starting with a digit": "Dùng chữ cái, chữ số và dấu gạch dưới, không bắt đầu bằng chữ số",
   "Push value into $env on every sync": "Đẩy giá trị vào $env mỗi lần đồng bộ",
   "Allow resolving this variable from the client for logged-in users": "Cho phép người dùng đã đăng nhập phân giải biến này từ client"
+  , "Browse Vault paths": "Duyệt đường dẫn Vault"
+  , "Browse": "Duyệt"
+  , "Failed to list Vault paths": "Không thể lấy danh sách đường dẫn Vault"
+  , "Failed to list secret keys": "Không thể lấy danh sách khóa secret"
+  , "Select a connection first": "Hãy chọn kết nối trước"
+  , "Select or enter a secret key": "Chọn hoặc nhập khóa secret"
+  , "Enter the key manually": "Nhập khóa thủ công"
+  , "Loading": "Đang tải"
+  , "Up": "Lên"
+  , "No paths found": "Không tìm thấy đường dẫn"
+  , "Type": "Loại"
+  , "Folder": "Thư mục"
 }

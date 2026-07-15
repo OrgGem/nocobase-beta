@@ -7,7 +7,8 @@ export function createCorrelationActions(plugin: PluginUiPathOrchestratorServer)
   return {
     fromLog: async (ctx: Context, next: Next) => {
       try {
-        const { instanceId, logId, jobKey, timeStamp, bufferSeconds } = ctx.action.params;
+        const { instanceId, logId, jobKey, timeStamp, queueItemId, queueItemKey, queueReference, bufferSeconds } =
+          ctx.action.params;
         const client = await plugin.getApiClient(instanceId);
         const folder = extractFolderContext(ctx.action.params);
         const service = new UiPathCorrelationService(client, plugin.app.logger);
@@ -16,6 +17,9 @@ export function createCorrelationActions(plugin: PluginUiPathOrchestratorServer)
           logId,
           jobKey,
           timeStamp,
+          queueItemId,
+          queueItemKey,
+          queueReference,
           bufferSeconds: Number(bufferSeconds) || undefined,
           folder,
         });

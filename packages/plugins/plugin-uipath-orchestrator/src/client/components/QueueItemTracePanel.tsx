@@ -8,12 +8,14 @@ import { getActionResponseBody } from '../utils/apiResponse';
 export const QueueItemTracePanel: React.FC<{ itemId: number }> = ({ itemId }) => {
   const t = useT();
   const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey } = useCurrentInstance();
+  const { instanceId, folderId, folderKey, folderPath, folderReady } = useCurrentInstance();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<any>(null);
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
+    if (!itemId || !instanceId || !folderReady) return;
+
     let active = true;
     setLoading(true);
     setError(null);
@@ -24,6 +26,7 @@ export const QueueItemTracePanel: React.FC<{ itemId: number }> = ({ itemId }) =>
           instanceId,
           folderId,
           folderKey,
+          folderPath,
           queueItemId: itemId,
         },
       })
@@ -43,7 +46,7 @@ export const QueueItemTracePanel: React.FC<{ itemId: number }> = ({ itemId }) =>
     return () => {
       active = false;
     };
-  }, [itemId, instanceId, folderId, folderKey, api]);
+  }, [itemId, instanceId, folderId, folderKey, folderPath, folderReady, api]);
 
   if (loading) {
     return (

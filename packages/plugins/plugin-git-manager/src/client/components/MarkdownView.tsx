@@ -9,10 +9,7 @@ const { useToken } = theme;
  * We avoid the full plugin-field-markdown-vditor `Display` component because
  * it is tightly coupled to formily field context.
  */
-export const MarkdownView: React.FC<{ content?: string; maxHeight?: number | string }> = ({
-  content,
-  maxHeight,
-}) => {
+export const MarkdownView: React.FC<{ content?: string; maxHeight?: number | string }> = ({ content, maxHeight }) => {
   const { token } = useToken();
   if (!content) return null;
   return (

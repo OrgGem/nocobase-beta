@@ -130,9 +130,7 @@ export const PollingStatus: React.FC = () => {
         <Space direction="vertical" size={4} style={{ width: '100%' }}>
           <Space>
             <Text type="secondary">{t('Background poller')}:</Text>
-            <Tag color={status?.running ? 'green' : 'default'}>
-              {status?.running ? t('Running') : t('Stopped')}
-            </Tag>
+            <Tag color={status?.running ? 'green' : 'default'}>{status?.running ? t('Running') : t('Stopped')}</Tag>
             {status?.polling && <Tag color="blue">{t('Polling now…')}</Tag>}
           </Space>
           <Space>
@@ -146,7 +144,9 @@ export const PollingStatus: React.FC = () => {
           {status?.lastError && (
             <Space>
               <Text type="secondary">{t('Last error')}:</Text>
-              <Text type="danger" style={{ fontSize: 12 }}>{status.lastError}</Text>
+              <Text type="danger" style={{ fontSize: 12 }}>
+                {status.lastError}
+              </Text>
             </Space>
           )}
         </Space>
@@ -184,7 +184,12 @@ export const PollingStatus: React.FC = () => {
                   const flow = flows.find((item) => Number(item.id) === Number(flowId));
                   const fallback = flows.find((item) => item.repositoryId === record.id || item.repositoryId == null);
                   if (flow) return <Tag color="blue">{flow.name}</Tag>;
-                  if (fallback) return <Tag color="default">{t('Fallback')}: {fallback.name}</Tag>;
+                  if (fallback)
+                    return (
+                      <Tag color="default">
+                        {t('Fallback')}: {fallback.name}
+                      </Tag>
+                    );
                   return <Tag color="red">{t('No matching flow available')}</Tag>;
                 },
               },

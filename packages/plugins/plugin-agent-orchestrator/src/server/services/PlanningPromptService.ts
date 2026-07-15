@@ -31,6 +31,15 @@ User request:
 `;
 
 export class PlanningPromptService {
+  static getMessageText(content: unknown): string {
+    if (typeof content === 'string') return content;
+    if (content && typeof content === 'object' && 'content' in content) {
+      const nested = (content as { content?: unknown }).content;
+      return typeof nested === 'string' ? nested : '';
+    }
+    return '';
+  }
+
   shouldInjectPlanningPrompt(text: string): boolean {
     if (!text) return false;
     const normalized = text.toLowerCase();
@@ -40,5 +49,24 @@ export class PlanningPromptService {
 
   getPlanningPrefix(): string {
     return PLANNING_PREFIX;
+  }
+
+  getPlanningInstructions(): string {
+    return PLANNING_PREFIX.replace(/User request:\s*$/, '').trim();
+  }
+
+  applyPlanningContext(messages: Array<{ role: string; content: unknown }>): boolean {
+    const shouldInject = messages.some(
+      (message) =>
+        message.role === 'user' &&
+        this.shouldInjectPlanningPrompt(PlanningPromptService.getMessageText(message.content)),
+    );
+    if (!shouldInject) return false;
+
+    messages.unshift({
+      role: 'system',
+      content: { type: 'text', content: this.getPlanningInstructions() },
+    });
+    return true;
   }
 }

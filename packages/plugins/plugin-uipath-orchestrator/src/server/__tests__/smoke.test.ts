@@ -339,6 +339,45 @@ describe('UiPathCorrelationService', () => {
     expect(result.queueItems[0].confidence).toBe('medium');
   });
 
+  it('prioritizes an exact queue reference from the log over unrelated overlapping items', async () => {
+    const filters: string[] = [];
+    const client = {
+      get: vi.fn(async (endpoint: string, options?: { query?: { $filter?: string } }) => {
+        if (endpoint === '/odata/Jobs') {
+          return {
+            value: [
+              {
+                Id: 10,
+                Key: 'job-key',
+                State: 'Successful',
+                StartTime: '2026-01-01T10:00:00.000Z',
+                EndTime: '2026-01-01T10:05:00.000Z',
+              },
+            ],
+          };
+        }
+        if (endpoint === '/odata/QueueItems') {
+          filters.push(options?.query?.$filter || '');
+          return { value: [{ Id: 101, Reference: 'INV-42', Status: 'Successful' }] };
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const service = new UiPathCorrelationService(client);
+    const result = await service.fromLog({
+      logId: 9,
+      jobKey: 'job-key',
+      timeStamp: '2026-01-01T10:02:00.000Z',
+      queueReference: 'INV-42',
+    });
+
+    expect(filters).toEqual(["(Key eq 'INV-42' or Reference eq 'INV-42')"]);
+    expect(result.queueItems).toHaveLength(1);
+    expect(result.queueItems[0].record.Id).toBe(101);
+    expect(result.queueItems[0].confidence).toBe('high');
+  });
+
   it('traces a job to logs and overlapping queue items', async () => {
     const client = {
       get: vi.fn(async (endpoint: string) => {

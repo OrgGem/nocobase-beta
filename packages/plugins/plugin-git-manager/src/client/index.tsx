@@ -10,6 +10,10 @@ const RepositoryConfig = React.lazy(() =>
   import('./components/RepositoryConfig').then((m) => ({ default: m.RepositoryConfigSettings })),
 );
 
+const GitAccounts = React.lazy(() =>
+  import('./components/GitAccounts').then((m) => ({ default: m.GitAccountsSettings })),
+);
+
 import PluginACLClient from '@nocobase/plugin-acl/client';
 import { RepositoryPermissions } from './components/RepositoryPermissions';
 
@@ -25,6 +29,13 @@ export class PluginGitManagerClient extends Plugin {
     this.app.pluginSettingsManager.add('git-manager.repositories', {
       title: (this as any).t('Repositories'),
       Component: RepositoryConfig,
+      aclSnippet: `pm.plugin-git-manager.repositories`,
+    });
+
+    // Git Accounts — separate group for managing shared credentials
+    this.app.pluginSettingsManager.add('git-manager.accounts', {
+      title: (this as any).t('Git Accounts'),
+      Component: GitAccounts,
       aclSnippet: `pm.plugin-git-manager.repositories`,
     });
 

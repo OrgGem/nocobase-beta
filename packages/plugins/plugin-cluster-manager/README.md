@@ -10,6 +10,7 @@ Monitor and operate NocoBase cluster nodes, async tasks, workflow executions, ev
 - **Container Orchestrator**: Manage Docker or Kubernetes worker stacks with leader-only write operations.
 - **Worker Packages**: Configure and dispatch apt, npm, and Python package installation across matching node roles.
 - **Plugin Operations**: List installed plugins and force-disable or force-remove broken plugin registry records.
+- **HA Safety**: Redis-leased Worker IDs, Redis Streams queues with ACK/reclaim/DLQ, ownership-safe distributed locks, shared cache versioning, and public liveness/readiness checks.
 
 ## Architecture Flow
 
@@ -25,3 +26,36 @@ Monitor and operate NocoBase cluster nodes, async tasks, workflow executions, ev
 2. Only accessible to Super Admins.
 3. Navigate to System Settings -> Cluster Manager.
 4. Use the dashboard to troubleshoot performance issues, retry failed background tasks, or clear caches.
+
+## Two-node HA configuration
+
+Both NocoBase app nodes must use the same values for `APP_NAME`, `APP_KEY`, `APP_AES_SECRET_KEY`, database, Redis endpoints, and plugin build. Each process receives a different Redis-leased Snowflake Worker ID.
+
+```ini
+WORKER_MODE=
+CACHE_DEFAULT_STORE=redis
+CACHE_REDIS_URL=redis://cache-redis:6379/0
+PUBSUB_ADAPTER_REDIS_URL=redis://coordination-redis:6379/0
+LOCK_ADAPTER_DEFAULT=redis
+LOCK_ADAPTER_REDIS_URL=redis://coordination-redis:6379/1
+QUEUE_ADAPTER=redis
+QUEUE_ADAPTER_REDIS_URL=redis://queue-redis:6379/0
+WORKER_ID_REDIS_URL=redis://coordination-redis:6379/2
+REDIS_URL=redis://coordination-redis:6379/2
+```
+
+Use `noeviction` on Redis instances that hold queues, locks, or Worker ID leases. Cache Redis may use an LRU/LFU eviction policy.
+
+Configure the AWS ALB target group health check to use:
+
+```text
+/api/clusterManagerHealth:readiness
+```
+
+The lightweight process liveness endpoint is:
+
+```text
+/api/clusterManagerHealth:liveness
+```
+
+For retryable Cluster Manager mutation requests, clients should send a stable `Idempotency-Key` header. Reusing the key with the same request replays the stored result; reusing it with a different payload returns HTTP 409.

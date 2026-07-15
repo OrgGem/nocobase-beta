@@ -21,5 +21,6 @@
   "Failed to load routes": "加载路由失败",
   "Please enter a new path": "请输入新路径",
   "Invalid path format. Use lowercase letters, numbers, and hyphens only.": "路径格式无效，请使用小写字母、数字和连字符",
-  "Use lowercase letters, numbers, and hyphens. Example: my-page, sales-report": "请使用小写字母、数字和连字符。示例：my-page、sales-report"
+  "Use lowercase letters, numbers, and hyphens. Example: my-page, sales-report": "请使用小写字母、数字和连字符。示例：my-page、sales-report",
+  "Tab paths cannot be renamed": "标签页路径不能重命名"
 }

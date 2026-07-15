@@ -2,6 +2,7 @@ import { Context } from '@nocobase/actions';
 import { scanKeys } from '../utils/redis';
 
 const REDIS_QUEUE_CONNECTION = 'cluster-manager:queue-monitor';
+const STREAM_CONSUMER_GROUP = 'nocobase-workers';
 const REDIS_QUEUE_PATTERNS = [
   '*:plugin-git-manager:review:queue',
   '*:plugin-build-guide-block:build:queue',
@@ -98,16 +99,26 @@ async function getRedisQueues(ctx: Context) {
   for (const key of keys) {
     if (!isKnownRedisQueueKey(key)) continue;
     let pending = 0;
+    let type = 'list';
+    let unacknowledged = 0;
     try {
-      pending = Number(await redis.sendCommand(['LLEN', key])) || 0;
+      type = String(await redis.sendCommand(['TYPE', key]));
+      if (type === 'stream') {
+        pending = Number(await redis.sendCommand(['XLEN', key])) || 0;
+        const summary = (await redis.sendCommand(['XPENDING', key, STREAM_CONSUMER_GROUP])) as unknown[];
+        unacknowledged = Array.isArray(summary) ? Number(summary[0]) || 0 : 0;
+      } else {
+        pending = Number(await redis.sendCommand(['LLEN', key])) || 0;
+      }
     } catch {
       pending = 0;
     }
     queues.push({
       source: 'redis',
       key,
-      type: 'list',
+      type,
       pending,
+      unacknowledged,
       ...describeRedisQueueKey(key),
     });
   }
@@ -134,6 +145,17 @@ function parseRedisQueueMessage(raw: string, key: string, index: number) {
     content,
     raw,
     timestamp: Number.isFinite(queuedAt) ? queuedAt : null,
+  };
+}
+
+function parseRedisStreamMessage(entry: unknown, key: string, index: number) {
+  const row = Array.isArray(entry) ? entry : [];
+  const fields = Array.isArray(row[1]) ? row[1] : [];
+  const messageIndex = fields.findIndex((field) => field === 'message');
+  const raw = messageIndex >= 0 ? String(fields[messageIndex + 1] || '') : '';
+  return {
+    ...parseRedisQueueMessage(raw, key, index),
+    id: String(row[0] || `${key}:${index}`),
   };
 }
 
@@ -218,11 +240,24 @@ export const eventQueueActions = {
       const currentPageSize = Number(pageSize);
       const start = (currentPage - 1) * currentPageSize;
       const end = start + currentPageSize - 1;
-      const count = Number(await redis.sendCommand(['LLEN', redisKey])) || 0;
-      const rows = (await redis.sendCommand(['LRANGE', redisKey, String(start), String(end)])) as string[];
+      const type = String(await redis.sendCommand(['TYPE', redisKey]));
+      const count =
+        type === 'stream'
+          ? Number(await redis.sendCommand(['XLEN', redisKey])) || 0
+          : Number(await redis.sendCommand(['LLEN', redisKey])) || 0;
+      const rows =
+        type === 'stream'
+          ? (
+              ((await redis.sendCommand(['XRANGE', redisKey, '-', '+', 'COUNT', String(end + 1)])) as unknown[]) || []
+            ).slice(start)
+          : ((await redis.sendCommand(['LRANGE', redisKey, String(start), String(end)])) as string[]);
 
       ctx.body = {
-        data: rows.map((raw, offset) => parseRedisQueueMessage(raw, redisKey, start + offset)),
+        data: rows.map((raw, offset) =>
+          type === 'stream'
+            ? parseRedisStreamMessage(raw, redisKey, start + offset)
+            : parseRedisQueueMessage(String(raw), redisKey, start + offset),
+        ),
         meta: { count, page: currentPage, pageSize: currentPageSize, source: 'redis', key: redisKey },
       };
       await next();

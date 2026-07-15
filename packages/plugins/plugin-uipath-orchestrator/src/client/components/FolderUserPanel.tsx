@@ -50,7 +50,7 @@ export const FolderUserPanel: React.FC = () => {
           folderPath: folder.fullyQualifiedName,
         },
       });
-      setFolder(folder.folderId, folder.folderKey || null);
+      setFolder(folder.folderId, folder.folderKey || null, folder.fullyQualifiedName || null);
       refreshInstances();
       message.success(t('Saved'));
     } catch (err: any) {

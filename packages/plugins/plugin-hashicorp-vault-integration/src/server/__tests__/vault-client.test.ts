@@ -38,6 +38,77 @@ describe('VaultClient', () => {
     expect(client.secretUrl('apps/billing')).toBe('https://vault.example.com:8200/v1/kv/apps/billing');
   });
 
+  it('builds KV v2 metadata URLs for listing paths', () => {
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200/',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    expect(client.listUrl()).toBe('https://vault.example.com:8200/v1/secret/metadata');
+    expect(client.listUrl('apps/billing')).toBe('https://vault.example.com:8200/v1/secret/metadata/apps/billing');
+    expect(client.listUrl('apps/team name')).toBe('https://vault.example.com:8200/v1/secret/metadata/apps/team%20name');
+  });
+
+  it('builds KV v1 URLs for listing paths', () => {
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 1,
+      mount: 'kv',
+    });
+    expect(client.listUrl('apps')).toBe('https://vault.example.com:8200/v1/kv/apps');
+  });
+
+  it('lists folders and secrets without exposing values', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: { data: { keys: ['billing/', 'shared-config'] } } } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.listPath('apps')).resolves.toEqual([
+      { name: 'billing', path: 'apps/billing', isFolder: true },
+      { name: 'shared-config', path: 'apps/shared-config', isFolder: false },
+    ]);
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ method: 'LIST', url: 'https://vault.example.com:8200/v1/secret/metadata/apps' }),
+    );
+  });
+
+  it('reports the listed path when Vault denies list permission', async () => {
+    mockedRequest.mockRejectedValueOnce({
+      message: 'Request failed with status code 403',
+      response: { status: 403, data: { errors: ['permission denied'] } },
+    });
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.listPath('apps')).rejects.toThrow(
+      'Failed to list Vault path "apps": HTTP 403: permission denied',
+    );
+  });
+
+  it('lists sorted keys for a selected secret', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: { data: { data: { password: 'secret', host: 'db' } } } } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.listSecretKeys('apps/billing')).resolves.toEqual(['host', 'password']);
+  });
+
   it('rejects invalid addresses', () => {
     expect(() => new VaultClient({ address: 'ftp://vault.example.com', authMethod: 'token', token: 't' })).toThrow(
       VaultError,

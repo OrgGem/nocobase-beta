@@ -33,6 +33,9 @@ interface FromLogInput extends CorrelationInput {
   logId?: string | number;
   jobKey?: string;
   timeStamp?: string;
+  queueItemId?: string | number;
+  queueItemKey?: string;
+  queueReference?: string;
 }
 
 interface FromQueueItemInput extends CorrelationInput {
@@ -216,7 +219,32 @@ export class UiPathCorrelationService {
     const jobs = jobKey
       ? await this.findJobsByKey(jobKey, input.folder)
       : await this.findJobsForWindow({ from: timeStamp, to: timeStamp, folder: input.folder });
-    const queueItems = timeStamp ? await this.findQueueItemsForTimestamp(timeStamp, input.folder) : [];
+    const primaryJob = jobs[0];
+    const jobStart = primaryJob
+      ? stringValue(primaryJob, 'StartTime') || stringValue(primaryJob, 'CreationTime')
+      : undefined;
+    const jobEnd = primaryJob ? dateOrNow(stringValue(primaryJob, 'EndTime')) : undefined;
+    let queueTerms = uniqueStrings([input.queueItemKey, input.queueReference, ...extractQueueTermsFromLog(log)]);
+
+    if (!queueTerms.length && jobKey && jobStart) {
+      const jobLogs = await this.findLogs({
+        jobKeys: [jobKey],
+        range: { from: jobStart, to: jobEnd },
+        folder: input.folder,
+        orderby: 'TimeStamp asc',
+      });
+      queueTerms = uniqueStrings(jobLogs.flatMap((row) => extractQueueTermsFromLog(row)));
+    }
+
+    const exactQueueItems = await this.findQueueItemsByIdentity(input.queueItemId, queueTerms, input.folder);
+    const fallbackQueueItems = exactQueueItems.length
+      ? []
+      : jobStart
+        ? await this.findQueueItemsForWindow(jobStart, jobEnd, [], input.folder)
+        : timeStamp
+          ? await this.findQueueItemsForTimestamp(timeStamp, input.folder)
+          : [];
+    const queueItems = exactQueueItems.length ? exactQueueItems : fallbackQueueItems;
     const nearbyLogs = timeStamp
       ? await this.findLogs({
           jobKeys: jobKey ? [jobKey] : [],
@@ -228,13 +256,22 @@ export class UiPathCorrelationService {
 
     return {
       log,
-      job: jobs[0] || null,
+      job: primaryJob || null,
       jobs: jobs.map((job) =>
         withConfidence(job, jobKey ? 'high' : 'medium', jobKey ? 'Matched by JobKey.' : 'Matched by time overlap.'),
       ),
-      queueItems: queueItems.map((item) =>
-        withConfidence(item, 'medium', 'Log timestamp is inside the queue item processing window.'),
-      ),
+      queueItems: queueItems.map((item) => {
+        if (exactQueueItems.length) {
+          return withConfidence(item, 'high', 'Matched a queue item ID, key, or reference found in the job log.');
+        }
+        return withConfidence(
+          item,
+          primaryJob ? 'medium' : 'low',
+          primaryJob
+            ? 'No queue identifier was found; the queue item overlaps the correlated job runtime.'
+            : 'No queue identifier or job was found; the queue item overlaps the log timestamp.',
+        );
+      }),
       nearbyLogs,
     };
   }
@@ -336,6 +373,36 @@ export class UiPathCorrelationService {
         $expand: 'Robot',
         $orderby: 'StartProcessing desc',
       },
+      folder,
+    });
+  }
+
+  private async findQueueItemsByIdentity(
+    queueItemId: string | number | undefined,
+    queueTerms: string[],
+    folder?: FolderContext,
+  ): Promise<Array<Record<string, unknown>>> {
+    if (queueItemId !== undefined && queueItemId !== null && String(queueItemId).trim()) {
+      try {
+        const item = asRecord(
+          await this.client.get(`/odata/QueueItems(${queueItemId})`, {
+            query: { $expand: 'Robot' },
+            folder,
+          }),
+        );
+        if (Object.keys(item).length) return [item];
+      } catch (error) {
+        this.logger.debug?.(`[plugin-uipath] Queue item ID lookup failed: ${String(error)}`);
+      }
+    }
+
+    const identityFilter = uniqueStrings(queueTerms)
+      .map((term) => `(Key eq ${odataString(term)} or Reference eq ${odataString(term)})`)
+      .join(' or ');
+    if (!identityFilter) return [];
+
+    return this.safeList('/odata/QueueItems', {
+      query: { $top: 20, $filter: identityFilter, $expand: 'Robot', $orderby: 'CreationTime desc' },
       folder,
     });
   }

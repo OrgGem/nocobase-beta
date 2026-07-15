@@ -1,5 +1,6 @@
 import { Context } from '@nocobase/actions';
 import { scanKeys, deleteKeysChunked } from '../utils/redis';
+import { cacheVersionManager } from '../utils/versionManager';
 
 /**
  * In-memory ACL stats counter.
@@ -24,8 +25,18 @@ const stats: AclCacheStats = {
 const ACL_CACHE_PREFIX = 'acl:can:';
 const ACL_CACHE_TTL = 60 * 5; // 5 minutes default
 
-function getCacheKey(role: string, resource: string, action: string): string {
-  return `${ACL_CACHE_PREFIX}${role}:${resource}:${action}`;
+function getCacheKey(options: {
+  appName: string;
+  dataSource: string;
+  globalVersion: number;
+  roleVersion: number;
+  role: string;
+  userId: string;
+  resource: string;
+  action: string;
+}): string {
+  const { appName, dataSource, globalVersion, roleVersion, role, userId, resource, action } = options;
+  return `${ACL_CACHE_PREFIX}${appName}:${dataSource}:g${globalVersion}:r${roleVersion}:${role}:u${userId}:${resource}:${action}`;
 }
 
 function recordStat(role: string, hit: boolean) {
@@ -70,7 +81,29 @@ export function createAclCacheMiddleware(app: any) {
       return next();
     }
 
-    const cacheKey = getCacheKey(role, resourceName, actionName);
+    const appName = String(ctx.headers['x-app'] || app.name || 'main');
+    const dataSource = String(ctx.headers['x-data-source'] || 'main');
+    const userId = String(ctx.state?.currentUser?.id || 'anonymous');
+    let cacheKey: string;
+
+    try {
+      const [globalVersion, roleVersion] = await Promise.all([
+        cacheVersionManager.getGlobalAclVersion(app),
+        cacheVersionManager.getAclVersion(app, role),
+      ]);
+      cacheKey = getCacheKey({
+        appName,
+        dataSource,
+        globalVersion,
+        roleVersion,
+        role,
+        userId,
+        resource: resourceName,
+        action: actionName,
+      });
+    } catch {
+      return next();
+    }
 
     // Try reading from cache first
     try {
@@ -123,8 +156,7 @@ export const aclCacheActions = {
    * Returns ACL cache hit/miss statistics
    */
   async stats(ctx: Context, next: () => Promise<void>) {
-    const hitRate =
-      stats.totalChecks > 0 ? Math.round((stats.cacheHits / stats.totalChecks) * 10000) / 100 : 0;
+    const hitRate = stats.totalChecks > 0 ? Math.round((stats.cacheHits / stats.totalChecks) * 10000) / 100 : 0;
 
     // Count cached keys using SCAN (production-safe)
     let cachedKeys = 0;

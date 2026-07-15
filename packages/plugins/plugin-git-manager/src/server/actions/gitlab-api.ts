@@ -1,5 +1,6 @@
 import { Context } from '@nocobase/actions';
 import { parseGitLabProject } from '../utils/gitlab-url';
+import { getRepoAccount } from '../utils/get-repo-account';
 
 function getActionParams(ctx: Context) {
   return { ...ctx.action.params, ...ctx.action.params?.values, ...((ctx as any).request?.body || {}) };
@@ -18,7 +19,7 @@ async function gitlabFetch(apiBase: string, endpoint: string, pat: string, param
   const response = await fetch(url.toString(), {
     headers: {
       'PRIVATE-TOKEN': pat,
-      'Accept': 'application/json',
+      Accept: 'application/json',
     },
   });
 
@@ -39,16 +40,18 @@ async function getRepoApiContext(ctx: Context) {
   // Fix for POST requests where data might be in ctx.request.body
   const params = getActionParams(ctx);
   const { repositoryId } = params;
-  
+
   const repo = await ctx.db.getRepository('gitRepositories').findOne({
     filterByTk: repositoryId,
   });
   if (!repo) {
     ctx.throw(404, 'Repository not found');
   }
-  const pat = (repo.get('pat') as string || '').trim();
-  const repoUrl = (repo.get('repoUrl') as string || '').trim();
-  const isGitHub = repoUrl.includes('github.com');
+
+  const account = await getRepoAccount(ctx.db, repo);
+  const pat = account?.pat || '';
+  const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
+  const isGitHub = account?.provider === 'github' || repoUrl.includes('github.com');
   const { apiBase, encodedProject, projectPath } = parseGitLabProject(repoUrl);
   return { repo, pat, apiBase, encodedProject, projectPath, isGitHub };
 }
@@ -64,7 +67,7 @@ async function githubFetch(endpoint: string, pat: string, params?: Record<string
   }
 
   const headers: any = {
-    'Accept': 'application/vnd.github.v3+json',
+    Accept: 'application/vnd.github.v3+json',
   };
   if (pat) {
     headers['Authorization'] = `Bearer ${pat}`;
@@ -80,7 +83,7 @@ async function githubFetch(endpoint: string, pat: string, params?: Record<string
   const linkHeader = response.headers.get('link');
   let totalPages = null;
   if (linkHeader) {
-    const lastLink = linkHeader.split(',').find(s => s.includes('rel="last"'));
+    const lastLink = linkHeader.split(',').find((s) => s.includes('rel="last"'));
     if (lastLink) {
       const match = lastLink.match(/page=(\d+)/);
       if (match) totalPages = parseInt(match[1], 10);
@@ -95,14 +98,7 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx);
   // Merge params from query and body
   const params = getActionParams(ctx);
-  const {
-    state = 'opened',
-    search,
-    page = 1,
-    perPage = 20,
-    orderBy = 'updated_at',
-    sort = 'desc',
-  } = params;
+  const { state = 'opened', search, page = 1, perPage = 20, orderBy = 'updated_at', sort = 'desc' } = params;
 
   let result;
   let items;
@@ -138,12 +134,16 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
       iid: pr.number,
       title: pr.title,
       description: pr.body,
-      state: pr.state === 'open' ? 'opened' : (pr.merged_at ? 'merged' : 'closed'),
+      state: pr.state === 'open' ? 'opened' : pr.merged_at ? 'merged' : 'closed',
       sourceBranch: pr.head?.ref,
       targetBranch: pr.base?.ref,
       author: pr.user ? { name: pr.user.login, username: pr.user.login, avatarUrl: pr.user.avatar_url } : null,
       assignees: (pr.assignees || []).map((a: any) => ({ name: a.login, username: a.login, avatarUrl: a.avatar_url })),
-      reviewers: (pr.requested_reviewers || []).map((r: any) => ({ name: r.login, username: r.login, avatarUrl: r.avatar_url })),
+      reviewers: (pr.requested_reviewers || []).map((r: any) => ({
+        name: r.login,
+        username: r.login,
+        avatarUrl: r.avatar_url,
+      })),
       labels: (pr.labels || []).map((l: any) => l.name),
       draft: pr.draft || false,
       mergedBy: null, // Not returned by the PR list endpoint
@@ -178,9 +178,19 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
       state: mr.state,
       sourceBranch: mr.source_branch,
       targetBranch: mr.target_branch,
-      author: mr.author ? { name: mr.author.name, username: mr.author.username, avatarUrl: mr.author.avatar_url } : null,
-      assignees: (mr.assignees || []).map((a: any) => ({ name: a.name, username: a.username, avatarUrl: a.avatar_url })),
-      reviewers: (mr.reviewers || []).map((r: any) => ({ name: r.name, username: r.username, avatarUrl: r.avatar_url })),
+      author: mr.author
+        ? { name: mr.author.name, username: mr.author.username, avatarUrl: mr.author.avatar_url }
+        : null,
+      assignees: (mr.assignees || []).map((a: any) => ({
+        name: a.name,
+        username: a.username,
+        avatarUrl: a.avatar_url,
+      })),
+      reviewers: (mr.reviewers || []).map((r: any) => ({
+        name: r.name,
+        username: r.username,
+        avatarUrl: r.avatar_url,
+      })),
       labels: mr.labels || [],
       draft: mr.draft || mr.work_in_progress || false,
       mergedBy: mr.merged_by ? { name: mr.merged_by.name, username: mr.merged_by.username } : null,
@@ -224,7 +234,7 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
       githubFetch(`/repos/${projectPath}/pulls/${mrIid}`, pat),
       githubFetch(`/repos/${projectPath}/pulls/${mrIid}/files`, pat).catch(() => ({ data: [] })),
     ]);
-    
+
     const pr = prResult.data;
     const changes = (filesResult.data || []).map((c: any) => ({
       oldPath: c.previous_filename || c.filename,
@@ -240,12 +250,16 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
       iid: pr.number,
       title: pr.title,
       description: pr.body,
-      state: pr.state === 'open' ? 'opened' : (pr.merged_at ? 'merged' : 'closed'),
+      state: pr.state === 'open' ? 'opened' : pr.merged_at ? 'merged' : 'closed',
       sourceBranch: pr.head?.ref,
       targetBranch: pr.base?.ref,
       author: pr.user ? { name: pr.user.login, username: pr.user.login, avatarUrl: pr.user.avatar_url } : null,
       assignees: (pr.assignees || []).map((a: any) => ({ name: a.login, username: a.login, avatarUrl: a.avatar_url })),
-      reviewers: (pr.requested_reviewers || []).map((r: any) => ({ name: r.login, username: r.login, avatarUrl: r.avatar_url })),
+      reviewers: (pr.requested_reviewers || []).map((r: any) => ({
+        name: r.login,
+        username: r.login,
+        avatarUrl: r.avatar_url,
+      })),
       labels: (pr.labels || []).map((l: any) => l.name),
       draft: pr.draft || false,
       createdAt: pr.created_at,
@@ -275,7 +289,9 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
     if (!pat) ctx.throw(400, 'Personal Access Token is required for GitLab API access');
     const [mrResult, changesResult] = await Promise.all([
       gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}`, pat),
-      gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}/changes`, pat).catch(() => ({ data: {} })),
+      gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}/changes`, pat).catch(() => ({
+        data: {},
+      })),
     ]);
 
     const mr = mrResult.data;
@@ -296,9 +312,19 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
       state: mr.state,
       sourceBranch: mr.source_branch,
       targetBranch: mr.target_branch,
-      author: mr.author ? { name: mr.author.name, username: mr.author.username, avatarUrl: mr.author.avatar_url } : null,
-      assignees: (mr.assignees || []).map((a: any) => ({ name: a.name, username: a.username, avatarUrl: a.avatar_url })),
-      reviewers: (mr.reviewers || []).map((r: any) => ({ name: r.name, username: r.username, avatarUrl: r.avatar_url })),
+      author: mr.author
+        ? { name: mr.author.name, username: mr.author.username, avatarUrl: mr.author.avatar_url }
+        : null,
+      assignees: (mr.assignees || []).map((a: any) => ({
+        name: a.name,
+        username: a.username,
+        avatarUrl: a.avatar_url,
+      })),
+      reviewers: (mr.reviewers || []).map((r: any) => ({
+        name: r.name,
+        username: r.username,
+        avatarUrl: r.avatar_url,
+      })),
       labels: mr.labels || [],
       draft: mr.draft || mr.work_in_progress || false,
       createdAt: mr.created_at,
@@ -333,7 +359,12 @@ export async function mergeRequestNotes(ctx: Context, next: () => Promise<void>)
   }
 
   let notes = [];
-  let pagination = { page: parseInt(String(page), 10), perPage: parseInt(String(perPage), 10), total: null, totalPages: null as any };
+  const pagination = {
+    page: parseInt(String(page), 10),
+    perPage: parseInt(String(perPage), 10),
+    total: null,
+    totalPages: null as any,
+  };
 
   if (isGitHub) {
     const result = await githubFetch(`/repos/${projectPath}/issues/${mrIid}/comments`, pat, {

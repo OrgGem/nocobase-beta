@@ -26,9 +26,15 @@ interface SftpgoConnectionOption {
   title?: string;
 }
 
+interface SftpgoUserOption {
+  username: string;
+}
+
 interface SftpgoApiKey {
   id: string;
+  name: string;
   key?: string;
+  maskedKey?: string | null;
   scope: number;
   admin?: string;
   user?: string;
@@ -38,6 +44,7 @@ interface SftpgoApiKey {
 }
 
 interface ApiKeyFormValues {
+  name: string;
   scope: number;
   admin?: string;
   user?: string;
@@ -51,6 +58,9 @@ export const SftpgoApiKeys: React.FC = () => {
   const [connections, setConnections] = useState<SftpgoConnectionOption[]>([]);
   const [connectionId, setConnectionId] = useState<number | null>(null);
   const [apiKeys, setApiKeys] = useState<SftpgoApiKey[]>([]);
+  const [userOptions, setUserOptions] = useState<SftpgoUserOption[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -97,10 +107,38 @@ export const SftpgoApiKeys: React.FC = () => {
     else setApiKeys([]);
   }, [connectionId, loadApiKeys]);
 
+  const loadUserOptions = useCallback(
+    async (connId: number) => {
+      setUsersLoading(true);
+      setUsersError(false);
+      try {
+        const res = await api.request({ url: 'sftpgoUsers:list', params: { connectionId: connId, limit: 500 } });
+        const data = res?.data?.data as unknown;
+        setUserOptions(Array.isArray(data) ? (data as SftpgoUserOption[]) : []);
+      } catch {
+        setUserOptions([]);
+        setUsersError(true);
+      } finally {
+        setUsersLoading(false);
+      }
+    },
+    [api],
+  );
+
+  useEffect(() => {
+    if (scope === 2 && connectionId) {
+      loadUserOptions(connectionId).catch(() => undefined);
+      return;
+    }
+    setUserOptions([]);
+    setUsersError(false);
+  }, [connectionId, loadUserOptions, scope]);
+
   const handleSave = async () => {
     if (!connectionId) return;
     const values = await form.validateFields();
     const payload: Record<string, unknown> = {
+      name: values.name,
       description: values.description,
       scope: values.scope,
       admin: values.scope === 1 ? values.admin : undefined,
@@ -151,6 +189,13 @@ export const SftpgoApiKeys: React.FC = () => {
   };
 
   const columns = [
+    { title: t('Name'), dataIndex: 'name', key: 'name' },
+    {
+      title: t('Stored API Key'),
+      dataIndex: 'maskedKey',
+      key: 'maskedKey',
+      render: (value?: string | null) => value || '-',
+    },
     { title: t('Description'), dataIndex: 'description', key: 'description', ellipsis: true },
     {
       title: t('Scope'),
@@ -187,6 +232,7 @@ export const SftpgoApiKeys: React.FC = () => {
             onClick={() => {
               setEditing(record);
               form.setFieldsValue({
+                name: record.name,
                 scope: record.scope,
                 admin: record.admin,
                 user: record.user,
@@ -262,6 +308,9 @@ export const SftpgoApiKeys: React.FC = () => {
         width={480}
       >
         <Form form={form} layout="vertical" initialValues={{ scope: 1 }}>
+          <Form.Item name="name" label={t('Name')} rules={[{ required: true }]}>
+            <Input disabled={!!editing} />
+          </Form.Item>
           <Form.Item name="description" label={t('Description')}>
             <Input />
           </Form.Item>
@@ -280,7 +329,14 @@ export const SftpgoApiKeys: React.FC = () => {
               extra={t('Bind this key to a specific SFTPGo user')}
               rules={[{ required: true }]}
             >
-              <Input placeholder="username" />
+              <Select
+                showSearch
+                optionFilterProp="label"
+                loading={usersLoading}
+                placeholder={t('Select a user')}
+                notFoundContent={t(usersError ? 'Failed to load users' : 'No users available')}
+                options={userOptions.map((item) => ({ value: item.username, label: item.username }))}
+              />
             </Form.Item>
           ) : (
             <Form.Item name="admin" label={t('Admin')} extra={t('Leave empty to bind this key to any admin')}>

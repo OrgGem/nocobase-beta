@@ -51,6 +51,27 @@ export default {
       type: 'integer',
     },
     {
+      name: 'startedAt',
+      type: 'date',
+      allowNull: true,
+    },
+    {
+      name: 'heartbeatAt',
+      type: 'date',
+      allowNull: true,
+    },
+    {
+      name: 'workerId',
+      type: 'string',
+      length: 200,
+      allowNull: true,
+    },
+    {
+      name: 'retryCount',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
       name: 'sessionId',
       type: 'string',
       length: 100,

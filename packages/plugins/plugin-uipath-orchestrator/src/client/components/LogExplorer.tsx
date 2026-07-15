@@ -41,7 +41,8 @@ const LOG_LEVELS = ['Trace', 'Info', 'Warn', 'Error', 'Fatal'];
 export const LogExplorer: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey, dateRange, processFilter, queueFilter } = useCurrentInstance();
+  const { instanceId, folderId, folderKey, folderPath, folderReady, dateRange, processFilter, queueFilter } =
+    useCurrentInstance();
 
   const [level, setLevel] = useState<string | undefined>();
   const [search, setSearch] = useState('');
@@ -54,7 +55,7 @@ export const LogExplorer: React.FC = () => {
   const [selectedQueueItem, setSelectedQueueItem] = useState<any>(null);
 
   useEffect(() => {
-    if (!tracingLog) {
+    if (!tracingLog || !folderReady) {
       setTraceData(null);
       setSelectedQueueItem(null);
       return;
@@ -67,9 +68,13 @@ export const LogExplorer: React.FC = () => {
           instanceId,
           folderId,
           folderKey,
+          folderPath,
           logId: tracingLog.Id,
           timeStamp: tracingLog.TimeStamp,
           jobKey: tracingLog.JobKey,
+          queueItemId: tracingLog.QueueItemId || tracingLog.queueItemId,
+          queueItemKey: tracingLog.QueueItemKey || tracingLog.queueItemKey,
+          queueReference: tracingLog.Reference || tracingLog.reference,
         },
       })
       .then((res) => {
@@ -80,7 +85,7 @@ export const LogExplorer: React.FC = () => {
         message.error(err.message);
         setTraceLoading(false);
       });
-  }, [tracingLog, instanceId, folderId, folderKey, api]);
+  }, [tracingLog, instanceId, folderId, folderKey, folderPath, folderReady, api]);
 
   const { data, meta, loading, error, refresh } = useUiPathRequest('uipathRobotLogs', 'search', {
     level,
@@ -193,7 +198,7 @@ export const LogExplorer: React.FC = () => {
           <div style={{ padding: 24, textAlign: 'center' }}>
             <Spin size="large" />
           </div>
-        ) : traceData?.queueItems?.length > 0 ? (
+        ) : traceData?.jobs?.length > 0 || traceData?.queueItems?.length > 0 ? (
           <div>
             {traceData.jobs?.length ? (
               <div style={{ marginBottom: 16 }}>
@@ -209,6 +214,7 @@ export const LogExplorer: React.FC = () => {
                           <Tag>{candidate.confidence || 'match'}</Tag>
                           <span>{job.ReleaseName || job.Key}</span>
                           <Tag>{job.State}</Tag>
+                          {candidate.reason ? <span>{candidate.reason}</span> : null}
                         </Space>
                       </List.Item>
                     );
@@ -243,6 +249,7 @@ export const LogExplorer: React.FC = () => {
                           <span>
                             Start: {item.StartProcessing ? new Date(item.StartProcessing).toLocaleTimeString() : '-'}
                           </span>
+                          {candidate.reason ? <span>{candidate.reason}</span> : null}
                         </Space>
                       }
                     />

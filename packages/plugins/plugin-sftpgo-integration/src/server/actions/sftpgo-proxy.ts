@@ -32,7 +32,11 @@ export function createSftpgoProxyActions(plugin: PluginSftpgoIntegrationServer, 
       const { limit, offset } = ctx.action.params as { limit?: number; offset?: number };
       try {
         const client = await plugin.getClient(connection);
-        ctx.body = { data: await client.listResources(type, { limit, offset }) };
+        const resources = await client.listResources(type, { limit, offset });
+        ctx.body =
+          type === 'apikeys'
+            ? await plugin.attachMaskedApiKeySecrets(connection.get('id') as number, resources)
+            : resources;
       } catch (err) {
         return ctx.throw(502, toSafeErrorMessage(err));
       }
@@ -45,7 +49,7 @@ export function createSftpgoProxyActions(plugin: PluginSftpgoIntegrationServer, 
       if (!filterByTk) return ctx.throw(400, 'filterByTk is required');
       try {
         const client = await plugin.getClient(connection);
-        ctx.body = { data: await client.getResource(type, filterByTk) };
+        ctx.body = await client.getResource(type, filterByTk);
       } catch (err) {
         return ctx.throw(502, toSafeErrorMessage(err));
       }
@@ -57,7 +61,18 @@ export function createSftpgoProxyActions(plugin: PluginSftpgoIntegrationServer, 
       const values = (ctx.action.params.values || {}) as Record<string, unknown>;
       try {
         const client = await plugin.getClient(connection);
-        ctx.body = { data: await client.createResource(type, values) };
+        const created = await client.createResource(type, values);
+        if (type === 'apikeys' && typeof created.key === 'string' && typeof values.name === 'string') {
+          const apiKeys = await client.listResources('apikeys', { limit: 500 });
+          const match = apiKeys.find(
+            (item) => !!item && typeof item === 'object' && (item as Record<string, unknown>).name === values.name,
+          ) as Record<string, unknown> | undefined;
+          if (!match?.id) {
+            return ctx.throw(502, 'API key was created but its identifier could not be resolved');
+          }
+          await plugin.saveApiKeySecret(connection.get('id') as number, String(match.id), values.name, created.key);
+        }
+        ctx.body = created;
       } catch (err) {
         return ctx.throw(502, toSafeErrorMessage(err));
       }
@@ -73,7 +88,7 @@ export function createSftpgoProxyActions(plugin: PluginSftpgoIntegrationServer, 
       if (!filterByTk) return ctx.throw(400, 'filterByTk is required');
       try {
         const client = await plugin.getClient(connection);
-        ctx.body = { data: await client.updateResource(type, filterByTk, values || {}) };
+        ctx.body = await client.updateResource(type, filterByTk, values || {});
       } catch (err) {
         return ctx.throw(502, toSafeErrorMessage(err));
       }
@@ -87,7 +102,10 @@ export function createSftpgoProxyActions(plugin: PluginSftpgoIntegrationServer, 
       try {
         const client = await plugin.getClient(connection);
         await client.deleteResource(type, filterByTk);
-        ctx.body = { data: true };
+        if (type === 'apikeys') {
+          await plugin.deleteApiKeySecret(connection.get('id') as number, String(filterByTk));
+        }
+        ctx.body = true;
       } catch (err) {
         return ctx.throw(502, toSafeErrorMessage(err));
       }

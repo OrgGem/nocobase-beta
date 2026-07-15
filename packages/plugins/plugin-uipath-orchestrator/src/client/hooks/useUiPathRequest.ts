@@ -86,7 +86,7 @@ export function toUiPathArray<T = Record<string, unknown>>(value: unknown): T[] 
  */
 export function useUiPathRequest(resource: string, action: string, extraParams: RequestParams = {}) {
   const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey } = useCurrentInstance();
+  const { instanceId, folderId, folderKey, folderPath, folderReady } = useCurrentInstance();
   const [data, setData] = useState<unknown>(null);
   const [meta, setMeta] = useState<unknown>(null);
   const [loading, setLoading] = useState(false);
@@ -97,7 +97,7 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
 
   const run = useCallback(
     async (overrideParams: RequestParams = {}) => {
-      if (!instanceId) {
+      if (!instanceId || !folderReady) {
         setData(null);
         setMeta(null);
         setError(null);
@@ -115,6 +115,7 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
             instanceId,
             folderId,
             folderKey,
+            folderPath,
             ...extraParamsRef.current,
             ...overrideParams,
           },
@@ -143,7 +144,7 @@ export function useUiPathRequest(resource: string, action: string, extraParams: 
         }
       }
     },
-    [api, instanceId, folderId, folderKey, resource, action],
+    [api, instanceId, folderId, folderKey, folderPath, folderReady, resource, action],
   );
 
   // Re-fetch when deps change

@@ -11,6 +11,7 @@ import { createAgentLoopTools } from './tools/agent-loop';
 import { PlanningPromptService } from './services/PlanningPromptService';
 import { asObject, isAdminUser, currentUserId } from './utils/ctx-utils';
 import { getAIToolsManager } from './utils/ai-manager';
+import { AgentRuntimeLifecycle } from './services/AgentRuntimeLifecycle';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -127,6 +128,7 @@ async function resolveTracingRetentionDays(plugin: { db: any; app: any }) {
 export class PluginAgentOrchestratorServer extends Plugin {
   skillHub: SkillHubSubFeature;
   nativeObserver: NativeSubAgentObserver;
+  agentRuntimeLifecycle: AgentRuntimeLifecycle;
   private readonly installNativeObserver = () => {
     this.nativeObserver?.install();
   };
@@ -134,6 +136,13 @@ export class PluginAgentOrchestratorServer extends Plugin {
   async afterAdd() {
     this.skillHub = new SkillHubSubFeature(this);
     this.nativeObserver = new NativeSubAgentObserver(this);
+    this.agentRuntimeLifecycle = new AgentRuntimeLifecycle((hookType, name, error) => {
+      this.app.logger.warn(`[AgentOrchestrator] ${hookType} hook "${name}" failed; continuing agent execution.`, {
+        error,
+      });
+    });
+    (this.app as typeof this.app & { agentRuntimeLifecycle: AgentRuntimeLifecycle }).agentRuntimeLifecycle =
+      this.agentRuntimeLifecycle;
   }
 
   async beforeLoad() {
@@ -224,6 +233,11 @@ export class PluginAgentOrchestratorServer extends Plugin {
     // instructions so the AI agent creates a plan via agent_loop_start before
     // executing.
     const planningPrompt = new PlanningPromptService();
+    this.agentRuntimeLifecycle.registerBeforeRunHook('orchestrator-planning', (context) => {
+      if (planningPrompt.applyPlanningContext(context.messages)) {
+        context.metadata.planningPromptInjected = true;
+      }
+    });
     this.app.resourceManager.use(
       async (ctx, next) => {
         const { resourceName, actionName } = ctx.action || {};
@@ -231,13 +245,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
           const values = ctx.action.params.values || {};
           const messages = values.messages;
           if (Array.isArray(messages)) {
-            for (const msg of messages) {
-              if (msg.role === 'user' && typeof msg.content === 'string') {
-                if (planningPrompt.shouldInjectPlanningPrompt(msg.content)) {
-                  msg.content = planningPrompt.getPlanningPrefix() + msg.content;
-                }
-              }
-            }
+            planningPrompt.applyPlanningContext(messages);
           }
         }
         await next();

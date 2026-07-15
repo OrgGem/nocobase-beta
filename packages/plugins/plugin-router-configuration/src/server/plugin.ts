@@ -26,7 +26,17 @@ export class PluginRouterConfigurationServer extends Plugin {
 
   private registerRenameAction() {
     this.app.resourceManager.registerActionHandler('desktopRoutes:renamePath', async (ctx, next) => {
-      const { id, schemaUid: newSchemaUid } = ctx.action.params;
+      const actionParams = ctx.action.params as Record<string, unknown>;
+      const requestBody =
+        ctx.request.body && typeof ctx.request.body === 'object' ? (ctx.request.body as Record<string, unknown>) : {};
+      const candidate = actionParams.values || requestBody.values || requestBody;
+      const wrappedValues = candidate && typeof candidate === 'object' ? (candidate as Record<string, unknown>) : {};
+      const values =
+        wrappedValues.values && typeof wrappedValues.values === 'object'
+          ? (wrappedValues.values as Record<string, unknown>)
+          : wrappedValues;
+      const id = values.id;
+      const newSchemaUid = values.schemaUid;
       const repo = ctx.db.getRepository('desktopRoutes');
 
       if (!id) {
@@ -59,6 +69,10 @@ export class PluginRouterConfigurationServer extends Plugin {
       const route = await repo.findOne({ filterByTk: id });
       if (!route) {
         ctx.throw(404, `Route with id ${id} not found.`);
+      }
+
+      if (route.get('type') === 'tabs') {
+        ctx.throw(400, 'Tab route paths cannot be renamed.');
       }
 
       const oldSchemaUid = route.get('schemaUid');

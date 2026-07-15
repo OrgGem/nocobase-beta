@@ -65,4 +65,16 @@
   "Use letters, digits and underscores, not starting with a digit": "Use letters, digits and underscores, not starting with a digit",
   "Push value into $env on every sync": "Push value into $env on every sync",
   "Allow resolving this variable from the client for logged-in users": "Allow resolving this variable from the client for logged-in users"
+  , "Browse Vault paths": "Browse Vault paths"
+  , "Browse": "Browse"
+  , "Failed to list Vault paths": "Failed to list Vault paths"
+  , "Failed to list secret keys": "Failed to list secret keys"
+  , "Select a connection first": "Select a connection first"
+  , "Select or enter a secret key": "Select or enter a secret key"
+  , "Enter the key manually": "Enter the key manually"
+  , "Loading": "Loading"
+  , "Up": "Up"
+  , "No paths found": "No paths found"
+  , "Type": "Type"
+  , "Folder": "Folder"
 }

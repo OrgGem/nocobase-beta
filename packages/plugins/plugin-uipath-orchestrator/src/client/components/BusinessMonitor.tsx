@@ -77,7 +77,7 @@ function isTriggerForType(trigger: RowData, triggerType?: string): boolean {
 export const BusinessMonitor: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
-  const { instanceId, folderId, folderKey, folders, dateRange } = useCurrentInstance();
+  const { instanceId, folderId, folderKey, folderPath, folderReady, folders, dateRange } = useCurrentInstance();
   const [selectedProcessId, setSelectedProcessId] = useState<number | undefined>();
   const [processModalOpen, setProcessModalOpen] = useState(false);
   const [stepModalOpen, setStepModalOpen] = useState(false);
@@ -310,7 +310,7 @@ export const BusinessMonitor: React.FC = () => {
   };
 
   const loadSnapshot = async () => {
-    if (!selectedProcessId || !instanceId) return;
+    if (!selectedProcessId || !instanceId || !folderReady) return;
     setSnapshotLoading(true);
     try {
       const response = await api.request({
@@ -320,6 +320,7 @@ export const BusinessMonitor: React.FC = () => {
           instanceId,
           folderId,
           folderKey,
+          folderPath,
           from: dateToOData(dateRange?.[0]),
           to: dateToOData(dateRange?.[1]),
         },
@@ -354,6 +355,7 @@ export const BusinessMonitor: React.FC = () => {
   };
 
   const openCorrelation = async (type: 'job' | 'queue' | 'log', record: RowData) => {
+    if (!instanceId || !folderReady) return;
     const title =
       type === 'job' ? t('Job Correlation') : type === 'queue' ? t('Queue Correlation') : t('Log Correlation');
     setCorrelation({ title, loading: true, data: null });
@@ -370,7 +372,7 @@ export const BusinessMonitor: React.FC = () => {
           : type === 'queue'
             ? { queueItemId: record.Id || record.id }
             : { logId: record.Id || record.id, jobKey: record.JobKey, timeStamp: record.TimeStamp };
-      const response = await api.request({ url, params: { instanceId, folderId, folderKey, ...params } });
+      const response = await api.request({ url, params: { instanceId, folderId, folderKey, folderPath, ...params } });
       setCorrelation({ title, loading: false, data: getActionResponseBody(response) as RowData });
     } catch (error) {
       setCorrelation({ title, loading: false, data: { error: error instanceof Error ? error.message : t('Failed') } });

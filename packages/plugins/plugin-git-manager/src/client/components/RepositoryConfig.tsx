@@ -14,6 +14,7 @@ export const RepositoryConfig: React.FC = () => {
   const [form] = Form.useForm();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [reviewFlows, setReviewFlows] = useState<any[]>([]);
+  const [gitAccounts, setGitAccounts] = useState<any[]>([]);
 
   const loadReviewFlows = useCallback(async () => {
     const { data } = await api.request({
@@ -29,9 +30,15 @@ export const RepositoryConfig: React.FC = () => {
     setReviewFlows(data?.data || []);
   }, [api]);
 
+  const loadGitAccounts = useCallback(async () => {
+    const { data } = await api.request({ url: 'gitAccounts:list', params: { pageSize: 100 } });
+    setGitAccounts(data?.data || []);
+  }, [api]);
+
   useEffect(() => {
     loadReviewFlows().catch(() => undefined);
-  }, [loadReviewFlows]);
+    loadGitAccounts().catch(() => undefined);
+  }, [loadReviewFlows, loadGitAccounts]);
 
   useEffect(() => {
     refreshRepos().catch(() => undefined);
@@ -47,10 +54,6 @@ export const RepositoryConfig: React.FC = () => {
 
   const handleSave = async () => {
     const values = await form.validateFields();
-    // Don't send PAT if it's empty or the masked placeholder
-    if (editingRepo && (!values.pat || values.pat === '••••••••')) {
-      delete values.pat;
-    }
     try {
       if (editingRepo) {
         await api.request({
@@ -109,6 +112,17 @@ export const RepositoryConfig: React.FC = () => {
       render: (text: string, record: any) => <a onClick={() => setSelectedRepo(record)}>{text}</a>,
     },
     { title: t('Repository URL'), dataIndex: 'repoUrl', key: 'repoUrl', ellipsis: true },
+    {
+      title: t('Git Account'),
+      dataIndex: 'gitAccountId',
+      key: 'gitAccountId',
+      width: 160,
+      render: (gitAccountId: number | null) => {
+        if (!gitAccountId) return <Tag>{t('None')}</Tag>;
+        const account = gitAccounts.find((acc) => acc.id === gitAccountId);
+        return account ? account.name : <Tag>{t('None')}</Tag>;
+      },
+    },
     { title: t('Local Path'), dataIndex: 'localPath', key: 'localPath', ellipsis: true },
     { title: t('Default Branch'), dataIndex: 'defaultBranch', key: 'defaultBranch', width: 120 },
     {
@@ -216,7 +230,7 @@ export const RepositoryConfig: React.FC = () => {
             size="small"
             onClick={() => {
               setEditingRepo(record);
-              form.setFieldsValue({ ...record, pat: '' });
+              form.setFieldsValue(record);
               setModalOpen(true);
             }}
           >
@@ -273,18 +287,22 @@ export const RepositoryConfig: React.FC = () => {
             <Input placeholder="https://gitlab.com/user/repo.git" />
           </Form.Item>
           <Form.Item
-            name="username"
-            label={t('Username')}
-            rules={[{ required: true }]}
-            extra={t('GitLab username for PAT authentication')}
+            name="gitAccountId"
+            label={t('Git Account')}
+            rules={[{ required: true, message: t('Please select a Git account') }]}
+            extra={t('Select the GitLab or GitHub account to use for this repository')}
           >
-            <Input placeholder="gitlab-username" />
+            <Select
+              placeholder={t('Select an account')}
+              options={gitAccounts.map((acc) => ({
+                value: acc.id,
+                label: `${acc.name} (${acc.username})`,
+              }))}
+              notFoundContent={t('No accounts configured. Add one in the Git Accounts tab.')}
+            />
           </Form.Item>
           <Form.Item name="localPath" label={t('Local Path')} rules={[{ required: true }]}>
             <Input placeholder="my-project" />
-          </Form.Item>
-          <Form.Item name="pat" label={t('Personal Access Token')} rules={editingRepo ? [] : [{ required: true }]}>
-            <Input.Password placeholder={editingRepo ? 'Leave empty to keep current' : 'ghp_xxxx...'} />
           </Form.Item>
           <Form.Item name="defaultBranch" label={t('Default Branch')}>
             <Input placeholder="main" />

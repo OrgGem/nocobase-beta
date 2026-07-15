@@ -27,11 +27,33 @@ import { PackageManager } from './orchestrator/PackageManager';
 import { createListMetaCacheMiddleware } from './middlewares/listMetaCacheMiddleware';
 import { registerCacheHooks } from './hooks/cacheInvalidationHooks';
 import { collectLocalDoctorSnapshot, doctorActions } from './actions/doctor';
+import { RedisWorkerIdAllocator } from './adapters/redis-worker-id-allocator';
+import { healthActions } from './actions/health';
+import { createIdempotencyMiddleware } from './middlewares/idempotencyMiddleware';
 
 export class PluginClusterManagerServer extends Plugin {
   public nodeRegistry: RedisNodeRegistry;
   public orchestrator: IOrchestratorAdapter | null = null;
   public leaderElection: LeaderElection | null = null;
+  public workerIdAllocator: RedisWorkerIdAllocator | null = null;
+
+  async afterAdd() {
+    // NocoBase asks workerIdAllocator for the Snowflake worker ID immediately
+    // after the application-level beforeLoad event. Registering here guarantees
+    // the Redis adapter exists before that allocation happens on every node.
+    const workerRedisUrl = process.env.WORKER_ID_REDIS_URL || process.env.REDIS_URL;
+    const allocatorState = this.app.workerIdAllocator as unknown as { adapter?: unknown };
+    if (allocatorState.adapter) {
+      this.app.logger.info('[ClusterManager] Worker ID allocator already registered; keeping the existing adapter.');
+    } else if (workerRedisUrl) {
+      this.workerIdAllocator = new RedisWorkerIdAllocator(workerRedisUrl, this.app.name, this.app.logger);
+      this.app.workerIdAllocator.setAdapter(this.workerIdAllocator);
+    } else {
+      this.app.logger.warn(
+        '[ClusterManager] WORKER_ID_REDIS_URL/REDIS_URL is missing; HA worker ID allocation is unavailable.',
+      );
+    }
+  }
 
   async beforeLoad() {
     await this.db.import({ directory: path.resolve(__dirname, 'collections') });
@@ -145,7 +167,10 @@ export class PluginClusterManagerServer extends Plugin {
     if (lockMgr && lockMgr.registry && !lockMgr.registry.get('redis') && !lockMgr.adapters.get('redis')) {
       lockMgr.registerAdapter('redis', {
         Adapter: RedisLockAdapter,
-        options: { app: this.app },
+        options: {
+          app: this.app,
+          url: process.env.LOCK_ADAPTER_REDIS_URL || process.env.REDIS_URL,
+        },
       });
       this.app.logger.info('[ClusterManager] Polyfilled RedisLockAdapter as an active distributed lock provider');
     }
@@ -268,8 +293,12 @@ export class PluginClusterManagerServer extends Plugin {
     // Task management (reads asyncTasks table)
     this.app.resourcer.define({
       name: 'clusterManager',
-      actions: tasksActions,
+      actions: {
+        ...tasksActions,
+        health: healthActions.liveness,
+      },
     });
+    this.app.acl.allow('clusterManager', 'health', 'public');
 
     // Workflow execution management (reads executions + jobs tables)
     this.app.resourcer.define({
@@ -319,6 +348,12 @@ export class PluginClusterManagerServer extends Plugin {
       actions: cacheMonitorActions,
     });
 
+    this.app.resourcer.define({
+      name: 'clusterManagerHealth',
+      actions: healthActions,
+    });
+    this.app.acl.allow('clusterManagerHealth', ['liveness', 'readiness'], 'public');
+
     // Package manager (installs apt/npm/python packages across nodes)
     this.app.resourcer.define({
       name: 'workerPackages',
@@ -355,17 +390,8 @@ export class PluginClusterManagerServer extends Plugin {
     // Register DB hooks for invalidating cache versions
     registerCacheHooks(this.app);
 
-    // Lightweight healthcheck endpoint avoiding workflow pre-action and resourcer spam
-    this.app.use(async (ctx: any, next: any) => {
-      if (ctx.path === '/api/clusterManager:health' && (ctx.method === 'GET' || ctx.method === 'HEAD')) {
-        ctx.body = {
-          status: 'ok',
-          version: process.env.NOCOBASE_VERSION || process.version,
-          mode: process.env.WORKER_MODE || 'main',
-        };
-        return;
-      }
-      await next();
+    this.app.resourcer.use(createIdempotencyMiddleware(this.app), {
+      tag: 'clusterManagerIdempotency',
     });
 
     // Admin-only access
