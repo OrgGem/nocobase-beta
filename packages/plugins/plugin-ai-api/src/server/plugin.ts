@@ -11,6 +11,7 @@ import { Plugin } from '@nocobase/server';
 import { createAiLlmRouter } from './routes/router';
 import aiApiConfigResource from './resource/ai-api-config';
 import { RateLimiter } from './utils/rate-limiter';
+import { invalidateRolePermissionCache } from './middleware/role-permission';
 
 // Ensure dayjs timezone + utc plugins are loaded.
 // Some Docker builds ship an older @nocobase/utils whose dayjs.js does not
@@ -41,10 +42,19 @@ export class PluginAiApiServer extends Plugin {
   async load() {
     // 1. Register raw Koa middleware for OpenAI-compatible endpoints
     //    Must run before 'resourcer' so URL paths match OpenAI convention
-    this.app.use(createAiLlmRouter(this), { before: 'resourcer' });
+    // OIDC access tokens must first pass through plugin-idp-oauth, which validates
+    // issuer/audience/scope and rewrites them to a NocoBase internal token.
+    this.app.use(createAiLlmRouter(this), { after: 'idp-oauth-resource-auth', before: 'resourcer' });
 
     // 2. Register admin config resource
     this.app.resourceManager.define(aiApiConfigResource);
+
+    this.app.db.on('aiApiRolePermissions.afterSave', (model) => {
+      invalidateRolePermissionCache(model.get('roleName'));
+    });
+    this.app.db.on('aiApiRolePermissions.afterDestroy', (model) => {
+      invalidateRolePermissionCache(model.get('roleName'));
+    });
 
     // 3. Set ACL permissions for admin config + role permissions management
     this.app.acl.registerSnippet({

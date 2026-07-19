@@ -3,7 +3,7 @@
   "displayName": "Plugin: Field style format",
   "description": "Adds table column settings to format cell spacing and alignment.",
   "version": "1.0.0",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
     "nocobase",

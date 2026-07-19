@@ -35,6 +35,7 @@ interface SubtreeConfig {
   repositoryId: number;
   sourceBranch: string;
   sourcePrefix: string;
+  sourcePrefixes?: string[];
   targetBranch: string;
   remoteName: string;
   defaultPolicy: SubtreePolicy;
@@ -45,6 +46,26 @@ interface SubtreeConfig {
 }
 
 type ConfigFormValues = Omit<SubtreeConfig, 'id' | 'lastStatus' | 'lastRunAt'>;
+
+type SearchOption = { label?: React.ReactNode; value?: string | number };
+
+function optionText(option?: SearchOption): string {
+  return String(option?.label ?? option?.value ?? '').toLocaleLowerCase();
+}
+
+function filterOption(input: string, option?: SearchOption): boolean {
+  return optionText(option).includes(input.trim().toLocaleLowerCase());
+}
+
+function filterSort(optionA: SearchOption, optionB: SearchOption, info: { searchValue: string }): number {
+  const search = info.searchValue.trim().toLocaleLowerCase();
+  const a = optionText(optionA);
+  const b = optionText(optionB);
+  const aStarts = a.startsWith(search);
+  const bStarts = b.startsWith(search);
+  if (aStarts !== bStarts) return aStarts ? -1 : 1;
+  return a.localeCompare(b);
+}
 
 interface PreviewResult {
   sourceSha: string;
@@ -142,9 +163,12 @@ export default function SubtreeSplits() {
   const loadOptions = async (repositoryId: number, sourceBranch?: string, remoteName = 'origin') => {
     const response = await ctx.api.request({
       url: 'gitManager:subtreeOptions',
+      method: 'post',
       params: { repositoryId, sourceBranch, remoteName },
     });
-    const data = response.data?.data as OptionsResult;
+    // v1 and v2 requesters can wrap the action payload differently.
+    // Normalize both `{ data: { branches } }` and `{ data: { data: { branches } } }`.
+    const data = (response.data?.data?.data || response.data?.data) as OptionsResult;
     setBranches(data?.branches || []);
     setFolders(data?.folders || []);
   };
@@ -160,7 +184,10 @@ export default function SubtreeSplits() {
 
   const openEdit = async (config: SubtreeConfig) => {
     setEditing(config);
-    form.setFieldsValue(config);
+    form.setFieldsValue({
+      ...config,
+      sourcePrefixes: config.sourcePrefixes?.length ? config.sourcePrefixes : [config.sourcePrefix],
+    });
     setConfigOpen(true);
     try {
       await loadOptions(config.repositoryId, config.sourceBranch, config.remoteName);
@@ -171,13 +198,14 @@ export default function SubtreeSplits() {
 
   const saveConfig = async () => {
     const values = await form.validateFields();
+    const sourcePrefixes = values.sourcePrefixes || [];
     setSaving(true);
     try {
       await ctx.api.request({
         url: editing ? 'gitSubtreeConfigs:update' : 'gitSubtreeConfigs:create',
         method: 'post',
         params: editing ? { filterByTk: editing.id } : undefined,
-        data: values,
+        data: { ...values, sourcePrefix: sourcePrefixes[0], sourcePrefixes },
       });
       message.success(t(editing ? 'Subtree configuration updated' : 'Subtree configuration created'));
       setConfigOpen(false);
@@ -278,7 +306,10 @@ export default function SubtreeSplits() {
     {
       title: t('Source'),
       key: 'source',
-      render: (_: unknown, config: SubtreeConfig) => `${config.sourceBranch}:${config.sourcePrefix}`,
+      render: (_: unknown, config: SubtreeConfig) =>
+        `${config.sourceBranch}:${(config.sourcePrefixes?.length ? config.sourcePrefixes : [config.sourcePrefix]).join(
+          ', ',
+        )}`,
     },
     { title: t('Target branch'), dataIndex: 'targetBranch', key: 'targetBranch' },
     {
@@ -342,10 +373,11 @@ export default function SubtreeSplits() {
           <Form.Item name="repositoryId" label={t('Repository')} rules={[{ required: true }]}>
             <Select
               showSearch
-              optionFilterProp="label"
+              filterOption={filterOption}
+              filterSort={filterSort}
               options={repositories.map((repository) => ({ value: repository.id, label: repository.name }))}
               onChange={async (repositoryId: number) => {
-                form.setFieldsValue({ sourceBranch: undefined, sourcePrefix: undefined });
+                form.setFieldsValue({ sourceBranch: undefined, sourcePrefix: undefined, sourcePrefixes: undefined });
                 setFolders([]);
                 try {
                   await loadOptions(repositoryId, undefined, form.getFieldValue('remoteName'));
@@ -361,9 +393,11 @@ export default function SubtreeSplits() {
           <Form.Item name="sourceBranch" label={t('Source branch')} rules={[{ required: true }]}>
             <Select
               showSearch
+              filterOption={filterOption}
+              filterSort={filterSort}
               options={branches.map((branch) => ({ value: branch, label: branch }))}
               onChange={async (sourceBranch: string) => {
-                form.setFieldValue('sourcePrefix', undefined);
+                form.setFieldsValue({ sourcePrefix: undefined, sourcePrefixes: undefined });
                 const repositoryId = form.getFieldValue('repositoryId');
                 if (!repositoryId) return;
                 try {
@@ -374,15 +408,21 @@ export default function SubtreeSplits() {
               }}
             />
           </Form.Item>
-          <Form.Item name="sourcePrefix" label={t('Source folder')} rules={[{ required: true }]}>
+          <Form.Item name="sourcePrefixes" label={t('Source folder')} rules={[{ required: true }]}>
             <Select
+              mode="multiple"
               showSearch
-              optionFilterProp="label"
+              filterOption={filterOption}
+              filterSort={filterSort}
               options={folders.map((folder) => ({ value: folder, label: folder }))}
             />
           </Form.Item>
           <Form.Item name="targetBranch" label={t('Target branch')} rules={[{ required: true }]}>
-            <AutoComplete options={branches.map((branch) => ({ value: branch }))} />
+            <AutoComplete
+              filterOption={filterOption}
+              filterSort={filterSort}
+              options={branches.map((branch) => ({ value: branch, label: branch }))}
+            />
           </Form.Item>
           <Form.Item name="defaultPolicy" label={t('Default policy')} rules={[{ required: true }]}>
             <Select
@@ -418,7 +458,11 @@ export default function SubtreeSplits() {
           <Space direction="vertical" size="middle" style={{ width: '100%' }}>
             <Descriptions size="small" bordered column={1}>
               <Descriptions.Item label={t('Source')}>
-                {runningConfig.sourceBranch}:{runningConfig.sourcePrefix}
+                {runningConfig.sourceBranch}:
+                {(runningConfig.sourcePrefixes?.length
+                  ? runningConfig.sourcePrefixes
+                  : [runningConfig.sourcePrefix]
+                ).join(', ')}
               </Descriptions.Item>
               <Descriptions.Item label={t('Target branch')}>{runningConfig.targetBranch}</Descriptions.Item>
             </Descriptions>

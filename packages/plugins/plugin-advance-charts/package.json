@@ -7,7 +7,7 @@
   "description.zh-CN": "为 NocoBase 数据可视化提供高级图表类型，包括 KPI 卡片、进度、排名、时间线、迷你趋势图和仪表盘。",
   "description.vi-VN": "Bổ sung các kiểu biểu đồ nâng cao cho Data visualization của NocoBase, gồm KPI card, tiến độ, xếp hạng, timeline, sparkline và gauge.",
   "version": "1.0.0",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
     "Charts",

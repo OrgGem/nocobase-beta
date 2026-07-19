@@ -1,0 +1,30 @@
+{
+  "name": "plugin-idp-oidc-client-manager",
+  "displayName": "OIDC applications",
+  "displayName.zh-CN": "OIDC 应用",
+  "description": "Manage confidential OIDC clients that use NocoBase as their identity provider.",
+  "version": "1.0.1",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "Authentication",
+    "OIDC",
+    "OAuth"
+  ],
+  "files": [
+    "dist"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      ">=2.1.0"
+    ],
+    "editionLevel": 1
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/plugin-idp-oauth": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x"
+  }
+}

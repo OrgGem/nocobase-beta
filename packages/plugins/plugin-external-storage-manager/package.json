@@ -5,7 +5,7 @@
   "displayName.zh-CN": "外部存储管理器",
   "description": "Unified file browser for external storage backends (S3, SFTP) with virtual directory mapping, per-directory ACL, and streaming data transfer.",
   "description.zh-CN": "外部存储后端（S3、SFTP）的统一文件浏览器，支持虚拟目录映射、目录级 ACL 和流式数据传输。",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [
     "dist",

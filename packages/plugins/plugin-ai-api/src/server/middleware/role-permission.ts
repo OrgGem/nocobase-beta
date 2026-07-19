@@ -10,6 +10,14 @@
 import { Context } from '@nocobase/actions';
 import { toOpenAIError } from '../utils/openai-format';
 
+const PERMISSION_TTL_MS = 15_000;
+const permissionCache = new Map<string, { record: any; expiresAt: number }>();
+
+export function invalidateRolePermissionCache(roleName?: string): void {
+  if (roleName) permissionCache.delete(roleName);
+  else permissionCache.clear();
+}
+
 /**
  * Check whether the authenticated role is allowed to use the AI API.
  * Loads the permission record and stores it in ctx.state.aiApiRolePermission.
@@ -27,9 +35,14 @@ export async function checkRolePermission(ctx: Context): Promise<boolean> {
     return true;
   }
 
-  const record = await ctx.db.getRepository('aiApiRolePermissions').findOne({
-    filter: { roleName },
-  });
+  const cached = permissionCache.get(roleName);
+  const record =
+    cached && cached.expiresAt > Date.now()
+      ? cached.record
+      : await ctx.db.getRepository('aiApiRolePermissions').findOne({ filter: { roleName } });
+  if (!cached || cached.expiresAt <= Date.now()) {
+    permissionCache.set(roleName, { record, expiresAt: Date.now() + PERMISSION_TTL_MS });
+  }
 
   if (!record?.enabled) {
     ctx.status = 403;

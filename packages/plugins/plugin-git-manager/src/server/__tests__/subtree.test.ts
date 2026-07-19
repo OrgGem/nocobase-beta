@@ -6,6 +6,7 @@ import {
   validateSubtreeConfigInput,
   validateSubtreePolicy,
   validateSubtreePrefix,
+  validateSubtreePrefixes,
 } from '../actions/subtree';
 
 describe('Git subtree validation', () => {
@@ -15,6 +16,17 @@ describe('Git subtree validation', () => {
 
   it.each(['../admin', 'apps/../admin', '/apps/admin', 'C:/apps/admin', ''])('rejects unsafe prefix %s', (prefix) => {
     expect(() => validateSubtreePrefix(prefix)).toThrow();
+  });
+
+  it('accepts, normalizes, de-duplicates, and sorts multiple source folders', () => {
+    expect(validateSubtreePrefixes(['./packages/plugin-b/', 'packages/plugin-a', 'packages/plugin-b'])).toEqual([
+      'packages/plugin-a',
+      'packages/plugin-b',
+    ]);
+  });
+
+  it('rejects overlapping parent and child source folders', () => {
+    expect(() => validateSubtreePrefixes(['packages', 'packages/plugin-a'])).toThrow('overlapping');
   });
 
   it('requires different source and target branches', () => {

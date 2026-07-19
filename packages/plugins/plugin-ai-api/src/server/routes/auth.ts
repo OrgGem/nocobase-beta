@@ -7,14 +7,17 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { Context, Next } from '@nocobase/actions';
+import { Context } from '@nocobase/actions';
 import { toOpenAIError } from '../utils/openai-format';
 
 /**
  * Authentication middleware for /api/ai-llm/v1/* routes.
  *
- * Validates Bearer token against NocoBase's apiKeys collection.
- * Sets ctx.state.currentUser for downstream handlers.
+ * Resolve the principal prepared by NocoBase auth/ACL middleware. OIDC resource
+ * authentication rewrites the external access token to an internal session token
+ * and sets currentUser before this gateway runs. API keys are the one case where
+ * we still need to decode the token locally because they are signed directly by
+ * NocoBase and carry a fixed roleName.
  */
 export async function authenticateBearer(ctx: Context): Promise<boolean> {
   const authHeader = ctx.get('Authorization') || '';
@@ -22,7 +25,7 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
     ctx.status = 401;
     ctx.body = toOpenAIError(
       401,
-      'Missing or invalid Authorization header. Expected: Bearer <api-key>',
+      'Missing or invalid Authorization header. Expected: Bearer <access-token>',
       'invalid_request_error',
       'invalid_api_key',
     );
@@ -37,16 +40,16 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
   }
 
   try {
-    // Use NocoBase's auth system directly to validate the token.
-    // NocoBase API keys are JWT tokens signed with the app secret.
-    // We decode them directly via authManager.jwt rather than going through
-    // the full NocoBase auth middleware stack (which requires being inside
-    // the resourcer pipeline, but we run before it).
-    const auth = ctx.app['authManager'];
-    if (!auth) {
-      ctx.status = 500;
-      ctx.body = toOpenAIError(500, 'Auth system not available', 'server_error');
-      return false;
+    if (ctx.state.currentUser) {
+      if (!ctx.state.currentRole) {
+        const requestedRole = ctx.get('X-Role');
+        const rolesRepository = ctx.db.getRepository('users.roles', ctx.state.currentUser.id);
+        const roles = await rolesRepository.find({ fields: ['name'] });
+        const roleNames = roles.map((role: { name: string }) => role.name);
+        ctx.state.currentRole = roleNames.includes(requestedRole) ? requestedRole : roleNames[0];
+        ctx.state.currentRoles = ctx.state.currentRole ? [ctx.state.currentRole] : roleNames;
+      }
+      return true;
     }
 
     // Try to authenticate using the token as a NocoBase JWT/API token
@@ -58,7 +61,7 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
       return false;
     }
 
-    let decoded: any;
+    let decoded: { userId?: string | number; roleName?: string; temp?: boolean };
     try {
       decoded = await jwt.decode(token);
     } catch (e) {
@@ -73,7 +76,20 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
       return false;
     }
 
-    // Load user
+    // This fallback is for API keys only. A normal login/OIDC token should have
+    // been resolved by NocoBase auth middleware and must not be treated as the
+    // member role merely because it has no roleName claim.
+    if (!decoded.roleName) {
+      ctx.status = 401;
+      ctx.body = toOpenAIError(
+        401,
+        'Token was not resolved by the NocoBase auth middleware',
+        'invalid_request_error',
+        'invalid_api_key',
+      );
+      return false;
+    }
+
     const user = await ctx.db.getRepository('users').findOne({
       filterByTk: decoded.userId,
     });
@@ -86,7 +102,22 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
 
     // Set user context for downstream handlers
     ctx.state.currentUser = user;
-    ctx.state.currentRoles = decoded.roleName ? [decoded.roleName] : ['member'];
+    const rolesRepository = ctx.db.getRepository('users.roles', user.id);
+    const roles = await rolesRepository.find({ fields: ['name'] });
+    const roleNames = roles.map((role: { name: string }) => role.name);
+    if (!roleNames.includes(decoded.roleName)) {
+      ctx.status = 403;
+      ctx.body = toOpenAIError(
+        403,
+        'The API key role is no longer assigned to this user',
+        'permission_denied',
+        'role_not_permitted',
+      );
+      return false;
+    }
+    ctx.state.currentRole = decoded.roleName;
+    ctx.state.currentRoles = [decoded.roleName];
+    ctx.state.aiApiAuthType = 'apiKey';
 
     // Also set ctx.auth for AIEmployee compatibility.
     // Only expose non-sensitive fields — exclude password, token, 2FA secrets, etc.

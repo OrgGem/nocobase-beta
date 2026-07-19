@@ -5,7 +5,7 @@
   "displayName.zh-CN": "数据源：MSSQL",
   "version": "2.0.11",
   "description": "External MSSQL data source support for NocoBase.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "scripts": {
     "postbuild": "node ./scripts/copy-tedious.js",

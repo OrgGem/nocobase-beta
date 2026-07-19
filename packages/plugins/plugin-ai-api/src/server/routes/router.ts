@@ -18,6 +18,7 @@ import { handleEmbeddings } from './embeddings';
 import { toOpenAIError } from '../utils/openai-format';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import { checkRolePermission } from '../middleware/role-permission';
+import { startUsageRecord, finishUsageRecord } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
 const API_PREFIX = '/api/ai-llm/v1';
@@ -120,6 +121,18 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     // ─── Route matching ───────────────────────────────────────────────────
     const model = (ctx.request.body as any)?.model ?? '-';
     const t0 = Date.now();
+    let usageId: unknown;
+    try {
+      usageId = await startUsageRecord(
+        ctx,
+        requestId,
+        subPath,
+        String(model),
+        Boolean((ctx.request.body as any)?.stream),
+      );
+    } catch (usageError) {
+      ctx.log.error('AI API usage record could not be created:', usageError);
+    }
 
     try {
       // POST /v1/chat/completions — route based on mode
@@ -207,6 +220,14 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       if (!ctx.res.headersSent) {
         ctx.status = 500;
         ctx.body = toOpenAIError(500, err.message || 'Internal server error', 'server_error');
+      }
+    } finally {
+      if (usageId !== undefined) {
+        try {
+          await finishUsageRecord(ctx, usageId, t0, ctx.status >= 200 && ctx.status < 400 ? 'succeeded' : 'failed');
+        } catch (usageError) {
+          ctx.log.error('AI API usage record could not be finalized:', usageError);
+        }
       }
     }
   };

@@ -17,6 +17,7 @@ export default defineCollection({
     },
     { type: 'string', name: 'sourceBranch', allowNull: false },
     { type: 'string', name: 'sourcePrefix', allowNull: false },
+    { type: 'json', name: 'sourcePrefixes' },
     { type: 'string', name: 'targetBranch', allowNull: false },
     { type: 'string', name: 'remoteName', allowNull: false, defaultValue: 'origin' },
     { type: 'string', name: 'defaultPolicy', allowNull: false, defaultValue: 'fastForward' },

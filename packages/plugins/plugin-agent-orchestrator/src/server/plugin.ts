@@ -245,10 +245,37 @@ export class PluginAgentOrchestratorServer extends Plugin {
           const values = ctx.action.params.values || {};
           const messages = values.messages;
           if (Array.isArray(messages)) {
-            planningPrompt.applyPlanningContext(messages);
+            const runtimeContext = {
+              ctx,
+              source: 'chat-ui' as const,
+              employee: undefined,
+              sessionId: String(ctx.state?.sessionId || ''),
+              userId: currentUserId(ctx),
+              messages,
+              metadata: {},
+            };
+            await this.agentRuntimeLifecycle.runBeforeHooks(runtimeContext);
+            ctx.state.agentRuntimeContext = runtimeContext;
           }
         }
-        await next();
+        const runtimeContext = ctx.state?.agentRuntimeContext;
+        try {
+          await next();
+          if (runtimeContext) {
+            await this.agentRuntimeLifecycle.runAfterHooks(runtimeContext, {
+              succeeded: ctx.status < 400,
+              value: ctx.body,
+            });
+          }
+        } catch (error) {
+          if (runtimeContext) {
+            await this.agentRuntimeLifecycle.runAfterHooks(runtimeContext, {
+              succeeded: false,
+              error: error instanceof Error ? error : new Error(String(error)),
+            });
+          }
+          throw error;
+        }
       },
       { tag: 'orchestrator-planning-prompt', after: 'acl' },
     );

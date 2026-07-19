@@ -5,7 +5,7 @@
   "displayName.zh-CN": "S3 私有存储",
   "description": "Extends file-manager to stream files from private S3 buckets via server proxy with ACL support.",
   "description.zh-CN": "扩展文件管理器，通过服务器代理从私有 S3 存储桶流式传输文件，支持 ACL。",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [
     "dist",

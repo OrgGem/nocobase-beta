@@ -352,7 +352,7 @@ export class PluginClusterManagerServer extends Plugin {
       name: 'clusterManagerHealth',
       actions: healthActions,
     });
-    this.app.acl.allow('clusterManagerHealth', ['liveness', 'readiness'], 'public');
+    this.app.acl.allow('clusterManagerHealth', 'liveness', 'public');
 
     // Package manager (installs apt/npm/python packages across nodes)
     this.app.resourcer.define({
@@ -420,9 +420,11 @@ export class PluginClusterManagerServer extends Plugin {
   }
 
   private registerPubSubAdapter() {
-    const url = process.env.PUBSUB_ADAPTER_REDIS_URL;
+    const url = process.env.PUBSUB_ADAPTER_REDIS_URL || process.env.REDIS_URL;
     if (!url) {
-      this.app.logger.info('[cluster-manager] PUBSUB_ADAPTER_REDIS_URL not set, skipping Redis PubSub adapter');
+      this.app.logger.info(
+        '[cluster-manager] PUBSUB_ADAPTER_REDIS_URL/REDIS_URL not set, skipping Redis PubSub adapter',
+      );
       return;
     }
 

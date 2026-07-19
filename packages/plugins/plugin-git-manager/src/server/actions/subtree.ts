@@ -20,6 +20,7 @@ interface SubtreeConfig {
   repositoryId: number | string;
   sourceBranch: string;
   sourcePrefix: string;
+  sourcePrefixes: string[];
   targetBranch: string;
   remoteName: string;
   enabled: boolean;
@@ -56,11 +57,14 @@ function booleanValue(value: unknown, fallback: boolean): boolean {
 }
 
 function recordToConfig(record: RecordLike): SubtreeConfig {
+  const storedPrefixes = record.get('sourcePrefixes');
+  const sourcePrefix = stringValue(record.get('sourcePrefix'));
   return {
     id: record.get('id') as number | string,
     repositoryId: record.get('repositoryId') as number | string,
     sourceBranch: stringValue(record.get('sourceBranch')),
-    sourcePrefix: stringValue(record.get('sourcePrefix')),
+    sourcePrefix,
+    sourcePrefixes: validateSubtreePrefixes(Array.isArray(storedPrefixes) ? storedPrefixes : [sourcePrefix]),
     targetBranch: stringValue(record.get('targetBranch')),
     remoteName: stringValue(record.get('remoteName'), 'origin') || 'origin',
     enabled: record.get('enabled') !== false,
@@ -74,6 +78,16 @@ export function validateSubtreePrefix(prefix: string): string {
   }
   if (normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
     throw new Error('Source folder contains an invalid path segment');
+  }
+  return normalized;
+}
+
+export function validateSubtreePrefixes(prefixes: unknown[]): string[] {
+  const normalized = Array.from(new Set(prefixes.map((prefix) => validateSubtreePrefix(stringValue(prefix))))).sort();
+  for (const prefix of normalized) {
+    if (normalized.some((candidate) => candidate !== prefix && prefix.startsWith(`${candidate}/`))) {
+      throw new Error('Source folders cannot contain overlapping parent and child paths');
+    }
   }
   return normalized;
 }
@@ -98,7 +112,14 @@ export function validateSubtreeConfigInput(values: Record<string, unknown>): voi
   if (sourceBranch && targetBranch && sourceBranch === targetBranch) {
     throw new Error('Source branch and target branch must be different');
   }
-  if (values.sourcePrefix !== undefined) validateSubtreePrefix(stringValue(values.sourcePrefix));
+  if (values.sourcePrefixes !== undefined) {
+    if (!Array.isArray(values.sourcePrefixes) || values.sourcePrefixes.length === 0) {
+      throw new Error('At least one source folder is required');
+    }
+    validateSubtreePrefixes(values.sourcePrefixes);
+  } else if (values.sourcePrefix !== undefined) {
+    validateSubtreePrefix(stringValue(values.sourcePrefix));
+  }
   if (values.remoteName !== undefined) validateRemoteName(stringValue(values.remoteName));
   if (values.defaultPolicy !== undefined) validateSubtreePolicy(values.defaultPolicy);
 }
@@ -160,13 +181,42 @@ async function assertGitBranchFormat(git: SimpleGit, branch: string): Promise<vo
   }
 }
 
+async function createCombinedSnapshot(git: SimpleGit, sourceSha: string, prefixes: string[]): Promise<string> {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nocobase-git-snapshot-'));
+  const indexPath = path.join(temporaryRoot, 'index');
+  const repositoryRoot = (await git.revparse(['--show-toplevel'])).trim();
+  const indexGit = createGit(repositoryRoot).env('GIT_INDEX_FILE', indexPath);
+  try {
+    await indexGit.raw(['read-tree', '--empty']);
+    for (const prefix of prefixes) {
+      const treeSha = (await git.revparse([`${sourceSha}:${prefix}`])).trim();
+      await indexGit.raw(['read-tree', `--prefix=${prefix}/`, treeSha]);
+    }
+    const treeSha = (await indexGit.raw(['write-tree'])).trim();
+    return (
+      await git.raw([
+        '-c',
+        'user.name=NocoBase Git Manager',
+        '-c',
+        'user.email=git-manager@nocobase.local',
+        'commit-tree',
+        treeSha,
+        '-m',
+        `Snapshot selected folders from ${sourceSha}`,
+      ])
+    ).trim();
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
 async function createPreview(git: SimpleGit, config: SubtreeConfig): Promise<PreviewResult> {
   validateBranch(config.sourceBranch);
   validateBranch(config.targetBranch);
   if (config.sourceBranch === config.targetBranch) {
     throw new Error('Source branch and target branch must be different');
   }
-  const prefix = validateSubtreePrefix(config.sourcePrefix);
+  const prefixes = validateSubtreePrefixes(config.sourcePrefixes);
   const remoteName = validateRemoteName(config.remoteName);
   const sourceRef = `refs/remotes/${remoteName}/${config.sourceBranch}`;
   const targetRef = `refs/remotes/${remoteName}/${config.targetBranch}`;
@@ -178,15 +228,17 @@ async function createPreview(git: SimpleGit, config: SubtreeConfig): Promise<Pre
   const sourceSha = await resolveOptionalRef(git, sourceRef);
   if (!sourceSha) throw new Error('Source branch was not found on the configured remote');
 
-  let objectType = '';
-  try {
-    objectType = (await git.raw(['cat-file', '-t', `${sourceSha}:${prefix}`])).trim();
-  } catch {
-    throw new Error('Source folder was not found in the selected source branch');
+  for (const prefix of prefixes) {
+    let objectType = '';
+    try {
+      objectType = (await git.raw(['cat-file', '-t', `${sourceSha}:${prefix}`])).trim();
+    } catch {
+      throw new Error(`Source folder was not found in the selected source branch: ${prefix}`);
+    }
+    if (objectType !== 'tree') throw new Error(`Selected source path is not a folder: ${prefix}`);
   }
-  if (objectType !== 'tree') throw new Error('Selected source path is not a folder');
 
-  const splitSha = (await git.raw(['subtree', 'split', '--prefix', prefix, sourceSha])).trim();
+  const splitSha = await createCombinedSnapshot(git, sourceSha, prefixes);
   if (!/^[a-f0-9]{40,64}$/i.test(splitSha)) throw new Error('Git subtree split did not return a valid commit');
 
   const targetSha = await resolveOptionalRef(git, targetRef);

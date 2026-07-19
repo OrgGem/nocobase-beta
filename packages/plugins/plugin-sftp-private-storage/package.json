@@ -5,7 +5,7 @@
   "displayName.zh-CN": "SFTP 私有存储",
   "description": "Provides SFTP connection management and file operations for external storage integration.",
   "description.zh-CN": "提供 SFTP 连接管理和文件操作，用于外部存储集成。",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [
     "dist",

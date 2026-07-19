@@ -3,7 +3,7 @@
   "displayName": "Plugin: Router configuration",
   "description": "Allows renaming auto-generated route paths to user-friendly names for easier navigation.",
   "version": "1.0.2",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
     "nocobase",

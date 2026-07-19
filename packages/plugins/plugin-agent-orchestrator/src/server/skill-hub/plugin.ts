@@ -501,11 +501,32 @@ export class SkillHubSubFeature {
 
       const timeoutMs = ((skill.timeoutSeconds || skill.get?.('timeoutSeconds') || 60) + 15) * 1000;
       const timeout = setTimeout(() => {
+        clearInterval(poll);
         rejectPromise(new Error(`Skill execution timeout after ${skill.timeoutSeconds || 60}s`));
       }, timeoutMs);
+      const poll = setInterval(async () => {
+        try {
+          const current = await (this as any).db.getRepository('skillExecutions').findOne({ filterByTk: execId });
+          const status = current?.get?.('status') || current?.status;
+          if (!['succeeded', 'failed', 'timeout', 'canceled'].includes(status)) return;
+          clearTimeout(timeout);
+          clearInterval(poll);
+          resolvePromise({
+            status,
+            stdout: current?.get?.('stdout') || current?.stdout || '',
+            stderr: current?.get?.('stderr') || current?.stderr || '',
+            files: parseJsonText(current?.get?.('outputFiles') || current?.outputFiles, []),
+            durationMs: current?.get?.('durationMs') || current?.durationMs || 0,
+          });
+        } catch {
+          // Pub/Sub remains the primary completion path; polling is a recovery fallback.
+        }
+      }, 2000);
+      poll.unref?.();
 
       const doneCallback = async (data: any) => {
         clearTimeout(timeout);
+        clearInterval(poll);
         resolvePromise(data);
       };
 

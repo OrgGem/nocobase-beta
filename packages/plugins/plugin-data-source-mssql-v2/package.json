@@ -7,9 +7,14 @@
   "description.zh-CN": "基于 tedious 驱动的 MSSQL 外部数据源插件",
   "description.vi-VN": "Plugin nguồn dữ liệu MSSQL dùng trực tiếp tedious driver (fork từ dbgate)",
   "version": "1.0.0",
-  "license": "AGPL-3.0",
+  "license": "Apache-2.0",
   "main": "dist/server/index.js",
-  "keywords": ["nocobase", "mssql", "sqlserver", "datasource"],
+  "keywords": [
+    "nocobase",
+    "mssql",
+    "sqlserver",
+    "datasource"
+  ],
   "files": [
     "dist",
     "client.js",

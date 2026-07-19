@@ -1,0 +1,33 @@
+import { defineCollection } from '@nocobase/database';
+
+export default defineCollection({
+  name: 'aiApiUsageRecords',
+  autoGenId: true,
+  fields: [
+    { name: 'requestId', type: 'string', unique: true, index: true },
+    { name: 'userId', type: 'string', index: true },
+    { name: 'roleName', type: 'string', index: true },
+    { name: 'authType', type: 'string', index: true },
+    { name: 'oauthClientId', type: 'string', allowNull: true, index: true },
+    { name: 'oauthSubject', type: 'string', allowNull: true },
+    { name: 'oauthScopes', type: 'json', allowNull: true },
+    { name: 'endpoint', type: 'string' },
+    { name: 'mode', type: 'string', allowNull: true },
+    { name: 'model', type: 'string', allowNull: true, index: true },
+    { name: 'status', type: 'string', index: true },
+    { name: 'httpStatus', type: 'integer', allowNull: true },
+    { name: 'errorCode', type: 'string', allowNull: true },
+    { name: 'streaming', type: 'boolean', defaultValue: false },
+    { name: 'inputTokens', type: 'integer', allowNull: true },
+    { name: 'outputTokens', type: 'integer', allowNull: true },
+    { name: 'totalTokens', type: 'integer', allowNull: true },
+    { name: 'estimatedCost', type: 'decimal', allowNull: true, precision: 20, scale: 8 },
+    { name: 'currency', type: 'string', allowNull: true },
+    { name: 'providerRequestId', type: 'string', allowNull: true },
+    { name: 'requestMetadata', type: 'jsonb', defaultValue: {} },
+    { name: 'responseMetadata', type: 'jsonb', defaultValue: {} },
+    { name: 'startedAt', type: 'datetimeTz', allowNull: true },
+    { name: 'completedAt', type: 'datetimeTz', allowNull: true },
+    { name: 'durationMs', type: 'integer', allowNull: true },
+  ],
+});

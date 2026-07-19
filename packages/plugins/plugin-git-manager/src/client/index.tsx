@@ -14,6 +14,10 @@ const GitAccounts = React.lazy(() =>
   import('./components/GitAccounts').then((m) => ({ default: m.GitAccountsSettings })),
 );
 
+// The settings center can still be rendered by the legacy client runtime.
+// Reuse the v2 subtree UI here so the feature is available in both runtimes.
+const SubtreeSplits = React.lazy(() => import('../client-v2/components/SubtreeSplits'));
+
 import PluginACLClient from '@nocobase/plugin-acl/client';
 import { RepositoryPermissions } from './components/RepositoryPermissions';
 
@@ -37,6 +41,12 @@ export class PluginGitManagerClient extends Plugin {
       title: (this as any).t('Git Accounts'),
       Component: GitAccounts,
       aclSnippet: `pm.plugin-git-manager.repositories`,
+    });
+
+    this.app.pluginSettingsManager.add('git-manager.subtree-splits', {
+      title: (this as any).t('Subtree Splits'),
+      Component: SubtreeSplits,
+      aclSnippet: `pm.plugin-git-manager.write`,
     });
 
     // Full management — requires full plugin permission
