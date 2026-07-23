@@ -4,14 +4,13 @@
   "displayName.zh-CN": "Microsoft Graph 网关",
   "displayName.vi-VN": "Gateway Microsoft Graph",
   "description": "Queue-backed Microsoft Graph gateway for Outlook, Lists, OneDrive and SharePoint.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "scripts": {
     "build:plugin": "yarn --cwd ../../.. nocobase build plugin-microsoft-graph-gateway --no-dts",
     "copy:runtime-deps": "node scripts/copy-runtime-deps.cjs",
-    "prepack": "npm run build:plugin && npm run copy:runtime-deps",
-    "prepublishOnly": "yarn --cwd ../../.. plugin:check plugin-microsoft-graph-gateway"
+    "prepack": "npm run build:plugin && npm run copy:runtime-deps"
   },
   "keywords": [
     "Microsoft Graph",
@@ -55,6 +54,10 @@
     "uuid": "^10.0.0"
   },
   "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
     "@nocobase/server": "2.x"
   }
 }

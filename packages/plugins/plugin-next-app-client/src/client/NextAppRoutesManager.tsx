@@ -36,6 +36,50 @@ import {
 } from '@ant-design/icons';
 import React, { FC, useMemo, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { getHubPagePath, getHubTabPath } from './hubRouteContract';
+import type { NextAppDesktopRoute } from './nextAppRoutesContext';
+
+interface EditableRoute extends NextAppDesktopRoute {
+  configId?: number | null;
+  sort?: number;
+  children?: EditableRoute[];
+}
+
+interface RouteFormValues {
+  title: string;
+  icon?: string;
+  type: string;
+  showInMenu: boolean;
+}
+
+const flattenRouteIds = (routes: EditableRoute[]): string[] =>
+  routes.flatMap((route) => [String(route.id), ...flattenRouteIds(route.children || [])]);
+
+const SortableRow = (props: React.HTMLAttributes<HTMLTableRowElement> & { 'data-row-key': string }) => {
+  const { 'data-row-key': rowKey, ...restProps } = props;
+  const sortableId = String(rowKey);
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sortableId });
+  return (
+    <tr
+      {...restProps}
+      {...attributes}
+      {...listeners}
+      ref={setNodeRef}
+      data-row-key={sortableId}
+      style={{
+        ...restProps.style,
+        transform: CSS.Transform.toString(transform),
+        transition,
+        cursor: 'move',
+        position: isDragging ? 'relative' : undefined,
+        zIndex: isDragging ? 1 : undefined,
+      }}
+    />
+  );
+};
 
 /**
  * Map route type to a visual tag, matching the Desktop routes table
@@ -56,19 +100,19 @@ const TypeTag: FC<{ value: string }> = ({ value }) => {
 /**
  * Compute the URL path for a route
  */
-const getRoutePath = (record: any, allRoutes: any[], appPath?: string): string | null => {
+const getRoutePath = (record: EditableRoute, allRoutes: EditableRoute[], appPath?: string): string | null => {
   if (record.type === 'group' || record.type === 'link') {
     return null;
   }
 
-  const prefix = appPath ? `/next-app/${appPath.replace(/^\//, '')}` : '/next-app';
+  const normalizedAppPath = appPath?.replace(/^\//, '') || '';
 
   if (record.type === 'page' || record.type === 'flowPage') {
-    return record.schemaUid ? `${prefix}/${record.schemaUid}` : null;
+    return record.schemaUid && normalizedAppPath ? getHubPagePath(normalizedAppPath, record.schemaUid) : null;
   }
 
   if (record.type === 'tabs' && record.parentId) {
-    const findParent = (items: any[]): any => {
+    const findParent = (items: EditableRoute[]): EditableRoute | undefined => {
       for (const item of items) {
         if (item.id === record.parentId) return item;
         if (item.children) {
@@ -76,11 +120,13 @@ const getRoutePath = (record: any, allRoutes: any[], appPath?: string): string |
           if (found) return found;
         }
       }
-      return null;
+      return undefined;
     };
     const parent = findParent(allRoutes);
     if (parent?.schemaUid) {
-      return `${prefix}/${parent.schemaUid}/tabs/${record.schemaUid}`;
+      return normalizedAppPath && record.schemaUid
+        ? getHubTabPath(normalizedAppPath, parent.schemaUid, record.schemaUid)
+        : null;
     }
   }
 
@@ -92,17 +138,18 @@ const getRoutePath = (record: any, allRoutes: any[], appPath?: string): string |
  * Manages the nextAppRoutes collection — a settings table showing all next-app routes
  * with columns matching the Desktop routes table: Title, Type, Show in menu, Path, Actions.
  *
- * Since /next-app mirrors /admin (same AdminLayout + AdminDynamicPage), pages and schemas
- * come from desktopRoutes. This manager is mainly for viewing/managing route metadata.
+ * Page schemas are projected from desktop routes while navigation remains inside Hub.
  */
 export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> = ({ configId, appPath }) => {
   const { t } = useTranslation();
-  const api = useApp().apiClient;
+  const app = useApp();
+  const api = app.apiClient;
   const [modalVisible, setModalVisible] = useState(false);
-  const [editingRoute, setEditingRoute] = useState<any>(null);
+  const [editingRoute, setEditingRoute] = useState<EditableRoute | null>(null);
   const [form] = Form.useForm();
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
-  const { data, loading, refresh } = useRequest<{ data: any[] }, any[]>(() =>
+  const { data, loading, refresh } = useRequest<{ data: EditableRoute[] }, []>(() =>
     api
       .resource('nextAppRoutes')
       .list({
@@ -118,6 +165,26 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
   );
 
   const routes = useMemo(() => data?.data || [], [data]);
+  const sortableRouteIds = useMemo(() => flattenRouteIds(routes), [routes]);
+
+  const handleDragEnd = useCallback(
+    async ({ active, over }: DragEndEvent) => {
+      if (!over || active.id === over.id) {
+        return;
+      }
+      try {
+        await api.resource('nextAppRoutes').move({
+          sourceId: active.id,
+          targetId: over.id,
+          sortField: 'sort',
+        });
+        await refresh();
+      } catch {
+        message.error(t('Failed to move'));
+      }
+    },
+    [api, refresh, t],
+  );
 
   const handleCreate = useCallback(async () => {
     setEditingRoute(null);
@@ -127,7 +194,7 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
   }, [form]);
 
   const handleEdit = useCallback(
-    (record: any) => {
+    (record: EditableRoute) => {
       setEditingRoute(record);
       form.setFieldsValue({
         title: record.title,
@@ -155,11 +222,11 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
 
   const handleSubmit = useCallback(async () => {
     try {
-      const values = await form.validateFields();
+      const values = (await form.validateFields()) as RouteFormValues;
 
       // Convert showInMenu (true=visible) to hideInMenu (true=hidden)
       const { showInMenu, ...rest } = values;
-      const submitValues: any = {
+      const submitValues: Omit<RouteFormValues, 'showInMenu'> & { hideInMenu: boolean } = {
         ...rest,
         hideInMenu: !showInMenu,
       };
@@ -194,7 +261,7 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
       key: 'title',
       width: 200,
       ellipsis: true,
-      render: (title: string, record: any) => {
+      render: (title: string, record: EditableRoute) => {
         const displayTitle = title || (record.type === 'tabs' ? t('Unnamed') : '');
         return (
           <span>
@@ -225,7 +292,7 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
       key: 'path',
       width: 300,
       ellipsis: true,
-      render: (_: any, record: any) => {
+      render: (_: unknown, record: EditableRoute) => {
         const path = getRoutePath(record, routes, appPath);
         if (!path) return null;
         return (
@@ -239,7 +306,7 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
       title: t('Actions'),
       key: 'actions',
       width: 200,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: EditableRoute) => (
         <Space size="small">
           <Tooltip title={t('Edit')}>
             <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)} />
@@ -252,7 +319,7 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
                 icon={<EyeOutlined />}
                 onClick={() => {
                   const path = getRoutePath(record, routes, appPath);
-                  if (path) window.open(path, '_blank');
+                  if (path) window.open(app.getRouteUrl(path), '_blank', 'noopener,noreferrer');
                 }}
               />
             </Tooltip>
@@ -277,21 +344,27 @@ export const NextAppRoutesManager: FC<{ configId?: number; appPath?: string }> =
           {t('Add new')}
         </Button>
       </div>
-      <Table
-        loading={loading}
-        dataSource={routes}
-        columns={columns}
-        rowKey="id"
-        size="middle"
-        pagination={false}
-        expandable={{
-          defaultExpandAllRows: false,
-          childrenColumnName: 'children',
-        }}
-        rowSelection={{
-          type: 'checkbox',
-        }}
-      />
+      <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <SortableContext items={sortableRouteIds} strategy={verticalListSortingStrategy}>
+          <Table
+            loading={loading}
+            dataSource={routes}
+            columns={columns}
+            rowKey="id"
+            size="middle"
+            pagination={false}
+            scroll={{ x: 940 }}
+            components={{ body: { row: SortableRow } }}
+            expandable={{
+              defaultExpandAllRows: false,
+              childrenColumnName: 'children',
+            }}
+            rowSelection={{
+              type: 'checkbox',
+            }}
+          />
+        </SortableContext>
+      </DndContext>
       <Modal
         open={modalVisible}
         title={editingRoute ? t('Edit') : t('Add new')}

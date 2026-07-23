@@ -9,7 +9,11 @@ export default {
     { name: 'idempotencyKey', type: 'string', unique: true },
     { name: 'attempts', type: 'integer', defaultValue: 0 },
     { name: 'nextAttemptAt', type: 'date' },
-    { name: 'lastError', type: 'string' },
+    { name: 'lastError', type: 'text' },
     { name: 'graphRequestId', type: 'string' },
+    { name: 'result', type: 'json' },
+    { name: 'startedAt', type: 'date' },
+    { name: 'finishedAt', type: 'date' },
+    { name: 'lockedBy', type: 'string' },
   ],
 } as CollectionOptions;

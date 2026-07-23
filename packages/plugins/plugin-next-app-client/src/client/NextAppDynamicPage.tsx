@@ -20,18 +20,19 @@ import { RemoteSchemaComponent, KeepAlive } from '@nocobase/client';
 import { NocoBaseDesktopRouteType } from '@nocobase/client';
 import { type LayoutDefinition } from '@nocobase/client-v2';
 import { FlowModelRenderer, useFlowEngine } from '@nocobase/flow-engine';
-import { useNextAppAllAccessRoutes } from './nextAppRoutesContext';
+import { NextAppDesktopRoute, useNextAppAllAccessRoutes } from './nextAppRoutesContext';
 import {
   getNextAppLayoutModel,
   NEXT_APP_LAYOUT_MODEL_CLASS,
   NEXT_APP_LAYOUT_MODEL_UID,
   NextAppLayoutModel,
 } from './NextAppFlowLayoutModel';
+import { HUB_PATH, HUB_ROUTE_NAMES } from './hubRouteContract';
 
 const NEXT_APP_LAYOUT_DEFINITION: LayoutDefinition = {
-  routeName: 'nextApp',
-  rootRouteName: 'nextApp',
-  routePath: '/next-app',
+  routeName: HUB_ROUTE_NAMES.root,
+  rootRouteName: HUB_ROUTE_NAMES.root,
+  routePath: HUB_PATH,
   uid: NEXT_APP_LAYOUT_MODEL_UID,
   layoutModelClass: NEXT_APP_LAYOUT_MODEL_CLASS,
   rootPageModelClass: 'RootPageModel',
@@ -39,7 +40,7 @@ const NEXT_APP_LAYOUT_DEFINITION: LayoutDefinition = {
   authCheck: true,
 };
 
-const findRouteBySchemaUid = (uid: string, routes: any[]): any => {
+const findRouteBySchemaUid = (uid: string, routes: NextAppDesktopRoute[]): NextAppDesktopRoute | undefined => {
   if (!routes) return null;
   for (const route of routes) {
     if (route.schemaUid === uid) return route;
@@ -48,15 +49,15 @@ const findRouteBySchemaUid = (uid: string, routes: any[]): any => {
       if (found) return found;
     }
   }
-  return null;
+  return undefined;
 };
 
-const isGroup = (groupId: string, allAccessRoutes: any[]) => {
+const isGroup = (groupId: string, allAccessRoutes: NextAppDesktopRoute[]) => {
   const route = findRouteById(groupId, allAccessRoutes);
   return route?.type === NocoBaseDesktopRouteType.group;
 };
 
-const findRouteById = (id: string, treeArray: any[]): any => {
+const findRouteById = (id: string, treeArray: NextAppDesktopRoute[]): NextAppDesktopRoute | undefined => {
   for (const node of treeArray) {
     if (Number(id) === Number(node.id)) return node;
     if (node.children?.length) {
@@ -64,10 +65,10 @@ const findRouteById = (id: string, treeArray: any[]): any => {
       if (result) return result;
     }
   }
-  return null;
+  return undefined;
 };
 
-const noAccessPermission = (currentPageUid: string, allAccessRoutes: any[]) => {
+const noAccessPermission = (currentPageUid: string, allAccessRoutes: NextAppDesktopRoute[]) => {
   if (!currentPageUid) return false;
   const routeNode = findRouteBySchemaUid(currentPageUid, allAccessRoutes);
   return !routeNode;
@@ -75,6 +76,7 @@ const noAccessPermission = (currentPageUid: string, allAccessRoutes: any[]) => {
 
 const NextAppFlowPage = (props: { pageUid: string }) => {
   const { pageUid } = props;
+  const { allAccessRoutes } = useNextAppAllAccessRoutes();
   const flowEngine = useFlowEngine();
   const location = useLocation();
   const params = useParams<{ appPath?: string; name?: string; tabUid?: string; '*': string }>();
@@ -88,8 +90,8 @@ const NextAppFlowPage = (props: { pageUid: string }) => {
   });
   const routeLike = useMemo(
     () => ({
-      id: params.tabUid ? 'nextApp.page.tab' : 'nextApp.page',
-      name: params.tabUid ? 'nextApp.page.tab' : 'nextApp.page',
+      id: params.tabUid ? HUB_ROUTE_NAMES.tabs : HUB_ROUTE_NAMES.page,
+      name: params.tabUid ? HUB_ROUTE_NAMES.tabs : HUB_ROUTE_NAMES.page,
       pathname: typeof window !== 'undefined' ? window.location.pathname : location.pathname,
       params,
       layoutRouteName: NEXT_APP_LAYOUT_DEFINITION.routeName,
@@ -110,11 +112,9 @@ const NextAppFlowPage = (props: { pageUid: string }) => {
     }
 
     const currentPageUid = layoutRoute.pageUid || pageUid;
-    const routeRepository = flowEngine.context.routeRepository;
-    const refreshDesktopRoutes = routeRepository?.refreshAccessible?.bind(routeRepository);
     model.registerRoutePage(currentPageUid, {
       active: true,
-      refreshDesktopRoutes,
+      refreshDesktopRoutes: () => Promise.resolve(allAccessRoutes),
       layoutContentElement: null,
     });
     model.syncLayoutRoute(routeLike);
@@ -122,7 +122,7 @@ const NextAppFlowPage = (props: { pageUid: string }) => {
     return () => {
       model.unregisterRoutePage(currentPageUid);
     };
-  }, [flowEngine, layoutRoute, model, pageUid, routeLike]);
+  }, [allAccessRoutes, layoutRoute, model, pageUid, routeLike]);
 
   return <FlowModelRenderer model={model} />;
 };
@@ -153,7 +153,7 @@ export const NextAppDynamicPage = memo(() => {
 
   return (
     <KeepAlive uid={currentPageUid}>
-      {(uid) => {
+      {(uid: string) => {
         const route = findRouteBySchemaUid(uid, allAccessRoutes);
         if (route?.type === NocoBaseDesktopRouteType.flowPage) {
           return <NextAppFlowPage pageUid={uid} />;

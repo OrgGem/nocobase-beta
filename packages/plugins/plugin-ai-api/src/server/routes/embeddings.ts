@@ -179,7 +179,7 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
       model: body.model,
       embeddings: vectors,
       // LangChain's EmbeddingsInterface does not expose token counts.
-      promptTokens: 0,
+      promptTokens: null,
     });
   } catch (err) {
     ctx.log.error('AI API embeddings error:', err);

@@ -1,0 +1,45 @@
+{
+  "name": "plugin-oidc-auth",
+  "displayName": "OIDC Authentication",
+  "displayName.zh-CN": "OIDC 身份认证",
+  "description": "Production-grade OpenID Connect login with PKCE, nonce, secure account provisioning and automatic redirect.",
+  "version": "1.0.5",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "Authentication",
+    "OIDC",
+    "OpenID Connect",
+    "SSO"
+  ],
+  "files": [
+    "dist"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      ">=2.1.0"
+    ],
+    "editionLevel": 1
+  },
+  "dependencies": {
+    "js-cookie": "^3.0.5",
+    "openid-client": "^6.8.1"
+  },
+  "peerDependencies": {
+    "@ant-design/icons": "5.x",
+    "@formily/antd-v5": "1.x",
+    "@formily/core": "2.x",
+    "@formily/react": "2.x",
+    "@nocobase/actions": "2.x",
+    "@nocobase/auth": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/plugin-auth": "2.x",
+    "@nocobase/server": "2.x",
+    "antd": "5.x",
+    "react": "18.x",
+    "react-i18next": ">=11"
+  }
+}

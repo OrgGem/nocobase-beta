@@ -59,8 +59,16 @@ export function toOpenAIResponse(options: {
   content: string;
   finishReason?: string;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  toolCalls?: OpenAIToolCall[];
 }) {
-  const { id, model, content, finishReason = 'stop', usage } = options;
+  const {
+    id,
+    model,
+    content,
+    finishReason = options.toolCalls?.length ? 'tool_calls' : 'stop',
+    usage,
+    toolCalls,
+  } = options;
   return {
     id,
     object: 'chat.completion',
@@ -73,12 +81,13 @@ export function toOpenAIResponse(options: {
         message: {
           role: 'assistant',
           content,
+          ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
         },
         logprobs: null,
         finish_reason: finishReason,
       },
     ],
-    usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: usage || { prompt_tokens: null, completion_tokens: null, total_tokens: null },
   };
 }
 
@@ -87,7 +96,7 @@ export function toOpenAIResponse(options: {
 export function toOpenAIStreamChunk(options: {
   id: string;
   model: string;
-  delta: { role?: string; content?: string };
+  delta: { role?: string; content?: string; tool_calls?: OpenAIToolCallChunk[] };
   finishReason?: string | null;
 }) {
   const { id, model, delta, finishReason = null } = options;
@@ -108,10 +117,27 @@ export function toOpenAIStreamChunk(options: {
   };
 }
 
+export interface OpenAIToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+
+export interface OpenAIToolCallChunk {
+  index: number;
+  id?: string;
+  type?: 'function';
+  function?: { name?: string; arguments?: string };
+}
+
 // ─── OpenAI Embeddings response ───
 
-export function toOpenAIEmbeddingsResponse(options: { model: string; embeddings: number[][]; promptTokens?: number }) {
-  const { model, embeddings, promptTokens = 0 } = options;
+export function toOpenAIEmbeddingsResponse(options: {
+  model: string;
+  embeddings: number[][];
+  promptTokens?: number | null;
+}) {
+  const { model, embeddings, promptTokens = null } = options;
   return {
     object: 'list' as const,
     data: embeddings.map((embedding, index) => ({

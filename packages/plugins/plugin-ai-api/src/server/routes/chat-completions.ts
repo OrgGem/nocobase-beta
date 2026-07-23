@@ -15,8 +15,11 @@ import {
   toOpenAIError,
   formatSSE,
   formatSSEDone,
+  OpenAIToolCall,
+  OpenAIToolCallChunk,
 } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { createRequestAbortController, isStreamingRequested, writeResponse } from '../utils/streaming';
 import { checkEmployeeAccess } from '../middleware/role-permission';
 import type PluginAiApiServer from '../plugin';
 
@@ -55,7 +58,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     return;
   }
 
-  const stream = body.stream === true;
+  const stream = isStreamingRequested(body.stream);
 
   // ─── Resolve model string against DB ───
   const resolved = await resolveModelString(ctx, body.model);
@@ -117,7 +120,8 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
       return;
     }
 
-    const modelOptions: Record<string, any> = {
+    const providerRequestParameters = getProviderRequestParameters(body);
+    const modelOptions: Record<string, unknown> = {
       model: modelId,
       llmService: service.name,
     };
@@ -125,7 +129,8 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     // Pass through optional parameters
     if (body.temperature !== undefined) modelOptions.temperature = body.temperature;
     if (body.top_p !== undefined) modelOptions.topP = body.top_p;
-    if (body.max_tokens !== undefined) modelOptions.maxTokens = body.max_tokens;
+    if (body.max_completion_tokens !== undefined) modelOptions.maxTokens = body.max_completion_tokens;
+    else if (body.max_tokens !== undefined) modelOptions.maxTokens = body.max_tokens;
     if (body.frequency_penalty !== undefined) modelOptions.frequencyPenalty = body.frequency_penalty;
     if (body.presence_penalty !== undefined) modelOptions.presencePenalty = body.presence_penalty;
     if (body.stop !== undefined) modelOptions.stop = body.stop;
@@ -173,24 +178,51 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     const langchainMessages = messages.map((msg: any) => {
       const role = msg.role === 'assistant' ? 'ai' : msg.role;
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        return {
+          role,
+          content,
+          tool_calls: msg.tool_calls,
+          additional_kwargs: { tool_calls: msg.tool_calls },
+        };
+      }
+      if (msg.role === 'tool') {
+        return { role: 'tool', content, tool_call_id: msg.tool_call_id, name: msg.name };
+      }
       return [role, content] as [string, string];
     });
 
     const completionId = generateCompletionId();
-    const chatModel = provider.createModel();
+    const baseModel = provider.createModel();
+    applyProviderRequestParameters(baseModel, providerRequestParameters);
+    const chatModel = bindRequestTools(baseModel, body.tools, body.tool_choice, providerRequestParameters);
 
     if (stream) {
       // ─── Streaming mode ───
-      await handleStreamingCompletion(ctx, chatModel, langchainMessages, completionId, body.model);
+      await handleStreamingCompletion(
+        ctx,
+        chatModel,
+        langchainMessages,
+        completionId,
+        body.model,
+        providerRequestParameters,
+      );
     } else {
       // ─── Non-streaming mode ───
-      await handleNonStreamingCompletion(ctx, chatModel, langchainMessages, completionId, body.model);
+      await handleNonStreamingCompletion(
+        ctx,
+        chatModel,
+        langchainMessages,
+        completionId,
+        body.model,
+        providerRequestParameters,
+      );
     }
   } catch (err) {
     ctx.log.error('AI API chat completions error:', err);
     if (!ctx.res.headersSent) {
       ctx.status = 500;
-      ctx.body = toOpenAIError(500, err.message || 'Internal server error', 'server_error');
+      ctx.body = toOpenAIError(500, getErrorMessage(err, 'Internal server error'), 'server_error');
     }
   }
 }
@@ -203,8 +235,9 @@ async function handleNonStreamingCompletion(
   messages: any[],
   completionId: string,
   modelName: string,
+  providerRequestParameters: Record<string, unknown>,
 ) {
-  const result = await chatModel.invoke(messages);
+  const result = await chatModel.invoke(messages, providerRequestParameters);
 
   let content = '';
   if (typeof result.content === 'string') {
@@ -225,11 +258,13 @@ async function handleNonStreamingCompletion(
     : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
   ctx.status = 200;
+  const toolCalls = normalizeToolCalls(result.tool_calls);
   ctx.body = toOpenAIResponse({
     id: completionId,
     model: modelName,
     content,
     usage,
+    toolCalls,
   });
 }
 
@@ -241,6 +276,7 @@ async function handleStreamingCompletion(
   messages: any[],
   completionId: string,
   modelName: string,
+  providerRequestParameters: Record<string, unknown>,
 ) {
   // Set SSE headers
   ctx.set({
@@ -252,7 +288,8 @@ async function handleStreamingCompletion(
   ctx.status = 200;
 
   // Send initial chunk with role
-  ctx.res.write(
+  await writeResponse(
+    ctx,
     formatSSE(
       toOpenAIStreamChunk({
         id: completionId,
@@ -262,10 +299,14 @@ async function handleStreamingCompletion(
     ),
   );
 
+  const requestAbort = createRequestAbortController(ctx);
+  let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+  let finishReason = 'stop';
   try {
-    const stream = await chatModel.stream(messages);
+    const stream = await chatModel.stream(messages, { ...providerRequestParameters, signal: requestAbort.signal });
 
     for await (const chunk of stream) {
+      if (requestAbort.signal.aborted) throw requestAbort.signal.reason;
       let content = '';
       if (typeof chunk.content === 'string') {
         content = chunk.content;
@@ -275,7 +316,8 @@ async function handleStreamingCompletion(
       }
 
       if (content) {
-        ctx.res.write(
+        await writeResponse(
+          ctx,
           formatSSE(
             toOpenAIStreamChunk({
               id: completionId,
@@ -285,34 +327,149 @@ async function handleStreamingCompletion(
           ),
         );
       }
+
+      const toolCallChunks = normalizeToolCallChunks(chunk.tool_call_chunks);
+      if (toolCallChunks.length) {
+        finishReason = 'tool_calls';
+        await writeResponse(
+          ctx,
+          formatSSE(toOpenAIStreamChunk({ id: completionId, model: modelName, delta: { tool_calls: toolCallChunks } })),
+        );
+      }
+      if (chunk.usage_metadata) {
+        usage = {
+          prompt_tokens: chunk.usage_metadata.input_tokens || 0,
+          completion_tokens: chunk.usage_metadata.output_tokens || 0,
+          total_tokens: chunk.usage_metadata.total_tokens || 0,
+        };
+      }
     }
 
     // Send finish chunk
-    ctx.res.write(
+    await writeResponse(
+      ctx,
       formatSSE(
         toOpenAIStreamChunk({
           id: completionId,
           model: modelName,
           delta: {},
-          finishReason: 'stop',
+          finishReason,
         }),
       ),
     );
 
     // Send [DONE]
-    ctx.res.write(formatSSEDone());
+    await writeResponse(ctx, formatSSEDone());
+    ctx.state.aiApiStreamResult = { succeeded: true, id: completionId, usage };
   } catch (err) {
     ctx.log.error('AI API streaming error:', err);
     // Send error as SSE event before closing
-    ctx.res.write(
-      formatSSE({
-        error: {
-          message: err.message || 'Streaming error',
-          type: 'server_error',
-        },
-      }),
-    );
+    if (!ctx.res.destroyed && !ctx.res.writableEnded) {
+      await writeResponse(
+        ctx,
+        formatSSE({
+          error: {
+            message: getErrorMessage(err, 'Streaming error'),
+            type: 'server_error',
+          },
+        }),
+      );
+    }
+    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, usage, errorCode: 'stream_error' };
   } finally {
-    ctx.res.end();
+    requestAbort.dispose();
+    if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
   }
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+const GATEWAY_MANAGED_PARAMETERS = new Set(['model', 'messages', 'tools', 'tool_choice', 'stream', 'n']);
+
+export function getProviderRequestParameters(body: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(body).filter(([name, value]) => !GATEWAY_MANAGED_PARAMETERS.has(name) && value !== undefined),
+  );
+}
+
+interface ModelWithKwargs {
+  modelKwargs?: Record<string, unknown>;
+}
+
+export function applyProviderRequestParameters(chatModel: unknown, parameters: Record<string, unknown>): void {
+  if (!chatModel || typeof chatModel !== 'object') return;
+
+  const model = chatModel as ModelWithKwargs;
+  const modelKwargs = { ...(model.modelKwargs ?? {}) };
+
+  // OpenAI providers currently install a synthetic text response format even when
+  // the client did not request one. Remove that default so LLM mode matches the
+  // original OpenAI-compatible request more closely.
+  if (!Object.hasOwn(parameters, 'response_format')) {
+    if (isDefaultTextResponseFormat(modelKwargs.response_format)) delete modelKwargs.response_format;
+    if (isDefaultResponsesTextFormat(modelKwargs.text)) delete modelKwargs.text;
+  }
+
+  model.modelKwargs = { ...modelKwargs, ...parameters };
+}
+
+function bindRequestTools(
+  chatModel: any,
+  tools: unknown,
+  toolChoice: unknown,
+  providerRequestParameters: Record<string, unknown>,
+) {
+  if (!Array.isArray(tools) || tools.length === 0) return chatModel;
+  if (typeof chatModel.bindTools !== 'function') {
+    throw new Error('The selected LLM provider does not support tool calling');
+  }
+  return chatModel.bindTools(tools, {
+    ...providerRequestParameters,
+    ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }),
+  });
+}
+
+function isDefaultTextResponseFormat(value: unknown): boolean {
+  return isRecord(value) && value.type === 'text' && Object.keys(value).length === 1;
+}
+
+function isDefaultResponsesTextFormat(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.format)) return false;
+  return value.format.type === 'text' && Object.keys(value.format).length === 1 && Object.keys(value).length === 1;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeToolCalls(value: unknown): OpenAIToolCall[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  return value.map((call: any) => ({
+    id: String(call.id || ''),
+    type: 'function',
+    function: {
+      name: String(call.name || call.function?.name || ''),
+      arguments: serializeToolArguments(call.args ?? call.function?.arguments),
+    },
+  }));
+}
+
+function normalizeToolCallChunks(value: unknown): OpenAIToolCallChunk[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((call: any, fallbackIndex) => ({
+    index: typeof call.index === 'number' ? call.index : fallbackIndex,
+    ...(call.id ? { id: String(call.id), type: 'function' as const } : {}),
+    function: {
+      ...(call.name ? { name: String(call.name) } : {}),
+      ...(call.args !== undefined || call.function?.arguments !== undefined
+        ? { arguments: serializeToolArguments(call.args ?? call.function?.arguments) }
+        : {}),
+    },
+  }));
+}
+
+function serializeToolArguments(value: unknown) {
+  return typeof value === 'string' ? value : JSON.stringify(value ?? {});
 }

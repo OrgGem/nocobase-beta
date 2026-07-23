@@ -309,6 +309,7 @@ export class PluginNextAppServer extends Plugin {
         if (appPath) {
           actualFilter['config.path'] = appPath;
         }
+        actualFilter['config.enabled'] = true;
 
         const result = await nextAppRoutesRepository.find({
           tree: true,
@@ -332,6 +333,7 @@ export class PluginNextAppServer extends Plugin {
       if (appPath) {
         actualFilter['config.path'] = appPath;
       }
+      actualFilter['config.enabled'] = true;
 
       if (nextAppRoutesId.length > 0) {
         const result = await nextAppRoutesRepository.find({
@@ -357,9 +359,18 @@ export class PluginNextAppServer extends Plugin {
       const { filter } = ctx.action.params;
 
       if (ctx.state.currentRoles.includes('root')) {
+        const { appPath, ...otherFilter } = filter || {};
+        const actualFilter: Record<string, unknown> = {
+          ...otherFilter,
+          'config.enabled': true,
+        };
+        if (appPath) {
+          actualFilter['config.path'] = appPath;
+        }
         ctx.body = await nextAppRoutesRepository.findOne({
           sort: 'sort',
           ...ctx.action.params,
+          filter: actualFilter,
         });
         return await next();
       }
@@ -377,14 +388,15 @@ export class PluginNextAppServer extends Plugin {
       if (appPath) {
         actualFilter['config.path'] = appPath;
       }
+      actualFilter['config.enabled'] = true;
 
       if (nextAppRoutesId.length > 0) {
         const result = await nextAppRoutesRepository.findOne({
+          ...ctx.action.params,
           filter: {
             ...actualFilter,
             id: nextAppRoutesId,
           },
-          ...ctx.action.params,
         });
 
         ctx.body = result;

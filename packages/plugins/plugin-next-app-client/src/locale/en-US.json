@@ -1,4 +1,5 @@
 {
   "Next App routes": "Next App routes",
-  "Next App": "Next App"
+  "Next App": "Next App",
+  "Each app is accessible under /hub/{path}. You can configure separate menus and permissions for each.": "Each app is accessible under /hub/{path}. You can configure separate menus and permissions for each."
 }

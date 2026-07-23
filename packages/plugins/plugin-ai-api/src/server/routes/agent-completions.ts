@@ -14,9 +14,11 @@ import {
   toOpenAIError,
   formatSSE,
   formatSSEDone,
+  OpenAIToolCallChunk,
 } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
 import { checkEmployeeAccess } from '../middleware/role-permission';
+import { isStreamingRequested } from '../utils/streaming';
 import {
   AgentRuntimeContext,
   createAIEmployeeOptions,
@@ -132,7 +134,7 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
     return;
   }
 
-  const wantStream = body.stream === true;
+  const wantStream = isStreamingRequested(body.stream);
   const lifecycle = getAgentRuntimeLifecycle(ctx);
   let runtimeContext: AgentRuntimeContext | undefined;
   let lifecycleCompleted = false;
@@ -256,6 +258,17 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
 
       const originalWrite = ctx.res.write.bind(ctx.res);
       const originalEnd = ctx.res.end.bind(ctx.res);
+      const aiPlugin = ctx.app.pm.get('ai') as any;
+      const abortAgent = () => {
+        if (!ctx.res.writableEnded) {
+          aiPlugin?.aiEmployeesManager?.conversationController?.get(String(sessionId))?.abort();
+        }
+      };
+      ctx.req.once('aborted', abortAgent);
+      ctx.res.once('close', abortAgent);
+      let streamSucceeded = false;
+      let sawToolCalls = false;
+      let pendingSse = '';
 
       // Intercept end() — prevent AIEmployee from terminating the stream early.
       // We restore and call it ourselves in the finally block.
@@ -269,46 +282,78 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
 
       // Intercept write() — translate NocoBase SSE → OpenAI SSE
       (ctx.res as any).write = (data: Buffer | string): boolean => {
-        const text = typeof data === 'string' ? data : data.toString('utf8');
+        pendingSse += typeof data === 'string' ? data : data.toString('utf8');
+        const frames = pendingSse.split('\n\n');
+        pendingSse = frames.pop() || '';
 
-        for (const line of text.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data: ')) continue;
+        for (const frame of frames) {
+          for (const line of frame.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data: ')) continue;
 
-          const jsonStr = trimmed.substring(6);
-          if (!jsonStr) continue;
+            const jsonStr = trimmed.substring(6);
+            if (!jsonStr) continue;
 
-          try {
-            const event = JSON.parse(jsonStr);
+            try {
+              const event = JSON.parse(jsonStr);
 
-            if (event.type === 'content' && event.body) {
-              // Content chunk — forward as OpenAI delta
-              originalWrite(
-                formatSSE(
-                  toOpenAIStreamChunk({
-                    id: completionId,
-                    model: body.model,
-                    delta: { content: String(event.body) },
+              if (event.type === 'content' && event.body) {
+                // Content chunk — forward as OpenAI delta
+                originalWrite(
+                  formatSSE(
+                    toOpenAIStreamChunk({
+                      id: completionId,
+                      model: body.model,
+                      delta: { content: String(event.body) },
+                    }),
+                  ),
+                );
+              } else if (event.type === 'tool_call_chunks' && Array.isArray(event.body)) {
+                const chunks = toOpenAIToolCallChunks(event.body);
+                if (chunks.length) {
+                  sawToolCalls = true;
+                  originalWrite(
+                    formatSSE(
+                      toOpenAIStreamChunk({
+                        id: completionId,
+                        model: body.model,
+                        delta: { tool_calls: chunks },
+                      }),
+                    ),
+                  );
+                }
+              } else if (!sawToolCalls && event.type === 'tool_calls' && Array.isArray(event.body?.toolCalls)) {
+                const chunks = toOpenAIToolCallChunks(event.body.toolCalls);
+                if (chunks.length) {
+                  sawToolCalls = true;
+                  originalWrite(
+                    formatSSE(
+                      toOpenAIStreamChunk({
+                        id: completionId,
+                        model: body.model,
+                        delta: { tool_calls: chunks },
+                      }),
+                    ),
+                  );
+                }
+              } else if (event.type === 'error' && event.body) {
+                // Error from the agent — surface as SSE error object
+                originalWrite(
+                  formatSSE({
+                    error: {
+                      message: String(event.body),
+                      type: 'server_error',
+                      code: 'agent_error',
+                    },
                   }),
-                ),
-              );
-            } else if (event.type === 'error' && event.body) {
-              // Error from the agent — surface as SSE error object
-              originalWrite(
-                formatSSE({
-                  error: {
-                    message: String(event.body),
-                    type: 'server_error',
-                    code: 'agent_error',
-                  },
-                }),
-              );
+                );
+              }
+              // stream_start, stream_end, tool_call_status, web_search,
+              // reasoning and new_message are NocoBase-only events and are ignored.
+              // These are NocoBase-internal events not part of the OpenAI protocol.
+            } catch {
+              // Non-JSON SSE line — ignore
             }
-            // stream_start, stream_end, tool_calls, tool_call_status,
-            // web_search, reasoning, new_message, tool_call_chunks → silently ignored.
-            // These are NocoBase-internal events not part of the OpenAI protocol.
-          } catch {
-            // Non-JSON SSE line — ignore
           }
         }
         return true;
@@ -322,7 +367,10 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
           }),
         );
 
-        await aiEmployee.stream({ userMessages });
+        streamSucceeded = await aiEmployee.stream({ userMessages });
+        if (!streamSucceeded) {
+          throw new Error('AI Employee stream failed');
+        }
         try {
           await lifecycle?.runAfterHooks(runtimeContext, { succeeded: true });
         } finally {
@@ -332,20 +380,26 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
         // Restore original write/end before sending our closing frames
         (ctx.res as any).write = originalWrite;
         (ctx.res as any).end = originalEnd;
+        ctx.req.off('aborted', abortAgent);
+        ctx.res.off('close', abortAgent);
 
-        // Send the finish chunk and [DONE] signal
-        originalWrite(
-          formatSSE(
-            toOpenAIStreamChunk({
-              id: completionId,
-              model: body.model,
-              delta: {},
-              finishReason: 'stop',
-            }),
-          ),
-        );
-        originalWrite(formatSSEDone());
-        originalEnd();
+        if (streamSucceeded && !ctx.res.destroyed) {
+          originalWrite(
+            formatSSE(
+              toOpenAIStreamChunk({
+                id: completionId,
+                model: body.model,
+                delta: {},
+                finishReason: 'stop',
+              }),
+            ),
+          );
+          originalWrite(formatSSEDone());
+          ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
+        } else {
+          ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, errorCode: 'agent_error' };
+        }
+        if (!ctx.res.writableEnded && !ctx.res.destroyed) originalEnd();
       }
     } else {
       // ── NON-STREAMING (invoke) ─────────────────────────────────────────────
@@ -420,6 +474,19 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
       });
     }
   }
+}
+
+function toOpenAIToolCallChunks(value: unknown[]): OpenAIToolCallChunk[] {
+  return value.map((call: any, fallbackIndex) => ({
+    index: typeof call.index === 'number' ? call.index : fallbackIndex,
+    ...(call.id ? { id: String(call.id), type: 'function' as const } : {}),
+    function: {
+      ...(call.name ? { name: String(call.name) } : {}),
+      ...(call.args !== undefined
+        ? { arguments: typeof call.args === 'string' ? call.args : JSON.stringify(call.args) }
+        : {}),
+    },
+  }));
 }
 
 /**

@@ -10,5 +10,8 @@ export default {
     { name: 'clientSecret', type: 'text', hidden: true },
     { name: 'maxAttempts', type: 'integer', defaultValue: 5 },
     { name: 'concurrency', type: 'integer', defaultValue: 2 },
+    { name: 'batchSize', type: 'integer', defaultValue: 10 },
+    { name: 'retryBaseSeconds', type: 'integer', defaultValue: 30 },
+    { name: 'processingTimeoutMinutes', type: 'integer', defaultValue: 15 },
   ],
 } as CollectionOptions;

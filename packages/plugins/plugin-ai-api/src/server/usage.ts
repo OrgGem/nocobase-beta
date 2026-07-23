@@ -1,6 +1,20 @@
 import { Context } from '@nocobase/actions';
 
-type Usage = { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+export type Usage = { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null };
+
+function normalizeUsage(value: unknown): Usage | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  const prompt = source.prompt_tokens ?? source.input_tokens;
+  const completion = source.completion_tokens ?? source.output_tokens;
+  const total = source.total_tokens;
+  if (prompt == null && completion == null && total == null) return undefined;
+  return {
+    prompt_tokens: typeof prompt === 'number' ? prompt : null,
+    completion_tokens: typeof completion === 'number' ? completion : null,
+    total_tokens: typeof total === 'number' ? total : null,
+  };
+}
 
 export async function startUsageRecord(
   ctx: Context,
@@ -8,6 +22,7 @@ export async function startUsageRecord(
   endpoint: string,
   model: string,
   streaming: boolean,
+  mode: 'llm' | 'agent',
 ) {
   const body = (ctx.request.body || {}) as Record<string, unknown>;
   const messages = Array.isArray(body.messages) ? body.messages : undefined;
@@ -22,7 +37,7 @@ export async function startUsageRecord(
       oauthSubject: oauth?.subject,
       oauthScopes: oauth?.scopes,
       endpoint,
-      mode: ctx.get('X-AI-Mode') || undefined,
+      mode,
       model: model === '-' ? undefined : model,
       status: 'pending',
       streaming,
@@ -34,19 +49,30 @@ export async function startUsageRecord(
 }
 
 export async function finishUsageRecord(ctx: Context, id: unknown, startedAt: number, status: 'succeeded' | 'failed') {
-  const response = (ctx.body || {}) as { usage?: Usage; id?: string; error?: { code?: string } };
-  const usage = response.usage;
+  const response = (ctx.body || {}) as {
+    usage?: Usage;
+    response_metadata?: { usage?: unknown };
+    id?: string;
+    error?: { code?: string };
+  };
+  const streamResult = ctx.state.aiApiStreamResult as
+    | { usage?: Usage; id?: string; errorCode?: string; succeeded: boolean }
+    | undefined;
+  const usage =
+    normalizeUsage(response.usage) ||
+    normalizeUsage(response.response_metadata?.usage) ||
+    normalizeUsage(streamResult?.usage);
   const values = {
-    status,
+    status: streamResult ? (streamResult.succeeded ? 'succeeded' : 'failed') : status,
     httpStatus: ctx.status,
-    errorCode: response.error?.code,
+    errorCode: response.error?.code || streamResult?.errorCode,
     inputTokens: usage?.prompt_tokens,
     outputTokens: usage?.completion_tokens,
     totalTokens: usage?.total_tokens,
-    providerRequestId: response.id,
+    providerRequestId: response.id || streamResult?.id,
     completedAt: new Date(),
     durationMs: Date.now() - startedAt,
-    responseMetadata: { usageSource: usage ? 'response' : 'unavailable' },
+    responseMetadata: { usageSource: usage ? 'provider' : 'unavailable' },
   };
   await ctx.db.getRepository('aiApiUsageRecords').update({ filterByTk: id, values });
 }

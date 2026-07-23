@@ -10,10 +10,8 @@
 /**
  * NextApp — mount component for the separate sub-router.
  *
- * Instead of using AdminProvider (which fetches desktopRoutes and redirects to /admin),
- * we build a custom provider stack that:
- * 1. Fetches nextAppRoutes:listAccessible via NextAppRoutesRequestProvider
- * 2. Provides schema/collection infrastructure for rendering pages
+ * Hub relies on the application infrastructure already mounted at the root and renders
+ * an independent router without adding another provider stack.
  *
  * Uses usePlugin() for reliable plugin lookup (same pattern as Mobile.tsx).
  */
@@ -21,12 +19,13 @@ import React, { useMemo } from 'react';
 import {
   ACLRolesCheckProvider,
   CurrentAppInfoProvider,
+  CurrentPageUidProvider,
+  CurrentTabUidProvider,
+  IsSubPageClosedByPageMenuProvider,
   RemoteCollectionManagerProvider,
   RemoteSchemaTemplateManagerProvider,
   usePlugin,
 } from '@nocobase/client';
-import { CurrentPageUidProvider, CurrentTabUidProvider, IsSubPageClosedByPageMenuProvider } from '@nocobase/client';
-import { NextAppRoutesRequestProvider } from './nextAppRoutesContext';
 import { PluginNextAppClient } from './index';
 
 export const NextApp = () => {

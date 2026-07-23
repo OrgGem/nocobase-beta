@@ -19,6 +19,7 @@ import { toOpenAIError } from '../utils/openai-format';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import { checkRolePermission } from '../middleware/role-permission';
 import { startUsageRecord, finishUsageRecord } from '../usage';
+import { isStreamingRequested } from '../utils/streaming';
 import type PluginAiApiServer from '../plugin';
 
 const API_PREFIX = '/api/ai-llm/v1';
@@ -120,16 +121,27 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
 
     // ─── Route matching ───────────────────────────────────────────────────
     const model = (ctx.request.body as any)?.model ?? '-';
+    const isUsageEndpoint =
+      method === 'POST' && (subPath === '/chat/completions' || subPath === '/completions' || subPath === '/embeddings');
+    const resolvedMode = isUsageEndpoint ? await resolveMode(ctx) : 'llm';
+    const requestBody = (ctx.request.body || {}) as Record<string, unknown>;
+    const streaming = isUsageEndpoint && isStreamingRequested(requestBody.stream);
+    if (streaming && (subPath === '/chat/completions' || subPath === '/completions')) {
+      const streamOptions = requestBody.stream_options;
+      ctx.request.body = {
+        ...requestBody,
+        stream_options: {
+          ...(streamOptions && typeof streamOptions === 'object' ? streamOptions : {}),
+          include_usage: true,
+        },
+      };
+    }
     const t0 = Date.now();
     let usageId: unknown;
     try {
-      usageId = await startUsageRecord(
-        ctx,
-        requestId,
-        subPath,
-        String(model),
-        Boolean((ctx.request.body as any)?.stream),
-      );
+      usageId = isUsageEndpoint
+        ? await startUsageRecord(ctx, requestId, subPath, String(model), streaming, resolvedMode)
+        : undefined;
     } catch (usageError) {
       ctx.log.error('AI API usage record could not be created:', usageError);
     }
@@ -137,9 +149,14 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     try {
       // POST /v1/chat/completions — route based on mode
       if (method === 'POST' && subPath === '/chat/completions') {
-        const mode = await resolveMode(ctx);
-        await (mode === 'agent' ? handleAgentCompletions(ctx, plugin) : handleChatCompletions(ctx, plugin));
-        logRequest(ctx, requestId, model, 'ok', Date.now() - t0);
+        await (resolvedMode === 'agent' ? handleAgentCompletions(ctx, plugin) : handleChatCompletions(ctx, plugin));
+        logRequest(
+          ctx,
+          requestId,
+          model,
+          ctx.state.aiApiStreamResult?.succeeded === false ? 'error' : 'ok',
+          Date.now() - t0,
+        );
         return;
       }
 
@@ -152,7 +169,7 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
 
       // POST /v1/completions (legacy text completions — used by LiteLLM)
       if (method === 'POST' && subPath === '/completions') {
-        const completionsMode = await resolveMode(ctx);
+        const completionsMode = resolvedMode;
         if (completionsMode === 'agent') {
           // Convert legacy prompt → messages format for agent handler
           const reqBody = ctx.request.body as any;
@@ -169,7 +186,13 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
         } else {
           await handleCompletions(ctx, plugin);
         }
-        logRequest(ctx, requestId, model, 'ok', Date.now() - t0);
+        logRequest(
+          ctx,
+          requestId,
+          model,
+          ctx.state.aiApiStreamResult?.succeeded === false ? 'error' : 'ok',
+          Date.now() - t0,
+        );
         return;
       }
 
@@ -219,7 +242,11 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       logRequest(ctx, requestId, model, 'error', Date.now() - t0);
       if (!ctx.res.headersSent) {
         ctx.status = 500;
-        ctx.body = toOpenAIError(500, err.message || 'Internal server error', 'server_error');
+        ctx.body = toOpenAIError(
+          500,
+          err instanceof Error && err.message ? err.message : 'Internal server error',
+          'server_error',
+        );
       }
     } finally {
       if (usageId !== undefined) {

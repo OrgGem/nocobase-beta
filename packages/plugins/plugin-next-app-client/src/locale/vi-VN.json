@@ -1,0 +1,5 @@
+{
+  "Next App routes": "Tuyến ứng dụng Hub",
+  "Next App": "Ứng dụng Hub",
+  "Each app is accessible under /hub/{path}. You can configure separate menus and permissions for each.": "Mỗi ứng dụng có thể được truy cập tại /hub/{path} và có cấu hình menu, quyền riêng."
+}

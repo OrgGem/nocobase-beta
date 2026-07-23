@@ -1,0 +1,71 @@
+{
+  "Enable": "Enable",
+  "Issuer": "Issuer",
+  "OIDC manager": "OIDC manager",
+  "OIDC Providers": "OIDC Providers",
+  "Provider name": "Name",
+  "Client id": "Client id",
+  "Client secret": "Client secret",
+  "Openid configuration": "Openid configuration",
+  "Authorization endpoint": "Authorization endpoint",
+  "Access token endpoint": "Access token endpoint",
+  "JWKS endpoint": "JWKS endpoint",
+  "Userinfo endpoint": "Userinfo endpoint",
+  "Redirect url": "Redirect url",
+  "Logout endpoint": "Logout endpoint",
+  "Id token sign alg": "Id token sign alg",
+  "Add provider": "Add",
+  "Edit provider": "Edit",
+  "Delete provider": "Delete",
+  "Sign in button name, which will be displayed on the sign in page": "Sign in button name, which will be displayed on the sign in page",
+  "Use this field to bind the user": "Use this field to bind the user",
+  "Sign up automatically when the user does not exist": "Sign up automatically when the user does not exist",
+  "Username must be 2-16 characters in length (excluding @.<>\"'/)": "Username must be 2-16 characters in length (excluding @.<>\"'/)",
+  "User not found": "User not found",
+  "Basic configuration": "Basic configuration",
+  "Field mapping": "Field mapping",
+  "Advanced configuration": "Advanced configuration",
+  "Usage": "Usage",
+  "Redirect URL": "Redirect URL",
+  "Check if NocoBase is running on HTTP protocol": "Check if NocoBase is running on HTTP protocol",
+  "The port number of the NocoBase service if it is not 80 or 443": "The port number of the NocoBase service if it is not 80 or 443",
+  "Pass parameters in the authorization code grant exchange": "Pass parameters in the authorization code grant exchange",
+  "Method to call the user info endpoint": "Method to call the user info endpoint",
+  "Where to put the access token when calling the user info endpoint": "Where to put the access token when calling the user info endpoint",
+  "Header": "Header",
+  "Body (Use with POST method)": "Body (Use with POST method)",
+  "Query parameters (Use with GET method)": "Query parameters (Use with GET method)",
+  "Parameter name": "Parameter name",
+  "The state token helps prevent CSRF attacks. It's recommended to leave it blank for automatic random generation.": "The state token helps prevent CSRF attacks. It's recommended to leave it blank for automatic random generation.",
+  "Client ID": "Client ID",
+  "Client Secret": "Client Secret",
+  "Token endpoint authentication": "Token endpoint authentication",
+  "Redirect URI": "Redirect URI",
+  "Leave blank to derive it from the current NocoBase URL.": "Leave blank to derive it from the current NocoBase URL.",
+  "User provisioning": "User provisioning",
+  "Require verified email": "Require verified email",
+  "When disabled, an unverified email may create a new user but can never link an existing account.": "When disabled, an unverified email may create a new user but can never link an existing account.",
+  "Unverified email is never used to link an existing NocoBase account.": "Unverified email is never used to link an existing NocoBase account.",
+  "Bind existing users by verified email": "Bind existing users by verified email",
+  "Bind existing users by email": "Bind existing users by email",
+  "Do not bind existing users": "Do not bind existing users",
+  "Trusted email domains": "Trusted email domains",
+  "Optional comma-separated domains, for example example.com, subsidiary.com": "Optional comma-separated domains, for example example.com, subsidiary.com",
+  "Automatic redirect to issuer login": "Automatic redirect to issuer login",
+  "RP-initiated logout": "RP-initiated logout",
+  "Post logout redirect URI": "Post logout redirect URI",
+  "This URI must be registered at the identity provider.": "This URI must be registered at the identity provider.",
+  "Sign in with OIDC": "Sign in with OIDC",
+  "The identity provider returned an invalid authorization URL.": "The identity provider returned an invalid authorization URL.",
+  "OIDC login failed.": "OIDC login failed."
+  ,"Allow signup with unverified email": "Allow signup with unverified email"
+  ,"Store unverified email in the user profile": "Store unverified email in the user profile"
+  ,"Unverified email is not an ownership proof and cannot link an existing account.": "Unverified email is not an ownership proof and cannot link an existing account."
+  ,"The identity provider did not verify this email address.": "The identity provider did not verify this email address."
+  ,"The email domain is not allowed.": "The email domain is not allowed."
+  ,"Automatic OIDC user signup is disabled.": "Automatic OIDC user signup is disabled."
+  ,"Signup with an unverified email is disabled.": "Signup with an unverified email is disabled."
+  ,"A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually.": "A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually."
+  ,"This OIDC identity cannot be linked because the identity provider did not verify its email address.": "This OIDC identity cannot be linked because the identity provider did not verify its email address."
+  ,"A NocoBase account already uses this email, but automatic verified-email linking is disabled.": "A NocoBase account already uses this email, but automatic verified-email linking is disabled."
+}

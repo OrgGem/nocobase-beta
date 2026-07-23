@@ -10,6 +10,7 @@
 import { Context } from '@nocobase/actions';
 import { generateCompletionId, toOpenAIError, formatSSE, formatSSEDone } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { createRequestAbortController, isStreamingRequested, writeResponse } from '../utils/streaming';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -48,7 +49,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
     return;
   }
 
-  const stream = body.stream === true;
+  const stream = isStreamingRequested(body.stream);
 
   // ─── Resolve model string against DB ───
   const resolved = await resolveModelString(ctx, body.model);
@@ -162,7 +163,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
     ctx.log.error('AI API completions error:', err);
     if (!ctx.res.headersSent) {
       ctx.status = 500;
-      ctx.body = toOpenAIError(500, err.message || 'Internal server error', 'server_error');
+      ctx.body = toOpenAIError(500, getErrorMessage(err, 'Internal server error'), 'server_error');
     }
   }
 }
@@ -230,10 +231,13 @@ async function handleStreamingTextCompletion(
   });
   ctx.status = 200;
 
+  const requestAbort = createRequestAbortController(ctx);
+  let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
   try {
-    const stream = await chatModel.stream(messages);
+    const stream = await chatModel.stream(messages, { signal: requestAbort.signal });
 
     for await (const chunk of stream) {
+      if (requestAbort.signal.aborted) throw requestAbort.signal.reason;
       let text = '';
       if (typeof chunk.content === 'string') {
         text = chunk.content;
@@ -243,7 +247,8 @@ async function handleStreamingTextCompletion(
       }
 
       if (text) {
-        ctx.res.write(
+        await writeResponse(
+          ctx,
           formatSSE({
             id: completionId,
             object: 'text_completion',
@@ -261,10 +266,18 @@ async function handleStreamingTextCompletion(
           }),
         );
       }
+      if (chunk.usage_metadata) {
+        usage = {
+          prompt_tokens: chunk.usage_metadata.input_tokens || 0,
+          completion_tokens: chunk.usage_metadata.output_tokens || 0,
+          total_tokens: chunk.usage_metadata.total_tokens || 0,
+        };
+      }
     }
 
     // Final chunk
-    ctx.res.write(
+    await writeResponse(
+      ctx,
       formatSSE({
         id: completionId,
         object: 'text_completion',
@@ -282,18 +295,28 @@ async function handleStreamingTextCompletion(
       }),
     );
 
-    ctx.res.write(formatSSEDone());
+    await writeResponse(ctx, formatSSEDone());
+    ctx.state.aiApiStreamResult = { succeeded: true, id: completionId, usage };
   } catch (err) {
     ctx.log.error('AI API completions streaming error:', err);
-    ctx.res.write(
-      formatSSE({
-        error: {
-          message: err.message || 'Streaming error',
-          type: 'server_error',
-        },
-      }),
-    );
+    if (!ctx.res.destroyed && !ctx.res.writableEnded) {
+      await writeResponse(
+        ctx,
+        formatSSE({
+          error: {
+            message: getErrorMessage(err, 'Streaming error'),
+            type: 'server_error',
+          },
+        }),
+      );
+    }
+    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, usage, errorCode: 'stream_error' };
   } finally {
-    ctx.res.end();
+    requestAbort.dispose();
+    if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
   }
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }

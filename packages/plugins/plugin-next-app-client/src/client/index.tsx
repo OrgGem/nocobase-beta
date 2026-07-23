@@ -15,14 +15,18 @@ import { MenuPermissions, NextAppAllRoutesProvider } from './MenuPermissions';
 import { NextApp } from './NextApp';
 import { NextAppLayout } from './NextAppLayout';
 import { NextAppDynamicPage } from './NextAppDynamicPage';
-// @ts-ignore
+import { HubLegacyRedirect } from './HubLegacyRedirect';
+import { HubAdminRedirect } from './HubAdminRedirect';
+import { HubRouteStore } from './HubRouteStore';
+import { getHubBasename, HUB_PATH, HUB_ROUTE_NAMES, LEGACY_NEXT_APP_PATH } from './hubRouteContract';
 import pkg from '../../package.json';
 
 const { NextAppSettings } = lazy(() => import('./NextAppSettings'), 'NextAppSettings');
 
 export class PluginNextAppClient extends Plugin {
   nextAppRouter?: RouterManager;
-  nextAppPath = '/next-app';
+  readonly hubRouteStore = new HubRouteStore();
+  nextAppPath = HUB_PATH;
 
   async beforeLoad() {}
 
@@ -36,24 +40,24 @@ export class PluginNextAppClient extends Plugin {
   /**
    * Create (or recreate) the sub-router with the given path segment.
    */
-  setupRouter(pathSegment = 'next-app') {
-    this.nextAppPath = `/${pathSegment.replace(/^\//, '')}`;
-    const segment = this.nextAppPath.replace(/^\//, '');
-    const base = this.router.getBasename() || '/';
-    const cleanBase = base.endsWith('/') ? base : `${base}/`;
-    const basename = `${cleanBase}${segment}`;
+  setupRouter() {
+    this.nextAppPath = HUB_PATH;
+    const basename = getHubBasename(this.router.getBasename() || '/');
 
     this.nextAppRouter = createRouterManager({ type: 'browser', basename }, this.app);
 
     this.addSubRoutes();
 
     // Re-register the catch-all in the main app router (remove old one first if exists)
-    this.app.router.add('next-app', {
+    this.app.router.add(HUB_ROUTE_NAMES.root, {
       path: `${this.nextAppPath}/*`,
       Component: NextApp,
     });
 
-    console.log(`[plugin-next-app] Router set up at ${this.nextAppPath}`);
+    this.app.router.add('next-app-legacy-redirect', {
+      path: `${LEGACY_NEXT_APP_PATH}/*`,
+      Component: HubLegacyRedirect,
+    });
   }
 
   /**
@@ -64,41 +68,52 @@ export class PluginNextAppClient extends Plugin {
       NextApp,
       NextAppLayout,
       NextAppDynamicPage,
+      HubLegacyRedirect,
+      HubAdminRedirect,
     });
   }
 
   /**
    * Register routes inside the separate sub-router.
-   * Paths are relative to the sub-router's basename (/next-app).
+   * Paths are relative to the sub-router's basename (/hub).
    * Cấu trúc: /:appPath/[:pageName]
    */
   addSubRoutes() {
+    const router = this.nextAppRouter;
+    if (!router) {
+      throw new Error('[plugin-next-app-client] Hub router is not initialized');
+    }
     // Main layout
-    this.nextAppRouter!.add('nextApp', {
+    router.add(HUB_ROUTE_NAMES.root, {
       path: '/:appPath',
       Component: 'NextAppLayout',
     });
 
+    router.add('hub-admin-compat', {
+      path: '/admin/*',
+      Component: HubAdminRedirect,
+    });
+
     // Dynamic page
-    this.nextAppRouter!.add('nextApp.page', {
+    router.add(HUB_ROUTE_NAMES.page, {
       path: '/:appPath/:name',
       Component: 'NextAppDynamicPage',
     });
 
     // Tabs
-    this.nextAppRouter!.add('nextApp.page.tabs', {
+    router.add(HUB_ROUTE_NAMES.tabs, {
       path: '/:appPath/:name/tabs/:tabUid',
       Component: 'NextAppDynamicPage',
     });
 
     // Popups
-    this.nextAppRouter!.add('nextApp.page.popups', {
+    router.add(HUB_ROUTE_NAMES.popups, {
       path: '/:appPath/:name/popups/*',
       Component: PagePopups,
     });
 
     // Tabs + Popups
-    this.nextAppRouter!.add('nextApp.page.tabs.popups', {
+    router.add(HUB_ROUTE_NAMES.tabPopups, {
       path: '/:appPath/:name/tabs/:tabUid/popups/*',
       Component: PagePopups,
     });
@@ -109,7 +124,10 @@ export class PluginNextAppClient extends Plugin {
    * Returns a stable component — call once and cache the result.
    */
   getRouterComponent() {
-    return this.nextAppRouter!.getRouterComponent();
+    if (!this.nextAppRouter) {
+      throw new Error('[plugin-next-app-client] Hub router is not initialized');
+    }
+    return this.nextAppRouter.getRouterComponent();
   }
 
   /**

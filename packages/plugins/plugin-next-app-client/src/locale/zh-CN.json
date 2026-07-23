@@ -1,4 +1,5 @@
 {
   "Next App routes": "Next App 路由",
-  "Next App": "Next App"
+  "Next App": "Next App",
+  "Each app is accessible under /hub/{path}. You can configure separate menus and permissions for each.": "每个应用可通过 /hub/{path} 访问，并可分别配置菜单和权限。"
 }

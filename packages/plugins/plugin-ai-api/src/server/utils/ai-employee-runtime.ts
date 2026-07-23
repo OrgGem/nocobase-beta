@@ -15,7 +15,7 @@ interface AIEmployeeConstructorOptions {
 }
 
 interface AIEmployeeRuntime {
-  stream(options: { userMessages: unknown[] }): Promise<void>;
+  stream(options: { userMessages: unknown[] }): Promise<boolean>;
   invoke(options: { userMessages: unknown[] }): Promise<unknown>;
 }
 

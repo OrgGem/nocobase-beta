@@ -18,19 +18,17 @@
 import React, { FC, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import ReactDOM from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import ProLayout, { RouteContext, RouteContextType } from '@ant-design/pro-layout';
 import { theme as antdTheme, ConfigProvider, Grid, Result } from 'antd';
 import { css } from '@emotion/css';
 import { createGlobalStyle } from 'antd-style';
 import { HighlightOutlined } from '@ant-design/icons';
 import {
-  DndContext,
   Icon,
   PinnedPluginList,
   useDesignable,
   useGlobalTheme,
-  useMenuDragEnd,
   useSchemaInitializerRender,
   useSystemSettings,
   useToken,
@@ -39,6 +37,7 @@ import {
 } from '@nocobase/client';
 import { useMenuTranslation } from '@nocobase/client';
 import { useNextAppAllAccessRoutes, NextAppRoutesRequestProvider } from './nextAppRoutesContext';
+import { getHubInternalPagePath, normalizeHubLink } from './hubRouteContract';
 
 // ---------- convertRoutesToLayout (custom prefix-free version) ----------
 
@@ -46,7 +45,7 @@ import { useNextAppAllAccessRoutes, NextAppRoutesRequestProvider } from './nextA
  * Same as core convertRoutesToLayout but uses "/" prefix
  * (paths relative to sub-router basename) instead of hardcoded "/admin/"
  */
-function convertRoutesToLayout(routes: any[], { designable, parentRoute, isMobile, t, depth = 0 }: any) {
+function convertRoutesToLayout(routes: any[], { designable, parentRoute, isMobile, t, appPath, depth = 0 }: any) {
   if (!routes || !Array.isArray(routes)) return [];
 
   const result: any[] = routes
@@ -60,7 +59,7 @@ function convertRoutesToLayout(routes: any[], { designable, parentRoute, isMobil
         return {
           name,
           icon,
-          path: '/',
+          path: normalizeHubLink(item.options?.url || '', appPath),
           hideInMenu: item.hideInMenu,
           _route: item,
           _parentRoute: parentRoute,
@@ -73,8 +72,8 @@ function convertRoutesToLayout(routes: any[], { designable, parentRoute, isMobil
           name,
           icon,
           // Use "/" prefix — relative to sub-router basename
-          path: `/${item.schemaUid}`,
-          redirect: `/${item.schemaUid}`,
+          path: getHubInternalPagePath(appPath, item.schemaUid),
+          redirect: getHubInternalPagePath(appPath, item.schemaUid),
           hideInMenu: item.hideInMenu,
           _route: item,
           _parentRoute: parentRoute,
@@ -91,14 +90,16 @@ function convertRoutesToLayout(routes: any[], { designable, parentRoute, isMobil
             depth: depth + 1,
             isMobile,
             t,
+            appPath,
           }) || [];
 
         const firstChild = findFirstPageRoute(itemChildren);
         const groupRoute: any = {
           name,
           icon,
-          path: `/${item.id}`,
-          redirect: children.length > 0 ? `/${firstChild?.schemaUid || item.id}` : undefined,
+          path: getHubInternalPagePath(appPath, String(item.id)),
+          redirect:
+            children.length > 0 ? getHubInternalPagePath(appPath, firstChild?.schemaUid || String(item.id)) : undefined,
           hideInMenu: item.hideInMenu,
           _route: item,
           _depth: depth,
@@ -166,8 +167,9 @@ const ShowTipWhenNoPages = () => {
   const { token } = useToken();
   const { t } = useTranslation();
   const location = useLocation();
+  const { appPath = '' } = useParams<{ appPath: string }>();
 
-  if (allAccessRoutes.length === 0 && !designable && (location.pathname === '/' || location.pathname === '')) {
+  if (allAccessRoutes.length === 0 && !designable && location.pathname === `/${appPath}`) {
     return (
       <Result
         icon={<HighlightOutlined style={{ fontSize: '8em', color: token.colorText }} />}
@@ -244,13 +246,14 @@ const actionsRender = () => {
 const NavigateToDefaultPage: FC = ({ children }) => {
   const { allAccessRoutes } = useNextAppAllAccessRoutes();
   const location = useLocation();
+  const { appPath = '' } = useParams<{ appPath: string }>();
   const defaultPageUid = findFirstPageRoute(allAccessRoutes as any[])?.schemaUid;
 
   return (
     <>
       {children}
-      {defaultPageUid && (location.pathname === '/' || location.pathname === '') && (
-        <Navigate replace to={`/${defaultPageUid}`} />
+      {defaultPageUid && location.pathname === `/${appPath}` && (
+        <Navigate replace to={getHubInternalPagePath(appPath, defaultPageUid)} />
       )}
     </>
   );
@@ -277,19 +280,20 @@ export const NextAppInternalLayout = (props: any) => {
   const isMobileViewport =
     screens.md === false || (screens.md === undefined && typeof window !== 'undefined' && window.innerWidth < 768);
   const location = useLocation();
-  const { onDragEnd } = useMenuDragEnd();
+  const navigate = useNavigate();
+  const { appPath = '' } = useParams<{ appPath: string }>();
   const { token } = useToken();
   const [collapsed, setCollapsed] = useState(isMobileViewport);
   const { t } = useMenuTranslation();
   const designable = isMobileViewport ? false : _designable;
 
   const route = useMemo(() => {
-    const children = convertRoutesToLayout(allAccessRoutes, { designable, isMobile: isMobileViewport, t });
+    const children = convertRoutesToLayout(allAccessRoutes, { designable, isMobile: isMobileViewport, t, appPath });
     return {
       path: '/',
       children: Array.isArray(children) ? children : [],
     };
-  }, [allAccessRoutes, designable, isMobileViewport, t]);
+  }, [allAccessRoutes, appPath, designable, isMobileViewport, t]);
 
   const layoutToken = useMemo(() => {
     return {
@@ -324,35 +328,50 @@ export const NextAppInternalLayout = (props: any) => {
   return (
     <div style={rootStyle}>
       <div id="nocobase-nextapp-container" style={appContainerStyle}>
-        <DndContext onDragEnd={onDragEnd}>
-          <ProLayout
-            {...props}
-            contentStyle={contentStyle}
-            siderWidth={token.siderWidth || 200}
-            className={resetStyle}
-            location={location}
-            route={route}
-            actionsRender={actionsRender}
-            logo={<NocoBaseLogo />}
-            title={''}
-            layout="mix"
-            splitMenus
-            token={layoutToken}
-            onCollapse={onCollapse}
-            collapsed={collapsed}
-          >
-            <RouteContext.Consumer>
-              {() => {
-                return (
-                  <ConfigProvider theme={theme}>
-                    <GlobalStyle />
-                    <LayoutContent />
-                  </ConfigProvider>
-                );
+        <ProLayout
+          {...props}
+          contentStyle={contentStyle}
+          siderWidth={token.siderWidth || 200}
+          className={resetStyle}
+          location={location}
+          route={route}
+          menuItemRender={(item, dom) => (
+            <a
+              href={item.path}
+              onClick={(event) => {
+                event.preventDefault();
+                const target = String(item.path || '');
+                const routeData = item._route as { options?: { openInNewWindow?: boolean } } | undefined;
+                if (/^(https?:)?\/\//i.test(target) || routeData?.options?.openInNewWindow) {
+                  window.open(target, '_blank', 'noopener,noreferrer');
+                  return;
+                }
+                navigate(target);
               }}
-            </RouteContext.Consumer>
-          </ProLayout>
-        </DndContext>
+            >
+              {dom}
+            </a>
+          )}
+          actionsRender={actionsRender}
+          logo={<NocoBaseLogo />}
+          title={''}
+          layout="mix"
+          splitMenus
+          token={layoutToken}
+          onCollapse={onCollapse}
+          collapsed={collapsed}
+        >
+          <RouteContext.Consumer>
+            {() => {
+              return (
+                <ConfigProvider theme={theme}>
+                  <GlobalStyle />
+                  <LayoutContent />
+                </ConfigProvider>
+              );
+            }}
+          </RouteContext.Consumer>
+        </ProLayout>
       </div>
     </div>
   );

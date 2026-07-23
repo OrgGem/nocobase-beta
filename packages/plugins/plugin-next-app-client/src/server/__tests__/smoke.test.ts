@@ -127,4 +127,32 @@ describe('Next App Client plugin smoke', () => {
     // enableTabs is false -> hidden should be !enableTabs -> true
     expect(updatedChild2.hidden).toBe(true);
   });
+
+  it('does not expose routes from a disabled Hub app', async () => {
+    const configRepository = app.db.getRepository('nextAppConfig');
+    const routesRepository = app.db.getRepository('nextAppRoutes');
+    const config = await configRepository.create({
+      values: {
+        path: 'disabled-app',
+        title: 'Disabled app',
+        enabled: false,
+      },
+    });
+    await routesRepository.create({
+      values: {
+        title: 'Hidden route',
+        configId: config.id,
+      },
+    });
+
+    const response = await app
+      .agent()
+      .resource('nextAppRoutes')
+      .listAccessible({
+        filter: { appPath: 'disabled-app' },
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual([]);
+  });
 });

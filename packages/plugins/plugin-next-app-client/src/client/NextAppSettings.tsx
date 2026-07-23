@@ -10,18 +10,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, Table, Button, Modal, Form, Input, Switch, Space, Popconfirm, Alert, Typography, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
+import { stripModernClientPrefix, useApp } from '@nocobase/client-v2';
 import { useTranslation } from 'react-i18next';
 
 const { Title, Text } = Typography;
 import { NextAppRoutesManager } from './NextAppRoutesManager';
 import { ArrowLeftOutlined } from '@ant-design/icons';
+import { getHubAppPath, HUB_PATH, joinRoutePath } from './hubRouteContract';
 
 /** Only lowercase letters, numbers, and hyphens */
 const PATH_REGEX = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
 
 /** Paths that must not be used */
-const RESERVED_PATHS = ['admin', 'api', 'signin', 'signup', 'static', 'storage'];
+const RESERVED_PATHS = ['hub', 'next-app', 'admin', 'api', 'signin', 'signup', 'static', 'storage'];
 
 /** Generate a random path like 'app-a3f1' */
 const generateRandomPath = (): string => {
@@ -43,7 +44,8 @@ interface SubpathRecord {
 }
 
 export const NextAppSettings: React.FC = () => {
-  const api = useApp().apiClient;
+  const app = useApp();
+  const api = app.apiClient;
   const { t } = useTranslation();
 
   const [subpaths, setSubpaths] = useState<SubpathRecord[]>([]);
@@ -52,16 +54,20 @@ export const NextAppSettings: React.FC = () => {
   const [editing, setEditing] = useState<SubpathRecord | null>(null);
   const [currentApp, setCurrentApp] = useState<SubpathRecord | null>(null);
   const [form] = Form.useForm();
+  const getHubUrl = useCallback(
+    (appPath: string) => joinRoutePath(stripModernClientPrefix(app.getPublicPath()), getHubAppPath(appPath)),
+    [app],
+  );
 
   // Fetch all subpaths
   const fetchSubpaths = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.request({
+      const res = await api.request<{ data: SubpathRecord[] }>({
         url: 'nextAppConfig:list',
         params: { sort: ['-createdAt'], pageSize: 100 },
       });
-      setSubpaths((res as any)?.data?.data || []);
+      setSubpaths(res?.data?.data || []);
     } catch (err) {
       console.error('Failed to fetch subpaths:', err);
     } finally {
@@ -169,8 +175,8 @@ export const NextAppSettings: React.FC = () => {
       render: (value: string) => (
         <Space>
           <LinkOutlined />
-          <a href={`/next-app/${value.replace(/^\//, '')}`} target="_blank" rel="noopener noreferrer">
-            /next-app/{value.replace(/^\//, '')}
+          <a href={getHubUrl(value)} target="_blank" rel="noopener noreferrer">
+            {getHubUrl(value)}
           </a>
         </Space>
       ),
@@ -199,7 +205,7 @@ export const NextAppSettings: React.FC = () => {
       title: t('Actions'),
       key: 'actions',
       width: 140,
-      render: (_, record) => (
+      render: (_: unknown, record: SubpathRecord) => (
         <Space>
           <Button type="link" size="small" onClick={() => setCurrentApp(record)}>
             {t('Configure Routes')}
@@ -255,7 +261,7 @@ export const NextAppSettings: React.FC = () => {
 
         <Alert
           message={t(
-            'Each app is accessible under /next-app/{path}. You can configure separate menus and permissions for each.',
+            'Each app is accessible under /hub/{path}. You can configure separate menus and permissions for each.',
           )}
           type="info"
           showIcon
@@ -305,7 +311,7 @@ export const NextAppSettings: React.FC = () => {
             ]}
             help={t('A unique identifier for this app (e.g. portal, dashboard)')}
           >
-            <Input addonBefore="/next-app/" placeholder="my-portal" disabled={!!editing} />
+            <Input addonBefore={`${HUB_PATH}/`} placeholder="my-portal" disabled={!!editing} />
           </Form.Item>
 
           <Form.Item
