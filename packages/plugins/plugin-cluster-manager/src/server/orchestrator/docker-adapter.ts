@@ -111,8 +111,6 @@ export class DockerAdapter implements IOrchestratorAdapter {
       // this, a worker created from the bare image runs the image default
       // command, skips the app's bootstrap, never finishes booting, and never
       // registers a heartbeat — so it never appears in Cluster Nodes.
-      let inheritedCmd: string[] | undefined;
-      let inheritedEntrypoint: string[] | undefined;
 
       // Auto-detect current container's configuration to inherit networks and env vars
       try {
@@ -153,14 +151,6 @@ export class DockerAdapter implements IOrchestratorAdapter {
           const inheritedBinds = myInfo.HostConfig.Binds as string[];
           targetVolumes = Array.from(new Set([...inheritedBinds, ...targetVolumes]));
         }
-        // Inherit the startup Cmd/Entrypoint so the worker runs the same bootstrap
-        // as the app container (used only when the stack pins no explicit command).
-        if (Array.isArray(myInfo?.Config?.Cmd) && myInfo.Config.Cmd.length > 0) {
-          inheritedCmd = myInfo.Config.Cmd as string[];
-        }
-        if (Array.isArray(myInfo?.Config?.Entrypoint) && myInfo.Config.Entrypoint.length > 0) {
-          inheritedEntrypoint = myInfo.Config.Entrypoint as string[];
-        }
       } catch (e: any) {
         // Ignore error if not running in a container or cannot inspect
         console.error('[DockerAdapter] Failed to inherit container config:', e.message);
@@ -189,6 +179,7 @@ export class DockerAdapter implements IOrchestratorAdapter {
           Labels: {
             [LABEL_STACK]: stack.name,
             [LABEL_MANAGED]: 'true',
+            'orchestrator.template-hash': stack.templateHash || 'unknown',
             ...this.workerLabels,
           },
           HostConfig: {
@@ -197,18 +188,9 @@ export class DockerAdapter implements IOrchestratorAdapter {
           },
         };
 
-        if (stack.command) {
-          createOpts.Cmd = ['/bin/sh', '-c', stack.command];
-        } else {
-          // No explicit command: replay the app container's bootstrap so the
-          // worker boots NocoBase the same way and registers a heartbeat.
-          if (inheritedEntrypoint) {
-            createOpts.Entrypoint = inheritedEntrypoint;
-          }
-          if (inheritedCmd) {
-            createOpts.Cmd = inheritedCmd;
-          }
-        }
+        // Never inherit app-main's command/entrypoint. The worker branch waits
+        // for a verified migration leader and only then starts NocoBase.
+        createOpts.Cmd = ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh'];
 
         if (stack.resourceLimits?.memory) {
           createOpts.HostConfig.Memory = this.parseMemory(stack.resourceLimits.memory);
@@ -249,7 +231,7 @@ export class DockerAdapter implements IOrchestratorAdapter {
         }
 
         await container.start();
-        result.containersCreated!.push(container.id.substring(0, 12));
+        result.containersCreated?.push(container.id.substring(0, 12));
       }
     } else if (diff < 0) {
       // Scale DOWN — remove newest first (LIFO)
@@ -261,10 +243,10 @@ export class DockerAdapter implements IOrchestratorAdapter {
           const container = this.docker.getContainer(c.id);
           await container.stop({ t: 10 }).catch(() => {});
           await container.remove({ force: true });
-          result.containersRemoved!.push(c.id);
+          result.containersRemoved?.push(c.id);
         } catch (err: any) {
           // Container may already be gone
-          result.containersRemoved!.push(`${c.id} (error: ${err.message})`);
+          result.containersRemoved?.push(`${c.id} (error: ${err.message})`);
         }
       }
     }

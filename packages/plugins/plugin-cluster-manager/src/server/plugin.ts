@@ -30,12 +30,24 @@ import { collectLocalDoctorSnapshot, doctorActions } from './actions/doctor';
 import { RedisWorkerIdAllocator } from './adapters/redis-worker-id-allocator';
 import { healthActions } from './actions/health';
 import { createIdempotencyMiddleware } from './middlewares/idempotencyMiddleware';
+import { workerTemplateVariableActions } from './actions/worker-template-variables';
+import { WORKER_TEMPLATE_DEFAULTS } from './orchestrator/worker-template';
 
 export class PluginClusterManagerServer extends Plugin {
   public nodeRegistry: RedisNodeRegistry;
   public orchestrator: IOrchestratorAdapter | null = null;
   public leaderElection: LeaderElection | null = null;
   public workerIdAllocator: RedisWorkerIdAllocator | null = null;
+
+  async install() {
+    const variables = this.db.getRepository('workerTemplateVariables');
+    for (const value of WORKER_TEMPLATE_DEFAULTS) {
+      const existing = await variables.findOne({ filter: { key: value.key, scope: 'global', stackId: null } });
+      if (!existing) {
+        await variables.create({ values: value });
+      }
+    }
+  }
 
   async afterAdd() {
     // NocoBase asks workerIdAllocator for the Snowflake worker ID immediately
@@ -360,6 +372,11 @@ export class PluginClusterManagerServer extends Plugin {
       actions: packageManagerActions,
     });
 
+    this.app.resourcer.define({
+      name: 'workerTemplate',
+      actions: workerTemplateVariableActions,
+    });
+
     // Plugin operations (force disable/remove application plugin records)
     this.app.resourcer.define({
       name: 'clusterManagerPlugins',
@@ -409,6 +426,7 @@ export class PluginClusterManagerServer extends Plugin {
         'clusterManagerCacheMgr:*',
         'workerOrchestrator:*',
         'orchestratorStacks:*',
+        'workerTemplate:*',
         'workerPackages:*',
         'clusterManagerPlugins:*',
         'workerQueueMappings:*',

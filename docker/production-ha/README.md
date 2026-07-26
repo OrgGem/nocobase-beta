@@ -77,7 +77,11 @@ This stack is pinned to `nocobase/nocobase:2.1.30-full` via
 fresh deployments and existing `.env` based deployments resolve to the same
 NocoBase version. All three app containers use `WORKER_MODE=''`, so they also
 consume registered background queues. Worker containers spawned separately by
-`plugin-cluster-manager` inherit the app container image.
+`plugin-cluster-manager` inherit the app container image. They are always
+started with `APP_ROLE=worker`, `APP_NODE_ROLE=worker`, and `WORKER_MODE=*`
+unless the worker stack explicitly narrows the queue mode. Before `yarn start`,
+the managed worker branch waits for `CLUSTER_MANAGER_WORKER_READY_URL`; it exits
+on timeout instead of racing the app-main migration gate.
 
 ## Quick Start
 
@@ -178,6 +182,8 @@ upstream apps {
 |---|---|
 | `WORKER_MODE=!` | HTTP only, no background jobs |
 | `WORKER_MODE=*` | Background jobs only, no HTTP |
+| `CLUSTER_MANAGER_WORKER_READY_URL` | Deployment-specific app-main readiness endpoint for dynamic workers |
+| `CLUSTER_MANAGER_WORKER_IMAGE` | Optional explicit worker image; otherwise Docker inherits app-main's image |
 | `CACHE_DEFAULT_STORE=redis` | Use Redis for caching |
 | `REDIS_URL` | Redis for pub/sub + queue coordination |
 | `CACHE_REDIS_URL` | Redis for cache storage |

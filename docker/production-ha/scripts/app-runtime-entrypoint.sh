@@ -4,7 +4,7 @@ set -eu
 
 APP_ROOT='/app/nocobase'
 STORAGE_ROOT="${APP_ROOT}/storage"
-READINESS_URL="${APP_START_AFTER_URL:-http://app-main:${APP_PORT:-13000}/api/app:getInfo}"
+READINESS_URL="${APP_START_AFTER_URL:-${WORKER_READY_URL:-${CLUSTER_MANAGER_WORKER_READY_URL:-}}}"
 
 install_git_if_missing() {
   if command -v git >/dev/null 2>&1; then
@@ -65,17 +65,79 @@ request.on('error', () => process.exit(1));
 NODE
 }
 
+is_non_negative_integer() {
+  case "$1" in
+    ''|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 wait_for_predecessor() {
+  max_wait_seconds="$1"
+  interval_seconds="$2"
+  if [ -z "${READINESS_URL}" ]; then
+    echo '[runtime] readiness URL is required' >&2
+    return 1
+  fi
+  if ! is_non_negative_integer "${max_wait_seconds}" || ! is_non_negative_integer "${interval_seconds}" || [ "${interval_seconds}" -eq 0 ]; then
+    echo '[runtime] readiness timeout and interval must be positive integers' >&2
+    return 1
+  fi
   echo "[runtime] waiting for predecessor readiness at ${READINESS_URL}"
-  attempt=0
+  waited=0
   while ! predecessor_is_ready; do
-    attempt=$((attempt + 1))
-    if [ $((attempt % 12)) -eq 0 ]; then
-      echo "[runtime] predecessor is not ready yet (attempt ${attempt})"
+    if [ "${max_wait_seconds}" -gt 0 ] && [ "${waited}" -ge "${max_wait_seconds}" ]; then
+      echo "[runtime] readiness timed out after ${waited}s; refusing to start" >&2
+      return 1
     fi
-    sleep 5
+    waited=$((waited + interval_seconds))
+    if [ $(((waited / interval_seconds) % 12)) -eq 0 ]; then
+      echo "[runtime] predecessor is not ready yet (${waited}s elapsed)"
+    fi
+    sleep "${interval_seconds}"
   done
   echo '[runtime] predecessor is ready'
+}
+
+run_full_upgrade() {
+  upgrade_log="$(mktemp)"
+  echo '[runtime] app-main: pending upgrade marker found; running full upgrade'
+
+  # `nocobase upgrade` can finish database migration but remain alive because a
+  # third-party plugin leaves a background handle open during its internal
+  # restart. Isolate it in a session so the completed CLI process can be
+  # stopped without affecting the entrypoint or the subsequent app server.
+  if command -v setsid >/dev/null 2>&1; then
+    setsid yarn nocobase upgrade >"${upgrade_log}" 2>&1 &
+    upgrade_pid=$!
+    upgrade_group=true
+  else
+    yarn nocobase upgrade >"${upgrade_log}" 2>&1 &
+    upgrade_pid=$!
+    upgrade_group=false
+  fi
+
+  while kill -0 "${upgrade_pid}" 2>/dev/null; do
+    if grep -q 'NocoBase has been upgraded' "${upgrade_log}"; then
+      echo '[runtime] app-main: full upgrade completed; stopping stale CLI process'
+      if [ "${upgrade_group}" = true ]; then
+        kill -TERM "-${upgrade_pid}" 2>/dev/null || true
+      else
+        kill -TERM "${upgrade_pid}" 2>/dev/null || true
+      fi
+      wait "${upgrade_pid}" 2>/dev/null || true
+      cat "${upgrade_log}"
+      rm -f "${upgrade_log}"
+      return 0
+    fi
+    sleep 1
+  done
+
+  wait "${upgrade_pid}"
+  upgrade_status=$?
+  cat "${upgrade_log}"
+  rm -f "${upgrade_log}"
+  return "${upgrade_status}"
 }
 
 install_git_if_missing
@@ -88,8 +150,7 @@ case "${APP_NODE_ROLE:-backup}" in
     yarn nocobase install
 
     if [ -e "${STORAGE_ROOT}/.upgrading" ]; then
-      echo '[runtime] app-main: pending upgrade marker found; running full upgrade'
-      yarn nocobase upgrade
+      run_full_upgrade
     else
       echo '[runtime] app-main: checking package/database version'
       SKIP_SAME_VERSION_UPGRADE=true yarn nocobase upgrade
@@ -103,9 +164,31 @@ case "${APP_NODE_ROLE:-backup}" in
     ;;
   backup)
     export READINESS_URL
-    wait_for_predecessor
+    wait_for_predecessor 0 5
     cd "${APP_ROOT}"
     echo '[runtime] backup: starting NocoBase without quickstart/migration'
+    exec yarn start
+    ;;
+  worker)
+    export READINESS_URL
+    worker_timeout="${WORKER_READY_TIMEOUT_SECONDS:-900}"
+    worker_interval="${WORKER_READY_INTERVAL_SECONDS:-5}"
+    worker_grace="${WORKER_READY_GRACE_SECONDS:-15}"
+    if ! is_non_negative_integer "${worker_grace}"; then
+      echo '[runtime] WORKER_READY_GRACE_SECONDS must be a non-negative integer' >&2
+      exit 1
+    fi
+    if ! wait_for_predecessor "${worker_timeout}" "${worker_interval}"; then
+      # Fail closed: Docker/Kubernetes restart policy may retry, but this worker
+      # never races app-main's install, upgrade, or migration gate.
+      exit 1
+    fi
+    if [ "${worker_grace}" -gt 0 ]; then
+      echo "[runtime] worker: readiness confirmed; waiting ${worker_grace}s grace period"
+      sleep "${worker_grace}"
+    fi
+    cd "${APP_ROOT}"
+    echo '[runtime] worker: starting NocoBase without install/upgrade/migration'
     exec yarn start
     ;;
   *)

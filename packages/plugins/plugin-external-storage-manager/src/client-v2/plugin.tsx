@@ -7,7 +7,6 @@ export class PluginExternalStorageManagerClient extends Plugin<Record<string, ne
       key: 'external-storage-manager',
       title: this.t('External Storage'),
       icon: 'HddOutlined',
-      
     });
 
     this.pluginSettingsManager.addPageTabItem({
@@ -15,7 +14,7 @@ export class PluginExternalStorageManagerClient extends Plugin<Record<string, ne
       key: 'browse',
       title: this.t('Browse Files'),
       aclSnippet: 'pm.plugin-external-storage-manager.browse',
-      componentLoader: () => import('../client/components/FileBrowser'),
+      componentLoader: () => import('./components/FileBrowser'),
     });
 
     this.pluginSettingsManager.addPageTabItem({
@@ -23,9 +22,8 @@ export class PluginExternalStorageManagerClient extends Plugin<Record<string, ne
       key: 'settings',
       title: this.t('Directory Settings'),
       aclSnippet: 'pm.plugin-external-storage-manager.directories',
-      componentLoader: () => import('../client/components/DirectoryManager'),
+      componentLoader: () => import('./components/DirectoryManager'),
     });
-
   }
 }
 

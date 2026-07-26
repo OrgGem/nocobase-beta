@@ -272,7 +272,11 @@ export class K8sAdapter implements IOrchestratorAdapter {
 
     const namespace = stack.namespace || this.namespace;
     const deploymentName = stack.deploymentName || stack.name;
-    const labels = this.buildWorkerLabels(stack);
+    const selectorLabels = this.buildWorkerLabels(stack);
+    const labels = {
+      ...selectorLabels,
+      'orchestrator.template-hash': stack.templateHash || 'unknown',
+    };
     const container: any = {
       name: stack.k8sContainerName || 'worker',
       image: stack.image,
@@ -284,9 +288,9 @@ export class K8sAdapter implements IOrchestratorAdapter {
       securityContext: stack.k8sSecurityContext,
     };
 
-    if (stack.command?.trim()) {
-      container.command = ['/bin/sh', '-c', stack.command.trim()];
-    }
+    // K8s images (or their mounted ConfigMap) must provide the same managed
+    // worker entrypoint as Docker. User stack commands are intentionally ignored.
+    container.command = ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh'];
 
     for (const key of ['envFrom', 'resources', 'volumeMounts', 'securityContext']) {
       if (this.isEmptyValue(container[key])) {
@@ -319,7 +323,7 @@ export class K8sAdapter implements IOrchestratorAdapter {
       spec: {
         replicas,
         selector: {
-          matchLabels: labels,
+          matchLabels: selectorLabels,
         },
         template: {
           metadata: {

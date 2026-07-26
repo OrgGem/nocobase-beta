@@ -54,6 +54,10 @@ x-nocobase-env: &nocobase-env
   LOCK_ADAPTER_REDIS_URL: ${LOCK_ADAPTER_REDIS_URL:-redis://redis:6379/4}
   # Orchestrator
   ORCHESTRATOR_ADAPTER: ${ORCHESTRATOR_ADAPTER:-docker}
+  # Dynamic worker containers read this deployment-specific endpoint through
+  # Cluster Manager; plugin code deliberately does not assume a service name.
+  CLUSTER_MANAGER_WORKER_READY_URL: ${CLUSTER_MANAGER_WORKER_READY_URL:-http://app-main:13000/api/app:getInfo}
+  CLUSTER_MANAGER_WORKER_IMAGE: ${CLUSTER_MANAGER_WORKER_IMAGE:-nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}}
   # Logging
   LOGGER_LEVEL: debug
   LOGGER_TRANSPORT: console,dailyRotateFile

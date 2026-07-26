@@ -9,6 +9,7 @@
 
 import { Readable } from 'stream';
 import path from 'path';
+import type { ListObjectsV2CommandOutput } from '@aws-sdk/client-s3';
 import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult } from './types';
 
 /**
@@ -23,11 +24,7 @@ export class S3Adapter implements IStorageAdapter {
   private bucket: string;
   private sdk: any; // SDK classes from s3 plugin
 
-  constructor(params: {
-    client: any;
-    bucket: string;
-    sdk: any;
-  }) {
+  constructor(params: { client: any; bucket: string; sdk: any }) {
     this.client = params.client;
     this.bucket = params.bucket;
     this.sdk = params.sdk;
@@ -44,19 +41,71 @@ export class S3Adapter implements IStorageAdapter {
   private guessMime(filename: string): string {
     const ext = path.extname(filename).toLowerCase();
     const mimeMap: Record<string, string> = {
-      '.txt': 'text/plain', '.html': 'text/html', '.css': 'text/css',
-      '.js': 'application/javascript', '.json': 'application/json',
-      '.xml': 'application/xml', '.pdf': 'application/pdf',
-      '.zip': 'application/zip', '.gz': 'application/gzip',
-      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-      '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
-      '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
-      '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      '.csv': 'text/csv', '.md': 'text/markdown',
+      '.txt': 'text/plain',
+      '.html': 'text/html',
+      '.css': 'text/css',
+      '.js': 'application/javascript',
+      '.json': 'application/json',
+      '.xml': 'application/xml',
+      '.pdf': 'application/pdf',
+      '.zip': 'application/zip',
+      '.gz': 'application/gzip',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.svg': 'image/svg+xml',
+      '.webp': 'image/webp',
+      '.mp4': 'video/mp4',
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.csv': 'text/csv',
+      '.md': 'text/markdown',
     };
     return mimeMap[ext] || 'application/octet-stream';
+  }
+
+  private toFileEntries(response: ListObjectsV2CommandOutput, prefix: string): FileEntry[] {
+    const entries: FileEntry[] = [];
+
+    for (const commonPrefix of response.CommonPrefixes || []) {
+      if (!commonPrefix.Prefix) continue;
+
+      const name = commonPrefix.Prefix.replace(prefix, '').replace(/\/$/, '');
+      if (name) {
+        entries.push({
+          name,
+          path: '/' + commonPrefix.Prefix.replace(/\/$/, ''),
+          type: 'directory',
+          size: 0,
+          modifiedAt: 0,
+        });
+      }
+    }
+
+    for (const object of response.Contents || []) {
+      if (!object.Key || object.Key === prefix) continue;
+
+      const name = object.Key.replace(prefix, '');
+      if (!name.includes('/')) {
+        entries.push({
+          name,
+          path: '/' + object.Key,
+          type: 'file',
+          size: object.Size || 0,
+          modifiedAt: object.LastModified ? object.LastModified.getTime() : 0,
+          mimetype: this.guessMime(name),
+        });
+      }
+    }
+
+    return entries;
   }
 
   async list(remotePath: string, options?: ListOptions): Promise<FileEntry[] | ListResult> {
@@ -68,13 +117,15 @@ export class S3Adapter implements IStorageAdapter {
     if (options?.search) {
       let continuationToken: string | undefined;
       do {
-        const response = await this.client.send(new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: prefix,
-          Delimiter: '/',
-          MaxKeys: 1000,
-          ContinuationToken: continuationToken,
-        }));
+        const response = await this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.bucket,
+            Prefix: prefix,
+            Delimiter: '/',
+            MaxKeys: 1000,
+            ContinuationToken: continuationToken,
+          }),
+        );
 
         if (response.CommonPrefixes) {
           for (const cp of response.CommonPrefixes) {
@@ -82,8 +133,11 @@ export class S3Adapter implements IStorageAdapter {
               const name = cp.Prefix.replace(prefix, '').replace(/\/$/, '');
               if (name) {
                 entries.push({
-                  name, path: '/' + cp.Prefix.replace(/\/$/, ''),
-                  type: 'directory', size: 0, modifiedAt: 0,
+                  name,
+                  path: '/' + cp.Prefix.replace(/\/$/, ''),
+                  type: 'directory',
+                  size: 0,
+                  modifiedAt: 0,
                 });
               }
             }
@@ -96,8 +150,10 @@ export class S3Adapter implements IStorageAdapter {
               const name = obj.Key.replace(prefix, '');
               if (!name.includes('/')) {
                 entries.push({
-                  name, path: '/' + obj.Key,
-                  type: 'file', size: obj.Size || 0,
+                  name,
+                  path: '/' + obj.Key,
+                  type: 'file',
+                  size: obj.Size || 0,
                   modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
                   mimetype: this.guessMime(name),
                 });
@@ -117,45 +173,45 @@ export class S3Adapter implements IStorageAdapter {
       return entries;
     }
 
-    // Native single-page list
     const limit = options?.limit || 100;
-    const response = await this.client.send(new ListObjectsV2Command({
-      Bucket: this.bucket,
-      Prefix: prefix,
-      Delimiter: '/',
-      MaxKeys: limit,
-      ContinuationToken: options?.continuationToken,
-    }));
+    let remainingOffset = options?.offset || 0;
+    let continuationToken = options?.continuationToken;
 
-    if (response.CommonPrefixes) {
-      for (const cp of response.CommonPrefixes) {
-        if (cp.Prefix) {
-          const name = cp.Prefix.replace(prefix, '').replace(/\/$/, '');
-          if (name) {
-            entries.push({
-              name, path: '/' + cp.Prefix.replace(/\/$/, ''),
-              type: 'directory', size: 0, modifiedAt: 0,
-            });
-          }
-        }
+    // S3 accepts cursors rather than offsets. Consume only the exact number of
+    // visible entries requested so the final response can expose a valid cursor.
+    while (remainingOffset > 0) {
+      const response = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          Delimiter: '/',
+          MaxKeys: Math.min(remainingOffset, 1000),
+          ContinuationToken: continuationToken,
+        }),
+      );
+      remainingOffset -= this.toFileEntries(response, prefix).length;
+      continuationToken = response.NextContinuationToken;
+
+      if (!continuationToken) {
+        return { entries: [], hasMore: false };
       }
     }
 
-    if (response.Contents) {
-      for (const obj of response.Contents) {
-        if (obj.Key && obj.Key !== prefix) {
-          const name = obj.Key.replace(prefix, '');
-          if (!name.includes('/')) {
-            entries.push({
-              name, path: '/' + obj.Key,
-              type: 'file', size: obj.Size || 0,
-              modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
-              mimetype: this.guessMime(name),
-            });
-          }
-        }
-      }
-    }
+    let hasMore = false;
+    do {
+      const response = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          Delimiter: '/',
+          MaxKeys: limit - entries.length,
+          ContinuationToken: continuationToken,
+        }),
+      );
+      entries.push(...this.toFileEntries(response, prefix));
+      continuationToken = response.NextContinuationToken;
+      hasMore = response.IsTruncated || false;
+    } while (entries.length < limit && continuationToken);
 
     entries.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
@@ -164,8 +220,8 @@ export class S3Adapter implements IStorageAdapter {
 
     return {
       entries,
-      nextContinuationToken: response.NextContinuationToken,
-      hasMore: response.IsTruncated,
+      nextContinuationToken: continuationToken,
+      hasMore,
     };
   }
 
@@ -174,21 +230,30 @@ export class S3Adapter implements IStorageAdapter {
     const key = remotePath.replace(/^\/+/, '');
 
     try {
-      const response = await this.client.send(new HeadObjectCommand({
-        Bucket: this.bucket, Key: key,
-      }));
+      const response = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+        }),
+      );
       return {
-        name: path.basename(key), path: '/' + key,
-        type: 'file', size: response.ContentLength || 0,
+        name: path.basename(key),
+        path: '/' + key,
+        type: 'file',
+        size: response.ContentLength || 0,
         modifiedAt: response.LastModified ? response.LastModified.getTime() : 0,
         mimetype: response.ContentType || this.guessMime(key),
       };
     } catch (error: any) {
       if (error.name === 'NotFound' || error.$metadata?.httpStatusCode === 404) {
         const prefix = key.endsWith('/') ? key : key + '/';
-        const listResponse = await this.client.send(new ListObjectsV2Command({
-          Bucket: this.bucket, Prefix: prefix, MaxKeys: 1,
-        }));
+        const listResponse = await this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.bucket,
+            Prefix: prefix,
+            MaxKeys: 1,
+          }),
+        );
         if ((listResponse.Contents?.length || 0) > 0) {
           return { name: path.basename(key), path: '/' + key, type: 'directory', size: 0, modifiedAt: 0 };
         }
@@ -216,10 +281,13 @@ export class S3Adapter implements IStorageAdapter {
     const upload = new Upload({
       client: this.client,
       params: {
-        Bucket: this.bucket, Key: key, Body: stream,
+        Bucket: this.bucket,
+        Key: key,
+        Body: stream,
         ContentType: options?.mimetype || this.guessMime(key),
       },
-      queueSize: 1, leavePartsOnError: false,
+      queueSize: 1,
+      leavePartsOnError: false,
     });
     await upload.done();
   }
@@ -228,9 +296,14 @@ export class S3Adapter implements IStorageAdapter {
     const { PutObjectCommand } = this.sdk;
     let key = remotePath.replace(/^\/+/, '');
     if (!key.endsWith('/')) key += '/';
-    await this.client.send(new PutObjectCommand({
-      Bucket: this.bucket, Key: key, Body: '', ContentType: 'application/x-directory',
-    }));
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: '',
+        ContentType: 'application/x-directory',
+      }),
+    );
   }
 
   async delete(remotePath: string): Promise<void> {
@@ -248,9 +321,14 @@ export class S3Adapter implements IStorageAdapter {
     let continuationToken: string | undefined;
 
     do {
-      const response = await this.client.send(new ListObjectsV2Command({
-        Bucket: this.bucket, Prefix: prefix, MaxKeys: 1000, ContinuationToken: continuationToken,
-      }));
+      const response = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.bucket,
+          Prefix: prefix,
+          MaxKeys: 1000,
+          ContinuationToken: continuationToken,
+        }),
+      );
       if (response.Contents) {
         for (const obj of response.Contents) {
           if (obj.Key) objects.push({ Key: obj.Key });
@@ -262,9 +340,12 @@ export class S3Adapter implements IStorageAdapter {
     if (objects.length === 0) return;
 
     for (let i = 0; i < objects.length; i += 1000) {
-      await this.client.send(new DeleteObjectsCommand({
-        Bucket: this.bucket, Delete: { Objects: objects.slice(i, i + 1000), Quiet: true },
-      }));
+      await this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: { Objects: objects.slice(i, i + 1000), Quiet: true },
+        }),
+      );
     }
   }
 
@@ -281,21 +362,25 @@ export class S3Adapter implements IStorageAdapter {
       let continuationToken: string | undefined;
 
       do {
-        const response = await this.client.send(new ListObjectsV2Command({
-          Bucket: this.bucket,
-          Prefix: oldPrefix,
-          MaxKeys: 1000,
-          ContinuationToken: continuationToken,
-        }));
+        const response = await this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.bucket,
+            Prefix: oldPrefix,
+            MaxKeys: 1000,
+            ContinuationToken: continuationToken,
+          }),
+        );
 
         for (const obj of response.Contents || []) {
           if (!obj.Key) continue;
           const targetKey = `${newPrefix}${obj.Key.slice(oldPrefix.length)}`;
-          await this.client.send(new CopyObjectCommand({
-            Bucket: this.bucket,
-            CopySource: encodeURIComponent(`${this.bucket}/${obj.Key}`),
-            Key: targetKey,
-          }));
+          await this.client.send(
+            new CopyObjectCommand({
+              Bucket: this.bucket,
+              CopySource: encodeURIComponent(`${this.bucket}/${obj.Key}`),
+              Key: targetKey,
+            }),
+          );
           copiedObjects.push({ Key: obj.Key });
         }
 
@@ -303,24 +388,33 @@ export class S3Adapter implements IStorageAdapter {
       } while (continuationToken);
 
       for (let i = 0; i < copiedObjects.length; i += 1000) {
-        await this.client.send(new DeleteObjectsCommand({
-          Bucket: this.bucket,
-          Delete: { Objects: copiedObjects.slice(i, i + 1000), Quiet: true },
-        }));
+        await this.client.send(
+          new DeleteObjectsCommand({
+            Bucket: this.bucket,
+            Delete: { Objects: copiedObjects.slice(i, i + 1000), Quiet: true },
+          }),
+        );
       }
       return;
     }
 
-    await this.client.send(new CopyObjectCommand({
-      Bucket: this.bucket,
-      CopySource: encodeURIComponent(`${this.bucket}/${oldKey}`),
-      Key: newKey,
-    }));
+    await this.client.send(
+      new CopyObjectCommand({
+        Bucket: this.bucket,
+        CopySource: encodeURIComponent(`${this.bucket}/${oldKey}`),
+        Key: newKey,
+      }),
+    );
     await this.delete(oldPath);
   }
 
   async exists(remotePath: string): Promise<boolean> {
-    try { await this.stat(remotePath); return true; } catch { return false; }
+    try {
+      await this.stat(remotePath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

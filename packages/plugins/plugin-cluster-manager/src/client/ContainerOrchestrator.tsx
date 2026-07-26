@@ -94,39 +94,12 @@ interface DiscoveredQueue {
   workerProcessName?: string;
 }
 
-const DEFAULT_WORKER_COMMAND = `export NOCOBASE_RUNNING_IN_DOCKER=true
-if ! command -v git >/dev/null; then echo "Installing git..."; if command -v apt-get >/dev/null; then apt-get update && apt-get install -y git; elif command -v apk >/dev/null; then apk add git; fi; fi
-if [ ! -d /app/nocobase ]; then mkdir -p /app/nocobase; fi
-if [ ! -f /app/nocobase/package.json ]; then
-  echo "copying..."
-  tar -zxf /app/nocobase.tar.gz --absolute-names -C /app/nocobase
-  touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
-fi
-echo "Applying license hotfix..."
-cd /app/nocobase && echo "module.exports={getEnvAsync:async()=>({sys:'mock',osVer:'mock',db:{id:'mock'}}),getInstanceIdWithPublicKeyAsync:async()=>'mock',getInstanceIdAsync:async()=>'mock',instanceIdDecrypt:()=>'mock',createKeyPair:()=>({publicKey:'mock',privateKey:'mock'}),encryptWithPublicKey:()=>'mock',encrypt:()=>'mock',decryptWithPrivateKey:()=>'mock',createSignature:()=>'mock',verifySignature:()=>true,keyEncrypt:()=>'mock',keyDecrypt:()=>JSON.stringify({licenseKey:{domain:'*'}})}" > node_modules/@nocobase/license-kit/index.js
-cd /app/nocobase && yarn nocobase postinstall
-PRIMARY_URL="http://app-1:13000/api/app:getInfo"
-MAX_WAIT=900
-WAITED=0
-while [ $WAITED -lt $MAX_WAIT ]; do
-  if wget -q --spider "$PRIMARY_URL" 2>/dev/null; then
-    echo "Primary ready after \${WAITED}s. Waiting an additional 15s..."
-    sleep 15
-    break
-  fi
-  sleep 5
-  WAITED=$((WAITED + 5))
-done
-exec yarn --cwd /app/nocobase start`;
-
-const DEFAULT_WORKER_MODE = 'workflow:process,async-task:process';
+const DEFAULT_WORKER_MODE = '*';
 
 const COMMON_WORKER_MODES = getCommonWorkerProcesses();
 const ALL_WORKER_MODE = { name: '*', label: 'All processes', description: 'Consume every worker process' };
 
 const DEFAULT_WORKER_ENV = {
-  APP_ROLE: 'worker',
-  WORKER_MODE: DEFAULT_WORKER_MODE,
   APP_PORT: '13000',
   SKILL_HUB_SANDBOX: 'false',
 };
@@ -207,8 +180,8 @@ function stackToFormValues(stack?: StackInfo | null) {
     return {
       name: 'app-workers',
       adapter: 'kubernetes',
-      image: 'nocobase/nocobase:2.1.6-full',
-      command: DEFAULT_WORKER_COMMAND,
+      image: '',
+      command: '',
       workerMode: splitWorkerMode(DEFAULT_WORKER_MODE),
       envVars: jsonText(DEFAULT_WORKER_ENV, {}),
       resourceLimits: jsonText({ memory: '1536Mi' }, {}),
@@ -260,8 +233,6 @@ function formValuesToStack(values: any) {
   }
 
   const envVars = parseJsonText(values.envVars, {}, 'Environment variables');
-  envVars.APP_ROLE = envVars.APP_ROLE || 'worker';
-  envVars.WORKER_MODE = workerMode;
   if (envVars.SKILL_HUB_SANDBOX === undefined) {
     envVars.SKILL_HUB_SANDBOX = 'false';
   }
@@ -919,8 +890,14 @@ export function ContainerOrchestrator() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="image" label={t('Image')} rules={[{ required: true }]}>
-                <Input placeholder="nocobase/nocobase:2.0.46-full" />
+              <Form.Item
+                name="image"
+                label={t('Image')}
+                extra={t(
+                  'Leave empty to inherit the app image. Configure an explicit image in Worker template when Kubernetes requires one.',
+                )}
+              >
+                <Input placeholder={t('Inherited from app')} />
               </Form.Item>
             </Col>
           </Row>
@@ -1081,10 +1058,6 @@ export function ContainerOrchestrator() {
                 </Row>
               );
             }}
-          </Form.Item>
-
-          <Form.Item name="command" label={t('Command')}>
-            <Input.TextArea rows={10} />
           </Form.Item>
 
           <Row gutter={12}>

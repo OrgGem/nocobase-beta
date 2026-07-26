@@ -46,6 +46,10 @@ export interface ListOptions {
 }
 
 export interface ListResult {
+  /**
+   * The requested page. Implementations apply ListOptions.offset and
+   * ListOptions.limit before returning entries; callers must not slice again.
+   */
   entries: FileEntry[];
   nextContinuationToken?: string;
   hasMore?: boolean;

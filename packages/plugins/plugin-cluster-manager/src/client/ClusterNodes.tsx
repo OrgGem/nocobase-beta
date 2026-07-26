@@ -352,11 +352,19 @@ export function ClusterNodes() {
         if (role === 'sandbox') {
           return <Tag color="purple">SANDBOX</Tag>;
         }
-        if (role === 'app' && isWorkerOnlyMode(mode)) {
+        if (role === 'app' && (isWorkerOnlyMode(mode) || !mode || mode === 'main')) {
           return (
             <Space size={4}>
-              <Tag color="green">APP</Tag>
-              <Tag color="blue">QUEUES</Tag>
+              <Tag color="green">{t('APP')}</Tag>
+              <Tag color="blue">{t('QUEUE FALLBACK')}</Tag>
+            </Space>
+          );
+        }
+        if (role === 'worker' && mode === '*') {
+          return (
+            <Space size={4}>
+              <Tag color="blue">{t('WORKER')}</Tag>
+              <Tag color="cyan">{t('ALL QUEUES')}</Tag>
             </Space>
           );
         }

@@ -39,6 +39,8 @@ export interface StackConfig {
   command?: string;
   envVars?: Record<string, string>;
   workerMode?: string;
+  /** Stable digest of the resolved worker template, used to detect runtime drift. */
+  templateHash?: string;
   volumes?: string[];
   networks?: string[];
   resourceLimits?: {

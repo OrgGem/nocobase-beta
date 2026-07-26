@@ -10,7 +10,7 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { IStorageAdapter, FileEntry, ListOptions, ListResult } from '../adapters/types';
+import { IStorageAdapter, FileEntry, ListOptions } from '../adapters/types';
 import { koaMulter as multer } from '@nocobase/utils';
 import { STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
 
@@ -127,7 +127,10 @@ function getRecordValue(record: any, key: string) {
  * before reaching this point. If `findOne` returns null, the user either provided
  * a bad ID or their Role data scope prevents access.
  */
-async function getDirectoryRecord(ctx: any, requiredAction: string = 'view'): Promise<{ directory: any; subPath: string } | null> {
+async function getDirectoryRecord(
+  ctx: any,
+  requiredAction = 'view',
+): Promise<{ directory: any; subPath: string } | null> {
   // Use filterByTk which comes from the URL param automatically (e.g. /externalStorageDirectories:list/<id>)
   // Or explicitly from params if they sent it
   const filterByTk = ctx.action.params.filterByTk || ctx.action.params.directoryId;
@@ -204,10 +207,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       // Find directories accessible to the user (Data Scope applied automatically)
       const directories = await ctx.db.getRepository('externalStorageDirectories').find({
         filter: {
-          $and: [
-            { enabled: true },
-            dataScopeFilter
-          ]
+          $and: [{ enabled: true }, dataScopeFilter],
         },
         sort: ['sort', 'name'],
       });
@@ -230,10 +230,18 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
         });
       }
 
-      const updatableIds = updateAccess ? (await ctx.db.getRepository('externalStorageDirectories').find({ filter: updateFilter, fields: ['id'] })).map(d => d.get('id')) : [];
-      const destroyableIds = destroyAccess ? (await ctx.db.getRepository('externalStorageDirectories').find({ filter: destroyFilter, fields: ['id'] })).map(d => d.get('id')) : [];
+      const updatableIds = updateAccess
+        ? (await ctx.db.getRepository('externalStorageDirectories').find({ filter: updateFilter, fields: ['id'] })).map(
+            (d) => d.get('id'),
+          )
+        : [];
+      const destroyableIds = destroyAccess
+        ? (
+            await ctx.db.getRepository('externalStorageDirectories').find({ filter: destroyFilter, fields: ['id'] })
+          ).map((d) => d.get('id'))
+        : [];
 
-      const dataWithActions = directories.map(dir => {
+      const dataWithActions = directories.map((dir) => {
         const id = dir.get('id');
         const allowedActions = ['list', 'view', 'download', 'exists'];
         if (updatableIds.includes(id)) {
@@ -258,129 +266,86 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     list: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'view');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
-    const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
-    const payload = getActionPayload(ctx);
-    const limit = clampListLimit(payload.limit);
-    const offset = parseOffset(payload.offset ?? payload.page);
-    const type = payload.type;
-    const search = String(payload.search || payload.q || '').toLowerCase();
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+      const payload = getActionPayload(ctx);
+      const limit = clampListLimit(payload.limit);
+      const offset = parseOffset(payload.offset ?? payload.page);
+      const type = payload.type;
+      const search = String(payload.search || payload.q || '').toLowerCase();
 
-    const options: ListOptions = {
-      limit,
-      offset,
-      continuationToken: payload.continuationToken,
-      search,
-      type,
-    };
-
-    try {
-      const filesOrResult = await adapter.list(remotePath, options);
-      let pageData: FileEntry[];
-      let meta: any = {
-        directoryId: directory.get('id'),
-        directoryName: directory.get('name'),
-        currentPath: subPath,
-        rootPath: directory.get('rootPath'),
+      const options: ListOptions = {
+        limit,
+        offset,
+        continuationToken: payload.continuationToken,
+        search,
+        type,
       };
 
-      if (Array.isArray(filesOrResult)) {
-        // Adapter returned all entries (e.g. SFTP with no pagination, or S3 with search).
-        // Sort / filter / slice on the server side.
-        let files = filesOrResult.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
-        if (type === 'file' || type === 'directory') {
-          files = files.filter((entry) => entry.type === type);
-        }
-        if (search) {
-          files = files.filter((entry) => entry.name.toLowerCase().includes(search));
-        }
-        const sorted = sortEntries(files, payload.sort || 'name', payload.order || 'asc');
-        pageData = sorted.slice(offset, offset + limit);
-        meta.total = sorted.length;
-        meta.limit = limit;
-        meta.offset = offset;
-        meta.hasMore = offset + limit < sorted.length;
-        meta.nextOffset = offset + limit < sorted.length ? offset + limit : null;
-      } else {
-        // Adapter returned a paginated ListResult (e.g. S3 without search).
-        // Apply type/search filters (which aren't applied by the adapter for ListResult).
-        let entries = filesOrResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
-        if (type === 'file' || type === 'directory') {
-          entries = entries.filter((entry) => entry.type === type);
-        }
-        if (search) {
-          entries = entries.filter((entry) => entry.name.toLowerCase().includes(search));
-        }
+      try {
+        const filesOrResult = await adapter.list(remotePath, options);
+        let pageData: FileEntry[];
+        const meta: any = {
+          directoryId: directory.get('id'),
+          directoryName: directory.get('name'),
+          currentPath: subPath,
+          rootPath: directory.get('rootPath'),
+        };
 
-        // If the client uses offset-based pagination but the adapter uses
-        // continuation tokens (S3), iterate through pages to reach the offset.
-        let currentResult = filesOrResult;
-        let remainingOffset = offset;
-        while (remainingOffset > 0 && entries.length > 0 && currentResult.hasMore && currentResult.nextContinuationToken) {
-          const consumed = Math.min(remainingOffset, entries.length);
-          remainingOffset -= consumed;
+        if (Array.isArray(filesOrResult)) {
+          // Adapter returned all entries (e.g. SFTP with no pagination, or S3 with search).
+          // Sort / filter / slice on the server side.
+          let files = filesOrResult.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+          if (type === 'file' || type === 'directory') {
+            files = files.filter((entry) => entry.type === type);
+          }
+          if (search) {
+            files = files.filter((entry) => entry.name.toLowerCase().includes(search));
+          }
+          const sorted = sortEntries(files, payload.sort || 'name', payload.order || 'asc');
+          pageData = sorted.slice(offset, offset + limit);
+          meta.total = sorted.length;
+          meta.limit = limit;
+          meta.offset = offset;
+          meta.hasMore = offset + limit < sorted.length;
+          meta.nextOffset = offset + limit < sorted.length ? offset + limit : null;
+        } else {
+          // Adapter returned a paginated ListResult (e.g. S3 without search).
+          // Apply type/search filters (which aren't applied by the adapter for ListResult).
+          let entries = filesOrResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
+          if (type === 'file' || type === 'directory') {
+            entries = entries.filter((entry) => entry.type === type);
+          }
+          if (search) {
+            entries = entries.filter((entry) => entry.name.toLowerCase().includes(search));
+          }
 
-          if (remainingOffset > 0) {
-            currentResult = await adapter.list(remotePath, {
-              ...options,
-              offset: 0,
-              continuationToken: currentResult.nextContinuationToken,
-            });
+          // A ListResult is already the requested offset/limit page. In particular,
+          // SFTP applies offset before returning its entries; slicing here again would
+          // make every page after the first appear empty.
+          pageData = entries;
 
-            if (Array.isArray(currentResult)) {
-              // Adapter switched to array mode mid-pagination — process as array
-              let allFiles = currentResult.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
-              if (type === 'file' || type === 'directory') {
-                allFiles = allFiles.filter((entry) => entry.type === type);
-              }
-              if (search) {
-                allFiles = allFiles.filter((entry) => entry.name.toLowerCase().includes(search));
-              }
-              const sorted = sortEntries(allFiles, payload.sort || 'name', payload.order || 'asc');
-              pageData = sorted.slice(remainingOffset, remainingOffset + limit);
-              meta.total = null;
-              meta.limit = limit;
-              meta.offset = offset;
-              meta.hasMore = remainingOffset + limit < sorted.length;
-              meta.nextOffset = remainingOffset + limit < sorted.length ? offset + limit : null;
-              meta.nextContinuationToken = undefined;
-              ctx.body = { data: pageData, meta };
-              return;
-            }
-
-            entries = currentResult.entries.map((entry) => normalizeEntryPath(directory.get('rootPath'), entry));
-            if (type === 'file' || type === 'directory') {
-              entries = entries.filter((entry) => entry.type === type);
-            }
-            if (search) {
-              entries = entries.filter((entry) => entry.name.toLowerCase().includes(search));
-            }
+          meta.limit = limit;
+          meta.offset = offset;
+          meta.continuationToken = payload.continuationToken;
+          meta.nextContinuationToken = filesOrResult.nextContinuationToken;
+          meta.hasMore = filesOrResult.hasMore ?? !!filesOrResult.nextContinuationToken;
+          if (filesOrResult.total !== undefined) {
+            meta.total = filesOrResult.total;
           }
         }
 
-        pageData = entries.slice(remainingOffset, remainingOffset + limit);
-
-        meta.limit = limit;
-        meta.offset = offset;
-        meta.continuationToken = payload.continuationToken;
-        meta.nextContinuationToken = currentResult.nextContinuationToken;
-        meta.hasMore = currentResult.hasMore ?? !!currentResult.nextContinuationToken;
-        if (currentResult.total !== undefined) {
-          meta.total = currentResult.total;
-        }
+        ctx.body = {
+          data: pageData,
+          meta,
+        };
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] List failed for path "${remotePath}":`, error);
+        ctx.throw(500, `Failed to list files: ${error.message}`);
       }
-
-      ctx.body = {
-        data: pageData,
-        meta,
-      };
-    } catch (error: any) {
-      ctx.logger?.error?.(`[ext-storage] List failed for path "${remotePath}":`, error);
-      ctx.throw(500, `Failed to list files: ${error.message}`);
-    }
     },
 
     /**
@@ -390,18 +355,18 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     stat: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'view');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
-    const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
 
-    try {
-      const stat = await adapter.stat(remotePath);
-      ctx.body = { data: normalizeEntryPath(directory.get('rootPath'), stat) };
-    } catch (error: any) {
-      ctx.throw(404, `File not found: ${error.message}`);
-    }
+      try {
+        const stat = await adapter.stat(remotePath);
+        ctx.body = { data: normalizeEntryPath(directory.get('rootPath'), stat) };
+      } catch (error: any) {
+        ctx.throw(404, `File not found: ${error.message}`);
+      }
     },
 
     /**
@@ -412,35 +377,35 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     download: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'view');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
-    const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
-    const mode = ctx.action.params.mode || 'attachment';
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+      const mode = ctx.action.params.mode || 'attachment';
 
-    try {
-      const { stream, contentType, size } = await adapter.getStream(remotePath);
-      const filename = encodeURIComponent(path.basename(subPath));
+      try {
+        const { stream, contentType, size } = await adapter.getStream(remotePath);
+        const filename = encodeURIComponent(path.basename(subPath));
 
-      ctx.set('Content-Type', contentType || 'application/octet-stream');
-      if (size) {
-        ctx.set('Content-Length', String(size));
+        ctx.set('Content-Type', contentType || 'application/octet-stream');
+        if (size) {
+          ctx.set('Content-Length', String(size));
+        }
+
+        if (mode === 'inline') {
+          ctx.set('Content-Disposition', `inline; filename="${filename}"`);
+        } else {
+          ctx.set('Content-Disposition', `attachment; filename="${filename}"`);
+        }
+
+        ctx.set('Cache-Control', 'private, max-age=300');
+        ctx.withoutDataWrapping = true;
+        ctx.body = stream;
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] Download failed for "${remotePath}":`, error);
+        ctx.throw(500, `Failed to download file: ${error.message}`);
       }
-
-      if (mode === 'inline') {
-        ctx.set('Content-Disposition', `inline; filename="${filename}"`);
-      } else {
-        ctx.set('Content-Disposition', `attachment; filename="${filename}"`);
-      }
-
-      ctx.set('Cache-Control', 'private, max-age=300');
-      ctx.withoutDataWrapping = true;
-      ctx.body = stream;
-    } catch (error: any) {
-      ctx.logger?.error?.(`[ext-storage] Download failed for "${remotePath}":`, error);
-      ctx.throw(500, `Failed to download file: ${error.message}`);
-    }
     },
 
     /**
@@ -451,114 +416,112 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     upload: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'update');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
 
-    if (!ctx.request?.is?.('multipart/*')) {
-      if (!ctx.req || subPath === '/') {
-        ctx.throw(400, 'Raw stream upload requires a file path');
+      if (!ctx.request?.is?.('multipart/*')) {
+        if (!ctx.req || subPath === '/') {
+          ctx.throw(400, 'Raw stream upload requires a file path');
+          return;
+        }
+
+        const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+        try {
+          await adapter.putStream(remotePath, ctx.req, {
+            size: Number(ctx.request?.headers?.['content-length'] || 0) || undefined,
+            mimetype: ctx.request?.headers?.['content-type'],
+          });
+          ctx.body = { data: { path: subPath, success: true } };
+        } catch (error: any) {
+          ctx.logger?.error?.(`[ext-storage] Raw upload failed for "${remotePath}":`, error);
+          ctx.throw(500, `Failed to upload file: ${error.message}`);
+        }
         return;
       }
 
-      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
       try {
-        await adapter.putStream(remotePath, ctx.req, {
-          size: Number(ctx.request?.headers?.['content-length'] || 0) || undefined,
-          mimetype: ctx.request?.headers?.['content-type'],
-        });
-        ctx.body = { data: { path: subPath, success: true } };
-      } catch (error: any) {
-        ctx.logger?.error?.(`[ext-storage] Raw upload failed for "${remotePath}":`, error);
-        ctx.throw(500, `Failed to upload file: ${error.message}`);
-      }
-      return;
-    }
-
-    try {
-      const uploadMiddleware = multer({ dest: os.tmpdir() }).any();
-      await uploadMiddleware(ctx, () => {});
-    } catch (err: any) {
-      ctx.throw(400, `Upload parsing error: ${err.message}`);
-      return;
-    }
-
-    // Handle file uploads from Koa context (multer puts any() in ctx.files)
-    const files = ctx.files || ctx.request?.files;
-    if (!files || Object.keys(files).length === 0) {
-      ctx.throw(400, 'No file provided');
-      return;
-    }
-
-    let fileList: any[] = [];
-    if (Array.isArray(files)) {
-      fileList = files;
-    } else if (files.file) {
-      fileList = Array.isArray(files.file) ? files.file : [files.file];
-    } else {
-      Object.values(files).forEach((val: any) => {
-        if (Array.isArray(val)) fileList.push(...val);
-        else fileList.push(val);
-      });
-    }
-
-    if (fileList.length === 0) {
-      ctx.throw(400, 'No file provided');
-      return;
-    }
-
-    const results: any[] = [];
-
-    for (const file of fileList) {
-      const fileName = safeUploadFilename(file.originalname || file.originalFilename || file.newFilename || file.name);
-      const filePath = file.path || file.filepath;
-
-      if (!filePath) {
-        results.push({
-          name: fileName,
-          success: false,
-          error: 'Missing file path in upload',
-        });
-        continue;
+        const uploadMiddleware = multer({ dest: os.tmpdir() }).any();
+        await uploadMiddleware(ctx, () => {});
+      } catch (err: any) {
+        ctx.throw(400, `Upload parsing error: ${err.message}`);
+        return;
       }
 
-      const targetPath = resolveRemotePath(
-        directory.get('rootPath'),
-        subPath.replace(/\/$/, '') + '/' + fileName,
-      );
+      // Handle file uploads from Koa context (multer puts any() in ctx.files)
+      const files = ctx.files || ctx.request?.files;
+      if (!files || Object.keys(files).length === 0) {
+        ctx.throw(400, 'No file provided');
+        return;
+      }
 
-      try {
-        const fileStream = fs.createReadStream(filePath);
-
-        await adapter.putStream(targetPath, fileStream, {
-          size: file.size,
-          mimetype: file.mimetype || file.type,
+      let fileList: any[] = [];
+      if (Array.isArray(files)) {
+        fileList = files;
+      } else if (files.file) {
+        fileList = Array.isArray(files.file) ? files.file : [files.file];
+      } else {
+        Object.values(files).forEach((val: any) => {
+          if (Array.isArray(val)) fileList.push(...val);
+          else fileList.push(val);
         });
+      }
 
-        results.push({
-          name: fileName,
-          path: subPath.replace(/\/$/, '') + '/' + fileName,
-          size: file.size,
-          mimetype: file.mimetype || file.type,
-          success: true,
-        });
+      if (fileList.length === 0) {
+        ctx.throw(400, 'No file provided');
+        return;
+      }
 
-      } catch (error: any) {
-        ctx.logger?.error?.(`[ext-storage] Upload failed for "${targetPath}":`, error);
-        results.push({
-          name: fileName,
-          success: false,
-          error: error.message,
-        });
-      } finally {
-        if (filePath) {
-          fs.unlink(filePath, () => {});
+      const results: any[] = [];
+
+      for (const file of fileList) {
+        const fileName = safeUploadFilename(
+          file.originalname || file.originalFilename || file.newFilename || file.name,
+        );
+        const filePath = file.path || file.filepath;
+
+        if (!filePath) {
+          results.push({
+            name: fileName,
+            success: false,
+            error: 'Missing file path in upload',
+          });
+          continue;
+        }
+
+        const targetPath = resolveRemotePath(directory.get('rootPath'), subPath.replace(/\/$/, '') + '/' + fileName);
+
+        try {
+          const fileStream = fs.createReadStream(filePath);
+
+          await adapter.putStream(targetPath, fileStream, {
+            size: file.size,
+            mimetype: file.mimetype || file.type,
+          });
+
+          results.push({
+            name: fileName,
+            path: subPath.replace(/\/$/, '') + '/' + fileName,
+            size: file.size,
+            mimetype: file.mimetype || file.type,
+            success: true,
+          });
+        } catch (error: any) {
+          ctx.logger?.error?.(`[ext-storage] Upload failed for "${targetPath}":`, error);
+          results.push({
+            name: fileName,
+            success: false,
+            error: error.message,
+          });
+        } finally {
+          if (filePath) {
+            fs.unlink(filePath, () => {});
+          }
         }
       }
-    }
 
-    ctx.body = { data: results };
+      ctx.body = { data: results };
     },
 
     /**
@@ -568,29 +531,29 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     rename: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'update');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory } = result;
-    const payload = getActionPayload(ctx);
-    const oldSubPath = sanitizePath(payload.oldPath || payload.from || payload.path || '/');
-    const newSubPath = sanitizePath(payload.newPath || payload.to || '/');
+      const { directory } = result;
+      const payload = getActionPayload(ctx);
+      const oldSubPath = sanitizePath(payload.oldPath || payload.from || payload.path || '/');
+      const newSubPath = sanitizePath(payload.newPath || payload.to || '/');
 
-    if (oldSubPath === '/' || newSubPath === '/') {
-      ctx.throw(400, 'Refusing to rename root path');
-      return;
-    }
+      if (oldSubPath === '/' || newSubPath === '/') {
+        ctx.throw(400, 'Refusing to rename root path');
+        return;
+      }
 
-    const adapter = await getAdapter(directory);
-    const oldRemotePath = resolveRemotePath(directory.get('rootPath'), oldSubPath);
-    const newRemotePath = resolveRemotePath(directory.get('rootPath'), newSubPath);
+      const adapter = await getAdapter(directory);
+      const oldRemotePath = resolveRemotePath(directory.get('rootPath'), oldSubPath);
+      const newRemotePath = resolveRemotePath(directory.get('rootPath'), newSubPath);
 
-    try {
-      await adapter.rename(oldRemotePath, newRemotePath);
-      ctx.body = { data: { oldPath: oldSubPath, newPath: newSubPath, success: true } };
-    } catch (error: any) {
-      ctx.logger?.error?.(`[ext-storage] Rename failed from "${oldRemotePath}" to "${newRemotePath}":`, error);
-      ctx.throw(500, `Failed to rename: ${error.message}`);
-    }
+      try {
+        await adapter.rename(oldRemotePath, newRemotePath);
+        ctx.body = { data: { oldPath: oldSubPath, newPath: newSubPath, success: true } };
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] Rename failed from "${oldRemotePath}" to "${newRemotePath}":`, error);
+        ctx.throw(500, `Failed to rename: ${error.message}`);
+      }
     },
 
     /**
@@ -600,18 +563,18 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     exists: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'view');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
-    const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
 
-    try {
-      ctx.body = { data: { path: subPath, exists: await adapter.exists(remotePath) } };
-    } catch (error: any) {
-      ctx.logger?.error?.(`[ext-storage] Exists check failed for "${remotePath}":`, error);
-      ctx.throw(500, `Failed to check path: ${error.message}`);
-    }
+      try {
+        ctx.body = { data: { path: subPath, exists: await adapter.exists(remotePath) } };
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] Exists check failed for "${remotePath}":`, error);
+        ctx.throw(500, `Failed to check path: ${error.message}`);
+      }
     },
 
     /**
@@ -621,43 +584,44 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     mkdir: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'update');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
 
-    const body = ctx.request.body || {};
-    const folderName = body.folderName || body.values?.folderName || ctx.action.params.values?.folderName || ctx.action.params.folderName;
-    if (!folderName) {
-      ctx.throw(400, 'Missing folderName parameter');
-      return;
-    }
+      const body = ctx.request.body || {};
+      const folderName =
+        body.folderName ||
+        body.values?.folderName ||
+        ctx.action.params.values?.folderName ||
+        ctx.action.params.folderName;
+      if (!folderName) {
+        ctx.throw(400, 'Missing folderName parameter');
+        return;
+      }
 
-    // Validate folder name
-    if (/[\/\\<>:"|?*]/.test(folderName)) {
-      ctx.throw(400, 'Invalid folder name');
-      return;
-    }
+      // Validate folder name
+      if (/[/\\<>:"|?*]/.test(folderName)) {
+        ctx.throw(400, 'Invalid folder name');
+        return;
+      }
 
-    const remotePath = resolveRemotePath(
-      directory.get('rootPath'),
-      subPath.replace(/\/$/, '') + '/' + folderName,
-    );
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath.replace(/\/$/, '') + '/' + folderName);
 
-    try {
-      await adapter.mkdir(remotePath);
-      ctx.body = {
-        data: {
-          name: folderName,
-          path: subPath.replace(/\/$/, '') + '/' + folderName,
-          type: 'directory',
-          success: true,
-        },
-      };
-    } catch (error: any) {
-      ctx.logger?.error?.(`[ext-storage] Mkdir failed for "${remotePath}":`, error);
-      ctx.throw(500, `Failed to create folder: ${error.message}`);
-    }
+      try {
+        await adapter.mkdir(remotePath);
+        ctx.body = {
+          data: {
+            name: folderName,
+            path: subPath.replace(/\/$/, '') + '/' + folderName,
+            type: 'directory',
+            success: true,
+          },
+        };
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] Mkdir failed for "${remotePath}":`, error);
+        ctx.throw(500, `Failed to create folder: ${error.message}`);
+      }
     },
 
     /**
@@ -667,24 +631,24 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      */
     delete: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'destroy');
-    if (!result) return;
+      if (!result) return;
 
-    const { directory, subPath } = result;
-    const adapter = await getAdapter(directory);
-    const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
-    const itemType = ctx.action.params.values?.type || ctx.action.params.type || 'file';
+      const { directory, subPath } = result;
+      const adapter = await getAdapter(directory);
+      const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
+      const itemType = ctx.action.params.values?.type || ctx.action.params.type || 'file';
 
-    try {
-      if (itemType === 'directory') {
-        await adapter.deleteDir(remotePath);
-      } else {
-        await adapter.delete(remotePath);
+      try {
+        if (itemType === 'directory') {
+          await adapter.deleteDir(remotePath);
+        } else {
+          await adapter.delete(remotePath);
+        }
+        ctx.body = { data: { success: true, path: subPath } };
+      } catch (error: any) {
+        ctx.logger?.error?.(`[ext-storage] Delete failed for "${remotePath}":`, error);
+        ctx.throw(500, `Failed to delete: ${error.message}`);
       }
-      ctx.body = { data: { success: true, path: subPath } };
-    } catch (error: any) {
-      ctx.logger?.error?.(`[ext-storage] Delete failed for "${remotePath}":`, error);
-      ctx.throw(500, `Failed to delete: ${error.message}`);
-    }
     },
 
     /**
@@ -704,7 +668,11 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       }
 
       const s3Access = await ctx.app.acl.can({ roles: getCurrentRoles(ctx), resource: 'storages', action: 'list' });
-      const sftpAccess = await ctx.app.acl.can({ roles: getCurrentRoles(ctx), resource: 'sftpStorageConfigs', action: 'list' });
+      const sftpAccess = await ctx.app.acl.can({
+        roles: getCurrentRoles(ctx),
+        resource: 'sftpStorageConfigs',
+        action: 'list',
+      });
 
       let s3Filter = s3Access?.params?.filter || {};
       let sftpFilter = sftpAccess?.params?.filter || {};
@@ -802,8 +770,8 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     rolePermissions: async (ctx: any) => {
       const currentRoles = getCurrentRoles(ctx);
       if (!currentRoles.includes('root')) {
-         const canAccessRoles = await ctx.app.acl.can({ roles: currentRoles, resource: 'roles', action: 'update' });
-         if (!canAccessRoles) return ctx.throw(403, 'Permission denied');
+        const canAccessRoles = await ctx.app.acl.can({ roles: currentRoles, resource: 'roles', action: 'update' });
+        if (!canAccessRoles) return ctx.throw(403, 'Permission denied');
       }
 
       const roleName = ctx.action.params.roleName;
@@ -851,8 +819,8 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     updateRolePermissions: async (ctx: any) => {
       const currentRoles = getCurrentRoles(ctx);
       if (!currentRoles.includes('root')) {
-         const canAccessRoles = await ctx.app.acl.can({ roles: currentRoles, resource: 'roles', action: 'update' });
-         if (!canAccessRoles) return ctx.throw(403, 'Permission denied');
+        const canAccessRoles = await ctx.app.acl.can({ roles: currentRoles, resource: 'roles', action: 'update' });
+        if (!canAccessRoles) return ctx.throw(403, 'Permission denied');
       }
 
       const payload = ctx.action.params.values || ctx.request.body || {};
@@ -863,59 +831,62 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       const resourceRepo = ctx.db.getRepository('rolesResources');
       let resource = await resourceRepo.findOne({ filter: { roleName, name: 'externalStorageDirectories' } });
       if (!resource) {
-         resource = await resourceRepo.create({ values: { roleName, name: 'externalStorageDirectories', usingActionsConfig: true } });
+        resource = await resourceRepo.create({
+          values: { roleName, name: 'externalStorageDirectories', usingActionsConfig: true },
+        });
       } else if (!getRecordValue(resource, 'usingActionsConfig')) {
-         await resource.update({ usingActionsConfig: true });
+        await resource.update({ usingActionsConfig: true });
       }
 
       const rolesResourceId = getRecordValue(resource, 'id');
       const actionsRepo = ctx.db.getRepository('rolesResourcesActions');
       for (const actionName of ['view', 'update', 'destroy']) {
-         const ids = permissions[actionName] || [];
-         const action = await actionsRepo.findOne({
-           filter: { rolesResourceId, name: actionName },
-           appends: ['scope']
-         });
+        const ids = permissions[actionName] || [];
+        const action = await actionsRepo.findOne({
+          filter: { rolesResourceId, name: actionName },
+          appends: ['scope'],
+        });
 
-         if (ids.length === 0) {
-            // Remove the action if no ids allowed
-            if (action) await action.destroy();
-         } else {
-            const scopeJson = { $and: [{ id: { $in: ids } }] };
-            if (action) {
-               const actionData = action.toJSON ? action.toJSON() : action;
-               const actionScope = actionData.scope;
-               const actionScopeId = getRecordValue(actionScope, 'id') || actionData.scopeId || getRecordValue(action, 'scopeId');
-               // Update existing action
-               if (actionScopeId) {
-                  // update the related scope record
-                  await ctx.db.getRepository('rolesResourcesScopes').update({
-                     filterByTk: actionScopeId,
-                     values: { scope: scopeJson }
-                  });
-               } else {
-                  // create a new scope record and link it
-                  const newScope = await ctx.db.getRepository('rolesResourcesScopes').create({
-                     values: { scope: scopeJson }
-                  });
-                  await action.update({ scopeId: getRecordValue(newScope, 'id') });
-               }
+        if (ids.length === 0) {
+          // Remove the action if no ids allowed
+          if (action) await action.destroy();
+        } else {
+          const scopeJson = { $and: [{ id: { $in: ids } }] };
+          if (action) {
+            const actionData = action.toJSON ? action.toJSON() : action;
+            const actionScope = actionData.scope;
+            const actionScopeId =
+              getRecordValue(actionScope, 'id') || actionData.scopeId || getRecordValue(action, 'scopeId');
+            // Update existing action
+            if (actionScopeId) {
+              // update the related scope record
+              await ctx.db.getRepository('rolesResourcesScopes').update({
+                filterByTk: actionScopeId,
+                values: { scope: scopeJson },
+              });
             } else {
-               const newScope = await ctx.db.getRepository('rolesResourcesScopes').create({
-                  values: { scope: scopeJson }
-               });
-               await actionsRepo.create({
-                 values: { rolesResourceId, name: actionName, scopeId: getRecordValue(newScope, 'id') }
-               });
+              // create a new scope record and link it
+              const newScope = await ctx.db.getRepository('rolesResourcesScopes').create({
+                values: { scope: scopeJson },
+              });
+              await action.update({ scopeId: getRecordValue(newScope, 'id') });
             }
-         }
+          } else {
+            const newScope = await ctx.db.getRepository('rolesResourcesScopes').create({
+              values: { scope: scopeJson },
+            });
+            await actionsRepo.create({
+              values: { rolesResourceId, name: actionName, scopeId: getRecordValue(newScope, 'id') },
+            });
+          }
+        }
       }
 
       // Force reload the ACL cache in memory for this resource
       try {
-         await resource.writeToACL({ acl: ctx.app.acl });
+        await resource.writeToACL({ acl: ctx.app.acl });
       } catch (e) {
-         ctx.logger?.warn?.('[ext-storage] Failed to write resource to ACL memory cache:', e);
+        ctx.logger?.warn?.('[ext-storage] Failed to write resource to ACL memory cache:', e);
       }
 
       ctx.body = { data: 'ok' };

@@ -1171,6 +1171,7 @@ async function getWorkerProcessCoverage(app: Application, requiredProcesses: str
     missing: [] as string[],
     wildcard: false,
     stacks: [] as Array<{ id: unknown; name: unknown; workerMode: string }>,
+    appFallbackNodes: [] as Array<{ id?: string; name?: string; workerMode?: string }>,
   };
 
   try {
@@ -1192,6 +1193,17 @@ async function getWorkerProcessCoverage(app: Application, requiredProcesses: str
       }
       for (const token of workerMode.split(',').filter(Boolean)) {
         covered.add(token);
+      }
+    }
+
+    // APP_ROLE=app plus an empty WORKER_MODE is NocoBase's all-queue fallback.
+    // Heartbeats serialize an empty mode as "main", so recognize both forms.
+    const nodes = await getClusterNodes(app);
+    for (const node of nodes) {
+      const workerMode = String(node.workerMode || '');
+      if (node.appRole === 'app' && (workerMode === '' || workerMode === 'main')) {
+        result.wildcard = true;
+        result.appFallbackNodes.push({ id: node.id, name: node.name, workerMode });
       }
     }
 

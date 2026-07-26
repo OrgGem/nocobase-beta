@@ -9,6 +9,7 @@ import { Context } from '@nocobase/actions';
 import { getRedisClient } from '../utils/redis';
 import type { IOrchestratorAdapter, StackConfig } from '../orchestrator/types';
 import { normalizeWorkerMode } from '../../shared/worker-processes';
+import { resolveWorkerTemplate, type WorkerTemplateVariable } from '../orchestrator/worker-template';
 
 type QueueMappingRecord = {
   get: (key: string) => unknown;
@@ -61,11 +62,31 @@ async function assertManagedContainer(
 
 function applyWorkerMode(stack: StackConfig, workerMode: string) {
   stack.workerMode = workerMode;
-  stack.envVars = {
-    ...(stack.envVars || {}),
-    APP_ROLE: stack.envVars?.APP_ROLE || 'worker',
-    WORKER_MODE: workerMode,
-    SKILL_HUB_SANDBOX: stack.envVars?.SKILL_HUB_SANDBOX || 'false',
+}
+
+async function resolveWorkerStack(ctx: Context, stack: StackConfig): Promise<StackConfig> {
+  const templateRepo = ctx.db.getRepository('workerTemplateVariables');
+  const rows = await templateRepo.find({ sort: ['scope', 'stackId', 'sort', 'key'] });
+  const variables = rows.map((row) => row.toJSON() as unknown as WorkerTemplateVariable);
+  const resolved = resolveWorkerTemplate({
+    stack,
+    variables,
+    inheritedEnv: {
+      CLUSTER_MANAGER_WORKER_READY_URL: process.env.CLUSTER_MANAGER_WORKER_READY_URL,
+      CLUSTER_MANAGER_WORKER_IMAGE: process.env.CLUSTER_MANAGER_WORKER_IMAGE,
+    },
+    fallbackReadyUrl: process.env.CLUSTER_MANAGER_WORKER_READY_URL,
+  });
+
+  for (const warning of resolved.warnings) {
+    ctx.app.logger.warn(`[Orchestrator] ${warning}`);
+  }
+  return {
+    ...stack,
+    image: resolved.image || '',
+    command: undefined,
+    envVars: resolved.envVars,
+    templateHash: resolved.templateHash,
   };
 }
 
@@ -196,7 +217,15 @@ export const orchestratorActions = {
       }
     }
 
-    const result = await adapter.scale(stack, Number(replicas));
+    let workerStack: StackConfig;
+    try {
+      workerStack = await resolveWorkerStack(ctx, stack);
+    } catch (error) {
+      ctx.throw(400, error instanceof Error ? error.message : String(error));
+      return;
+    }
+
+    const result = await adapter.scale(workerStack, Number(replicas));
 
     // Update DB
     const repo = ctx.db.getRepository('orchestratorStacks');
