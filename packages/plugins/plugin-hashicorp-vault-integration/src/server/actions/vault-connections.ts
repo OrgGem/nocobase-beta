@@ -1,5 +1,5 @@
 import type { Context, Next } from '@nocobase/actions';
-import type { Repository } from '@nocobase/database';
+import type { Model, Repository } from '@nocobase/database';
 import { toSafeErrorMessage } from '../utils/redact';
 import type PluginHashicorpVaultIntegrationServer from '../plugin';
 
@@ -43,6 +43,52 @@ export function createVaultConnectionActions(plugin: PluginHashicorpVaultIntegra
       try {
         const { client } = await getClient(plugin, ctx);
         ctx.body = { entries: await client.listPath(path || '') };
+      } catch (err) {
+        return ctx.throw(502, toSafeErrorMessage(err));
+      }
+      return next();
+    },
+
+    async listAllPaths(ctx: Context, next: Next) {
+      const { path, maxDepth, maxEntries } = ctx.action.params as {
+        path?: string;
+        maxDepth?: number | string;
+        maxEntries?: number | string;
+      };
+      try {
+        const { client } = await getClient(plugin, ctx);
+        const result = await client.listAllPaths(path || '', {
+          maxDepth: maxDepth !== undefined ? Number(maxDepth) : undefined,
+          maxEntries: maxEntries !== undefined ? Number(maxEntries) : undefined,
+        });
+        ctx.body = result;
+      } catch (err) {
+        return ctx.throw(502, toSafeErrorMessage(err));
+      }
+      return next();
+    },
+
+    async writeSecret(ctx: Context, next: Next) {
+      const { path, key, value } = (ctx.action.params.values || ctx.action.params) as {
+        path?: string;
+        key?: string;
+        value?: string;
+      };
+      if (!path) return ctx.throw(400, 'path is required');
+      if (!key) return ctx.throw(400, 'key is required');
+      if (typeof value !== 'string') return ctx.throw(400, 'value must be a string');
+      try {
+        const { connection, client } = await getClient(plugin, ctx);
+        await client.setSecretKey(path, key, value);
+        // drop stale cached values for mappings that read from this path
+        const mappingRepo = ctx.db.getRepository('vaultSecretMappings') as Repository;
+        const affected = (await mappingRepo.find({
+          filter: { connectionId: connection.get('id'), secretPath: path },
+        })) as Model[];
+        for (const mapping of affected) {
+          plugin.cache.invalidate(mapping.get('variableKey') as string);
+        }
+        ctx.body = { success: true };
       } catch (err) {
         return ctx.throw(502, toSafeErrorMessage(err));
       }

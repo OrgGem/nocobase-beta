@@ -14,7 +14,7 @@ import {
   Table,
   message,
 } from 'antd';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
 import { useSftpgoTabVisibility } from '../hooks/useSftpgoTabVisibility';
@@ -50,23 +50,25 @@ interface UserFormValues {
   description?: string;
 }
 
-const PERMISSION_OPTIONS = [
-  { value: '*', label: 'All' },
-  { value: 'list', label: 'List' },
-  { value: 'download', label: 'Download' },
-  { value: 'upload', label: 'Upload' },
-  { value: 'overwrite', label: 'Overwrite' },
-  { value: 'delete', label: 'Delete' },
-  { value: 'rename', label: 'Rename' },
-  { value: 'create_dirs', label: 'Create dirs' },
-  { value: 'create_symlinks', label: 'Create symlinks' },
-  { value: 'chmod', label: 'Chmod' },
-  { value: 'chown', label: 'Chown' },
-  { value: 'chtimes', label: 'Chtimes' },
-];
-
 export const SftpgoUsers: React.FC = () => {
   const t = useT();
+  const permissionOptions = useMemo(
+    () => [
+      { value: '*', label: t('All') },
+      { value: 'list', label: t('List') },
+      { value: 'download', label: t('Download') },
+      { value: 'upload', label: t('Upload') },
+      { value: 'overwrite', label: t('Overwrite') },
+      { value: 'delete', label: t('Delete') },
+      { value: 'rename', label: t('Rename') },
+      { value: 'create_dirs', label: t('Create dirs') },
+      { value: 'create_symlinks', label: t('Create symlinks') },
+      { value: 'chmod', label: t('Chmod') },
+      { value: 'chown', label: t('Chown') },
+      { value: 'chtimes', label: t('Chtimes') },
+    ],
+    [t],
+  );
   const api = useApp().apiClient;
   const [connections, setConnections] = useState<SftpgoConnectionOption[]>([]);
   const [connectionId, setConnectionId] = useState<number | null>(null);
@@ -260,7 +262,7 @@ export const SftpgoUsers: React.FC = () => {
             <Input placeholder="/srv/sftpgo/data/username" />
           </Form.Item>
           <Form.Item name="permissions" label={t('Permissions (root path)')}>
-            <Select mode="multiple" options={PERMISSION_OPTIONS} />
+            <Select mode="multiple" options={permissionOptions} />
           </Form.Item>
           <Form.Item name="quota_size" label={t('Quota Size (bytes, 0 = unlimited)')}>
             <InputNumber min={0} style={{ width: '100%' }} />

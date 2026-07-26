@@ -1,6 +1,6 @@
 import { z } from 'zod';
-type ToolRegisterOptions = any;
 import { loadShapeLibrary, SHAPE_LIBRARY_NAMES } from '../shape-libraries';
+import type { DrawioToolDefinition } from './types';
 
 const description = `Get draw.io shape/icon library documentation with style syntax and shape names.
 
@@ -16,7 +16,7 @@ Available libraries:
 
 Call this tool to get shape names and usage syntax for a specific library.`;
 
-const getShapeLibraryTool: ToolRegisterOptions = {
+const getShapeLibraryTool: DrawioToolDefinition = {
   groupName: 'drawio',
   tool: {
     name: 'get_shape_library',
@@ -26,8 +26,9 @@ const getShapeLibraryTool: ToolRegisterOptions = {
     schema: z.object({
       library: z.string().describe("Library name (e.g., 'aws4', 'kubernetes', 'flowchart')"),
     }),
-    invoke: async (_ctx, args: { library?: string }) => {
-      const requested = (args?.library || '').trim();
+    invoke: async (_ctx, args) => {
+      const library = args.library;
+      const requested = typeof library === 'string' ? library.trim() : '';
       if (!requested) {
         return { status: 'error', content: 'library parameter is required.' };
       }

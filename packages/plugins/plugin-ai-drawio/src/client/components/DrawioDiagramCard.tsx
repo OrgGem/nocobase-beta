@@ -1,11 +1,24 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Drawer, Space, Typography, Card, Tag, message as antMessage } from 'antd';
 import { ApartmentOutlined, FullscreenOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import type { ToolsUIProperties } from '@nocobase/client';
+import type { ToolsUIProperties } from '@nocobase/client-v2';
 import { DrawioBlock } from '../DrawioBlock';
 import { getDiagramResultByTitle, subscribeDiagramResult } from './diagramResultStore';
+import { useT } from '../locale';
 
 const { Text } = Typography;
+
+type DiagramToolArgs = {
+  title?: string;
+};
+
+function getDiagramToolArgs(value: unknown): DiagramToolArgs {
+  if (typeof value !== 'object' || value === null || !('title' in value)) {
+    return {};
+  }
+  const title = value.title;
+  return typeof title === 'string' ? { title } : {};
+}
 
 /**
  * Shared UI card rendered inside the AI Employee chat bubble when a drawio
@@ -21,43 +34,33 @@ const { Text } = Typography;
  * open and view the newly created diagram.
  */
 export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => {
+  const t = useT();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openDiagramId, setOpenDiagramId] = useState<string>();
   const [openDiagramTitle, setOpenDiagramTitle] = useState<string>();
-
-  const args = toolCall.args as any;
-  const diagramTitle: string = args?.title || 'Drawio Diagram';
-
-  // The invoke handler stores diagram result in module-level store keyed by title.
-  // It also mutates the args object to include _diagramId and _appliedDirectly.
-  // On initial render, _diagramId might not be set yet (invoke still running),
-  // but by the time the user clicks "Open Diagram", it will be available.
+  const args = getDiagramToolArgs(toolCall.args);
+  const diagramTitle = args.title || t('Drawio Diagram');
+  const [result, setResult] = useState(() => getDiagramResultByTitle(diagramTitle));
 
   const getDiagramId = useCallback((): string | undefined => {
-    // First check the mutated args (set by invoke handler)
-    if (args?._diagramId) return args._diagramId;
-    // Fallback: check the module-level store
-    const stored = getDiagramResultByTitle(diagramTitle);
-    return stored?.diagramId;
-  }, [args, diagramTitle]);
+    return result?.diagramId || getDiagramResultByTitle(diagramTitle)?.diagramId;
+  }, [diagramTitle, result?.diagramId]);
 
   const isAppliedDirectly = useCallback((): boolean => {
-    if (args?._appliedDirectly !== undefined) return args._appliedDirectly;
-    const stored = getDiagramResultByTitle(diagramTitle);
-    return stored?.appliedDirectly ?? false;
-  }, [args, diagramTitle]);
+    return result?.appliedDirectly ?? getDiagramResultByTitle(diagramTitle)?.appliedDirectly ?? false;
+  }, [diagramTitle, result?.appliedDirectly]);
 
   const openDrawer = useCallback(() => {
     const diagramId = getDiagramId();
     if (!diagramId) {
-      antMessage.warning('Diagram is still being created. Please try again in a moment.');
+      antMessage.warning(t('Diagram is still being created. Please try again in a moment.'));
       return;
     }
-    const stored = getDiagramResultByTitle(diagramTitle);
+    const stored = result || getDiagramResultByTitle(diagramTitle);
     setOpenDiagramId(diagramId);
     setOpenDiagramTitle(stored?.title || diagramTitle);
     setDrawerOpen(true);
-  }, [diagramTitle, getDiagramId]);
+  }, [diagramTitle, getDiagramId, result, t]);
 
   const closeDrawer = useCallback(() => {
     setDrawerOpen(false);
@@ -68,6 +71,7 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
       if (result.title !== diagramTitle) {
         return;
       }
+      setResult(result);
       if (drawerOpen) {
         setOpenDiagramId(result.diagramId);
         setOpenDiagramTitle(result.title || diagramTitle);
@@ -92,7 +96,7 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
           <ApartmentOutlined style={{ color: '#52c41a', fontSize: 16 }} />
           <Text style={{ fontSize: 13 }}>{diagramTitle}</Text>
           <Tag color="green" icon={<CheckCircleOutlined />}>
-            Applied
+            {t('Applied')}
           </Tag>
         </Space>
       </Card>
@@ -119,7 +123,7 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
               {diagramTitle}
             </Text>
             <Tag color="blue" icon={<CheckCircleOutlined />} style={{ marginLeft: 4 }}>
-              Ready
+              {t('Ready')}
             </Tag>
           </Space>
           <Button
@@ -133,7 +137,7 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
               fontWeight: 500,
             }}
           >
-            Open Diagram
+            {t('Open Diagram')}
           </Button>
         </Space>
       </Card>

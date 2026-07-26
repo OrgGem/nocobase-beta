@@ -2,7 +2,7 @@ import type { Model, Repository } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 import { createTestConnectionAction } from './actions/sftpgo-connections';
 import { createSftpgoProxyActions } from './actions/sftpgo-proxy';
-import { assertValidAddress, SftpgoClient, SftpgoResourceType } from './sftpgo-client';
+import { assertValidAddress, SftpgoClient, SftpgoConnectionConfig, SftpgoResourceType } from './sftpgo-client';
 import { maskApiKey } from './utils/mask-api-key';
 
 const MASK = '••••••••';
@@ -15,12 +15,13 @@ const PROXY_RESOURCES: { name: string; type: SftpgoResourceType }[] = [
 ];
 
 export class PluginSftpgoIntegrationServer extends Plugin {
-  private clientCache = new Map<number, SftpgoClient>();
+  private clientCache = new Map<number, { configKey: string; client: SftpgoClient }>();
 
   async beforeLoad() {
     this.db.on('sftpgoConnections.beforeSave', async (model: Model) => {
       if (model.changed('baseUrl')) {
-        assertValidAddress(model.get('baseUrl') as string);
+        // validate the resolved address so `{{$env.X}}` templates can be stored
+        assertValidAddress(this.resolveEnv(model.get('baseUrl') as string) || '');
       }
       for (const field of ENCRYPTED_FIELDS) {
         if (model.changed(field) && model.get(field)) {
@@ -67,20 +68,45 @@ export class PluginSftpgoIntegrationServer extends Plugin {
 
   /**
    * Return a cached SftpgoClient for the given connection so the admin
-   * bearer token (and its TTL) is reused across requests.  The cache is
-   * invalidated automatically when the connection row is saved or deleted.
+   * bearer token (and its TTL) is reused across requests.  The cache entry
+   * is keyed by the resolved config, so changing the connection row or a
+   * referenced environment variable produces a fresh client.
    */
   async getClient(connection: Model): Promise<SftpgoClient> {
     const id = connection.get('id') as number;
-    let client = this.clientCache.get(id);
-    if (!client) {
-      client = await this.buildClient(connection);
-      this.clientCache.set(id, client);
+    const config = await this.buildClientConfig(connection);
+    const configKey = JSON.stringify(config);
+    const cached = this.clientCache.get(id);
+    if (cached && cached.configKey === configKey) {
+      return cached.client;
     }
+    const client = new SftpgoClient(config);
+    this.clientCache.set(id, { configKey, client });
     return client;
   }
 
+  /**
+   * Expand `{{$env.NAME}}` references using the app environment service
+   * (Variables and secrets plugin). Only this braced syntax is supported so
+   * literal credentials can never be partially rewritten; unknown variables
+   * are left untouched.
+   */
+  public resolveEnv(val: string | null | undefined): string | null | undefined {
+    if (!val || typeof val !== 'string') return val;
+    return val.replace(/\{\{\s*\$env\.([a-zA-Z0-9_]+)\s*\}\}/g, (match, name) => this.getEnvVal(name) ?? match);
+  }
+
+  private getEnvVal(name: string): string | undefined {
+    const envService = (this.app as unknown as { environment?: { getVariable?: (n: string) => unknown } }).environment;
+    const value = envService?.getVariable?.(name);
+    return value == null ? undefined : String(value);
+  }
+
   async buildClient(connection: Model): Promise<SftpgoClient> {
+    return new SftpgoClient(await this.buildClientConfig(connection));
+  }
+
+  private async buildClientConfig(connection: Model): Promise<SftpgoConnectionConfig> {
     const aes = this.app.aesEncryptor;
     let password: string | null = null;
     let apiKey: string | null = null;
@@ -90,13 +116,13 @@ export class PluginSftpgoIntegrationServer extends Plugin {
     } catch {
       throw new Error('Failed to decrypt SFTPGo credentials');
     }
-    return new SftpgoClient({
-      baseUrl: connection.get('baseUrl') as string,
+    return {
+      baseUrl: this.resolveEnv(connection.get('baseUrl') as string) || '',
       authMethod: connection.get('authMethod') as string,
-      username: connection.get('username') as string | null,
-      password,
-      apiKey,
-    });
+      username: this.resolveEnv(connection.get('username') as string | null),
+      password: this.resolveEnv(password),
+      apiKey: this.resolveEnv(apiKey),
+    };
   }
 
   async saveApiKeySecret(connectionId: number, apiKeyId: string, name: string, secret: string) {

@@ -42,4 +42,13 @@
   "Open Diagram": "Open Diagram",
   "Ready": "Ready",
   "Applied": "Applied"
+,
+  "Paste this prompt into the \"About\" / instructions field of an AI Employee when you want it to follow the complete Drawio workflow. Drawio tools are available automatically; attaching a drawio work-context is optional.": "Paste this prompt into the \"About\" / instructions field of an AI Employee when you want it to follow the complete Drawio workflow. Drawio tools are available automatically; attaching a drawio work-context is optional.",
+  "Height (px)": "Height (px)",
+  "UI mode": "UI mode",
+  "Kennedy (default)": "Kennedy (default)",
+  "Min": "Min",
+  "Sketch": "Sketch",
+  "Atlas": "Atlas",
+  "Diagram is still being created. Please try again in a moment.": "Diagram is still being created. Please try again in a moment."
 }

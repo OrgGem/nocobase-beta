@@ -42,4 +42,13 @@
   "Applied": "Đã áp dụng",
   "No drawio diagram is currently open on the page.": "Hiện không có sơ đồ drawio nào đang mở trên trang.",
   "Drawio diagram already attached to this chat.": "Sơ đồ Drawio đã được gắn vào chat này."
+,
+  "Paste this prompt into the \"About\" / instructions field of an AI Employee when you want it to follow the complete Drawio workflow. Drawio tools are available automatically; attaching a drawio work-context is optional.": "Dán prompt này vào trường About / hướng dẫn của AI Employee khi bạn muốn nó thực hiện đầy đủ quy trình Drawio. Công cụ Drawio luôn có sẵn; việc gắn work-context Drawio là tùy chọn.",
+  "Height (px)": "Chiều cao (px)",
+  "UI mode": "Chế độ giao diện",
+  "Kennedy (default)": "Kennedy (mặc định)",
+  "Min": "Tối giản",
+  "Sketch": "Phác thảo",
+  "Atlas": "Atlas",
+  "Diagram is still being created. Please try again in a moment.": "Sơ đồ đang được tạo. Vui lòng thử lại sau ít phút."
 }

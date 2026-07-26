@@ -48,20 +48,36 @@ nodes one at a time, waiting for readiness `200` before draining the other node.
 
 ```
 Client -> nginx (LB :80)
-           -> app-1  (WORKER_MODE=! HTTP + WebSocket)
-
-           -> worker containers managed by plugin-cluster-manager
+           -> app-main      (primary HTTP + WebSocket + workers)
+           -> app-backup-1  (HTTP failover + workers)
+           -> app-backup-2  (HTTP failover + workers)
 
            ├── redis 8  (cache db0 + pub/sub/queue/locks db1-db4)
            └── postgres 16 (tuned for production)
 ```
 
-This stack is pinned to `nocobase/nocobase:2.1.6-full` via
-`NOCOBASE_VERSION=2.1.6-full`. The compose fallback also uses the same tag, so
+Startup is deliberately serialized because custom plugin `load()` hooks may
+also call `db.sync()`:
+
+```text
+app-main install/version check/upgrade -> healthy
+app-backup-1 start                      -> healthy
+app-backup-2 start                      -> healthy
+nginx routes HTTP to app-main and uses the backups only for failover
+```
+
+`app-main` is the only migration leader. It performs a full upgrade when
+`storage/.upgrading` exists, or when the image version differs from the database
+version. On an ordinary same-version restart, the upgrade command exits early.
+Backups run plain `yarn start` without `--quickstart` and perform an HTTP 200 +
+JSON version readiness check against their predecessor before starting.
+
+This stack is pinned to `nocobase/nocobase:2.1.30-full` via
+`NOCOBASE_VERSION=2.1.30-full`. The compose fallback also uses the same tag, so
 fresh deployments and existing `.env` based deployments resolve to the same
-NocoBase version. Worker containers spawned by `plugin-cluster-manager` (Docker
-adapter) inherit the app container's image automatically, so they stay
-version-locked with `app-1` without configuring an image per stack.
+NocoBase version. All three app containers use `WORKER_MODE=''`, so they also
+consume registered background queues. Worker containers spawned separately by
+`plugin-cluster-manager` inherit the app container image.
 
 ## Quick Start
 
@@ -72,7 +88,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-## Upgrade to NocoBase 2.1.6
+## Upgrade to NocoBase 2.1.30
 
 Before upgrading, make a database backup. NocoBase supports upgrades only; if a
 rollback is required, restore the backup and start again with the previous image
@@ -86,23 +102,21 @@ grep '^NOCOBASE_VERSION=' .env
 
 # Optional backup example. Adjust the output path for your environment.
 docker compose exec postgres sh -c \
-  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/nocobase-before-2.1.6.dump'
-docker compose cp postgres:/tmp/nocobase-before-2.1.6.dump ./nocobase-before-2.1.6.dump
+  'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -f /tmp/nocobase-before-2.1.30.dump'
+docker compose cp postgres:/tmp/nocobase-before-2.1.30.dump ./nocobase-before-2.1.30.dump
 
-# Pull and recreate the app container with the pinned 2.1.6 image.
-docker compose pull app-1
-docker compose up -d app-1 nginx
+# Pull and recreate the migration leader and two serialized backups.
+docker compose pull app-main app-backup-1 app-backup-2
+docker compose up -d app-main app-backup-1 app-backup-2 nginx
 
-# Watch the upgrade/startup logs until the app is healthy.
-docker compose logs -f app-1
+# Watch the migration leader and readiness gates.
+docker compose logs -f app-main app-backup-1 app-backup-2
 docker compose ps
 ```
 
 If plugin-cluster-manager has created worker containers outside this compose
-file, recreate those workers after `app-1` is healthy so they use the same
-`2.1.6-full` image. Workers created by the Docker orchestrator now inherit the
-app container's image automatically, so they stay version-locked with `app-1`
-after the recreate.
+file, recreate those workers after `app-main` is healthy so they use the same
+`2.1.30-full` image. The compose app nodes all use the same image tag.
 
 ## Install plugin-worker-monitor
 
@@ -121,8 +135,8 @@ docker cp plugin-worker-monitor-1.0.0.tgz <container>:/tmp/
 docker exec -it <container> bash -c \
   "cd /app/nocobase && yarn pm add /tmp/plugin-worker-monitor-1.0.0.tgz && yarn pm enable plugin-worker-monitor"
 
-# Restart the compose-managed app and proxy
-docker compose restart app-1 nginx
+# Restart the migration leader; backups will wait for its readiness gate.
+docker compose restart app-main app-backup-1 app-backup-2 nginx
 ```
 
 Or add `APPEND_PRESET_LOCAL_PLUGINS=plugin-worker-monitor` in `.env` if the plugin is
@@ -135,23 +149,26 @@ Add more app or worker nodes:
 ```yaml
 # docker-compose.override.yml
 services:
-  app-3:
+  app-backup-3:
     <<: *nocobase-base
     environment:
       <<: *nocobase-env
-      WORKER_MODE: "!"
+      APP_NODE_ROLE: backup
+      APP_START_AFTER_URL: http://app-backup-2:13000/api/app:getInfo
+      WORKER_MODE: ''
       APP_PORT: 13000
     depends_on:
-      app-1:
+      app-backup-2:
         condition: service_healthy
 ```
 
 Then update `nginx.conf` upstream:
 ```nginx
 upstream apps {
-    server app-1:13000;
-    server app-2:13000;
-    server app-3:13000;
+    server app-main:13000;
+    server app-backup-1:13000 backup;
+    server app-backup-2:13000 backup;
+    server app-backup-3:13000 backup;
 }
 ```
 

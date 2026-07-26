@@ -1,9 +1,10 @@
 import { ReloadOutlined, RedoOutlined } from '@ant-design/icons';
 import { useFlowContext } from '@nocobase/flow-engine';
-import { Button, Card, Col, Row, Select, Space, Statistic, Table, Tag, message } from 'antd';
+import { Button, Card, Col, Input, Row, Select, Space, Statistic, Table, Tag, message } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useT } from '../locale';
 import { actionData, ActionResponse, ApiEnvelope, errorMessage } from './shared';
+
 interface Job {
   id: number;
   jobId: string;
@@ -14,36 +15,47 @@ interface Job {
   createdAt: string;
   nextAttemptAt?: string;
 }
+
 interface Audit {
   id: number;
   requestId: string;
   jobId?: string;
+  idempotencyKey?: string;
   operation: string;
   status: string;
   httpStatus?: number;
   graphHttpStatus?: number;
   graphRequestId?: string;
+  apiKeyName?: string;
   apiKeyPrefix?: string;
   attempt?: number;
   durationMs?: number;
   error?: string;
   createdAt: string;
 }
+
 const colors: Record<string, string> = {
   succeeded: 'green',
   failed: 'red',
+  rejected: 'magenta',
   processing: 'blue',
   retrying: 'orange',
+  queued: 'purple',
   pending: 'default',
 };
+
 export default function OperationsPage() {
   const api = useFlowContext().api;
   const t = useT();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [audits, setAudits] = useState<Audit[]>([]);
   const [stats, setStats] = useState<Record<string, number>>({});
-  const [status, setStatus] = useState<string>();
+  const [jobStatus, setJobStatus] = useState<string>();
+  const [auditStatus, setAuditStatus] = useState<string>();
+  const [auditOperation, setAuditOperation] = useState<string>();
+  const [auditHttpStatus, setAuditHttpStatus] = useState<string>();
   const [loading, setLoading] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -51,12 +63,17 @@ export default function OperationsPage() {
         api.request<ActionResponse<ApiEnvelope<Job[]>>>({
           url: 'msGraphGateway:listJobs',
           method: 'post',
-          data: { pageSize: 50, status },
+          data: { pageSize: 50, status: jobStatus },
         }),
         api.request<ActionResponse<ApiEnvelope<Audit[]>>>({
           url: 'msGraphGateway:listAuditLogs',
           method: 'post',
-          data: { pageSize: 50 },
+          data: {
+            pageSize: 50,
+            status: auditStatus,
+            operation: auditOperation || undefined,
+            httpStatus: auditHttpStatus || undefined,
+          },
         }),
         api.request<ActionResponse<ApiEnvelope<Record<string, number>>>>({ url: 'msGraphGateway:dashboard' }),
       ]);
@@ -66,15 +83,18 @@ export default function OperationsPage() {
     } finally {
       setLoading(false);
     }
-  }, [api, status]);
+  }, [api, jobStatus, auditStatus, auditOperation, auditHttpStatus]);
+
   useEffect(() => {
     load().catch((error) => message.error(errorMessage(error, t('Load failed'))));
   }, [load, t]);
+
   const retry = async (jobId: string) => {
     await api.request({ url: 'msGraphGateway:retryJob', method: 'post', data: { jobId } });
     message.success(t('Job queued for retry'));
     await load();
   };
+
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Row gutter={[12, 12]}>
@@ -86,6 +106,7 @@ export default function OperationsPage() {
           </Col>
         ))}
       </Row>
+
       <Card
         title={t('Queue')}
         extra={
@@ -93,8 +114,8 @@ export default function OperationsPage() {
             <Select
               allowClear
               placeholder={t('Status')}
-              value={status}
-              onChange={setStatus}
+              value={jobStatus}
+              onChange={setJobStatus}
               options={['pending', 'processing', 'retrying', 'succeeded', 'failed'].map((value) => ({
                 value,
                 label: value,
@@ -141,11 +162,47 @@ export default function OperationsPage() {
           ]}
         />
       </Card>
-      <Card title={t('Audit log')}>
+
+      <Card
+        title={t('Audit log')}
+        extra={
+          <Space wrap>
+            <Select
+              allowClear
+              placeholder={t('Status')}
+              value={auditStatus}
+              onChange={setAuditStatus}
+              style={{ width: 130 }}
+              options={['queued', 'succeeded', 'retrying', 'failed', 'rejected'].map((value) => ({
+                value,
+                label: value,
+              }))}
+            />
+            <Input
+              allowClear
+              placeholder={t('Operation')}
+              value={auditOperation}
+              onChange={(e) => setAuditOperation(e.target.value)}
+              style={{ width: 160 }}
+            />
+            <Input
+              allowClear
+              placeholder={t('HTTP status')}
+              value={auditHttpStatus}
+              onChange={(e) => setAuditHttpStatus(e.target.value)}
+              style={{ width: 120 }}
+            />
+            <Button icon={<ReloadOutlined />} onClick={load}>
+              {t('Refresh')}
+            </Button>
+          </Space>
+        }
+      >
         <Table
           rowKey="id"
+          loading={loading}
           dataSource={audits}
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1600 }}
           columns={[
             {
               title: t('Time'),
@@ -154,7 +211,7 @@ export default function OperationsPage() {
               render: (v: string) => new Date(v).toLocaleString(),
             },
             { title: t('Request ID'), dataIndex: 'requestId', width: 220, ellipsis: true },
-            { title: t('Job ID'), dataIndex: 'jobId', width: 220 },
+            { title: t('Job ID'), dataIndex: 'jobId', width: 200, ellipsis: true },
             { title: t('Operation'), dataIndex: 'operation', width: 160 },
             {
               title: t('Status'),
@@ -164,7 +221,13 @@ export default function OperationsPage() {
             },
             { title: t('HTTP status'), dataIndex: 'httpStatus', width: 110 },
             { title: t('Graph status'), dataIndex: 'graphHttpStatus', width: 110 },
-            { title: t('API key'), dataIndex: 'apiKeyPrefix', width: 130 },
+            {
+              title: t('API key'),
+              dataIndex: 'apiKeyPrefix',
+              width: 160,
+              render: (_: unknown, row: Audit) =>
+                row.apiKeyName ? `${row.apiKeyName} (${row.apiKeyPrefix ?? ''})` : row.apiKeyPrefix ?? '-',
+            },
             { title: t('Graph request ID'), dataIndex: 'graphRequestId', width: 220, ellipsis: true },
             { title: t('Attempt'), dataIndex: 'attempt', width: 90 },
             { title: t('Duration (ms)'), dataIndex: 'durationMs', width: 120 },

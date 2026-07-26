@@ -46,23 +46,37 @@ export default defineCollection({
       },
     },
     {
+      type: 'string',
+      name: 'direction',
+      defaultValue: 'pull',
+      interface: 'select',
+      uiSchema: {
+        title: 'Direction',
+        type: 'string',
+        'x-component': 'Select',
+        enum: [
+          { value: 'pull', label: 'Pull from vault' },
+          { value: 'push', label: 'Push to vault' },
+        ],
+      },
+    },
+    {
+      type: 'string',
+      name: 'envVariable',
+      interface: 'input',
+      uiSchema: {
+        title: 'Environment Variable',
+        type: 'string',
+        'x-component': 'Input',
+      },
+    },
+    {
       type: 'boolean',
       name: 'exposeToClient',
       defaultValue: false,
       interface: 'checkbox',
       uiSchema: {
         title: 'Expose To Client',
-        type: 'boolean',
-        'x-component': 'Checkbox',
-      },
-    },
-    {
-      type: 'boolean',
-      name: 'syncToEnv',
-      defaultValue: false,
-      interface: 'checkbox',
-      uiSchema: {
-        title: 'Sync To $env',
         type: 'boolean',
         'x-component': 'Checkbox',
       },

@@ -1,6 +1,5 @@
-import type { ToolsOptions } from '@nocobase/client';
-import { createAndOpenDiagram } from '../autoOpenDiagram';
-import { getActiveHandle, getAllHandles } from '../lib/activeRegistry';
+import type { ToolsOptions } from '@nocobase/client-v2';
+import { getActiveHandle, getAllHandles, getHandleByDiagramId } from '../lib/activeRegistry';
 import { wrapWithMxFile } from '../lib/xml-utils';
 import { DrawioDiagramCard } from '../components/DrawioDiagramCard';
 import { setDiagramResult } from '../components/diagramResultStore';
@@ -31,13 +30,21 @@ type DiagramEdge = {
 type DiagramModel = {
   title?: string;
   description?: string;
+  diagramId?: string;
   containers?: DiagramNode[];
   nodes?: DiagramNode[];
   edges?: DiagramEdge[];
 };
 
-function getMountedHandle() {
+function getMountedHandle(diagramId?: string) {
+  if (diagramId) {
+    return getHandleByDiagramId(diagramId);
+  }
   return getActiveHandle() || getAllHandles()[0] || null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function escapeXml(value: unknown): string {
@@ -54,8 +61,7 @@ function normalizeStyle(style?: string) {
 }
 
 function shapeStyle(shape: DiagramShape | undefined, fallback: DiagramShape) {
-  const kind = shape || fallback;
-  switch (kind) {
+  switch (shape || fallback) {
     case 'ellipse':
       return 'ellipse;whiteSpace=wrap;html=1;';
     case 'diamond':
@@ -96,67 +102,47 @@ function edgeToMxCell(edge: DiagramEdge) {
 }
 
 function modelToMxCells(model: DiagramModel) {
-  const containers = model.containers || [];
-  const nodes = model.nodes || [];
-  const edges = model.edges || [];
   return [
-    ...containers.map((node) => nodeToMxCell(node, 'swimlane')),
-    ...nodes.map((node) => nodeToMxCell(node, 'rounded')),
-    ...edges.map(edgeToMxCell),
+    ...(model.containers || []).map((node) => nodeToMxCell(node, 'swimlane')),
+    ...(model.nodes || []).map((node) => nodeToMxCell(node, 'rounded')),
+    ...(model.edges || []).map(edgeToMxCell),
   ].join('\n');
 }
 
-async function invoke(app: any, params: DiagramModel): Promise<ToolResult> {
-  const nodes = params?.nodes || [];
-  if (!nodes.length) {
+async function invoke(
+  app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
+  rawParams: unknown,
+): Promise<ToolResult> {
+  const params = rawParams as DiagramModel;
+  if (!params.nodes?.length) {
     return { status: 'error', content: 'display_model_diagram called without nodes.' };
   }
 
   const fullXml = wrapWithMxFile(modelToMxCells(params));
   try {
-    const existingHandle = getMountedHandle();
-
+    const existingHandle = getMountedHandle(params.diagramId);
     if (existingHandle) {
-      // Drawio block is already open on the page — apply directly
       existingHandle.setXml(fullXml);
       await existingHandle.persist(fullXml);
-      existingHandle.bridge.load(fullXml);
-
-      const title = existingHandle.diagramTitle || params.title || 'Drawio Diagram';
+      existingHandle.load(fullXml);
       setDiagramResult({
         diagramId: existingHandle.diagramId,
-        title,
+        title: existingHandle.diagramTitle || params.title || 'Drawio Diagram',
         appliedDirectly: true,
       });
-      (params as any)._diagramId = existingHandle.diagramId;
-      (params as any)._appliedDirectly = true;
-
       return { status: 'success', content: 'Successfully displayed the diagram.' };
     }
 
-    // No drawio block is open — create the diagram record and save XML.
-    // The UI card will give the user a button to open it.
-    const apiClient = app?.apiClient;
+    if (params.diagramId) {
+      return {
+        status: 'error',
+        content: `The requested diagram ${params.diagramId} is not open on this page. Open it before updating it.`,
+      };
+    }
+
+    const apiClient = app.apiClient;
     if (!apiClient) {
-      // Fallback: auto-open via Drawer as before
-      const handle = await createAndOpenDiagram(app, {
-        title: params.title,
-        description: params.description || 'Created from AI Employee draw.io tool.',
-      });
-      handle.setXml(fullXml);
-      await handle.persist(fullXml);
-      handle.bridge.load(fullXml);
-
-      const title = handle.diagramTitle || params.title || 'Drawio Diagram';
-      setDiagramResult({
-        diagramId: handle.diagramId,
-        title,
-        appliedDirectly: true,
-      });
-      (params as any)._diagramId = handle.diagramId;
-      (params as any)._appliedDirectly = true;
-
-      return { status: 'success', content: 'Successfully displayed the diagram.' };
+      return { status: 'error', content: 'NocoBase API client is not available.' };
     }
 
     const title = params.title || `AI diagram ${new Date().toLocaleString()}`;
@@ -172,30 +158,19 @@ async function invoke(app: any, params: DiagramModel): Promise<ToolResult> {
       throw new Error('Failed to create draw.io diagram.');
     }
 
-    // Save the XML content to the newly created diagram
     await apiClient.request({
       url: `aiDiagrams:saveXml/${encodeURIComponent(diagramId)}`,
       method: 'post',
       data: { xml: fullXml },
     });
 
-    setDiagramResult({
-      diagramId,
-      title,
-      appliedDirectly: false,
-    });
-    (params as any)._diagramId = diagramId;
-    (params as any)._appliedDirectly = false;
-
+    setDiagramResult({ diagramId, title, appliedDirectly: false });
     return {
       status: 'success',
-      content: `Diagram created successfully. Click "Open Diagram" below to view it.`,
+      content: 'Diagram created successfully. Click "Open Diagram" below to view it.',
     };
-  } catch (err: any) {
-    return {
-      status: 'error',
-      content: `Failed to display diagram: ${err?.message || String(err)}`,
-    };
+  } catch (error: unknown) {
+    return { status: 'error', content: `Failed to display diagram: ${errorMessage(error)}` };
   }
 }
 

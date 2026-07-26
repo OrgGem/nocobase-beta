@@ -1,5 +1,5 @@
 import { z } from 'zod';
-type ToolRegisterOptions = any;
+import type { DrawioToolDefinition } from './types';
 
 const description = `Continue generating diagram XML when previous display_diagram output was truncated due to length limits.
 
@@ -13,7 +13,7 @@ CRITICAL INSTRUCTIONS:
 
 Example: If previous output ended with '<mxCell id="x" style="rounded=1', continue with ';" vertex="1">...' and complete the remaining elements.`;
 
-const appendDiagramTool: ToolRegisterOptions = {
+const appendDiagramTool: DrawioToolDefinition = {
   groupName: 'drawio',
   tool: {
     name: 'append_diagram',

@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import {
+  Alert,
   AutoComplete,
   Button,
   Form,
@@ -41,8 +42,9 @@ interface VaultSecretMapping {
   variableKey: string;
   secretPath: string;
   secretKey: string;
+  direction: 'pull' | 'push';
+  envVariable?: string | null;
   exposeToClient: boolean;
-  syncToEnv: boolean;
   lastSyncedAt?: string;
   lastError?: string;
 }
@@ -52,14 +54,20 @@ interface MappingFormValues {
   variableKey: string;
   secretPath: string;
   secretKey: string;
+  direction: 'pull' | 'push';
+  envVariable?: string | null;
   exposeToClient: boolean;
-  syncToEnv: boolean;
 }
 
 interface VaultPathEntry {
   name: string;
   path: string;
   isFolder: boolean;
+}
+
+interface EnvVariableOption {
+  name: string;
+  type?: string;
 }
 
 function getErrorMessage(err: unknown, fallback: string): string {
@@ -72,6 +80,8 @@ export const VaultSecretMappings: React.FC = () => {
   const api = useApp().apiClient;
   const [mappings, setMappings] = useState<VaultSecretMapping[]>([]);
   const [connections, setConnections] = useState<VaultConnectionOption[]>([]);
+  const [envVariables, setEnvVariables] = useState<EnvVariableOption[]>([]);
+  const [envVarsAvailable, setEnvVarsAvailable] = useState(true);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -80,9 +90,12 @@ export const VaultSecretMappings: React.FC = () => {
   const [browserPath, setBrowserPath] = useState('');
   const [browserEntries, setBrowserEntries] = useState<VaultPathEntry[]>([]);
   const [browserLoading, setBrowserLoading] = useState(false);
+  const [recursive, setRecursive] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   const [secretKeys, setSecretKeys] = useState<string[]>([]);
   const [keysLoading, setKeysLoading] = useState(false);
   const [form] = Form.useForm<MappingFormValues>();
+  const direction = Form.useWatch('direction', form);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -101,9 +114,22 @@ export const VaultSecretMappings: React.FC = () => {
     }
   }, [api]);
 
+  const loadEnvVariables = useCallback(async () => {
+    try {
+      const res = await api.request({ url: 'environmentVariables:list' });
+      const items = (res?.data?.data as EnvVariableOption[]) || [];
+      setEnvVariables(items.map((item) => ({ name: item.name, type: item.type })));
+      setEnvVarsAvailable(true);
+    } catch {
+      setEnvVariables([]);
+      setEnvVarsAvailable(false);
+    }
+  }, [api]);
+
   useEffect(() => {
     loadData().catch(() => undefined);
-  }, [loadData]);
+    loadEnvVariables().catch(() => undefined);
+  }, [loadData, loadEnvVariables]);
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -148,7 +174,7 @@ export const VaultSecretMappings: React.FC = () => {
     }
   };
 
-  const handleToggle = async (record: VaultSecretMapping, field: 'exposeToClient' | 'syncToEnv', checked: boolean) => {
+  const handleToggle = async (record: VaultSecretMapping, field: 'exposeToClient', checked: boolean) => {
     try {
       await api.request({
         url: 'vaultSecretMappings:update',
@@ -162,16 +188,17 @@ export const VaultSecretMappings: React.FC = () => {
     }
   };
 
-  const loadPath = async (connectionId: number, path: string) => {
+  const loadPath = async (connectionId: number, path: string, recursiveMode = recursive) => {
     setBrowserLoading(true);
     try {
       const res = await api.request({
-        url: 'vaultConnections:listPaths',
+        url: recursiveMode ? 'vaultConnections:listAllPaths' : 'vaultConnections:listPaths',
         method: 'post',
         params: { filterByTk: connectionId, path },
       });
       setBrowserPath(path);
       setBrowserEntries(res?.data?.data?.entries || []);
+      setTruncated(recursiveMode ? !!res?.data?.data?.truncated : false);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to list Vault paths') as string));
     } finally {
@@ -230,6 +257,8 @@ export const VaultSecretMappings: React.FC = () => {
     }
   };
 
+  const directionLabel = (d: string) => (d === 'push' ? t('Push to vault') : t('Pull from vault'));
+
   const columns = [
     {
       title: t('Variable Key'),
@@ -262,6 +291,21 @@ export const VaultSecretMappings: React.FC = () => {
       render: (_: unknown, record: VaultSecretMapping) => `${record.secretPath} # ${record.secretKey}`,
     },
     {
+      title: t('Direction'),
+      key: 'direction',
+      width: 130,
+      render: (_: unknown, record: VaultSecretMapping) => (
+        <Space size={4} direction="vertical">
+          <Tag color={record.direction === 'push' ? 'orange' : 'blue'}>{directionLabel(record.direction)}</Tag>
+          {record.envVariable && (
+            <Tooltip title={`{{$env.${record.envVariable}}}`}>
+              <code style={{ fontSize: 11 }}>{record.envVariable}</code>
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
+    {
       title: (
         <Tooltip title={t('Allow resolving this variable from the client for logged-in users')}>{t('Client')}</Tooltip>
       ),
@@ -274,24 +318,6 @@ export const VaultSecretMappings: React.FC = () => {
           checked={!!v}
           aria-label={t('Expose to client') as string}
           onChange={(checked) => handleToggle(record, 'exposeToClient', checked)}
-        />
-      ),
-    },
-    {
-      title: (
-        <Tooltip title={t('Push value into $env on every sync')}>
-          <span>$env</span>
-        </Tooltip>
-      ),
-      dataIndex: 'syncToEnv',
-      key: 'syncToEnv',
-      width: 80,
-      render: (v: boolean, record: VaultSecretMapping) => (
-        <Switch
-          size="small"
-          checked={!!v}
-          aria-label={t('Sync to $env') as string}
-          onChange={(checked) => handleToggle(record, 'syncToEnv', checked)}
         />
       ),
     },
@@ -377,7 +403,7 @@ export const VaultSecretMappings: React.FC = () => {
         }}
         width={560}
       >
-        <Form form={form} layout="vertical" initialValues={{ exposeToClient: false, syncToEnv: false }}>
+        <Form form={form} layout="vertical" initialValues={{ direction: 'pull', exposeToClient: false }}>
           <Form.Item name="connectionId" label={t('Connection')} rules={[{ required: true }]}>
             <Select
               placeholder={t('Select a connection') as string}
@@ -441,19 +467,55 @@ export const VaultSecretMappings: React.FC = () => {
               notFoundContent={keysLoading ? t('Loading') : t('Enter the key manually')}
             />
           </Form.Item>
+          <Form.Item name="direction" label={t('Direction')} rules={[{ required: true }]}>
+            <Select
+              options={[
+                { value: 'pull', label: t('Pull from vault') as string },
+                { value: 'push', label: t('Push to vault') as string },
+              ]}
+              onChange={() => {
+                form.setFieldValue('envVariable', undefined);
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="envVariable"
+            label={t('Environment Variable')}
+            extra={
+              !envVarsAvailable
+                ? t('Enable the environment-variables plugin first')
+                : direction === 'push'
+                  ? t(
+                      'Required for push direction; current env value will overwrite vault on every sync when they differ',
+                    )
+                  : t('Optional for pull direction; vault value will overwrite env when they differ')
+            }
+            rules={direction === 'push' ? [{ required: true }] : []}
+          >
+            <Select
+              allowClear
+              showSearch
+              disabled={!envVarsAvailable}
+              placeholder={t('Select an environment variable') as string}
+              options={envVariables.map((env) => ({
+                value: env.name,
+                label: (
+                  <Space>
+                    <span style={{ fontFamily: 'monospace' }}>{`{{$env.${env.name}}}`}</span>
+                    <Tag color={env.type === 'secret' ? 'red' : 'blue'} style={{ fontSize: 10, margin: 0 }}>
+                      {env.type || 'default'}
+                    </Tag>
+                  </Space>
+                ),
+              }))}
+              notFoundContent={t('No environment variables available') as string}
+            />
+          </Form.Item>
           <Form.Item
             name="exposeToClient"
             label={t('Expose to client')}
             valuePropName="checked"
             extra={t('Allow resolving this variable from the client for logged-in users')}
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name="syncToEnv"
-            label={t('Sync to $env')}
-            valuePropName="checked"
-            extra={t('Push value into $env on every sync')}
           >
             <Switch />
           </Form.Item>
@@ -467,7 +529,7 @@ export const VaultSecretMappings: React.FC = () => {
         onCancel={() => setBrowserOpen(false)}
         width={620}
       >
-        <Space style={{ marginBottom: 12 }}>
+        <Space style={{ marginBottom: 12 }} wrap>
           <Button
             icon={<ArrowLeftOutlined />}
             disabled={!browserPath || browserLoading}
@@ -480,7 +542,21 @@ export const VaultSecretMappings: React.FC = () => {
             {t('Up')}
           </Button>
           <code>/{browserPath}</code>
+          <Switch
+            size="small"
+            checked={recursive}
+            aria-label={t('All paths') as string}
+            onChange={(checked) => {
+              setRecursive(checked);
+              const connectionId = form.getFieldValue('connectionId');
+              if (connectionId) loadPath(connectionId, browserPath, checked);
+            }}
+          />
+          <span>{t('All paths')}</span>
         </Space>
+        {truncated && (
+          <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={t('Too many paths, result truncated')} />
+        )}
         <Table<VaultPathEntry>
           rowKey="path"
           size="small"
@@ -498,7 +574,7 @@ export const VaultSecretMappings: React.FC = () => {
                   icon={entry.isFolder ? <FolderOutlined /> : <KeyOutlined />}
                   onClick={() => selectBrowserEntry(entry)}
                 >
-                  {name}
+                  {recursive ? entry.path : name}
                   {entry.isFolder ? '/' : ''}
                 </Button>
               ),

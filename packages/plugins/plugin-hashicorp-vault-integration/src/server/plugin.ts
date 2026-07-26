@@ -1,4 +1,4 @@
-import type { Model, Transaction } from '@nocobase/database';
+import type { Model, Repository, Transaction } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 import type { CronJob } from 'cron';
 import { createVaultConnectionActions } from './actions/vault-connections';
@@ -42,28 +42,32 @@ export class PluginHashicorpVaultIntegrationServer extends Plugin {
       if (model.changed('secretPath')) {
         assertSafePath(model.get('secretPath') as string);
       }
+      const direction = (model.get('direction') as string | null) || 'pull';
+      const envVariable = (model.get('envVariable') as string | null) || null;
+      if (direction === 'push' && !envVariable) {
+        throw new Error('envVariable is required when direction is "push"');
+      }
+      if (envVariable) {
+        await this.assertEnvironmentVariableExists(envVariable);
+      }
     });
 
     this.db.on('vaultSecretMappings.afterSave', async (model: Model, options: { transaction?: Transaction }) => {
       const previousKey = model.previous('variableKey') as string | undefined;
       const key = model.get('variableKey') as string;
       if (previousKey && previousKey !== key) {
-        this.removeVariable(previousKey);
+        this.cache.invalidate(previousKey);
       }
       this.cache.invalidate(key);
-      if (!model.get('syncToEnv') && this.cache.isEnvKey(key)) {
-        this.app.environment.removeVariable(key);
-        this.cache.unmarkEnvKey(key);
-      }
       await this.sendSyncMessage({ type: 'vaultRefresh' }, { transaction: options?.transaction });
     });
 
     this.db.on('vaultSecretMappings.afterDestroy', async (model: Model, options: { transaction?: Transaction }) => {
-      this.removeVariable(model.get('variableKey') as string);
+      this.cache.invalidate(model.get('variableKey') as string);
       await this.sendSyncMessage({ type: 'vaultRefresh' }, { transaction: options?.transaction });
     });
 
-    const onConnectionChanged = async (model: Model, options: { transaction?: Transaction }) => {
+    const onConnectionChanged = async (_model: Model, options: { transaction?: Transaction }) => {
       this.cache.clear();
       await this.sendSyncMessage({ type: 'vaultRefresh' }, { transaction: options?.transaction });
     };
@@ -82,6 +86,8 @@ export class PluginHashicorpVaultIntegrationServer extends Plugin {
     this.app.resourceManager.registerActionHandlers({
       'vaultConnections:testConnection': connectionActions.testConnection,
       'vaultConnections:listPaths': connectionActions.listPaths,
+      'vaultConnections:listAllPaths': connectionActions.listAllPaths,
+      'vaultConnections:writeSecret': connectionActions.writeSecret,
       'vaultConnections:listSecretKeys': connectionActions.listSecretKeys,
     });
 
@@ -121,11 +127,21 @@ export class PluginHashicorpVaultIntegrationServer extends Plugin {
     this.teardown();
   }
 
-  private removeVariable(key: string) {
-    this.cache.invalidate(key);
-    if (this.cache.isEnvKey(key)) {
-      this.app.environment.removeVariable(key);
-      this.cache.unmarkEnvKey(key);
+  /** Verify an env var is registered through the environment-variables plugin. */
+  async assertEnvironmentVariableExists(name: string): Promise<void> {
+    const repo = this.db.getRepository('environmentVariables') as Repository | null;
+    if (!repo) {
+      throw new Error(`Cannot bind to environment variable "${name}": the environment-variables plugin is not enabled`);
+    }
+    const exists = await repo.collection.existsInDb();
+    if (!exists) {
+      throw new Error(
+        `Cannot bind to environment variable "${name}": the environmentVariables collection does not exist`,
+      );
+    }
+    const row = await repo.findOne({ filterByTk: name });
+    if (!row) {
+      throw new Error(`Environment variable "${name}" does not exist`);
     }
   }
 
@@ -148,10 +164,6 @@ export class PluginHashicorpVaultIntegrationServer extends Plugin {
       this.app.cronJobManager.removeJob(this.cronJob);
       this.cronJob = null;
     }
-    for (const key of this.cache.getEnvKeys()) {
-      this.app.environment.removeVariable(key);
-    }
-    this.cache.clearEnvKeys();
     this.cache.clear();
   }
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-type ToolRegisterOptions = any;
+import type { DrawioToolDefinition } from './types';
 
 const description = `Display a NEW draw.io diagram from compact structured data.
 
@@ -30,7 +30,7 @@ const diagramNodeSchema = z.object({
   style: z.string().optional().describe('Optional draw.io style suffix.'),
 });
 
-const displayModelDiagramTool: ToolRegisterOptions = {
+const displayModelDiagramTool: DrawioToolDefinition = {
   groupName: 'drawio',
   tool: {
     name: 'display_model_diagram',
@@ -40,6 +40,10 @@ const displayModelDiagramTool: ToolRegisterOptions = {
     schema: z.object({
       title: z.string().optional().describe('Diagram title to use when a new draw.io diagram must be created.'),
       description: z.string().optional().describe('Diagram description to save with a newly created diagram.'),
+      diagramId: z
+        .string()
+        .optional()
+        .describe('Target ID returned by inspect_active_diagram when updating an open diagram.'),
       containers: z.array(diagramNodeSchema).optional().describe('Optional grouping containers.'),
       nodes: z.array(diagramNodeSchema).describe('Diagram nodes.'),
       edges: z

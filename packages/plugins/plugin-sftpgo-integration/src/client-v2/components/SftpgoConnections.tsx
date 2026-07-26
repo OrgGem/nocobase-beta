@@ -2,6 +2,7 @@ import { CheckCircleOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/i
 import { useApp } from '@nocobase/client-v2';
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
 import React, { useCallback, useEffect, useState } from 'react';
+import { EnvInput, type EnvVariableOption } from './EnvInput';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
 import { notifySftpgoConnectionsChanged, useSftpgoTabVisibility } from '../hooks/useSftpgoTabVisibility';
@@ -38,6 +39,7 @@ export const SftpgoConnections: React.FC = () => {
   const app = useApp();
   const api = app.apiClient;
   const [connections, setConnections] = useState<SftpgoConnection[]>([]);
+  const [envVariables, setEnvVariables] = useState<EnvVariableOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<SftpgoConnection | null>(null);
@@ -46,6 +48,19 @@ export const SftpgoConnections: React.FC = () => {
   const authMethod = Form.useWatch('authMethod', form);
 
   useSftpgoTabVisibility();
+
+  const loadEnvVariables = useCallback(async () => {
+    try {
+      const res = await api.request({
+        url: 'environmentVariables?paginate=false',
+        skipNotify: true,
+      });
+      const list = (res?.data?.data || []) as EnvVariableOption[];
+      setEnvVariables(Array.isArray(list) ? list : []);
+    } catch {
+      setEnvVariables([]);
+    }
+  }, [api]);
 
   const loadConnections = useCallback(async () => {
     setLoading(true);
@@ -62,7 +77,8 @@ export const SftpgoConnections: React.FC = () => {
 
   useEffect(() => {
     loadConnections().catch(() => undefined);
-  }, [loadConnections]);
+    loadEnvVariables().catch(() => undefined);
+  }, [loadConnections, loadEnvVariables]);
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -255,10 +271,13 @@ export const SftpgoConnections: React.FC = () => {
             label={t('Base URL')}
             rules={[
               { required: true },
-              { pattern: /^https?:\/\//, message: t('Address must start with http:// or https://') as string },
+              {
+                pattern: /^(https?:\/\/|\{\{\s*\$env\.)/,
+                message: t('Address must start with http:// or https:// or environment variable') as string,
+              },
             ]}
           >
-            <Input placeholder="https://sftpgo.example.com:8080" />
+            <EnvInput envVariables={envVariables} placeholder="https://sftpgo.example.com:8080" />
           </Form.Item>
           <Form.Item name="authMethod" label={t('Auth Method')} rules={[{ required: true }]}>
             <Select
@@ -271,24 +290,32 @@ export const SftpgoConnections: React.FC = () => {
           {authMethod !== 'apikey' && (
             <>
               <Form.Item name="username" label={t('Username')} rules={[{ required: true }]}>
-                <Input placeholder="admin" />
+                <EnvInput envVariables={envVariables} placeholder="admin" />
               </Form.Item>
               <Form.Item name="password" label={t('Password')} rules={editing ? [] : [{ required: true }]}>
-                <Input.Password placeholder={editing ? (t('Leave empty to keep current') as string) : undefined} />
+                <EnvInput
+                  isPassword
+                  envVariables={envVariables}
+                  placeholder={editing ? (t('Leave empty to keep current') as string) : undefined}
+                />
               </Form.Item>
             </>
           )}
           {authMethod === 'apikey' && (
             <>
               <Form.Item name="apiKey" label={t('API Key')} rules={editing ? [] : [{ required: true }]}>
-                <Input.Password placeholder={editing ? (t('Leave empty to keep current') as string) : undefined} />
+                <EnvInput
+                  isPassword
+                  envVariables={envVariables}
+                  placeholder={editing ? (t('Leave empty to keep current') as string) : undefined}
+                />
               </Form.Item>
               <Form.Item
                 name="username"
                 label={t('Impersonate User')}
                 extra={t('Only needed if the API key is not bound to a specific admin or user')}
               >
-                <Input placeholder={t('Optional') as string} />
+                <EnvInput envVariables={envVariables} placeholder={t('Optional') as string} />
               </Form.Item>
             </>
           )}

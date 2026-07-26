@@ -1,5 +1,5 @@
 import { z } from 'zod';
-type ToolRegisterOptions = any;
+import type { DrawioToolDefinition } from './types';
 
 const description = `Display a diagram on the active draw.io block. Pass ONLY the mxCell elements - wrapper tags and root cells are added automatically.
 
@@ -29,7 +29,7 @@ Notes:
 - For animated connectors, add "flowAnimation=1" to edge style.
 `;
 
-const displayDiagramTool: ToolRegisterOptions = {
+const displayDiagramTool: DrawioToolDefinition = {
   groupName: 'drawio',
   tool: {
     name: 'display_diagram',
@@ -39,6 +39,10 @@ const displayDiagramTool: ToolRegisterOptions = {
     schema: z.object({
       title: z.string().optional().describe('Diagram title to use when a new draw.io diagram must be created.'),
       description: z.string().optional().describe('Diagram description to save with a newly created diagram.'),
+      diagramId: z
+        .string()
+        .optional()
+        .describe('Target ID returned by inspect_active_diagram when updating an open diagram.'),
       xml: z.string().describe('XML string to be displayed on draw.io (mxCell elements only)'),
     }),
     invoke: async () => ({

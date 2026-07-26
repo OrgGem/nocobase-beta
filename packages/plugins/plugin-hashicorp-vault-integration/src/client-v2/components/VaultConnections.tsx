@@ -1,4 +1,4 @@
-import { CheckCircleOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
+import { CheckCircleOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import {
   Button,
@@ -51,6 +51,12 @@ interface ConnectionFormValues {
   enabled: boolean;
 }
 
+interface SecretFormValues {
+  path: string;
+  key: string;
+  value: string;
+}
+
 function getErrorMessage(err: unknown, fallback: string): string {
   const e = err as { response?: { data?: { errors?: { message?: string }[] } }; message?: string };
   return e?.response?.data?.errors?.[0]?.message || e?.message || fallback;
@@ -64,7 +70,10 @@ export const VaultConnections: React.FC = () => {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<VaultConnection | null>(null);
   const [testingId, setTestingId] = useState<number | null>(null);
+  const [secretTarget, setSecretTarget] = useState<VaultConnection | null>(null);
+  const [writing, setWriting] = useState(false);
   const [form] = Form.useForm<ConnectionFormValues>();
+  const [secretForm] = Form.useForm<SecretFormValues>();
   const authMethod = Form.useWatch('authMethod', form);
 
   const loadConnections = useCallback(async () => {
@@ -152,6 +161,27 @@ export const VaultConnections: React.FC = () => {
     }
   };
 
+  const handleWriteSecret = async () => {
+    if (!secretTarget) return;
+    const values = await secretForm.validateFields();
+    setWriting(true);
+    try {
+      await api.request({
+        url: 'vaultConnections:writeSecret',
+        method: 'post',
+        params: { filterByTk: secretTarget.id },
+        data: values,
+      });
+      message.success(t('Secret written to Vault'));
+      setSecretTarget(null);
+      secretForm.resetFields();
+    } catch (err) {
+      message.error(getErrorMessage(err, t('Failed to write secret') as string));
+    } finally {
+      setWriting(false);
+    }
+  };
+
   const columns = [
     { title: t('Name'), dataIndex: 'name', key: 'name' },
     { title: t('Address'), dataIndex: 'address', key: 'address', ellipsis: true },
@@ -207,7 +237,7 @@ export const VaultConnections: React.FC = () => {
     {
       title: '',
       key: 'actions',
-      width: 220,
+      width: 300,
       render: (_: unknown, record: VaultConnection) => (
         <Space size="small">
           <Button
@@ -217,6 +247,16 @@ export const VaultConnections: React.FC = () => {
             onClick={() => handleTest(record)}
           >
             {t('Test')}
+          </Button>
+          <Button
+            size="small"
+            icon={<KeyOutlined />}
+            onClick={() => {
+              secretForm.resetFields();
+              setSecretTarget(record);
+            }}
+          >
+            {t('Set Secret')}
           </Button>
           <Button
             size="small"
@@ -319,6 +359,43 @@ export const VaultConnections: React.FC = () => {
           </Form.Item>
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={
+          secretTarget ? `${t('Set Secret')} — ${secretTarget.title || secretTarget.name}` : (t('Set Secret') as string)
+        }
+        open={!!secretTarget}
+        okText={t('Write')}
+        confirmLoading={writing}
+        onOk={handleWriteSecret}
+        onCancel={() => {
+          setSecretTarget(null);
+          secretForm.resetFields();
+        }}
+        width={520}
+      >
+        <Form form={secretForm} layout="vertical">
+          <Form.Item
+            name="path"
+            label={t('Secret Path')}
+            extra={t('Path under the KV mount, e.g. apps/billing')}
+            rules={[{ required: true }]}
+          >
+            <Input placeholder="apps/billing" />
+          </Form.Item>
+          <Form.Item name="key" label={t('Secret Key')} rules={[{ required: true }]}>
+            <Input placeholder="password" />
+          </Form.Item>
+          <Form.Item
+            name="value"
+            label={t('Value')}
+            extra={t('Other keys at this path are preserved')}
+            rules={[{ required: true }]}
+          >
+            <Input.Password autoComplete="new-password" />
           </Form.Item>
         </Form>
       </Modal>

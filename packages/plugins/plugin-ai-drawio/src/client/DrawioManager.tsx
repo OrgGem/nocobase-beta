@@ -356,7 +356,7 @@ const SystemPromptTab: React.FC = () => {
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
         <Text type="secondary">
           {t(
-            'Paste this prompt into the "About" / instructions field of the AI Employee that should drive draw.io diagrams. The prompt assumes the four drawio tools and the drawio work-context are enabled for that employee.',
+            'Paste this prompt into the "About" / instructions field of an AI Employee when you want it to follow the complete Drawio workflow. Drawio tools are available automatically; attaching a drawio work-context is optional.',
           )}
         </Text>
         <Space>

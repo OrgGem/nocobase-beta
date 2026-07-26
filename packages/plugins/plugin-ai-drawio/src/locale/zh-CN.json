@@ -42,4 +42,13 @@
   "Applied": "已应用",
   "No drawio diagram is currently open on the page.": "当前页面没有打开的 drawio 图表。",
   "Drawio diagram already attached to this chat.": "此聊天已关联 Drawio 图表。"
+,
+  "Paste this prompt into the \"About\" / instructions field of an AI Employee when you want it to follow the complete Drawio workflow. Drawio tools are available automatically; attaching a drawio work-context is optional.": "当您希望 AI Employee 遵循完整的 Drawio 工作流程时，请将此提示词粘贴到其“About”/说明字段。Drawio 工具会自动提供；附加 Drawio 工作上下文是可选的。",
+  "Height (px)": "高度（像素）",
+  "UI mode": "界面模式",
+  "Kennedy (default)": "Kennedy（默认）",
+  "Min": "简洁",
+  "Sketch": "草图",
+  "Atlas": "Atlas",
+  "Diagram is still being created. Please try again in a moment.": "图表仍在创建中，请稍后再试。"
 }

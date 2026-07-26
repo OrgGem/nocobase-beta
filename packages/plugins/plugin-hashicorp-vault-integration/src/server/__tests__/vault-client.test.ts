@@ -76,8 +76,63 @@ describe('VaultClient', () => {
       { name: 'shared-config', path: 'apps/shared-config', isFolder: false },
     ]);
     expect(mockedRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ method: 'LIST', url: 'https://vault.example.com:8200/v1/secret/metadata/apps' }),
+      expect.objectContaining({
+        method: 'GET',
+        url: 'https://vault.example.com:8200/v1/secret/metadata/apps',
+        params: { list: 'true' },
+      }),
     );
+  });
+
+  it('treats 404 on list as an empty path instead of an error', async () => {
+    mockedRequest.mockRejectedValueOnce({
+      message: 'Request failed with status code 404',
+      response: { status: 404, data: { errors: [] } },
+    });
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.listPath('empty/folder')).resolves.toEqual([]);
+  });
+
+  it('recursively lists the whole tree with listAllPaths', async () => {
+    mockedRequest
+      .mockResolvedValueOnce({ data: { data: { keys: ['apps/', 'shared-config'] } } } as never)
+      .mockResolvedValueOnce({ data: { data: { keys: ['billing', 'crm'] } } } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.listAllPaths()).resolves.toEqual({
+      entries: [
+        { name: 'apps', path: 'apps', isFolder: true },
+        { name: 'shared-config', path: 'shared-config', isFolder: false },
+        { name: 'billing', path: 'apps/billing', isFolder: false },
+        { name: 'crm', path: 'apps/crm', isFolder: false },
+      ],
+      truncated: false,
+    });
+  });
+
+  it('stops listAllPaths at maxEntries and reports truncation', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: { data: { keys: ['a', 'b', 'c'] } } } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    const result = await client.listAllPaths('', { maxEntries: 2 });
+    expect(result.entries).toHaveLength(2);
+    expect(result.truncated).toBe(true);
   });
 
   it('reports the listed path when Vault denies list permission', async () => {
@@ -214,6 +269,79 @@ describe('VaultClient', () => {
     mockedRequest.mockResolvedValueOnce({ data: { initialized: true, sealed: true } } as never);
     const client = new VaultClient({ address: 'https://vault.example.com:8200', authMethod: 'token', token: 't' });
     await expect(client.healthCheck()).rejects.toThrow('Vault is sealed');
+  });
+
+  it('writes a KV v2 secret wrapped in a data envelope', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: {} } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await client.writeSecret('apps/billing', { password: 'new' });
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        url: 'https://vault.example.com:8200/v1/secret/data/apps/billing',
+        data: { data: { password: 'new' } },
+      }),
+    );
+  });
+
+  it('writes a KV v1 secret without the data envelope', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: {} } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 1,
+      mount: 'kv',
+    });
+    await client.writeSecret('apps/billing', { password: 'new' });
+    expect(mockedRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'POST',
+        url: 'https://vault.example.com:8200/v1/kv/apps/billing',
+        data: { password: 'new' },
+      }),
+    );
+  });
+
+  it('setSecretKey merges the new key with existing keys', async () => {
+    mockedRequest
+      .mockResolvedValueOnce({ data: { data: { data: { host: 'db', password: 'old' } } } } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await client.setSecretKey('apps/billing', 'password', 'new');
+    expect(mockedRequest.mock.calls[1][0]).toEqual(
+      expect.objectContaining({
+        method: 'POST',
+        data: { data: { host: 'db', password: 'new' } },
+      }),
+    );
+  });
+
+  it('setSecretKey creates the secret when the path does not exist yet', async () => {
+    mockedRequest
+      .mockRejectedValueOnce({ message: '404', response: { status: 404, data: { errors: [] } } })
+      .mockResolvedValueOnce({ data: {} } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await client.setSecretKey('apps/new-app', 'apiKey', 'k');
+    expect(mockedRequest.mock.calls[1][0]).toEqual(expect.objectContaining({ data: { data: { apiKey: 'k' } } }));
   });
 });
 

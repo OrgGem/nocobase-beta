@@ -67,6 +67,10 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
 
   const initialXml = getXmlFromResponse(xmlData);
 
+  const loadIntoEditor = useCallback((xml: string) => {
+    bridgeRef.current?.load(xml);
+  }, []);
+
   useEffect(() => {
     if (xmlData !== undefined) {
       xmlRef.current = getXmlFromResponse(xmlData);
@@ -106,7 +110,10 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
     bridge.attach(
       iframeRef.current,
       {
-        onInit: () => setIframeReady(true),
+        onInit: () => {
+          setIframeReady(true);
+          setActiveBlockUid(blockUid);
+        },
         onLoad: (xml) => {
           xmlRef.current = xml;
         },
@@ -150,12 +157,12 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
       blockUid,
       diagramId,
       diagramTitle,
-      bridge: bridgeRef.current,
       getXml: () => xmlRef.current,
       setXml: (xml: string) => {
         xmlRef.current = xml;
       },
       persist: persistXml,
+      load: loadIntoEditor,
     });
 
     setActiveBlockUid(blockUid);
@@ -163,7 +170,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
     return () => {
       unregisterActive();
     };
-  }, [diagramId, blockUid, diagramTitle, persistXml]);
+  }, [diagramId, blockUid, diagramTitle, loadIntoEditor, persistXml]);
 
   useEffect(() => {
     if (!diagramId) return;

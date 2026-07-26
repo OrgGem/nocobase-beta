@@ -1,23 +1,39 @@
-import type { ToolsOptions } from '@nocobase/client';
-import { getActiveHandle, getAllHandles } from '../lib/activeRegistry';
-import { applyDiagramOperations, DiagramOperation, wrapWithMxFile } from '../lib/xml-utils';
+import type { ToolsOptions } from '@nocobase/client-v2';
+import { getActiveHandle, getAllHandles, getHandleByDiagramId } from '../lib/activeRegistry';
+import { applyDiagramOperations, type DiagramOperation, wrapWithMxFile } from '../lib/xml-utils';
 import type { ToolResult } from './types';
 
-function getMountedHandle() {
+type EditDiagramParams = {
+  diagramId?: string;
+  operations?: DiagramOperation[];
+};
+
+function getMountedHandle(diagramId?: string) {
+  if (diagramId) {
+    return getHandleByDiagramId(diagramId);
+  }
   return getActiveHandle() || getAllHandles()[0] || null;
 }
 
-async function invoke(_app: any, params: { operations?: DiagramOperation[] }): Promise<ToolResult> {
-  const operations = params?.operations || [];
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function invoke(
+  _app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
+  rawParams: unknown,
+): Promise<ToolResult> {
+  const params = rawParams as EditDiagramParams;
+  const operations = params.operations || [];
   if (!operations.length) {
     return { status: 'error', content: 'edit_diagram called without operations.' };
   }
 
-  const handle = getMountedHandle();
+  const handle = getMountedHandle(params.diagramId);
   if (!handle) {
     return {
       status: 'error',
-      content: 'No active draw.io block found. Open a Drawio Diagram block on the page before calling edit_diagram.',
+      content: 'No matching draw.io block is open. Call inspect_active_diagram before editing.',
     };
   }
 
@@ -30,26 +46,28 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
   }
 
   let editedXml: string;
-  let opErrors: { type: string; cellId: string; message: string }[];
+  let operationErrors: { type: string; cellId: string; message: string }[];
   try {
-    const r = applyDiagramOperations(currentXml, operations);
-    editedXml = r.result;
-    opErrors = r.errors;
-  } catch (err: any) {
+    const result = applyDiagramOperations(currentXml, operations);
+    editedXml = result.result;
+    operationErrors = result.errors;
+  } catch (error: unknown) {
     return {
       status: 'error',
-      content: `Edit failed: ${err?.message || String(err)}\n\nCurrent diagram XML:\n\`\`\`xml\n${currentXml}\n\`\`\``,
+      content: `Edit failed: ${errorMessage(error)}\n\nCurrent diagram XML:\n\`\`\`xml\n${currentXml}\n\`\`\``,
     };
   }
 
-  if (opErrors.length) {
-    const messages = opErrors.map((e) => `- ${e.type} on cell_id="${e.cellId}": ${e.message}`).join('\n');
+  if (operationErrors.length) {
+    const messages = operationErrors
+      .map((error) => `- ${error.type} on cell_id="${error.cellId}": ${error.message}`)
+      .join('\n');
     return {
       status: 'error',
       content:
         `Some operations failed:\n${messages}\n\n` +
         `Current diagram XML:\n\`\`\`xml\n${currentXml}\n\`\`\`\n\n` +
-        `Please check the cell IDs and retry.`,
+        'Please check the cell IDs and retry.',
     };
   }
 
@@ -57,15 +75,12 @@ async function invoke(_app: any, params: { operations?: DiagramOperation[] }): P
   try {
     handle.setXml(fullXml);
     await handle.persist(fullXml);
-    handle.bridge.load(fullXml);
-  } catch (err: any) {
-    return { status: 'error', content: `Failed to apply edits to canvas: ${err?.message || String(err)}` };
+    handle.load(fullXml);
+  } catch (error: unknown) {
+    return { status: 'error', content: `Failed to apply edits to canvas: ${errorMessage(error)}` };
   }
 
-  return {
-    status: 'success',
-    content: `Successfully applied ${operations.length} operation(s) to the diagram.`,
-  };
+  return { status: 'success', content: `Successfully applied ${operations.length} operation(s) to the diagram.` };
 }
 
 export const editDiagramTool: [string, ToolsOptions] = ['drawio-edit_diagram', { invoke }];

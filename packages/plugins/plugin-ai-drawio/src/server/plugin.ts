@@ -1,4 +1,5 @@
 import { InstallOptions, Plugin } from '@nocobase/server';
+import type { ToolsOptions } from '@nocobase/ai';
 import { resolve } from 'path';
 import { loadXml } from './actions/loadXml';
 import { saveXml } from './actions/saveXml';
@@ -12,7 +13,9 @@ import {
   editDiagramTool,
   appendDiagramTool,
   getShapeLibraryTool,
+  inspectDiagramTool,
 } from './tools';
+import type { DrawioToolDefinition } from './tools/types';
 
 export class PluginAIDrawioServer extends Plugin {
   private readonly schemaCollections = ['aiDiagrams', 'aiDrawioConfig'];
@@ -76,28 +79,36 @@ export class PluginAIDrawioServer extends Plugin {
       return;
     }
 
-    toolsManager.registerTools(
-      [displayModelDiagramTool, displayDiagramTool, editDiagramTool, appendDiagramTool, getShapeLibraryTool].map(
-        (item: any) => {
-          const name = `${item.groupName}-${item.tool.name}`;
-          return {
-            scope: 'CUSTOM',
-            defaultPermission: item.tool.execution === 'backend' ? 'ALLOW' : 'ASK',
-            execution: item.tool.execution,
-            introduction: {
-              title: item.tool.title,
-              about: item.tool.description,
-            },
-            definition: {
-              name,
-              description: item.tool.description,
-              schema: item.tool.schema,
-            },
-            invoke: item.tool.invoke,
-          };
-        },
-      ),
-    );
+    const autoApprovedFrontendTools = new Set(['inspect_active_diagram']);
+    const tools = [
+      inspectDiagramTool,
+      displayModelDiagramTool,
+      displayDiagramTool,
+      editDiagramTool,
+      appendDiagramTool,
+      getShapeLibraryTool,
+    ].map((item) => this.toRegisteredTool(item, autoApprovedFrontendTools));
+    toolsManager.registerTools(tools);
+  }
+
+  private toRegisteredTool(item: DrawioToolDefinition, autoApprovedFrontendTools: ReadonlySet<string>): ToolsOptions {
+    const name = `${item.groupName}-${item.tool.name}`;
+    const isAutoApproved = item.tool.execution === 'backend' || autoApprovedFrontendTools.has(item.tool.name);
+    return {
+      scope: 'GENERAL',
+      defaultPermission: isAutoApproved ? 'ALLOW' : 'ASK',
+      execution: item.tool.execution,
+      introduction: {
+        title: item.tool.title,
+        about: item.tool.description,
+      },
+      definition: {
+        name,
+        description: item.tool.description,
+        schema: item.tool.schema,
+      },
+      invoke: item.tool.invoke,
+    };
   }
 
   async install(options?: InstallOptions) {}

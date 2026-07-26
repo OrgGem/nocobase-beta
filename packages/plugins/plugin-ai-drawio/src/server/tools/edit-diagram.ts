@@ -1,5 +1,5 @@
 import { z } from 'zod';
-type ToolRegisterOptions = any;
+import type { DrawioToolDefinition } from './types';
 
 const description = `Edit the current diagram by ID-based operations (update/add/delete cells).
 
@@ -18,7 +18,7 @@ Example - Add a rectangle:
 Example - Delete container (children & edges auto-deleted):
 {"operations": [{"operation": "delete", "cell_id": "2"}]}`;
 
-const editDiagramTool: ToolRegisterOptions = {
+const editDiagramTool: DrawioToolDefinition = {
   groupName: 'drawio',
   tool: {
     name: 'edit_diagram',
@@ -26,17 +26,16 @@ const editDiagramTool: ToolRegisterOptions = {
     description,
     execution: 'frontend',
     schema: z.object({
+      diagramId: z
+        .string()
+        .optional()
+        .describe('Target ID returned by inspect_active_diagram. Omit only when exactly one diagram is open.'),
       operations: z
         .array(
           z.object({
-            operation: z
-              .enum(['update', 'add', 'delete'])
-              .describe('Operation to perform: add, update, or delete'),
+            operation: z.enum(['update', 'add', 'delete']).describe('Operation to perform: add, update, or delete'),
             cell_id: z.string().describe('The id of the mxCell. Must match the id attribute in new_xml.'),
-            new_xml: z
-              .string()
-              .optional()
-              .describe('Complete mxCell XML element (required for update/add)'),
+            new_xml: z.string().optional().describe('Complete mxCell XML element (required for update/add)'),
           }),
         )
         .describe('Array of operations to apply'),

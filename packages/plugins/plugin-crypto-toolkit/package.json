@@ -1,0 +1,54 @@
+{
+  "name": "plugin-crypto-toolkit",
+  "displayName": "Crypto Toolkit",
+  "displayName.zh-CN": "加密工具箱",
+  "displayName.vi-VN": "Bộ công cụ mã hóa",
+  "description": "Generate and manage crypto keys (PGP, RSA, Ed25519, SSH), encrypt/decrypt/sign/verify files through file manager, create CSR and self-signed X.509 certificates. Private keys are stored as NocoBase secret environment variables.",
+  "description.zh-CN": "生成并管理加密密钥（PGP、RSA、Ed25519、SSH），通过文件管理器加密/解密/签名/验签文件，创建 CSR 与自签名 X.509 证书。私钥保存为 NocoBase 环境变量（secret）。",
+  "description.vi-VN": "Tạo và quản lý khóa mã hóa (PGP, RSA, Ed25519, SSH), mã hóa/giải mã/ký/xác minh file qua file manager, tạo CSR và chứng chỉ X.509 tự ký. Private key lưu dưới dạng biến môi trường secret của NocoBase.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "crypto",
+    "pgp",
+    "encryption",
+    "certificate",
+    "signature"
+  ],
+  "files": [
+    "dist",
+    "!dist/node_modules/@peculiar/x509/**",
+    "src",
+    "client.js",
+    "client-v2.js",
+    "server.js",
+    "client.d.ts",
+    "client-v2.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "dependencies": {
+    "openpgp": "^5.11.0",
+    "sshpk": "^1.18.0"
+  },
+  "devDependencies": {
+    "@types/sshpk": "^1.17.4"
+  },
+  "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/plugin-file-manager": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/utils": "2.x"
+  }
+}

@@ -3,7 +3,8 @@
 # ==============================================================================
 #
 #   Client -> nginx (embedded config, no file mounts - Portainer compatible)
-#             -> app-1:13000 (Node.js/Koa, WORKER_MODE=! : HTTP + WebSocket)
+#             -> app-main:13000 (primary HTTP/WebSocket node)
+#             -> app-backup-1/app-backup-2 only when app-main is unavailable
 #
 #   Background:
 #             worker containers managed dynamically by plugin-cluster-manager
@@ -15,13 +16,14 @@
 #
 #   Boot order:
 #     1. postgres + redis start and become healthy
-#     2. app-1 starts (runs migrations/install/upgrade)
-#     3. app-1 becomes healthy (API responding on :13000)
-#     4. nginx starts
+#     2. app-main runs the only startup install/upgrade gate
+#     3. app-main becomes healthy (HTTP 200 + valid API version)
+#     4. app-backup-1 and app-backup-2 pass their own app-main readiness wait
+#     5. nginx starts with app-main as primary and backups as failover nodes
 #
 #   Workers:
 #     Workers are now managed dynamically by plugin-cluster-manager.
-#     app-1 mounts /var/run/docker.sock to manage worker containers.
+#     app-main mounts /var/run/docker.sock to manage worker containers.
 # ==============================================================================
 
 x-nocobase-env: &nocobase-env
@@ -58,6 +60,7 @@ x-nocobase-env: &nocobase-env
   # Timezone
   TZ: ${TZ:-UTC}
   APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
+  NOCOBASE_IMAGE_VERSION: ${NOCOBASE_VERSION:-2.1.30-full}
   NPM_REGISTRY_URL: 'http://nginx-cache-registry/npm/'
   APT_MIRROR_URL: 'http://nginx-cache-registry/debian/'
   PYPI_INDEX_URL: 'http://nginx-cache-registry/pypi-simple/'
@@ -81,19 +84,30 @@ x-nocobase-env: &nocobase-env
   KB_DEFAULT_LOCAL_EMBED_DTYPE: ${KB_DEFAULT_LOCAL_EMBED_DTYPE:-q8}
 
 x-nocobase-base: &nocobase-base
-  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.6-full}
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}
   restart: unless-stopped
   networks:
     - nocobase
   volumes:
     - app-storage:/app/nocobase/storage
     - /var/run/docker.sock:/var/run/docker.sock
+    - ./scripts/app-runtime-entrypoint.sh:/usr/local/bin/app-runtime-entrypoint.sh:ro
   depends_on:
     postgres:
       condition: service_healthy
     redis:
       condition: service_healthy
   init: true
+
+x-nocobase-healthcheck: &nocobase-healthcheck
+  test:
+    - CMD-SHELL
+    - >-
+      node -e 'const http=require("http");const expected=(process.env.NOCOBASE_IMAGE_VERSION||"").replace(/-full$/,"");const req=http.get("http://127.0.0.1:13000/api/app:getInfo",res=>{let body="";res.setEncoding("utf8");res.on("data",chunk=>body+=chunk);res.on("end",()=>{try{const payload=JSON.parse(body);const version=payload&&payload.data&&payload.data.version;const expectedIsSemver=/^\d+\.\d+\.\d+$/.test(expected);process.exit(res.statusCode===200&&typeof version==="string"&&version.length>0&&(!expectedIsSemver||version===expected)?0:1)}catch(_error){process.exit(1)}})});req.setTimeout(5000,()=>{req.destroy();process.exit(1)});req.on("error",()=>process.exit(1));'
+  interval: 10s
+  timeout: 8s
+  retries: 30
+  start_period: 300s
 
 networks:
   nocobase:
@@ -126,7 +140,7 @@ volumes:
 services:
   # ============================================================================
   # NGINX — inline config (Portainer compatible, no file mounts)
-  # Proxies directly to app-1:13000 (bypasses internal NocoBase nginx)
+  # Proxies directly to the app-main/app-backup upstream (bypasses internal NocoBase nginx)
   # Static asset cache via proxy_cache (volume: nginx-cache)
   # All nginx $variables use $$ to escape Docker Compose interpolation
   # ============================================================================
@@ -140,10 +154,12 @@ services:
     networks:
       - nocobase
     depends_on:
-      app-1:
+      app-main:
         condition: service_healthy
-      app-2:
-        condition: service_healthy
+      app-backup-1:
+        condition: service_started
+      app-backup-2:
+        condition: service_started
     entrypoint: ['/bin/sh', '-c']
     command:
       - |
@@ -190,9 +206,9 @@ services:
                 use_temp_path=off;
 
             upstream nocobase {
-                least_conn;
-                server app-1:13000 max_fails=2 fail_timeout=10s;
-                server app-2:13000 max_fails=2 fail_timeout=10s;
+                server app-main:13000 max_fails=2 fail_timeout=10s;
+                server app-backup-1:13000 backup max_fails=2 fail_timeout=10s;
+                server app-backup-2:13000 backup max_fails=2 fail_timeout=10s;
                 keepalive 32;
             }
 
@@ -347,14 +363,16 @@ services:
         NGINXEOF
         exec nginx -g 'daemon off;'
     healthcheck:
-      test: ['CMD', 'wget', '-q', '--spider', 'http://127.0.0.1/nginx-health']
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O - http://127.0.0.1/api/app:getInfo | grep -q '"version"' && wget -q --spider http://127.0.0.1/nginx-health
       interval: 10s
       timeout: 5s
       retries: 3
 
   # ============================================================================
-  # PRIMARY App - Runs migrations/install/upgrade via yarn nocobase upgrade
-  # This is the ONLY node that touches the migrations table on boot
+  # PRIMARY App - the only node allowed to install/upgrade before serving HTTP
   # ============================================================================
   nginx-cache-registry:
     image: nginx:1.25-alpine
@@ -366,86 +384,66 @@ services:
     networks:
       - nocobase
 
-  app-1:
+  app-main:
     <<: *nocobase-base
-    container_name: app-1
-    command:
-      - /bin/sh
-      - -c
-      - |
-        if ! command -v git >/dev/null; then
-          echo "Installing git..."
-          if command -v apt-get >/dev/null; then
-            apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-          elif command -v apk >/dev/null; then
-            apk add --no-cache git
-          fi
-        fi
-        if [ ! -d /app/nocobase ]; then mkdir /app/nocobase; fi
-        if [ ! -f /app/nocobase/package.json ]; then
-          echo "Extracting NocoBase source..."
-          tar -zxf /app/nocobase.tar.gz --absolute-names -C /app/nocobase
-          touch /app/nocobase/node_modules/@nocobase/app/dist/client/index.html
-        fi
-        cd /app/nocobase
-        echo "module.exports={getEnvAsync:async()=>({sys:'mock',osVer:'mock',db:{id:'mock'}}),getInstanceIdWithPublicKeyAsync:async()=>'mock',getInstanceIdAsync:async()=>'mock',instanceIdDecrypt:()=>'mock',createKeyPair:()=>({publicKey:'mock',privateKey:'mock'}),encryptWithPublicKey:()=>'mock',encrypt:()=>'mock',decryptWithPrivateKey:()=>'mock',createSignature:()=>'mock',verifySignature:()=>true,keyEncrypt:()=>'mock',keyDecrypt:()=>JSON.stringify({licenseKey:{domain:'*'}})}" > node_modules/@nocobase/license-kit/index.js
-        exec yarn start
+    container_name: app-main
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
     environment:
       <<: *nocobase-env
       APP_ROLE: 'app'
-      # Empty means this node serves HTTP and consumes all worker queues.
+      APP_NODE_ROLE: 'main'
+      # Empty means this node serves HTTP and consumes all registered worker queues.
       WORKER_MODE: ''
       APP_PORT: 13000
       APP_BIND: 0.0.0.0
       SKILL_HUB_SANDBOX: 'false'
     ports:
       - '13000:13000'
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'node -e "require(''http'').get(''http://127.0.0.1:13000/api/app:getInfo'', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on(''error'', () => process.exit(1))"',
-        ]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 180s
+    healthcheck: *nocobase-healthcheck
 
-  app-2:
+  app-backup-1:
     <<: *nocobase-base
-    container_name: app-2
-    command:
-      - /bin/sh
-      - -c
-      - |
-        if ! command -v git >/dev/null; then
-          echo "Installing git..."
-          if command -v apt-get >/dev/null; then
-            apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
-          elif command -v apk >/dev/null; then
-            apk add --no-cache git
-          fi
-        fi
-        cd /app/nocobase
-        echo "module.exports={getEnvAsync:async()=>({sys:'mock',osVer:'mock',db:{id:'mock'}}),getInstanceIdWithPublicKeyAsync:async()=>'mock',getInstanceIdAsync:async()=>'mock',instanceIdDecrypt:()=>'mock',createKeyPair:()=>({publicKey:'mock',privateKey:'mock'}),encryptWithPublicKey:()=>'mock',encrypt:()=>'mock',decryptWithPrivateKey:()=>'mock',createSignature:()=>'mock',verifySignature:()=>true,keyEncrypt:()=>'mock',keyDecrypt:()=>JSON.stringify({licenseKey:{domain:'*'}})}" > node_modules/@nocobase/license-kit/index.js
-        exec yarn start
+    container_name: app-backup-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app-main:
+        condition: service_healthy
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
     environment:
       <<: *nocobase-env
       APP_ROLE: 'app'
+      APP_NODE_ROLE: 'backup'
+      APP_START_AFTER_URL: 'http://app-main:13000/api/app:getInfo'
       WORKER_MODE: ''
       APP_PORT: 13000
       APP_BIND: 0.0.0.0
       SKILL_HUB_SANDBOX: 'false'
-    healthcheck:
-      test:
-        [
-          'CMD-SHELL',
-          'node -e "require(''http'').get(''http://127.0.0.1:13000/api/app:getInfo'', (res) => process.exit(res.statusCode < 500 ? 0 : 1)).on(''error'', () => process.exit(1))"',
-        ]
-      interval: 15s
-      timeout: 10s
-      retries: 20
-      start_period: 180s
+    healthcheck: *nocobase-healthcheck
+
+  app-backup-2:
+    <<: *nocobase-base
+    container_name: app-backup-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app-backup-1:
+        condition: service_healthy
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
+    environment:
+      <<: *nocobase-env
+      APP_ROLE: 'app'
+      APP_NODE_ROLE: 'backup'
+      APP_START_AFTER_URL: 'http://app-backup-1:13000/api/app:getInfo'
+      WORKER_MODE: ''
+      APP_PORT: 13000
+      APP_BIND: 0.0.0.0
+      SKILL_HUB_SANDBOX: 'false'
+    healthcheck: *nocobase-healthcheck
 
   # ============================================================================
   # Redis 8

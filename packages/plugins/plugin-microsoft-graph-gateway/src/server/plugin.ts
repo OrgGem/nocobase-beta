@@ -7,8 +7,11 @@ import { createGraphClient, GraphSettings } from './graph-client';
 
 type Scope = 'email:read' | 'email:write' | 'lists:read' | 'lists:write' | 'drive:read' | 'drive:write';
 type Values = Record<string, unknown>;
-type GatewayApiKeyMetadata = { id: string; prefix: string };
-type GatewayState = Context['state'] & { msGraphGatewayApiKey?: GatewayApiKeyMetadata };
+type GatewayApiKeyMetadata = { id: string; name: string; prefix: string };
+type GatewayState = Context['state'] & {
+  msGraphGatewayApiKey?: GatewayApiKeyMetadata;
+  msGraphGatewayJob?: { jobId: string; idempotencyKey: string; duplicate?: boolean };
+};
 type GraphResult = Record<string, unknown> | unknown[] | null;
 type JobOperation =
   | 'sendEmail'
@@ -51,7 +54,11 @@ const stringOf = (value: unknown, name: string) => {
 const safeError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   return message
-    .replace(/(client[_ -]?secret|access[_ -]?token|api[_ -]?key)\s*[:=]\s*\S+/gi, '$1=[REDACTED]')
+    .replace(/mgk_[A-Za-z0-9_-]+/g, 'mgk_[REDACTED]')
+    .replace(
+      /(client[_ -]?secret|access[_ -]?token|api[_ -]?key|bearer|secret|password|token)\s*[:=]\s*\S+/gi,
+      '$1=[REDACTED]',
+    )
     .slice(0, 4000);
 };
 const graphRequestId = (error: unknown) => {
@@ -100,10 +107,11 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
           const isValidationError =
             metadata.gatewayStatus === 500 && error instanceof Error && / is required$/.test(error.message);
           const gatewayStatus = isValidationError ? 400 : metadata.gatewayStatus;
+          const isRejected = gatewayStatus >= 400 && gatewayStatus < 500;
           await this.auditRequestSafely(ctx, {
             requestId,
             operation,
-            status: gatewayStatus === 401 || gatewayStatus === 403 ? 'rejected' : 'failed',
+            status: isRejected ? 'rejected' : 'failed',
             httpStatus: gatewayStatus,
             graphHttpStatus: metadata.graphStatus,
             graphRequestId: graphRequestId(error),
@@ -117,11 +125,16 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
           if (isValidationError && error instanceof Error) ctx.throw(400, error.message);
           throw error;
         }
+        const job = (ctx.state as GatewayState).msGraphGatewayJob;
+        const status = job ? 'queued' : 'succeeded';
         await this.auditRequestSafely(ctx, {
           requestId,
+          jobId: job?.jobId ?? null,
+          idempotencyKey: job?.idempotencyKey ?? null,
           operation,
-          status: 'succeeded',
+          status,
           httpStatus: ctx.status || 200,
+          graphHttpStatus: job ? null : 200,
           startedAt,
           finishedAt: new Date(),
           durationMs: Date.now() - startedAt.getTime(),
@@ -372,6 +385,7 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
     await record.update({ lastUsedAt: new Date() });
     (ctx.state as GatewayState).msGraphGatewayApiKey = {
       id: String(record.get('id')),
+      name: String(record.get('name') ?? ''),
       prefix: String(record.get('keyPrefix') ?? ''),
     };
     return record;
@@ -389,13 +403,22 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
     const idempotencyKey = String(ctx.request.headers['idempotency-key'] ?? randomUUID());
     const existing = await ctx.db.getRepository('msGraphGatewayQueue').findOne({ filter: { idempotencyKey } });
     if (existing) {
+      (ctx.state as GatewayState).msGraphGatewayJob = {
+        jobId: String(existing.get('jobId')),
+        idempotencyKey,
+        duplicate: true,
+      };
       ctx.body = { data: { jobId: existing.get('jobId'), status: existing.get('status'), duplicate: true } };
       return;
     }
     const job = await ctx.db
       .getRepository('msGraphGatewayQueue')
       .create({ values: { operation, payload: values, idempotencyKey, status: 'pending', attempts: 0 } });
-    await this.audit({ jobId: String(job.get('jobId')), operation, status: 'queued', details: { idempotencyKey } });
+    (ctx.state as GatewayState).msGraphGatewayJob = {
+      jobId: String(job.get('jobId')),
+      idempotencyKey,
+      duplicate: false,
+    };
     ctx.body = { data: { jobId: job.get('jobId'), status: 'pending', duplicate: false } };
   }
 
@@ -454,16 +477,22 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
       await job.update({ status: 'succeeded', result: null, finishedAt: new Date(), lockedBy: null });
       await this.audit({
         jobId: String(job.get('jobId')),
+        idempotencyKey: String(job.get('idempotencyKey') ?? '') || null,
         operation,
         status: 'succeeded',
+        httpStatus: 200,
+        graphHttpStatus: 200,
         attempt,
         durationMs: Date.now() - started,
+        startedAt: new Date(started),
+        finishedAt: new Date(),
       });
     } catch (error) {
       const maxAttempts = Math.max(1, Number(settings.get('maxAttempts') ?? 5));
       const failed = attempt >= maxAttempts;
       const delay = Math.max(1, Number(settings.get('retryBaseSeconds') ?? 30)) * 2 ** Math.max(0, attempt - 1);
       const requestId = graphRequestId(error);
+      const meta = errorMetadata(error);
       await job.update({
         status: failed ? 'failed' : 'retrying',
         lastError: safeError(error),
@@ -474,15 +503,19 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
       });
       await this.audit({
         jobId: String(job.get('jobId')),
+        idempotencyKey: String(job.get('idempotencyKey') ?? '') || null,
         operation,
         status: failed ? 'failed' : 'retrying',
+        httpStatus: 502,
+        graphHttpStatus: meta.graphStatus,
+        graphRequestId: requestId,
         attempt,
         durationMs: Date.now() - started,
-        graphRequestId: requestId,
-        graphHttpStatus: errorMetadata(error).graphStatus,
         error: safeError(error),
-        errorCode: errorMetadata(error).code,
-        errorName: errorMetadata(error).name,
+        errorCode: meta.code,
+        errorName: meta.name,
+        startedAt: new Date(started),
+        finishedAt: new Date(),
       });
     }
   }
@@ -743,7 +776,9 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
     const v = payloadOf(ctx);
     const page = Math.max(1, Number(v.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(v.pageSize ?? 20)));
-    const filter = v.status ? { status: v.status } : {};
+    const filter: Record<string, unknown> = {};
+    if (v.status) filter.status = v.status;
+    if (v.operation) filter.operation = v.operation;
     const [rows, count] = await Promise.all([
       ctx.db
         .getRepository('msGraphGatewayQueue')
@@ -757,7 +792,10 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
     const v = payloadOf(ctx);
     const page = Math.max(1, Number(v.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(v.pageSize ?? 20)));
-    const filter = v.status ? { status: v.status } : {};
+    const filter: Record<string, unknown> = {};
+    if (v.status) filter.status = v.status;
+    if (v.operation) filter.operation = v.operation;
+    if (v.httpStatus) filter.httpStatus = Number(v.httpStatus);
     const [rows, count] = await Promise.all([
       ctx.db
         .getRepository('msGraphGatewayAuditLogs')
@@ -785,6 +823,8 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
   private async auditRequestSafely(ctx: Context, values: Values) {
     const body = payloadOf(ctx);
     const apiKey = (ctx.state as GatewayState).msGraphGatewayApiKey;
+    const rawApiKey = String(ctx.request.headers['x-api-key'] ?? '');
+    const fallbackPrefix = rawApiKey ? rawApiKey.slice(0, 12) : null;
     let requestSize: number | null = null;
     try {
       requestSize = Buffer.byteLength(JSON.stringify(body));
@@ -796,7 +836,8 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
         route: String(ctx.request.path ?? ctx.request.url ?? ''),
         method: String(ctx.request.method ?? 'POST').toUpperCase(),
         apiKeyId: apiKey?.id ?? null,
-        apiKeyPrefix: apiKey?.prefix ?? null,
+        apiKeyName: apiKey?.name ?? null,
+        apiKeyPrefix: apiKey?.prefix ?? fallbackPrefix,
         clientIp: String(ctx.ip ?? ''),
         userAgent: String(ctx.request.headers['user-agent'] ?? '').slice(0, 1000),
         requestSize,

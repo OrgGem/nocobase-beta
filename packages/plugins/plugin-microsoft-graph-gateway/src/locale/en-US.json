@@ -63,6 +63,8 @@
   "retrying": "Retrying",
   "succeeded": "Succeeded",
   "failed": "Failed",
+  "rejected": "Rejected",
+  "queued": "Queued",
   "Microsoft Graph Gateway API": "Microsoft Graph Gateway API",
   "The API key must be sent in the X-API-Key header. Mutating actions return a queue job ID.": "The API key must be sent in the X-API-Key header. Mutating actions return a queue job ID.",
   "Base URL": "Base URL",

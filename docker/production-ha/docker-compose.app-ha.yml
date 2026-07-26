@@ -41,7 +41,7 @@ x-nocobase-env: &nocobase-env
   TZ: ${TZ:-UTC}
 
 x-app-node: &app-node
-  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.9-full}
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}
   restart: unless-stopped
   init: true
   stop_grace_period: 90s
