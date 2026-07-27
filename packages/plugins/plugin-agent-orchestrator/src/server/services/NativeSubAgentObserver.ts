@@ -184,7 +184,7 @@ export class NativeSubAgentObserver {
     const observedTask = memory.context
       ? {
           ...task,
-          question: `${task.question}\n\n${memory.context}`,
+          question: `${memory.context}\n\n<agent_task>\n${task.question}\n</agent_task>`,
         }
       : task;
 
@@ -225,7 +225,7 @@ export class NativeSubAgentObserver {
     };
 
     try {
-      const result = await originalRun(observedTask);
+      const result = await this.runWithKnowledgeBaseAgentContext(employeeUsername, () => originalRun(observedTask));
       await this.flushPending(state);
       await this.spanService.finish(state.rootSpanId, 'success', state.rootStartedAt, {
         output: trimText(result, 20000),
@@ -306,6 +306,16 @@ export class NativeSubAgentObserver {
     })) as SpanRecord | null;
 
     state.rootSpanId = span?.id;
+  }
+
+  private runWithKnowledgeBaseAgentContext<T>(employeeUsername: string | undefined, fn: () => Promise<T>) {
+    if (!employeeUsername) return fn();
+    const knowledgeBasePlugin = this.plugin.app.pm?.get?.('plugin-knowledge-base') as
+      | { runWithAgentContext?: <TResult>(username: string, callback: () => Promise<TResult>) => Promise<TResult> }
+      | undefined;
+    return knowledgeBasePlugin?.runWithAgentContext
+      ? knowledgeBasePlugin.runWithAgentContext(employeeUsername, fn)
+      : fn();
   }
 
   private async handleWriterChunk(state: RunState, chunk: Record<string, unknown>) {

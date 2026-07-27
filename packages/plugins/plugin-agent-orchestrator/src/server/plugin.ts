@@ -4,6 +4,7 @@ import { createExternalRagSearchTool } from './tools/external-rag-search';
 import { registerTracingResource } from './resources/tracing';
 import { registerAgentMonitorResource } from './resources/agent-monitor';
 import { registerAgentLoopResource } from './resources/agent-loop';
+import { registerAgentKnowledgeInsightsResource } from './resources/agent-knowledge-insights';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
 import { AgentLoopService } from './services/AgentLoopService';
@@ -166,6 +167,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
         'orchestratorConfig:*',
         'orchestratorTracing:*',
         'agentMonitor:*',
+        'agentKnowledgeInsights:*',
         'agentMemoryContexts:*',
         'agentLoopRuns:*',
         'agentLoopSteps:*',
@@ -294,6 +296,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
     // --- Native plugin-ai Monitor Resource ---
     registerAgentMonitorResource(this);
+    registerAgentKnowledgeInsightsResource(this);
     this.installNativeObserver();
     this.app.on?.('afterStart', this.installNativeObserver);
 

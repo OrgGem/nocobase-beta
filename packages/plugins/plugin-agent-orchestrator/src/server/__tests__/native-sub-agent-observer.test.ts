@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentMemoryContextService } from '../services/AgentMemoryContextService';
 import { NativeSubAgentObserver } from '../services/NativeSubAgentObserver';
 
-function createObserverHarness(profileSettings: Record<string, unknown> | null = {}) {
+function createObserverHarness(
+  profileSettings: Record<string, unknown> | null = {},
+  options: {
+    memoryRows?: unknown[];
+    orchestratorConfig?: unknown;
+    knowledgeBasePlugin?: unknown;
+  } = {},
+) {
   let nextSpanId = 1;
   const spanRepo = {
     create: vi.fn(async ({ values }) => ({ id: nextSpanId++, ...values })),
@@ -53,7 +60,7 @@ function createObserverHarness(profileSettings: Record<string, unknown> | null =
       findOne: vi.fn(async () => (profileSettings ? { settings: profileSettings } : null)),
     },
     agentMemoryContexts: {
-      find: vi.fn(async () => []),
+      find: vi.fn(async () => options.memoryRows ?? []),
     },
     aiToolMessages: {
       findOne: vi.fn(async () => ({
@@ -70,6 +77,9 @@ function createObserverHarness(profileSettings: Record<string, unknown> | null =
           : null,
       ),
     },
+    orchestratorConfig: {
+      findOne: vi.fn(async () => options.orchestratorConfig ?? null),
+    },
   };
   const plugin = {
     app: {
@@ -78,7 +88,11 @@ function createObserverHarness(profileSettings: Record<string, unknown> | null =
         warn: vi.fn(),
       },
       pm: {
-        get: vi.fn((name) => (name === 'ai' ? { subAgentsDispatcher: dispatcher } : null)),
+        get: vi.fn((name) => {
+          if (name === 'ai') return { subAgentsDispatcher: dispatcher };
+          if (name === 'plugin-knowledge-base') return options.knowledgeBasePlugin ?? null;
+          return null;
+        }),
         getPlugins: vi.fn(() => new Map()),
       },
     },
@@ -189,7 +203,7 @@ describe('NativeSubAgentObserver', () => {
 });
 
 describe('AgentMemoryContextService', () => {
-  it('builds context in public, user-memory, user, agent_user precedence', async () => {
+  it('prioritizes agent-user context before user and public memory', async () => {
     const rows = [
       { scope: 'public', enabled: true, userId: null, aiEmployeeUsername: '', contentMd: 'Public fact' },
       { scope: 'user', enabled: true, userId: 7, aiEmployeeUsername: '', contentMd: 'User context' },
@@ -237,10 +251,78 @@ describe('AgentMemoryContextService', () => {
       settings: { memoryScopes: ['public', 'user', 'agent_user'], maxMemoryContextChars: 10000 },
     });
 
-    expect(result.appliedScopes).toEqual(['public', 'user-memory', 'user', 'agent_user']);
-    expect(result.context.indexOf('Public fact')).toBeLessThan(result.context.indexOf('<user_memory>'));
+    expect(result.appliedScopes).toEqual(['agent_user', 'user-memory', 'user', 'public']);
+    expect(result.context.indexOf('Private graph')).toBeLessThan(result.context.indexOf('<user_memory>'));
     expect(result.context.indexOf('<user_memory>')).toBeLessThan(result.context.indexOf('User context'));
-    expect(result.context.indexOf('User context')).toBeLessThan(result.context.indexOf('Private graph'));
+    expect(result.context.indexOf('User context')).toBeLessThan(result.context.indexOf('Public fact'));
     expect(result.context).not.toContain('Other private');
+  });
+
+  it('does not inject any memory when a profile explicitly selects no scopes', async () => {
+    const plugin = {
+      app: { logger: { warn: vi.fn() }, pm: { get: vi.fn() } },
+      db: {
+        getRepository: vi.fn(() => ({
+          find: vi.fn(async () => [{ scope: 'public', enabled: true, userId: null, contentMd: 'Public fact' }]),
+        })),
+      },
+    };
+    const service = new AgentMemoryContextService(plugin);
+
+    await expect(
+      service.buildContext({
+        userId: 7,
+        aiEmployeeUsername: 'sub-agent',
+        settings: { memoryScopes: [] },
+      }),
+    ).resolves.toEqual({ context: '', appliedScopes: [], chars: 0 });
+  });
+
+  it('uses the leader-to-sub-agent harness tag when no explicit tag is supplied', async () => {
+    const { plugin } = createObserverHarness(null, {
+      orchestratorConfig: { harnessTag: 'safe' },
+    });
+    const profileRepo = plugin.db.getRepository('agentHarnessProfiles') as {
+      findOne: ReturnType<typeof vi.fn>;
+    };
+    profileRepo.findOne.mockImplementation(async ({ filter }: { filter: { tag: string } }) =>
+      filter.tag === 'safe' ? { settings: { maxMemoryContextChars: 1200 } } : null,
+    );
+    const service = new AgentMemoryContextService(plugin);
+
+    await expect(
+      service.resolvePolicySettings({ ctx: createTask().ctx, employee: { username: 'sub-agent' } }),
+    ).resolves.toEqual(expect.objectContaining({ harnessTag: 'safe', maxMemoryContextChars: 1200 }));
+  });
+});
+
+describe('NativeSubAgentObserver memory injection', () => {
+  it('places reference memory before the immutable agent task', async () => {
+    const { plugin, dispatcher, originalRun } = createObserverHarness(
+      {},
+      {
+        memoryRows: [{ scope: 'public', enabled: true, userId: null, contentMd: 'Reference fact' }],
+      },
+    );
+    const observer = new NativeSubAgentObserver(plugin);
+    observer.install();
+
+    await dispatcher.run(createTask());
+
+    const question = originalRun.mock.calls[0][0].question as string;
+    expect(question).toContain('<agent_memory_context>');
+    expect(question).toContain('<agent_task>\ndo the work\n</agent_task>');
+    expect(question.indexOf('Reference fact')).toBeLessThan(question.indexOf('<agent_task>'));
+  });
+
+  it('runs the native sub-agent with its Knowledge Base request identity', async () => {
+    const runWithAgentContext = vi.fn(async (_username: string, callback: () => Promise<string>) => callback());
+    const { plugin, dispatcher } = createObserverHarness({}, { knowledgeBasePlugin: { runWithAgentContext } });
+    const observer = new NativeSubAgentObserver(plugin);
+    observer.install();
+
+    await dispatcher.run(createTask());
+
+    expect(runWithAgentContext).toHaveBeenCalledWith('sub-agent', expect.any(Function));
   });
 });

@@ -31,11 +31,34 @@ export interface KnowledgeBaseGroup {
   knowledgeBaseList: KnowledgeBase[];
 }
 
+import type { DocumentSegmentedWithScore, SearchOptions } from '@nocobase/plugin-ai';
+import { getCurrentRequestContext } from '../request-context';
+
 export interface KnowledgeBaseFeature {
   getKnowledgeBase(knowledgeBaseIds: string[]): Promise<KnowledgeBase[]>;
   getKnowledgeBaseGroup(knowledgeBaseIds: string[]): Promise<KnowledgeBaseGroup[]>;
+  search(options: SearchOptions): Promise<DocumentSegmentedWithScore[]>;
 }
 import type PluginKnowledgeBaseServer from '../plugin';
+
+function withAgentIdentity(ctx: unknown, agentUsername?: string) {
+  if (!ctx || typeof ctx !== 'object' || !agentUsername) {
+    return ctx;
+  }
+
+  const base = ctx as {
+    state?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
+  const scoped = Object.create(base) as typeof base;
+  const employee = { username: agentUsername };
+  scoped._currentAIEmployee = employee;
+  scoped.state = {
+    ...(base.state ?? {}),
+    currentAIEmployee: employee,
+  };
+  return scoped;
+}
 
 /**
  * Fix #1: Matches interface signature exactly — getKnowledgeBaseGroup(knowledgeBaseIds: string[])
@@ -48,6 +71,41 @@ import type PluginKnowledgeBaseServer from '../plugin';
  */
 export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
   constructor(private plugin: PluginKnowledgeBaseServer) {}
+
+  async search(options: SearchOptions): Promise<DocumentSegmentedWithScore[]> {
+    const query = typeof options?.query === 'string' ? options.query.trim() : '';
+    const knowledgeBaseIds = Array.isArray(options?.knowledgeBaseKeys)
+      ? options.knowledgeBaseKeys.filter(Boolean).map(String)
+      : [];
+    if (!query || knowledgeBaseIds.length === 0) {
+      return [];
+    }
+
+    const request = getCurrentRequestContext();
+    if (!request?.ctx) {
+      this.plugin.app.logger.warn('[KnowledgeBase] Native AI employee retrieval requires an active request context.');
+      return [];
+    }
+
+    const scoreThreshold = Number(options.score);
+    const results = await this.plugin.searchKnowledgeBases(
+      withAgentIdentity(request.ctx, request.agentUsername),
+      query,
+      {
+        knowledgeBaseIds,
+        topK: options.topK,
+        scoreThreshold: Number.isFinite(scoreThreshold) ? scoreThreshold : undefined,
+        rerank: true,
+      },
+    );
+
+    return results.map((result) => ({
+      content: result.content,
+      metadata: result.metadata ?? {},
+      id: result.id,
+      score: result.rerankScore,
+    }));
+  }
 
   async getKnowledgeBase(knowledgeBaseIds: string[]): Promise<KnowledgeBase[]> {
     if (!knowledgeBaseIds || knowledgeBaseIds.length === 0) {
@@ -140,7 +198,10 @@ export class KnowledgeBaseFeatureImpl implements KnowledgeBaseFeature {
         });
       }
 
-      const group = groups.get(groupKey)!;
+      const group = groups.get(groupKey);
+      if (!group) {
+        continue;
+      }
       const kbEntry: KnowledgeBase = {
         knowledgeBaseType: kbData.type ?? 'LOCAL',
         knowledgeBaseOuterId: kbData.id,

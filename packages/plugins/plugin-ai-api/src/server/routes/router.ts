@@ -24,6 +24,8 @@ import type PluginAiApiServer from '../plugin';
 
 const API_PREFIX = '/api/ai-llm/v1';
 
+type DataWrappingContext = Context & { withoutDataWrapping?: boolean };
+
 /**
  * Main Koa middleware router for OpenAI-compatible endpoints.
  *
@@ -60,7 +62,7 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
 
     // Prevent NocoBase's dataWrapping middleware from wrapping OpenAI-format responses
     // in an extra {"data": ...} envelope, which breaks OpenAI-compatible clients like n8n.
-    (ctx as any).withoutDataWrapping = true;
+    (ctx as DataWrappingContext).withoutDataWrapping = true;
 
     // Parse the sub-path after prefix
     const subPath = path.substring(API_PREFIX.length);
@@ -89,8 +91,9 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       try {
         const rawBody = await getRawBody(ctx);
         ctx.request.body = JSON.parse(rawBody);
-      } catch (bodyErr: any) {
-        const status = bodyErr?.statusCode === 413 ? 413 : 400;
+      } catch (bodyErr: unknown) {
+        const status =
+          bodyErr && typeof bodyErr === 'object' && 'statusCode' in bodyErr && bodyErr.statusCode === 413 ? 413 : 400;
         const message = status === 413 ? 'Request body too large (max 10 MB)' : 'Invalid JSON in request body';
         ctx.status = status;
         ctx.body = toOpenAIError(status, message, 'invalid_request_error');
@@ -120,13 +123,14 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     }
 
     // ─── Route matching ───────────────────────────────────────────────────
-    const model = (ctx.request.body as any)?.model ?? '-';
+    const requestBody = (ctx.request.body || {}) as Record<string, unknown>;
+    const model = requestBody.model === undefined || requestBody.model === null ? '-' : String(requestBody.model);
     const isUsageEndpoint =
       method === 'POST' && (subPath === '/chat/completions' || subPath === '/completions' || subPath === '/embeddings');
+    const isStreamingEndpoint = method === 'POST' && (subPath === '/chat/completions' || subPath === '/completions');
     const resolvedMode = isUsageEndpoint ? await resolveMode(ctx) : 'llm';
-    const requestBody = (ctx.request.body || {}) as Record<string, unknown>;
-    const streaming = isUsageEndpoint && isStreamingRequested(requestBody.stream);
-    if (streaming && (subPath === '/chat/completions' || subPath === '/completions')) {
+    const streaming = isStreamingEndpoint && isStreamingRequested(requestBody.stream);
+    if (streaming) {
       const streamOptions = requestBody.stream_options;
       ctx.request.body = {
         ...requestBody,
@@ -140,7 +144,7 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     let usageId: unknown;
     try {
       usageId = isUsageEndpoint
-        ? await startUsageRecord(ctx, requestId, subPath, String(model), streaming, resolvedMode)
+        ? await startUsageRecord(ctx, requestId, subPath, model, streaming, resolvedMode)
         : undefined;
     } catch (usageError) {
       ctx.log.error('AI API usage record could not be created:', usageError);
@@ -172,8 +176,8 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
         const completionsMode = resolvedMode;
         if (completionsMode === 'agent') {
           // Convert legacy prompt → messages format for agent handler
-          const reqBody = ctx.request.body as any;
-          if (reqBody?.prompt !== undefined) {
+          const reqBody = (ctx.request.body || {}) as Record<string, unknown>;
+          if (reqBody.prompt !== undefined) {
             const prompt =
               typeof reqBody.prompt === 'string'
                 ? reqBody.prompt

@@ -41,6 +41,7 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
 
   try {
     if (ctx.state.currentUser) {
+      ctx.state.aiApiAuthType = ctx.state.oauthPrincipal ? 'oidc' : 'bearer';
       if (!ctx.state.currentRole) {
         const requestedRole = ctx.get('X-Role');
         const rolesRepository = ctx.db.getRepository('users.roles', ctx.state.currentUser.id);

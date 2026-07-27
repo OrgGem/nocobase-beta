@@ -3,7 +3,7 @@
   "displayName": "SFTPGo Integration",
   "displayName.zh-CN": "SFTPGo 集成",
   "description": "Connect to SFTPGo servers and manage Users, Folders and API Keys from NocoBase.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

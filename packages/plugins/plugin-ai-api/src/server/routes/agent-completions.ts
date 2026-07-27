@@ -25,6 +25,7 @@ import {
   getAgentRuntimeLifecycle,
   loadAIEmployeeConstructor,
 } from '../utils/ai-employee-runtime';
+import { setAiApiUsageUnavailable } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -395,8 +396,10 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
             ),
           );
           originalWrite(formatSSEDone());
+          setAiApiUsageUnavailable(ctx, completionId);
           ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
         } else {
+          setAiApiUsageUnavailable(ctx, completionId);
           ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, errorCode: 'agent_error' };
         }
         if (!ctx.res.writableEnded && !ctx.res.destroyed) originalEnd();
@@ -443,6 +446,7 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
         // Clients can detect agent mode by checking usage.total_tokens === 0.
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       };
+      setAiApiUsageUnavailable(ctx, completionId);
     }
 
     // ─── Cleanup: delete the ephemeral conversation (best-effort) ────────────

@@ -157,7 +157,7 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
     if (accessLevel === 'SHARED' && allowedRoles?.length) {
       const currentRoles = getCurrentUserRoles();
       const hasAccess =
-        currentRoles.some((role: string) => allowedRoles!.includes(role)) ||
+        currentRoles.some((role: string) => allowedRoles.includes(role)) ||
         currentRoles.includes('root') ||
         currentRoles.includes('admin');
       if (!hasAccess) {
@@ -165,7 +165,7 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
       }
     }
 
-    return new DefaultVectorStoreService(vectorStore, { accessLevel, ownerId, allowedRoles });
+    return new DefaultVectorStoreService(vectorStore, vectorDatabase.provider, { accessLevel, ownerId, allowedRoles });
   }
 }
 
@@ -174,6 +174,34 @@ type AccessContext = {
   ownerId?: string;
   allowedRoles?: string[];
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * LangChain forwards Qdrant filters directly to Qdrant. Our internal search
+ * filter is metadata-oriented, so translate it to Qdrant's `must` DSL before
+ * sending the query. Other vector providers keep the existing filter shape.
+ */
+export function toQdrantMetadataFilter(filter: Record<string, unknown> | undefined) {
+  if (!filter) {
+    return undefined;
+  }
+  if (['must', 'must_not', 'should', 'min_should'].some((key) => key in filter)) {
+    return filter;
+  }
+
+  const must = Object.entries(filter).flatMap(([key, value]) => {
+    const metadataKey = key.startsWith('metadata.') ? key : `metadata.${key}`;
+    if (isRecord(value) && Array.isArray(value.in)) {
+      return value.in.length ? [{ key: metadataKey, match: { any: value.in } }] : [];
+    }
+    return [{ key: metadataKey, match: { value } }];
+  });
+
+  return must.length ? { must } : undefined;
+}
 
 /**
  * Access-aware VectorStoreService.
@@ -184,6 +212,7 @@ type AccessContext = {
 class DefaultVectorStoreService implements VectorStoreService {
   constructor(
     private vectorStore: any,
+    private vectorDatabaseProvider: string,
     private accessContext: AccessContext = {},
   ) {}
 
@@ -211,7 +240,11 @@ class DefaultVectorStoreService implements VectorStoreService {
       };
     }
 
-    const results = await this.vectorStore.similaritySearchWithScore(query, effectiveTopK, mergedFilter);
+    const providerFilter =
+      this.vectorDatabaseProvider === 'qdrant'
+        ? toQdrantMetadataFilter(mergedFilter as Record<string, unknown> | undefined)
+        : mergedFilter;
+    const results = await this.vectorStore.similaritySearchWithScore(query, effectiveTopK, providerFilter);
 
     const parsedThreshold = score == null ? 0 : Number(score);
     const scoreThreshold = Number.isFinite(parsedThreshold) ? parsedThreshold : 0;

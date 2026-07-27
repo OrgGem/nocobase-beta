@@ -11,6 +11,7 @@ import { Context } from '@nocobase/actions';
 import { generateCompletionId, toOpenAIError, formatSSE, formatSSEDone } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
 import { createRequestAbortController, isStreamingRequested, writeResponse } from '../utils/streaming';
+import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -187,13 +188,10 @@ async function handleNonStreamingTextCompletion(
     text = textPart?.text || JSON.stringify(result.content);
   }
 
-  const usage = result.usage_metadata
-    ? {
-        prompt_tokens: result.usage_metadata.input_tokens || 0,
-        completion_tokens: result.usage_metadata.output_tokens || 0,
-        total_tokens: result.usage_metadata.total_tokens || 0,
-      }
-    : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const usage = setAiApiUsageResult(ctx, result.usage_metadata, {
+    gatewayResponseId: completionId,
+    providerRequestId: extractProviderRequestId(result),
+  });
 
   ctx.status = 200;
   ctx.body = {
@@ -210,7 +208,7 @@ async function handleNonStreamingTextCompletion(
         finish_reason: 'stop',
       },
     ],
-    usage,
+    usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
   };
 }
 
@@ -232,7 +230,8 @@ async function handleStreamingTextCompletion(
   ctx.status = 200;
 
   const requestAbort = createRequestAbortController(ctx);
-  let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+  let usage: Usage | undefined;
+  let providerRequestId: string | undefined;
   try {
     const stream = await chatModel.stream(messages, { signal: requestAbort.signal });
 
@@ -267,12 +266,9 @@ async function handleStreamingTextCompletion(
         );
       }
       if (chunk.usage_metadata) {
-        usage = {
-          prompt_tokens: chunk.usage_metadata.input_tokens || 0,
-          completion_tokens: chunk.usage_metadata.output_tokens || 0,
-          total_tokens: chunk.usage_metadata.total_tokens || 0,
-        };
+        usage = normalizeUsage(chunk.usage_metadata) ?? usage;
       }
+      providerRequestId = providerRequestId ?? extractProviderRequestId(chunk);
     }
 
     // Final chunk
@@ -296,7 +292,8 @@ async function handleStreamingTextCompletion(
     );
 
     await writeResponse(ctx, formatSSEDone());
-    ctx.state.aiApiStreamResult = { succeeded: true, id: completionId, usage };
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
   } catch (err) {
     ctx.log.error('AI API completions streaming error:', err);
     if (!ctx.res.destroyed && !ctx.res.writableEnded) {
@@ -310,7 +307,8 @@ async function handleStreamingTextCompletion(
         }),
       );
     }
-    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, usage, errorCode: 'stream_error' };
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, errorCode: 'stream_error' };
   } finally {
     requestAbort.dispose();
     if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();

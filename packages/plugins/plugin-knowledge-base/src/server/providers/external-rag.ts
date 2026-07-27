@@ -50,6 +50,11 @@ export type RagSearchStrategy = (
   options: RagSearchOptions,
 ) => Promise<RagSearchResult[]>;
 
+export function usesForwardedEmbeddingCredentials(kb: Record<string, any>): boolean {
+  const provider = kb.options?.ragProvider ?? EXTERNAL_HTTP_RAG_PROVIDER;
+  return provider === OPENAI_COMPATIBLE_RAG_PROVIDER || provider === E5_HTTP_RAG_PROVIDER;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Built-in strategy: generic HTTP endpoint
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,12 +114,11 @@ function normalizeRagResults(data: ExternalRagResponseBody, apiUrl: string): Rag
 
 /**
  * SSRF guard — blocks requests to localhost, private RFC-1918 ranges,
- * link-local, cloud metadata endpoints, and DNS-rebinding attacks.
+ * link-local, cloud metadata endpoints, and DNS-rebinding attempts.
  *
- * Fix P0-4: After hostname string checks, resolves the hostname to an IP
- * and validates the resolved address against private/loopback/link-local
- * ranges. This closes DNS rebinding, octal/hex IP encoding, and
- * IPv6-mapped IPv4 bypass vectors.
+ * After hostname string checks, resolve every address for the hostname and
+ * reject private/loopback/link-local ranges. Requests also reject redirects,
+ * so a public endpoint cannot redirect the server into an internal network.
  */
 function validateExternalUrl(url: string): void {
   let parsed: URL;
@@ -162,7 +166,7 @@ function validateExternalUrl(url: string): void {
 
 /**
  * Check if a resolved IP address is in a private/loopback/link-local range.
- * Catches DNS rebinding, octal/hex IP encodings, and IPv6-mapped IPv4 bypasses.
+ * Catches encoded IPv4 and IPv6-mapped IPv4 bypass vectors.
  */
 function isPrivateOrReservedIP(ip: string): boolean {
   // Normalize IPv6-mapped IPv4 (e.g., ::ffff:127.0.0.1 → 127.0.0.1)
@@ -199,24 +203,28 @@ function isPrivateOrReservedIP(ip: string): boolean {
 }
 
 /**
- * Async SSRF guard — resolves hostname to IP and validates against private ranges.
- * Call this in addition to validateExternalUrl() for defense-in-depth.
+ * Async SSRF guard — resolves every hostname address and validates each against
+ * private ranges. Call this in addition to validateExternalUrl().
  */
 async function validateResolvedIP(url: string): Promise<void> {
   const { hostname } = new URL(url);
 
   try {
     const dns = await import('dns');
-    const resolvedIP = await new Promise<string>((resolve, reject) => {
-      dns.lookup(hostname, { family: 0 }, (err, address) => {
-        if (err) reject(err);
-        else resolve(address);
+    const resolvedIPs = await new Promise<string[]>((resolve, reject) => {
+      dns.lookup(hostname, { all: true, verbatim: true }, (err, addresses) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(addresses.map(({ address }) => address));
       });
     });
 
-    if (isPrivateOrReservedIP(resolvedIP)) {
+    const blockedIP = resolvedIPs.find(isPrivateOrReservedIP);
+    if (blockedIP) {
       throw new Error(
-        `RAG API URL "${url}" resolves to private/reserved IP ${resolvedIP}. This is blocked to prevent SSRF.`,
+        `RAG API URL "${url}" resolves to private/reserved IP ${blockedIP}. This is blocked to prevent SSRF.`,
       );
     }
   } catch (err: any) {
@@ -232,7 +240,6 @@ async function postExternalRag(
   body: ExternalRagRequestBody,
   label = 'External RAG API',
 ): Promise<RagSearchResult[]> {
-
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), RAG_REQUEST_TIMEOUT_MS);
 
@@ -246,6 +253,7 @@ async function postExternalRag(
       },
       body: JSON.stringify(body),
       signal: controller.signal,
+      redirect: 'error',
     });
   } catch (err: any) {
     if (err.name === 'AbortError') {
@@ -305,7 +313,6 @@ export const externalHttpRagStrategy: RagSearchStrategy = async (
   };
 
   return (await postExternalRag(apiUrl, apiKey, body)).filter((r) => (Number(r.score) || 0) >= effectiveThreshold);
-
 };
 
 type EmbeddingHttpProviderOptions = {
@@ -371,7 +378,8 @@ export function createOpenAICompatibleRagStrategy(providerOptions: EmbeddingHttp
       );
     }
 
-    // Fix P0-4: Defense-in-depth — validate resolved IP against private ranges
+    validateExternalUrl(apiUrl);
+    await validateResolvedIP(apiUrl);
 
     const embedding = await resolveLlmServiceEmbeddingConfig(providerOptions, kb);
     const body: ExternalRagRequestBody = {
@@ -386,7 +394,6 @@ export function createOpenAICompatibleRagStrategy(providerOptions: EmbeddingHttp
     return (await postExternalRag(apiUrl, apiKey, body, 'External embedding RAG API')).filter(
       (r) => (Number(r.score) || 0) >= effectiveThreshold,
     );
-
   };
 }
 

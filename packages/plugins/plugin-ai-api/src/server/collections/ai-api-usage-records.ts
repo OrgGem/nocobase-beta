@@ -5,7 +5,15 @@ export default defineCollection({
   autoGenId: true,
   fields: [
     { name: 'requestId', type: 'string', unique: true, index: true },
-    { name: 'userId', type: 'string', index: true },
+    { name: 'userId', type: 'bigInt', allowNull: false, index: true },
+    {
+      name: 'user',
+      type: 'belongsTo',
+      target: 'users',
+      targetKey: 'id',
+      foreignKey: 'userId',
+      constraints: false,
+    },
     { name: 'roleName', type: 'string', index: true },
     { name: 'authType', type: 'string', index: true },
     { name: 'oauthClientId', type: 'string', allowNull: true, index: true },

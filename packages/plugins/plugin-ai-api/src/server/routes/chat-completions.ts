@@ -21,6 +21,7 @@ import {
 import { resolveModelString } from '../utils/resolve-service';
 import { createRequestAbortController, isStreamingRequested, writeResponse } from '../utils/streaming';
 import { checkEmployeeAccess } from '../middleware/role-permission';
+import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -249,13 +250,10 @@ async function handleNonStreamingCompletion(
   }
 
   // Extract usage if available
-  const usage = result.usage_metadata
-    ? {
-        prompt_tokens: result.usage_metadata.input_tokens || 0,
-        completion_tokens: result.usage_metadata.output_tokens || 0,
-        total_tokens: result.usage_metadata.total_tokens || 0,
-      }
-    : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const usage = setAiApiUsageResult(ctx, result.usage_metadata, {
+    gatewayResponseId: completionId,
+    providerRequestId: extractProviderRequestId(result),
+  });
 
   ctx.status = 200;
   const toolCalls = normalizeToolCalls(result.tool_calls);
@@ -263,7 +261,7 @@ async function handleNonStreamingCompletion(
     id: completionId,
     model: modelName,
     content,
-    usage,
+    usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     toolCalls,
   });
 }
@@ -300,7 +298,8 @@ async function handleStreamingCompletion(
   );
 
   const requestAbort = createRequestAbortController(ctx);
-  let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+  let usage: Usage | undefined;
+  let providerRequestId: string | undefined;
   let finishReason = 'stop';
   try {
     const stream = await chatModel.stream(messages, { ...providerRequestParameters, signal: requestAbort.signal });
@@ -337,12 +336,9 @@ async function handleStreamingCompletion(
         );
       }
       if (chunk.usage_metadata) {
-        usage = {
-          prompt_tokens: chunk.usage_metadata.input_tokens || 0,
-          completion_tokens: chunk.usage_metadata.output_tokens || 0,
-          total_tokens: chunk.usage_metadata.total_tokens || 0,
-        };
+        usage = normalizeUsage(chunk.usage_metadata) ?? usage;
       }
+      providerRequestId = providerRequestId ?? extractProviderRequestId(chunk);
     }
 
     // Send finish chunk
@@ -360,7 +356,8 @@ async function handleStreamingCompletion(
 
     // Send [DONE]
     await writeResponse(ctx, formatSSEDone());
-    ctx.state.aiApiStreamResult = { succeeded: true, id: completionId, usage };
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
   } catch (err) {
     ctx.log.error('AI API streaming error:', err);
     // Send error as SSE event before closing
@@ -375,7 +372,8 @@ async function handleStreamingCompletion(
         }),
       );
     }
-    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, usage, errorCode: 'stream_error' };
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, errorCode: 'stream_error' };
   } finally {
     requestAbort.dispose();
     if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();

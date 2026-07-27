@@ -51,7 +51,6 @@ export const HarnessProfilesTab: React.FC = () => {
                 nativeObserverEnabled: true,
                 memoryInjectionEnabled: true,
                 memoryScopes: ['public', 'user', 'agent_user'],
-                knowledgeScopes: ['public', 'private'],
                 maxMemoryContextChars: 6000,
                 tracingRetentionDays: 30,
               },
@@ -199,7 +198,7 @@ export const HarnessProfilesTab: React.FC = () => {
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
             <Text type="secondary">
-              {t('Policy profiles control native observer, tracing retention, and memory/knowledge scopes.')}
+              {t('Policy profiles control native observation, memory scopes, and tracing retention.')}
             </Text>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openDrawer()}>
               {t('New Policy')}

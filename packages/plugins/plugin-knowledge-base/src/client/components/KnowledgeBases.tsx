@@ -38,7 +38,6 @@ import {
 import {
   PlusOutlined,
   DeleteOutlined,
-  UploadOutlined,
   ReloadOutlined,
   InboxOutlined,
   GlobalOutlined,
@@ -155,6 +154,10 @@ export const KnowledgeBases: React.FC = () => {
   const [settingsForm] = Form.useForm();
   const [sAccessLevel, setSAccessLevel] = useState('PUBLIC');
   const [sType, setSType] = useState('LOCAL');
+  const knowledgeBasesPageRef = React.useRef<HTMLDivElement>(null);
+  const documentTableViewportRef = React.useRef<HTMLDivElement>(null);
+  const [knowledgeBasesPageHeight, setKnowledgeBasesPageHeight] = useState<number>();
+  const [documentTableScrollY, setDocumentTableScrollY] = useState(160);
 
   const documentStats = React.useMemo(() => getDocumentStats(documents), [documents]);
   const filteredDocuments = React.useMemo(() => {
@@ -164,6 +167,53 @@ export const KnowledgeBases: React.FC = () => {
     return documents.filter((doc) => doc.status === docStatusFilter);
   }, [docStatusFilter, documents]);
   const selectedTypeConfig = kbTypeConfig[selectedKB?.type || 'LOCAL'] || kbTypeConfig.LOCAL;
+
+  useEffect(() => {
+    const page = knowledgeBasesPageRef.current;
+    if (!page || typeof window === 'undefined') {
+      return;
+    }
+
+    const updatePageHeight = () => {
+      const availableHeight = Math.floor(window.innerHeight - page.getBoundingClientRect().top);
+      if (availableHeight > 0) {
+        setKnowledgeBasesPageHeight(availableHeight);
+      }
+    };
+
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updatePageHeight);
+    if (page.parentElement) {
+      observer?.observe(page.parentElement);
+    }
+    window.addEventListener('resize', updatePageHeight);
+    updatePageHeight();
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updatePageHeight);
+    };
+  }, []);
+
+  useEffect(() => {
+    const viewport = documentTableViewportRef.current;
+    if (!viewport || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const updateTableHeight = () => {
+      const availableHeight = Math.floor(viewport.getBoundingClientRect().height);
+      if (availableHeight > 0) {
+        // Reserve room for the table header and compact pagination controls.
+        setDocumentTableScrollY(Math.max(120, availableHeight - 96));
+      }
+    };
+
+    const observer = new ResizeObserver(updateTableHeight);
+    observer.observe(viewport);
+    updateTableHeight();
+
+    return () => observer.disconnect();
+  }, [selectedKB?.id]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -737,13 +787,23 @@ export const KnowledgeBases: React.FC = () => {
     ];
 
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <Row gutter={24} style={{ marginBottom: 24 }}>
-          <Col xs={24} md={16}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          minWidth: 0,
+          height: '100%',
+          minHeight: 0,
+          gap: 16,
+        }}
+      >
+        <Row gutter={[16, 16]} style={{ flex: '0 0 auto' }}>
+          <Col xs={24} md={14}>
             <Card
               hoverable
               bodyStyle={{ padding: 0 }}
-              style={{ height: '100%', borderRadius: 12, overflow: 'hidden', border: '1px solid #e8e8e8' }}
+              style={{ height: 88, borderRadius: 12, overflow: 'hidden', border: '1px solid #e8e8e8' }}
             >
               <Dragger
                 name="file"
@@ -752,61 +812,66 @@ export const KnowledgeBases: React.FC = () => {
                 accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
                 customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
                 onChange={handleUploadChange}
-                style={{ padding: '32px 0', background: '#fafafa', border: 'none' }}
+                style={{ height: '100%', padding: '0 20px', background: '#fafafa', border: 'none' }}
               >
-                <p className="ant-upload-drag-icon">
-                  <InboxOutlined style={{ color: '#1890ff', fontSize: 48 }} />
-                </p>
-                <Title level={5} style={{ margin: '16px 0 8px' }}>
-                  Click or drag file to this area to upload
-                </Title>
-                <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
-                  Support for single or bulk upload. Select multiple documents to populate your knowledge base quickly.
-                </Text>
-                <Button type="primary" shape="round" icon={<UploadOutlined />}>
-                  Select Files
-                </Button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, minHeight: 86, textAlign: 'left' }}>
+                  <InboxOutlined style={{ color: '#1890ff', fontSize: 32 }} />
+                  <div>
+                    <Text strong>Click or drag file to this area to upload</Text>
+                  </div>
+                </div>
               </Dragger>
             </Card>
           </Col>
 
-          <Col xs={24} md={8}>
+          <Col xs={24} md={10}>
             <Card
               hoverable
+              bodyStyle={{ height: '100%', padding: 0 }}
               style={{
-                height: '100%',
+                height: 88,
                 borderRadius: 12,
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'center',
-                alignItems: 'center',
                 border: '1px solid #e8e8e8',
                 background: '#fafafa',
-                cursor: 'pointer',
               }}
-              onClick={() => setTextModalVisible(true)}
             >
-              <div style={{ textAlign: 'center', padding: '16px 0' }}>
-                <FileTextOutlined style={{ fontSize: 48, color: '#52c41a', marginBottom: 16 }} />
-                <Title level={5} style={{ margin: '0 0 8px' }}>
-                  Paste Plain Text
-                </Title>
-                <Text type="secondary" style={{ textAlign: 'center', marginBottom: 16, display: 'block' }}>
-                  Directly paste your text content to create a document.
-                </Text>
-                <Button shape="round" icon={<PlusOutlined />}>
-                  Paste Text
-                </Button>
-              </div>
+              <Button
+                type="text"
+                block
+                onClick={() => setTextModalVisible(true)}
+                style={{ height: '100%', padding: '0 20px', textAlign: 'left', whiteSpace: 'normal' }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <FileTextOutlined style={{ fontSize: 32, color: '#52c41a' }} />
+                  <span>
+                    <Text strong>Paste Plain Text</Text>
+                  </span>
+                </span>
+              </Button>
             </Card>
           </Col>
         </Row>
 
         <Card
           title="Document List"
-          style={{ borderRadius: 12, border: '1px solid #e8e8e8', flex: 1, display: 'flex', flexDirection: 'column' }}
-          headStyle={{ borderBottom: '1px solid #f0f0f0', padding: '0 24px' }}
-          bodyStyle={{ padding: '24px', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          style={{
+            borderRadius: 12,
+            border: '1px solid #e8e8e8',
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+          headStyle={{ minHeight: 48, borderBottom: '1px solid #f0f0f0', padding: '0 16px' }}
+          bodyStyle={{
+            padding: '12px 16px',
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
           extra={
             <Space>
               <Select
@@ -822,7 +887,7 @@ export const KnowledgeBases: React.FC = () => {
             </Space>
           }
         >
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 8, flex: '0 0 auto' }}>
             <Space wrap size={[0, 8]}>
               <Tag icon={<FileTextOutlined />} color="blue" style={{ borderRadius: 4 }}>
                 {documentStats.total} total
@@ -841,16 +906,18 @@ export const KnowledgeBases: React.FC = () => {
               </Tag>
             </Space>
           </div>
-          <Table
-            rowKey="id"
-            size="middle"
-            loading={docsLoading}
-            columns={documentColumns}
-            dataSource={filteredDocuments}
-            locale={{ emptyText: <Empty description="No documents match this view" /> }}
-            pagination={{ pageSize: 10, showSizeChanger: true }}
-            scroll={{ x: 760, y: 'calc(100vh - 460px)' }}
-          />
+          <div ref={documentTableViewportRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+            <Table
+              rowKey="id"
+              size="small"
+              loading={docsLoading}
+              columns={documentColumns}
+              dataSource={filteredDocuments}
+              locale={{ emptyText: <Empty description="No documents match this view" /> }}
+              pagination={{ pageSize: 10, showSizeChanger: true, size: 'small' }}
+              scroll={{ x: 760, y: documentTableScrollY }}
+            />
+          </div>
         </Card>
       </div>
     );
@@ -1098,203 +1165,243 @@ export const KnowledgeBases: React.FC = () => {
   );
 
   return (
-    <div style={{ display: 'flex', height: 'calc(100vh - 56px)', overflow: 'hidden', background: '#f5f5f5' }}>
-      {renderSidebar()}
+    <>
+      <style>{`
+        .kb-detail-tabs .ant-tabs-content-holder,
+        .kb-detail-tabs .ant-tabs-content,
+        .kb-detail-tabs .ant-tabs-tabpane-active {
+          display: flex;
+          flex: 1;
+          flex-direction: column;
+          min-height: 0;
+        }
+      `}</style>
+      <div
+        ref={knowledgeBasesPageRef}
+        style={{
+          display: 'flex',
+          height: knowledgeBasesPageHeight ?? 'calc(100dvh - 56px)',
+          minHeight: 0,
+          overflow: 'hidden',
+          background: '#f5f5f5',
+        }}
+      >
+        {renderSidebar()}
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '24px' }}>
-        {selectedKB ? (
-          <div
-            style={{
-              background: '#fff',
-              borderRadius: 12,
-              display: 'flex',
-              flexDirection: 'column',
-              height: '100%',
-              boxShadow: '0 4px 16px rgba(0,0,0,0.04)',
-              border: '1px solid #f0f0f0',
-            }}
-          >
-            <div style={{ padding: '24px 32px 16px', borderBottom: '1px solid #f0f0f0' }}>
-              <div
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <div
-                    style={{
-                      width: 56,
-                      height: 56,
-                      borderRadius: '12px',
-                      background: '#e6f4ff',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#1890ff',
-                      fontSize: 28,
-                    }}
-                  >
-                    <BookOutlined />
-                  </div>
-                  <div>
-                    <Title
-                      level={3}
-                      style={{ margin: 0, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}
-                    >
-                      {selectedKB.name}
-                      <Space size={4}>
-                        <Tag
-                          color={selectedTypeConfig.color}
-                          style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
-                        >
-                          {selectedTypeConfig.label}
-                        </Tag>
-                        <Tag
-                          color={accessColors[selectedKB.accessLevel || 'PUBLIC']}
-                          style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
-                        >
-                          {selectedKB.accessLevel || 'PUBLIC'}
-                        </Tag>
-                        <Tag
-                          color={selectedKB.enabled === false ? 'default' : 'success'}
-                          style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
-                        >
-                          {selectedKB.enabled === false ? 'Disabled' : 'Active'}
-                        </Tag>
-                      </Space>
-                    </Title>
-                    <Text type="secondary" style={{ fontSize: 14 }}>
-                      {selectedKB.description ||
-                        'Manage documents, search content, and configure settings for this knowledge base.'}
-                    </Text>
-                  </div>
-                </div>
-                <Popconfirm
-                  title="Are you sure to delete this knowledge base? This action cannot be undone."
-                  onConfirm={() => handleDeleteKB(selectedKB.id)}
-                >
-                  <Button danger shape="round" icon={<DeleteOutlined />}>
-                    Delete
-                  </Button>
-                </Popconfirm>
-              </div>
-            </div>
-
-            <Tabs
-              defaultActiveKey="documents"
-              style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '0 32px' }}
-              className="kb-detail-tabs"
-              items={[
-                {
-                  key: 'documents',
-                  label: (
-                    <span style={{ fontSize: 15, padding: '8px 16px' }}>
-                      <FileTextOutlined /> Documents
-                    </span>
-                  ),
-                  children: (
-                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>{renderDocumentsTab()}</div>
-                  ),
-                },
-                {
-                  key: 'search',
-                  label: (
-                    <span style={{ fontSize: 15, padding: '8px 16px' }}>
-                      <SearchOutlined /> Search
-                    </span>
-                  ),
-                  children: (
-                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>{renderSearchTab()}</div>
-                  ),
-                },
-                {
-                  key: 'settings',
-                  label: (
-                    <span style={{ fontSize: 15, padding: '8px 16px' }}>
-                      <SettingOutlined /> Settings
-                    </span>
-                  ),
-                  children: (
-                    <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%', maxWidth: 800 }}>
-                      <Form form={settingsForm} layout="vertical" onFinish={handleUpdateSettings}>
-                        {formFields(sType, sAccessLevel, setSAccessLevel, setSType)}
-                        <Form.Item style={{ marginTop: 24 }}>
-                          <Button type="primary" htmlType="submit" size="large" shape="round">
-                            Save Changes
-                          </Button>
-                        </Form.Item>
-                      </Form>
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        ) : (
-          <div
-            style={{
-              flex: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: '#fff',
-              borderRadius: 12,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.04)',
-              border: '1px solid #f0f0f0',
-            }}
-          >
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={
-                <span style={{ color: '#8c8c8c', fontSize: 16 }}>
-                  Select a knowledge base from the sidebar or create a new one
-                </span>
-              }
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            padding: '24px',
+          }}
+        >
+          {selectedKB ? (
+            <div
+              style={{
+                background: '#fff',
+                borderRadius: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                height: '100%',
+                minHeight: 0,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.04)',
+                border: '1px solid #f0f0f0',
+              }}
             >
-              <Button
-                type="primary"
-                size="large"
-                shape="round"
-                icon={<PlusOutlined />}
-                onClick={handleCreate}
-                style={{ marginTop: 16 }}
+              <div style={{ padding: '24px 32px 16px', borderBottom: '1px solid #f0f0f0' }}>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    marginBottom: 8,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                    <div
+                      style={{
+                        width: 56,
+                        height: 56,
+                        borderRadius: '12px',
+                        background: '#e6f4ff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#1890ff',
+                        fontSize: 28,
+                      }}
+                    >
+                      <BookOutlined />
+                    </div>
+                    <div>
+                      <Title
+                        level={3}
+                        style={{ margin: 0, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}
+                      >
+                        {selectedKB.name}
+                        <Space size={4}>
+                          <Tag
+                            color={selectedTypeConfig.color}
+                            style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
+                          >
+                            {selectedTypeConfig.label}
+                          </Tag>
+                          <Tag
+                            color={accessColors[selectedKB.accessLevel || 'PUBLIC']}
+                            style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
+                          >
+                            {selectedKB.accessLevel || 'PUBLIC'}
+                          </Tag>
+                          <Tag
+                            color={selectedKB.enabled === false ? 'default' : 'success'}
+                            style={{ borderRadius: 4, fontWeight: 'normal', fontSize: 12 }}
+                          >
+                            {selectedKB.enabled === false ? 'Disabled' : 'Active'}
+                          </Tag>
+                        </Space>
+                      </Title>
+                      <Text type="secondary" style={{ fontSize: 14 }}>
+                        {selectedKB.description ||
+                          'Manage documents, search content, and configure settings for this knowledge base.'}
+                      </Text>
+                    </div>
+                  </div>
+                  <Popconfirm
+                    title="Are you sure to delete this knowledge base? This action cannot be undone."
+                    onConfirm={() => handleDeleteKB(selectedKB.id)}
+                  >
+                    <Button danger shape="round" icon={<DeleteOutlined />}>
+                      Delete
+                    </Button>
+                  </Popconfirm>
+                </div>
+              </div>
+
+              <Tabs
+                defaultActiveKey="documents"
+                style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '0 32px' }}
+                className="kb-detail-tabs"
+                items={[
+                  {
+                    key: 'documents',
+                    label: (
+                      <span style={{ fontSize: 15, padding: '8px 16px' }}>
+                        <FileTextOutlined /> Documents
+                      </span>
+                    ),
+                    children: (
+                      <div
+                        style={{ padding: '16px 0', overflow: 'hidden', height: '100%', minHeight: 0, display: 'flex' }}
+                      >
+                        {renderDocumentsTab()}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'search',
+                    label: (
+                      <span style={{ fontSize: 15, padding: '8px 16px' }}>
+                        <SearchOutlined /> Search
+                      </span>
+                    ),
+                    children: (
+                      <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%' }}>{renderSearchTab()}</div>
+                    ),
+                  },
+                  {
+                    key: 'settings',
+                    label: (
+                      <span style={{ fontSize: 15, padding: '8px 16px' }}>
+                        <SettingOutlined /> Settings
+                      </span>
+                    ),
+                    children: (
+                      <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%', maxWidth: 800 }}>
+                        <Form form={settingsForm} layout="vertical" onFinish={handleUpdateSettings}>
+                          {formFields(sType, sAccessLevel, setSAccessLevel, setSType)}
+                          <Form.Item style={{ marginTop: 24 }}>
+                            <Button type="primary" htmlType="submit" size="large" shape="round">
+                              Save Changes
+                            </Button>
+                          </Form.Item>
+                        </Form>
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          ) : (
+            <div
+              style={{
+                flex: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: '#fff',
+                borderRadius: 12,
+                boxShadow: '0 4px 16px rgba(0,0,0,0.04)',
+                border: '1px solid #f0f0f0',
+              }}
+            >
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <span style={{ color: '#8c8c8c', fontSize: 16 }}>
+                    Select a knowledge base from the sidebar or create a new one
+                  </span>
+                }
               >
-                Create Knowledge Base
-              </Button>
-            </Empty>
-          </div>
-        )}
+                <Button
+                  type="primary"
+                  size="large"
+                  shape="round"
+                  icon={<PlusOutlined />}
+                  onClick={handleCreate}
+                  style={{ marginTop: 16 }}
+                >
+                  Create Knowledge Base
+                </Button>
+              </Empty>
+            </div>
+          )}
+        </div>
+
+        <Modal
+          title="Create Knowledge Base"
+          open={createModalVisible}
+          onOk={submitCreate}
+          onCancel={() => setCreateModalVisible(false)}
+          width={700}
+          destroyOnClose
+        >
+          <Form form={createForm} layout="vertical">
+            {formFields(cType, cAccessLevel, setCAccessLevel, setCType)}
+          </Form>
+        </Modal>
+
+        <Modal
+          title="Add Text Document"
+          open={textModalVisible}
+          onOk={handleAddTextDocument}
+          onCancel={() => setTextModalVisible(false)}
+          width={600}
+          destroyOnClose
+        >
+          <Form form={textForm} layout="vertical">
+            <Form.Item name="filename" label="Document Name" rules={[{ required: true }]}>
+              <Input placeholder="e.g. FAQ" />
+            </Form.Item>
+            <Form.Item name="textContent" label="Content" rules={[{ required: true }]}>
+              <Input.TextArea autoSize={{ minRows: 6, maxRows: 16 }} />
+            </Form.Item>
+          </Form>
+        </Modal>
       </div>
-
-      <Modal
-        title="Create Knowledge Base"
-        open={createModalVisible}
-        onOk={submitCreate}
-        onCancel={() => setCreateModalVisible(false)}
-        width={700}
-        destroyOnClose
-      >
-        <Form form={createForm} layout="vertical">
-          {formFields(cType, cAccessLevel, setCAccessLevel, setCType)}
-        </Form>
-      </Modal>
-
-      <Modal
-        title="Add Text Document"
-        open={textModalVisible}
-        onOk={handleAddTextDocument}
-        onCancel={() => setTextModalVisible(false)}
-        width={600}
-        destroyOnClose
-      >
-        <Form form={textForm} layout="vertical">
-          <Form.Item name="filename" label="Document Name" rules={[{ required: true }]}>
-            <Input placeholder="e.g. FAQ" />
-          </Form.Item>
-          <Form.Item name="textContent" label="Content" rules={[{ required: true }]}>
-            <Input.TextArea autoSize={{ minRows: 6, maxRows: 16 }} />
-          </Form.Item>
-        </Form>
-      </Modal>
-    </div>
+    </>
   );
 };
 

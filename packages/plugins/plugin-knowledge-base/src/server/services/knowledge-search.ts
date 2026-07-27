@@ -2,6 +2,7 @@ import type { Context } from '@nocobase/actions';
 import { buildAccessibleKnowledgeBaseFilter, resolveAccessContext } from '../utils/access';
 import { EXTERNAL_HTTP_RAG_PROVIDER, EXTERNAL_RAG_KB_TYPE } from '../providers/external-rag';
 import type { RagSearchResult } from '../providers/external-rag';
+import { usesForwardedEmbeddingCredentials } from '../providers/external-rag';
 
 export type KnowledgeSearchOptions = {
   knowledgeBaseIds?: string[];
@@ -129,9 +130,22 @@ export class KnowledgeSearchService {
     const accessibleIds = accessibleKbs.map((kb: any) => String(kb.id));
     if (!accessibleIds.length) return [];
 
-    const externalKbs = accessibleKbs.filter((kb: any) => kb.type === EXTERNAL_RAG_KB_TYPE);
-    const externalIds = new Set(externalKbs.map((kb: any) => String(kb.id)));
-    const standardIds = accessibleIds.filter((id) => !externalIds.has(id));
+    const allExternalIds = new Set(
+      accessibleKbs.filter((kb: any) => kb.type === EXTERNAL_RAG_KB_TYPE).map((kb: any) => String(kb.id)),
+    );
+    const externalKbs = accessibleKbs.filter((kb: any) => {
+      if (kb.type !== EXTERNAL_RAG_KB_TYPE) {
+        return false;
+      }
+      if (usesForwardedEmbeddingCredentials(kb) && !access.isAdmin) {
+        this.plugin.app.logger.warn(
+          `[KB Search] Non-admin request blocked from credential-forwarding External RAG KB "${kb.name ?? kb.id}".`,
+        );
+        return false;
+      }
+      return true;
+    });
+    const standardIds = accessibleIds.filter((id) => !allExternalIds.has(id));
     const results: KnowledgeSearchResult[] = [];
 
     if (standardIds.length) {

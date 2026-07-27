@@ -3,7 +3,7 @@
   "displayName": "HashiCorp Vault Integration",
   "displayName.zh-CN": "HashiCorp Vault 集成",
   "description": "Map HashiCorp Vault secrets to NocoBase variables ({{$vault.KEY}}) with optional $env sync.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

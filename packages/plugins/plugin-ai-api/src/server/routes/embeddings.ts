@@ -10,6 +10,7 @@
 import { Context } from '@nocobase/actions';
 import { toOpenAIError, toOpenAIEmbeddingsResponse } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { setAiApiUsageUnavailable } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -175,6 +176,7 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
 
     ctx.status = 200;
     ctx.set('Content-Type', 'application/json');
+    setAiApiUsageUnavailable(ctx);
     ctx.body = toOpenAIEmbeddingsResponse({
       model: body.model,
       embeddings: vectors,

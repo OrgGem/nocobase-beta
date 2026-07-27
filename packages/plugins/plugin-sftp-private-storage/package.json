@@ -1,6 +1,6 @@
 {
   "name": "plugin-sftp-private-storage",
-  "version": "1.0.17",
+  "version": "1.0.18",
   "displayName": "SFTP Private Storage",
   "displayName.zh-CN": "SFTP 私有存储",
   "description": "Provides SFTP connection management and file operations for external storage integration.",

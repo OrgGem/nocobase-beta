@@ -17,6 +17,8 @@ import {
   normalizeRoles,
   resolveAccessContext,
 } from '../utils/access';
+import { usesForwardedEmbeddingCredentials } from '../providers/external-rag';
+import { addDocumentAction } from '../actions/add-document';
 
 /**
  * Helper to get the knowledge base plugin instance via class reference (not string name).
@@ -76,9 +78,26 @@ function normalizeKnowledgeBaseValues(ctx: Context, values: any, existing?: any)
   }
 }
 
+function isCredentialForwardingExternalRag(values: Record<string, unknown>, existing?: unknown) {
+  const effective = {
+    ...(existing && typeof existing === 'object' && 'toJSON' in existing && typeof existing.toJSON === 'function'
+      ? existing.toJSON()
+      : existing ?? {}),
+    ...values,
+  };
+  return effective.type === 'EXTERNAL_RAG' && usesForwardedEmbeddingCredentials(effective);
+}
+
 export default {
   name: 'aiKnowledgeBase',
   actions: {
+    async addDocument(ctx: Context, next: Function) {
+      // Do not assign addDocumentAction directly here. That action imports the
+      // server plugin, which imports this resource; reading the CommonJS export
+      // during module initialization would otherwise capture `undefined`.
+      await addDocumentAction(ctx, next);
+    },
+
     async list(ctx: Context, next: Function) {
       const repo = ctx.db.getRepository('aiKnowledgeBases');
       const { filter = {}, fields, sort, page, pageSize } = ctx.action.params;
@@ -169,6 +188,15 @@ export default {
         delete values.allowedAgents;
       }
       normalizeKnowledgeBaseValues(ctx, values);
+      if (!access.isAdmin && isCredentialForwardingExternalRag(values)) {
+        ctx.throw(
+          403,
+          ctx.t('Only administrators can configure External RAG providers that forward LLM credentials.', {
+            ns: 'plugin-knowledge-base',
+          }),
+        );
+        return;
+      }
 
       // For BASIC KBs, automatically set the owner.
       if (values.accessLevel === 'BASIC') {
@@ -212,6 +240,15 @@ export default {
       }
 
       normalizeKnowledgeBaseValues(ctx, values, existing);
+      if (!access.isAdmin && isCredentialForwardingExternalRag(values, existing)) {
+        ctx.throw(
+          403,
+          ctx.t('Only administrators can configure External RAG providers that forward LLM credentials.', {
+            ns: 'plugin-knowledge-base',
+          }),
+        );
+        return;
+      }
       if (!access.isAdmin) {
         // Members may manage KB content/settings, but changing the row-level
         // access policy (user or agent) remains an admin concern.

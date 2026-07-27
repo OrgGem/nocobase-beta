@@ -1,6 +1,6 @@
 {
   "name": "plugin-external-storage-manager",
-  "version": "1.1.17",
+  "version": "1.1.18",
   "displayName": "External Storage Manager",
   "displayName.zh-CN": "外部存储管理器",
   "description": "Unified file browser for external storage backends (S3, SFTP) with virtual directory mapping, per-directory ACL, and streaming data transfer.",

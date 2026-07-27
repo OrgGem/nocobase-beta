@@ -39,6 +39,34 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai.orchestrator',
+      key: 'agent-bindings',
+      title: this.t('Agent Bindings'),
+      componentLoader: () => import('./pages/AgentBindingsPage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai.orchestrator',
+      key: 'knowledge-access',
+      title: this.t('Knowledge Access'),
+      componentLoader: () => import('./pages/KnowledgeAccessPage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai.orchestrator',
+      key: 'retrieval-trace',
+      title: this.t('Retrieval Trace'),
+      componentLoader: () => import('./pages/RetrievalTracePage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai.orchestrator',
+      key: 'memory-inspector',
+      title: this.t('Memory Inspector'),
+      componentLoader: () => import('./pages/MemoryInspectorPage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai.orchestrator',
       key: 'skill-definitions',
       title: this.t('Skill Hub Definitions'),
       componentLoader: () => import('./pages/SkillDefinitionsPage'),

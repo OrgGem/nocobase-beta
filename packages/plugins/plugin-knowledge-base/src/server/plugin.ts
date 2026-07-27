@@ -37,9 +37,8 @@ import aiKnowledgeBase from './resources/ai-knowledge-base';
 import aiKnowledgeBaseDocuments from './resources/ai-knowledge-base-documents';
 import aiVectorStores from './resources/ai-vector-stores';
 import aiVectorDatabases from './resources/ai-vector-databases';
-import { addDocumentAction } from './actions/add-document';
 import * as sessionContextAdminActions from './actions/session-context-admin';
-import requestContext from './request-context';
+import requestContext, { runWithAgentUsername } from './request-context';
 import { getCurrentRoles } from './utils/access';
 import {
   enqueueKnowledgeBaseDocument,
@@ -101,6 +100,10 @@ export class PluginKnowledgeBaseServer extends Plugin {
       this._aiPlugin = this.pm.get(PluginAIServer) as any;
     }
     return this._aiPlugin;
+  }
+
+  runWithAgentContext<T>(agentUsername: string, fn: () => T): T {
+    return runWithAgentUsername(agentUsername, fn);
   }
 
   // ── Public extension API ────────────────────────────────────────────────────
@@ -198,11 +201,17 @@ export class PluginKnowledgeBaseServer extends Plugin {
     // 5. Middleware: propagate current userId + roles via AsyncLocalStorage
     this.app.resourceManager.use(async (ctx, next) => {
       const userId = ctx.auth?.user?.id ?? ctx.state?.currentUser?.id;
-      if (userId) {
-        const userRoles = getCurrentRoles(ctx);
-        return requestContext.run({ userId, userRoles }, () => next());
-      }
-      await next();
+      const userRoles = getCurrentRoles(ctx);
+      const values = ctx.action?.params?.values;
+      const rawEmployee = values?.aiEmployee ?? values?.aiEmployeeUsername;
+      const agentUsername =
+        typeof rawEmployee === 'string'
+          ? rawEmployee
+          : typeof rawEmployee?.username === 'string'
+            ? rawEmployee.username
+            : undefined;
+
+      return requestContext.run({ userId, userRoles, ctx, agentUsername }, () => next());
     });
 
     // 6. Set ACL permissions
@@ -365,9 +374,6 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.app.resourceManager.define(aiKnowledgeBaseDocuments);
     this.app.resourceManager.define(aiVectorStores);
     this.app.resourceManager.define(aiVectorDatabases);
-
-    // Register addDocument action for workflow integration
-    this.app.resourceManager.registerActionHandler('aiKnowledgeBase:addDocument', addDocumentAction);
 
     // Register admin actions for Agent Session Context
     this.app.resourceManager.define({

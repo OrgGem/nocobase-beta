@@ -43,5 +43,6 @@
   "Vector database created successfully": "Tạo cơ sở dữ liệu vector thành công",
   "Select Knowledge Base": "Chọn cơ sở tri thức",
   "No knowledge bases available": "Không có cơ sở tri thức nào",
-  "LLM Service (Remote API)": "Dịch vụ LLM (API từ xa)"
+  "LLM Service (Remote API)": "Dịch vụ LLM (API từ xa)",
+  "Only administrators can configure External RAG providers that forward LLM credentials.": "Chỉ quản trị viên mới có thể cấu hình nhà cung cấp RAG bên ngoài chuyển tiếp thông tin xác thực LLM."
 }

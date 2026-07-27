@@ -58,7 +58,11 @@ export function toOpenAIResponse(options: {
   model: string;
   content: string;
   finishReason?: string;
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  usage?: {
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    total_tokens?: number | null;
+  };
   toolCalls?: OpenAIToolCall[];
 }) {
   const {
@@ -156,7 +160,7 @@ export function toOpenAIEmbeddingsResponse(options: {
 /**
  * Format a streaming chunk as an SSE data line.
  */
-export function formatSSE(data: any): string {
+export function formatSSE(data: unknown): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
