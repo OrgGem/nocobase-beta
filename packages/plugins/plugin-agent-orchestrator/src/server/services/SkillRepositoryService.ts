@@ -1,5 +1,15 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'fs';
-import { resolve, relative } from 'path';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
+import { dirname, relative, resolve, sep } from 'path';
 import AdmZip from 'adm-zip';
 import { parseSkillMarkdown } from '../skill-hub/utils/json-fields';
 export interface SkillPackageMetadata {
@@ -7,6 +17,11 @@ export interface SkillPackageMetadata {
   metadata: Record<string, any>;
   instructions: string;
   code: string | null;
+}
+
+export interface SkillPackageFile {
+  path: string;
+  content: Buffer;
 }
 
 export class SkillRepositoryService {
@@ -43,6 +58,39 @@ export class SkillRepositoryService {
     return resolve(this.baseDir, skillName);
   }
 
+  readSkillPackageFiles(skillName: string): SkillPackageFile[] | null {
+    const targetDir = this.getSkillPath(skillName);
+    if (!existsSync(targetDir)) {
+      return null;
+    }
+    const files: SkillPackageFile[] = [];
+    const collect = (directory: string) => {
+      for (const item of readdirSync(directory)) {
+        const fullPath = resolve(directory, item);
+        const stat = statSync(fullPath);
+        if (stat.isDirectory()) {
+          collect(fullPath);
+          continue;
+        }
+        if (!stat.isFile()) {
+          continue;
+        }
+        const relativePath = relative(targetDir, fullPath).replace(/\\/g, '/');
+        files.push({ path: relativePath, content: readFileSync(fullPath) });
+      }
+    };
+    collect(targetDir);
+    return files;
+  }
+
+  removeSkillPackage(skillName: string): void {
+    const targetDir = this.getSkillPath(skillName);
+    if (!targetDir.startsWith(`${this.baseDir}${sep}`)) {
+      throw new Error(`Invalid skill package name: ${skillName}`);
+    }
+    rmSync(targetDir, { recursive: true, force: true });
+  }
+
   getSkillCode(skillName: string): string | null {
     const dir = this.getSkillPath(skillName);
     if (!existsSync(dir)) return null;
@@ -53,6 +101,54 @@ export class SkillRepositoryService {
   copySkillPackageTo(skillName: string, destDir: string) {
     const srcDir = this.getSkillPath(skillName);
     this.copyDirectoryTo(srcDir, destDir);
+  }
+
+  writeSkillPackage(skillName: string, files: SkillPackageFile[]): void {
+    const targetDir = this.getSkillPath(skillName);
+    const temporaryDir = `${targetDir}.next-${Date.now()}`;
+    const backupDir = `${targetDir}.previous-${Date.now()}`;
+    const filePaths = new Set<string>();
+
+    rmSync(temporaryDir, { recursive: true, force: true });
+    mkdirSync(temporaryDir, { recursive: true });
+    try {
+      for (const file of files) {
+        const path = file.path.replace(/\\/g, '/');
+        if (
+          !path ||
+          path.includes('\0') ||
+          path.startsWith('/') ||
+          path.split('/').some((part) => !part || part === '.' || part === '..') ||
+          filePaths.has(path)
+        ) {
+          throw new Error(`Invalid skill package path: ${file.path}`);
+        }
+        filePaths.add(path);
+        const outputPath = resolve(temporaryDir, path);
+        if (!outputPath.startsWith(`${temporaryDir}${sep}`)) {
+          throw new Error(`Skill package path is outside its package root: ${file.path}`);
+        }
+        mkdirSync(dirname(outputPath), { recursive: true });
+        writeFileSync(outputPath, file.content);
+      }
+
+      if (existsSync(targetDir)) {
+        rmSync(backupDir, { recursive: true, force: true });
+        renameSync(targetDir, backupDir);
+      }
+      try {
+        renameSync(temporaryDir, targetDir);
+      } catch (error) {
+        if (existsSync(backupDir)) {
+          renameSync(backupDir, targetDir);
+        }
+        throw error;
+      }
+      rmSync(backupDir, { recursive: true, force: true });
+    } catch (error) {
+      rmSync(temporaryDir, { recursive: true, force: true });
+      throw error;
+    }
   }
 
   readSkillPackage(packageDir: string): SkillPackageMetadata {

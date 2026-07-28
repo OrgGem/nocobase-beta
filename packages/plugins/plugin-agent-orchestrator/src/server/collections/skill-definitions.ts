@@ -17,6 +17,14 @@ export default {
       unique: true,
     },
     {
+      // Immutable tool identity used by plugin-ai bindings. Display/internal
+      // names may change without invalidating existing AI employee settings.
+      name: 'toolName',
+      type: 'string',
+      length: 140,
+      unique: true,
+    },
+    {
       name: 'title',
       type: 'string',
       length: 200,
@@ -81,6 +89,14 @@ export default {
       defaultValue: 'CUSTOM',
     },
     {
+      // Provider-owned opt-in. Background consumers such as Skill Registry
+      // must not turn their own server privileges into access to every skill.
+      name: 'registryExportEnabled',
+      type: 'boolean',
+      allowNull: false,
+      defaultValue: false,
+    },
+    {
       name: 'autoCall',
       type: 'boolean',
       defaultValue: false,
@@ -110,6 +126,21 @@ export default {
       target: 'attachments',
       foreignKey: 'fileId',
     },
+    // Registry linkage is nullable so existing local skills remain fully compatible.
+    { name: 'registryPackageId', type: 'bigInt', allowNull: true },
+    { name: 'registryVersionId', type: 'bigInt', allowNull: true },
+    { name: 'registryChannel', type: 'string', length: 20, allowNull: true },
+    { name: 'sourceDigest', type: 'string', length: 71, allowNull: true },
+    { name: 'sourceSignature', type: 'text', allowNull: true },
+    {
+      name: 'registryInstallation',
+      type: 'belongsTo',
+      target: 'skillRegistryInstallations',
+      foreignKey: 'registryInstallationId',
+      onDelete: 'SET NULL',
+    },
+    { name: 'registryInstallStatus', type: 'string', length: 24, allowNull: true },
+    { name: 'registryUpdatePolicy', type: 'string', length: 20, allowNull: true },
     {
       name: 'createdAt',
       type: 'date',

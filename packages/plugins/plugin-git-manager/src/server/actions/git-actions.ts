@@ -26,7 +26,7 @@ export function acquireLock(key: string): { promise: Promise<void>; release: () 
   return { promise, release };
 }
 
-function validateRef(ref: string): string {
+export function validateRef(ref: string): string {
   if (!REF_PATTERN.test(ref)) {
     throw new Error(`Invalid ref: ${ref}`);
   }
@@ -135,6 +135,10 @@ function isMissingGitError(error: any) {
 
 export function createGit(baseDir?: string): SimpleGit {
   return simpleGit({ baseDir, binary: GIT_BINARY } as any);
+}
+
+export function getGitBinaryPath(): string {
+  return GIT_BINARY;
 }
 
 function getGit(ctx: Context, localPath: string): SimpleGit {

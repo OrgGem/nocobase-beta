@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentMemoryContextService } from '../services/AgentMemoryContextService';
 import { NativeSubAgentObserver } from '../services/NativeSubAgentObserver';
+import { getAgentExecutionContext } from '../services/AgentExecutionContext';
 
 function createObserverHarness(
   profileSettings: Record<string, unknown> | null = {},
@@ -8,14 +9,22 @@ function createObserverHarness(
     memoryRows?: unknown[];
     orchestratorConfig?: unknown;
     knowledgeBasePlugin?: unknown;
+    toolCallResult?: unknown;
   } = {},
 ) {
   let nextSpanId = 1;
+  let observedIdentity: string | undefined;
+  let observedSkillSettings: unknown;
   const spanRepo = {
     create: vi.fn(async ({ values }) => ({ id: nextSpanId++, ...values })),
     update: vi.fn(async () => ({})),
   };
+  const skillExecutionRepo = {
+    update: vi.fn(async () => ({})),
+  };
   const originalRun = vi.fn(async (task) => {
+    observedIdentity = getAgentExecutionContext()?.employeeUsername;
+    observedSkillSettings = task.skillSettings;
     task.writer?.({
       action: 'beforeToolCall',
       body: {
@@ -40,7 +49,7 @@ function createObserverHarness(
           name: 'skill_hub_execute',
           messageId: 'msg-1',
         },
-        toolCallResult: {
+        toolCallResult: options.toolCallResult ?? {
           status: 'success',
           content: { ok: true },
         },
@@ -56,6 +65,7 @@ function createObserverHarness(
   const dispatcher = { run: originalRun };
   const repos: Record<string, unknown> = {
     agentExecutionSpans: spanRepo,
+    skillExecutions: skillExecutionRepo,
     agentHarnessProfiles: {
       findOne: vi.fn(async () => (profileSettings ? { settings: profileSettings } : null)),
     },
@@ -101,7 +111,15 @@ function createObserverHarness(
     },
   };
 
-  return { plugin, dispatcher, originalRun, spanRepo, repos };
+  return {
+    plugin,
+    dispatcher,
+    originalRun,
+    spanRepo,
+    skillExecutionRepo,
+    repos,
+    getObserved: () => ({ observedIdentity, observedSkillSettings }),
+  };
 }
 
 function createTask(getRepository?: (name: string) => unknown) {
@@ -123,6 +141,7 @@ function createTask(getRepository?: (name: string) => unknown) {
     },
     sessionId: 'sub-session',
     employee: { username: 'sub-agent' },
+    skillSettings: { tools: [{ name: 'skill_hub_leader_only' }] },
     question: 'do the work',
   };
 }
@@ -141,6 +160,37 @@ describe('NativeSubAgentObserver', () => {
     expect(originalRun).toHaveBeenCalledTimes(1);
     expect(spanRepo.create).toHaveBeenCalled();
     expect(spanRepo.update).toHaveBeenCalled();
+  });
+
+  it('uses the sub-agent employee bindings instead of inheriting the leader tool filter', async () => {
+    const { plugin, dispatcher, getObserved } = createObserverHarness();
+    const observer = new NativeSubAgentObserver(plugin);
+    observer.install();
+
+    await dispatcher.run(createTask());
+
+    expect(getObserved()).toEqual({ observedIdentity: 'sub-agent', observedSkillSettings: undefined });
+  });
+
+  it('links a completed Skill Hub execution to its native tool span', async () => {
+    const { plugin, dispatcher, skillExecutionRepo } = createObserverHarness(
+      {},
+      {
+        toolCallResult: {
+          status: 'success',
+          content: JSON.stringify({ execId: 'execution-41' }),
+        },
+      },
+    );
+    const observer = new NativeSubAgentObserver(plugin);
+    observer.install();
+
+    await dispatcher.run(createTask());
+
+    expect(skillExecutionRepo.update).toHaveBeenCalledWith({
+      filterByTk: 'execution-41',
+      values: { orchestratorSpanId: 2 },
+    });
   });
 
   it('restores the native dispatcher when uninstalled', async () => {

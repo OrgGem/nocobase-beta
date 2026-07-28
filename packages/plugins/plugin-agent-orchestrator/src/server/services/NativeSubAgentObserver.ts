@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { ExecutionSpanService } from './ExecutionSpanService';
 import { AgentMemoryContextService } from './AgentMemoryContextService';
 import { TokenTracker } from './TokenTracker';
+import { runWithAgentExecutionContext } from './AgentExecutionContext';
 import { asObject, currentUserId, toPlain, trimText } from '../utils/ctx-utils';
 
 const WRAP_STATE_KEY = Symbol.for('plugin-agent-orchestrator.nativeSubAgentObserver');
@@ -106,6 +107,20 @@ function chunkCurrentConversation(chunk: Record<string, unknown>) {
   return asObject(chunk.currentConversation);
 }
 
+function readSkillExecutionId(result: Record<string, unknown>): string | number | undefined {
+  const nestedResult = asObject(result.result);
+  const direct = nestedResult.execId || result.execId;
+  if (typeof direct === 'string' || typeof direct === 'number') return direct;
+
+  if (typeof result.content !== 'string') return undefined;
+  try {
+    const content = asObject(JSON.parse(result.content));
+    return typeof content.execId === 'string' || typeof content.execId === 'number' ? content.execId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class NativeSubAgentObserver {
   private readonly spanService: ExecutionSpanService;
   private readonly memoryService: AgentMemoryContextService;
@@ -181,12 +196,14 @@ export class NativeSubAgentObserver {
       aiEmployeeUsername: employeeUsername,
       settings,
     });
-    const observedTask = memory.context
-      ? {
-          ...task,
-          question: `${memory.context}\n\n<agent_task>\n${task.question}\n</agent_task>`,
-        }
-      : task;
+    const observedTask: NativeSubAgentTask = {
+      ...task,
+      // Native dispatch passes the leader conversation's skillSettings to the
+      // sub-agent. Clear that inherited filter so plugin-ai resolves tools from
+      // the sub-agent employee's own bindings instead.
+      skillSettings: undefined,
+      question: memory.context ? `${memory.context}\n\n<agent_task>\n${task.question}\n</agent_task>` : task.question,
+    };
 
     const state: RunState = {
       rootRunId,
@@ -225,7 +242,17 @@ export class NativeSubAgentObserver {
     };
 
     try {
-      const result = await this.runWithKnowledgeBaseAgentContext(employeeUsername, () => originalRun(observedTask));
+      const result = await runWithAgentExecutionContext(
+        {
+          rootRunId,
+          spanId: state.rootSpanId ? String(state.rootSpanId) : undefined,
+          toolCallId,
+          leaderUsername,
+          employeeUsername,
+          sessionId: subSessionId,
+        },
+        () => this.runWithKnowledgeBaseAgentContext(employeeUsername, () => originalRun(observedTask)),
+      );
       await this.flushPending(state);
       await this.spanService.finish(state.rootSpanId, 'success', state.rootStartedAt, {
         output: trimText(result, 20000),
@@ -355,6 +382,7 @@ export class NativeSubAgentObserver {
     };
     state.toolSpans.set(toolCallId, toolSpan);
 
+    const toolName = normalizeString(toolCall.name);
     toolSpan.ready = this.spanService
       .create({
         rootRunId: state.rootRunId,
@@ -363,12 +391,17 @@ export class NativeSubAgentObserver {
         parentSessionId: state.parentSessionId || undefined,
         subSessionId: normalizeString(conversation.sessionId) || state.subSessionId || undefined,
         toolCallId,
-        type: normalizeString(toolCall.name) === 'dispatch-sub-agent-task' ? 'dispatch' : 'tool',
+        type:
+          toolName === 'dispatch-sub-agent-task'
+            ? 'dispatch'
+            : toolName === 'skill_hub_execute' || toolName.startsWith('skill_hub_')
+              ? 'skill'
+              : 'tool',
         status: 'running',
         leaderUsername: state.leaderUsername,
         employeeUsername: normalizeString(conversation.username) || state.employeeUsername,
-        toolName: normalizeString(toolCall.name),
-        title: normalizeString(toolCall.name) || 'tool call',
+        toolName,
+        title: toolName || 'tool call',
         input: asObject(toolCall.args),
         metadata: {
           source: NATIVE_SOURCE,
@@ -396,6 +429,9 @@ export class NativeSubAgentObserver {
     const error = body.error;
     const status = forceError || result.status === 'error' ? 'error' : 'success';
     const output = result.content ?? result.result ?? result;
+    const toolName = normalizeString(toolCall.name);
+    const skillExecutionId =
+      toolName === 'skill_hub_execute' || toolName.startsWith('skill_hub_') ? readSkillExecutionId(result) : undefined;
     const invokeStart = Number(result.invokeStartTime);
     const invokeEnd = Number(result.invokeEndTime);
     const durationMs =
@@ -409,6 +445,7 @@ export class NativeSubAgentObserver {
       durationMs,
       output: forceError ? undefined : trimText(output, 20000),
       error: forceError ? trimText(errorMessage(error), 10000) : undefined,
+      skillExecutionId,
       metadata: {
         source: NATIVE_SOURCE,
         toolCallResultStatus: result.status,
@@ -417,11 +454,28 @@ export class NativeSubAgentObserver {
       },
     });
 
+    if (skillExecutionId && existing.spanId) {
+      await this.linkExecutionToSpan(skillExecutionId, existing.spanId);
+    }
+
     await this.tokenTracker.estimateAndTrack(
       existing.spanId,
       normalizeString(toolCall.name),
       typeof output === 'string' ? output : JSON.stringify(output),
     );
+  }
+
+  private async linkExecutionToSpan(skillExecutionId: string | number, spanId: string | number) {
+    try {
+      const repo = this.plugin.db.getRepository('skillExecutions');
+      if (!repo) return;
+      await repo.update({
+        filterByTk: skillExecutionId,
+        values: { orchestratorSpanId: spanId },
+      });
+    } catch (error) {
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to link skill execution to native span', error);
+    }
   }
 
   private resolveParentSessionId(task: NativeSubAgentTask) {

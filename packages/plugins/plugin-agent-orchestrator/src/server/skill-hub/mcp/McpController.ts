@@ -1,5 +1,6 @@
 import type PluginSkillHubServer from '../plugin';
 import { parseJsonText } from '../utils/json-fields';
+import { buildSkillToolName, getSkillToolName } from '../../utils/skill-tool-name';
 
 export class McpController {
   constructor(private plugin: PluginSkillHubServer) {}
@@ -15,11 +16,7 @@ export class McpController {
 
     const tools = await Promise.all(
       skills.map(async (skill: any) => ({
-        name: skill
-          .get('name')
-          .toLowerCase()
-          .replace(/[^a-z0-9_]/g, '_')
-          .replace(/_+/g, '_'),
+        name: getSkillToolName(skill),
         description:
           typeof this.plugin.getSkillDescriptionForAI === 'function'
             ? await this.plugin.getSkillDescriptionForAI(skill)
@@ -51,21 +48,18 @@ export class McpController {
       filter: { enabled: true },
     });
 
-    const skill = skills.find(
-      (s: any) =>
-        s
-          .get('name')
-          .toLowerCase()
-          .replace(/[^a-z0-9_]/g, '_')
-          .replace(/_+/g, '_') === name,
-    );
+    const skill = skills.find((s: any) => {
+      const stableName = getSkillToolName(s);
+      const legacyMcpName = buildSkillToolName(s.get('name')).replace(/^skill_hub_/, '');
+      return stableName === name || legacyMcpName === name;
+    });
 
     if (!skill) {
       ctx.throw(404, `Tool ${name} not found`);
     }
 
     try {
-      const result = await this.plugin.executeSkill(skill, args || {}, ctx);
+      const result = await this.plugin.executeSkill(skill, args || {}, ctx, { privileged: true });
 
       let textContent = `Executed successfully.`;
       if (result.stdout) textContent += `\nOutput:\n${result.stdout}`;

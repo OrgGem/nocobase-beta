@@ -2,6 +2,7 @@ import { Context } from '@nocobase/actions';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import * as path from 'path';
 import { parseJsonText, stringifyJsonText, parseJsonLike, parseSkillMarkdown } from '../utils/json-fields';
+import { assertSkillToolNameAvailable, buildSkillToolName } from '../../utils/skill-tool-name';
 
 type SkillManifestEntry = Record<string, any> & {
   folder?: string;
@@ -193,6 +194,7 @@ export async function gitSyncSkills(ctx: Context, next: () => Promise<void>) {
 
       const merged: Record<string, any> = {
         name: skillName,
+        toolName: buildSkillToolName(skillName),
         title: frontmatter.title || meta.title || rawName,
         description: frontmatter.description || meta.description || '',
         language: detectedLanguage,
@@ -236,9 +238,11 @@ export async function gitSyncSkills(ctx: Context, next: () => Promise<void>) {
       }
 
       if (existing) {
+        delete merged.toolName;
         await skillRepo.update({ filterByTk: existing.get('id'), values: merged });
         results.push({ folder: key, name: skillName, status: 'updated' });
       } else {
+        await assertSkillToolNameAvailable(ctx.db, merged.toolName);
         await skillRepo.create({ values: merged });
         results.push({ folder: key, name: skillName, status: 'created' });
       }

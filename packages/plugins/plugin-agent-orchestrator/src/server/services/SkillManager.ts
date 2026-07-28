@@ -1,5 +1,6 @@
 import { Database } from '@nocobase/database';
 import { stringifyJsonText } from '../skill-hub/utils/json-fields';
+import { buildSkillToolName } from '../utils/skill-tool-name';
 
 export class SkillManager {
   constructor(private db: Database) {}
@@ -208,6 +209,7 @@ export class SkillManager {
           await repo.create({
             values: {
               ...seed,
+              toolName: buildSkillToolName(seed.name),
               inputSchema: stringifyJsonText(seed.inputSchema),
               packages: stringifyJsonText(seed.packages, []),
             },

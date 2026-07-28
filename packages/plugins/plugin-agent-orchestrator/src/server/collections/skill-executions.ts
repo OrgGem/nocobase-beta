@@ -78,6 +78,25 @@ export default {
       allowNull: true,
     },
     {
+      name: 'aiEmployeeUsername',
+      type: 'string',
+      length: 100,
+      allowNull: true,
+    },
+    {
+      name: 'skillToolName',
+      type: 'string',
+      length: 140,
+      allowNull: true,
+    },
+    {
+      // SHA-256 of the exact rendered source stored in executedCode.
+      name: 'skillDigest',
+      type: 'string',
+      length: 64,
+      allowNull: true,
+    },
+    {
       name: 'orchestratorRootRunId',
       type: 'string',
       length: 100,

@@ -59,6 +59,14 @@ export default defineCollection({
       uiSchema: { title: 'Auto Review', type: 'boolean', 'x-component': 'Checkbox' },
     },
     {
+      type: 'boolean',
+      name: 'registryExportEnabled',
+      allowNull: false,
+      defaultValue: false,
+      interface: 'checkbox',
+      uiSchema: { title: 'Allow Skill Registry export', type: 'boolean', 'x-component': 'Checkbox' },
+    },
+    {
       type: 'belongsTo',
       name: 'autoReviewFlow',
       target: 'gitReviewFlows',

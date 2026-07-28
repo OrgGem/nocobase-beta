@@ -96,6 +96,7 @@ const PYTHON_BUILTINS = [
   'fractions',
   'random',
   'statistics',
+  'runpy',
   'copy',
   'enum',
   'dataclasses',

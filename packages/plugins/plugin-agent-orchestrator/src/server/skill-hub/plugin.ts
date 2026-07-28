@@ -14,8 +14,15 @@ import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fi
 import { getOrchestratorTraceContext } from '../services/ExecutionSpanService';
 import { tryGetAIToolsManager } from '../utils/ai-manager';
 import type { ToolsRuntime } from '@nocobase/ai';
+import { SkillAccessService } from '../services/SkillAccessService';
+import { validateSkillInput } from '../services/InputSchemaValidator';
+import { currentUserId } from '../utils/ctx-utils';
+import { getSkillToolName, normalizeSkillToolScope, readRecordValue } from '../utils/skill-tool-name';
 
 type ToolRuntimeInput = string | ToolsRuntime | undefined;
+type ExecuteSkillOptions = {
+  privileged?: boolean;
+};
 const SKILL_TASK_POLL_INTERVAL_MS = Number.parseInt(process.env.SKILL_HUB_TASK_POLL_INTERVAL_MS || '5000', 10);
 const SKILL_TASK_POLL_LIMIT = Number.parseInt(process.env.SKILL_HUB_TASK_POLL_LIMIT || '3', 10);
 
@@ -113,6 +120,7 @@ export class SkillHubSubFeature {
   private skillTaskPolling = false;
   private mcpController: McpController;
   private skillRepoService: SkillRepositoryService;
+  readonly skillAccessService: SkillAccessService;
   private rateLimiter = new RateLimiter(
     parseInt(process.env.SKILL_HUB_RATE_LIMIT_MAX || '10', 10),
     parseInt(process.env.SKILL_HUB_RATE_LIMIT_WINDOW_MS || '60000', 10),
@@ -129,7 +137,9 @@ export class SkillHubSubFeature {
     });
   };
 
-  constructor(private plugin: any) {}
+  constructor(private plugin: any) {
+    this.skillAccessService = new SkillAccessService(plugin);
+  }
 
   get app() {
     return this.plugin.app;
@@ -139,6 +149,10 @@ export class SkillHubSubFeature {
   }
   get name() {
     return this.plugin.name;
+  }
+
+  getSkillRepositoryService(): SkillRepositoryService {
+    return this.skillRepoService;
   }
 
   async load() {
@@ -432,9 +446,17 @@ export class SkillHubSubFeature {
    * Pushes progress to SSE via runtime.writer (if within AI tool context).
    * Includes rate limiting and graceful abort propagation.
    */
-  async executeSkill(skill: any, inputArgs: Record<string, any>, ctx?: any): Promise<any> {
+  async executeSkill(
+    skill: any,
+    inputArgs: Record<string, unknown>,
+    ctx?: any,
+    options: ExecuteSkillOptions = {},
+  ): Promise<any> {
+    validateSkillInput(readRecordValue(skill, 'inputSchema'), inputArgs);
+    const aiEmployeeUsername = await this.skillAccessService.assertCanExecute(ctx, skill, options);
+
     // ── Rate limiting ──
-    const userId = ctx?.state?.currentUser?.id;
+    const userId = currentUserId(ctx);
     if (userId) {
       if (!this.rateLimiter.check(String(userId))) {
         const remaining = this.rateLimiter.remaining(String(userId));
@@ -451,7 +473,9 @@ export class SkillHubSubFeature {
         skillId: skill.id,
         status: 'pending',
         inputArgs: stringifyJsonText(inputArgs, {}),
-        sessionId: ctx?.state?.sessionId,
+        sessionId: traceContext?.sessionId || ctx?.state?.sessionId || ctx?.action?.params?.values?.sessionId,
+        aiEmployeeUsername,
+        skillToolName: getSkillToolName(skill),
         orchestratorRootRunId: traceContext?.rootRunId,
         orchestratorSpanId: traceContext?.spanId,
         orchestratorParentSpanId: traceContext?.parentSpanId,
@@ -463,6 +487,13 @@ export class SkillHubSubFeature {
     });
 
     const execId = String(execution.id);
+    const linkedSpanId = await this.linkSkillExecutionToSpan(traceContext, execId);
+    if (linkedSpanId && String(linkedSpanId) !== String(traceContext?.spanId || '')) {
+      await (this as any).db.getRepository('skillExecutions').update({
+        filterByTk: execId,
+        values: { orchestratorSpanId: linkedSpanId },
+      });
+    }
 
     (this as any).app.logger.info(
       `[skill-hub] Queued execution ${execId}: skill=${skill.get ? skill.get('name') : skill.name}, ` +
@@ -590,6 +621,45 @@ export class SkillHubSubFeature {
     };
   }
 
+  private async linkSkillExecutionToSpan(traceContext: any, executionId: string) {
+    if (!traceContext?.rootRunId) return undefined;
+    try {
+      const repo = (this as any).db.getRepository('agentExecutionSpans');
+      if (!repo) return undefined;
+
+      let span = null;
+      if (traceContext.toolCallId) {
+        span = await repo.findOne({
+          filter: {
+            rootRunId: traceContext.rootRunId,
+            toolCallId: traceContext.toolCallId,
+          },
+          sort: ['-id'],
+        });
+      }
+      // spanId is normally the Sub-Agent root span. Only use it when there is
+      // no tool-call identity; otherwise a beforeToolCall race could turn the
+      // whole Sub-Agent run into a skill span.
+      if (!traceContext.toolCallId && traceContext.spanId) {
+        span = await repo.findOne({ filterByTk: traceContext.spanId });
+      }
+      if (!span) return undefined;
+
+      const spanId = readRecordValue(span, 'id');
+      await repo.update({
+        filterByTk: spanId,
+        values: {
+          type: 'skill',
+          skillExecutionId: executionId,
+        },
+      });
+      return spanId;
+    } catch (error) {
+      (this as any).app.logger.warn('[skill-hub] Failed to link skill execution to agent span', error);
+      return undefined;
+    }
+  }
+
   private async handleDownload(ctx: any, next: any) {
     const { execId, filename, f } = ctx.action.params;
     let targetFile = filename;
@@ -644,7 +714,7 @@ export class SkillHubSubFeature {
       ctx.throw(404, 'Skill not found');
     }
 
-    const result = await this.executeSkill(skill, input || {}, ctx);
+    const result = await this.executeSkill(skill, input || {}, ctx, { privileged: true });
     ctx.body = result;
     await next();
   }
@@ -803,12 +873,6 @@ export class SkillHubSubFeature {
 
           const tools = await Promise.all(
             skills.map(async (skill: any) => {
-              const sanitizedToolName = skill
-                .get('name')
-                .toLowerCase()
-                .replace(/[^a-z0-9_]/g, '_')
-                .replace(/_+/g, '_')
-                .replace(/^_|_$/g, '');
               const autoCall = !!skill.get('autoCall');
               const loopConfig = loopConfigsBySkillId.get(this.getSkillRecordId(skill));
               const loopInteractionSchema = this.resolveLoopInteractionSchema(loopConfig);
@@ -823,7 +887,7 @@ export class SkillHubSubFeature {
                 ? `${baseDescription}\n\nIMPORTANT: This skill is bound to a Skill Hub human-in-the-loop review template. Pass best-effort args; the user can approve, edit, or reject them before execution.`
                 : baseDescription;
               return {
-                scope: 'CUSTOM' as const,
+                scope: normalizeSkillToolScope(skill.get('toolScope')),
                 execution: 'backend' as const,
                 defaultPermission: (requiresHumanReview ? 'ASK' : autoCall ? 'ALLOW' : 'ASK') as 'ALLOW' | 'ASK',
                 introduction: {
@@ -831,7 +895,7 @@ export class SkillHubSubFeature {
                   about: skill.get('description') || `Thực thi kỹ năng ${skill.get('title')}`,
                 },
                 definition: {
-                  name: `skill_hub_${sanitizedToolName}`,
+                  name: getSkillToolName(skill),
                   description,
                   schema: parseJsonText(skill.get('inputSchema'), { type: 'object', properties: {} }),
                 },

@@ -5,6 +5,8 @@ import { SandboxRunner } from '../../services/SandboxRunner';
 import { FileManager } from '../../services/FileManager';
 import { SkillRepositoryService } from '../../services/SkillRepositoryService';
 import { CodeValidator } from '../../services/CodeValidator';
+import { createHash } from 'crypto';
+import { assertSkillToolNameAvailable, buildSkillToolName } from '../../utils/skill-tool-name';
 import { parseJsonText, stringifyJsonText } from '../utils/json-fields';
 
 /**
@@ -168,7 +170,8 @@ export class SkillExecutionTask {
       }
 
       const code = this.renderTemplate(rawCodeTemplate, inputArgs, execId, skillDir);
-      if (!(await this.updateIfOwned(execId, workerId, { executedCode: code }))) {
+      const skillDigest = createHash('sha256').update(code, 'utf8').digest('hex');
+      if (!(await this.updateIfOwned(execId, workerId, { executedCode: code, skillDigest }))) {
         abortController.abort();
         return;
       }
@@ -253,6 +256,7 @@ export class SkillExecutionTask {
         timeoutSeconds: timeoutSeconds || 60,
         maxOutputSizeMb: maxOutputSizeMb || 50,
         skillDir,
+        inputArgs,
         signal: abortController.signal,
         packageWhitelist,
         onProgress: (progress) => {
@@ -367,6 +371,10 @@ export class SkillExecutionTask {
     // Inject outputDir so code templates can use {{outputDir}}
     code = code.replaceAll('{{outputDir}}', this.fileManager.getOutputDir(execId).replace(/\\/g, '/'));
     code = code.replaceAll('{{skillDir}}', (skillDir || '').replace(/\\/g, '/'));
+    code = code.replaceAll(
+      '{{inputFile}}',
+      resolve(this.fileManager.getExecDir(execId), 'input.json').replace(/\\/g, '/'),
+    );
     return code;
   }
 
@@ -422,6 +430,7 @@ export class SkillExecutionTask {
         timeoutSeconds: Math.min(Number(skill.timeoutSeconds || 60), 30),
         maxOutputSizeMb: Math.min(Number(skill.maxOutputSizeMb || 50), 10),
         skillDir: packageDir,
+        inputArgs: manifest.testInput,
       });
 
       if (!verifyResult.success) {
@@ -448,6 +457,7 @@ export class SkillExecutionTask {
 
     const values: any = {
       name,
+      toolName: buildSkillToolName(name),
       title: skill.title || name,
       description: skill.description || '',
       instructions: skill.instructions || '',
@@ -474,10 +484,12 @@ export class SkillExecutionTask {
       if (manifest.overwrite === false) {
         throw new Error(`Skill "${name}" already exists and overwrite=false.`);
       }
-      await repo.update({ filter: { name }, values });
+      const { toolName: _stableToolName, ...updateValues } = values;
+      await repo.update({ filter: { name }, values: updateValues });
       return `[skill-hub] Updated generated skill "${name}" in Skill Hub.`;
     }
 
+    await assertSkillToolNameAvailable((this as any).app.db, values.toolName);
     await repo.create({ values });
     return `[skill-hub] Installed generated skill "${name}" in Skill Hub.`;
   }

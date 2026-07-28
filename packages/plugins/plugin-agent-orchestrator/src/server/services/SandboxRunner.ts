@@ -39,6 +39,8 @@ export interface ExecuteOptions {
   packageWhitelist?: string[];
   /** Optional installed/copied skill package root exposed to the runtime as SKILL_DIR. */
   skillDir?: string;
+  /** Validated input exposed as a JSON file to avoid source-code interpolation. */
+  inputArgs?: Record<string, unknown>;
 }
 
 export interface ProgressUpdate {
@@ -196,6 +198,7 @@ export class SandboxRunner {
       signal,
       packageWhitelist,
       skillDir,
+      inputArgs,
     } = options;
 
     // 1. Validate code against forbidden patterns
@@ -212,6 +215,8 @@ export class SandboxRunner {
     // 3. Prepare workspace
     const workDir = this.fileManager.createExecDir(execId);
     const outputDir = this.fileManager.getOutputDir(execId);
+    const inputFile = resolve(workDir, 'input.json');
+    writeFileSync(inputFile, JSON.stringify(inputArgs || {}, null, 2), 'utf-8');
 
     const filename = language === 'node' ? 'script.js' : 'script.py';
     const scriptPath = resolve(workDir, filename);
@@ -268,6 +273,7 @@ export class SandboxRunner {
       // Consumed by the sitecustomize.py guard to scope file writes.
       SKILL_HUB_WRITE_ROOTS: [workDir, outputDir, tmpdir()].join(delimiter),
       SKILL_DIR: skillDir || '',
+      SKILL_INPUT_FILE: inputFile,
       // DO NOT pass: DB credentials, API keys, APP_KEY, etc.
     };
 

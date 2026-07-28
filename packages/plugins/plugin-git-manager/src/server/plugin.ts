@@ -1,4 +1,5 @@
 import { Plugin } from '@nocobase/server';
+import type { Database } from '@nocobase/database';
 import { resolve } from 'path';
 import { DataTypes } from 'sequelize';
 import * as gitActions from './actions/git-actions';
@@ -10,12 +11,19 @@ import * as subtreeActions from './actions/subtree';
 import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
+import { RegistryGitContentService } from './services/registry-content-service';
 
 export class PluginGitManagerServer extends Plugin {
   // @ts-ignore
   declare app: any;
   // @ts-ignore
   declare db: any;
+  registryContentService: RegistryGitContentService;
+
+  async afterAdd() {
+    this.registryContentService = new RegistryGitContentService((this as unknown as { db: Database }).db);
+  }
+
   async beforeLoad() {
     await (this as any).app.db.import({
       directory: resolve(__dirname, 'collections'),
@@ -188,10 +196,15 @@ export class PluginGitManagerServer extends Plugin {
     (this as any).app.acl.registerSnippet({
       name: `pm.${(this as any).name}.manage`,
       actions: [
-        `pm.${(this as any).name}.repositories`,
-        `pm.${(this as any).name}.read`,
-        `pm.${(this as any).name}.write`,
-        `pm.${(this as any).name}.subtreeReplace`,
+        // ACL snippet actions are resource:action patterns; nested snippet names
+        // are not expanded by the core snippet manager.
+        'gitRepositories:*',
+        'gitAccounts:*',
+        'gitReviewFlows:*',
+        'gitCodeReviews:*',
+        'gitSubtreeConfigs:*',
+        'gitSubtreeRuns:*',
+        'gitManager:*',
       ],
     });
 

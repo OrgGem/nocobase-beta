@@ -7,12 +7,16 @@ import { registerAgentLoopResource } from './resources/agent-loop';
 import { registerAgentKnowledgeInsightsResource } from './resources/agent-knowledge-insights';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
+import { RegistrySkillSnapshotService } from './skill-hub/services/RegistrySkillSnapshotService';
+import { RegistrySkillInstallationService } from './skill-hub/services/RegistrySkillInstallationService';
 import { AgentLoopService } from './services/AgentLoopService';
 import { createAgentLoopTools } from './tools/agent-loop';
 import { PlanningPromptService } from './services/PlanningPromptService';
 import { asObject, isAdminUser, currentUserId } from './utils/ctx-utils';
 import { getAIToolsManager } from './utils/ai-manager';
 import { AgentRuntimeLifecycle } from './services/AgentRuntimeLifecycle';
+import { validateInputSchemaDefinition } from './services/InputSchemaValidator';
+import { assertSkillToolNameAvailable, buildSkillToolName, getSkillToolName } from './utils/skill-tool-name';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -21,6 +25,34 @@ function normalizeOptionalString(value: unknown) {
 function readModelValue(record: unknown, key: string) {
   const model = record as { get?: (name: string) => unknown; [key: string]: unknown };
   return typeof model?.get === 'function' ? model.get(key) : model?.[key];
+}
+
+const PRIVATE_SKILL_FIELDS = ['codeTemplate', 'instructions', 'storageUrl', 'packages', 'fileId'] as const;
+
+function redactSkillRecord(record: unknown): unknown {
+  if (!record || typeof record !== 'object') return record;
+  const source =
+    (record as { toJSON?: () => Record<string, unknown> }).toJSON?.() || (record as Record<string, unknown>);
+  const result = { ...source };
+  for (const field of PRIVATE_SKILL_FIELDS) {
+    delete result[field];
+  }
+  return result;
+}
+
+function redactSkillResponse(body: unknown): unknown {
+  if (Array.isArray(body)) return body.map(redactSkillRecord);
+  if (!body || typeof body !== 'object') return body;
+
+  const value = body as Record<string, unknown>;
+  if (Array.isArray(value.rows)) return { ...value, rows: value.rows.map(redactSkillRecord) };
+  if (Object.prototype.hasOwnProperty.call(value, 'data')) {
+    return {
+      ...value,
+      data: Array.isArray(value.data) ? value.data.map(redactSkillRecord) : redactSkillRecord(value.data),
+    };
+  }
+  return redactSkillRecord(value);
 }
 
 function buildAgentMemoryContextKey(values: { scope: string; userId?: unknown; aiEmployeeUsername?: string }) {
@@ -128,6 +160,8 @@ async function resolveTracingRetentionDays(plugin: { db: any; app: any }) {
 
 export class PluginAgentOrchestratorServer extends Plugin {
   skillHub: SkillHubSubFeature;
+  registrySkillSnapshotService: RegistrySkillSnapshotService;
+  registrySkillInstallationService: RegistrySkillInstallationService;
   nativeObserver: NativeSubAgentObserver;
   agentRuntimeLifecycle: AgentRuntimeLifecycle;
   private readonly installNativeObserver = () => {
@@ -136,6 +170,10 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
   async afterAdd() {
     this.skillHub = new SkillHubSubFeature(this);
+    this.registrySkillSnapshotService = new RegistrySkillSnapshotService(this.db);
+    this.registrySkillInstallationService = new RegistrySkillInstallationService(this.db, () =>
+      this.skillHub.getSkillRepositoryService(),
+    );
     this.nativeObserver = new NativeSubAgentObserver(this);
     this.agentRuntimeLifecycle = new AgentRuntimeLifecycle((hookType, name, error) => {
       this.app.logger.warn(`[AgentOrchestrator] ${hookType} hook "${name}" failed; continuing agent execution.`, {
@@ -193,7 +231,6 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('skillLoopConfigs', 'get', 'loggedIn');
     this.app.acl.allow('skillExecutions', 'list', 'loggedIn');
     this.app.acl.allow('skillExecutions', 'get', 'loggedIn');
-    this.app.acl.allow('skillHub', 'test', 'loggedIn');
     this.app.acl.allow('skillHub', 'download', 'loggedIn');
     this.app.acl.allow('skillHub', 'listTemplates', 'loggedIn');
     this.app.acl.allow('agentMonitor', ['list', 'get'], 'loggedIn');
@@ -217,6 +254,72 @@ export class PluginAgentOrchestratorServer extends Plugin {
         await next();
       },
       { tag: 'orchestrator-skill-executions-scope', after: 'acl' },
+    );
+
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        const { resourceName, actionName } = ctx.action || {};
+        if (resourceName !== 'skillDefinitions') {
+          await next();
+          return;
+        }
+
+        const values = ctx.action?.params?.values || {};
+        if (actionName === 'create' || actionName === 'update') {
+          try {
+            if (Object.prototype.hasOwnProperty.call(values, 'inputSchema')) {
+              validateInputSchemaDefinition(values.inputSchema);
+            }
+
+            if (actionName === 'create') {
+              const toolName = buildSkillToolName(values.name);
+              await assertSkillToolNameAvailable(ctx.db, toolName);
+              values.toolName = toolName;
+            } else {
+              const existing = await ctx.db.getRepository('skillDefinitions').findOne({
+                filterByTk: ctx.action?.params?.filterByTk,
+              });
+              if (existing) {
+                const stableToolName = getSkillToolName(existing);
+                if (values.toolName && values.toolName !== stableToolName) {
+                  ctx.throw(400, 'toolName is immutable after a skill is created.');
+                  return;
+                }
+                values.toolName = stableToolName;
+              }
+            }
+          } catch (error) {
+            ctx.throw(400, error instanceof Error ? error.message : String(error));
+            return;
+          }
+        }
+
+        if (actionName === 'destroy') {
+          const existing = await ctx.db.getRepository('skillDefinitions').findOne({
+            filterByTk: ctx.action?.params?.filterByTk,
+          });
+          if (existing) {
+            const toolName = getSkillToolName(existing);
+            const agentUsernames = await this.skillHub.skillAccessService.findAgentUsernamesUsingTool(toolName);
+            if (agentUsernames.length > 0) {
+              ctx.throw(
+                409,
+                `Skill tool "${toolName}" is still bound to AI employees: ${agentUsernames.join(
+                  ', ',
+                )}. Disable or unbind it before deletion.`,
+              );
+              return;
+            }
+          }
+        }
+
+        await next();
+
+        if ((actionName === 'list' || actionName === 'get') && !isAdminUser(ctx)) {
+          ctx.body = redactSkillResponse(ctx.body);
+        }
+      },
+      { tag: 'orchestrator-skill-definition-policy', after: 'acl' },
     );
 
     this.app.resourceManager.use(

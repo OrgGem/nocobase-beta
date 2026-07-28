@@ -50,7 +50,7 @@ export function currentUserId(ctx: any) {
  * scoping and file access stay consistent.
  */
 export function isAdminUser(ctx: any): boolean {
-  const roles = ctx?.state?.currentUser?.roles || ctx?.auth?.user?.roles;
+  const roles = ctx?.state?.currentUser?.roles || ctx?.auth?.user?.roles || ctx?.state?.currentRoles;
   if (!Array.isArray(roles)) return false;
   return roles.some((r: any) => {
     const name = typeof r === 'string' ? r : r?.name;

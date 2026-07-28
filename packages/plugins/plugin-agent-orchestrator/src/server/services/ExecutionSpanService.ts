@@ -1,4 +1,5 @@
 import { toPlain } from '../utils/ctx-utils';
+import { getAgentExecutionContext } from './AgentExecutionContext';
 
 export const ORCHESTRATOR_TRACE_CONTEXT_KEY = '__orchestratorTraceContext';
 
@@ -12,6 +13,7 @@ export type OrchestratorTraceContext = {
   toolName?: string;
   agentLoopRunId?: string;
   agentLoopStepId?: string;
+  sessionId?: string;
 };
 
 type SpanValues = {
@@ -96,12 +98,19 @@ export class ExecutionSpanService {
 }
 
 export function getOrchestratorTraceContext(ctx: any): OrchestratorTraceContext | null {
-  return (
+  const requestContext =
     ctx?.[ORCHESTRATOR_TRACE_CONTEXT_KEY] ||
     ctx?.state?.orchestratorTraceContext ||
     ctx?.runtime?.context?.orchestratorTraceContext ||
-    null
-  );
+    null;
+  const agentContext = getAgentExecutionContext();
+  if (!requestContext && !agentContext) return null;
+
+  return {
+    ...(agentContext || {}),
+    ...(requestContext || {}),
+    toolCallId: ctx?.runtime?.toolCallId || requestContext?.toolCallId || agentContext?.toolCallId,
+  };
 }
 
 export function setOrchestratorTraceContext(ctx: any, traceContext: OrchestratorTraceContext) {

@@ -1,5 +1,6 @@
 import { parseJsonText } from '../skill-hub/utils/json-fields';
 import type { ToolsRuntime } from '@nocobase/ai';
+import { getSkillToolName } from '../utils/skill-tool-name';
 
 type ToolRuntimeInput = string | ToolsRuntime | undefined;
 
@@ -68,11 +69,23 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
       if (args.action === 'list') {
         const skills = await plugin.db.getRepository('skillDefinitions').find({
           filter: { enabled: true },
-          fields: ['name', 'title', 'description', 'language', 'inputSchema', 'instructions', 'storageType'],
+          fields: [
+            'name',
+            'toolName',
+            'title',
+            'description',
+            'language',
+            'inputSchema',
+            'instructions',
+            'storageType',
+            'toolScope',
+          ],
         });
 
-        const skillList = skills.map((s: any) => ({
+        const accessibleSkills = await plugin.skillAccessService.filterAccessibleSkills(ctx, skills);
+        const skillList = accessibleSkills.map((s: any) => ({
           name: s.get('name'),
+          toolName: getSkillToolName(s),
           title: s.get('title'),
           description: s.get('description'),
           language: s.get('language'),
@@ -104,6 +117,14 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
           };
         }
 
+        const accessible = await plugin.skillAccessService.filterAccessibleSkills(ctx, [skill]);
+        if (accessible.length === 0) {
+          return {
+            status: 'error',
+            content: `Skill "${args.skillName}" is not available to this AI employee`,
+          };
+        }
+
         const instructions =
           typeof plugin.getSkillInstructions === 'function'
             ? await plugin.getSkillInstructions(skill)
@@ -113,6 +134,7 @@ IMPORTANT: If the skill returns file download URLs, you MUST format them as clic
           status: 'success',
           content: JSON.stringify({
             name: skill.get('name'),
+            toolName: getSkillToolName(skill),
             title: skill.get('title'),
             description: skill.get('description'),
             language: skill.get('language'),
