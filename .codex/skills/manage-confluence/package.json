@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": { "confluence.js": "^3.0.3" }
+}
