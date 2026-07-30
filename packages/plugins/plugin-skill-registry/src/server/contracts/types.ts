@@ -12,7 +12,7 @@ export interface RegistrySkillManifestV1 {
   description: string;
   license?: string;
   runtime: {
-    kind: 'python' | 'node';
+    kind: 'python' | 'node' | 'instruction';
     entrypoint: string;
   };
   inputSchema: JsonValue;

@@ -21,15 +21,28 @@ export const SOURCE_INGESTION_LIMITS = Object.freeze({
   maxPathLength: 500,
 });
 
+function sourceIngestionLimits() {
+  return {
+    ...SOURCE_INGESTION_LIMITS,
+    maxItems: parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS, 1000, 10_000),
+    maxFileBytes: parseArtifactLimit(
+      process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES,
+      10 * 1024 * 1024,
+      256 * 1024 * 1024,
+    ),
+  };
+}
+
 function invalidCandidate(message: string): never {
   throw new RegistryError('INVALID_SOURCE_CANDIDATE', 422, message);
 }
 
 export function validateDiscoveredExternalKeys(value: unknown): string[] {
+  const limits = sourceIngestionLimits();
   if (!Array.isArray(value)) {
     invalidCandidate('Source provider discovery must return an array.');
   }
-  if (value.length > SOURCE_INGESTION_LIMITS.maxItems) {
+  if (value.length > limits.maxItems) {
     throw new RegistryError('SOURCE_ITEM_LIMIT_EXCEEDED', 422, 'Source contains too many skill candidates.');
   }
   const result: string[] = [];
@@ -61,6 +74,7 @@ export function validateProviderCandidate(input: {
   externalKey: string;
   candidate: RegistrySkillCandidateV1;
 }): RegistrySkillCandidateV1 {
+  const limits = sourceIngestionLimits();
   const { provider, source, externalKey, candidate } = input;
   if (!isRecord(candidate) || candidate.contractVersion !== 'registry-candidate/v1') {
     invalidCandidate('Source provider returned an unsupported candidate contract.');
@@ -118,7 +132,7 @@ export function validateProviderCandidate(input: {
     if (path !== file.path || path.length > SOURCE_INGESTION_LIMITS.maxPathLength || paths.has(path)) {
       invalidCandidate('Source provider returned a non-canonical or duplicate candidate file path.');
     }
-    if (file.content.length > SOURCE_INGESTION_LIMITS.maxFileBytes) {
+    if (file.content.length > limits.maxFileBytes) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Source candidate contains an oversized file.');
     }
     expandedBytes += file.content.length;

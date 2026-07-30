@@ -1,6 +1,98 @@
 import { createAdminActions } from '../actions';
 
 describe('skill registry admin contracts', () => {
+  it('accepts publish values from the NocoBase values envelope', async () => {
+    const publish = {
+      publish: vi.fn().mockResolvedValue({ get: (key: string) => ({ id: 'v1', version: '1.0.0' })[key] }),
+    };
+    const actions = createAdminActions({
+      sync: {} as never,
+      publish: publish as never,
+      database: {} as never,
+      installationBridge: {} as never,
+    });
+    const ctx = {
+      action: { params: { values: { sourceItemId: '12', version: '1.0.0', channel: 'stable' } } },
+      auth: { user: { id: '1' } },
+      body: null,
+    };
+
+    await actions.publish(ctx as never, async () => undefined);
+
+    expect(publish.publish).toHaveBeenCalledWith({
+      sourceItemId: '12',
+      version: '1.0.0',
+      channel: 'stable',
+      changelog: undefined,
+      publishedById: '1',
+    });
+  });
+
+  it('accepts publish values from the HTTP request body', async () => {
+    const publish = { publish: vi.fn().mockResolvedValue({ get: () => '1.0.0' }) };
+    const actions = createAdminActions({
+      sync: {} as never,
+      publish: publish as never,
+      database: {} as never,
+      installationBridge: {} as never,
+    });
+    const ctx = {
+      action: { params: {} },
+      request: { body: { sourceItemId: '12', version: '1.0.0', channel: 'stable' } },
+      auth: { user: { id: '1' } },
+      body: null,
+    };
+
+    await actions.publish(ctx as never, async () => undefined);
+
+    expect(publish.publish).toHaveBeenCalled();
+  });
+
+  it('publishes selected candidates independently and reports partial results', async () => {
+    const publish = {
+      publish: vi
+        .fn()
+        .mockResolvedValueOnce({ get: (key: string) => (key === 'version' ? '1.0.0' : 'v1') })
+        .mockRejectedValueOnce(new Error('provider failed')),
+    };
+    const actions = createAdminActions({
+      sync: {} as never,
+      publish: publish as never,
+      database: {} as never,
+      installationBridge: {} as never,
+    });
+    const ctx = {
+      action: { params: { values: { sourceItemIds: ['1', '2'], version: '1.0.0', channel: 'stable' } } },
+      auth: { user: { id: '1' } },
+      body: null,
+    };
+
+    await actions.publishBatch(ctx as never, async () => undefined);
+
+    expect(ctx.body).toMatchObject({ published: 1, failed: 1 });
+  });
+
+  it('accepts numeric source IDs returned by auto-increment collections', async () => {
+    const sync = {
+      discover: vi.fn().mockResolvedValue({ sourceId: '1', candidates: [] }),
+    };
+    const actions = createAdminActions({
+      sync: sync as never,
+      publish: {} as never,
+      database: {} as never,
+      installationBridge: {} as never,
+    });
+    const ctx = {
+      action: { params: { values: { sourceId: 1 } } },
+      body: null,
+      throw: vi.fn(),
+    };
+
+    await actions.discover(ctx as never, async () => undefined);
+
+    expect(sync.discover).toHaveBeenCalledWith(1);
+  });
+
   it('verifies a published artifact through the installation bridge', async () => {
     const bridge = {
       verify: vi.fn().mockResolvedValue({

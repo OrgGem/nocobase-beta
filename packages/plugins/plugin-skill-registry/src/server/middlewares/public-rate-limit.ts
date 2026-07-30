@@ -27,7 +27,11 @@ function bucketFor(action: string): PublicRateLimitBucket | null {
   return null;
 }
 
-export function createPublicRateLimitMiddleware(getLimiter: () => PublicRateLimiter | undefined) {
+export function createPublicRateLimitMiddleware(
+  getLimiter: () => PublicRateLimiter | undefined,
+  isPublicEnabled: () => Promise<boolean> = async () =>
+    process.env.SKILL_REGISTRY_PUBLIC_ENABLED?.toLowerCase() === 'true',
+) {
   return async (ctx: Context, next: () => Promise<void>) => {
     if (ctx.action.resourceName !== 'skillRegistryPublic') {
       await next();
@@ -38,7 +42,7 @@ export function createPublicRateLimitMiddleware(getLimiter: () => PublicRateLimi
       await next();
       return;
     }
-    if (process.env.SKILL_REGISTRY_PUBLIC_ENABLED?.toLowerCase() !== 'true') {
+    if (!(await isPublicEnabled())) {
       throw new RegistryError('PUBLIC_REGISTRY_DISABLED', 503, 'Public registry endpoints are disabled.');
     }
     const limiter = getLimiter();

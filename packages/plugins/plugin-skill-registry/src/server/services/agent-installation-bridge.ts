@@ -125,6 +125,13 @@ export class AgentInstallationBridge {
     if (!entrypointCode) {
       throw new RegistryError('INVALID_MANIFEST', 422, 'Artifact entrypoint is missing.');
     }
+    if (unpacked.manifest.runtime.kind === 'instruction') {
+      throw new RegistryError(
+        'INVALID_MANIFEST',
+        422,
+        'Instruction-only registry skills cannot be installed as executable Agent Orchestrator skills.',
+      );
+    }
     return serviceFor(this.pluginManager).installRegistryVersion({
       registryPackageId: modelId(packageRecord),
       registryVersionId: modelId(version),

@@ -9,15 +9,20 @@ describe('GitManagerSourceProvider', () => {
     const skillMarkdown = Buffer.from('---\nname: report\n---\nBuild a report.\n');
     const code = Buffer.from('print("report")\n');
     const resolveCommit = vi.fn().mockResolvedValueOnce(commitA).mockResolvedValueOnce(commitB);
-    const listTree = vi.fn().mockImplementation(async ({ rootPath }: { rootPath: string }) => {
-      if (rootPath === 'automation/skills') {
-        return [{ type: 'blob', path: 'report/SKILL.md', size: 1 }];
-      }
-      return [
-        { type: 'blob', path: 'SKILL.md', size: skillMarkdown.length },
-        { type: 'blob', path: 'index.py', size: code.length },
-      ];
-    });
+    const listTree = vi
+      .fn()
+      .mockImplementation(async ({ rootPath, recursive }: { rootPath: string; recursive: boolean }) => {
+        if (rootPath === 'automation/skills') {
+          return [{ type: 'tree', path: 'report', size: 0 }];
+        }
+        if (rootPath === 'automation/skills/report' && !recursive) {
+          return [{ type: 'blob', path: 'SKILL.md', size: skillMarkdown.length }];
+        }
+        return [
+          { type: 'blob', path: 'SKILL.md', size: skillMarkdown.length },
+          { type: 'blob', path: 'index.py', size: code.length },
+        ];
+      });
     const readFile = vi.fn().mockImplementation(async ({ filePath }: { filePath: string }) => {
       if (filePath.endsWith('skills.json')) {
         throw Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' });
@@ -48,6 +53,80 @@ describe('GitManagerSourceProvider', () => {
 
     expect(refreshedCandidate.source.revision).toBe(commitB);
     expect(resolveCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it('generates a bounded virtual manifest from direct skill folders when skills.json is absent', async () => {
+    const readFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }));
+    const listTree = vi
+      .fn()
+      .mockImplementation(async ({ rootPath, recursive }: { rootPath: string; recursive: boolean }) => {
+        expect(recursive).toBe(false);
+        if (rootPath === '.kiro/skills') {
+          return [
+            { type: 'tree', path: 'alpha', size: 0 },
+            { type: 'tree', path: 'beta', size: 0 },
+            { type: 'tree', path: 'not-a-skill', size: 0 },
+          ];
+        }
+        if (rootPath === '.kiro/skills/not-a-skill') {
+          return [{ type: 'blob', path: 'README.md', size: 10 }];
+        }
+        return [{ type: 'blob', path: 'SKILL.md', size: 10 }];
+      });
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
+      }),
+    });
+
+    await expect(
+      provider.discover({
+        id: 'source-1',
+        providerType: 'git-manager',
+        namespace: 'orggem',
+        providerConfig: { repositoryId: 1, ref: 'main', rootPath: '.kiro' },
+      }),
+    ).resolves.toEqual(['alpha', 'beta']);
+  });
+
+  it('builds an instruction-only candidate from SKILL.md without scanning unrelated files', async () => {
+    const markdown = Buffer.from(
+      '---\nname: gen-doc-ppt-master\ndescription: Generate documents\n---\nFollow these instructions.\n',
+    );
+    const listTree = vi.fn().mockImplementation(async ({ recursive }: { recursive: boolean }) => {
+      expect(recursive).toBe(false);
+      return [
+        { type: 'blob', path: 'SKILL.md', size: markdown.length },
+        { type: 'tree', path: 'references', size: 0 },
+        { type: 'blob', path: 'large-model.bin', size: ARTIFACT_LIMITS.maxExpandedBytes + 1 },
+      ];
+    });
+    const readFile = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }))
+      .mockResolvedValue(markdown);
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
+      }),
+    });
+
+    const candidate = await provider.getCandidate(
+      {
+        id: 'source-1',
+        providerType: 'git-manager',
+        namespace: 'orggem',
+        providerConfig: { repositoryId: 1, ref: 'main', rootPath: '.kiro' },
+      },
+      'gen-doc-ppt-master',
+    );
+
+    expect(candidate.manifest.runtime).toEqual({ kind: 'instruction', entrypoint: 'SKILL.md' });
+    expect(candidate.files.map((file) => file.path)).toEqual(['SKILL.md']);
+    expect(listTree).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalledTimes(3);
   });
 
   it('does not treat an export denial while reading optional skills.json as a missing file', async () => {

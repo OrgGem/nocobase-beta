@@ -24,6 +24,7 @@ import { PublicRateLimiter } from './services/public-rate-limiter';
 import { RegistryReadinessService } from './services/registry-readiness-service';
 import { SignatureService } from './services/signature-service';
 import { SourceSyncService } from './services/source-sync-service';
+import { RegistrySettingsService, type RegistryRuntimeOverrides } from './services/registry-settings-service';
 import {
   assertChannel,
   assertSemver,
@@ -46,6 +47,7 @@ type ActionContext = Context & {
   state: Record<string, unknown>;
   status: number;
   withoutDataWrapping?: boolean;
+  request?: { body?: unknown };
 };
 
 const DEFAULT_PAGE_LIMIT = 20;
@@ -58,8 +60,18 @@ function params(ctx: Context): Record<string, unknown> {
 }
 
 function values(ctx: Context): Record<string, unknown> {
-  const value = params(ctx).values;
-  return isRecord(value) ? value : params(ctx);
+  const actionParams = params(ctx);
+  const requestBody = (ctx as ActionContext).request?.body;
+  const merged: Record<string, unknown> = {};
+  const mergeNested = (value: unknown, depth: number): void => {
+    if (depth > 5 || !isRecord(value)) return;
+    Object.assign(merged, value);
+    mergeNested(value.values, depth + 1);
+    mergeNested(value.data, depth + 1);
+  };
+  mergeNested(requestBody, 0);
+  mergeNested(actionParams, 0);
+  return merged;
 }
 
 function stringParam(ctx: Context, name: string): string | undefined {
@@ -73,6 +85,14 @@ function boundedStringParam(ctx: Context, name: string, maximum: number): string
     throw new RegistryError('INVALID_REQUEST', 400, `${name} must be at most ${maximum} characters.`);
   }
   return value;
+}
+
+function boundedIdentifierParam(ctx: Context, name: string, maximum: number): string | number | undefined {
+  const value = values(ctx)[name];
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  }
+  return boundedStringParam(ctx, name, maximum);
 }
 
 function publicStringParam(ctx: Context, name: string, maximum: number): string | undefined {
@@ -537,11 +557,50 @@ export function createAdminActions(input: {
   database: RegistryDatabase;
   installationBridge: AgentInstallationBridge;
   lockManager?: RegistryOperationLockManager;
+  settings?: RegistrySettingsService;
 }) {
   return {
+    getSettings: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        if (!input.settings) throw new RegistryError('SETTINGS_UNAVAILABLE', 503, 'Registry settings are unavailable.');
+        (ctx as ActionContext).body = await input.settings.effective();
+      }),
+    updateSettings: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const raw = values(ctx).overrides;
+        if (!isRecord(raw)) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'overrides must be an object.');
+        }
+        const allowed = [
+          'publicEnabled',
+          'maxSourceItems',
+          'maxSourceFileBytes',
+          'downloadConcurrencyPerIp',
+          'downloadConcurrencyGlobal',
+          'downloadResponseTimeoutMs',
+          'stuckRunMinutes',
+          'downloadRetentionDays',
+        ] as const;
+        const overrides: RegistryRuntimeOverrides = {};
+        for (const key of allowed) {
+          const value = raw[key];
+          if (value === undefined) continue;
+          if (key === 'publicEnabled') {
+            if (typeof value !== 'boolean') throw new RegistryError('INVALID_REQUEST', 400, `${key} must be boolean.`);
+            overrides[key] = value;
+          } else {
+            if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+              throw new RegistryError('INVALID_REQUEST', 400, `${key} must be a positive integer.`);
+            }
+            overrides[key] = value;
+          }
+        }
+        if (!input.settings) throw new RegistryError('SETTINGS_UNAVAILABLE', 503, 'Registry settings are unavailable.');
+        (ctx as ActionContext).body = await input.settings.update(overrides);
+      }),
     discover: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const sourceId = boundedStringParam(ctx, 'sourceId', 128);
+        const sourceId = boundedIdentifierParam(ctx, 'sourceId', 128);
         if (!sourceId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'sourceId is required.');
         }
@@ -549,7 +608,7 @@ export function createAdminActions(input: {
       }),
     sync: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const sourceId = boundedStringParam(ctx, 'sourceId', 128);
+        const sourceId = boundedIdentifierParam(ctx, 'sourceId', 128);
         if (!sourceId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'sourceId is required.');
         }
@@ -558,7 +617,7 @@ export function createAdminActions(input: {
       }),
     retry: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const syncRunId = boundedStringParam(ctx, 'syncRunId', 128);
+        const syncRunId = boundedIdentifierParam(ctx, 'syncRunId', 128);
         if (!syncRunId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'syncRunId is required.');
         }
@@ -700,9 +759,55 @@ export function createAdminActions(input: {
         });
         (ctx as ActionContext).body = versionResponse(created);
       }),
+    publishBatch: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const rawIds = values(ctx).sourceItemIds;
+        const rawVersion = boundedStringParam(ctx, 'version', PUBLIC_INPUT_LIMITS.version);
+        if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > 100 || !rawVersion) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'sourceItemIds and version are required.');
+        }
+        const sourceItemIds = rawIds.map((id) => {
+          if ((typeof id !== 'string' && typeof id !== 'number') || !String(id).trim()) {
+            throw new RegistryError('INVALID_REQUEST', 400, 'sourceItemIds must contain valid record IDs.');
+          }
+          return id;
+        });
+        const version = assertSemver(rawVersion);
+        const rawChannel = boundedStringParam(ctx, 'channel', PUBLIC_INPUT_LIMITS.channel);
+        const channel = rawChannel ? assertChannel(rawChannel) : undefined;
+        const results = [];
+        for (const sourceItemId of sourceItemIds) {
+          try {
+            const created = await input.publish.publish({
+              sourceItemId,
+              version,
+              channel,
+              publishedById: currentUserId(ctx),
+            });
+            results.push({
+              sourceItemId: String(sourceItemId),
+              status: 'published',
+              version: getString(created, 'version'),
+            });
+          } catch (error) {
+            const registryError = toRegistryError(error);
+            results.push({
+              sourceItemId: String(sourceItemId),
+              status: 'failed',
+              code: registryError.code,
+              message: registryError.message,
+            });
+          }
+        }
+        (ctx as ActionContext).body = {
+          results,
+          published: results.filter((result) => result.status === 'published').length,
+          failed: results.filter((result) => result.status === 'failed').length,
+        };
+      }),
     yank: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const versionId = boundedStringParam(ctx, 'versionId', 128);
+        const versionId = boundedIdentifierParam(ctx, 'versionId', 128);
         if (!versionId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'versionId is required.');
         }
@@ -711,7 +816,7 @@ export function createAdminActions(input: {
       }),
     verify: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const versionId = boundedStringParam(ctx, 'versionId', 128);
+        const versionId = boundedIdentifierParam(ctx, 'versionId', 128);
         if (!versionId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'versionId is required.');
         }
@@ -719,7 +824,7 @@ export function createAdminActions(input: {
       }),
     install: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const versionId = boundedStringParam(ctx, 'versionId', 128);
+        const versionId = boundedIdentifierParam(ctx, 'versionId', 128);
         if (!versionId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'versionId is required.');
         }

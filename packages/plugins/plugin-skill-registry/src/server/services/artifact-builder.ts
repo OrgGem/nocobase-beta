@@ -80,8 +80,8 @@ function validateManifest(manifest: unknown): asserts manifest is RegistrySkillM
   ) {
     throw new RegistryError('INVALID_MANIFEST', 422, 'Manifest requires displayName and runtime.entrypoint.');
   }
-  if (typeof manifest.runtime.kind !== 'string' || !['python', 'node'].includes(manifest.runtime.kind)) {
-    throw new RegistryError('INVALID_MANIFEST', 422, 'Manifest runtime.kind must be python or node.');
+  if (typeof manifest.runtime.kind !== 'string' || !['python', 'node', 'instruction'].includes(manifest.runtime.kind)) {
+    throw new RegistryError('INVALID_MANIFEST', 422, 'Manifest runtime.kind must be python, node, or instruction.');
   }
 }
 

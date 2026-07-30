@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Button, Card, Form, Input, Modal, Space, Table, type TableColumnsType, Tag, Typography } from 'antd';
+import { Button, Card, Form, Input, Modal, Select, Space, Table, type TableColumnsType, Tag, Typography } from 'antd';
 import { useRequest } from 'ahooks';
 import { useFlowContext } from '@nocobase/flow-engine';
 
 import { useT } from '../locale';
 import { useSkillRegistryPermissions } from '../permissions';
-import { type NocoBaseListBody, type NocoBaseResponse, unwrapRecords } from './api';
+import { unwrapListMeta, unwrapRecords } from './api';
 
 type RegistryPackage = {
   id: string;
@@ -41,22 +41,64 @@ export default function CatalogPage() {
   const ctx = useFlowContext();
   const t = useT();
   const { canPublish } = useSkillRegistryPermissions();
-  const packagesRequest = useRequest(() =>
-    ctx.api.request<NocoBaseListBody<RegistryPackage>>({
-      url: 'skillRegistryPackages:list',
-      method: 'get',
-      params: { appends: ['latestStableVersion'] },
-    }),
+  const [packagePage, setPackagePage] = useState(1);
+  const [candidatePage, setCandidatePage] = useState(1);
+  const [packageSearch, setPackageSearch] = useState('');
+  const [candidateSearch, setCandidateSearch] = useState('');
+  const [candidateStatus, setCandidateStatus] = useState<string>();
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Array<string | number>>([]);
+  const [batchPublishOpen, setBatchPublishOpen] = useState(false);
+  const pageSize = 50;
+  const packagesRequest = useRequest(
+    () =>
+      ctx.api.request({
+        url: 'skillRegistryPackages:list',
+        method: 'get',
+        params: {
+          appends: ['latestStableVersion'],
+          page: packagePage,
+          pageSize,
+          filter: packageSearch
+            ? {
+                $or: [
+                  { namespace: { $includes: packageSearch } },
+                  { slug: { $includes: packageSearch } },
+                  { displayName: { $includes: packageSearch } },
+                ],
+              }
+            : undefined,
+        },
+      }),
+    { refreshDeps: [packagePage, packageSearch] },
   );
-  const candidatesRequest = useRequest(() =>
-    ctx.api.request<NocoBaseListBody<SourceItem>>({
-      url: 'skillRegistrySourceItems:list',
-      method: 'get',
-      params: { sort: ['-updatedAt'], pageSize: 20 },
-    }),
+  const candidatesRequest = useRequest(
+    () =>
+      ctx.api.request({
+        url: 'skillRegistrySourceItems:list',
+        method: 'get',
+        params: {
+          sort: ['-updatedAt'],
+          page: candidatePage,
+          pageSize,
+          filter: {
+            ...(candidateStatus ? { state: candidateStatus } : {}),
+            ...(candidateSearch
+              ? {
+                  $or: [
+                    { displayName: { $includes: candidateSearch } },
+                    { externalKey: { $includes: candidateSearch } },
+                  ],
+                }
+              : {}),
+          },
+        },
+      }),
+    { refreshDeps: [candidatePage, candidateSearch, candidateStatus] },
   );
   const packages = unwrapRecords<RegistryPackage>(packagesRequest.data);
   const candidates = unwrapRecords<SourceItem>(candidatesRequest.data);
+  const packageTotal = unwrapListMeta(packagesRequest.data)?.count ?? packages.length;
+  const candidateTotal = unwrapListMeta(candidatesRequest.data)?.count ?? candidates.length;
   const [publishCandidate, setPublishCandidate] = useState<SourceItem | null>(null);
   const [resolveCandidate, setResolveCandidate] = useState<SourceItem | null>(null);
   const [publishForm] = Form.useForm<PublishValues>();
@@ -114,7 +156,7 @@ export default function CatalogPage() {
     }
     try {
       const values = await publishForm.validateFields();
-      await ctx.api.request<NocoBaseResponse<{ version: string }>>({
+      await ctx.api.request({
         url: 'skillRegistryAdmin:publish',
         method: 'post',
         data: { sourceItemId: publishCandidate.id, version: values.version, channel: values.channel || 'stable' },
@@ -127,13 +169,40 @@ export default function CatalogPage() {
     }
   };
 
+  const publishSelected = async () => {
+    if (!canPublish || selectedCandidateIds.length === 0) return;
+    try {
+      const values = await publishForm.validateFields();
+      const response = await ctx.api.request({
+        url: 'skillRegistryAdmin:publishBatch',
+        method: 'post',
+        data: {
+          sourceItemIds: selectedCandidateIds,
+          version: values.version,
+          channel: values.channel || 'stable',
+        },
+      });
+      const body = response?.data?.data;
+      const published = body && typeof body === 'object' && 'published' in body ? Number(body.published) : 0;
+      const failed = body && typeof body === 'object' && 'failed' in body ? Number(body.failed) : 0;
+      ctx.message.success(
+        t('Batch publish completed: {{published}} published, {{failed}} failed', { published, failed }),
+      );
+      setBatchPublishOpen(false);
+      setSelectedCandidateIds([]);
+      await refresh();
+    } catch {
+      ctx.message.error(t('Action failed'));
+    }
+  };
+
   const resolveConflict = async () => {
     if (!canPublish || !resolveCandidate) {
       return;
     }
     try {
       const values = await resolveForm.validateFields();
-      await ctx.api.request<NocoBaseResponse<{ sourceItemId: string; packageId: string; state: string }>>({
+      await ctx.api.request({
         url: 'skillRegistryAdmin:resolve',
         method: 'post',
         data: { sourceItemId: resolveCandidate.id, namespace: values.namespace, slug: values.slug },
@@ -156,11 +225,20 @@ export default function CatalogPage() {
           </Button>
         }
       >
+        <Input.Search
+          allowClear
+          placeholder={t('Search catalog skills')}
+          style={{ width: 360, marginBottom: 16 }}
+          onSearch={(value) => {
+            setPackagePage(1);
+            setPackageSearch(value.trim());
+          }}
+        />
         <Table
           aria-label={t('Catalog')}
           rowKey="id"
           loading={packagesRequest.loading}
-          pagination={{ pageSize: 20 }}
+          pagination={{ current: packagePage, pageSize, total: packageTotal, onChange: setPackagePage }}
           scroll={{ x: 'max-content' }}
           dataSource={packages}
           locale={{ emptyText: t('No data') }}
@@ -169,11 +247,55 @@ export default function CatalogPage() {
       </Card>
 
       <Card title={t('Candidates')}>
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Input.Search
+            allowClear
+            placeholder={t('Search candidates')}
+            style={{ width: 320 }}
+            onSearch={(value) => {
+              setCandidatePage(1);
+              setCandidateSearch(value.trim());
+            }}
+          />
+          <Select
+            allowClear
+            placeholder={t('Filter by status')}
+            style={{ width: 180 }}
+            value={candidateStatus}
+            onChange={(value) => {
+              setCandidatePage(1);
+              setCandidateStatus(value);
+            }}
+            options={['ready', 'published', 'conflict', 'blocked', 'error'].map((value) => ({ value, label: value }))}
+          />
+          {canPublish ? (
+            <Button
+              type="primary"
+              disabled={selectedCandidateIds.length === 0}
+              onClick={() => {
+                publishForm.setFieldsValue({ version: '', channel: 'stable' });
+                setBatchPublishOpen(true);
+              }}
+            >
+              {t('Publish selected ({{count}})', { count: selectedCandidateIds.length })}
+            </Button>
+          ) : null}
+        </Space>
         <Table
           aria-label={t('Candidates')}
           rowKey="id"
           loading={candidatesRequest.loading}
-          pagination={{ pageSize: 20 }}
+          pagination={{ current: candidatePage, pageSize, total: candidateTotal, onChange: setCandidatePage }}
+          rowSelection={
+            canPublish
+              ? {
+                  selectedRowKeys: selectedCandidateIds,
+                  onChange: (keys) => setSelectedCandidateIds(keys),
+                  getCheckboxProps: (record) => ({ disabled: !['ready', 'published'].includes(record.state) }),
+                  preserveSelectedRowKeys: true,
+                }
+              : undefined
+          }
           scroll={{ x: 'max-content' }}
           dataSource={candidates}
           locale={{ emptyText: t('No data') }}
@@ -188,6 +310,23 @@ export default function CatalogPage() {
             onCancel={() => setPublishCandidate(null)}
             onOk={publish}
             okText={t('Publish')}
+            cancelText={t('Cancel')}
+          >
+            <Form form={publishForm} layout="vertical" initialValues={{ version: '', channel: 'stable' }}>
+              <Form.Item name="version" label={t('Version')} rules={[{ required: true }]}>
+                <Input placeholder="1.0.0" autoFocus />
+              </Form.Item>
+              <Form.Item name="channel" label={t('Channel')} rules={[{ required: true }]}>
+                <Input placeholder="stable" />
+              </Form.Item>
+            </Form>
+          </Modal>
+          <Modal
+            title={t('Publish selected skills')}
+            open={batchPublishOpen}
+            onCancel={() => setBatchPublishOpen(false)}
+            onOk={publishSelected}
+            okText={t('Publish selected')}
             cancelText={t('Cancel')}
           >
             <Form form={publishForm} layout="vertical" initialValues={{ version: '', channel: 'stable' }}>

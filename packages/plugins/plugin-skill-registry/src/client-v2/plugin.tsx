@@ -43,6 +43,14 @@ export class PluginSkillRegistryClientV2 extends Plugin<Record<string, never>, A
       componentLoader: () => import('./pages/VersionsPage'),
       aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
     });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'skill-registry',
+      key: 'settings',
+      title: this.t('Settings'),
+      componentLoader: () => import('./pages/SettingsPage'),
+      aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
+    });
   }
 }
 

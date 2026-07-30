@@ -1,5 +1,18 @@
-import React, { useState } from 'react';
-import { Button, Card, Form, Input, InputNumber, Modal, Select, Space, Table, type TableColumnsType, Tag } from 'antd';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Select,
+  Space,
+  Switch,
+  Table,
+  type TableColumnsType,
+  Tag,
+} from 'antd';
 import { useRequest } from 'ahooks';
 import { useFlowContext } from '@nocobase/flow-engine';
 
@@ -16,7 +29,9 @@ type RegistrySource = {
   enabled: boolean;
   syncPolicy: 'manual' | 'interval';
   syncIntervalMinutes?: number;
+  enabled: boolean;
   updatedAt?: string;
+  providerConfig?: Record<string, unknown>;
 };
 
 interface SourceFormValues {
@@ -33,12 +48,41 @@ export default function SourcesPage() {
   const t = useT();
   const { canSync, canManage } = useSkillRegistryPermissions();
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<RegistrySource | null>(null);
+  const [activeOperations, setActiveOperations] = useState<Record<string, 'discover' | 'sync'>>({});
   const [form] = Form.useForm<SourceFormValues>();
   const syncPolicy = Form.useWatch('syncPolicy', form);
   const request = useRequest(() =>
     ctx.api.request<NocoBaseListBody<RegistrySource>>({ url: 'skillRegistrySources:list', method: 'get' }),
   );
   const sources = unwrapRecords<RegistrySource>(request.data);
+  const refreshRunningOperations = useCallback(async () => {
+    const response = await ctx.api.request<NocoBaseListBody<{ sourceId: string }>>({
+      url: 'skillRegistrySyncRuns:list',
+      method: 'get',
+      params: { filter: { status: 'running' }, pageSize: 100 },
+    });
+    const running = unwrapRecords<{ sourceId: string }>(response);
+    setActiveOperations(Object.fromEntries(running.map((run) => [String(run.sourceId), 'sync' as const])));
+  }, [ctx.api]);
+
+  useEffect(() => {
+    refreshRunningOperations().catch(() => undefined);
+  }, [refreshRunningOperations]);
+
+  useEffect(() => {
+    if (!Object.keys(activeOperations).length) {
+      return undefined;
+    }
+    const timer = window.setInterval(async () => {
+      try {
+        await Promise.all([request.refreshAsync(), refreshRunningOperations()]);
+      } catch {
+        // Keep controls disabled until a later poll can confirm completion.
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [activeOperations, refreshRunningOperations, request]);
   const columns: TableColumnsType<RegistrySource> = [
     { title: t('Name'), key: 'name', render: (_, record) => record.name },
     { title: t('Provider'), key: 'providerType', render: (_, record) => record.providerType },
@@ -52,16 +96,36 @@ export default function SourcesPage() {
     { title: t('Updated'), key: 'updatedAt', render: (_, record) => record.updatedAt || '\u2014' },
   ];
 
+  if (canManage) {
+    columns.push({
+      title: t('Edit'),
+      key: 'edit',
+      render: (_, record) => (
+        <Button onClick={() => openEdit(record)} disabled={Boolean(activeOperations[record.id])}>
+          {t('Edit')}
+        </Button>
+      ),
+    });
+  }
+
   if (canSync) {
     columns.push({
       title: t('Run'),
       key: 'run',
       render: (_, record) => (
         <Space>
-          <Button onClick={() => discoverSource(record.id)} disabled={!record.enabled}>
+          <Button
+            onClick={() => discoverSource(record.id)}
+            disabled={!record.enabled || Boolean(activeOperations[record.id])}
+            loading={activeOperations[record.id] === 'discover'}
+          >
             {t('Discover')}
           </Button>
-          <Button onClick={() => syncSource(record.id)} disabled={!record.enabled}>
+          <Button
+            onClick={() => syncSource(record.id)}
+            disabled={!record.enabled || Boolean(activeOperations[record.id])}
+            loading={activeOperations[record.id] === 'sync'}
+          >
             {t('Sync')}
           </Button>
         </Space>
@@ -73,6 +137,7 @@ export default function SourcesPage() {
     if (!canSync) {
       return;
     }
+    setActiveOperations((current) => ({ ...current, [sourceId]: 'sync' }));
     try {
       await ctx.api.request<NocoBaseResponse<{ runId: string; status: string }>>({
         url: 'skillRegistryAdmin:sync',
@@ -83,6 +148,11 @@ export default function SourcesPage() {
       await request.refreshAsync();
     } catch {
       ctx.message.error(t('Action failed'));
+      setActiveOperations((current) => {
+        const next = { ...current };
+        delete next[sourceId];
+        return next;
+      });
     }
   };
 
@@ -90,6 +160,7 @@ export default function SourcesPage() {
     if (!canSync) {
       return;
     }
+    setActiveOperations((current) => ({ ...current, [sourceId]: 'discover' }));
     try {
       const response = await ctx.api.request<NocoBaseResponse<NocoBaseResponse<{ candidates?: unknown[] }>>>({
         url: 'skillRegistryAdmin:discover',
@@ -103,31 +174,54 @@ export default function SourcesPage() {
       ctx.message.success(t('Discovery completed ({{count}} candidates)', { count }));
     } catch {
       ctx.message.error(t('Action failed'));
+    } finally {
+      setActiveOperations((current) => {
+        const next = { ...current };
+        delete next[sourceId];
+        return next;
+      });
     }
   };
 
-  const createSource = async () => {
+  const openEdit = (source: RegistrySource) => {
+    setEditing(source);
+    form.setFieldsValue({
+      name: source.name,
+      providerType: source.providerType,
+      namespace: source.namespace,
+      providerConfigText: JSON.stringify(source.providerConfig || {}, null, 2),
+      syncPolicy: source.syncPolicy,
+      syncIntervalMinutes: source.syncIntervalMinutes,
+      enabled: source.enabled,
+    });
+    setOpen(true);
+  };
+
+  const saveSource = async () => {
     if (!canManage) {
       return;
     }
     try {
       const values = await form.validateFields();
       const providerConfig = JSON.parse(values.providerConfigText || '{}') as Record<string, unknown>;
+      const sourceValues = {
+        name: values.name,
+        providerType: values.providerType,
+        namespace: values.namespace,
+        providerConfig,
+        enabled: editing ? values.enabled : true,
+        syncPolicy: values.syncPolicy,
+        ...(values.syncPolicy === 'interval' ? { syncIntervalMinutes: values.syncIntervalMinutes } : {}),
+      };
       await ctx.api.request<NocoBaseResponse<Record<string, never>>>({
-        url: 'skillRegistrySources:create',
+        url: editing ? 'skillRegistrySources:update' : 'skillRegistrySources:create',
         method: 'post',
-        data: {
-          name: values.name,
-          providerType: values.providerType,
-          namespace: values.namespace,
-          providerConfig,
-          enabled: true,
-          syncPolicy: values.syncPolicy,
-          ...(values.syncPolicy === 'interval' ? { syncIntervalMinutes: values.syncIntervalMinutes } : {}),
-        },
+        params: editing ? { filterByTk: editing.id } : undefined,
+        data: sourceValues,
       });
-      ctx.message.success(t('Source created'));
+      ctx.message.success(t(editing ? 'Source updated' : 'Source created'));
       setOpen(false);
+      setEditing(null);
       form.resetFields();
       await request.refreshAsync();
     } catch {
@@ -144,7 +238,14 @@ export default function SourcesPage() {
             {t('Refresh')}
           </Button>
           {canManage ? (
-            <Button type="primary" onClick={() => setOpen(true)}>
+            <Button
+              type="primary"
+              onClick={() => {
+                setEditing(null);
+                form.resetFields();
+                setOpen(true);
+              }}
+            >
               {t('Create source')}
             </Button>
           ) : null}
@@ -163,10 +264,13 @@ export default function SourcesPage() {
       />
       {canManage ? (
         <Modal
-          title={t('Create source')}
+          title={t(editing ? 'Edit source' : 'Create source')}
           open={open}
-          onCancel={() => setOpen(false)}
-          onOk={createSource}
+          onCancel={() => {
+            setOpen(false);
+            setEditing(null);
+          }}
+          onOk={saveSource}
           okText={t('Save')}
           cancelText={t('Cancel')}
         >
@@ -180,6 +284,7 @@ export default function SourcesPage() {
               ['providerConfigText']: '{}',
               ['syncPolicy']: 'manual',
               ['syncIntervalMinutes']: undefined,
+              ['enabled']: true,
             }}
           >
             <Form.Item name="name" label={t('Name')} rules={[{ required: true }]}>
@@ -187,11 +292,15 @@ export default function SourcesPage() {
             </Form.Item>
             <Form.Item name="providerType" label={t('Provider')} rules={[{ required: true }]}>
               <Select
+                disabled={Boolean(editing)}
                 options={[
                   { value: 'skill-hub', label: t('Skill Hub') },
                   { value: 'git-manager', label: t('Git Manager') },
                 ]}
               />
+            </Form.Item>
+            <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
+              <Switch />
             </Form.Item>
             <Form.Item name="namespace" label={t('Namespace')} rules={[{ required: true }]}>
               <Input placeholder="acme" />

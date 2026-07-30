@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react';
 import { useAclSnippets } from '@nocobase/client-v2';
 
 /**
@@ -9,16 +10,26 @@ import { useAclSnippets } from '@nocobase/client-v2';
  * does not grant read/list actions to a sync-only role.
  */
 export const SKILL_REGISTRY_SNIPPETS = {
-  read: 'pm.plugin-skill-registry.read',
-  sync: 'pm.plugin-skill-registry.sync',
-  publish: 'pm.plugin-skill-registry.publish',
-  install: 'pm.plugin-skill-registry.install',
-  manage: 'pm.plugin-skill-registry.manage',
+  read: 'pm.skill-registry.read',
+  sync: 'pm.skill-registry.sync',
+  publish: 'pm.skill-registry.publish',
+  install: 'pm.skill-registry.install',
+  manage: 'pm.skill-registry.manage',
 } as const;
 
 export type SkillRegistryCapability = keyof typeof SKILL_REGISTRY_SNIPPETS;
 
 export type AclSnippetAllow = (snippet?: string) => boolean;
+
+export interface SkillRegistryPermissions {
+  canRead: boolean;
+  canSync: boolean;
+  canPublish: boolean;
+  canInstall: boolean;
+  canManage: boolean;
+}
+
+export const SkillRegistryPermissionOverrideContext = createContext<SkillRegistryPermissions | null>(null);
 
 /**
  * Resolve one registry capability from the current role's ACL snippets.
@@ -27,15 +38,15 @@ export type AclSnippetAllow = (snippet?: string) => boolean;
  */
 export function canUseSkillRegistryCapability(allow: AclSnippetAllow, capability: SkillRegistryCapability): boolean {
   if (capability === 'manage') {
-    return allow(SKILL_REGISTRY_SNIPPETS.manage);
+    return allow(SKILL_REGISTRY_SNIPPETS.manage) || allow('pm.*') || allow('pm');
   }
 
-  return allow(SKILL_REGISTRY_SNIPPETS[capability]) || allow(SKILL_REGISTRY_SNIPPETS.manage);
+  return (
+    allow(SKILL_REGISTRY_SNIPPETS[capability]) || allow(SKILL_REGISTRY_SNIPPETS.manage) || allow('pm.*') || allow('pm')
+  );
 }
 
-export function useSkillRegistryPermissions() {
-  const { allow } = useAclSnippets();
-
+export function resolveSkillRegistryPermissions(allow: AclSnippetAllow): SkillRegistryPermissions {
   return {
     canRead: canUseSkillRegistryCapability(allow, 'read'),
     canSync: canUseSkillRegistryCapability(allow, 'sync'),
@@ -43,4 +54,11 @@ export function useSkillRegistryPermissions() {
     canInstall: canUseSkillRegistryCapability(allow, 'install'),
     canManage: canUseSkillRegistryCapability(allow, 'manage'),
   };
+}
+
+export function useSkillRegistryPermissions(): SkillRegistryPermissions {
+  const { allow } = useAclSnippets();
+  const override = useContext(SkillRegistryPermissionOverrideContext);
+
+  return override ?? resolveSkillRegistryPermissions(allow);
 }

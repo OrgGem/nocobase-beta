@@ -17,6 +17,7 @@ import { FilesystemArtifactStore } from './services/filesystem-artifact-store';
 import { PublishService } from './services/publish-service';
 import { PublicRateLimiter } from './services/public-rate-limiter';
 import { RegistryMaintenanceService } from './services/registry-maintenance-service';
+import { RegistrySettingsService } from './services/registry-settings-service';
 import { distributedTopologyReady, RegistryReadinessService } from './services/registry-readiness-service';
 import type { RegistryDatabase } from './services/repository-types';
 import { SignatureService } from './services/signature-service';
@@ -32,6 +33,7 @@ const managementResourceNames = new Set([
   'skillRegistrySyncRuns',
   'skillRegistryArtifacts',
   'skillRegistryDownloads',
+  'skillRegistrySettings',
 ]);
 
 export class PluginSkillRegistryServer extends Plugin {
@@ -55,6 +57,7 @@ export class PluginSkillRegistryServer extends Plugin {
     this.artifactStore,
     this.app.lockManager,
   );
+  private readonly registrySettingsService = new RegistrySettingsService(this.database);
   private readonly readinessService = new RegistryReadinessService(
     this.database,
     this.artifactStore,
@@ -142,6 +145,7 @@ export class PluginSkillRegistryServer extends Plugin {
         publish: this.publishService,
         installationBridge: this.installationBridge,
         lockManager: this.app.lockManager,
+        settings: this.registrySettingsService,
       }),
     });
     this.app.resourceManager.define({
@@ -162,12 +166,14 @@ export class PluginSkillRegistryServer extends Plugin {
       'skillRegistrySyncRuns:list',
       'skillRegistrySyncRuns:get',
       'skillRegistryHealth:readiness',
+      'skillRegistryAdmin:getSettings',
     ];
     const syncActions = ['skillRegistryAdmin:discover', 'skillRegistryAdmin:sync', 'skillRegistryAdmin:retry'];
     // ADR-0002 §13: identity mapping (resolve) belongs to the publish permission, not sync.
     const publishActions = [
       'skillRegistryAdmin:resolve',
       'skillRegistryAdmin:publish',
+      'skillRegistryAdmin:publishBatch',
       'skillRegistryAdmin:yank',
       'skillRegistryAdmin:verify',
     ];
@@ -188,12 +194,23 @@ export class PluginSkillRegistryServer extends Plugin {
           'skillRegistrySources:create',
           'skillRegistrySources:update',
           'skillRegistrySources:destroy',
+          'skillRegistryAdmin:updateSettings',
         ]),
       ],
     });
 
     this.app.resourceManager.use(createRequestMethodPolicy());
-    this.app.resourceManager.use(createPublicRateLimitMiddleware(() => this.publicRateLimiter));
+    this.app.resourceManager.use(async (ctx, next) => {
+      if (ctx.action.resourceName.startsWith('skillRegistry'))
+        await this.registrySettingsService.applyRuntimeOverrides();
+      await next();
+    });
+    this.app.resourceManager.use(
+      createPublicRateLimitMiddleware(
+        () => this.publicRateLimiter,
+        () => this.registrySettingsService.publicEnabled(),
+      ),
+    );
     this.app.resourceManager.use(async (ctx, next) => {
       const resourceName = resolveRegistryResourceName(ctx) || ctx.action.resourceName;
       const { actionName } = ctx.action;

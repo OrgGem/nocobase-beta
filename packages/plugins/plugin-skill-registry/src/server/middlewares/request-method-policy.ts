@@ -22,6 +22,7 @@ const ADMIN_ACTIONS = new Set([
   'retry',
   'resolve',
   'publish',
+  'publishBatch',
   'yank',
   'verify',
   'install',

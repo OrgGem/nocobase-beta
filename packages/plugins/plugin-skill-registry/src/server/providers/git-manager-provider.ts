@@ -167,6 +167,45 @@ function isMissingOptionalGitFile(error: unknown): boolean {
   return isRecord(error) && error.code === 'REGISTRY_GIT_FILE_NOT_FOUND';
 }
 
+async function generateVirtualSkillsManifest(input: {
+  service: GitManagerContentService;
+  config: GitSourceConfig;
+  commitSha: string;
+}): Promise<string[]> {
+  const skillsRoot = joinPath(input.config.rootPath, 'skills');
+  const rootEntries = await requireGitExport(
+    input.service.listTree({
+      repositoryId: input.config.repositoryId,
+      commitSha: input.commitSha,
+      rootPath: skillsRoot,
+      recursive: false,
+    }),
+  );
+  const skillFolders = rootEntries.filter((entry) => entry.type === 'tree').map((entry) => entry.path);
+  validateDiscoveredExternalKeys(skillFolders);
+
+  const discovered: string[] = [];
+  const batchSize = 16;
+  for (let offset = 0; offset < skillFolders.length; offset += batchSize) {
+    const batch = skillFolders.slice(offset, offset + batchSize);
+    const results = await Promise.all(
+      batch.map(async (folder) => {
+        const entries = await requireGitExport(
+          input.service.listTree({
+            repositoryId: input.config.repositoryId,
+            commitSha: input.commitSha,
+            rootPath: joinPath(skillsRoot, folder),
+            recursive: false,
+          }),
+        );
+        return entries.some((entry) => entry.type === 'blob' && entry.path === 'SKILL.md') ? folder : null;
+      }),
+    );
+    discovered.push(...results.filter((folder): folder is string => folder !== null));
+  }
+  return validateDiscoveredExternalKeys(discovered);
+}
+
 export class GitManagerSourceProvider implements RegistrySourceProvider {
   readonly type = 'git-manager' as const;
   private readonly pinnedCommits = new Map<string, string>();
@@ -202,19 +241,7 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
       }
       // Fall through to SKILL.md discovery when the optional skills.json is absent.
     }
-    const entries = await requireGitExport(
-      service.listTree({
-        repositoryId: config.repositoryId,
-        commitSha,
-        rootPath: joinPath(config.rootPath, 'skills'),
-        recursive: true,
-      }),
-    );
-    return validateDiscoveredExternalKeys(
-      entries
-        .filter((entry) => entry.type === 'blob' && entry.path.endsWith('/SKILL.md'))
-        .map((entry) => entry.path.slice(0, -'/SKILL.md'.length)),
-    );
+    return generateVirtualSkillsManifest({ service, config, commitSha });
   }
 
   async getCandidate(source: RegistrySourceDescriptor, externalKey: string): Promise<RegistrySkillCandidateV1> {
@@ -256,14 +283,43 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
 
     const folder = typeof entry?.folder === 'string' ? entry.folder : externalKey;
     const skillRoot = joinPath(config.rootPath, 'skills', folder);
-    const entries = await requireGitExport(
-      service.listTree({
+    const declaredCodeFile = (typeof entry?.codeFile === 'string' && entry.codeFile) || undefined;
+    const skillMarkdownPath = joinPath(skillRoot, 'SKILL.md');
+    const skillMarkdownSize = (
+      await requireGitExport(
+        service.listTree({
+          repositoryId: config.repositoryId,
+          commitSha,
+          rootPath: skillRoot,
+          recursive: false,
+        }),
+      )
+    ).find((item) => item.type === 'blob' && item.path === 'SKILL.md')?.size;
+    if (skillMarkdownSize === undefined) {
+      throw new RegistryError('INVALID_MANIFEST', 422, `Git source item ${externalKey} has no SKILL.md.`);
+    }
+    if (
+      !Number.isSafeInteger(skillMarkdownSize) ||
+      skillMarkdownSize < 0 ||
+      skillMarkdownSize > SOURCE_INGESTION_LIMITS.maxFileBytes
+    ) {
+      throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Git source item contains an oversized SKILL.md.');
+    }
+    const frontmatterMarkdown = await requireGitExport(
+      service.readFile({
         repositoryId: config.repositoryId,
         commitSha,
-        rootPath: skillRoot,
-        recursive: true,
+        filePath: skillMarkdownPath,
+        maxBytes: Math.max(1, skillMarkdownSize),
       }),
     );
+    const frontmatter = parseFrontmatter(frontmatterMarkdown.toString('utf8'));
+    const codeFile = declaredCodeFile || (typeof frontmatter.codeFile === 'string' ? frontmatter.codeFile : undefined);
+    const entries = codeFile
+      ? await requireGitExport(
+          service.listTree({ repositoryId: config.repositoryId, commitSha, rootPath: skillRoot, recursive: true }),
+        )
+      : [{ type: 'blob' as const, path: 'SKILL.md', size: skillMarkdownSize }];
     const fileEntries = entries.filter((item) => item.type === 'blob');
     if (fileEntries.length === 0) {
       throw new RegistryError('INVALID_MANIFEST', 422, `Git source item ${externalKey} has no files.`);
@@ -309,19 +365,12 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
       });
     }
     const skillMarkdown = files.find((file) => file.path === 'SKILL.md')?.content.toString('utf8') || '';
-    const frontmatter = parseFrontmatter(skillMarkdown);
-    const codeFile =
-      (typeof entry?.codeFile === 'string' && entry.codeFile) ||
-      (typeof frontmatter.codeFile === 'string' && frontmatter.codeFile) ||
-      files.find((file) => ['index.py', 'index.js', 'main.py'].includes(file.path))?.path;
-    if (!codeFile) {
-      throw new RegistryError('NON_PORTABLE_SKILL', 422, `Git source item ${externalKey} has no supported entrypoint.`);
-    }
-    const language =
-      (typeof frontmatter.language === 'string' && frontmatter.language) ||
-      (typeof entry?.language === 'string' && entry.language) ||
-      (codeFile.endsWith('.js') ? 'node' : 'python');
-    if (language !== 'python' && language !== 'node') {
+    const language = codeFile
+      ? (typeof frontmatter.language === 'string' && frontmatter.language) ||
+        (typeof entry?.language === 'string' && entry.language) ||
+        (codeFile.endsWith('.js') ? 'node' : 'python')
+      : 'instruction';
+    if (language !== 'python' && language !== 'node' && language !== 'instruction') {
       throw new RegistryError('INVALID_MANIFEST', 422, `Unsupported runtime language ${language}.`);
     }
     const rawName =
@@ -349,7 +398,7 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
         (typeof frontmatter.description === 'string' && frontmatter.description) ||
         (typeof entry?.description === 'string' && entry.description) ||
         '',
-      runtime: { kind: language, entrypoint: normalizeRelativePath(codeFile) },
+      runtime: { kind: language, entrypoint: codeFile ? normalizeRelativePath(codeFile) : 'SKILL.md' },
       inputSchema: asJsonValue(inputSchema, { type: 'object', properties: {} }),
       outputSchema: { type: 'object' },
       permissions: { network: 'deny', filesystem: ['workdir:read', 'output:write'] },
