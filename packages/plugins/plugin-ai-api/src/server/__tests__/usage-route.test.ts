@@ -79,6 +79,10 @@ describe('AI API chat usage collection', () => {
       source: 'unavailable',
       gatewayResponseId: expect.stringMatching(/^chatcmpl-/),
     });
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'test-service', provider: 'test-provider', model: 'test-model' },
+      providerAttempted: true,
+    });
   });
 
   it('stores provider usage and provider request ID separately from the gateway response ID', async () => {

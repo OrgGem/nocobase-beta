@@ -10,8 +10,10 @@
 import { Plugin } from '@nocobase/server';
 import { createAiLlmRouter } from './routes/router';
 import aiApiConfigResource from './resource/ai-api-config';
+import aiApiUsageMonitorResource from './resource/ai-api-usage-monitor';
 import { RateLimiter } from './utils/rate-limiter';
 import { invalidateRolePermissionCache } from './middleware/role-permission';
+import { validateModelPrice, validateQuotaPolicy } from './validation';
 
 // Ensure dayjs timezone + utc plugins are loaded.
 // Some Docker builds ship an older @nocobase/utils whose dayjs.js does not
@@ -37,7 +39,14 @@ export class PluginAiApiServer extends Plugin {
 
   async afterAdd() {}
 
-  async beforeLoad() {}
+  async beforeLoad() {
+    this.app.db.on('aiApiModelPrices.beforeSave', async (model) => {
+      await validateModelPrice(this.db, model);
+    });
+    this.app.db.on('aiApiUserQuotaPolicies.beforeSave', (model) => {
+      validateQuotaPolicy(model);
+    });
+  }
 
   async load() {
     // 1. Register raw Koa middleware for OpenAI-compatible endpoints
@@ -48,6 +57,7 @@ export class PluginAiApiServer extends Plugin {
 
     // 2. Register admin config resource
     this.app.resourceManager.define(aiApiConfigResource);
+    this.app.resourceManager.define(aiApiUsageMonitorResource);
 
     this.app.db.on('aiApiRolePermissions.afterSave', (model) => {
       invalidateRolePermissionCache(model.get('roleName'));
@@ -59,7 +69,17 @@ export class PluginAiApiServer extends Plugin {
     // 3. Set ACL permissions for admin config + role permissions management
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.configuration`,
-      actions: ['aiApiConfig:*', 'aiApiRolePermissions:*'],
+      actions: [
+        'aiApiConfig:*',
+        'aiApiRolePermissions:*',
+        'aiApiModelPrices:*',
+        'aiApiUserQuotaPolicies:*',
+        'aiApiUserQuotaBuckets:list',
+        'aiApiUserQuotaBuckets:get',
+        'aiApiUsageRecords:list',
+        'aiApiUsageRecords:get',
+        'aiApiUsageMonitor:summary',
+      ],
     });
 
     // 4. GC the rate limiter every 5 minutes to evict stale user entries.
@@ -77,6 +97,8 @@ export class PluginAiApiServer extends Plugin {
           defaultAiEmployee: '',
           enabledLlmServices: [],
           rateLimitPerMinute: 60,
+          quotaEnabled: false,
+          defaultReservationOutputTokens: 4096,
         },
       });
     }

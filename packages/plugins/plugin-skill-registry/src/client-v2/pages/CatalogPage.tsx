@@ -1,21 +1,29 @@
 import React, { useState } from 'react';
-import { Button, Card, Form, Input, Modal, Select, Space, Table, type TableColumnsType, Tag, Typography } from 'antd';
+import {
+  Button,
+  Card,
+  Drawer,
+  Form,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  type TableColumnsType,
+  Tag,
+  Typography,
+} from 'antd';
 import { useRequest } from 'ahooks';
 import { useFlowContext } from '@nocobase/flow-engine';
 
 import { useT } from '../locale';
 import { useSkillRegistryPermissions } from '../permissions';
 import { unwrapListMeta, unwrapRecords } from './api';
+import { VersionManagement, type RegistryPackageContext } from './VersionManagement';
 
-type RegistryPackage = {
-  id: string;
-  namespace: string;
-  slug: string;
-  displayName: string;
-  status: string;
+type RegistryPackage = RegistryPackageContext & {
   visibility: string;
   updatedAt?: string;
-  latestStableVersion?: { version?: string };
 };
 
 type SourceItem = {
@@ -25,6 +33,8 @@ type SourceItem = {
   sourceRevision: string;
   candidateDigest: string;
   updatedAt?: string;
+  source?: { name?: string };
+  package?: RegistryPackage;
 };
 
 type PublishValues = {
@@ -41,82 +51,71 @@ export default function CatalogPage() {
   const ctx = useFlowContext();
   const t = useT();
   const { canPublish } = useSkillRegistryPermissions();
-  const [packagePage, setPackagePage] = useState(1);
-  const [candidatePage, setCandidatePage] = useState(1);
-  const [packageSearch, setPackageSearch] = useState('');
-  const [candidateSearch, setCandidateSearch] = useState('');
-  const [candidateStatus, setCandidateStatus] = useState<string>();
+  const [page, setPage] = useState(1);
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState<string>();
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Array<string | number>>([]);
+  const [selectedCandidates, setSelectedCandidates] = useState<SourceItem[]>([]);
   const [batchPublishOpen, setBatchPublishOpen] = useState(false);
+  const [unpublishCandidates, setUnpublishCandidates] = useState<SourceItem[]>([]);
+  const [unpublishReason, setUnpublishReason] = useState('');
+  const [unpublishing, setUnpublishing] = useState(false);
+  const [versionsPackage, setVersionsPackage] = useState<RegistryPackage | null>(null);
   const pageSize = 50;
-  const packagesRequest = useRequest(
-    () =>
-      ctx.api.request({
-        url: 'skillRegistryPackages:list',
-        method: 'get',
-        params: {
-          appends: ['latestStableVersion'],
-          page: packagePage,
-          pageSize,
-          filter: packageSearch
-            ? {
-                $or: [
-                  { namespace: { $includes: packageSearch } },
-                  { slug: { $includes: packageSearch } },
-                  { displayName: { $includes: packageSearch } },
-                ],
-              }
-            : undefined,
-        },
-      }),
-    { refreshDeps: [packagePage, packageSearch] },
-  );
-  const candidatesRequest = useRequest(
+  const skillsRequest = useRequest(
     () =>
       ctx.api.request({
         url: 'skillRegistrySourceItems:list',
         method: 'get',
         params: {
+          appends: ['source', 'package', 'package.latestStableVersion'],
           sort: ['-updatedAt'],
-          page: candidatePage,
+          page,
           pageSize,
           filter: {
-            ...(candidateStatus ? { state: candidateStatus } : {}),
-            ...(candidateSearch
+            ...(status ? { state: status } : {}),
+            ...(search
               ? {
                   $or: [
-                    { displayName: { $includes: candidateSearch } },
-                    { externalKey: { $includes: candidateSearch } },
+                    { displayName: { $includes: search } },
+                    { externalKey: { $includes: search } },
+                    { 'package.namespace': { $includes: search } },
+                    { 'package.slug': { $includes: search } },
+                    { 'source.name': { $includes: search } },
                   ],
                 }
               : {}),
           },
         },
       }),
-    { refreshDeps: [candidatePage, candidateSearch, candidateStatus] },
+    { refreshDeps: [page, search, status] },
   );
-  const packages = unwrapRecords<RegistryPackage>(packagesRequest.data);
-  const candidates = unwrapRecords<SourceItem>(candidatesRequest.data);
-  const packageTotal = unwrapListMeta(packagesRequest.data)?.count ?? packages.length;
-  const candidateTotal = unwrapListMeta(candidatesRequest.data)?.count ?? candidates.length;
+  const skills = unwrapRecords<SourceItem>(skillsRequest.data);
+  const total = unwrapListMeta(skillsRequest.data)?.count ?? skills.length;
   const [publishCandidate, setPublishCandidate] = useState<SourceItem | null>(null);
   const [resolveCandidate, setResolveCandidate] = useState<SourceItem | null>(null);
   const [publishForm] = Form.useForm<PublishValues>();
   const [resolveForm] = Form.useForm<ResolveValues>();
-  const packageColumns: TableColumnsType<RegistryPackage> = [
-    {
-      title: t('Name'),
-      key: 'name',
-      render: (_, record) => `${record.namespace}/${record.slug}`,
-    },
-    { title: t('Catalog'), key: 'displayName', render: (_, record) => record.displayName },
-    { title: t('Version'), key: 'version', render: (_, record) => record.latestStableVersion?.version || '\u2014' },
-    { title: t('Status'), key: 'status', render: (_, record) => <Tag>{record.status}</Tag> },
-    { title: t('Updated'), key: 'updatedAt', render: (_, record) => record.updatedAt || '\u2014' },
-  ];
   const candidateColumns: TableColumnsType<SourceItem> = [
-    { title: t('Name'), key: 'displayName', render: (_, record) => record.displayName },
+    {
+      title: t('Skill'),
+      key: 'displayName',
+      render: (_, record) => (
+        <Space direction="vertical" size={0}>
+          <Typography.Text strong>{record.displayName}</Typography.Text>
+          <Typography.Text type="secondary">
+            {record.package ? `${record.package.namespace}/${record.package.slug}` : t('Not published')}
+          </Typography.Text>
+        </Space>
+      ),
+    },
+    { title: t('Source'), key: 'source', render: (_, record) => record.source?.name || '\u2014' },
     { title: t('Status'), key: 'state', render: (_, record) => <Tag>{record.state}</Tag> },
+    {
+      title: t('Latest stable'),
+      key: 'latestStable',
+      render: (_, record) => record.package?.latestStableVersion?.version || '\u2014',
+    },
     {
       title: t('Digest'),
       key: 'candidateDigest',
@@ -125,29 +124,45 @@ export default function CatalogPage() {
     { title: t('Updated'), key: 'updatedAt', render: (_, record) => record.updatedAt || '\u2014' },
   ];
 
-  if (canPublish) {
-    candidateColumns.push({
-      title: t('Run'),
-      key: 'actions',
-      render: (_, record) =>
-        record.state === 'conflict' ? (
-          <Button onClick={() => setResolveCandidate(record)}>{t('Resolve conflict')}</Button>
-        ) : (
-          <Button
-            disabled={!['ready', 'published'].includes(record.state)}
-            onClick={() => {
-              publishForm.setFieldsValue({ version: '', channel: 'stable' });
-              setPublishCandidate(record);
-            }}
-          >
-            {t('Publish')}
-          </Button>
-        ),
-    });
-  }
+  candidateColumns.push({
+    title: t('Run'),
+    key: 'actions',
+    render: (_, record) => (
+      <Space wrap>
+        {record.package ? (
+          <Button onClick={() => setVersionsPackage(record.package || null)}>{t('Manage versions')}</Button>
+        ) : null}
+        {canPublish ? (
+          record.state === 'conflict' ? (
+            <Button onClick={() => setResolveCandidate(record)}>{t('Resolve conflict')}</Button>
+          ) : record.state === 'published' ? (
+            <Button
+              danger
+              onClick={() => {
+                setUnpublishReason('');
+                setUnpublishCandidates([record]);
+              }}
+            >
+              {t('Unpublish')}
+            </Button>
+          ) : (
+            <Button
+              disabled={record.state !== 'ready'}
+              onClick={() => {
+                publishForm.setFieldsValue({ version: '', channel: 'stable' });
+                setPublishCandidate(record);
+              }}
+            >
+              {t('Publish')}
+            </Button>
+          )
+        ) : null}
+      </Space>
+    ),
+  });
 
   const refresh = async () => {
-    await Promise.all([packagesRequest.refreshAsync(), candidatesRequest.refreshAsync()]);
+    await skillsRequest.refreshAsync();
   };
 
   const publish = async () => {
@@ -196,6 +211,44 @@ export default function CatalogPage() {
     }
   };
 
+  const unpublish = async () => {
+    if (!canPublish || unpublishCandidates.length === 0) return;
+    setUnpublishing(true);
+    try {
+      if (unpublishCandidates.length === 1) {
+        await ctx.api.request({
+          url: 'skillRegistryAdmin:unpublish',
+          method: 'post',
+          data: { sourceItemId: unpublishCandidates[0].id, reason: unpublishReason.trim() || undefined },
+        });
+        ctx.message.success(t('Skill unpublished'));
+      } else {
+        const response = await ctx.api.request({
+          url: 'skillRegistryAdmin:unpublishBatch',
+          method: 'post',
+          data: {
+            sourceItemIds: unpublishCandidates.map((candidate) => candidate.id),
+            reason: unpublishReason.trim() || undefined,
+          },
+        });
+        const body = response?.data?.data;
+        const unpublished = body && typeof body === 'object' && 'unpublished' in body ? Number(body.unpublished) : 0;
+        const failed = body && typeof body === 'object' && 'failed' in body ? Number(body.failed) : 0;
+        ctx.message.success(
+          t('Batch unpublish completed: {{unpublished}} unpublished, {{failed}} failed', { unpublished, failed }),
+        );
+      }
+      setUnpublishCandidates([]);
+      setSelectedCandidateIds([]);
+      setSelectedCandidates([]);
+      await refresh();
+    } catch {
+      ctx.message.error(t('Action failed'));
+    } finally {
+      setUnpublishing(false);
+    }
+  };
+
   const resolveConflict = async () => {
     if (!canPublish || !resolveCandidate) {
       return;
@@ -218,86 +271,87 @@ export default function CatalogPage() {
   return (
     <Space direction="vertical" size="large" style={{ display: 'flex' }}>
       <Card
-        title={t('Catalog')}
+        title={t('Skills')}
         extra={
-          <Button onClick={refresh} loading={packagesRequest.loading || candidatesRequest.loading}>
+          <Button onClick={refresh} loading={skillsRequest.loading}>
             {t('Refresh')}
           </Button>
         }
       >
-        <Input.Search
-          allowClear
-          placeholder={t('Search catalog skills')}
-          style={{ width: 360, marginBottom: 16 }}
-          onSearch={(value) => {
-            setPackagePage(1);
-            setPackageSearch(value.trim());
-          }}
-        />
-        <Table
-          aria-label={t('Catalog')}
-          rowKey="id"
-          loading={packagesRequest.loading}
-          pagination={{ current: packagePage, pageSize, total: packageTotal, onChange: setPackagePage }}
-          scroll={{ x: 'max-content' }}
-          dataSource={packages}
-          locale={{ emptyText: t('No data') }}
-          columns={packageColumns}
-        />
-      </Card>
-
-      <Card title={t('Candidates')}>
         <Space wrap style={{ marginBottom: 16 }}>
           <Input.Search
             allowClear
-            placeholder={t('Search candidates')}
+            placeholder={t('Search skills')}
             style={{ width: 320 }}
             onSearch={(value) => {
-              setCandidatePage(1);
-              setCandidateSearch(value.trim());
+              setPage(1);
+              setSearch(value.trim());
             }}
           />
           <Select
             allowClear
             placeholder={t('Filter by status')}
             style={{ width: 180 }}
-            value={candidateStatus}
+            value={status}
             onChange={(value) => {
-              setCandidatePage(1);
-              setCandidateStatus(value);
+              setPage(1);
+              setStatus(value);
             }}
-            options={['ready', 'published', 'conflict', 'blocked', 'error'].map((value) => ({ value, label: value }))}
+            options={['discovered', 'ready', 'published', 'conflict', 'blocked', 'error'].map((value) => ({
+              value,
+              label: value,
+            }))}
           />
           {canPublish ? (
-            <Button
-              type="primary"
-              disabled={selectedCandidateIds.length === 0}
-              onClick={() => {
-                publishForm.setFieldsValue({ version: '', channel: 'stable' });
-                setBatchPublishOpen(true);
-              }}
-            >
-              {t('Publish selected ({{count}})', { count: selectedCandidateIds.length })}
-            </Button>
+            <>
+              <Button
+                type="primary"
+                disabled={selectedCandidates.filter((candidate) => candidate.state === 'ready').length === 0}
+                onClick={() => {
+                  const readyCandidates = selectedCandidates.filter((candidate) => candidate.state === 'ready');
+                  setSelectedCandidateIds(readyCandidates.map((candidate) => candidate.id));
+                  publishForm.setFieldsValue({ version: '', channel: 'stable' });
+                  setBatchPublishOpen(true);
+                }}
+              >
+                {t('Publish selected ({{count}})', {
+                  count: selectedCandidates.filter((candidate) => candidate.state === 'ready').length,
+                })}
+              </Button>
+              <Button
+                danger
+                disabled={selectedCandidates.filter((candidate) => candidate.state === 'published').length === 0}
+                onClick={() => {
+                  setUnpublishReason('');
+                  setUnpublishCandidates(selectedCandidates.filter((candidate) => candidate.state === 'published'));
+                }}
+              >
+                {t('Unpublish selected ({{count}})', {
+                  count: selectedCandidates.filter((candidate) => candidate.state === 'published').length,
+                })}
+              </Button>
+            </>
           ) : null}
         </Space>
         <Table
-          aria-label={t('Candidates')}
+          aria-label={t('Skills')}
           rowKey="id"
-          loading={candidatesRequest.loading}
-          pagination={{ current: candidatePage, pageSize, total: candidateTotal, onChange: setCandidatePage }}
+          loading={skillsRequest.loading}
+          pagination={{ current: page, pageSize, total, onChange: setPage }}
           rowSelection={
             canPublish
               ? {
                   selectedRowKeys: selectedCandidateIds,
-                  onChange: (keys) => setSelectedCandidateIds(keys),
+                  onChange: (keys, rows) => {
+                    setSelectedCandidateIds(keys);
+                    setSelectedCandidates(rows);
+                  },
                   getCheckboxProps: (record) => ({ disabled: !['ready', 'published'].includes(record.state) }),
-                  preserveSelectedRowKeys: true,
                 }
               : undefined
           }
           scroll={{ x: 'max-content' }}
-          dataSource={candidates}
+          dataSource={skills}
           locale={{ emptyText: t('No data') }}
           columns={candidateColumns}
         />
@@ -339,6 +393,29 @@ export default function CatalogPage() {
             </Form>
           </Modal>
           <Modal
+            title={unpublishCandidates.length > 1 ? t('Unpublish selected skills') : t('Unpublish skill')}
+            open={unpublishCandidates.length > 0}
+            onCancel={() => setUnpublishCandidates([])}
+            onOk={unpublish}
+            okText={t('Unpublish')}
+            okButtonProps={{ danger: true, loading: unpublishing }}
+            cancelText={t('Cancel')}
+          >
+            <Typography.Paragraph>
+              {t(
+                'All published versions of the selected skills will be yanked and removed from the public catalog. Version history and artifacts are retained.',
+              )}
+            </Typography.Paragraph>
+            <Input.TextArea
+              aria-label={t('Unpublish reason')}
+              placeholder={t('Unpublish reason (optional)')}
+              value={unpublishReason}
+              maxLength={2000}
+              rows={3}
+              onChange={(event) => setUnpublishReason(event.target.value)}
+            />
+          </Modal>
+          <Modal
             title={t('Resolve conflict')}
             open={Boolean(resolveCandidate)}
             onCancel={() => setResolveCandidate(null)}
@@ -357,6 +434,15 @@ export default function CatalogPage() {
           </Modal>
         </>
       ) : null}
+      <Drawer
+        title={t('Manage versions')}
+        width="min(1200px, 95vw)"
+        open={Boolean(versionsPackage)}
+        onClose={() => setVersionsPackage(null)}
+        destroyOnClose
+      >
+        {versionsPackage ? <VersionManagement packageRecord={versionsPackage} /> : null}
+      </Drawer>
     </Space>
   );
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 
-import type { RegistrySourceDescriptor, RegistrySourceProvider } from '../contracts/types';
+import type { RegistrySourceAccessContext, RegistrySourceDescriptor, RegistrySourceProvider } from '../contracts/types';
 import { asJsonValue } from '../contracts/types';
 import { RegistryError, toRegistryError } from '../contracts/errors';
 import { getJson, getString, type RegistryModel } from './model-values';
@@ -16,6 +16,11 @@ import type { RegistryDatabase } from './repository-types';
 import { withTransaction } from './repository-types';
 
 type TriggerType = 'manual' | 'schedule' | 'webhook' | 'retry';
+
+export const SCHEDULED_SYNC_ACCESS: RegistrySourceAccessContext = {
+  kind: 'system',
+  reason: 'scheduled-sync',
+};
 
 export type SourceDiscoveryItem = {
   externalKey: string;
@@ -33,6 +38,7 @@ export type SourceDiscoveryPreview = {
 };
 
 const EMPTY_DIGEST = `sha256:${'0'.repeat(64)}`;
+const SCHEDULED_GIT_ACCESS_REQUIRED = 'SOURCE_REPOSITORY_ACCESS_REAUTHORIZATION_REQUIRED';
 
 function modelId(model: RegistryModel): string {
   return getString(model, 'id');
@@ -109,21 +115,22 @@ export class SourceSyncService {
     sourceId: string | number,
     triggerType: TriggerType,
     requestedById?: string | number,
+    access?: RegistrySourceAccessContext,
   ): Promise<RegistryModel> {
     const sourceRepository = this.database.getRepository('skillRegistrySources');
     const source = await sourceRepository.findOne({ filterByTk: sourceId });
     if (!source) {
       throw new RegistryError('SOURCE_NOT_FOUND', 404, 'Skill registry source was not found.');
     }
-    return this.withSourceLock(source, () => this.syncSource(source, triggerType, requestedById));
+    return this.withSourceLock(source, () => this.syncSource(source, triggerType, requestedById, access));
   }
 
-  async discover(sourceId: string | number): Promise<SourceDiscoveryPreview> {
+  async discover(sourceId: string | number, access?: RegistrySourceAccessContext): Promise<SourceDiscoveryPreview> {
     const source = await this.database.getRepository('skillRegistrySources').findOne({ filterByTk: sourceId });
     if (!source) {
       throw new RegistryError('SOURCE_NOT_FOUND', 404, 'Skill registry source was not found.');
     }
-    return this.withSourceLock(source, () => this.discoverSource(source));
+    return this.withSourceLock(source, () => this.discoverSource(source, access));
   }
 
   async recoverStuckRuns(maxAgeMs = stuckRunAgeMs()): Promise<number> {
@@ -222,8 +229,24 @@ export class SourceSyncService {
         result.skippedCount += 1;
         continue;
       }
+      if (getString(source, 'providerType') === 'git-manager' && !asDate(source.get('providerAccessAuthorizedAt'))) {
+        // Older sources have no durable proof that their Git binding was set by
+        // a repository-authorized user. Do not elevate them to the system actor
+        // until an administrator saves the source (or runs a user-scoped sync).
+        await this.database.getRepository('skillRegistrySources').update({
+          filterByTk: modelId(source),
+          values: {
+            status: 'error',
+            lastErrorCode: SCHEDULED_GIT_ACCESS_REQUIRED,
+            lastErrorMessage:
+              'Re-save this Git Manager source with a user who can read the repository before scheduled sync can run.',
+          },
+        });
+        result.errorCount += 1;
+        continue;
+      }
       try {
-        await this.sync(modelId(source), 'schedule');
+        await this.sync(modelId(source), 'schedule', undefined, SCHEDULED_SYNC_ACCESS);
         result.syncedCount += 1;
       } catch (error) {
         if (error instanceof RegistryError && error.code === 'SYNC_ALREADY_RUNNING') {
@@ -302,6 +325,7 @@ export class SourceSyncService {
     source: RegistryModel,
     triggerType: TriggerType,
     requestedById?: string | number,
+    access?: RegistrySourceAccessContext,
   ): Promise<RegistryModel> {
     const sourceRepository = this.database.getRepository('skillRegistrySources');
     const normalizedSourceId = modelId(source);
@@ -349,7 +373,7 @@ export class SourceSyncService {
       descriptor = sourceDescriptor(source);
       provider = providerFor(this.providers, descriptor);
       await this.heartbeatRun(runId, normalizedSourceId, fencingToken);
-      const externalKeys = validateDiscoveredExternalKeys(await provider.discover(descriptor));
+      const externalKeys = validateDiscoveredExternalKeys(await provider.discover(descriptor, access));
       await this.heartbeatRun(runId, normalizedSourceId, fencingToken);
       const counters = {
         discoveredCount: externalKeys.length,
@@ -369,7 +393,7 @@ export class SourceSyncService {
             provider,
             source: descriptor,
             externalKey,
-            candidate: await provider.getCandidate(descriptor, externalKey),
+            candidate: await provider.getCandidate(descriptor, externalKey, access),
           });
           resolvedRevision ||= candidate.source.revision;
           const result = await this.withOwnedRun(runId, normalizedSourceId, fencingToken, (transaction) =>
@@ -412,6 +436,13 @@ export class SourceSyncService {
       await this.withOwnedRun(runId, normalizedSourceId, fencingToken, (transaction) =>
         this.markMissingItems(normalizedSourceId, new Set(externalKeys), transaction),
       );
+      const providerAccessAuthorization =
+        descriptor.providerType === 'git-manager' && access?.kind === 'user' && access.userId !== undefined
+          ? {
+              providerAccessAuthorizedAt: new Date(),
+              providerAccessAuthorizedById: String(access.userId),
+            }
+          : {};
       const completed = await this.finalizeOwnedRun(
         runId,
         normalizedSourceId,
@@ -422,6 +453,7 @@ export class SourceSyncService {
           lastSyncedAt: new Date(),
           lastErrorCode: null,
           lastErrorMessage: null,
+          ...providerAccessAuthorization,
         },
         {
           status: counters.errorCount > 0 ? 'partial' : 'succeeded',
@@ -461,11 +493,14 @@ export class SourceSyncService {
     }
   }
 
-  private async discoverSource(source: RegistryModel): Promise<SourceDiscoveryPreview> {
+  private async discoverSource(
+    source: RegistryModel,
+    access?: RegistrySourceAccessContext,
+  ): Promise<SourceDiscoveryPreview> {
     const descriptor = sourceDescriptor(source);
     const provider = providerFor(this.providers, descriptor);
     try {
-      const externalKeys = validateDiscoveredExternalKeys(await provider.discover(descriptor));
+      const externalKeys = validateDiscoveredExternalKeys(await provider.discover(descriptor, access));
       const candidates: SourceDiscoveryItem[] = [];
       let resolvedRevision: string | null = null;
       for (const externalKey of externalKeys) {
@@ -474,7 +509,7 @@ export class SourceSyncService {
             provider,
             source: descriptor,
             externalKey,
-            candidate: await provider.getCandidate(descriptor, externalKey),
+            candidate: await provider.getCandidate(descriptor, externalKey, access),
           });
           resolvedRevision ||= candidate.source.revision;
           candidates.push({

@@ -31,3 +31,12 @@ export function unwrapListMeta(payload: unknown): NocoBaseListBody<unknown>['met
   }
   return undefined;
 }
+
+export function unwrapData<T>(payload: unknown): T | undefined {
+  let current = payload;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== 'object' || !('data' in current)) return current as T;
+    current = (current as { data?: unknown }).data;
+  }
+  return current as T;
+}

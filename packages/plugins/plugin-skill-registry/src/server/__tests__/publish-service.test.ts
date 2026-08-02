@@ -262,3 +262,100 @@ describe('PublishService concurrency', () => {
     expect(fixture.provider.releaseSource).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PublishService unpublish', () => {
+  it('returns the package to draft when its final published version is yanked', async () => {
+    const publishedVersion = model({
+      id: 'version-1',
+      packageId: 'package-1',
+      channel: 'stable',
+      status: 'published',
+    });
+    const versions = repository({
+      findOne: vi
+        .fn()
+        .mockResolvedValueOnce(publishedVersion)
+        .mockResolvedValueOnce(publishedVersion)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null),
+    });
+    const packages = repository({
+      findOne: vi.fn().mockResolvedValue(model({ id: 'package-1', latestStableVersionId: 'version-1' })),
+    });
+    const database: RegistryDatabase = {
+      getRepository(name: string): RegistryRepository {
+        return name === 'skillRegistryVersions' ? versions : packages;
+      },
+      sequelize: { transaction: <T>(callback: (transaction: unknown) => Promise<T>) => callback({}) },
+    };
+    const service = new PublishService(database, new Map(), {} as never, {} as never);
+
+    await service.yank('version-1', 'Superseded');
+
+    expect(packages.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filterByTk: 'package-1',
+        values: { status: 'draft', latestStableVersionId: null },
+      }),
+    );
+  });
+
+  it('yanks every published version and returns the candidate to ready', async () => {
+    const sourceItems = repository({
+      findOne: vi.fn().mockResolvedValue(model({ id: 'item-1', sourceId: 'source-1', state: 'published' })),
+    });
+    const publishedVersions = [
+      model({ id: 'version-2', status: 'published' }),
+      model({ id: 'version-1', status: 'published' }),
+    ];
+    const versions = repository({
+      find: vi.fn().mockResolvedValue(publishedVersions),
+      findOne: vi.fn().mockResolvedValue(null),
+    });
+    const database: RegistryDatabase = {
+      getRepository(name: string): RegistryRepository {
+        return name === 'skillRegistrySourceItems' ? sourceItems : versions;
+      },
+    };
+    const service = new PublishService(database, new Map(), {} as never, {} as never);
+    const yank = vi.spyOn(service, 'yank').mockResolvedValue(undefined);
+
+    await expect(service.unpublishSourceItem('item-1', 'Superseded')).resolves.toEqual({
+      sourceItemId: 'item-1',
+      state: 'ready',
+      yanked: 2,
+    });
+
+    expect(yank).toHaveBeenNthCalledWith(1, 'version-2', 'Superseded');
+    expect(yank).toHaveBeenNthCalledWith(2, 'version-1', 'Superseded');
+    expect(sourceItems.update).toHaveBeenCalledWith({ filterByTk: 'item-1', values: { state: 'ready' } });
+  });
+
+  it('rejects a candidate that is not published', async () => {
+    const sourceItems = repository({
+      findOne: vi.fn().mockResolvedValue(model({ id: 'item-1', state: 'ready' })),
+    });
+    const database: RegistryDatabase = { getRepository: () => sourceItems };
+    const service = new PublishService(database, new Map(), {} as never, {} as never);
+
+    await expect(service.unpublishSourceItem('item-1', 'Mistake')).rejects.toMatchObject({
+      code: 'SOURCE_ITEM_NOT_PUBLISHED',
+      status: 409,
+    } satisfies Partial<RegistryError>);
+  });
+
+  it('uses the same source lock as publish and sync operations', async () => {
+    const sourceItems = repository({
+      findOne: vi.fn().mockResolvedValue(model({ id: 'item-1', sourceId: 'source-1', state: 'published' })),
+    });
+    const database: RegistryDatabase = { getRepository: () => sourceItems };
+    const lockManager = { tryAcquire: vi.fn().mockRejectedValue(new Error('locked')) };
+    const service = new PublishService(database, new Map(), {} as never, {} as never, lockManager);
+
+    await expect(service.unpublishSourceItem('item-1', 'Mistake')).rejects.toMatchObject({
+      code: 'REGISTRY_OPERATION_BUSY',
+      status: 409,
+    } satisfies Partial<RegistryError>);
+    expect(lockManager.tryAcquire).toHaveBeenCalledWith('skill-registry:source:source-1', 0);
+  });
+});

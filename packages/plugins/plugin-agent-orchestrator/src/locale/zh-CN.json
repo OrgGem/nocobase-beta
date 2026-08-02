@@ -140,5 +140,17 @@
   "Character budget": "字符预算",
   "Applied scopes": "已应用范围",
   "None": "无",
-  "No memory context matched this preview.": "没有匹配此预览的记忆上下文。"
+  "No memory context matched this preview.": "没有匹配此预览的记忆上下文。",
+  "This Skill Hub Git import action does not allow the request method.": "此 Skill Hub Git 导入操作不允许该请求方法。",
+  "repositoryId and rootFolder are required": "必须提供 repositoryId 和 rootFolder。",
+  "repositoryId, rootFolder and skills[] are required": "必须提供 repositoryId、rootFolder 和 skills[]。",
+  "skills[] must contain non-empty string keys": "skills[] 必须只包含非空字符串键。",
+  "Git Manager is not enabled for Skill Hub imports.": "Git Manager 未启用，无法导入 Skill Hub。",
+  "Git Manager must support actor-aware content reads for Skill Hub imports.": "Git Manager 必须支持基于用户身份读取内容，才能导入 Skill Hub。",
+  "A valid user role context is required to import skills from Git Manager.": "从 Git Manager 导入技能需要有效的用户角色上下文。",
+  "Git Manager could not read the requested repository content.": "Git Manager 无法读取请求的仓库内容。",
+  "Selected skills are not listed in the explicit skills.json manifest: {{skills}}": "所选技能不在显式 skills.json 清单中：{{skills}}",
+  "Git skill contains more than {{count}} supplemental Markdown files.": "Git 技能包含超过 {{count}} 个补充 Markdown 文件。",
+  "Git skill contains a supplemental Markdown file with an invalid size.": "Git 技能包含大小无效的补充 Markdown 文件。",
+  "Git skill supplemental Markdown exceeds {{maxBytes}} bytes.": "Git 技能的补充 Markdown 超过 {{maxBytes}} 字节。"
 }

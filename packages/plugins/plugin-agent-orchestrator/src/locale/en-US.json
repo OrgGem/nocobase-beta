@@ -140,5 +140,17 @@
   "Character budget": "Character budget",
   "Applied scopes": "Applied scopes",
   "None": "None",
-  "No memory context matched this preview.": "No memory context matched this preview."
+  "No memory context matched this preview.": "No memory context matched this preview.",
+  "This Skill Hub Git import action does not allow the request method.": "This Skill Hub Git import action does not allow the request method.",
+  "repositoryId and rootFolder are required": "repositoryId and rootFolder are required",
+  "repositoryId, rootFolder and skills[] are required": "repositoryId, rootFolder and skills[] are required",
+  "skills[] must contain non-empty string keys": "skills[] must contain non-empty string keys",
+  "Git Manager is not enabled for Skill Hub imports.": "Git Manager is not enabled for Skill Hub imports.",
+  "Git Manager must support actor-aware content reads for Skill Hub imports.": "Git Manager must support actor-aware content reads for Skill Hub imports.",
+  "A valid user role context is required to import skills from Git Manager.": "A valid user role context is required to import skills from Git Manager.",
+  "Git Manager could not read the requested repository content.": "Git Manager could not read the requested repository content.",
+  "Selected skills are not listed in the explicit skills.json manifest: {{skills}}": "Selected skills are not listed in the explicit skills.json manifest: {{skills}}",
+  "Git skill contains more than {{count}} supplemental Markdown files.": "Git skill contains more than {{count}} supplemental Markdown files.",
+  "Git skill contains a supplemental Markdown file with an invalid size.": "Git skill contains a supplemental Markdown file with an invalid size.",
+  "Git skill supplemental Markdown exceeds {{maxBytes}} bytes.": "Git skill supplemental Markdown exceeds {{maxBytes}} bytes."
 }

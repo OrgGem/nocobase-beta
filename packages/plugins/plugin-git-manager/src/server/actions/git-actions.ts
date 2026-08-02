@@ -3,8 +3,10 @@ import { Context } from '@nocobase/actions';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawnSync } from 'child_process';
+import { getEffectiveActionParams } from '../repository-access';
 import { redactPat, redactError } from '../utils/redact';
 import { getRepoAccount } from '../utils/get-repo-account';
+import { assertUrlHasNoUserInfo } from '../utils/url-security';
 
 // Disallow leading `-` to prevent argument-injection (e.g. `--upload-pack=...`)
 // when refs are passed as positional args to git.
@@ -14,6 +16,23 @@ const REF_PATTERN = /^(?!-)[a-zA-Z0-9._/-]+$/;
 const repoLocks = new Map<string, Promise<any>>();
 const GIT_BINARY = process.env.GIT_BINARY_PATH || process.env.GIT_EXECUTABLE || 'git';
 let gitAvailabilityChecked = false;
+
+interface GitActionParams {
+  repositoryId?: number | string;
+  file?: string;
+  commitHash?: string;
+  compareHash?: string;
+  maxCount?: number | string;
+  branch?: string;
+  ref?: string;
+  treePath?: string;
+  recursive?: boolean | string;
+  filePath?: string;
+}
+
+function getGitActionParams(ctx: Context): GitActionParams {
+  return getEffectiveActionParams(ctx) as GitActionParams;
+}
 
 export function acquireLock(key: string): { promise: Promise<void>; release: () => void } {
   const prev = repoLocks.get(key) || Promise.resolve();
@@ -51,7 +70,8 @@ export function validateBranch(branch: string): string {
   return branch;
 }
 
-function validateRepoUrl(repoUrl: string): void {
+export function validateRepoUrl(repoUrl: string): void {
+  assertUrlHasNoUserInfo(repoUrl);
   let parsed: URL;
   try {
     parsed = new URL(repoUrl);
@@ -72,6 +92,7 @@ export async function withAuth<T>(
   username?: string,
   remoteName = 'origin',
 ): Promise<T> {
+  assertUrlHasNoUserInfo(repoUrl);
   // Lock by local working tree — that's what `git.remote('set-url', ...)`
   // mutates. Two repo records sharing a `repoUrl` but cloned to different
   // paths can run in parallel safely; conversely, two repos pointed at the
@@ -108,6 +129,7 @@ export async function withAuth<T>(
 }
 
 function getAuthUrl(repoUrl: string, pat: string, username?: string): string {
+  assertUrlHasNoUserInfo(repoUrl);
   const url = new URL(repoUrl.trim());
   url.username = (username || 'oauth2').trim();
   url.password = pat.trim();
@@ -149,8 +171,8 @@ function getGit(ctx: Context, localPath: string): SimpleGit {
   return createGit(localPath);
 }
 
-async function getRepo(ctx: Context) {
-  const { repositoryId } = ctx.action.params;
+export async function getRepo(ctx: Context) {
+  const { repositoryId } = getGitActionParams(ctx);
   const repo = await ctx.db.getRepository('gitRepositories').findOne({
     filterByTk: repositoryId,
   });
@@ -274,7 +296,7 @@ export async function fetch(ctx: Context, next: () => Promise<void>) {
 export async function diff(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { file, commitHash, compareHash } = ctx.action.params;
+  const { file, commitHash, compareHash } = getGitActionParams(ctx);
 
   const git = getGit(ctx, localPath);
   const args: string[] = [];
@@ -304,9 +326,9 @@ export async function status(ctx: Context, next: () => Promise<void>) {
 export async function log(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { maxCount = 50, file } = ctx.action.params;
+  const { maxCount = 50, file } = getGitActionParams(ctx);
 
-  const parsed = parseInt(maxCount, 10);
+  const parsed = Number.parseInt(String(maxCount), 10);
   const options: Record<string, any> = { maxCount: Math.min(Math.max(parsed || 50, 1), 500) };
   if (file) {
     if (file.includes('..')) ctx.throw(400, 'Invalid file path');
@@ -329,7 +351,8 @@ export async function branches(ctx: Context, next: () => Promise<void>) {
 export async function checkout(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { branch } = ctx.action.params;
+  const { branch } = getGitActionParams(ctx);
+  if (!branch) ctx.throw(400, 'branch is required');
   validateBranch(branch);
   await getGit(ctx, localPath).checkout(branch);
   ctx.body = { success: true, message: `Switched to branch ${branch}` };
@@ -339,7 +362,7 @@ export async function checkout(ctx: Context, next: () => Promise<void>) {
 export async function fileTree(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { ref = 'HEAD', treePath = '', recursive } = ctx.action.params;
+  const { ref = 'HEAD', treePath = '', recursive } = getGitActionParams(ctx);
 
   const git = getGit(ctx, localPath);
   validateRef(ref);
@@ -388,7 +411,7 @@ export async function fileTree(ctx: Context, next: () => Promise<void>) {
 export async function fileContent(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { ref = 'HEAD', filePath } = ctx.action.params;
+  const { ref = 'HEAD', filePath } = getGitActionParams(ctx);
 
   if (!filePath) {
     ctx.throw(400, 'filePath is required');
@@ -407,7 +430,7 @@ export async function fileContent(ctx: Context, next: () => Promise<void>) {
 export async function commitDetail(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { commitHash } = ctx.action.params;
+  const { commitHash } = getGitActionParams(ctx);
 
   if (!commitHash) {
     ctx.throw(400, 'commitHash is required');

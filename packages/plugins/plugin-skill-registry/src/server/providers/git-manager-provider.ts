@@ -2,6 +2,7 @@ import type {
   JsonValue,
   RegistrySkillCandidateV1,
   RegistrySkillFile,
+  RegistrySourceAccessContext,
   RegistrySourceDescriptor,
   RegistrySourceProvider,
 } from '../contracts/types';
@@ -19,19 +20,28 @@ interface GitTreeEntry {
 }
 
 interface GitManagerContentService {
-  resolveCommit(repositoryId: string | number, ref: string): Promise<string>;
-  listTree(input: {
-    repositoryId: string | number;
-    commitSha: string;
-    rootPath: string;
-    recursive: boolean;
-  }): Promise<GitTreeEntry[]>;
-  readFile(input: {
-    repositoryId: string | number;
-    commitSha: string;
-    filePath: string;
-    maxBytes?: number;
-  }): Promise<Buffer>;
+  contractVersion?: number;
+  capabilities?: readonly string[];
+  assertRepositoryAccess?(repositoryId: string | number, access?: RegistrySourceAccessContext): Promise<void>;
+  resolveCommit(repositoryId: string | number, ref: string, access?: RegistrySourceAccessContext): Promise<string>;
+  listTree(
+    input: {
+      repositoryId: string | number;
+      commitSha: string;
+      rootPath: string;
+      recursive: boolean;
+    },
+    access?: RegistrySourceAccessContext,
+  ): Promise<GitTreeEntry[]>;
+  readFile(
+    input: {
+      repositoryId: string | number;
+      commitSha: string;
+      filePath: string;
+      maxBytes?: number;
+    },
+    access?: RegistrySourceAccessContext,
+  ): Promise<Buffer>;
 }
 
 type PluginManager = {
@@ -55,11 +65,73 @@ async function requireGitExport<T>(operation: Promise<T>): Promise<T> {
         'Git Manager repository is not authorized for Skill Registry export.',
       );
     }
+    if (isRecord(error) && error.code === 'REGISTRY_REPOSITORY_ACCESS_DENIED') {
+      throw new RegistryError(
+        'SOURCE_REPOSITORY_ACCESS_DENIED',
+        403,
+        'The current actor is not authorized to read this Git Manager repository for Skill Registry.',
+      );
+    }
     if (isRecord(error) && error.code === 'REGISTRY_CONTENT_LIMIT_EXCEEDED') {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Git source content exceeds the registry ingestion limit.');
     }
     throw error;
   }
+}
+
+function requireActorAwareGitService(service: GitManagerContentService): void {
+  const capabilities = service.capabilities;
+  if (
+    !Number.isSafeInteger(service.contractVersion) ||
+    service.contractVersion < 2 ||
+    !Array.isArray(capabilities) ||
+    !capabilities.includes('registry-content-with-actor')
+  ) {
+    throw new RegistryError(
+      'SOURCE_PROVIDER_UNAVAILABLE',
+      424,
+      'Git Manager must support actor-aware registry content reads.',
+    );
+  }
+}
+
+function requireSourceAuthorizationService(service: GitManagerContentService): void {
+  requireActorAwareGitService(service);
+  if (
+    typeof service.assertRepositoryAccess !== 'function' ||
+    !service.capabilities?.includes('registry-content-authorize-source')
+  ) {
+    throw new RegistryError(
+      'SOURCE_PROVIDER_UNAVAILABLE',
+      424,
+      'Git Manager must support source authorization for Skill Registry.',
+    );
+  }
+}
+
+function resolveCommit(
+  service: GitManagerContentService,
+  repositoryId: string | number,
+  ref: string,
+  access?: RegistrySourceAccessContext,
+): Promise<string> {
+  return access ? service.resolveCommit(repositoryId, ref, access) : service.resolveCommit(repositoryId, ref);
+}
+
+function listTree(
+  service: GitManagerContentService,
+  input: { repositoryId: string | number; commitSha: string; rootPath: string; recursive: boolean },
+  access?: RegistrySourceAccessContext,
+): Promise<GitTreeEntry[]> {
+  return access ? service.listTree(input, access) : service.listTree(input);
+}
+
+function readFile(
+  service: GitManagerContentService,
+  input: { repositoryId: string | number; commitSha: string; filePath: string; maxBytes?: number },
+  access?: RegistrySourceAccessContext,
+): Promise<Buffer> {
+  return access ? service.readFile(input, access) : service.readFile(input);
 }
 
 function getGitService(pluginManager: PluginManager): GitManagerContentService {
@@ -103,6 +175,10 @@ function getGitSourceConfig(source: RegistrySourceDescriptor): GitSourceConfig {
 
 function joinPath(...parts: string[]): string {
   return parts.filter(Boolean).join('/').replace(/\/+/g, '/');
+}
+
+function normalizeRootPath(rootPath: string): string {
+  return rootPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
 }
 
 function parseFrontmatter(markdown: string): Record<string, unknown> {
@@ -167,22 +243,29 @@ function isMissingOptionalGitFile(error: unknown): boolean {
   return isRecord(error) && error.code === 'REGISTRY_GIT_FILE_NOT_FOUND';
 }
 
-async function generateVirtualSkillsManifest(input: {
+async function discoverVirtualSkillFolders(input: {
   service: GitManagerContentService;
   config: GitSourceConfig;
   commitSha: string;
+  access?: RegistrySourceAccessContext;
+  skillsRoot: string;
+  rootEntries?: GitTreeEntry[];
 }): Promise<string[]> {
-  const skillsRoot = joinPath(input.config.rootPath, 'skills');
-  const rootEntries = await requireGitExport(
-    input.service.listTree({
-      repositoryId: input.config.repositoryId,
-      commitSha: input.commitSha,
-      rootPath: skillsRoot,
-      recursive: false,
-    }),
-  );
+  const rootEntries =
+    input.rootEntries ||
+    (await requireGitExport(
+      listTree(
+        input.service,
+        {
+          repositoryId: input.config.repositoryId,
+          commitSha: input.commitSha,
+          rootPath: input.skillsRoot,
+          recursive: false,
+        },
+        input.access,
+      ),
+    ));
   const skillFolders = rootEntries.filter((entry) => entry.type === 'tree').map((entry) => entry.path);
-  validateDiscoveredExternalKeys(skillFolders);
 
   const discovered: string[] = [];
   const batchSize = 16;
@@ -191,42 +274,112 @@ async function generateVirtualSkillsManifest(input: {
     const results = await Promise.all(
       batch.map(async (folder) => {
         const entries = await requireGitExport(
-          input.service.listTree({
-            repositoryId: input.config.repositoryId,
-            commitSha: input.commitSha,
-            rootPath: joinPath(skillsRoot, folder),
-            recursive: false,
-          }),
+          listTree(
+            input.service,
+            {
+              repositoryId: input.config.repositoryId,
+              commitSha: input.commitSha,
+              rootPath: joinPath(input.skillsRoot, folder),
+              recursive: false,
+            },
+            input.access,
+          ),
         );
         return entries.some((entry) => entry.type === 'blob' && entry.path === 'SKILL.md') ? folder : null;
       }),
     );
     discovered.push(...results.filter((folder): folder is string => folder !== null));
+    // Source item limits apply to confirmed skills, not arbitrary folders in a Git root.
+    // This preserves the fallback to a nested `skills` directory in large monorepos.
+    validateDiscoveredExternalKeys(discovered);
   }
-  return validateDiscoveredExternalKeys(discovered);
+  return discovered;
+}
+
+async function resolveSkillsRoot(input: {
+  service: GitManagerContentService;
+  config: GitSourceConfig;
+  commitSha: string;
+  access?: RegistrySourceAccessContext;
+}): Promise<{ skillsRoot: string; externalKeys: string[] }> {
+  const configuredRoot = normalizeRootPath(input.config.rootPath);
+  const rootEntries = await requireGitExport(
+    listTree(
+      input.service,
+      {
+        repositoryId: input.config.repositoryId,
+        commitSha: input.commitSha,
+        rootPath: configuredRoot,
+        recursive: false,
+      },
+      input.access,
+    ),
+  );
+  const configuredRootIsSkillsDirectory = configuredRoot === 'skills' || configuredRoot.endsWith('/skills');
+  const directExternalKeys = await discoverVirtualSkillFolders({
+    ...input,
+    skillsRoot: configuredRoot,
+    rootEntries,
+  });
+  if (directExternalKeys.length > 0 || configuredRootIsSkillsDirectory) {
+    return { skillsRoot: configuredRoot, externalKeys: directExternalKeys };
+  }
+
+  const hasSkillsSubfolder = rootEntries.some((entry) => entry.type === 'tree' && entry.path === 'skills');
+  if (!hasSkillsSubfolder) {
+    return { skillsRoot: configuredRoot, externalKeys: directExternalKeys };
+  }
+
+  const fallbackRoot = joinPath(configuredRoot, 'skills');
+  return {
+    skillsRoot: fallbackRoot,
+    externalKeys: await discoverVirtualSkillFolders({ ...input, skillsRoot: fallbackRoot }),
+  };
 }
 
 export class GitManagerSourceProvider implements RegistrySourceProvider {
   readonly type = 'git-manager' as const;
-  private readonly pinnedCommits = new Map<string, string>();
+  private readonly pinnedSources = new Map<string, { commitSha: string; skillsRoot?: string }>();
 
   constructor(private readonly pluginManager: PluginManager) {}
 
-  async discover(source: RegistrySourceDescriptor): Promise<string[]> {
+  async assertAccess(source: RegistrySourceDescriptor, access: RegistrySourceAccessContext): Promise<void> {
     const service = getGitService(this.pluginManager);
+    requireSourceAuthorizationService(service);
     const config = getGitSourceConfig(source);
-    const commitSha = await requireGitExport(service.resolveCommit(config.repositoryId, config.ref));
-    this.pinnedCommits.set(source.id, commitSha);
+    const authorizeRepository = service.assertRepositoryAccess;
+    if (typeof authorizeRepository !== 'function') {
+      throw new RegistryError(
+        'SOURCE_PROVIDER_UNAVAILABLE',
+        424,
+        'Git Manager must support source authorization for Skill Registry.',
+      );
+    }
+    await requireGitExport(authorizeRepository.call(service, config.repositoryId, access));
+  }
+
+  async discover(source: RegistrySourceDescriptor, access?: RegistrySourceAccessContext): Promise<string[]> {
+    const service = getGitService(this.pluginManager);
+    if (access) {
+      requireActorAwareGitService(service);
+    }
+    const config = getGitSourceConfig(source);
+    const commitSha = await requireGitExport(resolveCommit(service, config.repositoryId, config.ref, access));
+    this.pinnedSources.set(source.id, { commitSha });
     const skillsJsonPath = joinPath(config.rootPath, 'skills.json');
     try {
       const entries = parseSkillsManifest(
         await requireGitExport(
-          service.readFile({
-            repositoryId: config.repositoryId,
-            commitSha,
-            filePath: skillsJsonPath,
-            maxBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
-          }),
+          readFile(
+            service,
+            {
+              repositoryId: config.repositoryId,
+              commitSha,
+              filePath: skillsJsonPath,
+              maxBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
+            },
+            access,
+          ),
         ),
       );
       // A present skills.json is authoritative, including an intentionally empty
@@ -241,26 +394,39 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
       }
       // Fall through to SKILL.md discovery when the optional skills.json is absent.
     }
-    return generateVirtualSkillsManifest({ service, config, commitSha });
+    const resolved = await resolveSkillsRoot({ service, config, commitSha, access });
+    this.pinnedSources.set(source.id, { commitSha, skillsRoot: resolved.skillsRoot });
+    return resolved.externalKeys;
   }
 
-  async getCandidate(source: RegistrySourceDescriptor, externalKey: string): Promise<RegistrySkillCandidateV1> {
+  async getCandidate(
+    source: RegistrySourceDescriptor,
+    externalKey: string,
+    access?: RegistrySourceAccessContext,
+  ): Promise<RegistrySkillCandidateV1> {
     const service = getGitService(this.pluginManager);
+    if (access) {
+      requireActorAwareGitService(service);
+    }
     const config = getGitSourceConfig(source);
+    const pinned = this.pinnedSources.get(source.id);
     const commitSha =
-      this.pinnedCommits.get(source.id) ||
-      (await requireGitExport(service.resolveCommit(config.repositoryId, config.ref)));
+      pinned?.commitSha || (await requireGitExport(resolveCommit(service, config.repositoryId, config.ref, access)));
     const skillsJsonPath = joinPath(config.rootPath, 'skills.json');
     let entry: Record<string, unknown> | undefined;
     try {
       const entries = parseSkillsManifest(
         await requireGitExport(
-          service.readFile({
-            repositoryId: config.repositoryId,
-            commitSha,
-            filePath: skillsJsonPath,
-            maxBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
-          }),
+          readFile(
+            service,
+            {
+              repositoryId: config.repositoryId,
+              commitSha,
+              filePath: skillsJsonPath,
+              maxBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
+            },
+            access,
+          ),
         ),
       );
       entry = entries.find((candidate) => entryKey(candidate) === externalKey);
@@ -281,18 +447,24 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
       entry = undefined;
     }
 
+    const skillsRoot =
+      pinned?.skillsRoot || (await resolveSkillsRoot({ service, config, commitSha, access })).skillsRoot;
     const folder = typeof entry?.folder === 'string' ? entry.folder : externalKey;
-    const skillRoot = joinPath(config.rootPath, 'skills', folder);
+    const skillRoot = joinPath(skillsRoot, folder);
     const declaredCodeFile = (typeof entry?.codeFile === 'string' && entry.codeFile) || undefined;
     const skillMarkdownPath = joinPath(skillRoot, 'SKILL.md');
     const skillMarkdownSize = (
       await requireGitExport(
-        service.listTree({
-          repositoryId: config.repositoryId,
-          commitSha,
-          rootPath: skillRoot,
-          recursive: false,
-        }),
+        listTree(
+          service,
+          {
+            repositoryId: config.repositoryId,
+            commitSha,
+            rootPath: skillRoot,
+            recursive: false,
+          },
+          access,
+        ),
       )
     ).find((item) => item.type === 'blob' && item.path === 'SKILL.md')?.size;
     if (skillMarkdownSize === undefined) {
@@ -306,18 +478,26 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Git source item contains an oversized SKILL.md.');
     }
     const frontmatterMarkdown = await requireGitExport(
-      service.readFile({
-        repositoryId: config.repositoryId,
-        commitSha,
-        filePath: skillMarkdownPath,
-        maxBytes: Math.max(1, skillMarkdownSize),
-      }),
+      readFile(
+        service,
+        {
+          repositoryId: config.repositoryId,
+          commitSha,
+          filePath: skillMarkdownPath,
+          maxBytes: Math.max(1, skillMarkdownSize),
+        },
+        access,
+      ),
     );
     const frontmatter = parseFrontmatter(frontmatterMarkdown.toString('utf8'));
     const codeFile = declaredCodeFile || (typeof frontmatter.codeFile === 'string' ? frontmatter.codeFile : undefined);
     const entries = codeFile
       ? await requireGitExport(
-          service.listTree({ repositoryId: config.repositoryId, commitSha, rootPath: skillRoot, recursive: true }),
+          listTree(
+            service,
+            { repositoryId: config.repositoryId, commitSha, rootPath: skillRoot, recursive: true },
+            access,
+          ),
         )
       : [{ type: 'blob' as const, path: 'SKILL.md', size: skillMarkdownSize }];
     const fileEntries = entries.filter((item) => item.type === 'blob');
@@ -341,12 +521,16 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
     for (const file of fileEntries) {
       const relativePath = normalizeRelativePath(file.path);
       const content = await requireGitExport(
-        service.readFile({
-          repositoryId: config.repositoryId,
-          commitSha,
-          filePath: joinPath(skillRoot, relativePath),
-          maxBytes: Math.max(1, file.size),
-        }),
+        readFile(
+          service,
+          {
+            repositoryId: config.repositoryId,
+            commitSha,
+            filePath: joinPath(skillRoot, relativePath),
+            maxBytes: Math.max(1, file.size),
+          },
+          access,
+        ),
       );
       if (
         !Buffer.isBuffer(content) ||
@@ -426,6 +610,6 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
   }
 
   releaseSource(source: RegistrySourceDescriptor): void {
-    this.pinnedCommits.delete(source.id);
+    this.pinnedSources.delete(source.id);
   }
 }

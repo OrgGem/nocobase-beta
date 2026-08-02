@@ -1,5 +1,6 @@
 import { GitManagerSourceProvider } from '../providers/git-manager-provider';
 import { ARTIFACT_LIMITS } from '../services/artifact-builder';
+import { SOURCE_INGESTION_LIMITS } from '../services/candidate-validator';
 
 const commitA = 'a'.repeat(40);
 const commitB = 'b'.repeat(40);
@@ -55,7 +56,50 @@ describe('GitManagerSourceProvider', () => {
     expect(resolveCommit).toHaveBeenCalledTimes(2);
   });
 
-  it('generates a bounded virtual manifest from direct skill folders when skills.json is absent', async () => {
+  it.each([['.kiro'], ['.kiro/skills']])(
+    'uses a configured root first and falls back to its skills subfolder only when it exists (%s)',
+    async (rootPath) => {
+      const readFile = vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }));
+      const listTree = vi
+        .fn()
+        .mockImplementation(async ({ rootPath, recursive }: { rootPath: string; recursive: boolean }) => {
+          expect(recursive).toBe(false);
+          if (rootPath === '.kiro') {
+            return [{ type: 'tree', path: 'skills', size: 0 }];
+          }
+          if (rootPath === '.kiro/skills') {
+            return [
+              { type: 'tree', path: 'alpha', size: 0 },
+              { type: 'tree', path: 'beta', size: 0 },
+              { type: 'tree', path: 'not-a-skill', size: 0 },
+            ];
+          }
+          if (rootPath === '.kiro/skills/not-a-skill') {
+            return [{ type: 'blob', path: 'README.md', size: 10 }];
+          }
+          return [{ type: 'blob', path: 'SKILL.md', size: 10 }];
+        });
+      const provider = new GitManagerSourceProvider({
+        get: () => ({
+          registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
+        }),
+      });
+
+      await expect(
+        provider.discover({
+          id: 'source-1',
+          providerType: 'git-manager',
+          namespace: 'orggem',
+          providerConfig: { repositoryId: 1, ref: 'main', rootPath },
+        }),
+      ).resolves.toEqual(['alpha', 'beta']);
+      expect(listTree).not.toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/skills/skills' }));
+    },
+  );
+
+  it('keeps a configured root that directly contains skill folders', async () => {
     const readFile = vi
       .fn()
       .mockRejectedValue(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }));
@@ -63,17 +107,13 @@ describe('GitManagerSourceProvider', () => {
       .fn()
       .mockImplementation(async ({ rootPath, recursive }: { rootPath: string; recursive: boolean }) => {
         expect(recursive).toBe(false);
-        if (rootPath === '.kiro/skills') {
-          return [
-            { type: 'tree', path: 'alpha', size: 0 },
-            { type: 'tree', path: 'beta', size: 0 },
-            { type: 'tree', path: 'not-a-skill', size: 0 },
-          ];
+        if (rootPath === 'agent-assets') {
+          return [{ type: 'tree', path: 'reporting', size: 0 }];
         }
-        if (rootPath === '.kiro/skills/not-a-skill') {
-          return [{ type: 'blob', path: 'README.md', size: 10 }];
+        if (rootPath === 'agent-assets/reporting') {
+          return [{ type: 'blob', path: 'SKILL.md', size: 10 }];
         }
-        return [{ type: 'blob', path: 'SKILL.md', size: 10 }];
+        throw new Error(`Unexpected root path: ${rootPath}`);
       });
     const provider = new GitManagerSourceProvider({
       get: () => ({
@@ -86,9 +126,86 @@ describe('GitManagerSourceProvider', () => {
         id: 'source-1',
         providerType: 'git-manager',
         namespace: 'orggem',
-        providerConfig: { repositoryId: 1, ref: 'main', rootPath: '.kiro' },
+        providerConfig: { repositoryId: 1, ref: 'main', rootPath: 'agent-assets' },
       }),
-    ).resolves.toEqual(['alpha', 'beta']);
+    ).resolves.toEqual(['reporting']);
+    expect(listTree).not.toHaveBeenCalledWith(expect.objectContaining({ rootPath: 'agent-assets/skills' }));
+  });
+
+  it('does not append another skills directory when the configured root already ends in skills', async () => {
+    const readFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }));
+    const listTree = vi.fn().mockImplementation(async ({ rootPath }: { rootPath: string }) => {
+      if (rootPath === 'agent-assets/skills') {
+        return [{ type: 'tree', path: 'skills', size: 0 }];
+      }
+      if (rootPath === 'agent-assets/skills/skills') {
+        return [{ type: 'blob', path: 'SKILL.md', size: 10 }];
+      }
+      throw new Error(`Unexpected root path: ${rootPath}`);
+    });
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
+      }),
+    });
+
+    await expect(
+      provider.discover({
+        id: 'source-1',
+        providerType: 'git-manager',
+        namespace: 'orggem',
+        providerConfig: { repositoryId: 1, ref: 'main', rootPath: 'agent-assets/skills' },
+      }),
+    ).resolves.toEqual(['skills']);
+    expect(listTree).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootPath: 'agent-assets/skills/skills/skills' }),
+    );
+  });
+
+  it('falls back to a nested skills directory when the configured root has more unrelated folders than the skill limit', async () => {
+    const unrelatedFolders = Array.from({ length: SOURCE_INGESTION_LIMITS.maxItems + 1 }, (_, index) => ({
+      type: 'tree' as const,
+      path: `unrelated-${index}`,
+      size: 0,
+    }));
+    const readFile = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }));
+    const listTree = vi
+      .fn()
+      .mockImplementation(async ({ rootPath, recursive }: { rootPath: string; recursive: boolean }) => {
+        expect(recursive).toBe(false);
+        if (rootPath === 'automation') {
+          return [...unrelatedFolders, { type: 'tree' as const, path: 'skills', size: 0 }];
+        }
+        if (rootPath === 'automation/skills') {
+          return [{ type: 'tree' as const, path: 'report', size: 0 }];
+        }
+        if (rootPath === 'automation/skills/report') {
+          return [{ type: 'blob' as const, path: 'SKILL.md', size: 10 }];
+        }
+        if (rootPath.startsWith('automation/unrelated-')) {
+          return [];
+        }
+        throw new Error(`Unexpected root path: ${rootPath}`);
+      });
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
+      }),
+    });
+
+    await expect(
+      provider.discover({
+        id: 'source-1',
+        providerType: 'git-manager',
+        namespace: 'orggem',
+        providerConfig: { repositoryId: 1, ref: 'main', rootPath: 'automation' },
+      }),
+    ).resolves.toEqual(['report']);
+    expect(listTree).toHaveBeenCalledWith(expect.objectContaining({ rootPath: 'automation/skills' }));
   });
 
   it('builds an instruction-only candidate from SKILL.md without scanning unrelated files', async () => {
@@ -125,7 +242,9 @@ describe('GitManagerSourceProvider', () => {
 
     expect(candidate.manifest.runtime).toEqual({ kind: 'instruction', entrypoint: 'SKILL.md' });
     expect(candidate.files.map((file) => file.path)).toEqual(['SKILL.md']);
-    expect(listTree).toHaveBeenCalledTimes(1);
+    expect(listTree).toHaveBeenCalledTimes(3);
+    expect(listTree).toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/gen-doc-ppt-master' }));
+    expect(listTree).not.toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/skills/gen-doc-ppt-master' }));
     expect(readFile).toHaveBeenCalledTimes(3);
   });
 
@@ -304,5 +423,88 @@ describe('GitManagerSourceProvider', () => {
         'report',
       ),
     ).rejects.toMatchObject({ code: 'SOURCE_CONTENT_CHANGED', status: 409 });
+  });
+
+  it('forwards the requesting user to Git Manager and maps repository scope denial to a stable 403', async () => {
+    const access = { kind: 'user' as const, userId: 'admin-1', roles: ['registry-manager'] };
+    const denied = Object.assign(new Error('repository denied'), { code: 'REGISTRY_REPOSITORY_ACCESS_DENIED' });
+    const resolveCommit = vi.fn().mockRejectedValue(denied);
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: {
+          contractVersion: 2,
+          capabilities: ['registry-content-with-actor', 'registry-content-authorize-source'],
+          resolveCommit,
+          listTree: vi.fn(),
+          readFile: vi.fn(),
+          assertRepositoryAccess: vi.fn(),
+        },
+      }),
+    });
+    const source = {
+      id: 'source-1',
+      providerType: 'git-manager' as const,
+      namespace: 'acme',
+      providerConfig: { repositoryId: 9, ref: 'refs/heads/main' },
+    };
+
+    await expect(provider.discover(source, access)).rejects.toMatchObject({
+      code: 'SOURCE_REPOSITORY_ACCESS_DENIED',
+      status: 403,
+    });
+    expect(resolveCommit).toHaveBeenCalledWith(9, 'refs/heads/main', access);
+  });
+
+  it('requires an actor-aware Git Manager contract instead of failing with a raw method error', async () => {
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: {
+          resolveCommit: vi.fn(),
+          listTree: vi.fn(),
+          readFile: vi.fn(),
+        },
+      }),
+    });
+
+    await expect(
+      provider.discover(
+        {
+          id: 'source-1',
+          providerType: 'git-manager',
+          namespace: 'acme',
+          providerConfig: { repositoryId: 9, ref: 'refs/heads/main' },
+        },
+        { kind: 'user', roles: ['registry-manager'] },
+      ),
+    ).rejects.toMatchObject({ code: 'SOURCE_PROVIDER_UNAVAILABLE', status: 424 });
+  });
+
+  it('authorizes a Git source binding before it can be persisted', async () => {
+    const assertRepositoryAccess = vi.fn().mockResolvedValue(undefined);
+    const provider = new GitManagerSourceProvider({
+      get: () => ({
+        registryContentService: {
+          contractVersion: 2,
+          capabilities: ['registry-content-with-actor', 'registry-content-authorize-source'],
+          assertRepositoryAccess,
+          resolveCommit: vi.fn(),
+          listTree: vi.fn(),
+          readFile: vi.fn(),
+        },
+      }),
+    });
+    const access = { kind: 'user' as const, userId: 'admin-1', roles: ['registry-manager'] };
+
+    await provider.assertAccess(
+      {
+        id: 'new-source',
+        providerType: 'git-manager',
+        namespace: 'acme',
+        providerConfig: { repositoryId: 9, ref: 'refs/heads/main' },
+      },
+      access,
+    );
+
+    expect(assertRepositoryAccess).toHaveBeenCalledWith(9, access);
   });
 });

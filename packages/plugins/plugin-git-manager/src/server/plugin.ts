@@ -11,17 +11,40 @@ import * as subtreeActions from './actions/subtree';
 import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { startPoller, stopPoller } from './poller';
-import { RegistryGitContentService } from './services/registry-content-service';
+import { RegistryGitContentService, SkillHubGitContentService } from './services/registry-content-service';
+import { enforceRepositoryAccess, enforceRepositoryCollectionAccess } from './repository-access';
+import { isGitManagerResourceResponse, redactCredentialFields } from './utils/redact';
+import { containsCredentialBearingUrlField, URL_USERINFO_NOT_ALLOWED } from './utils/url-security';
+
+const GIT_CONFIGURATION_URL_FIELDS = new Set(['repoUrl', 'baseUrl']);
+
+export function isGitConfigurationUrlMutation(resourceName: unknown, actionName: unknown): boolean {
+  return (
+    typeof actionName === 'string' &&
+    ['create', 'update'].includes(actionName) &&
+    isGitManagerResourceResponse(resourceName)
+  );
+}
 
 export class PluginGitManagerServer extends Plugin {
   // @ts-ignore
   declare app: any;
   // @ts-ignore
   declare db: any;
-  registryContentService: RegistryGitContentService;
+  registryContentService!: RegistryGitContentService;
+  skillHubContentService!: SkillHubGitContentService;
 
   async afterAdd() {
-    this.registryContentService = new RegistryGitContentService((this as unknown as { db: Database }).db);
+    this.registryContentService = new RegistryGitContentService(
+      (this as unknown as { db: Database }).db,
+      undefined,
+      this.app.acl,
+    );
+    this.skillHubContentService = new SkillHubGitContentService(
+      (this as unknown as { db: Database }).db,
+      undefined,
+      this.app.acl,
+    );
   }
 
   async beforeLoad() {
@@ -75,6 +98,9 @@ export class PluginGitManagerServer extends Plugin {
         subtreeReplace: subtreeActions.subtreeRunOnAppProcess,
       },
     });
+
+    (this as any).app.resourceManager.use(enforceRepositoryAccess);
+    (this as any).app.resourceManager.use(enforceRepositoryCollectionAccess);
 
     // Suppress noisy workflow pre-action/post-action warnings for custom resources
     (this as any).app.use(async (ctx, next) => {
@@ -251,10 +277,22 @@ export class PluginGitManagerServer extends Plugin {
         }
       }
 
-      if (
-        (resource === 'gitRepositories' || resource === 'gitAccounts') &&
-        ['create', 'update'].includes(ctx.action?.actionName)
-      ) {
+      if (isGitConfigurationUrlMutation(resource, ctx.action?.actionName)) {
+        const actionParams = ctx.action?.params;
+        const requestBody = ctx.request?.body;
+        const hasCredentialBearingUrl = [
+          actionParams,
+          actionParams?.values,
+          requestBody,
+          requestBody?.values,
+          ctx.query,
+          ctx.request?.query,
+        ].some((source) => containsCredentialBearingUrlField(source, GIT_CONFIGURATION_URL_FIELDS));
+
+        if (hasCredentialBearingUrl) {
+          ctx.throw(400, ctx.t(URL_USERINFO_NOT_ALLOWED, { ns: (this as any).name }));
+        }
+
         if (ctx.action.params?.values?.pat === '••••••••') {
           delete ctx.action.params.values.pat;
         }
@@ -265,28 +303,14 @@ export class PluginGitManagerServer extends Plugin {
       return next();
     });
 
-    // Strip PAT from API responses — scoped to gitRepositories and gitAccounts
+    // Strip PAT from every Git Manager response, including nested association routes.
     (this as any).app.resourceManager.use(async (ctx, next) => {
       const resource = ctx.action?.resourceName;
-      if (resource !== 'gitRepositories' && resource !== 'gitAccounts') {
+      if (!isGitManagerResourceResponse(resource)) {
         return next();
       }
       await next();
-      if (ctx.body) {
-        const items = Array.isArray(ctx.body)
-          ? ctx.body
-          : ctx.body?.data
-            ? Array.isArray(ctx.body.data)
-              ? ctx.body.data
-              : [ctx.body.data]
-            : [ctx.body];
-        items.forEach((item) => {
-          if (item && typeof item === 'object') {
-            if (item.pat) item.pat = '••••••••';
-            if (item.dataValues?.pat) item.dataValues.pat = '••••••••';
-          }
-        });
-      }
+      redactCredentialFields(ctx.body);
     });
   }
 

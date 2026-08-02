@@ -29,6 +29,8 @@ const aiApiConfigResource: ResourceOptions = {
             defaultLlmService: '',
             enabledLlmServices: [],
             rateLimitPerMinute: 60,
+            quotaEnabled: false,
+            defaultReservationOutputTokens: 4096,
             options: {},
           },
         });
@@ -50,6 +52,8 @@ const aiApiConfigResource: ResourceOptions = {
             defaultLlmService: values.defaultLlmService ?? '',
             enabledLlmServices: values.enabledLlmServices ?? [],
             rateLimitPerMinute: values.rateLimitPerMinute ?? 60,
+            quotaEnabled: values.quotaEnabled ?? false,
+            defaultReservationOutputTokens: values.defaultReservationOutputTokens ?? 4096,
             options: values.options ?? {},
           },
         });
@@ -60,6 +64,10 @@ const aiApiConfigResource: ResourceOptions = {
         if (values.defaultLlmService !== undefined) updateData.defaultLlmService = values.defaultLlmService;
         if (values.enabledLlmServices !== undefined) updateData.enabledLlmServices = values.enabledLlmServices;
         if (values.rateLimitPerMinute !== undefined) updateData.rateLimitPerMinute = values.rateLimitPerMinute;
+        if (values.quotaEnabled !== undefined) updateData.quotaEnabled = values.quotaEnabled;
+        if (values.defaultReservationOutputTokens !== undefined) {
+          updateData.defaultReservationOutputTokens = values.defaultReservationOutputTokens;
+        }
         if (values.options !== undefined) updateData.options = values.options;
 
         await config.update(updateData);

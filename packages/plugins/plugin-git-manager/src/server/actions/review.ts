@@ -1,5 +1,6 @@
 import { Context } from '@nocobase/actions';
 import type { Application } from '@nocobase/server';
+import { getEffectiveActionParams } from '../repository-access';
 import { parseGitLabProject } from '../utils/gitlab-url';
 import { redactPat } from '../utils/redact';
 import { getRepoAccount } from '../utils/get-repo-account';
@@ -74,10 +75,6 @@ let reviewQueueKickTimer: NodeJS.Timeout | null = null;
 let reviewQueueProcessing = false;
 let reviewWakeHandler: ((message?: any) => Promise<void>) | null = null;
 
-function getActionParams(ctx: Context) {
-  return { ...ctx.action.params, ...ctx.action.params?.values, ...((ctx as any).request?.body || {}) };
-}
-
 /**
  * Per-target mutex to prevent two concurrent calls to
  * `triggerReviewInternal` for the same MR / commit / branch from racing
@@ -112,7 +109,7 @@ async function withTriggerLock<T>(app: Application, key: string, fn: () => Promi
  * git-review worker. The action returns immediately with the reviewId.
  */
 export async function triggerReview(ctx: Context, next: () => Promise<void>) {
-  const params = getActionParams(ctx);
+  const params = getEffectiveActionParams(ctx);
   const { flowId, repositoryId, targetType, mrIid, commitSha, branch, folderPath, extraInstructions } = params;
 
   if (!repositoryId) ctx.throw(400, 'repositoryId is required');
@@ -165,6 +162,10 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     flow = await flowsRepo.findOne({ filterByTk: args.flowId });
     if (!flow) throwHttp(404, 'Review flow not found');
     if (!flow.get('enabled')) throwHttp(400, 'Review flow is disabled');
+    const flowRepositoryId = flow.get('repositoryId');
+    if (flowRepositoryId != null && String(flowRepositoryId) !== String(args.repositoryId)) {
+      throwHttp(400, 'Review flow does not belong to this repository');
+    }
   } else {
     // Find flows scoped to repo or global, prefer repo-specific
     const candidates = await flowsRepo.find({
@@ -213,6 +214,11 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
   const existing = await reviewsRepo.findOne({ filter: targetFilter });
   // Preserve a poller-tracked latestSha if we don't have a fresher one.
   const existingLatestSha = existing?.get('latestSha') as string | null | undefined;
+  // The actor must be selected from a server-owned field when the worker
+  // executes. Refresh it on every manual requeue so an old, more-privileged
+  // creator cannot be reused. Poll-triggered reviews deliberately have no
+  // user and retain the established system/admin worker behavior.
+  const queuedActorId = args.triggeredBy === 'poll' ? null : args.userId ?? null;
   const baseValues: any = {
     flowId: flow.get('id'),
     repositoryId: args.repositoryId,
@@ -254,11 +260,21 @@ async function triggerReviewInternalLocked(app: Application, args: TriggerArgs):
     }
     await reviewsRepo.update({
       filterByTk: existing.get('id'),
-      values: baseValues,
+      values: {
+        ...baseValues,
+        createdById: queuedActorId,
+      },
     });
     reviewId = existing.get('id') as number;
   } else {
-    const review = await reviewsRepo.create({ values: baseValues });
+    const review = await reviewsRepo.create({
+      values: {
+        ...baseValues,
+        // The worker later derives its acting user from this server-owned
+        // field rather than mutable review metadata.
+        createdById: queuedActorId,
+      },
+    });
     reviewId = review.get('id') as number;
   }
 
@@ -494,6 +510,26 @@ function getQueuedReviewMetadata(review: any): QueuedReviewMetadata {
   return typeof raw === 'object' ? raw : {};
 }
 
+type ReviewRecord = {
+  get(attribute: string): unknown;
+};
+
+/**
+ * A queued review's metadata can be changed by database mutations, so it must
+ * never select the user whose roles the background AI run receives. The
+ * server-owned field is refreshed only by the trusted queueing path.
+ */
+export function resolveImmutableReviewActorId(review: ReviewRecord): number | string | null {
+  const createdById = review.get('createdById');
+  if (typeof createdById === 'number' && Number.isFinite(createdById)) {
+    return createdById;
+  }
+  if (typeof createdById === 'string' && createdById.trim()) {
+    return createdById;
+  }
+  return null;
+}
+
 function toNullableNumber(value: any): number | null {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
@@ -605,6 +641,11 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
     const targetType = (message.targetType || review.get('targetType')) as 'mr' | 'commit' | 'branch' | 'folder';
 
     try {
+      const actorUserId = resolveImmutableReviewActorId(review);
+      if (actorUserId == null && review.get('triggeredBy') !== 'poll') {
+        throw new Error('Manual review has no immutable triggering user');
+      }
+
       const repo = await db.getRepository('gitRepositories').findOne({
         filterByTk: message.repositoryId || review.get('repositoryId'),
       });
@@ -614,6 +655,11 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
       const storedFlow = await db.getRepository('gitReviewFlows').findOne({
         filterByTk: flowSnapshot?.id || review.get('flowId'),
       });
+      if (!storedFlow) throw new Error('Review flow not found');
+      const flowRepositoryId = storedFlow.get('repositoryId');
+      if (flowRepositoryId != null && String(flowRepositoryId) !== String(repo.get('id'))) {
+        throw new Error('Review flow does not belong to this repository');
+      }
       const flow = createFlowFromSnapshot(flowSnapshot, storedFlow);
       const aiEmployeeUsername =
         message.aiEmployeeUsername || metadata.aiEmployeeUsername || (flow.get('aiEmployeeUsername') as string);
@@ -632,7 +678,7 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
         headSha: message.headSha || (review.get('headSha') as string | null),
         aiEmployeeUsername,
         extraInstructions: message.extraInstructions ?? metadata.extraInstructions ?? undefined,
-        userId: message.userId ?? metadata.userId ?? null,
+        userId: actorUserId,
       });
     } catch (err) {
       app.log?.error?.('git review queue: failed before review execution', err);
@@ -645,7 +691,7 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
  * Mark a review as approved and post its content to GitLab as an MR note.
  */
 export async function reviewApprovePost(ctx: Context, next: () => Promise<void>) {
-  const params = getActionParams(ctx);
+  const params = getEffectiveActionParams(ctx);
   const { reviewId, editedMarkdown } = params;
   if (!reviewId) ctx.throw(400, 'reviewId is required');
 
@@ -686,7 +732,7 @@ export async function reviewApprovePost(ctx: Context, next: () => Promise<void>)
  * Reject a pending review (do not post to GitLab).
  */
 export async function reviewReject(ctx: Context, next: () => Promise<void>) {
-  const params = getActionParams(ctx);
+  const params = getEffectiveActionParams(ctx);
   const { reviewId, reason } = params;
   if (!reviewId) ctx.throw(400, 'reviewId is required');
 
@@ -944,13 +990,24 @@ async function runReview(app: Application, args: RunReviewArgs) {
   }
 }
 
-async function resolveBackgroundReviewRoles(db: any, userId?: number | string | null): Promise<string[]> {
+type BackgroundReviewRoleRepository = {
+  find(input: { filter?: { userId: number | string }; raw: true }): Promise<unknown>;
+};
+
+type BackgroundReviewRoleDatabase = {
+  getRepository(name: 'users.roles' | 'rolesUsers', sourceKey?: number | string): BackgroundReviewRoleRepository;
+};
+
+export async function resolveBackgroundReviewRoles(
+  db: BackgroundReviewRoleDatabase,
+  userId?: number | string | null,
+): Promise<string[]> {
   if (!userId) return ['admin'];
 
   try {
     const roles = await db.getRepository('users.roles', userId).find({ raw: true });
     const roleNames = (Array.isArray(roles) ? roles : [])
-      .map((role: any) => role?.name)
+      .map((role: unknown) => (role && typeof role === 'object' ? (role as { name?: unknown }).name : undefined))
       .filter((name: unknown): name is string => typeof name === 'string' && !!name);
     if (roleNames.length) return roleNames;
   } catch {
@@ -964,14 +1021,16 @@ async function resolveBackgroundReviewRoles(db: any, userId?: number | string | 
       raw: true,
     });
     const roleNames = (Array.isArray(mappings) ? mappings : [])
-      .map((mapping: any) => mapping?.roleName)
+      .map((mapping: unknown) =>
+        mapping && typeof mapping === 'object' ? (mapping as { roleName?: unknown }).roleName : undefined,
+      )
       .filter((name: unknown): name is string => typeof name === 'string' && !!name);
     if (roleNames.length) return roleNames;
   } catch {
-    // Keep the synthetic ctx valid even if role lookup is unavailable.
+    // The manual actor must not inherit an administrative fallback.
   }
 
-  return ['admin'];
+  throw new Error('Unable to resolve roles for review actor');
 }
 
 function buildReviewPrompt(args: RunReviewArgs): string {

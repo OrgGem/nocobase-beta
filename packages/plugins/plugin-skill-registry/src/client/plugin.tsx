@@ -10,10 +10,10 @@ import { withLegacySkillRegistryPermissions } from './LegacySkillRegistryPage';
 
 const SETTINGS_KEY = 'skill-registry';
 const SETTINGS_PAGES = [
-  { key: 'index', title: 'Catalog', Component: withLegacySkillRegistryPermissions(CatalogPage), sort: -1 },
+  { key: 'index', title: 'Skills', Component: withLegacySkillRegistryPermissions(CatalogPage), sort: -1 },
   { key: 'sources', title: 'Sources', Component: withLegacySkillRegistryPermissions(SourcesPage) },
   { key: 'runs', title: 'Sync runs', Component: withLegacySkillRegistryPermissions(SyncRunsPage) },
-  { key: 'versions', title: 'Versions', Component: withLegacySkillRegistryPermissions(VersionsPage) },
+  { key: 'versions', title: 'Version audit', Component: withLegacySkillRegistryPermissions(VersionsPage) },
   { key: 'settings', title: 'Settings', Component: withLegacySkillRegistryPermissions(SettingsPage) },
 ] as const;
 

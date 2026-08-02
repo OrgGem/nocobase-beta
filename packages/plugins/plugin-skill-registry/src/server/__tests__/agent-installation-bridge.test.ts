@@ -99,6 +99,27 @@ function registryDatabase(
 }
 
 describe('AgentInstallationBridge', () => {
+  it('reads installation states only through the Agent Orchestrator service contract', async () => {
+    const artifact = artifactFixture();
+    const installationService = {
+      installRegistryVersion: vi.fn(),
+      getRegistryInstallationStates: vi
+        .fn()
+        .mockResolvedValue([{ installationId: 'installation-1', registryVersionId: 'version-1', status: 'installed' }]),
+    };
+    const bridge = new AgentInstallationBridge(
+      registryDatabase(artifact),
+      {} as never,
+      { get: vi.fn().mockReturnValue({ registrySkillInstallationService: installationService }) },
+      new SignatureService(),
+    );
+
+    await expect(bridge.installationStates(['version-1'])).resolves.toEqual([
+      expect.objectContaining({ registryVersionId: 'version-1', status: 'installed' }),
+    ]);
+    expect(installationService.getRegistryInstallationStates).toHaveBeenCalledWith(['version-1']);
+  });
+
   it('re-verifies and unpacks an immutable artifact before reporting it as installable', async () => {
     const artifact = artifactFixture();
     const artifactStore = { read: vi.fn().mockResolvedValue(artifact.content) };
@@ -166,6 +187,63 @@ describe('AgentInstallationBridge', () => {
     expect(installationService.installRegistryVersion).not.toHaveBeenCalled();
   });
 
+  it('returns a stable busy error before Agent Orchestrator changes package files', async () => {
+    const artifact = artifactFixture();
+    const installationService = { installRegistryVersion: vi.fn() };
+    const tryAcquire = vi.fn().mockRejectedValue(new Error('already locked'));
+    const bridge = new AgentInstallationBridge(
+      registryDatabase(artifact),
+      { read: vi.fn().mockResolvedValue(artifact.content) } as never,
+      { get: vi.fn().mockReturnValue({ registrySkillInstallationService: installationService }) },
+      new SignatureService(),
+      { tryAcquire } as never,
+    );
+
+    await expect(bridge.install('version-1', 'pinned')).rejects.toMatchObject({
+      code: 'REGISTRY_OPERATION_BUSY',
+      status: 409,
+    });
+    expect(tryAcquire).toHaveBeenCalledWith('skill-registry:package:package-1', 0);
+    expect(installationService.installRegistryVersion).not.toHaveBeenCalled();
+  });
+
+  it('re-reads the version after acquiring the package lock and stops a concurrent yank', async () => {
+    const artifact = artifactFixture();
+    const published = model({
+      id: 'version-1',
+      status: 'published',
+      packageId: 'package-1',
+      artifactId: 'artifact-1',
+    });
+    const yanked = model({
+      id: 'version-1',
+      status: 'yanked',
+      packageId: 'package-1',
+      artifactId: 'artifact-1',
+    });
+    const versions = { findOne: vi.fn().mockResolvedValueOnce(published).mockResolvedValueOnce(yanked) };
+    const bridge = new AgentInstallationBridge(
+      {
+        getRepository: (name: string) => {
+          if (name === 'skillRegistryVersions') return versions as never;
+          throw new Error(`Unexpected repository ${name}`);
+        },
+      } as never,
+      {} as never,
+      { get: vi.fn() },
+      new SignatureService(),
+      {
+        tryAcquire: vi.fn().mockResolvedValue({ runExclusive: (operation: () => Promise<unknown>) => operation() }),
+      } as never,
+    );
+
+    await expect(bridge.install('version-1', 'pinned')).rejects.toMatchObject({
+      code: 'VERSION_NOT_FOUND',
+      status: 404,
+    });
+    expect(versions.findOne).toHaveBeenCalledTimes(2);
+  });
+
   it('restores the previous installation only through Agent Orchestrator and a verified registry artifact', async () => {
     const artifact = artifactFixture();
     const installationService = {
@@ -188,7 +266,9 @@ describe('AgentInstallationBridge', () => {
       installationId: 'installation-1',
       toolName: 'registry_acme_report',
     });
-    expect(installationService.getRollbackTarget).toHaveBeenCalledWith('installation-2');
+    expect(installationService.getRollbackTarget).toHaveBeenCalledTimes(2);
+    expect(installationService.getRollbackTarget).toHaveBeenNthCalledWith(1, 'installation-2');
+    expect(installationService.getRollbackTarget).toHaveBeenNthCalledWith(2, 'installation-2');
     expect(installationService.installRegistryVersion).toHaveBeenCalledWith(
       expect.objectContaining({
         registryVersionId: 'version-1',
@@ -197,5 +277,32 @@ describe('AgentInstallationBridge', () => {
         updatePolicy: 'pinned',
       }),
     );
+  });
+
+  it('re-checks the rollback target after acquiring the package lock', async () => {
+    const artifact = artifactFixture();
+    const installationService = {
+      getRollbackTarget: vi
+        .fn()
+        .mockResolvedValueOnce({ registryVersionId: 'version-1', updatePolicy: 'pinned' })
+        .mockResolvedValueOnce(null),
+      installRegistryVersion: vi.fn(),
+    };
+    const bridge = new AgentInstallationBridge(
+      registryDatabase(artifact),
+      { read: vi.fn().mockResolvedValue(artifact.content) } as never,
+      { get: vi.fn().mockReturnValue({ registrySkillInstallationService: installationService }) },
+      new SignatureService(),
+      {
+        tryAcquire: vi.fn().mockResolvedValue({ runExclusive: (operation: () => Promise<unknown>) => operation() }),
+      } as never,
+    );
+
+    await expect(bridge.rollback('installation-2', 'admin-1')).rejects.toMatchObject({
+      code: 'ROLLBACK_UNAVAILABLE',
+      status: 409,
+    });
+    expect(installationService.getRollbackTarget).toHaveBeenCalledTimes(2);
+    expect(installationService.installRegistryVersion).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,13 @@ import type { Readable } from 'stream';
 import type { Database } from '@nocobase/database';
 
 import { getGitBinaryPath, validateLocalPath, validateRef } from '../actions/git-actions';
+import {
+  hasRepositoryAccess,
+  type RegistryGitAccessContext,
+  type RepositoryPermissionChecker,
+} from '../repository-access';
+
+export type { RegistryGitAccessContext } from '../repository-access';
 
 function positiveLimit(value: string | undefined, fallback: number, maximum: number): number {
   const parsed = Number(value);
@@ -40,8 +47,17 @@ type RepositoryModel = {
 };
 
 export const REGISTRY_EXPORT_NOT_GRANTED = 'REGISTRY_EXPORT_NOT_GRANTED';
+export const REGISTRY_REPOSITORY_ACCESS_DENIED = 'REGISTRY_REPOSITORY_ACCESS_DENIED';
+export const SKILL_HUB_REPOSITORY_ACCESS_DENIED = 'SKILL_HUB_REPOSITORY_ACCESS_DENIED';
 export const REGISTRY_CONTENT_LIMIT_EXCEEDED = 'REGISTRY_CONTENT_LIMIT_EXCEEDED';
 export const REGISTRY_GIT_FILE_NOT_FOUND = 'REGISTRY_GIT_FILE_NOT_FOUND';
+export const REGISTRY_GIT_CONTENT_CONTRACT_VERSION = 2;
+export const REGISTRY_GIT_CONTENT_CAPABILITIES = [
+  'registry-content-with-actor',
+  'registry-content-authorize-source',
+] as const;
+export const SKILL_HUB_GIT_CONTENT_CONTRACT_VERSION = 2;
+export const SKILL_HUB_GIT_CONTENT_CAPABILITIES = ['skill-hub-content-with-actor'] as const;
 
 const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 const MAX_STDERR_BYTES = 64 * 1024;
@@ -52,6 +68,24 @@ export class RegistryExportNotGrantedError extends Error {
   constructor() {
     super('Registry export is not enabled for this repository.');
     this.name = 'RegistryExportNotGrantedError';
+  }
+}
+
+export class RegistryRepositoryAccessDeniedError extends Error {
+  readonly code = REGISTRY_REPOSITORY_ACCESS_DENIED;
+
+  constructor() {
+    super('The current actor is not authorized to read this repository for registry export.');
+    this.name = 'RegistryRepositoryAccessDeniedError';
+  }
+}
+
+export class SkillHubRepositoryAccessDeniedError extends Error {
+  readonly code = SKILL_HUB_REPOSITORY_ACCESS_DENIED;
+
+  constructor() {
+    super('The current actor is not authorized to read this repository for Skill Hub.');
+    this.name = 'SkillHubRepositoryAccessDeniedError';
   }
 }
 
@@ -73,6 +107,33 @@ export class RegistryGitFileNotFoundError extends Error {
   }
 }
 
+interface GitContentAccessPolicy {
+  contractVersion: number;
+  capabilities: readonly string[];
+  allowsSystemScheduledSync: boolean;
+  requiresRegistryExport: boolean;
+  createAccessDeniedError(): Error;
+  createRepositoryUnavailableError(): Error;
+}
+
+const REGISTRY_CONTENT_ACCESS_POLICY: GitContentAccessPolicy = {
+  contractVersion: REGISTRY_GIT_CONTENT_CONTRACT_VERSION,
+  capabilities: REGISTRY_GIT_CONTENT_CAPABILITIES,
+  allowsSystemScheduledSync: true,
+  requiresRegistryExport: true,
+  createAccessDeniedError: () => new RegistryRepositoryAccessDeniedError(),
+  createRepositoryUnavailableError: () => new RegistryExportNotGrantedError(),
+};
+
+const SKILL_HUB_CONTENT_ACCESS_POLICY: GitContentAccessPolicy = {
+  contractVersion: SKILL_HUB_GIT_CONTENT_CONTRACT_VERSION,
+  capabilities: SKILL_HUB_GIT_CONTENT_CAPABILITIES,
+  allowsSystemScheduledSync: false,
+  requiresRegistryExport: false,
+  createAccessDeniedError: () => new SkillHubRepositoryAccessDeniedError(),
+  createRepositoryUnavailableError: () => new SkillHubRepositoryAccessDeniedError(),
+};
+
 function boundedPositive(value: number | undefined, fallback: number, maximum: number): number {
   return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= maximum ? Number(value) : fallback;
 }
@@ -85,17 +146,17 @@ function runGitBuffer(localPath: string, args: string[], maximumBytes: number, t
     let stderr = '';
     let stderrBytes = 0;
     let settled = false;
-    const fail = (error: Error) => {
-      if (settled) {
+    let pendingFailure: Error | undefined;
+    const stop = (error: Error) => {
+      if (settled || pendingFailure) {
         return;
       }
-      settled = true;
+      pendingFailure = error;
       clearTimeout(timer);
       child.kill();
-      reject(error);
     };
     const timer = setTimeout(() => {
-      fail(new RegistryContentLimitError('Git registry read exceeded its execution timeout.'));
+      stop(new RegistryContentLimitError('Git registry read exceeded its execution timeout.'));
     }, timeoutMs);
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -104,7 +165,7 @@ function runGitBuffer(localPath: string, args: string[], maximumBytes: number, t
       }
       outputBytes += chunk.length;
       if (outputBytes > maximumBytes) {
-        fail(new RegistryContentLimitError('Git registry read exceeded its output limit.'));
+        stop(new RegistryContentLimitError('Git registry read exceeded its output limit.'));
         return;
       }
       chunks.push(chunk);
@@ -118,13 +179,25 @@ function runGitBuffer(localPath: string, args: string[], maximumBytes: number, t
       stderrBytes += bounded.length;
       stderr += bounded.toString('utf8');
     });
-    child.once('error', (error) => fail(error));
+    child.once('error', (error) => {
+      if (!pendingFailure) {
+        pendingFailure = error;
+        clearTimeout(timer);
+      }
+    });
     child.once('close', (code) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
+      // `close` guarantees that the child process and both stdio streams have
+      // released their handles. In particular, Windows otherwise may still
+      // hold a temporary Git repository directory after an output-limit kill.
+      if (pendingFailure) {
+        reject(pendingFailure);
+        return;
+      }
       if (code !== 0) {
         if (/does not exist in|exists on disk, but not in|path .* does not exist/i.test(stderr)) {
           reject(new RegistryGitFileNotFoundError());
@@ -177,14 +250,31 @@ function parseTreeLine(line: string, rootPath: string): RegistryGitTreeEntry | n
   };
 }
 
-export class RegistryGitContentService {
+class GitContentService {
+  readonly contractVersion: number;
+  readonly capabilities: readonly string[];
+
   constructor(
     private readonly database: Database,
     private readonly limits: RegistryGitContentLimits = DEFAULT_REGISTRY_GIT_CONTENT_LIMITS,
-  ) {}
+    private readonly acl?: RepositoryPermissionChecker,
+    private readonly accessPolicy: GitContentAccessPolicy = REGISTRY_CONTENT_ACCESS_POLICY,
+  ) {
+    this.contractVersion = accessPolicy.contractVersion;
+    this.capabilities = accessPolicy.capabilities;
+  }
 
-  async resolveCommit(repositoryId: string | number, ref: string): Promise<string> {
-    const repository = await this.findRepository(repositoryId);
+  /**
+   * Validates actor access before a cross-plugin service binds or reads a
+   * repository. The concrete service policy decides whether Registry export
+   * opt-in or scheduled system access is permitted.
+   */
+  async assertRepositoryAccess(repositoryId: string | number, access?: RegistryGitAccessContext): Promise<void> {
+    await this.findRepository(repositoryId, access);
+  }
+
+  async resolveCommit(repositoryId: string | number, ref: string, access?: RegistryGitAccessContext): Promise<string> {
+    const repository = await this.findRepository(repositoryId, access);
     const localPath = validateLocalPath(repositoryValue(repository, 'localPath'));
     if (!existsSync(localPath)) {
       throw new Error('Repository directory does not exist. Clone the repository before reading its content.');
@@ -205,13 +295,16 @@ export class RegistryGitContentService {
     return result.toLowerCase();
   }
 
-  async listTree(input: {
-    repositoryId: string | number;
-    commitSha: string;
-    rootPath: string;
-    recursive: boolean;
-  }): Promise<RegistryGitTreeEntry[]> {
-    const repository = await this.findRepository(input.repositoryId);
+  async listTree(
+    input: {
+      repositoryId: string | number;
+      commitSha: string;
+      rootPath: string;
+      recursive: boolean;
+    },
+    access?: RegistryGitAccessContext,
+  ): Promise<RegistryGitTreeEntry[]> {
+    const repository = await this.findRepository(input.repositoryId, access);
     const localPath = validateLocalPath(repositoryValue(repository, 'localPath'));
     if (!existsSync(localPath)) {
       throw new Error('Repository directory does not exist. Clone the repository before reading its content.');
@@ -235,13 +328,16 @@ export class RegistryGitContentService {
       .sort((left, right) => left.path.localeCompare(right.path));
   }
 
-  async readFile(input: {
-    repositoryId: string | number;
-    commitSha: string;
-    filePath: string;
-    maxBytes?: number;
-  }): Promise<Buffer> {
-    const repository = await this.findRepository(input.repositoryId);
+  async readFile(
+    input: {
+      repositoryId: string | number;
+      commitSha: string;
+      filePath: string;
+      maxBytes?: number;
+    },
+    access?: RegistryGitAccessContext,
+  ): Promise<Buffer> {
+    const repository = await this.findRepository(input.repositoryId, access);
     const localPath = validateLocalPath(repositoryValue(repository, 'localPath'));
     if (!existsSync(localPath)) {
       throw new Error('Repository directory does not exist. Clone the repository before reading its content.');
@@ -259,8 +355,11 @@ export class RegistryGitContentService {
     }
   }
 
-  async archiveTree(input: { repositoryId: string | number; commitSha: string; rootPath: string }): Promise<Readable> {
-    const repository = await this.findRepository(input.repositoryId);
+  async archiveTree(
+    input: { repositoryId: string | number; commitSha: string; rootPath: string },
+    access?: RegistryGitAccessContext,
+  ): Promise<Readable> {
+    const repository = await this.findRepository(input.repositoryId, access);
     const localPath = validateLocalPath(repositoryValue(repository, 'localPath'));
     if (!existsSync(localPath)) {
       throw new Error('Repository directory does not exist. Clone the repository before reading its content.');
@@ -290,19 +389,54 @@ export class RegistryGitContentService {
     });
   }
 
-  private async findRepository(repositoryId: string | number): Promise<RepositoryModel> {
+  private async findRepository(
+    repositoryId: string | number,
+    access?: RegistryGitAccessContext,
+  ): Promise<RepositoryModel> {
+    await this.assertAccess(repositoryId, access);
     const repository = await this.database.getRepository('gitRepositories').findOne({ filterByTk: repositoryId });
     if (!repository) {
       // Do not distinguish a missing repository from one that exists but has not
       // granted registry export. Callers cannot use this bridge to enumerate
       // repository IDs or infer private repository existence.
-      throw new RegistryExportNotGrantedError();
+      throw this.accessPolicy.createRepositoryUnavailableError();
     }
     const repositoryModel = repository as unknown as RepositoryModel;
-    if (repositoryModel.get('registryExportEnabled') !== true) {
+    if (this.accessPolicy.requiresRegistryExport && repositoryModel.get('registryExportEnabled') !== true) {
       throw new RegistryExportNotGrantedError();
     }
     return repositoryModel;
+  }
+
+  private async assertAccess(repositoryId: string | number, access?: RegistryGitAccessContext): Promise<void> {
+    if (!access) {
+      // The old call shape is intentionally retained for a stable TypeScript
+      // boundary, but treating missing identity as a system caller would let
+      // user-triggered cross-plugin calls bypass repository-scoped ACL.
+      throw this.accessPolicy.createAccessDeniedError();
+    }
+    if (access.kind === 'system') {
+      if (this.accessPolicy.allowsSystemScheduledSync && access.reason === 'scheduled-sync') {
+        return;
+      }
+      throw this.accessPolicy.createAccessDeniedError();
+    }
+    if (
+      access.kind !== 'user' ||
+      !Array.isArray(access.roles) ||
+      !access.roles.every((role) => typeof role === 'string')
+    ) {
+      throw this.accessPolicy.createAccessDeniedError();
+    }
+    const allowed = await hasRepositoryAccess({
+      acl: this.acl,
+      roles: access.roles,
+      repositoryId,
+      action: 'fileContent',
+    });
+    if (!allowed) {
+      throw this.accessPolicy.createAccessDeniedError();
+    }
   }
 
   private assertCommitSha(value: string): string {
@@ -311,5 +445,25 @@ export class RegistryGitContentService {
       throw new Error('Registry reads require a full commit SHA');
     }
     return normalized.toLowerCase();
+  }
+}
+
+export class RegistryGitContentService extends GitContentService {
+  constructor(
+    database: Database,
+    limits: RegistryGitContentLimits = DEFAULT_REGISTRY_GIT_CONTENT_LIMITS,
+    acl?: RepositoryPermissionChecker,
+  ) {
+    super(database, limits, acl, REGISTRY_CONTENT_ACCESS_POLICY);
+  }
+}
+
+export class SkillHubGitContentService extends GitContentService {
+  constructor(
+    database: Database,
+    limits: RegistryGitContentLimits = DEFAULT_REGISTRY_GIT_CONTENT_LIMITS,
+    acl?: RepositoryPermissionChecker,
+  ) {
+    super(database, limits, acl, SKILL_HUB_CONTENT_ACCESS_POLICY);
   }
 }

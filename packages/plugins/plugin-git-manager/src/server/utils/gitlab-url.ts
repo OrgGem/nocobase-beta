@@ -1,3 +1,5 @@
+import { assertUrlHasNoUserInfo } from './url-security';
+
 /**
  * Shared utility for parsing GitLab repository URLs.
  * Extracted to avoid duplicating URL-parsing logic across
@@ -21,6 +23,7 @@ export interface GitLabProject {
  * @throws Error if the URL cannot be parsed or has no project path
  */
 export function parseGitLabProject(repoUrl: string): GitLabProject {
+  assertUrlHasNoUserInfo(repoUrl);
   const url = new URL(repoUrl);
   // Remove .git suffix and leading slash
   const projectPath = url.pathname.replace(/\.git$/, '').replace(/^\//, '');

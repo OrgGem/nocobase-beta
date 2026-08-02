@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage self-hosted Confluence"
-  short_description: "Operate Confluence with Bearer PAT authentication"
-  default_prompt: "Use $manage-confluence to inspect or change content in my self-hosted Confluence instance."

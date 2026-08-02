@@ -1,4 +1,0 @@
-interface:
-  display_name: "Manage self-hosted Jira"
-  short_description: "Operate Jira with Bearer PAT authentication"
-  default_prompt: "Use $manage-jira to inspect or change data in my self-hosted Jira instance."

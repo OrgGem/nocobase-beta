@@ -10,6 +10,7 @@ import { createSkillExecuteTool } from '../tools/skill-execute';
 import { McpController } from './mcp/McpController';
 import { SkillRepositoryService } from '../services/SkillRepositoryService';
 import { gitListSkills, gitSyncSkills } from './actions/git-import';
+import { createGitImportRequestMethodPolicy } from './middlewares/git-import-request-method-policy';
 import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fields';
 import { getOrchestratorTraceContext } from '../services/ExecutionSpanService';
 import { tryGetAIToolsManager } from '../utils/ai-manager';
@@ -168,6 +169,7 @@ export class SkillHubSubFeature {
     this.mcpController = new McpController(this);
 
     // 3. Register REST actions
+    (this as any).app.resourceManager.use(createGitImportRequestMethodPolicy());
     (this as any).app.resourceManager.define({
       name: 'skillHub',
       actions: {

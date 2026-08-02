@@ -118,6 +118,40 @@ describe('SourceSyncService maintenance and locking', () => {
     expect(runRepository.create).not.toHaveBeenCalled();
   });
 
+  it('passes the requesting user context through discovery and candidate reads', async () => {
+    const source = model({
+      id: 'source-1',
+      providerType: 'skill-hub',
+      namespace: 'acme',
+      providerConfig: {},
+    });
+    const sourceRepository = repository({ findOne: vi.fn().mockResolvedValue(source) });
+    const candidate = validCandidate('source-1', 'skillDefinitions:1');
+    const provider = {
+      discover: vi.fn().mockResolvedValue(['skillDefinitions:1']),
+      type: 'skill-hub' as const,
+      getCandidate: vi.fn().mockResolvedValue(candidate),
+      releaseSource: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new SourceSyncService(
+      database({ skillRegistrySources: sourceRepository }),
+      new Map([['skill-hub', provider as never]]),
+    );
+    const access = { kind: 'user' as const, userId: 'admin-1', roles: ['registry-manager'] };
+
+    await service.discover('source-1', access);
+
+    expect(provider.discover).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'source-1', providerType: 'skill-hub' }),
+      access,
+    );
+    expect(provider.getCandidate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'source-1', providerType: 'skill-hub' }),
+      'skillDefinitions:1',
+      access,
+    );
+  });
+
   it('uses a unique active-run key as a database backstop when a lock lease is ineffective', async () => {
     const source = model({ id: 'source-1' });
     const sourceRepository = repository({ findOne: vi.fn().mockResolvedValue(source) });
@@ -449,6 +483,38 @@ describe('SourceSyncService maintenance and locking', () => {
       skippedCount: 2,
       errorCount: 0,
     });
-    expect(sync).toHaveBeenCalledWith('due', 'schedule');
+    expect(sync).toHaveBeenCalledWith('due', 'schedule', undefined, {
+      kind: 'system',
+      reason: 'scheduled-sync',
+    });
+  });
+
+  it('does not elevate a legacy Git source without a user-authorized binding', async () => {
+    const source = model({
+      id: 'legacy-git',
+      providerType: 'git-manager',
+      syncIntervalMinutes: 5,
+      lastSyncedAt: null,
+      providerAccessAuthorizedAt: null,
+    });
+    const sourceRepository = repository({ find: vi.fn().mockResolvedValue([source]) });
+    const service = new SourceSyncService(database({ skillRegistrySources: sourceRepository }), new Map());
+    const sync = vi.spyOn(service, 'sync');
+
+    await expect(service.syncDueSources(new Date('2026-07-28T11:00:00.000Z'))).resolves.toEqual({
+      syncedCount: 0,
+      skippedCount: 0,
+      errorCount: 1,
+    });
+
+    expect(sync).not.toHaveBeenCalled();
+    expect(sourceRepository.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filterByTk: 'legacy-git',
+        values: expect.objectContaining({
+          lastErrorCode: 'SOURCE_REPOSITORY_ACCESS_REAUTHORIZATION_REQUIRED',
+        }),
+      }),
+    );
   });
 });

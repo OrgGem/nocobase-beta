@@ -279,7 +279,7 @@ export const RepositoryConfig: React.FC = () => {
         }}
         width={520}
       >
-        <Form form={form} layout="vertical" initialValues={{ defaultBranch: 'main' }}>
+        <Form form={form} layout="vertical" initialValues={{ defaultBranch: 'main', registryExportEnabled: false }}>
           <Form.Item name="name" label={t('Repository Name')} rules={[{ required: true }]}>
             <Input placeholder="my-project" />
           </Form.Item>
@@ -306,6 +306,9 @@ export const RepositoryConfig: React.FC = () => {
           </Form.Item>
           <Form.Item name="defaultBranch" label={t('Default Branch')}>
             <Input placeholder="main" />
+          </Form.Item>
+          <Form.Item name="registryExportEnabled" label={t('Allow Skill Registry export')} valuePropName="checked">
+            <Switch />
           </Form.Item>
           <Form.Item
             name="autoReviewFlowId"

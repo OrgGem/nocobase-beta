@@ -5,7 +5,7 @@ import { FilesystemArtifactStore } from './filesystem-artifact-store';
 import { SignatureService } from './signature-service';
 import type { RegistryDatabase } from './repository-types';
 import { withTransaction } from './repository-types';
-import type { RegistrySourceProvider } from '../contracts/types';
+import type { RegistrySourceAccessContext, RegistrySourceProvider } from '../contracts/types';
 import { RegistryError } from '../contracts/errors';
 import { assertChannel, assertSemver } from './validation';
 import { sourceDescriptor } from './source-sync-service';
@@ -115,6 +115,7 @@ export class PublishService {
     channel?: string;
     changelog?: string;
     publishedById?: string | number;
+    access?: RegistrySourceAccessContext;
   }): Promise<RegistryModel> {
     const sourceItem = await this.database
       .getRepository('skillRegistrySourceItems')
@@ -146,6 +147,7 @@ export class PublishService {
       channel?: string;
       changelog?: string;
       publishedById?: string | number;
+      access?: RegistrySourceAccessContext;
     },
     expectedSourceId: string,
   ): Promise<RegistryModel> {
@@ -187,7 +189,7 @@ export class PublishService {
         provider,
         source: descriptor,
         externalKey,
-        candidate: await provider.getCandidate(descriptor, externalKey),
+        candidate: await provider.getCandidate(descriptor, externalKey, input.access),
       });
       if (
         candidate.source.revision !== getString(sourceItem, 'sourceRevision') ||
@@ -491,25 +493,95 @@ export class PublishService {
             yankReason: reason.trim() || 'Withdrawn by administrator.',
           },
         });
-        if (getString(lockedVersion, 'channel') !== 'stable') {
-          return;
-        }
         const packages = this.database.getRepository('skillRegistryPackages');
         const packageRecord = await packages.findOne({ filterByTk: packageId, transaction, lock: true });
-        if (!packageRecord || getString(packageRecord, 'latestStableVersionId') !== modelId(lockedVersion)) {
+        if (!packageRecord) {
           return;
         }
-        const replacement = await versions.findOne({
-          filter: { packageId, channel: 'stable', status: 'published' },
+        const remainingPublished = await versions.findOne({
+          filter: { packageId, status: 'published' },
           sort: ['-publishedAt', '-id'],
           transaction,
         });
-        await packages.update({
-          filterByTk: packageId,
-          transaction,
-          values: { latestStableVersionId: replacement ? modelId(replacement) : null },
-        });
+        const values: Record<string, unknown> = remainingPublished ? {} : { status: 'draft' };
+        if (
+          getString(lockedVersion, 'channel') === 'stable' &&
+          getString(packageRecord, 'latestStableVersionId') === modelId(lockedVersion)
+        ) {
+          const replacement = await versions.findOne({
+            filter: { packageId, channel: 'stable', status: 'published' },
+            sort: ['-publishedAt', '-id'],
+            transaction,
+          });
+          values.latestStableVersionId = replacement ? modelId(replacement) : null;
+        }
+        if (Object.keys(values).length > 0) {
+          await packages.update({ filterByTk: packageId, transaction, values });
+        }
       }),
     );
+  }
+
+  async unpublishSourceItem(
+    sourceItemId: string | number,
+    reason: string,
+  ): Promise<{ sourceItemId: string; state: 'ready' | 'published'; yanked: number }> {
+    const sourceItems = this.database.getRepository('skillRegistrySourceItems');
+    const sourceItem = await sourceItems.findOne({ filterByTk: sourceItemId });
+    if (!sourceItem) {
+      throw new RegistryError('SOURCE_ITEM_NOT_FOUND', 404, 'Skill registry source item was not found.');
+    }
+    const sourceId = getString(sourceItem, 'sourceId');
+    const attempted = await tryRunRegistryOperation(
+      this.lockManager,
+      sourceOperationLockKey(sourceId),
+      publishLockTtlMs(),
+      () => this.unpublishWithSourceLock(sourceItemId, sourceId, reason),
+    );
+    if (!attempted.acquired) {
+      throw new RegistryError(
+        'REGISTRY_OPERATION_BUSY',
+        409,
+        'The source is currently being synchronized, published, or unpublished. Retry the request.',
+      );
+    }
+    return attempted.value;
+  }
+
+  private async unpublishWithSourceLock(
+    sourceItemId: string | number,
+    expectedSourceId: string,
+    reason: string,
+  ): Promise<{ sourceItemId: string; state: 'ready' | 'published'; yanked: number }> {
+    const sourceItems = this.database.getRepository('skillRegistrySourceItems');
+    const sourceItem = await sourceItems.findOne({ filterByTk: sourceItemId });
+    if (!sourceItem) {
+      throw new RegistryError('SOURCE_ITEM_NOT_FOUND', 404, 'Skill registry source item was not found.');
+    }
+    if (getString(sourceItem, 'sourceId') !== expectedSourceId) {
+      throw new RegistryError('SOURCE_REVISION_CHANGED', 409, 'Source item changed while unpublish was waiting.');
+    }
+    if (getString(sourceItem, 'state') !== 'published') {
+      throw new RegistryError('SOURCE_ITEM_NOT_PUBLISHED', 409, 'Only published candidates can be unpublished.');
+    }
+    const versions = this.database.getRepository('skillRegistryVersions');
+    const publishedVersions = await versions.find({
+      filter: { sourceItemId: modelId(sourceItem), status: 'published' },
+      sort: ['-publishedAt', '-id'],
+    });
+    for (const version of publishedVersions) {
+      await this.yank(modelId(version), reason);
+    }
+    const remaining = await versions.findOne({
+      filter: { sourceItemId: modelId(sourceItem), status: 'published' },
+    });
+    if (!remaining) {
+      await sourceItems.update({ filterByTk: modelId(sourceItem), values: { state: 'ready' } });
+    }
+    return {
+      sourceItemId: modelId(sourceItem),
+      state: remaining ? 'published' : 'ready',
+      yanked: publishedVersions.length,
+    };
   }
 }

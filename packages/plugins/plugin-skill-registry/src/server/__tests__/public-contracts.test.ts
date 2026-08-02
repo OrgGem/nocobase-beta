@@ -119,6 +119,49 @@ describe('skill registry public contracts', () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  it('omits compatibility only when includeCompatibility is explicitly false', async () => {
+    const row = {
+      name: 'acme/report',
+      displayName: 'Report',
+      description: 'Creates reports.',
+      tags: [],
+      latest: { version: '1.0.0', channel: 'stable', artifactDigest: 'sha256:digest' },
+      compatibility: { nocobase: '>=2.0.0' },
+      downloads: 3,
+    };
+    const actions = createPublicActions({
+      database: { getRepository: vi.fn() } as never,
+      catalog: { list: vi.fn().mockResolvedValue({ rows: [row], nextAnchor: null }) } as never,
+      artifactStore: {} as never,
+      rateLimiter: () => undefined,
+      signatureService: { keyId: 'unconfigured', publicKeyRing: () => ({}) } as never,
+    });
+    const context = (includeCompatibility?: unknown) => ({
+      action: { params: includeCompatibility === undefined ? {} : { includeCompatibility } },
+      body: undefined as unknown,
+      status: 200,
+      get: vi.fn().mockReturnValue(''),
+      set: vi.fn(),
+      state: {},
+    });
+
+    const defaultResponse = context();
+    await actions.list(defaultResponse as never, async () => undefined);
+    expect(defaultResponse.body).toMatchObject({ rows: [{ compatibility: { nocobase: '>=2.0.0' } }] });
+
+    const compactResponse = context('false');
+    await actions.list(compactResponse as never, async () => undefined);
+    expect(compactResponse.body).toMatchObject({ rows: [{ name: 'acme/report', downloads: 3 }] });
+    expect((compactResponse.body as { rows: Array<Record<string, unknown>> }).rows[0]).not.toHaveProperty(
+      'compatibility',
+    );
+
+    await expect(actions.list(context('0') as never, async () => undefined)).rejects.toMatchObject({
+      code: 'INVALID_REQUEST',
+      status: 400,
+    });
+  });
+
   it('rejects malformed package and version identities before catalog lookup with stable public errors', async () => {
     const getPackage = vi.fn();
     const resolveVersion = vi.fn();

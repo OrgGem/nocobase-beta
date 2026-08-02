@@ -44,7 +44,8 @@
   "Split SHA": "拆分 SHA",
   "Target before": "更新前目标",
   "Target after": "更新后目标",
-  "Error": "错误"
-  ,"Execution mode": "执行模式"
-  ,"App process": "应用进程"
+  "Error": "错误",
+  "Execution mode": "执行模式",
+  "App process": "应用进程",
+  "Credential-bearing URLs are not allowed": "URL 中不允许包含用户名或凭据"
 }

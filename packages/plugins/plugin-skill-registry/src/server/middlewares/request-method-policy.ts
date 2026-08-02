@@ -24,10 +24,15 @@ const ADMIN_ACTIONS = new Set([
   'publish',
   'publishBatch',
   'yank',
+  'unpublish',
+  'unpublishBatch',
   'verify',
   'install',
   'rollback',
+  'updateSettings',
 ]);
+
+const ADMIN_READ_ACTIONS = new Set(['getSettings', 'installationStates', 'yankImpact']);
 
 function allowedMethods(ctx: Context): readonly string[] | null {
   const { resourceName, actionName } = ctx.action;
@@ -36,6 +41,9 @@ function allowedMethods(ctx: Context): readonly string[] | null {
   }
   if (resourceName === 'skillRegistryAdmin' && ADMIN_ACTIONS.has(actionName)) {
     return ['POST'];
+  }
+  if (resourceName === 'skillRegistryAdmin' && ADMIN_READ_ACTIONS.has(actionName)) {
+    return ['GET', 'HEAD'];
   }
   if (resourceName === 'skillRegistryHealth' && actionName === 'readiness') {
     return ['GET', 'HEAD'];

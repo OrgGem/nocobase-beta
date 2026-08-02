@@ -50,6 +50,7 @@ export class PluginSkillRegistryServer extends Plugin {
     this.artifactStore,
     this.app.pm,
     this.signatureService,
+    this.app.lockManager,
   );
   private readonly sourceSyncService = new SourceSyncService(this.database, this.sourceProviders, this.app.lockManager);
   private readonly registryMaintenanceService = new RegistryMaintenanceService(
@@ -167,6 +168,7 @@ export class PluginSkillRegistryServer extends Plugin {
       'skillRegistrySyncRuns:get',
       'skillRegistryHealth:readiness',
       'skillRegistryAdmin:getSettings',
+      'skillRegistryAdmin:installationStates',
     ];
     const syncActions = ['skillRegistryAdmin:discover', 'skillRegistryAdmin:sync', 'skillRegistryAdmin:retry'];
     // ADR-0002 §13: identity mapping (resolve) belongs to the publish permission, not sync.
@@ -175,6 +177,9 @@ export class PluginSkillRegistryServer extends Plugin {
       'skillRegistryAdmin:publish',
       'skillRegistryAdmin:publishBatch',
       'skillRegistryAdmin:yank',
+      'skillRegistryAdmin:unpublish',
+      'skillRegistryAdmin:unpublishBatch',
+      'skillRegistryAdmin:yankImpact',
       'skillRegistryAdmin:verify',
     ];
     const installActions = ['skillRegistryAdmin:install', 'skillRegistryAdmin:rollback'];
@@ -239,7 +244,11 @@ export class PluginSkillRegistryServer extends Plugin {
     });
     this.app.resourceManager.use(createResourceMutationPolicy());
     this.app.resourceManager.use(
-      createSourceMutationPolicy({ database: this.database, lockManager: this.app.lockManager }),
+      createSourceMutationPolicy({
+        database: this.database,
+        lockManager: this.app.lockManager,
+        providers: this.sourceProviders,
+      }),
     );
   }
 

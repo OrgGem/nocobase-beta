@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import type { SimpleGit } from 'simple-git';
 import { createGit, validateBranch, validateLocalPath, withAuth } from './git-actions';
+import { getEffectiveActionParams } from '../repository-access';
 import { getRepoAccount } from '../utils/get-repo-account';
 import { redactError, redactPat } from '../utils/redact';
 
@@ -41,11 +42,6 @@ interface RunParams {
   policy: SubtreePolicy;
   push: boolean;
   expectedTargetSha?: string;
-}
-
-function getActionParams(ctx: Context): Record<string, unknown> {
-  const requestBody = (ctx as Context & { request?: { body?: Record<string, unknown> } }).request?.body || {};
-  return { ...ctx.action.params, ...ctx.action.params?.values, ...requestBody };
 }
 
 function stringValue(value: unknown, fallback = ''): string {
@@ -320,7 +316,7 @@ async function loadConfigAndRepository(ctx: Context, configId: number | string) 
 }
 
 export async function subtreeOptions(ctx: Context, next: () => Promise<void>) {
-  const params = getActionParams(ctx);
+  const params = getEffectiveActionParams(ctx);
   const repositoryId = params.repositoryId as number | string;
   if (!repositoryId) ctx.throw(400, 'repositoryId is required');
   const remoteName = validateRemoteName(stringValue(params.remoteName, 'origin') || 'origin');
@@ -379,7 +375,7 @@ export async function subtreeOptions(ctx: Context, next: () => Promise<void>) {
 }
 
 export async function subtreePreview(ctx: Context, next: () => Promise<void>) {
-  const params = getActionParams(ctx);
+  const params = getEffectiveActionParams(ctx);
   const configId = params.configId as number | string;
   if (!configId) ctx.throw(400, 'configId is required');
   const { config, repo, account } = await loadConfigAndRepository(ctx, configId);
@@ -410,7 +406,7 @@ export async function subtreePreview(ctx: Context, next: () => Promise<void>) {
  * This action intentionally does not enqueue work in the automatic-review queue.
  */
 export async function subtreeRunOnAppProcess(ctx: Context, next: () => Promise<void>) {
-  const params = getActionParams(ctx);
+  const params = getEffectiveActionParams(ctx);
   const runParams: RunParams = {
     configId: params.configId as number | string,
     policy: validateSubtreePolicy(params.policy),

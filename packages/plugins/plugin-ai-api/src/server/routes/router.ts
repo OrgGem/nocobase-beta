@@ -21,6 +21,7 @@ import { checkRolePermission } from '../middleware/role-permission';
 import { startUsageRecord, finishUsageRecord } from '../usage';
 import { isStreamingRequested } from '../utils/streaming';
 import type PluginAiApiServer from '../plugin';
+import { finalizeLlmBilling } from '../billing';
 
 const API_PREFIX = '/api/ai-llm/v1';
 
@@ -73,7 +74,10 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     ctx.set('Access-Control-Allow-Origin', '*');
     ctx.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     ctx.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-AI-Mode, X-Timezone, X-Locale');
-    ctx.set('Access-Control-Expose-Headers', 'X-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After');
+    ctx.set(
+      'Access-Control-Expose-Headers',
+      'X-Request-Id, X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reason, Retry-After',
+    );
     ctx.set('Access-Control-Max-Age', '86400');
 
     // ─── OPTIONS preflight — return immediately after CORS headers ────────
@@ -258,6 +262,17 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
           await finishUsageRecord(ctx, usageId, t0, ctx.status >= 200 && ctx.status < 400 ? 'succeeded' : 'failed');
         } catch (usageError) {
           ctx.log.error('AI API usage record could not be finalized:', usageError);
+        }
+      } else if (ctx.state.aiApiLlmBilling) {
+        try {
+          const usageResult = ctx.state.aiApiUsageResult;
+          const providerUsage = usageResult?.source === 'provider' ? usageResult.usage : undefined;
+          const succeeded = ctx.state.aiApiStreamResult
+            ? ctx.state.aiApiStreamResult.succeeded
+            : ctx.status >= 200 && ctx.status < 400;
+          await finalizeLlmBilling(ctx, providerUsage, succeeded);
+        } catch (billingError) {
+          ctx.log.error('AI API quota reservation could not be finalized:', billingError);
         }
       }
     }

@@ -1,0 +1,62 @@
+import dayjs from 'dayjs';
+import type { Database, Model } from '@nocobase/database';
+
+function requireNonNegativeDecimal(value: unknown, field: string): void {
+  const normalized = String(value ?? '').trim();
+  if (!/^\d+(?:\.\d+)?$/.test(normalized)) {
+    throw new Error(`${field} must be a non-negative decimal.`);
+  }
+}
+
+function requireNonNegativeIntegerOrNull(value: unknown, field: string): void {
+  if (value === null || value === undefined || value === '') return;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${field} must be a non-negative integer.`);
+}
+
+export async function validateModelPrice(db: Database, model: Model): Promise<void> {
+  requireNonNegativeDecimal(model.get('inputPricePerMillionTokens'), 'inputPricePerMillionTokens');
+  requireNonNegativeDecimal(model.get('outputPricePerMillionTokens'), 'outputPricePerMillionTokens');
+  requireNonNegativeDecimal(model.get('fixedCostPerRequest') ?? 0, 'fixedCostPerRequest');
+
+  const effectiveFrom = new Date(String(model.get('effectiveFrom')));
+  const effectiveToValue = model.get('effectiveTo');
+  const effectiveTo = effectiveToValue ? new Date(String(effectiveToValue)) : undefined;
+  if (Number.isNaN(effectiveFrom.getTime())) throw new Error('effectiveFrom must be a valid date.');
+  if (effectiveTo && (Number.isNaN(effectiveTo.getTime()) || effectiveTo <= effectiveFrom)) {
+    throw new Error('effectiveTo must be later than effectiveFrom.');
+  }
+  if (model.get('enabled') === false) return;
+
+  const overlapFilter: Record<string, unknown> = {
+    llmService: model.get('llmService'),
+    model: model.get('model'),
+    enabled: true,
+    effectiveFrom: { $lt: effectiveTo ?? new Date('9999-12-31T23:59:59.999Z') },
+    $or: [{ effectiveTo: null }, { effectiveTo: { $gt: effectiveFrom } }],
+  };
+  if (model.get('id')) overlapFilter.id = { $ne: model.get('id') };
+  const overlap = await db.getRepository('aiApiModelPrices').findOne({
+    filter: overlapFilter,
+  });
+  if (overlap) throw new Error('An enabled price already overlaps this effective period.');
+}
+
+export function validateQuotaPolicy(model: Model): void {
+  if (!['daily', 'monthly'].includes(String(model.get('periodType')))) {
+    throw new Error('periodType must be daily or monthly.');
+  }
+  if (!['allow', 'use_reserved'].includes(String(model.get('missingUsageBehavior')))) {
+    throw new Error('missingUsageBehavior must be allow or use_reserved.');
+  }
+  try {
+    dayjs().tz(String(model.get('timezone') || 'UTC'));
+  } catch {
+    throw new Error('timezone must be a valid IANA timezone.');
+  }
+  requireNonNegativeIntegerOrNull(model.get('requestLimit'), 'requestLimit');
+  requireNonNegativeIntegerOrNull(model.get('totalTokenLimit'), 'totalTokenLimit');
+  if (model.get('costLimit') !== null && model.get('costLimit') !== undefined) {
+    requireNonNegativeDecimal(model.get('costLimit'), 'costLimit');
+  }
+}

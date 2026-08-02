@@ -11,7 +11,10 @@ import { Plugin, lazy } from '@nocobase/client';
 import PluginACLClient from '@nocobase/plugin-acl/client';
 import React from 'react';
 
-const AiApiConfigPage = React.lazy(() => import('./AiApiConfigPage'));
+const AiApiConfigPage = React.lazy(() => import('../client-v2/pages/GeneralPage'));
+const AiApiModelPricingPage = React.lazy(() => import('../client-v2/pages/ModelPricingPage'));
+const AiApiUserQuotasPage = React.lazy(() => import('../client-v2/pages/UserQuotasPage'));
+const AiApiUsagePage = React.lazy(() => import('../client-v2/pages/UsagePage'));
 const { AiApiRolePermissions } = lazy(() => import('./components/AiApiRolePermissions'), 'AiApiRolePermissions');
 
 export class PluginAiApiClient extends Plugin {
@@ -25,6 +28,29 @@ export class PluginAiApiClient extends Plugin {
     this.app.pluginSettingsManager.add('ai-api.config', {
       title: this.t('Configuration'),
       Component: AiApiConfigPage,
+      aclSnippet: 'pm.ai-api.configuration',
+      sort: 1,
+    });
+
+    this.app.pluginSettingsManager.add('ai-api.model-pricing', {
+      title: this.t('Model pricing'),
+      Component: AiApiModelPricingPage,
+      aclSnippet: 'pm.ai-api.configuration',
+      sort: 2,
+    });
+
+    this.app.pluginSettingsManager.add('ai-api.user-quotas', {
+      title: this.t('User quotas'),
+      Component: AiApiUserQuotasPage,
+      aclSnippet: 'pm.ai-api.configuration',
+      sort: 3,
+    });
+
+    this.app.pluginSettingsManager.add('ai-api.usage', {
+      title: this.t('Usage'),
+      Component: AiApiUsagePage,
+      aclSnippet: 'pm.ai-api.configuration',
+      sort: 4,
     });
 
     // Add "AI API" tab in Settings → Users & Permissions → [Role]
@@ -42,7 +68,6 @@ export class PluginAiApiClient extends Plugin {
       }));
     }
   }
-
 }
 
 export default PluginAiApiClient;

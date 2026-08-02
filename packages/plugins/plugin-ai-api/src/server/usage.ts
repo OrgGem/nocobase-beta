@@ -1,4 +1,5 @@
 import { Context } from '@nocobase/actions';
+import { finalizeLlmBilling, type LlmBillingState } from './billing';
 
 export type Usage = {
   prompt_tokens: number | null;
@@ -35,6 +36,7 @@ interface AiApiContextState {
   currentRoles?: string[];
   currentUser?: { id?: string | number | bigint };
   oauthPrincipal?: OAuthPrincipal;
+  aiApiLlmBilling?: LlmBillingState;
 }
 
 function getAiApiState(ctx: Context): AiApiContextState {
@@ -158,7 +160,10 @@ export async function finishUsageRecord(ctx: Context, id: unknown, startedAt: nu
   const state = getAiApiState(ctx);
   const streamResult = state.aiApiStreamResult;
   const usageResult = state.aiApiUsageResult ?? { source: 'unavailable' as const };
-  const usage = usageResult.source === 'provider' ? usageResult.usage : undefined;
+  const providerUsage = usageResult.source === 'provider' ? usageResult.usage : undefined;
+  const succeeded = streamResult ? streamResult.succeeded : status === 'succeeded';
+  const billing = await finalizeLlmBilling(ctx, providerUsage, succeeded);
+  const usage = billing.usage ?? providerUsage;
   const gatewayResponseId = usageResult.gatewayResponseId || response.id || streamResult?.id;
   const values = {
     status: streamResult ? (streamResult.succeeded ? 'succeeded' : 'failed') : status,
@@ -167,6 +172,17 @@ export async function finishUsageRecord(ctx: Context, id: unknown, startedAt: nu
     inputTokens: usage?.prompt_tokens ?? null,
     outputTokens: usage?.completion_tokens ?? null,
     totalTokens: usage?.total_tokens ?? null,
+    resolvedService: state.aiApiLlmBilling?.resolution?.service ?? null,
+    resolvedProvider: state.aiApiLlmBilling?.resolution?.provider ?? null,
+    resolvedModel: state.aiApiLlmBilling?.resolution?.model ?? null,
+    estimatedCost: billing.estimatedCost ?? null,
+    currency: billing.currency ?? null,
+    costStatus: billing.costStatus ?? null,
+    modelPriceId: billing.modelPriceId ?? null,
+    quotaPolicyId: billing.quotaPolicyId ?? null,
+    inputPricePerMillionTokens: billing.inputPricePerMillionTokens ?? null,
+    outputPricePerMillionTokens: billing.outputPricePerMillionTokens ?? null,
+    fixedCostPerRequest: billing.fixedCostPerRequest ?? null,
     providerRequestId: usageResult.providerRequestId ?? null,
     completedAt: new Date(),
     durationMs: Date.now() - startedAt,

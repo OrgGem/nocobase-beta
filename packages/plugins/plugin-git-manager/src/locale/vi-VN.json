@@ -285,7 +285,8 @@
   "Policy": "Chính sách",
   "Split SHA": "SHA subtree",
   "Target before": "Nhánh đích trước đó",
-  "Target after": "Nhánh đích sau đó"
-  ,"Execution mode": "Chế độ thực thi"
-  ,"App process": "App process"
+  "Target after": "Nhánh đích sau đó",
+  "Execution mode": "Chế độ thực thi",
+  "App process": "App process",
+  "Credential-bearing URLs are not allowed": "URL không được chứa tên người dùng hoặc thông tin xác thực"
 }

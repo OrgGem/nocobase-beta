@@ -4,6 +4,23 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 export type RegistryProviderType = 'skill-hub' | 'git-manager';
 export type RegistryVersionStatus = 'discovered' | 'validating' | 'ready' | 'published' | 'rejected' | 'yanked';
 
+/**
+ * Identity used when a source provider reads content on behalf of Registry.
+ * A scheduled sync is deliberately distinct from a request made by an admin:
+ * Git Manager may bypass the current user's repository scope only for the
+ * explicitly fenced scheduled-sync path.
+ */
+export type RegistrySourceAccessContext =
+  | {
+      kind: 'user';
+      userId?: string | number;
+      roles: string[];
+    }
+  | {
+      kind: 'system';
+      reason: 'scheduled-sync';
+    };
+
 export interface RegistrySkillManifestV1 {
   schemaVersion: 'registry.skill.nocobase.io/v1';
   name: string;
@@ -63,8 +80,14 @@ export interface SourceItemDescriptor {
 
 export interface RegistrySourceProvider {
   readonly type: RegistryProviderType;
-  discover(source: RegistrySourceDescriptor): Promise<string[]>;
-  getCandidate(source: RegistrySourceDescriptor, externalKey: string): Promise<RegistrySkillCandidateV1>;
+  /** Validate a source binding before it is persisted, when the provider owns ACL. */
+  assertAccess?(source: RegistrySourceDescriptor, access: RegistrySourceAccessContext): Promise<void>;
+  discover(source: RegistrySourceDescriptor, access?: RegistrySourceAccessContext): Promise<string[]>;
+  getCandidate(
+    source: RegistrySourceDescriptor,
+    externalKey: string,
+    access?: RegistrySourceAccessContext,
+  ): Promise<RegistrySkillCandidateV1>;
   releaseSource?(source: RegistrySourceDescriptor): void | Promise<void>;
 }
 

@@ -1,0 +1,31 @@
+import { defineCollection } from '@nocobase/database';
+
+export default defineCollection({
+  name: 'dockerRegistrySettings',
+  title: 'Docker Registry settings',
+  fields: [
+    { name: 'displayName', type: 'string', defaultValue: 'Docker Registry' },
+    { name: 'registryUrl', type: 'string', defaultValue: '' },
+    { name: 'publicRegistryHost', type: 'string', defaultValue: '' },
+    { name: 'credentialMode', type: 'string', defaultValue: 'anonymous' },
+    { name: 'username', type: 'string', defaultValue: '' },
+    { name: 'passwordCiphertext', type: 'text', hidden: true },
+    { name: 'bearerTokenCiphertext', type: 'text', hidden: true },
+    { name: 'verifyTls', type: 'boolean', defaultValue: true },
+    { name: 'allowInsecureHttp', type: 'boolean', defaultValue: false },
+    { name: 'caCertificate', type: 'text' },
+    { name: 'clientCertificate', type: 'text' },
+    { name: 'clientPrivateKeyCiphertext', type: 'text', hidden: true },
+    { name: 'clientPrivateKeyPassphraseCiphertext', type: 'text', hidden: true },
+    { name: 'requestTimeoutMs', type: 'integer', defaultValue: 10000 },
+    { name: 'catalogPageSize', type: 'integer', defaultValue: 100 },
+    { name: 'maxConcurrentRequests', type: 'integer', defaultValue: 5 },
+    { name: 'autoRefreshSeconds', type: 'integer', defaultValue: 0 },
+    { name: 'deleteEnabled', type: 'boolean', defaultValue: false },
+    { name: 'rawManifestEnabled', type: 'boolean', defaultValue: true },
+    { name: 'showLegacySchema1', type: 'boolean', defaultValue: false },
+    { name: 'maxTransferSizeMb', type: 'integer', defaultValue: 4096 },
+    { name: 'uploadChunkSizeMb', type: 'integer', defaultValue: 4 },
+    { name: 'transferTimeoutMs', type: 'integer', defaultValue: 600000 },
+  ],
+});

@@ -42,6 +42,18 @@ export default defineCollection({
       comment: 'Max requests per user per minute',
     },
     {
+      name: 'quotaEnabled',
+      type: 'boolean',
+      defaultValue: false,
+      comment: 'Enable per-user request, token, and cost quotas for direct LLM mode',
+    },
+    {
+      name: 'defaultReservationOutputTokens',
+      type: 'integer',
+      defaultValue: 4096,
+      comment: 'Output tokens reserved when a request does not specify a maximum',
+    },
+    {
       name: 'options',
       type: 'jsonb',
       defaultValue: {},

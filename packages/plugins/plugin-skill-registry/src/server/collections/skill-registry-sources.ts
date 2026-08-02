@@ -24,6 +24,10 @@ export default defineCollection({
     { type: 'date', name: 'lastSyncedAt', allowNull: true },
     { type: 'string', name: 'lastErrorCode', length: 80, allowNull: true },
     { type: 'text', name: 'lastErrorMessage', allowNull: true },
+    // A scheduled sync has no interactive user context. Keep durable proof that
+    // a user with Git repository scope authorized the current source binding.
+    { type: 'date', name: 'providerAccessAuthorizedAt', allowNull: true },
+    { type: 'string', name: 'providerAccessAuthorizedById', length: 128, allowNull: true },
     { type: 'belongsTo', name: 'createdBy', target: 'users', foreignKey: 'createdById' },
     { type: 'belongsTo', name: 'updatedBy', target: 'users', foreignKey: 'updatedById' },
   ],

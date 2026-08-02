@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import type { Context } from '@nocobase/actions';
 
 import { RegistryError, toRegistryError } from './contracts/errors';
-import { isRecord } from './contracts/types';
+import { isRecord, type RegistrySourceAccessContext } from './contracts/types';
 import { canonicalJson, sha256 } from './services/canonical-json';
 import { CatalogService } from './services/catalog-service';
 import { AgentInstallationBridge } from './services/agent-installation-bridge';
@@ -113,6 +113,14 @@ function publicStringParam(ctx: Context, name: string, maximum: number): string 
   return normalized;
 }
 
+function publicBooleanParam(ctx: Context, name: string, defaultValue: boolean): boolean {
+  const value = values(ctx)[name];
+  if (value === undefined || value === '') return defaultValue;
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new RegistryError('INVALID_REQUEST', 400, `${name} must be true or false.`);
+}
+
 function publicPackageParam(ctx: Context): string {
   const rawValue = values(ctx).package;
   if (typeof rawValue !== 'string' || !rawValue.trim()) {
@@ -192,8 +200,18 @@ function pageLimit(ctx: Context): number {
 }
 
 function currentUserId(ctx: Context): string | undefined {
-  const user = (ctx.auth as unknown as { user?: { id?: string | number } }).user;
+  const user = (ctx.auth as unknown as { user?: { id?: string | number } } | undefined)?.user;
   return user?.id === undefined ? undefined : String(user.id);
+}
+
+function currentSourceAccess(ctx: Context): RegistrySourceAccessContext {
+  const currentRoles = (ctx.state as { currentRoles?: unknown } | undefined)?.currentRoles;
+  const roles =
+    Array.isArray(currentRoles) && currentRoles.every((role): role is string => typeof role === 'string')
+      ? currentRoles
+      : [];
+  const userId = currentUserId(ctx);
+  return { kind: 'user', ...(userId ? { userId } : {}), roles };
 }
 
 function modelId(model: RegistryModel): string {
@@ -289,6 +307,7 @@ export function createPublicActions(input: {
         const tag = publicStringParam(ctx, 'tag', PUBLIC_INPUT_LIMITS.tag);
         const runtime = publicRuntimeParam(ctx);
         const channel = publicChannelParam(ctx);
+        const includeCompatibility = publicBooleanParam(ctx, 'includeCompatibility', true);
         const cursorScope: PublicCursorScope = {
           endpoint: 'catalog',
           query: { q: q || null, tag: tag || null, runtime: runtime || null, channel },
@@ -302,8 +321,11 @@ export function createPublicActions(input: {
           limit,
           after,
         });
+        const rows = includeCompatibility
+          ? result.rows
+          : result.rows.map(({ compatibility: _compatibility, ...row }) => row);
         const response = {
-          data: result.rows,
+          data: rows,
           meta: { nextCursor: result.nextAnchor ? encodePublicCursor(cursorScope, result.nextAnchor) : null },
         };
         const actionContext = ctx as ActionContext;
@@ -316,7 +338,7 @@ export function createPublicActions(input: {
           return;
         }
         actionContext.body = {
-          rows: result.rows,
+          rows,
           nextCursor: response.meta.nextCursor,
         };
       }),
@@ -604,7 +626,7 @@ export function createAdminActions(input: {
         if (!sourceId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'sourceId is required.');
         }
-        (ctx as ActionContext).body = await input.sync.discover(sourceId);
+        (ctx as ActionContext).body = await input.sync.discover(sourceId, currentSourceAccess(ctx));
       }),
     sync: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
@@ -612,7 +634,7 @@ export function createAdminActions(input: {
         if (!sourceId) {
           throw new RegistryError('INVALID_REQUEST', 400, 'sourceId is required.');
         }
-        const run = await input.sync.sync(sourceId, 'manual', currentUserId(ctx));
+        const run = await input.sync.sync(sourceId, 'manual', currentUserId(ctx), currentSourceAccess(ctx));
         (ctx as ActionContext).body = { runId: modelId(run), status: getString(run, 'status') };
       }),
     retry: async (ctx: Context, next: () => Promise<void>) =>
@@ -625,12 +647,17 @@ export function createAdminActions(input: {
         if (!previous) {
           throw new RegistryError('SYNC_RUN_NOT_FOUND', 404, 'Sync run was not found.');
         }
-        const run = await input.sync.sync(getString(previous, 'sourceId'), 'retry', currentUserId(ctx));
+        const run = await input.sync.sync(
+          getString(previous, 'sourceId'),
+          'retry',
+          currentUserId(ctx),
+          currentSourceAccess(ctx),
+        );
         (ctx as ActionContext).body = { runId: modelId(run), status: getString(run, 'status') };
       }),
     resolve: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const sourceItemId = boundedStringParam(ctx, 'sourceItemId', 128);
+        const sourceItemId = boundedIdentifierParam(ctx, 'sourceItemId', 128);
         const namespace = boundedStringParam(ctx, 'namespace', 80);
         const slug = boundedStringParam(ctx, 'slug', 120);
         if (!sourceItemId || !namespace || !slug) {
@@ -743,7 +770,7 @@ export function createAdminActions(input: {
       }),
     publish: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
-        const sourceItemId = boundedStringParam(ctx, 'sourceItemId', 128);
+        const sourceItemId = boundedIdentifierParam(ctx, 'sourceItemId', 128);
         const rawVersion = boundedStringParam(ctx, 'version', PUBLIC_INPUT_LIMITS.version);
         if (!sourceItemId || !rawVersion) {
           throw new RegistryError('INVALID_REQUEST', 400, 'sourceItemId and version are required.');
@@ -756,6 +783,7 @@ export function createAdminActions(input: {
           channel: rawChannel ? assertChannel(rawChannel) : undefined,
           changelog: boundedStringParam(ctx, 'changelog', 20_000),
           publishedById: currentUserId(ctx),
+          access: currentSourceAccess(ctx),
         });
         (ctx as ActionContext).body = versionResponse(created);
       }),
@@ -783,6 +811,7 @@ export function createAdminActions(input: {
               version,
               channel,
               publishedById: currentUserId(ctx),
+              access: currentSourceAccess(ctx),
             });
             results.push({
               sourceItemId: String(sourceItemId),
@@ -814,6 +843,58 @@ export function createAdminActions(input: {
         await input.publish.yank(versionId, boundedStringParam(ctx, 'reason', 2_000) || 'Withdrawn by administrator.');
         (ctx as ActionContext).body = { status: 'yanked' };
       }),
+    unpublish: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const sourceItemId = boundedIdentifierParam(ctx, 'sourceItemId', 128);
+        if (!sourceItemId) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'sourceItemId is required.');
+        }
+        const result = await input.publish.unpublishSourceItem(
+          sourceItemId,
+          boundedStringParam(ctx, 'reason', 2_000) || 'Unpublished by administrator.',
+        );
+        (ctx as ActionContext).body = {
+          sourceItemId: result.sourceItemId,
+          status: result.state,
+          yanked: result.yanked,
+        };
+      }),
+    unpublishBatch: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const rawIds = values(ctx).sourceItemIds;
+        if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > 100) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'sourceItemIds are required.');
+        }
+        const reason = boundedStringParam(ctx, 'reason', 2_000) || 'Unpublished by administrator.';
+        const results = [];
+        for (const sourceItemId of rawIds) {
+          if ((typeof sourceItemId !== 'string' && typeof sourceItemId !== 'number') || !String(sourceItemId).trim()) {
+            throw new RegistryError('INVALID_REQUEST', 400, 'sourceItemIds must contain valid record IDs.');
+          }
+          try {
+            const result = await input.publish.unpublishSourceItem(sourceItemId, reason);
+            results.push({
+              sourceItemId: result.sourceItemId,
+              status: 'unpublished',
+              state: result.state,
+              yanked: result.yanked,
+            });
+          } catch (error) {
+            const registryError = toRegistryError(error);
+            results.push({
+              sourceItemId: String(sourceItemId),
+              status: 'failed',
+              code: registryError.code,
+              message: registryError.message,
+            });
+          }
+        }
+        (ctx as ActionContext).body = {
+          results,
+          unpublished: results.filter((result) => result.status === 'unpublished').length,
+          failed: results.filter((result) => result.status === 'failed').length,
+        };
+      }),
     verify: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {
         const versionId = boundedIdentifierParam(ctx, 'versionId', 128);
@@ -821,6 +902,53 @@ export function createAdminActions(input: {
           throw new RegistryError('INVALID_REQUEST', 400, 'versionId is required.');
         }
         (ctx as ActionContext).body = await input.installationBridge.verify(versionId);
+      }),
+    installationStates: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const rawIds = values(ctx).versionIds;
+        if (!Array.isArray(rawIds) || rawIds.length === 0 || rawIds.length > 100) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'versionIds are required.');
+        }
+        const versionIds = rawIds.map((id) => {
+          if ((typeof id !== 'string' && typeof id !== 'number') || !String(id).trim()) {
+            throw new RegistryError('INVALID_REQUEST', 400, 'versionIds must contain valid record IDs.');
+          }
+          return id;
+        });
+        (ctx as ActionContext).body = { states: await input.installationBridge.installationStates(versionIds) };
+      }),
+    yankImpact: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const versionId = boundedIdentifierParam(ctx, 'versionId', 128);
+        if (!versionId) throw new RegistryError('INVALID_REQUEST', 400, 'versionId is required.');
+        const versions = input.database.getRepository('skillRegistryVersions');
+        const version = await versions.findOne({ filterByTk: versionId });
+        if (!version || getString(version, 'status') !== 'published') {
+          throw new RegistryError('VERSION_NOT_PUBLISHED', 409, 'Only published versions can be yanked.');
+        }
+        const packageId = getString(version, 'packageId');
+        const packageRecord = await input.database.getRepository('skillRegistryPackages').findOne({
+          filterByTk: packageId,
+        });
+        if (!packageRecord) throw new RegistryError('PACKAGE_NOT_FOUND', 404, 'Package was not found.');
+        const remaining = await versions.findOne({
+          filter: { packageId, status: 'published', id: { $ne: modelId(version) } },
+          sort: ['-publishedAt', '-id'],
+        });
+        const isLatestStable = getString(packageRecord, 'latestStableVersionId') === modelId(version);
+        const replacement = isLatestStable
+          ? await versions.findOne({
+              filter: { packageId, channel: 'stable', status: 'published', id: { $ne: modelId(version) } },
+              sort: ['-publishedAt', '-id'],
+            })
+          : null;
+        (ctx as ActionContext).body = {
+          packageIdentity: `${getString(packageRecord, 'namespace')}/${getString(packageRecord, 'slug')}`,
+          version: getString(version, 'version'),
+          isLatestStable,
+          replacementVersion: replacement ? getString(replacement, 'version') : null,
+          packageWillBecomeDraft: !remaining,
+        };
       }),
     install: async (ctx: Context, next: () => Promise<void>) =>
       runAction(ctx, next, async () => {

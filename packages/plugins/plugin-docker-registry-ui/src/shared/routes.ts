@@ -1,0 +1,8 @@
+export const DOCKER_REGISTRY_SETTINGS_ROOT_PATH = '/admin/settings/docker-registry';
+export const DOCKER_REGISTRY_IMAGES_PATH = `${DOCKER_REGISTRY_SETTINGS_ROOT_PATH}/images`;
+
+export const DOCKER_REGISTRY_LEGACY_MANAGER_PATH = '/admin/docker-registry';
+export const DOCKER_REGISTRY_LEGACY_REPOSITORY_PATH = `${DOCKER_REGISTRY_LEGACY_MANAGER_PATH}/repository`;
+export const DOCKER_REGISTRY_LEGACY_IMAGE_PATH = `${DOCKER_REGISTRY_LEGACY_MANAGER_PATH}/image`;
+
+export const DOCKER_REGISTRY_DESKTOP_ROUTE_SCHEMA_UID = 'docker-registry-ui-main-menu';

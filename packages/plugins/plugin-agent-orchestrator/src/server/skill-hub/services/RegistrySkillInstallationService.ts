@@ -36,6 +36,17 @@ export interface RegistryRollbackTarget {
   updatePolicy: 'pinned' | 'channel';
 }
 
+export interface RegistryInstallationState {
+  installationId: string;
+  registryPackageId: string;
+  registryVersionId: string;
+  skillDefinitionId: string;
+  version: string;
+  updatePolicy: 'pinned' | 'channel';
+  status: string;
+  installedAt: string | null;
+}
+
 type Model = {
   get(attribute: string): unknown;
 };
@@ -46,15 +57,13 @@ function read(model: Model, attribute: string, fallback = ''): string {
 }
 
 function localSkillName(packageIdentity: string): string {
-  const normalized = `registry-${packageIdentity}`
+  const normalizedIdentity = packageIdentity
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-  if (normalized.length <= 100) {
-    return normalized;
-  }
+  const readablePrefix = normalizedIdentity ? `registry-${normalizedIdentity}` : 'registry';
   const suffix = createHash('sha256').update(packageIdentity).digest('hex').slice(0, 12);
-  return `${normalized.slice(0, 87)}-${suffix}`;
+  return `${readablePrefix.slice(0, 87)}-${suffix}`;
 }
 
 function jsonText(value: unknown, fallback: unknown): string {
@@ -83,6 +92,30 @@ export class RegistrySkillInstallationService {
     private readonly database: Database,
     private readonly getSkillRepository: () => SkillRepositoryService,
   ) {}
+
+  async getRegistryInstallationStates(
+    registryVersionIds: Array<string | number>,
+  ): Promise<RegistryInstallationState[]> {
+    if (registryVersionIds.length === 0) return [];
+    const installations = await this.database.getRepository('skillRegistryInstallations').find({
+      filter: { registryVersionId: { $in: registryVersionIds } },
+      sort: ['-installedAt', '-id'],
+    });
+    return installations.map((installation) => {
+      const record = installation as unknown as Model;
+      const installedAt = installation.get('installedAt');
+      return {
+        installationId: read(record, 'id'),
+        registryPackageId: read(record, 'registryPackageId'),
+        registryVersionId: read(record, 'registryVersionId'),
+        skillDefinitionId: read(record, 'skillDefinitionId'),
+        version: read(record, 'version'),
+        updatePolicy: read(record, 'updatePolicy') === 'channel' ? 'channel' : 'pinned',
+        status: read(record, 'status'),
+        installedAt: installedAt instanceof Date ? installedAt.toISOString() : installedAt ? String(installedAt) : null,
+      };
+    });
+  }
 
   async getRollbackTarget(installationId: string | number): Promise<RegistryRollbackTarget | null> {
     const installations = this.database.getRepository('skillRegistryInstallations');

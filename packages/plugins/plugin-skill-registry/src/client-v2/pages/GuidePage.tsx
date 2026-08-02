@@ -4,29 +4,31 @@ import { useFlowContext } from '@nocobase/flow-engine';
 
 import { useT } from '../locale';
 
-const API_EXAMPLES = [
-  {
-    title: 'List packages',
-    code: "curl 'https://registry.example.com/api/skillRegistryPublic:list?limit=20&channel=stable'",
-  },
-  {
-    title: 'Search packages',
-    code: "curl 'https://registry.example.com/api/skillRegistryPublic:list?q=ppt&channel=stable'",
-  },
-  {
-    title: 'Get package',
-    code: "curl 'https://registry.example.com/api/skillRegistryPublic:get?package=orggem/gen-doc-ppt-master'",
-  },
-  {
-    title: 'List versions',
-    code: "curl 'https://registry.example.com/api/skillRegistryPublic:versions?package=orggem/gen-doc-ppt-master&channel=stable'",
-  },
-  {
-    title: 'Download artifact',
-    code: "curl -L -o skill.zip 'https://registry.example.com/api/skillRegistryPublic:download?package=orggem/gen-doc-ppt-master&version=1.0.0'",
-  },
-  { title: 'Registry metadata', code: "curl 'https://registry.example.com/api/skillRegistryPublic:metadata'" },
-];
+function apiExamples(apiBaseUrl: string) {
+  return [
+    {
+      title: 'List packages',
+      code: `curl '${apiBaseUrl}/skillRegistryPublic:list?limit=20&channel=stable&includeCompatibility=false'`,
+    },
+    {
+      title: 'Search packages',
+      code: `curl '${apiBaseUrl}/skillRegistryPublic:list?q=ppt&channel=stable'`,
+    },
+    {
+      title: 'Get package',
+      code: `curl '${apiBaseUrl}/skillRegistryPublic:get?package=orggem/gen-doc-ppt-master'`,
+    },
+    {
+      title: 'List versions',
+      code: `curl '${apiBaseUrl}/skillRegistryPublic:versions?package=orggem/gen-doc-ppt-master&channel=stable'`,
+    },
+    {
+      title: 'Download artifact',
+      code: `curl -L -o skill.zip '${apiBaseUrl}/skillRegistryPublic:download?package=orggem/gen-doc-ppt-master&version=1.0.0'`,
+    },
+    { title: 'Registry metadata', code: `curl '${apiBaseUrl}/skillRegistryPublic:metadata'` },
+  ];
+}
 
 function CodeExample({ code, copyLabel, onCopy }: { code: string; copyLabel: string; onCopy: () => void }) {
   return (
@@ -44,6 +46,9 @@ function CodeExample({ code, copyLabel, onCopy }: { code: string; copyLabel: str
 export default function GuidePage() {
   const t = useT();
   const ctx = useFlowContext();
+  const configuredApiBaseUrl = ctx.api.axios.defaults.baseURL || '/api';
+  const apiBaseUrl = new URL(configuredApiBaseUrl, `${window.location.origin}/`).toString().replace(/\/+$/, '');
+  const examples = apiExamples(apiBaseUrl);
   const copy = async (value: string) => {
     await navigator.clipboard.writeText(value);
     ctx.message.success(t('Copied'));
@@ -89,7 +94,7 @@ export default function GuidePage() {
           )}
         </Typography.Paragraph>
         <Collapse
-          items={API_EXAMPLES.map(({ title, code }) => ({
+          items={examples.map(({ title, code }) => ({
             key: title,
             label: t(title),
             children: <CodeExample code={code} copyLabel={t('Copy')} onCopy={() => copy(code)} />,
@@ -99,10 +104,13 @@ export default function GuidePage() {
       <Card title={t('API response and pagination')}>
         <Typography.Paragraph>
           {t(
-            'list and versions return rows plus meta.nextCursor. Send the opaque cursor unchanged with the same filters to fetch the next page. limit accepts 1 through 100 and defaults to 20.',
+            'list and versions return records in data plus meta.nextCursor. Send the opaque cursor unchanged with the same filters to fetch the next page. limit accepts 1 through 100 and defaults to 20.',
           )}
         </Typography.Paragraph>
-        <Typography.Text code>{'{ "rows": [], "nextCursor": null }'}</Typography.Text>
+        <Typography.Text code>{'{ "data": [], "meta": { "nextCursor": null } }'}</Typography.Text>
+        <Typography.Paragraph>
+          {t('Set includeCompatibility=false on list requests to omit compatibility from each row.')}
+        </Typography.Paragraph>
         <Typography.Paragraph>
           {t(
             'download returns a ZIP and the X-Skill-Version, X-Artifact-Sha256, and Digest headers. Hash the downloaded bytes and compare the SHA-256 digest before installing.',

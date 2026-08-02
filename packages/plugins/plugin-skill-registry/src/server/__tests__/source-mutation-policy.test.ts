@@ -195,4 +195,201 @@ describe('skill registry source mutation policy', () => {
     expect(findSource).not.toHaveBeenCalled();
     expect(next).not.toHaveBeenCalled();
   });
+
+  it('requires Git Manager to authorize the current user before saving a Git source binding', async () => {
+    const assertAccess = vi.fn().mockResolvedValue(undefined);
+    const middleware = createSourceMutationPolicy({
+      database: { getRepository: vi.fn() } as never,
+      providers: new Map([
+        [
+          'git-manager',
+          {
+            type: 'git-manager',
+            assertAccess,
+          } as never,
+        ],
+      ]),
+    });
+    const context = {
+      ...sourceContext('create', {
+        values: {
+          name: 'Git source',
+          providerType: 'git-manager',
+          namespace: 'team',
+          providerConfig: { repositoryId: 42, ref: 'main', rootPath: 'skills' },
+        },
+      }),
+      auth: { user: { id: 'admin-1' } },
+      state: { currentRoles: ['registry-manager'] },
+    };
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware(context as never, next);
+
+    expect(assertAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'new-source',
+        providerType: 'git-manager',
+        providerConfig: { repositoryId: 42, ref: 'main', rootPath: 'skills' },
+      }),
+      { kind: 'user', userId: 'admin-1', roles: ['registry-manager'] },
+    );
+    expect(context.action.params.values).toEqual(
+      expect.objectContaining({
+        providerAccessAuthorizedById: 'admin-1',
+        providerAccessAuthorizedAt: expect.any(Date),
+      }),
+    );
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('allows non-binding updates to a Git source when Git Manager is unavailable or the actor has lost repository scope', async () => {
+    const existing = sourceModel({
+      name: 'Git source',
+      providerType: 'git-manager',
+      namespace: 'team',
+      providerConfig: { repositoryId: 42, ref: 'main', rootPath: 'skills' },
+      enabled: true,
+      syncPolicy: 'manual',
+      syncIntervalMinutes: null,
+      providerAccessAuthorizedAt: new Date(),
+    });
+    const getRepository = vi.fn((name: string) =>
+      name === 'skillRegistrySyncRuns'
+        ? { findOne: vi.fn().mockResolvedValue(null) }
+        : { findOne: vi.fn().mockResolvedValue(existing) },
+    );
+    const unavailableMiddleware = createSourceMutationPolicy({ database: { getRepository } as never });
+    const disableContext = sourceContext('update', {
+      filterByTk: 'source-1',
+      values: { enabled: false },
+    });
+    const disabled = vi.fn().mockResolvedValue(undefined);
+
+    await expect(unavailableMiddleware(disableContext as never, disabled)).resolves.toBeUndefined();
+    expect(disableContext.action.params.values).toEqual({ enabled: false });
+    expect(disabled).toHaveBeenCalledOnce();
+
+    const assertAccess = vi.fn().mockRejectedValue(new Error('repository scope was revoked'));
+    const deniedMiddleware = createSourceMutationPolicy({
+      database: { getRepository } as never,
+      providers: new Map([['git-manager', { type: 'git-manager', assertAccess } as never]]),
+    });
+    const renameContext = {
+      ...sourceContext('update', {
+        filterByTk: 'source-1',
+        values: { name: 'Archived Git source' },
+      }),
+      auth: { user: { id: 'admin-1' } },
+      state: { currentRoles: ['registry-manager'] },
+    };
+    const renamed = vi.fn().mockResolvedValue(undefined);
+
+    await expect(deniedMiddleware(renameContext as never, renamed)).resolves.toBeUndefined();
+    expect(renameContext.action.params.values).toEqual({ name: 'Archived Git source' });
+    expect(assertAccess).not.toHaveBeenCalled();
+    expect(renamed).toHaveBeenCalledOnce();
+  });
+
+  it('reauthorizes a legacy Git source without changing its binding', async () => {
+    const existing = sourceModel({
+      name: 'Git source',
+      providerType: 'git-manager',
+      namespace: 'team',
+      providerConfig: { repositoryId: 42, ref: 'main', rootPath: 'skills' },
+      enabled: true,
+      syncPolicy: 'manual',
+      syncIntervalMinutes: null,
+      providerAccessAuthorizedAt: null,
+    });
+    const assertAccess = vi.fn().mockResolvedValue(undefined);
+    const middleware = createSourceMutationPolicy({
+      database: {
+        getRepository: vi.fn((name: string) =>
+          name === 'skillRegistrySyncRuns'
+            ? { findOne: vi.fn().mockResolvedValue(null) }
+            : { findOne: vi.fn().mockResolvedValue(existing) },
+        ),
+      } as never,
+      providers: new Map([['git-manager', { type: 'git-manager', assertAccess } as never]]),
+    });
+    const context = {
+      ...sourceContext('update', {
+        filterByTk: 'source-1',
+        values: { name: 'Renamed Git source' },
+      }),
+      auth: { user: { id: 'admin-1' } },
+      state: { currentRoles: ['registry-manager'] },
+    };
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware(context as never, next);
+
+    expect(assertAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'source-1',
+        providerConfig: { repositoryId: 42, ref: 'main', rootPath: 'skills' },
+      }),
+      { kind: 'user', userId: 'admin-1', roles: ['registry-manager'] },
+    );
+    expect(context.action.params.values).toEqual(
+      expect.objectContaining({
+        name: 'Renamed Git source',
+        providerAccessAuthorizedAt: expect.any(Date),
+        providerAccessAuthorizedById: 'admin-1',
+      }),
+    );
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('reauthorizes a Git source when its effective binding changes', async () => {
+    const existing = sourceModel({
+      name: 'Git source',
+      providerType: 'git-manager',
+      namespace: 'team',
+      providerConfig: { repositoryId: 42, ref: 'main', rootPath: 'skills' },
+      enabled: true,
+      syncPolicy: 'manual',
+      syncIntervalMinutes: null,
+    });
+    const assertAccess = vi.fn().mockResolvedValue(undefined);
+    const middleware = createSourceMutationPolicy({
+      database: {
+        getRepository: vi.fn((name: string) =>
+          name === 'skillRegistrySyncRuns'
+            ? { findOne: vi.fn().mockResolvedValue(null) }
+            : { findOne: vi.fn().mockResolvedValue(existing) },
+        ),
+      } as never,
+      providers: new Map([['git-manager', { type: 'git-manager', assertAccess } as never]]),
+    });
+    const context = {
+      ...sourceContext('update', {
+        filterByTk: 'source-1',
+        values: { providerConfig: { repositoryId: 42, ref: 'release', rootPath: 'skills' } },
+      }),
+      auth: { user: { id: 'admin-1' } },
+      state: { currentRoles: ['registry-manager'] },
+    };
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware(context as never, next);
+
+    expect(assertAccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'source-1',
+        providerType: 'git-manager',
+        providerConfig: { repositoryId: 42, ref: 'release', rootPath: 'skills' },
+      }),
+      { kind: 'user', userId: 'admin-1', roles: ['registry-manager'] },
+    );
+    expect(context.action.params.values).toEqual(
+      expect.objectContaining({
+        providerConfig: { repositoryId: 42, ref: 'release', rootPath: 'skills' },
+        providerAccessAuthorizedById: 'admin-1',
+        providerAccessAuthorizedAt: expect.any(Date),
+      }),
+    );
+    expect(next).toHaveBeenCalledOnce();
+  });
 });

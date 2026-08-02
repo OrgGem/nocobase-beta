@@ -14,7 +14,7 @@ export class PluginSkillRegistryClientV2 extends Plugin<Record<string, never>, A
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'skill-registry',
       key: 'index',
-      title: this.t('Catalog'),
+      title: this.t('Skills'),
       componentLoader: () => import('./pages/CatalogPage'),
       sort: -1,
       aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
@@ -39,7 +39,7 @@ export class PluginSkillRegistryClientV2 extends Plugin<Record<string, never>, A
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'skill-registry',
       key: 'versions',
-      title: this.t('Versions'),
+      title: this.t('Version audit'),
       componentLoader: () => import('./pages/VersionsPage'),
       aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
     });

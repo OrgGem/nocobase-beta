@@ -1,5 +1,6 @@
 import { Context } from '@nocobase/actions';
 import { pollAllRepos, pollOneRepo, getPollerStatus } from '../poller';
+import { getEffectiveActionParams } from '../repository-access';
 
 /**
  * Manually trigger a poll cycle. If repositoryId is provided, only that repo
@@ -7,7 +8,7 @@ import { pollAllRepos, pollOneRepo, getPollerStatus } from '../poller';
  * with autoReview=true.
  */
 export async function pollNow(ctx: Context, next: () => Promise<void>) {
-  const { repositoryId } = ctx.action.params;
+  const { repositoryId } = getEffectiveActionParams(ctx);
   if (repositoryId) {
     const repo = await ctx.db.getRepository('gitRepositories').findOne({ filterByTk: repositoryId });
     if (!repo) ctx.throw(404, 'Repository not found');

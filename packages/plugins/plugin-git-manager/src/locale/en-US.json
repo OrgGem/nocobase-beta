@@ -290,7 +290,8 @@
   "Policy": "Policy",
   "Split SHA": "Split SHA",
   "Target before": "Target before",
-  "Target after": "Target after"
-  ,"Execution mode": "Execution mode"
-  ,"App process": "App process"
+  "Target after": "Target after",
+  "Execution mode": "Execution mode",
+  "App process": "App process",
+  "Credential-bearing URLs are not allowed": "Credential-bearing URLs are not allowed"
 }

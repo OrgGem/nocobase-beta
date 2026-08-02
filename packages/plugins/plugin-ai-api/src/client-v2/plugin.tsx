@@ -1,5 +1,4 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
 
 export class PluginAiApiClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -14,10 +13,29 @@ export class PluginAiApiClient extends Plugin<Record<string, never>, Application
       menuKey: 'ai-api',
       key: 'index',
       title: this.t('Configuration'),
-      
-      componentLoader: () => import('../client/AiApiConfigPage'),
+      componentLoader: () => import('./pages/GeneralPage'),
     });
 
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-api',
+      key: 'model-pricing',
+      title: this.t('Model pricing'),
+      componentLoader: () => import('./pages/ModelPricingPage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-api',
+      key: 'user-quotas',
+      title: this.t('User quotas'),
+      componentLoader: () => import('./pages/UserQuotasPage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-api',
+      key: 'usage',
+      title: this.t('Usage'),
+      componentLoader: () => import('./pages/UsagePage'),
+    });
   }
 }
 

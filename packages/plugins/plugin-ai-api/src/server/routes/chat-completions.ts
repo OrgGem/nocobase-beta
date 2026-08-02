@@ -23,6 +23,7 @@ import { createRequestAbortController, isStreamingRequested, writeResponse } fro
 import { checkEmployeeAccess } from '../middleware/role-permission';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
+import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
 
 /**
  * POST /api/ai-llm/v1/chat/completions
@@ -121,6 +122,8 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
       return;
     }
 
+    await prepareLlmBilling(ctx, resolved);
+
     const providerRequestParameters = getProviderRequestParameters(body);
     const modelOptions: Record<string, unknown> = {
       model: modelId,
@@ -197,6 +200,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     const baseModel = provider.createModel();
     applyProviderRequestParameters(baseModel, providerRequestParameters);
     const chatModel = bindRequestTools(baseModel, body.tools, body.tool_choice, providerRequestParameters);
+    markLlmProviderAttempted(ctx);
 
     if (stream) {
       // ─── Streaming mode ───
@@ -222,8 +226,15 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
   } catch (err) {
     ctx.log.error('AI API chat completions error:', err);
     if (!ctx.res.headersSent) {
-      ctx.status = 500;
-      ctx.body = toOpenAIError(500, getErrorMessage(err, 'Internal server error'), 'server_error');
+      const isQuotaError = err instanceof AiApiQuotaError;
+      ctx.status = isQuotaError ? 429 : 500;
+      if (isQuotaError) ctx.set('X-RateLimit-Reason', err.code);
+      ctx.body = toOpenAIError(
+        ctx.status,
+        getErrorMessage(err, 'Internal server error'),
+        isQuotaError ? 'quota_error' : 'server_error',
+        isQuotaError ? err.code : undefined,
+      );
     }
   }
 }

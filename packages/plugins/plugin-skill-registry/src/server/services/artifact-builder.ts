@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import { Buffer as NodeBuffer } from 'node:buffer';
 
 import { isRecord, type RegistrySkillCandidateV1, type RegistrySkillManifestV1 } from '../contracts/types';
 import { RegistryError } from '../contracts/errors';
@@ -172,15 +173,19 @@ export function unpackArtifact(content: Buffer): { manifest: RegistrySkillManife
   if (content.length > MAX_ARTIFACT_BYTES) {
     throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact compressed size exceeds the configured limit.');
   }
-  const archive = new AdmZip(content);
+  // Normalize through node:buffer so adm-zip's internal `instanceof
+  // Uint8Array` checks work even when the caller comes from a jsdom realm.
+  const archive = new AdmZip(NodeBuffer.from(content));
   const files = new Map<string, Buffer>();
   const collisionKeys = new Set<string>();
   let expandedSizeBytes = 0;
   for (const entry of archive.getEntries()) {
     const entryName = entry.entryName.replace(/\\/g, '/');
-    const path = normalizeRelativePath(
-      entry.isDirectory && entryName.endsWith('/') ? entryName.slice(0, -1) : entryName,
-    );
+    // ZIP directory entries are identified by a trailing separator. Relying on
+    // adm-zip's `isDirectory` is not portable because supported releases expose
+    // it as either a boolean getter or a method.
+    const isDirectory = entryName.endsWith('/');
+    const path = normalizeRelativePath(isDirectory && entryName.endsWith('/') ? entryName.slice(0, -1) : entryName);
     const collisionKey = pathCollisionKey(path);
     if (collisionKeys.has(collisionKey)) {
       throw new RegistryError(
@@ -197,7 +202,7 @@ export function unpackArtifact(content: Buffer): { manifest: RegistrySkillManife
       );
     }
     collisionKeys.add(collisionKey);
-    if (entry.isDirectory) {
+    if (isDirectory) {
       continue;
     }
     if (files.size >= MAX_FILES) {
@@ -215,7 +220,9 @@ export function unpackArtifact(content: Buffer): { manifest: RegistrySkillManife
     ) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact exceeds extraction limits.');
     }
-    const data = entry.getData();
+    // Normalize cross-realm Uint8Array values so string decoding and the public
+    // return type behave consistently in Node, jsdom tests, and bundled runtime.
+    const data = NodeBuffer.from(entry.getData());
     // Declared sizes can lie; re-check with the actual decompressed bytes.
     expandedSizeBytes += data.length;
     if (

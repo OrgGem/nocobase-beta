@@ -59,9 +59,33 @@ describe('skill registry request policies', () => {
     await expect(middleware(rejected as never, next)).rejects.toMatchObject({ status: 405 });
     expect(rejected.headers.get('Allow')).toBe('POST');
 
+    const rejectedSettingsUpdate = context({
+      resourceName: 'skillRegistryAdmin',
+      actionName: 'updateSettings',
+      method: 'GET',
+    });
+    await expect(middleware(rejectedSettingsUpdate as never, next)).rejects.toMatchObject({ status: 405 });
+    expect(rejectedSettingsUpdate.headers.get('Allow')).toBe('POST');
+
     const allowed = context({ resourceName: 'skillRegistryAdmin', actionName: 'publish', method: 'POST' });
     await middleware(allowed as never, next);
     expect(next).toHaveBeenCalledOnce();
+
+    const readPreview = context({
+      resourceName: 'skillRegistryAdmin',
+      actionName: 'yankImpact',
+      method: 'GET',
+    });
+    await middleware(readPreview as never, next);
+    expect(next).toHaveBeenCalledTimes(2);
+
+    const rejectedPreviewWrite = context({
+      resourceName: 'skillRegistryAdmin',
+      actionName: 'installationStates',
+      method: 'POST',
+    });
+    await expect(middleware(rejectedPreviewWrite as never, next)).rejects.toMatchObject({ status: 405 });
+    expect(rejectedPreviewWrite.headers.get('Allow')).toBe('GET, HEAD');
   });
 
   it('blocks generic mutation of internal resources regardless of filter shape', async () => {
