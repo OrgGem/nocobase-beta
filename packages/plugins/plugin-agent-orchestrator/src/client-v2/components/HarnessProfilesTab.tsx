@@ -161,17 +161,22 @@ export const HarnessProfilesTab: React.FC = () => {
     {
       title: t('Settings'),
       key: 'settings',
-      render: (_: any, record: any) => (
-        <Space size={4} wrap>
-          {Object.entries(record.settings || {})
-            .slice(0, 5)
-            .map(([key, value]) => (
-              <Tag key={key}>
+      width: 360,
+      render: (_: any, record: any) => {
+        const entries = Object.entries(record.settings || {});
+        const shown = entries.slice(0, 5);
+        const remaining = entries.length - shown.length;
+        return (
+          <Space size={[4, 4]} wrap style={{ maxWidth: 340 }}>
+            {shown.map(([key, value]) => (
+              <Tag key={key} style={{ whiteSpace: 'normal', wordBreak: 'break-word', margin: 0 }}>
                 {key}: {String(value)}
               </Tag>
             ))}
-        </Space>
-      ),
+            {remaining > 0 && <Tag color="default">+{remaining}</Tag>}
+          </Space>
+        );
+      },
     },
     {
       title: t('Actions'),

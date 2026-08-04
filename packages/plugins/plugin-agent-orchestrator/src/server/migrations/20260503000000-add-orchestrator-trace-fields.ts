@@ -1,4 +1,5 @@
 import { Migration } from '@nocobase/server';
+import { DataTypes } from '@nocobase/database';
 
 export default class AddOrchestratorTraceFieldsToSkillExecutions extends Migration {
   on = 'afterLoad';
@@ -15,7 +16,7 @@ export default class AddOrchestratorTraceFieldsToSkillExecutions extends Migrati
     const addIfMissing = async (name: string) => {
       if (tableDesc[name]) return;
       await queryInterface.addColumn(tableName, name, {
-        type: 'VARCHAR(100)',
+        type: DataTypes.STRING(100),
         allowNull: true,
       });
     };

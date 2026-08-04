@@ -22,6 +22,7 @@ type ProgressKpiProps = {
   percent: number;
   value?: number;
   target?: number;
+  showTarget?: boolean;
   type?: 'line' | 'circle' | 'dashboard';
   status?: 'success' | 'exception' | 'active' | 'normal';
   strokeColor?: string;
@@ -33,6 +34,7 @@ const ProgressKpiComponent: React.FC<ProgressKpiProps> = ({
   percent,
   value,
   target,
+  showTarget = false,
   type = 'line',
   status,
   strokeColor,
@@ -48,7 +50,7 @@ const ProgressKpiComponent: React.FC<ProgressKpiProps> = ({
         strokeColor={strokeColor || undefined}
         showInfo={showInfo}
       />
-      {target ? (
+      {showTarget ? (
         <Text type="secondary">
           {value} / {target}
         </Text>
@@ -119,6 +121,7 @@ export class ProgressKpi extends Chart {
       title: general?.title || fieldLabel(fieldProps, general?.valueField),
       value,
       target,
+      showTarget: Boolean(general?.targetField),
       percent,
     };
   }

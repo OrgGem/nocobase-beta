@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
+import type { Dayjs } from 'dayjs';
 import {
   Table,
   Card,
@@ -16,25 +17,88 @@ import {
   Select,
   DatePicker,
   Form,
+  message,
 } from 'antd';
-import { EyeOutlined, CheckCircleOutlined, CloseCircleOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  EyeOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  SyncOutlined,
+  ClockCircleOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import { useApiClient as useAPIClient, useRequest } from '../hooks/useApiRequest';
 import { useAIEmployees } from './AIEmployeesContext';
+import { useT } from '../skill-hub/locale';
 
 const { Text, Paragraph } = Typography;
 const { RangePicker } = DatePicker;
+
+type TraceItem = {
+  type?: string;
+  at?: string;
+  title?: string;
+  toolName?: string;
+  status?: string;
+  content?: string;
+  args?: unknown;
+  skillExecutionId?: number;
+};
+
+type TraceMessage = {
+  index: number;
+  type?: string;
+  content?: string;
+  toolCalls?: unknown[];
+};
+
+type TracingLog = {
+  id: number | string;
+  createdAt?: string;
+  leaderUsername?: string;
+  subAgentUsername?: string;
+  toolName?: string;
+  task?: string;
+  context?: string;
+  status?: string;
+  durationMs?: number;
+  depth?: number;
+  result?: string;
+  error?: string;
+  hasUnifiedTrace?: boolean;
+  trace?: TraceItem[];
+  messages?: TraceMessage[];
+};
 
 type FilterState = {
   leader?: string;
   subAgent?: string;
   status?: string;
-  range?: [any, any] | null;
+  range?: [Dayjs | null, Dayjs | null] | null;
 };
+
+function statusIcon(status?: string) {
+  if (status === 'success') return <CheckCircleOutlined />;
+  if (status === 'error') return <CloseCircleOutlined />;
+  if (status === 'running') return <SyncOutlined spin />;
+  return <ClockCircleOutlined />;
+}
+
+function statusColor(status?: string) {
+  if (status === 'success') return 'success';
+  if (status === 'error') return 'error';
+  if (status === 'running') return 'processing';
+  return 'default';
+}
 
 export const TracingTab: React.FC = () => {
   const api = useAPIClient();
-  const [selectedLog, setSelectedLog] = useState<any>(null);
+  const t = useT();
+  const [selectedLog, setSelectedLog] = useState<TracingLog | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Guards the detail drawer against out-of-order responses when the user
+  // switches rows quickly: only the newest request may commit its result.
+  const detailRequestId = useRef(0);
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -43,14 +107,15 @@ export const TracingTab: React.FC = () => {
   const { employees, employeeMap } = useAIEmployees();
 
   const requestParams = useMemo(() => {
-    const filter: any = {};
+    const filter: Record<string, unknown> = {};
     if (filters.leader) filter.leaderUsername = filters.leader;
     if (filters.subAgent) filter.subAgentUsername = filters.subAgent;
     if (filters.status) filter.status = filters.status;
     if (filters.range && (filters.range[0] || filters.range[1])) {
-      filter.createdAt = {};
-      if (filters.range[0]) filter.createdAt.$gte = filters.range[0].toDate().toISOString();
-      if (filters.range[1]) filter.createdAt.$lte = filters.range[1].toDate().toISOString();
+      const createdAt: Record<string, string> = {};
+      if (filters.range[0]) createdAt.$gte = filters.range[0].toDate().toISOString();
+      if (filters.range[1]) createdAt.$lte = filters.range[1].toDate().toISOString();
+      filter.createdAt = createdAt;
     }
     return {
       sort: ['-createdAt'],
@@ -60,7 +125,7 @@ export const TracingTab: React.FC = () => {
     };
   }, [page, pageSize, filters]);
 
-  const { data, loading, refresh } = useRequest(
+  const { data, loading, refresh } = useRequest<{ data?: TracingLog[]; meta?: { count?: number } }>(
     {
       url: 'orchestratorTracing:list',
       params: requestParams,
@@ -72,21 +137,22 @@ export const TracingTab: React.FC = () => {
 
   // Server returns { data: rows, meta: { count } }; useRequest unwraps to that shape.
   const logs = useMemo(() => {
-    const rows = (data as any)?.data;
+    const rows = data?.data;
     return Array.isArray(rows) ? rows : [];
   }, [data]);
 
   const total = useMemo(() => {
-    const count = (data as any)?.meta?.count;
+    const count = data?.meta?.count;
     return typeof count === 'number' ? count : 0;
   }, [data]);
 
-  const formatDuration = (ms: number) => {
+  const formatDuration = (ms?: number) => {
     if (!ms) return '-';
     return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
   };
 
-  const handleOpenLog = async (record: any) => {
+  const handleOpenLog = async (record: TracingLog) => {
+    const requestId = ++detailRequestId.current;
     setSelectedLog(record);
     setDetailLoading(true);
     try {
@@ -94,9 +160,23 @@ export const TracingTab: React.FC = () => {
         url: 'orchestratorTracing:get',
         params: { filterByTk: record.id, source: record.hasUnifiedTrace ? 'span' : 'log' },
       });
-      setSelectedLog((res as any)?.data?.data?.data || (res as any)?.data?.data || record);
+      if (requestId !== detailRequestId.current) return;
+      const payload = res as { data?: { data?: { data?: TracingLog } | TracingLog } };
+      const detail =
+        (payload?.data?.data as { data?: TracingLog })?.data || (payload?.data?.data as TracingLog) || record;
+      setSelectedLog(detail);
+    } catch (error) {
+      if (requestId !== detailRequestId.current) return;
+      const text =
+        (error as { response?: { data?: { errors?: Array<{ message?: string }> } }; message?: string })?.response?.data
+          ?.errors?.[0]?.message ||
+        (error as { message?: string })?.message ||
+        t('Failed to load execution detail');
+      message.error(text);
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestId.current) {
+        setDetailLoading(false);
+      }
     }
   };
 
@@ -125,26 +205,26 @@ export const TracingTab: React.FC = () => {
 
   const columns = [
     {
-      title: 'Time',
+      title: t('Time'),
       dataIndex: 'createdAt',
       key: 'createdAt',
       width: 170,
       render: (v: string) => (v ? new Date(v).toLocaleString() : '-'),
     },
     {
-      title: 'Leader',
+      title: t('Leader'),
       dataIndex: 'leaderUsername',
       key: 'leaderUsername',
       render: (username: string) => <Tag color="blue">{employeeMap.get(username) || username}</Tag>,
     },
     {
-      title: 'Sub-Agent',
+      title: t('Sub-Agent'),
       dataIndex: 'subAgentUsername',
       key: 'subAgentUsername',
       render: (username: string) => <Tag color="green">{employeeMap.get(username) || username}</Tag>,
     },
     {
-      title: 'Task',
+      title: t('Task'),
       dataIndex: 'task',
       key: 'task',
       render: (task: string) => (
@@ -154,28 +234,25 @@ export const TracingTab: React.FC = () => {
       ),
     },
     {
-      title: 'Status',
+      title: t('Status'),
       dataIndex: 'status',
       key: 'status',
       width: 90,
       render: (status: string) => (
-        <Tag
-          icon={status === 'success' ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-          color={status === 'success' ? 'success' : 'error'}
-        >
-          {status}
+        <Tag icon={statusIcon(status)} color={statusColor(status)}>
+          {status ? t(status) : '-'}
         </Tag>
       ),
     },
     {
-      title: 'Duration',
+      title: t('Duration'),
       dataIndex: 'durationMs',
       key: 'durationMs',
       width: 90,
       render: formatDuration,
     },
     {
-      title: 'Depth',
+      title: t('Depth'),
       dataIndex: 'depth',
       key: 'depth',
       width: 60,
@@ -185,9 +262,9 @@ export const TracingTab: React.FC = () => {
       title: '',
       key: 'actions',
       width: 80,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: TracingLog) => (
         <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => handleOpenLog(record)}>
-          Detail
+          {t('Detail')}
         </Button>
       ),
     },
@@ -199,21 +276,22 @@ export const TracingTab: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
-        message="Execution Tracing"
+        message={t('Execution Tracing')}
         description={
           <Text type="secondary">
-            View orchestration execution logs. Each row represents one sub-agent invocation, with child tool and Skill
-            Hub executions shown in the detail flow.
+            {t(
+              'View orchestration execution logs. Each row represents one sub-agent invocation, with child tool and Skill Hub executions shown in the detail flow.',
+            )}
           </Text>
         }
       />
 
       <Card bordered={false}>
         <Form layout="inline" style={{ marginBottom: 16, rowGap: 8, flexWrap: 'wrap' }}>
-          <Form.Item label="Leader">
+          <Form.Item label={t('Leader')}>
             <Select
               allowClear
-              placeholder="Any leader"
+              placeholder={t('Any leader')}
               style={{ minWidth: 180 }}
               options={employeeOptions}
               value={filters.leader}
@@ -222,10 +300,10 @@ export const TracingTab: React.FC = () => {
               optionFilterProp="label"
             />
           </Form.Item>
-          <Form.Item label="Sub-Agent">
+          <Form.Item label={t('Sub-Agent')}>
             <Select
               allowClear
-              placeholder="Any sub-agent"
+              placeholder={t('Any sub-agent')}
               style={{ minWidth: 180 }}
               options={employeeOptions}
               value={filters.subAgent}
@@ -234,30 +312,34 @@ export const TracingTab: React.FC = () => {
               optionFilterProp="label"
             />
           </Form.Item>
-          <Form.Item label="Status">
+          <Form.Item label={t('Status')}>
             <Select
               allowClear
-              placeholder="Any status"
+              placeholder={t('Any status')}
               style={{ minWidth: 140 }}
               options={[
-                { label: 'Success', value: 'success' },
-                { label: 'Error', value: 'error' },
-                { label: 'Running', value: 'running' },
+                { label: t('Success'), value: 'success' },
+                { label: t('Error'), value: 'error' },
+                { label: t('Running'), value: 'running' },
               ]}
               value={filters.status}
               onChange={(v) => updateFilter({ status: v })}
             />
           </Form.Item>
-          <Form.Item label="Time">
-            <RangePicker showTime value={filters.range as any} onChange={(v) => updateFilter({ range: v as any })} />
+          <Form.Item label={t('Time')}>
+            <RangePicker
+              showTime
+              value={filters.range}
+              onChange={(v) => updateFilter({ range: v as [Dayjs | null, Dayjs | null] | null })}
+            />
           </Form.Item>
           <Form.Item>
             <Space>
               <Button onClick={resetFilters} disabled={!hasFilters}>
-                Reset
+                {t('Reset')}
               </Button>
               <Button icon={<ReloadOutlined />} onClick={refresh}>
-                Refresh
+                {t('Refresh')}
               </Button>
             </Space>
           </Form.Item>
@@ -276,7 +358,7 @@ export const TracingTab: React.FC = () => {
             total,
             showSizeChanger: true,
             pageSizeOptions: [10, 20, 50, 100],
-            showTotal: (count) => `${count} execution${count === 1 ? '' : 's'}`,
+            showTotal: (count) => t('{{count}} executions', { count }),
             onChange: (nextPage, nextSize) => {
               setPage(nextPage);
               if (nextSize && nextSize !== pageSize) setPageSize(nextSize);
@@ -285,63 +367,62 @@ export const TracingTab: React.FC = () => {
           locale={{
             emptyText: (
               <Empty
-                description={hasFilters ? 'No executions match the current filters' : 'No delegation executions yet'}
+                description={
+                  hasFilters ? t('No executions match the current filters') : t('No delegation executions yet')
+                }
               />
             ),
           }}
         />
       </Card>
 
-      <Drawer title="Execution Detail" width={820} onClose={() => setSelectedLog(null)} open={!!selectedLog}>
+      <Drawer title={t('Execution Detail')} width={820} onClose={() => setSelectedLog(null)} open={!!selectedLog}>
         {selectedLog && (
           <Spin spinning={detailLoading}>
             <>
               <Descriptions column={1} bordered size="small" style={{ marginBottom: 16 }}>
-                <Descriptions.Item label="Status">
-                  <Tag
-                    icon={selectedLog.status === 'success' ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-                    color={selectedLog.status === 'success' ? 'success' : 'error'}
-                  >
-                    {selectedLog.status}
+                <Descriptions.Item label={t('Status')}>
+                  <Tag icon={statusIcon(selectedLog.status)} color={statusColor(selectedLog.status)}>
+                    {selectedLog.status ? t(selectedLog.status) : '-'}
                   </Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="Leader">
+                <Descriptions.Item label={t('Leader')}>
                   <Tag color="blue">{employeeMap.get(selectedLog.leaderUsername) || selectedLog.leaderUsername}</Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="Sub-Agent">
+                <Descriptions.Item label={t('Sub-Agent')}>
                   <Tag color="green">
                     {employeeMap.get(selectedLog.subAgentUsername) || selectedLog.subAgentUsername}
                   </Tag>
                 </Descriptions.Item>
-                <Descriptions.Item label="Tool">
+                <Descriptions.Item label={t('Tool')}>
                   <Text code>{selectedLog.toolName}</Text>
                 </Descriptions.Item>
-                <Descriptions.Item label="Depth">{selectedLog.depth ?? 0}</Descriptions.Item>
-                <Descriptions.Item label="Duration">{formatDuration(selectedLog.durationMs)}</Descriptions.Item>
-                <Descriptions.Item label="Time">
+                <Descriptions.Item label={t('Depth')}>{selectedLog.depth ?? 0}</Descriptions.Item>
+                <Descriptions.Item label={t('Duration')}>{formatDuration(selectedLog.durationMs)}</Descriptions.Item>
+                <Descriptions.Item label={t('Time')}>
                   {selectedLog.createdAt ? new Date(selectedLog.createdAt).toLocaleString() : '-'}
                 </Descriptions.Item>
               </Descriptions>
 
-              <Card title="Task" size="small" style={{ marginBottom: 16 }}>
+              <Card title={t('Task')} size="small" style={{ marginBottom: 16 }}>
                 <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
-                  {selectedLog.task || 'No task description'}
+                  {selectedLog.task || t('No task description')}
                 </Paragraph>
               </Card>
 
               {selectedLog.context && (
-                <Card title="Context" size="small" style={{ marginBottom: 16 }}>
+                <Card title={t('Context')} size="small" style={{ marginBottom: 16 }}>
                   <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
                     {selectedLog.context}
                   </Paragraph>
                 </Card>
               )}
 
-              <Card title="Execution Flow" size="small" style={{ marginBottom: 16 }}>
+              <Card title={t('Execution Flow')} size="small" style={{ marginBottom: 16 }}>
                 {Array.isArray(selectedLog.trace) && selectedLog.trace.length ? (
                   <Timeline
-                    items={selectedLog.trace.map((item: any, index: number) => ({
-                      key: index,
+                    items={selectedLog.trace.map((item, index) => ({
+                      key: item.skillExecutionId ?? `${item.type ?? 'step'}-${item.at ?? index}`,
                       color: item.status === 'error' ? 'red' : item.type === 'tool_call' ? 'blue' : 'green',
                       children: (
                         <div>
@@ -350,7 +431,9 @@ export const TracingTab: React.FC = () => {
                             <Text type="secondary">{item.at ? new Date(item.at).toLocaleString() : ''}</Text>
                             {item.toolName && <Text code>{item.toolName}</Text>}
                             {item.skillExecutionId && (
-                              <Text type="secondary">Skill execution #{item.skillExecutionId}</Text>
+                              <Text type="secondary">
+                                {t('Skill execution #{{id}}', { id: item.skillExecutionId })}
+                              </Text>
                             )}
                             {item.content && (
                               <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
@@ -368,7 +451,7 @@ export const TracingTab: React.FC = () => {
                     }))}
                   />
                 ) : (
-                  <Empty description="No execution flow captured" />
+                  <Empty description={t('No execution flow captured')} />
                 )}
               </Card>
 
@@ -378,17 +461,17 @@ export const TracingTab: React.FC = () => {
                   items={[
                     {
                       key: 'messages',
-                      label: `Raw messages (${selectedLog.messages.length})`,
+                      label: t('Raw messages ({{count}})', { count: selectedLog.messages.length }),
                       children: (
                         <Space direction="vertical" style={{ width: '100%' }}>
-                          {selectedLog.messages.map((message: any) => (
-                            <Card key={message.index} size="small" title={`${message.index + 1}. ${message.type}`}>
+                          {selectedLog.messages.map((msg) => (
+                            <Card key={msg.index} size="small" title={`${msg.index + 1}. ${msg.type}`}>
                               <Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 12 }}>
-                                {message.content || JSON.stringify(message.toolCalls || message, null, 2)}
+                                {msg.content || JSON.stringify(msg.toolCalls || msg, null, 2)}
                               </Paragraph>
-                              {message.toolCalls?.length > 0 && (
+                              {(msg.toolCalls?.length ?? 0) > 0 && (
                                 <Paragraph style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', fontSize: 12 }}>
-                                  {JSON.stringify(message.toolCalls, null, 2)}
+                                  {JSON.stringify(msg.toolCalls, null, 2)}
                                 </Paragraph>
                               )}
                             </Card>
@@ -401,7 +484,7 @@ export const TracingTab: React.FC = () => {
               )}
 
               <Card
-                title="Result"
+                title={t('Result')}
                 size="small"
                 style={{
                   marginBottom: 16,
@@ -412,12 +495,12 @@ export const TracingTab: React.FC = () => {
                   style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}
                   ellipsis={{ rows: 20, expandable: true }}
                 >
-                  {selectedLog.result || selectedLog.error || 'No result'}
+                  {selectedLog.result || selectedLog.error || t('No result')}
                 </Paragraph>
               </Card>
 
               {selectedLog.error && (
-                <Card title="Error" size="small" style={{ borderColor: '#ffa39e' }}>
+                <Card title={t('Error')} size="small" style={{ borderColor: '#ffa39e' }}>
                   <Paragraph type="danger" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 13 }}>
                     {selectedLog.error}
                   </Paragraph>

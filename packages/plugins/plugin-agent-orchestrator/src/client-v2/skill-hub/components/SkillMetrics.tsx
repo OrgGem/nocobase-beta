@@ -1,19 +1,19 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Card, Table, Typography, Space, Row, Col, Statistic, Progress } from 'antd';
+import { Alert, Card, Table, Space, Row, Col, Statistic, Progress } from 'antd';
 import { SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { useApiClient as useAPIClient } from '../../hooks/useApiRequest';
 import { useT } from '../locale';
-
-const { Title, Text } = Typography;
 
 export const SkillMetrics: React.FC = () => {
   const api = useAPIClient();
   const t = useT();
   const [executions, setExecutions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchExecutions = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       // Fetch up to 1000 recent executions to calculate basic metrics
       const { data } = await api.request({
@@ -26,12 +26,13 @@ export const SkillMetrics: React.FC = () => {
       });
       const rawData = data?.data?.data ?? data?.data ?? [];
       setExecutions(Array.isArray(rawData) ? rawData : []);
-    } catch {
-      // ignore
+    } catch (err: any) {
+      setExecutions([]);
+      setError(err?.response?.data?.errors?.[0]?.message || err?.message || t('Failed to load metrics'));
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, t]);
 
   useEffect(() => {
     fetchExecutions();
@@ -103,6 +104,7 @@ export const SkillMetrics: React.FC = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%', padding: '0 16px' }}>
+      {error && <Alert type="error" showIcon message={error} />}
       <Row gutter={16}>
         <Col span={6}>
           <Card size="small">

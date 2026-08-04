@@ -33,11 +33,7 @@ function positiveLimit(value: string | undefined, fallback: number, maximum: num
   return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : fallback;
 }
 
-const MAX_REGISTRY_SKILL_SNAPSHOTS = positiveLimit(
-  process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS,
-  1000,
-  10_000,
-);
+const MAX_REGISTRY_SKILL_SNAPSHOTS = positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS, 1000, 10_000);
 const MAX_REGISTRY_TEXT_BYTES = 10 * 1024 * 1024;
 
 const registryExportFilter = {

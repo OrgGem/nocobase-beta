@@ -33,6 +33,18 @@ export default defineCollection({
       defaultValue: true,
     },
     {
+      name: 'schemaVersion',
+      type: 'integer',
+      allowNull: false,
+      defaultValue: 1,
+    },
+    {
+      name: 'currentVersion',
+      type: 'belongsTo',
+      target: 'agentHarnessProfileVersions',
+      foreignKey: 'currentVersionId',
+    },
+    {
       name: 'settings',
       type: 'json',
       defaultValue: {},

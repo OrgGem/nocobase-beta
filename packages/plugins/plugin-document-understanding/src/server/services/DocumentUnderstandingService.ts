@@ -4,7 +4,7 @@ import { Database, Repository } from '@nocobase/database';
 import { ExternalApiClient, FileInput } from './ExternalApiClient';
 import { AsyncJobManager } from './AsyncJobManager';
 import { PipelineExecutor } from './PipelineExecutor';
-import { ServiceConfig, EndpointDef, PipelineDef, JobState } from '../types';
+import { ClientServiceConfig, ServiceConfig, EndpointDef, PipelineDef, JobState } from '../types';
 
 export class DocumentUnderstandingService {
   private app: Application;
@@ -101,14 +101,32 @@ export class DocumentUnderstandingService {
     return this.ensureConfig();
   }
 
+  async getConfigForClient(): Promise<ClientServiceConfig> {
+    const { authKey, webhookSecret, ...config } = await this.ensureConfig();
+    return {
+      ...config,
+      hasAuthKey: Boolean(authKey),
+      hasWebhookSecret: Boolean(webhookSecret),
+    };
+  }
+
   async updateConfig(data: Partial<ServiceConfig>): Promise<void> {
     const configRepo = this.db.getRepository<any>('doc_understanding_config');
     const conf = await configRepo.findOne();
     if (conf) {
-      await configRepo.update({ filterByTk: conf.id, values: data });
+      const values = { ...data };
+      if (!values.authKey) delete values.authKey;
+      if (!values.webhookSecret) delete values.webhookSecret;
+      await configRepo.update({ filterByTk: conf.id, values });
     }
     // Reinitialize to pick up new config
     await this.initialize();
+  }
+
+  destroy(): void {
+    this.jobManager?.destroy();
+    this.initialized = false;
+    this.startupRecoveryCompleted = false;
   }
 
   async listEndpoints(): Promise<EndpointDef[]> {
@@ -200,15 +218,17 @@ export class DocumentUnderstandingService {
     return { jobId: job.id };
   }
 
-  async getJobStatus(jobId: number): Promise<JobState> {
-    const job = await this.db.getRepository<any>('doc_understanding_jobs').findOne({ filterByTk: jobId });
+  async getJobStatus(jobId: number, userId?: number): Promise<JobState> {
+    const filter = userId ? { id: jobId, createdById: userId } : { id: jobId };
+    const job = await this.db.getRepository<any>('doc_understanding_jobs').findOne({ filter });
     if (!job) throw new Error('Job not found');
     return job;
   }
 
-  async listJobs(filters?: any): Promise<JobState[]> {
+  async listJobs(filters?: Record<string, unknown>, userId?: number): Promise<JobState[]> {
+    const filter = userId ? { ...(filters || {}), createdById: userId } : filters;
     return this.db.getRepository<any>('doc_understanding_jobs').find({
-      filter: filters,
+      filter,
       sort: ['-createdAt'],
     });
   }

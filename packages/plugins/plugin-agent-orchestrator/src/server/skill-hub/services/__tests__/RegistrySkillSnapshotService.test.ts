@@ -48,9 +48,7 @@ describe('RegistrySkillSnapshotService', () => {
   });
 
   it('bounds provider discovery before returning an unbounded definition list', async () => {
-    const find = vi
-      .fn()
-      .mockResolvedValue(Array.from({ length: 1001 }, (_, id) => ({ get: () => id + 1 })));
+    const find = vi.fn().mockResolvedValue(Array.from({ length: 1001 }, (_, id) => ({ get: () => id + 1 })));
     const database = {
       getRepository: vi.fn().mockReturnValue({ find }),
     } as unknown as Database;

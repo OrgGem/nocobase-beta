@@ -1,7 +1,6 @@
 import { existsSync, realpathSync, readFileSync, statSync } from 'fs';
 import { basename, resolve, sep } from 'path';
 import { Database } from '@nocobase/database';
-import axios from 'axios';
 import mime from 'mime-types';
 import { ExternalApiClient, FileInput } from './ExternalApiClient';
 import { AsyncJobManager } from './AsyncJobManager';
@@ -100,39 +99,10 @@ export class PipelineExecutor {
         };
       }
 
+      // Only files in NocoBase's upload storage are accepted. Fetching arbitrary
+      // HTTP(S) URLs here would turn a user/AI-provided value into an SSRF primitive.
       if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-        const response = await axios.get(urlOrPath, { responseType: 'arraybuffer' });
-        const buffer = Buffer.from(response.data);
-
-        let filename = 'file';
-        const disposition = response.headers['content-disposition'];
-        if (disposition && disposition.includes('filename=')) {
-          const match = disposition.match(/filename="?([^";]+)"?/);
-          if (match?.[1]) {
-            filename = match[1];
-          }
-        } else {
-          const base = basename(new URL(urlOrPath).pathname);
-          if (base && base.includes('.')) {
-            filename = base;
-          }
-        }
-
-        const contentType = response.headers['content-type'] || 'application/octet-stream';
-        const mimeType = contentType.split(';')[0].trim();
-        if (!filename.includes('.')) {
-          const extension = mime.extension(mimeType);
-          if (extension) {
-            filename = `${filename}.${extension}`;
-          }
-        }
-
-        return {
-          fieldName,
-          buffer,
-          filename,
-          mimeType,
-        };
+        this.logger.warn?.('Ignoring remote file URL; use a NocoBase upload URL instead.');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -157,6 +127,7 @@ export class PipelineExecutor {
     });
 
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found`);
+    if (!pipeline.enabled) throw new Error(`Pipeline ${pipelineId} is disabled`);
 
     // Create Job
     const job = await jobsRepo.create({
@@ -280,6 +251,10 @@ export class PipelineExecutor {
 
         if (!this.evaluateCondition(step.condition, context)) {
           continue; // Skip step
+        }
+
+        if (!step.endpoint?.enabled) {
+          throw new Error(`Endpoint for step ${step.name} is disabled`);
         }
 
         const mappedBody = this.resolveMapping(step.inputMapping || {}, context);

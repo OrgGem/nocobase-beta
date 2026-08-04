@@ -11,10 +11,18 @@ export default defineCollection({
       primaryKey: true,
     },
     {
+      name: 'runId',
+      type: 'bigInt',
+    },
+    {
       name: 'run',
       type: 'belongsTo',
       target: 'agentLoopRuns',
       foreignKey: 'runId',
+    },
+    {
+      name: 'stepId',
+      type: 'bigInt',
     },
     {
       name: 'step',
@@ -47,6 +55,21 @@ export default defineCollection({
       defaultValue: {},
     },
     {
+      name: 'actorType',
+      type: 'string',
+      length: 30,
+    },
+    {
+      name: 'actorIdentity',
+      type: 'string',
+      length: 200,
+    },
+    {
+      name: 'correlationKey',
+      type: 'string',
+      length: 300,
+    },
+    {
       name: 'user',
       type: 'belongsTo',
       target: 'users',
@@ -66,6 +89,10 @@ export default defineCollection({
     },
     {
       fields: ['type'],
+    },
+    {
+      unique: true,
+      fields: ['runId', 'type', 'correlationKey'],
     },
   ],
 });

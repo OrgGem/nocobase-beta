@@ -1,6 +1,9 @@
 import { Migration } from '@nocobase/server';
 
 export default class ChangePackagesToTextMigration extends Migration {
+  on = 'afterLoad';
+  appVersion = '>=0.1.0';
+
   async up() {
     const queryInterface = (this as any).db.sequelize.getQueryInterface();
     const tableName = `${(this as any).db.options.tablePrefix || ''}skillDefinitions`;

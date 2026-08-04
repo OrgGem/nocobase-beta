@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -28,6 +28,68 @@ type FilterState = {
   leader?: string;
   subAgent?: string;
   status?: string;
+};
+
+type TraceItem = {
+  id?: number | string;
+  type?: string;
+  title?: string;
+  status?: string;
+  toolName?: string;
+  durationMs?: number;
+  at?: string;
+  content?: unknown;
+};
+
+type ToolMessage = {
+  sessionId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  status?: string;
+  invokeStatus?: string;
+  content?: unknown;
+};
+
+type NativeMessage = {
+  sessionId?: string;
+  messageId?: string | number;
+  role?: string;
+  content?: unknown;
+  metadata?: unknown;
+};
+
+type RunRecord = {
+  id: number | string;
+  createdAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  leaderUsername?: string;
+  subAgentUsername?: string;
+  task?: string;
+  status?: string;
+  durationMs?: number;
+  memoryContextApplied?: boolean;
+  harnessTag?: string;
+  parentSessionId?: string;
+  subSessionId?: string;
+  toolCallId?: string;
+  input?: { question?: string };
+  output?: unknown;
+  error?: unknown;
+  metadata?: unknown;
+  trace?: TraceItem[];
+  toolMessages?: ToolMessage[];
+  nativeMessages?: NativeMessage[];
+};
+
+type ListResponse = {
+  data?: RunRecord[];
+  meta?: { count?: number };
+};
+
+type RequestError = {
+  response?: { data?: { errors?: Array<{ message?: string }> } };
+  message?: string;
 };
 
 function statusColor(status?: string) {
@@ -98,9 +160,12 @@ export const AgentRunsTab: React.FC = () => {
   const [filters, setFilters] = useState<FilterState>({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [selectedRun, setSelectedRun] = useState<any>(null);
+  const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
+  // Guards the detail drawer against out-of-order responses when the user
+  // switches rows quickly: only the newest request may commit its result.
+  const detailRequestId = useRef(0);
 
   const requestParams = useMemo(() => {
     const filter: Record<string, string> = {};
@@ -115,7 +180,7 @@ export const AgentRunsTab: React.FC = () => {
     };
   }, [filters, page, pageSize]);
 
-  const { data, loading, refresh } = useRequest(
+  const { data, loading, refresh } = useRequest<ListResponse>(
     {
       url: 'agentMonitor:list',
       params: requestParams,
@@ -126,12 +191,12 @@ export const AgentRunsTab: React.FC = () => {
   );
 
   const runs = useMemo(() => {
-    const rows = (data as any)?.data;
+    const rows = data?.data;
     return Array.isArray(rows) ? rows : [];
   }, [data]);
 
   const total = useMemo(() => {
-    const count = (data as any)?.meta?.count;
+    const count = data?.meta?.count;
     return typeof count === 'number' ? count : 0;
   }, [data]);
 
@@ -154,7 +219,8 @@ export const AgentRunsTab: React.FC = () => {
     setPage(1);
   };
 
-  const fetchDetail = async (record: any) => {
+  const fetchDetail = async (record: RunRecord) => {
+    const requestId = ++detailRequestId.current;
     setSelectedRun(record);
     setDetailLoading(true);
     try {
@@ -162,9 +228,22 @@ export const AgentRunsTab: React.FC = () => {
         url: 'agentMonitor:get',
         params: { filterByTk: record.id },
       });
-      setSelectedRun((res as any)?.data?.data?.data || (res as any)?.data?.data || record);
+      if (requestId !== detailRequestId.current) return;
+      const payload = res as { data?: { data?: { data?: RunRecord } | RunRecord } };
+      const detail =
+        (payload?.data?.data as { data?: RunRecord })?.data || (payload?.data?.data as RunRecord) || record;
+      setSelectedRun(detail);
+    } catch (error) {
+      if (requestId !== detailRequestId.current) return;
+      const text =
+        (error as RequestError)?.response?.data?.errors?.[0]?.message ||
+        (error as RequestError)?.message ||
+        t('Failed to load run detail');
+      message.error(text);
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestId.current) {
+        setDetailLoading(false);
+      }
     }
   };
 
@@ -176,11 +255,14 @@ export const AgentRunsTab: React.FC = () => {
         method: 'post',
         data: { limit: 500 },
       });
-      const result = (res as any)?.data?.data || {};
+      const result = (res as { data?: { data?: { created?: number } } })?.data?.data || {};
       message.success(t('Synced {{count}} native runs', { count: result.created || 0 }));
       refresh();
-    } catch (error: any) {
-      const text = error?.response?.data?.errors?.[0]?.message || error?.message || t('Sync failed');
+    } catch (error) {
+      const text =
+        (error as RequestError)?.response?.data?.errors?.[0]?.message ||
+        (error as RequestError)?.message ||
+        t('Sync failed');
       message.error(text);
     } finally {
       setSyncLoading(false);
@@ -188,9 +270,9 @@ export const AgentRunsTab: React.FC = () => {
   };
 
   const hasFilters = Boolean(filters.leader || filters.subAgent || filters.status);
-  const trace = Array.isArray(selectedRun?.trace) ? selectedRun.trace : [];
-  const toolMessages = Array.isArray(selectedRun?.toolMessages) ? selectedRun.toolMessages : [];
-  const nativeMessages = Array.isArray(selectedRun?.nativeMessages) ? selectedRun.nativeMessages : [];
+  const trace: TraceItem[] = Array.isArray(selectedRun?.trace) ? selectedRun.trace : [];
+  const toolMessages: ToolMessage[] = Array.isArray(selectedRun?.toolMessages) ? selectedRun.toolMessages : [];
+  const nativeMessages: NativeMessage[] = Array.isArray(selectedRun?.nativeMessages) ? selectedRun.nativeMessages : [];
 
   const columns = [
     {
@@ -249,7 +331,7 @@ export const AgentRunsTab: React.FC = () => {
       title: '',
       key: 'actions',
       width: 90,
-      render: (_: unknown, record: any) => (
+      render: (_: unknown, record: RunRecord) => (
         <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => fetchDetail(record)}>
           {t('Detail')}
         </Button>
@@ -396,7 +478,7 @@ export const AgentRunsTab: React.FC = () => {
               <Card title={t('Execution Flow')} size="small">
                 {trace.length ? (
                   <Timeline
-                    items={trace.map((item: any) => ({
+                    items={trace.map((item: TraceItem) => ({
                       key: item.id,
                       color: item.status === 'error' ? 'red' : item.status === 'running' ? 'blue' : 'green',
                       children: (
@@ -426,7 +508,7 @@ export const AgentRunsTab: React.FC = () => {
                     label: t('Native tool messages ({{count}})', { count: toolMessages.length }),
                     children: toolMessages.length ? (
                       <Table
-                        rowKey={(record: any) => `${record.sessionId}:${record.toolCallId}`}
+                        rowKey={(record: ToolMessage) => `${record.sessionId}:${record.toolCallId}`}
                         size="small"
                         pagination={false}
                         dataSource={toolMessages}
@@ -458,7 +540,7 @@ export const AgentRunsTab: React.FC = () => {
                     label: t('Native messages ({{count}})', { count: nativeMessages.length }),
                     children: nativeMessages.length ? (
                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        {nativeMessages.map((item: any) => (
+                        {nativeMessages.map((item: NativeMessage) => (
                           <Card
                             key={`${item.sessionId}:${item.messageId}`}
                             size="small"

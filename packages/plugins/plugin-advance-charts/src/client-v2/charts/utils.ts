@@ -166,16 +166,18 @@ export function usePlotComponent<TProps>(name: string) {
     if (cachedPlots) return;
     let cancelled = false;
     if (!loadingPromise) {
-      loadingPromise = import('@ant-design/plots').then(
-        (module) => module as unknown as PlotComponents,
-      );
+      loadingPromise = import('@ant-design/plots').then((module) => module as unknown as PlotComponents);
     }
-    loadingPromise.then((module) => {
-      if (!cancelled) {
-        cachedPlots = module;
-        setPlots(module);
-      }
-    });
+    loadingPromise
+      .then((module) => {
+        if (!cancelled) {
+          cachedPlots = module;
+          setPlots(module);
+        }
+      })
+      .catch(() => {
+        loadingPromise = null;
+      });
     return () => {
       cancelled = true;
     };

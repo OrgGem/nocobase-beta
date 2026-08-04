@@ -68,9 +68,23 @@ export function useRequest<TData = unknown>(
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
+  // Guards against out-of-order responses and post-unmount state writes.
+  // Each `run` claims a monotonically increasing id; only the newest in-flight
+  // request is allowed to commit results, and none may commit after unmount.
+  const mountedRef = useRef(true);
+  const latestRequestId = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const run = useCallback(
     async (overrideParams?: Record<string, unknown>): Promise<TData | undefined> => {
       const current = serviceRef.current;
+      const requestId = ++latestRequestId.current;
+      const isCurrent = () => mountedRef.current && requestId === latestRequestId.current;
       setLoading(true);
       setError(undefined);
       try {
@@ -85,23 +99,29 @@ export function useRequest<TData = unknown>(
             data: current.data,
           });
           const rawData = response?.data;
-          body = (rawData &&
-          typeof rawData === 'object' &&
-          rawData.data &&
-          typeof rawData.data === 'object' &&
-          'data' in rawData.data
-            ? rawData.data
-            : rawData) as TData;
+          body = (
+            rawData &&
+            typeof rawData === 'object' &&
+            rawData.data &&
+            typeof rawData.data === 'object' &&
+            'data' in rawData.data
+              ? rawData.data
+              : rawData
+          ) as TData;
         }
+        if (!isCurrent()) return undefined;
         setData(body);
         onSuccessRef.current?.(body);
         return body;
       } catch (err) {
+        if (!isCurrent()) return undefined;
         setError(err);
         onErrorRef.current?.(err);
         return undefined;
       } finally {
-        setLoading(false);
+        if (isCurrent()) {
+          setLoading(false);
+        }
       }
     },
     [api],

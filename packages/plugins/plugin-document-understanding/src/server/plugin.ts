@@ -29,27 +29,18 @@ export class PluginDocumentUnderstandingServer extends Plugin {
 
   async afterAdd() {}
 
-  async beforeLoad() {}
-
-  async load() {
-    // 1. Import collections
+  async beforeLoad() {
     await this.db.import({
       directory: resolve(__dirname, 'collections'),
     });
+  }
 
-    // 2. Create service
+  async load() {
+    // Collections are imported in beforeLoad so database metadata exists before
+    // resources and runtime services are registered.
     this.service = new DocumentUnderstandingService(this.app, this.db);
 
-    // Defer initialization to after app has loaded database so config exists
-    this.app.on('afterStart', async () => {
-      try {
-        await this.service.initialize({ recoverJobs: true });
-      } catch (err) {
-        this.app.logger.warn('Document Understanding plugin not configured yet, skip init.', err);
-      }
-    });
-
-    // 3. Register REST actions
+    // Register REST actions
     this.registerActions();
 
     // 4. Register AI tool (graceful)
@@ -113,6 +104,14 @@ export class PluginDocumentUnderstandingServer extends Plugin {
     }
   }
 
+  async afterStart() {
+    try {
+      await this.service.initialize({ recoverJobs: true });
+    } catch (err) {
+      this.app.logger.warn('Document Understanding plugin not configured yet, skip init.', err);
+    }
+  }
+
   async install() {}
 
   async afterEnable() {}
@@ -124,6 +123,7 @@ export class PluginDocumentUnderstandingServer extends Plugin {
   async beforeStop() {
     this.app.off?.('afterStart', this.registerAIToolsAfterStart);
     this.app.removeListener?.('afterStart', this.registerAIToolsAfterStart);
+    this.service?.destroy();
     const runtimeState = this.app as typeof this.app & DocumentToolRuntimeState;
     if (runtimeState.documentUnderstandingService === this.service) {
       runtimeState.documentUnderstandingService = undefined;

@@ -5,7 +5,6 @@ import { trimText, toPlain } from './ctx-utils';
 
 /**
  * Log (or update) a delegation event in the orchestratorLogs collection.
- * Used by both delegate-task.ts and AgentHarness.ts.
  */
 export async function logDelegation(ctx: any, plugin: any, data: DelegationLogData) {
   try {

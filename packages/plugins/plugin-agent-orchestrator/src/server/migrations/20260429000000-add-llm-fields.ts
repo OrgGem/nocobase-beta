@@ -1,4 +1,5 @@
 import { Migration } from '@nocobase/server';
+import { DataTypes } from '@nocobase/database';
 
 export default class AddLlmFieldsToOrchestratorConfig extends Migration {
   on = 'afterLoad';
@@ -16,7 +17,7 @@ export default class AddLlmFieldsToOrchestratorConfig extends Migration {
 
     if (!tableDesc['llmService']) {
       await queryInterface.addColumn(tableName, 'llmService', {
-        type: 'VARCHAR(255)',
+        type: DataTypes.STRING(255),
         allowNull: true,
       });
       console.log(`[AgentOrchestrator] Added llmService column to ${tableName}`);
@@ -24,7 +25,7 @@ export default class AddLlmFieldsToOrchestratorConfig extends Migration {
 
     if (!tableDesc['model']) {
       await queryInterface.addColumn(tableName, 'model', {
-        type: 'VARCHAR(255)',
+        type: DataTypes.STRING(255),
         allowNull: true,
       });
       console.log(`[AgentOrchestrator] Added model column to ${tableName}`);

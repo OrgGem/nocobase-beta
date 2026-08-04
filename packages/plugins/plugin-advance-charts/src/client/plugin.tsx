@@ -30,7 +30,7 @@ export class PluginAdvanceChartsClient extends Plugin {
   private registerAdvancedCharts() {
     const dataVisualization = this.getDataVisualizationPlugin();
     if (!dataVisualization?.charts) {
-      return;
+      return false;
     }
 
     if (!dataVisualization.charts.getChart('advanced-charts.advanced-statistic')) {
@@ -47,12 +47,14 @@ export class PluginAdvanceChartsClient extends Plugin {
         charts: Object.keys(dataVisualization.charts.getCharts()),
       };
     }
+    return true;
   }
 
   async load() {
     this.flowEngine.registerModels(models);
-    this.registerAdvancedCharts();
-    await patchDataVisualizationChartBlock(this.flowEngine);
+    if (this.registerAdvancedCharts()) {
+      await patchDataVisualizationChartBlock(this.flowEngine);
+    }
   }
 }
 

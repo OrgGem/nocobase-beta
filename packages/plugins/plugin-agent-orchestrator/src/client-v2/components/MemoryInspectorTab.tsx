@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Button, Card, Descriptions, Form, Input, Select, Space, Typography, message } from 'antd';
+import { Button, Card, Descriptions, Form, Select, Space, Typography, message } from 'antd';
 import { useApiClient, useRequest } from '../hooks/useApiRequest';
 import { useAIEmployees } from './AIEmployeesContext';
 import { useT } from '../skill-hub/locale';
 
 type ProfileRecord = { tag: string; title?: string; enabled?: boolean };
+type UserRecord = { id: number | string; nickname?: string; username?: string; email?: string };
 type Preview = {
   context: string;
   appliedScopes: string[];
@@ -33,6 +34,15 @@ export const MemoryInspectorTab: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const profilesRequest = useRequest({ url: 'agentHarnessProfiles:list', params: { pageSize: 100, sort: ['tag'] } });
   const profiles = useMemo(() => responseRows<ProfileRecord>(profilesRequest.data), [profilesRequest.data]);
+  const usersRequest = useRequest({ url: 'users:list', params: { pageSize: 200, sort: ['nickname'] } });
+  const userOptions = useMemo(
+    () =>
+      responseRows<UserRecord>(usersRequest.data).map((user) => {
+        const name = user.nickname || user.username || user.email || String(user.id);
+        return { label: `${name} (#${user.id})`, value: String(user.id) };
+      }),
+    [usersRequest.data],
+  );
 
   const createPreview = async (values: PreviewForm) => {
     setLoading(true);
@@ -64,8 +74,14 @@ export const MemoryInspectorTab: React.FC = () => {
           style={{ marginTop: 16, maxWidth: 680 }}
           initialValues={{ harnessTag: 'default' }}
         >
-          <Form.Item label={t('User ID')} name="userId" rules={[{ required: true, message: t('User ID is required') }]}>
-            <Input inputMode="numeric" />
+          <Form.Item label={t('User')} name="userId" rules={[{ required: true, message: t('User is required') }]}>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              loading={usersRequest.loading}
+              placeholder={t('Select a user')}
+              options={userOptions}
+            />
           </Form.Item>
           <Form.Item label={t('Sub-Agent')} name="employeeUsername">
             <Select

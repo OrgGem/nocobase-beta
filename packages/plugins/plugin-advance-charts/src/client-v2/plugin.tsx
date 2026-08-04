@@ -10,6 +10,23 @@ type DataVisualizationPluginLike = PluginDataVisualizationClient & {
 };
 
 export class PluginAdvanceChartsClientV2 extends Plugin<unknown, Application> {
+  private readonly dataVisualizationLoadedEvents = [
+    'plugin:data-visualization:loaded',
+    'plugin:@nocobase/plugin-data-visualization:loaded',
+  ];
+
+  private removeDataVisualizationLoadedListeners() {
+    this.dataVisualizationLoadedEvents.forEach((eventName) => {
+      this.app.eventBus.removeEventListener(eventName, this.registerAfterDataVisualizationLoaded);
+    });
+  }
+
+  private readonly registerAfterDataVisualizationLoaded = async () => {
+    if (await this.register()) {
+      this.removeDataVisualizationLoadedListeners();
+    }
+  };
+
   private getDataVisualizationPlugin() {
     return getDataVisualizationPlugin(this.app) as DataVisualizationPluginLike | undefined;
   }
@@ -37,22 +54,21 @@ export class PluginAdvanceChartsClientV2 extends Plugin<unknown, Application> {
 
   private async register() {
     if (!this.registerAdvancedCharts()) {
-      return;
+      return false;
     }
     await this.ensureChartBlockModelLoaded();
+    return true;
   }
 
   async load() {
-    await this.register();
+    if (await this.register()) {
+      return;
+    }
 
-    const registerAfterDataVisualizationLoaded = async () => {
-      await this.register();
-    };
-    this.app.eventBus.addEventListener('plugin:data-visualization:loaded', registerAfterDataVisualizationLoaded);
-    this.app.eventBus.addEventListener(
-      'plugin:@nocobase/plugin-data-visualization:loaded',
-      registerAfterDataVisualizationLoaded,
-    );
+    this.removeDataVisualizationLoadedListeners();
+    this.dataVisualizationLoadedEvents.forEach((eventName) => {
+      this.app.eventBus.addEventListener(eventName, this.registerAfterDataVisualizationLoaded);
+    });
   }
 }
 

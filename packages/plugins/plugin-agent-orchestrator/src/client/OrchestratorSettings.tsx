@@ -1,14 +1,22 @@
 import React from 'react';
 import { Tabs } from 'antd';
 import {
+  ApiOutlined,
   BarChartOutlined,
   CheckCircleOutlined,
   CodeOutlined,
+  DatabaseOutlined,
   HistoryOutlined,
   MonitorOutlined,
+  NodeIndexOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
 import { TracingTab } from '../client-v2/components/TracingTab';
+import { AgentBindingsTab } from '../client-v2/components/AgentBindingsTab';
+import { KnowledgeAccessTab } from '../client-v2/components/KnowledgeAccessTab';
+import { RetrievalTraceTab } from '../client-v2/components/RetrievalTraceTab';
+import { MemoryInspectorTab } from '../client-v2/components/MemoryInspectorTab';
 import { AgentRunsTab } from './AgentRunsTab';
 import { HarnessProfilesTab } from './HarnessProfilesTab';
 import { AIEmployeesProvider } from '../client-v2/components/AIEmployeesContext';
@@ -50,6 +58,42 @@ const OrchestratorSettings: React.FC = () => {
                 </span>
               ),
               children: <HarnessProfilesTab />,
+            },
+            {
+              key: 'agent-bindings',
+              label: (
+                <span>
+                  <TeamOutlined /> {t('Agent Bindings')}
+                </span>
+              ),
+              children: <AgentBindingsTab />,
+            },
+            {
+              key: 'knowledge-access',
+              label: (
+                <span>
+                  <ApiOutlined /> {t('Knowledge Access')}
+                </span>
+              ),
+              children: <KnowledgeAccessTab />,
+            },
+            {
+              key: 'retrieval-trace',
+              label: (
+                <span>
+                  <NodeIndexOutlined /> {t('Retrieval Trace')}
+                </span>
+              ),
+              children: <RetrievalTraceTab />,
+            },
+            {
+              key: 'memory-inspector',
+              label: (
+                <span>
+                  <DatabaseOutlined /> {t('Memory Inspector')}
+                </span>
+              ),
+              children: <MemoryInspectorTab />,
             },
             {
               key: 'skill-definitions',

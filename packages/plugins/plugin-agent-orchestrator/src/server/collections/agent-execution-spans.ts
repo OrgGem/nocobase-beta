@@ -24,6 +24,41 @@ export default defineCollection({
       allowNull: false,
     },
     {
+      name: 'agentLoopRunId',
+      type: 'bigInt',
+    },
+    {
+      name: 'agentLoopStepId',
+      type: 'bigInt',
+    },
+    {
+      name: 'patternId',
+      type: 'bigInt',
+    },
+    {
+      name: 'role',
+      type: 'string',
+      length: 30,
+    },
+    {
+      name: 'harnessProfileTag',
+      type: 'string',
+      length: 100,
+    },
+    {
+      name: 'harnessProfileVersion',
+      type: 'integer',
+    },
+    {
+      name: 'policyDecision',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'approvalId',
+      type: 'bigInt',
+    },
+    {
       name: 'parentSpanId',
       type: 'string',
       length: 100,
@@ -185,6 +220,18 @@ export default defineCollection({
     },
     {
       fields: ['userId'],
+    },
+    {
+      fields: ['agentLoopRunId'],
+    },
+    {
+      fields: ['agentLoopStepId'],
+    },
+    {
+      fields: ['patternId'],
+    },
+    {
+      fields: ['approvalId'],
     },
   ],
 });

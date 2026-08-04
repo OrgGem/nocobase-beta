@@ -4,19 +4,25 @@ import { createExternalRagSearchTool } from './tools/external-rag-search';
 import { registerTracingResource } from './resources/tracing';
 import { registerAgentMonitorResource } from './resources/agent-monitor';
 import { registerAgentLoopResource } from './resources/agent-loop';
+import { registerAgentLoopApprovalResource } from './resources/agent-loop-approval';
+import { registerAgentLoopArtifactResource } from './resources/agent-loop-artifact';
+import { registerAgentLoopEventsStreamResource } from './resources/agent-loop-events-stream';
 import { registerAgentKnowledgeInsightsResource } from './resources/agent-knowledge-insights';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
 import { RegistrySkillSnapshotService } from './skill-hub/services/RegistrySkillSnapshotService';
 import { RegistrySkillInstallationService } from './skill-hub/services/RegistrySkillInstallationService';
-import { AgentLoopService } from './services/AgentLoopService';
-import { createAgentLoopTools } from './tools/agent-loop';
-import { PlanningPromptService } from './services/PlanningPromptService';
+import { LoopPatternService } from './services/LoopPatternService';
+import { LoopSchedulerService } from './services/LoopSchedulerService';
+import { LoopTriggerService } from './services/LoopTriggerService';
+import { LoopWorkerService } from './services/LoopWorkerService';
 import { asObject, isAdminUser, currentUserId } from './utils/ctx-utils';
+import { employeeHarnessResolver, worktreeCapability } from './utils/loop-pattern-context';
 import { getAIToolsManager } from './utils/ai-manager';
 import { AgentRuntimeLifecycle } from './services/AgentRuntimeLifecycle';
 import { validateInputSchemaDefinition } from './services/InputSchemaValidator';
 import { assertSkillToolNameAvailable, buildSkillToolName, getSkillToolName } from './utils/skill-tool-name';
+import { ensureAgentOrchestratorIndexes } from './utils/ensure-indexes';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -164,6 +170,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
   registrySkillInstallationService: RegistrySkillInstallationService;
   nativeObserver: NativeSubAgentObserver;
   agentRuntimeLifecycle: AgentRuntimeLifecycle;
+  loopScheduler: LoopSchedulerService;
+  loopWorker: LoopWorkerService;
   private readonly installNativeObserver = () => {
     this.nativeObserver?.install();
   };
@@ -234,7 +242,16 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('skillHub', 'download', 'loggedIn');
     this.app.acl.allow('skillHub', 'listTemplates', 'loggedIn');
     this.app.acl.allow('agentMonitor', ['list', 'get'], 'loggedIn');
-    this.app.acl.allow('agentLoops', ['list', 'get'], 'loggedIn');
+    // ACL runs before the resource handler, so every owner-facing loop action must be listed
+    // here; ownership itself is enforced inside each handler by LoopRunRepository.
+    this.app.acl.allow(
+      'agentLoops',
+      ['list', 'get', 'runNow', 'pause', 'resume', 'cancel', 'retry', 'escalate', 'acceptResult', 'status'],
+      'loggedIn',
+    );
+    this.app.acl.allow('agentLoopApprovals', ['list', 'get'], 'loggedIn');
+    this.app.acl.allow('agentLoopArtifactsView', ['list', 'get'], 'loggedIn');
+    this.app.acl.allow('agentLoopEventsStream', ['stream'], 'loggedIn');
 
     // Data scoping for skillExecutions: a logged-in non-admin user may only
     // read their own executions. Rows hold inputArgs / stdout / output files,
@@ -333,80 +350,33 @@ export class PluginAgentOrchestratorServer extends Plugin {
       { tag: 'orchestrator-agent-memory-context-policy', after: 'acl' },
     );
 
-    // --- Planning Prompt Injection ---
-    // When a user message contains plan-related keywords, prepend planning
-    // instructions so the AI agent creates a plan via agent_loop_start before
-    // executing.
-    const planningPrompt = new PlanningPromptService();
-    this.agentRuntimeLifecycle.registerBeforeRunHook('orchestrator-planning', (context) => {
-      if (planningPrompt.applyPlanningContext(context.messages)) {
-        context.metadata.planningPromptInjected = true;
-      }
-    });
-    this.app.resourceManager.use(
-      async (ctx, next) => {
-        const { resourceName, actionName } = ctx.action || {};
-        if (resourceName === 'aiConversations' && actionName === 'sendMessages') {
-          const values = ctx.action.params.values || {};
-          const messages = values.messages;
-          if (Array.isArray(messages)) {
-            const runtimeContext = {
-              ctx,
-              source: 'chat-ui' as const,
-              employee: undefined,
-              sessionId: String(ctx.state?.sessionId || ''),
-              userId: currentUserId(ctx),
-              messages,
-              metadata: {},
-            };
-            await this.agentRuntimeLifecycle.runBeforeHooks(runtimeContext);
-            ctx.state.agentRuntimeContext = runtimeContext;
-          }
-        }
-        const runtimeContext = ctx.state?.agentRuntimeContext;
-        try {
-          await next();
-          if (runtimeContext) {
-            await this.agentRuntimeLifecycle.runAfterHooks(runtimeContext, {
-              succeeded: ctx.status < 400,
-              value: ctx.body,
-            });
-          }
-        } catch (error) {
-          if (runtimeContext) {
-            await this.agentRuntimeLifecycle.runAfterHooks(runtimeContext, {
-              succeeded: false,
-              error: error instanceof Error ? error : new Error(String(error)),
-            });
-          }
-          throw error;
-        }
-      },
-      { tag: 'orchestrator-planning-prompt', after: 'acl' },
-    );
-
     // --- Register External Tool Only ---
-    // Native @nocobase/plugin-ai owns sub-agent dispatch. The orchestrator no
-    // longer registers delegate_* / dispatch_subagents_* tools or controller
-    // plan tools; Skill Hub still registers its own AI tools from its subfeature.
+    // Native @nocobase/plugin-ai owns reasoning, planning/replanning and sub-agent dispatch.
+    // The orchestrator no longer injects planning prompts or registers self-state AI tools; it
+    // drives work through the Loop Control Plane (trigger → durable run → worker → verifier).
     const toolsManager = getAIToolsManager(this.app);
     toolsManager.registerTools(createExternalRagSearchTool(this));
 
-    // --- Register Agent Loop Tools & Resource ---
-    const agentLoopService = new AgentLoopService(this);
-    toolsManager.registerTools(createAgentLoopTools(this, agentLoopService));
-    registerAgentLoopResource(this, agentLoopService);
+    // --- Loop Control Plane runtime ---
+    const patterns = new LoopPatternService(this.db, employeeHarnessResolver(this), async () =>
+      worktreeCapability(this),
+    );
+    const triggers = new LoopTriggerService(this.db, patterns);
+    this.loopScheduler = new LoopSchedulerService(this, patterns, triggers);
+    this.loopWorker = new LoopWorkerService(this.app, this.db);
+    this.loopScheduler.install();
+    this.app.on?.('afterStart', this.startLoopWorker);
+
+    registerAgentLoopResource(this);
+    registerAgentLoopApprovalResource(this);
+    registerAgentLoopArtifactResource(this);
+    registerAgentLoopEventsStreamResource(this);
 
     // --- Native plugin-ai Monitor Resource ---
     registerAgentMonitorResource(this);
     registerAgentKnowledgeInsightsResource(this);
     this.installNativeObserver();
     this.app.on?.('afterStart', this.installNativeObserver);
-
-    // --- Crash Recovery ---
-    // On startup, scan for steps/runs left in "running" state from a previous
-    // crash and reset them so they can be retried.
-    this.app.on?.('afterStart', this.recoverAfterCrash);
 
     // --- Register Tracing Resource (Phase 5) ---
     // Custom read-only resource for the Swarm Tracing admin page.
@@ -448,6 +418,11 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
   async install() {
     await this.skillHub.install();
+    await ensureAgentOrchestratorIndexes(this.db);
+  }
+
+  async upgrade() {
+    await ensureAgentOrchestratorIndexes(this.db);
   }
 
   async afterEnable() {}
@@ -459,110 +434,21 @@ export class PluginAgentOrchestratorServer extends Plugin {
   async beforeStop() {
     this.app.off?.('afterStart', this.installNativeObserver);
     this.app.removeListener?.('afterStart', this.installNativeObserver);
-    this.app.off?.('afterStart', this.recoverAfterCrash);
-    this.app.removeListener?.('afterStart', this.recoverAfterCrash);
+    this.app.off?.('afterStart', this.startLoopWorker);
+    this.app.removeListener?.('afterStart', this.startLoopWorker);
+    await this.loopWorker?.stop();
+    await this.loopScheduler?.dispose();
     this.nativeObserver?.uninstall();
     await this.skillHub.beforeStop();
   }
 
-  // --- Crash Recovery ---
-  // Scans for agentLoopSteps stuck in "running" status from a previous crash
-  // and resets them to "pending". Also cleans up orphaned agentLoopRuns where
-  // all steps have reached terminal states but the run itself wasn't finalized.
-  private readonly recoverAfterCrash = async () => {
-    const timeoutMs = Number(process.env.ORCHESTRATOR_CRASH_RECOVERY_TIMEOUT_MS || 600000); // 10 min default
-    const cutoff = new Date(Date.now() - timeoutMs);
+  async handleSyncMessage(message: unknown) {
+    await this.loopScheduler?.handleSyncMessage(message);
+    await this.loopWorker?.handleSyncMessage(message);
+  }
 
-    try {
-      const stepsRepo = this.db.getRepository('agentLoopSteps');
-      const runsRepo = this.db.getRepository('agentLoopRuns');
-
-      // 1. Reset stale running steps back to pending
-      if (stepsRepo) {
-        const staleSteps = await stepsRepo.find({
-          filter: {
-            status: 'running',
-            startedAt: { $lt: cutoff.toISOString() },
-          },
-        });
-
-        for (const step of staleSteps) {
-          const stepId = readModelValue(step, 'id');
-          const runId = readModelValue(step, 'runId');
-          await stepsRepo.update({
-            filterByTk: stepId,
-            values: {
-              status: 'pending',
-              startedAt: null,
-              error: `Recovered after crash at ${new Date().toISOString()}`,
-            },
-          });
-          this.app.logger?.warn?.(
-            `[AgentOrchestrator] Crash recovery: reset step ${stepId} (run ${runId}) from running to pending`,
-          );
-        }
-
-        if (staleSteps.length > 0) {
-          this.app.logger?.info?.(
-            `[AgentOrchestrator] Crash recovery: reset ${staleSteps.length} stale running step(s)`,
-          );
-        }
-      }
-
-      // 2. Finalize orphaned runs — runs marked "running" where all steps are terminal
-      if (runsRepo) {
-        const runningRuns = await runsRepo.find({
-          filter: { status: 'running' },
-        });
-
-        for (const run of runningRuns) {
-          const runId = readModelValue(run, 'id');
-          const steps = await stepsRepo?.find({
-            filter: { runId },
-          });
-
-          if (!steps || steps.length === 0) {
-            // No steps at all — orphaned, mark as failed
-            await runsRepo.update({
-              filterByTk: runId,
-              values: {
-                status: 'failed',
-                endedAt: new Date(),
-                summary: 'Run was orphaned after server crash (no steps found).',
-              },
-            });
-            this.app.logger?.warn?.(
-              `[AgentOrchestrator] Crash recovery: marked orphaned run ${runId} as failed (no steps)`,
-            );
-            continue;
-          }
-
-          const allTerminal = steps.every((s: any) => {
-            const st = readModelValue(s, 'status');
-            return st === 'succeeded' || st === 'failed' || st === 'skipped';
-          });
-
-          if (!allTerminal) continue;
-
-          const anyFailed = steps.some((s: any) => readModelValue(s, 'status') === 'failed');
-          const finalStatus = anyFailed ? 'failed' : 'succeeded';
-
-          await runsRepo.update({
-            filterByTk: runId,
-            values: {
-              status: finalStatus,
-              endedAt: new Date(),
-              summary: `Run finalized as ${finalStatus} after server crash recovery.`,
-            },
-          });
-          this.app.logger?.warn?.(
-            `[AgentOrchestrator] Crash recovery: finalized orphaned run ${runId} as ${finalStatus}`,
-          );
-        }
-      }
-    } catch (error) {
-      this.app.logger?.error?.('[AgentOrchestrator] Crash recovery scan failed', error);
-    }
+  private readonly startLoopWorker = () => {
+    this.loopWorker?.start();
   };
 }
 

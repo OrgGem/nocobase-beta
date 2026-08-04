@@ -69,7 +69,7 @@ export class RankedTable extends Chart {
 
   getProps({ data, general, fieldProps }: RenderProps) {
     const rows = sortRows(data, general?.valueField, general?.sortOrder)
-      .slice(0, general?.limit || 10)
+      .slice(0, general?.limit ?? 10)
       .map((row, index) => ({ ...row, __rank: index + 1 }));
     const columns = [
       general?.showRank

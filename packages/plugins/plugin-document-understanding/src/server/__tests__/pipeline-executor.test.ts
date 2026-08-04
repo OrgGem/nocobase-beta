@@ -1,6 +1,9 @@
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
-import { resolveUploadFilePath } from '../services/PipelineExecutor';
+import axios from 'axios';
+import { AsyncJobManager } from '../services/AsyncJobManager';
+import { ExternalApiClient } from '../services/ExternalApiClient';
+import { PipelineExecutor, resolveUploadFilePath } from '../services/PipelineExecutor';
 
 describe('PipelineExecutor upload path resolution', () => {
   const uploadsRoot = resolve(process.cwd(), 'storage', 'uploads');
@@ -29,5 +32,24 @@ describe('PipelineExecutor upload path resolution', () => {
 
   it('maps upload URLs by pathname only', () => {
     expect(resolveUploadFilePath('https://example.com/uploads/du-test/sample.txt?token=secret')).toBe(samplePath);
+  });
+
+  it('does not resolve arbitrary remote URLs as upload files', () => {
+    expect(resolveUploadFilePath('https://evil.example/private.pdf')).toBeNull();
+  });
+});
+
+describe('PipelineExecutor remote file handling', () => {
+  it('does not fetch arbitrary remote URLs', async () => {
+    const getSpy = vi.spyOn(axios, 'get');
+    const executor = new PipelineExecutor(
+      { getRepository: vi.fn() } as never,
+      {} as ExternalApiClient,
+      {} as AsyncJobManager,
+      { error: vi.fn(), warn: vi.fn() },
+    );
+
+    await expect((executor as any).resolveFile('https://evil.example/private.pdf')).resolves.toBeNull();
+    expect(getSpy).not.toHaveBeenCalled();
   });
 });

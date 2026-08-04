@@ -17,6 +17,74 @@ export default defineCollection({
       allowNull: false,
     },
     {
+      name: 'runtimeVersion',
+      type: 'string',
+      length: 40,
+      defaultValue: 'control-plane-v2',
+    },
+    {
+      name: 'recordMode',
+      type: 'string',
+      length: 30,
+      defaultValue: 'observed-execution',
+    },
+    {
+      name: 'patternId',
+      type: 'bigInt',
+    },
+    {
+      name: 'pattern',
+      type: 'belongsTo',
+      target: 'agentLoopPatterns',
+      foreignKey: 'patternId',
+    },
+    {
+      name: 'triggerType',
+      type: 'string',
+      length: 20,
+    },
+    {
+      name: 'triggerKey',
+      type: 'string',
+      length: 300,
+    },
+    {
+      name: 'triggerPayload',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'autonomyLevel',
+      type: 'string',
+      length: 10,
+      defaultValue: 'L1',
+    },
+    {
+      name: 'roleBindingsSnapshot',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'leaderHarnessSnapshot',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'makerHarnessSnapshot',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'verifierHarnessSnapshot',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'policySnapshot',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
       name: 'sessionId',
       type: 'string',
       length: 100,
@@ -39,9 +107,9 @@ export default defineCollection({
       name: 'status',
       type: 'string',
       length: 30,
-      defaultValue: 'planning',
+      defaultValue: 'queued',
       comment:
-        'planning, waiting_plan_approval, approved, running, waiting_user, needs_replan, succeeded, failed, rejected, canceled',
+        'queued, preparing, waiting_lock, running, waiting_approval, verifying, waiting_human, paused, blocked, succeeded, failed, canceled',
     },
     {
       name: 'currentStepId',
@@ -151,9 +219,85 @@ export default defineCollection({
       comment: 'Maximum allowed cost in USD for this run (null = unlimited)',
     },
     {
+      name: 'repositoryKey',
+      type: 'string',
+      length: 200,
+    },
+    {
+      name: 'repositoryRoot',
+      type: 'string',
+      length: 1000,
+    },
+    {
+      name: 'baseRef',
+      type: 'string',
+      length: 200,
+    },
+    {
+      name: 'actingOn',
+      type: 'json',
+      defaultValue: [],
+    },
+    {
+      name: 'worktreeId',
+      type: 'bigInt',
+    },
+    {
+      name: 'currentRole',
+      type: 'string',
+      length: 30,
+    },
+    {
+      name: 'invocationCount',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
+      name: 'toolCallCount',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
+      name: 'delegationCount',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
+      name: 'verificationCount',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
+      name: 'blockedReason',
+      type: 'text',
+    },
+    {
+      name: 'escalationReason',
+      type: 'text',
+    },
+    {
+      name: 'verifierUsername',
+      type: 'string',
+      length: 100,
+    },
+    {
+      name: 'verifierVerdict',
+      type: 'string',
+      length: 20,
+    },
+    {
+      name: 'verifierEvidence',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
       name: 'metadata',
       type: 'json',
       defaultValue: {},
+    },
+    {
+      name: 'userId',
+      type: 'bigInt',
     },
     {
       name: 'user',
@@ -186,10 +330,27 @@ export default defineCollection({
       fields: ['status'],
     },
     {
+      // Covers the worker claim hot path: filter by status, order by creation.
+      fields: ['status', 'createdAt'],
+    },
+    {
       fields: ['leaderUsername'],
     },
     {
       fields: ['sessionId'],
+    },
+    {
+      fields: ['patternId', 'status'],
+    },
+    {
+      unique: true,
+      fields: ['patternId', 'triggerKey'],
+    },
+    {
+      fields: ['userId', 'status'],
+    },
+    {
+      fields: ['lockedUntil'],
     },
   ],
 });

@@ -1,0 +1,38 @@
+import { defineCollection } from '@nocobase/database';
+
+export default defineCollection({
+  name: 'agentLoopActionApprovals',
+  title: 'Agent Loop Action Approvals',
+  fields: [
+    { name: 'id', type: 'bigInt', autoIncrement: true, primaryKey: true },
+    { name: 'runId', type: 'bigInt', allowNull: false },
+    { name: 'run', type: 'belongsTo', target: 'agentLoopRuns', foreignKey: 'runId', allowNull: false },
+    { name: 'step', type: 'belongsTo', target: 'agentLoopSteps', foreignKey: 'stepId' },
+    { name: 'span', type: 'belongsTo', target: 'agentExecutionSpans', foreignKey: 'spanId' },
+    { name: 'toolCallId', type: 'string', length: 200, allowNull: false },
+    { name: 'toolName', type: 'string', length: 200, allowNull: false },
+    { name: 'actionType', type: 'string', length: 80 },
+    { name: 'proposedInput', type: 'json', defaultValue: {} },
+    { name: 'editedInput', type: 'json' },
+    { name: 'inputHash', type: 'string', length: 128, allowNull: false },
+    { name: 'paths', type: 'json', defaultValue: [] },
+    { name: 'policyDecision', type: 'json', defaultValue: {} },
+    { name: 'reason', type: 'text' },
+    { name: 'status', type: 'string', length: 20, defaultValue: 'pending' },
+    { name: 'requestedBy', type: 'belongsTo', target: 'users', foreignKey: 'requestedById' },
+    { name: 'assignedToId', type: 'bigInt' },
+    { name: 'assignedTo', type: 'belongsTo', target: 'users', foreignKey: 'assignedToId' },
+    { name: 'decidedBy', type: 'belongsTo', target: 'users', foreignKey: 'decidedById' },
+    { name: 'requestedAt', type: 'date' },
+    { name: 'decidedAt', type: 'date' },
+    { name: 'expiresAt', type: 'date' },
+    { name: 'consumedAt', type: 'date' },
+    { name: 'createdAt', type: 'date' },
+    { name: 'updatedAt', type: 'date' },
+  ],
+  indexes: [
+    { unique: true, fields: ['runId', 'toolCallId', 'inputHash'] },
+    { fields: ['status', 'assignedToId'] },
+    { fields: ['runId'] },
+  ],
+});

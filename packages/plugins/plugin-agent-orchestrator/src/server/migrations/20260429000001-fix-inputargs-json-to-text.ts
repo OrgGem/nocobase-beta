@@ -1,4 +1,5 @@
 import { Migration } from '@nocobase/server';
+import { DataTypes } from '@nocobase/database';
 
 /**
  * Fix: inputArgs column in skillExecutions was json type but should be text.
@@ -14,10 +15,12 @@ export default class FixInputArgsJsonToText extends Migration {
   appVersion = '>=0.1.0';
 
   async up() {
-    const queryInterface = (this as any).db.sequelize.getQueryInterface();
+    const db = (this as any).db;
+    const queryInterface = db.sequelize.getQueryInterface();
+    const tableName = `${db.options.tablePrefix || ''}skillExecutions`;
 
     // Check current column type
-    const tableDesc = await queryInterface.describeTable('skillExecutions').catch(() => null);
+    const tableDesc = await queryInterface.describeTable(tableName).catch(() => null);
     if (!tableDesc) return;
 
     const col = tableDesc['inputArgs'];
@@ -25,10 +28,14 @@ export default class FixInputArgsJsonToText extends Migration {
 
     // Only migrate if still json type
     if (col.type && col.type.toLowerCase().includes('json')) {
-      await (this as any).db.sequelize.query(
-        `ALTER TABLE "skillExecutions" ALTER COLUMN "inputArgs" TYPE text USING "inputArgs"::text`,
-      );
-      console.log('[skill-hub] Migration: converted skillExecutions.inputArgs from json to text');
+      if (db.sequelize.getDialect() === 'postgres') {
+        await db.sequelize.query(
+          `ALTER TABLE "${tableName}" ALTER COLUMN "inputArgs" TYPE text USING "inputArgs"::text`,
+        );
+      } else {
+        await queryInterface.changeColumn(tableName, 'inputArgs', { type: DataTypes.TEXT });
+      }
+      db.logger?.info?.('[skill-hub] Migration: converted skillExecutions.inputArgs from json to text');
     }
   }
 

@@ -1,189 +1,248 @@
-import { Plugin } from '@nocobase/server';
-import { AgentLoopService } from '../services/AgentLoopService';
-import { toPlain, currentUserId, valuesFromCtx as values } from '../utils/ctx-utils';
+import { randomUUID } from 'node:crypto';
+import type { Plugin } from '@nocobase/server';
+import { LoopPatternService } from '../services/LoopPatternService';
+import { LoopRunRepository } from '../services/LoopRunRepository';
+import { LoopRunStateMachine, type LoopRunStatus, loopRunStatuses } from '../services/LoopRunStateMachine';
+import { LoopTriggerService } from '../services/LoopTriggerService';
+import { loopWorkerAbortMessage } from '../services/LoopWorkerService';
+import { asObject, valuesFromCtx } from '../utils/ctx-utils';
+import { employeeHarnessResolver, worktreeCapability } from '../utils/loop-pattern-context';
+import { requestActor, throwResourceError } from './resource-helpers';
 
-function formatRunRow(raw: any) {
-  const row = toPlain(raw);
+type LoopResourcePlugin = Plugin & { loopWorker?: { abortRun(runId: number): void } };
+
+function formatRunRow(row: Record<string, unknown>) {
   return {
-    id: row.id,
-    rootRunId: row.rootRunId,
-    sessionId: row.sessionId,
-    messageId: row.messageId,
-    leaderUsername: row.leaderUsername,
-    goal: row.goal,
-    status: row.status,
-    approvalStatus: row.approvalStatus,
-    planVersion: row.planVersion,
-    planSource: row.planSource,
-    plannerModel: row.plannerModel,
-    approvedById: row.approvedById,
-    approvedAt: row.approvedAt,
-    rejectionReason: row.rejectionReason,
-    changeRequest: row.changeRequest,
-    currentStepId: row.currentStepId,
-    iterationCount: row.iterationCount || 0,
-    finalAnswer: row.finalAnswer,
-    summary: row.summary,
-    userId: row.userId,
-    startedAt: row.startedAt,
-    endedAt: row.endedAt,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
+    ...row,
+    historical: row.runtimeVersion !== 'control-plane-v2',
+    readOnly: row.runtimeVersion !== 'control-plane-v2',
   };
 }
 
-export function registerAgentLoopResource(plugin: Plugin, service: AgentLoopService) {
-  const app = plugin.app;
+function runIdFromContext(ctx: Parameters<typeof requestActor>[0]) {
+  const values = valuesFromCtx(ctx);
+  return values.runId || ctx.action.params.filterByTk;
+}
 
-  app.resource({
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function statusValue(value: unknown): LoopRunStatus {
+  if (typeof value === 'string' && (loopRunStatuses as readonly string[]).includes(value)) {
+    return value as LoopRunStatus;
+  }
+  throw new Error(`Unknown Loop Control Plane run status: ${String(value)}.`);
+}
+
+function manualAllowedUserIds(pattern: Record<string, unknown>) {
+  const triggerConfig = asObject(pattern.triggerConfig);
+  const configured = triggerConfig.allowedUserIds;
+  if (!Array.isArray(configured)) return [];
+  return configured.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0);
+}
+
+// Transitioning the row does not stop work that is already in flight: the invocation lives in the
+// worker's `AbortController` on whichever node claimed the run. `sendSyncMessage` publishes with
+// `skipSelf`, so the local worker is aborted directly and the message covers the other nodes.
+async function abortRunEverywhere(plugin: LoopResourcePlugin, runId: number) {
+  plugin.loopWorker?.abortRun(runId);
+  await plugin.sendSyncMessage(loopWorkerAbortMessage(runId));
+}
+
+async function transitionOwnedRun(
+  plugin: LoopResourcePlugin,
+  stateMachine: LoopRunStateMachine,
+  repository: LoopRunRepository,
+  ctx: Parameters<typeof requestActor>[0],
+  to: LoopRunStatus,
+  input?: { values?: Record<string, unknown>; humanAccepted?: boolean; eventType?: string; abort?: boolean },
+) {
+  const actor = requestActor(ctx);
+  const runId = runIdFromContext(ctx);
+  if (!runId) ctx.throw(400, 'runId is required');
+  await repository.requireMutableV2Run(runId, actor.userId, actor.isAdmin);
+  const transitioned = await stateMachine.transition({
+    runId: Number(runId),
+    to,
+    actorType: 'human',
+    actorIdentity: String(actor.userId),
+    eventType: input?.eventType,
+    values: input?.values,
+    humanAccepted: input?.humanAccepted,
+  });
+  if (input?.abort) await abortRunEverywhere(plugin, Number(runId));
+  return transitioned;
+}
+
+export function registerAgentLoopResource(plugin: LoopResourcePlugin) {
+  const repository = new LoopRunRepository(plugin.db);
+  const stateMachine = new LoopRunStateMachine(plugin.db);
+  const patterns = new LoopPatternService(plugin.db, employeeHarnessResolver(plugin), async () =>
+    worktreeCapability(plugin),
+  );
+  const triggers = new LoopTriggerService(plugin.db, patterns);
+
+  plugin.app.resource({
     name: 'agentLoops',
     actions: {
       async list(ctx, next) {
-        const { page = 1, pageSize = 20, sort = ['-createdAt'], filter = {} } = ctx.action.params;
-        const repo = ctx.db.getRepository('agentLoopRuns');
-        const [rows, count] = await repo.findAndCount({
-          filter,
-          sort,
-          offset: (Number(page) - 1) * Number(pageSize),
-          limit: Number(pageSize),
-        });
-
-        ctx.body = {
-          data: rows.map(formatRunRow),
-          meta: {
-            count,
-            page: Number(page),
-            pageSize: Number(pageSize),
-            totalPage: Math.ceil(count / Number(pageSize)),
-          },
-        };
+        try {
+          const actor = requestActor(ctx);
+          const result = await repository.listOwnedRuns({
+            userId: actor.userId,
+            isAdmin: actor.isAdmin,
+            filter: ctx.action.params.filter || {},
+            sort: ctx.action.params.sort,
+            page: Number(ctx.action.params.page),
+            pageSize: Number(ctx.action.params.pageSize),
+          });
+          ctx.body = {
+            data: result.rows.map(formatRunRow),
+            meta: {
+              count: result.count,
+              page: result.page,
+              pageSize: result.pageSize,
+              totalPage: result.totalPage,
+            },
+          };
+        } catch (error) {
+          throwResourceError(ctx, error);
+        }
         await next();
       },
 
       async get(ctx, next) {
-        const { filterByTk } = ctx.action.params;
-        if (!filterByTk) {
-          ctx.throw(400, 'run id is required');
-          return;
+        try {
+          const actor = requestActor(ctx);
+          const runId = runIdFromContext(ctx);
+          if (!runId) ctx.throw(400, 'run id is required');
+          ctx.body = { data: await repository.getOwnedRunDetail(runId, actor.userId, actor.isAdmin) };
+        } catch (error) {
+          throwResourceError(ctx, error);
         }
-        ctx.body = { data: await service.getRunDetail(filterByTk) };
+        await next();
+      },
+
+      async runNow(ctx, next) {
+        try {
+          const actor = requestActor(ctx);
+          const values = valuesFromCtx(ctx);
+          const patternId = Number(values.patternId || ctx.action.params.filterByTk);
+          if (!Number.isSafeInteger(patternId) || patternId <= 0) ctx.throw(400, 'patternId is required');
+          const { pattern } = await patterns.get(patternId);
+          if (
+            !actor.isAdmin &&
+            !manualAllowedUserIds(pattern as unknown as Record<string, unknown>).includes(actor.userId)
+          ) {
+            ctx.throw(403, 'This loop pattern does not allow manual runs for the current user.');
+          }
+          const requestedTriggerKey = stringValue(values.triggerKey);
+          const result = await triggers.enqueue({
+            patternId,
+            triggerType: 'manual',
+            triggerKey: requestedTriggerKey || `manual:${actor.userId}:${randomUUID()}`,
+            triggerPayload: asObject(values.triggerPayload),
+            userId: actor.userId,
+            goal: stringValue(values.goal) || undefined,
+            perRunHarness: values.perRunHarness,
+          });
+          ctx.body = { data: result };
+        } catch (error) {
+          throwResourceError(ctx, error);
+        }
+        await next();
+      },
+
+      async pause(ctx, next) {
+        try {
+          ctx.body = {
+            data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'paused', { abort: true }),
+          };
+        } catch (error) {
+          throwResourceError(ctx, error);
+        }
         await next();
       },
 
       async resume(ctx, next) {
-        const body = values(ctx);
-        const runId = body.runId || ctx.action.params.filterByTk;
-        if (!runId) {
-          ctx.throw(400, 'runId is required');
-          return;
+        try {
+          ctx.body = { data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'queued') };
+        } catch (error) {
+          throwResourceError(ctx, error);
         }
-        ctx.body = {
-          data: await service.resumeRun(runId, {
-            stepId: body.stepId,
-            approved: body.approved !== false,
-            editedInput: body.editedInput,
-            userId: currentUserId(ctx),
-            ctx,
-          }),
-        };
-        await next();
-      },
-
-      async approvePlan(ctx, next) {
-        const body = values(ctx);
-        const runId = body.runId || ctx.action.params.filterByTk;
-        if (!runId) {
-          ctx.throw(400, 'runId is required');
-          return;
-        }
-        ctx.body = {
-          data: await service.approvePlan(runId, {
-            userId: currentUserId(ctx),
-            reason: body.reason,
-          }),
-        };
-        await next();
-      },
-
-      async rejectPlan(ctx, next) {
-        const body = values(ctx);
-        const runId = body.runId || ctx.action.params.filterByTk;
-        if (!runId) {
-          ctx.throw(400, 'runId is required');
-          return;
-        }
-        ctx.body = {
-          data: await service.rejectPlan(runId, {
-            reason: body.reason,
-            userId: currentUserId(ctx),
-          }),
-        };
-        await next();
-      },
-
-      async requestPlanChanges(ctx, next) {
-        const body = values(ctx);
-        const runId = body.runId || ctx.action.params.filterByTk;
-        if (!runId) {
-          ctx.throw(400, 'runId is required');
-          return;
-        }
-        ctx.body = {
-          data: await service.requestPlanChanges(runId, {
-            feedback: body.feedback,
-            userId: currentUserId(ctx),
-          }),
-        };
         await next();
       },
 
       async cancel(ctx, next) {
-        const body = values(ctx);
-        const runId = body.runId || ctx.action.params.filterByTk;
-        if (!runId) {
-          ctx.throw(400, 'runId is required');
-          return;
+        try {
+          const values = valuesFromCtx(ctx);
+          ctx.body = {
+            data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'canceled', {
+              values: { summary: stringValue(values.reason) || 'Canceled by user.' },
+              eventType: 'run_canceled',
+              abort: true,
+            }),
+          };
+        } catch (error) {
+          throwResourceError(ctx, error);
         }
-        ctx.body = {
-          data: await service.cancelRun(runId, {
-            reason: body.reason,
-            userId: currentUserId(ctx),
-          }),
-        };
         await next();
       },
 
-      async retryStep(ctx, next) {
-        const body = values(ctx);
-        if (!body.stepId) {
-          ctx.throw(400, 'stepId is required');
-          return;
+      async retry(ctx, next) {
+        try {
+          ctx.body = {
+            data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'queued', {
+              values: { blockedReason: null, escalationReason: null },
+              eventType: 'run_retried',
+            }),
+          };
+        } catch (error) {
+          throwResourceError(ctx, error);
         }
-        ctx.body = {
-          data: await service.retryStep(body.stepId, {
-            userId: currentUserId(ctx),
-          }),
-        };
         await next();
       },
 
-      async stepFeedback(ctx, next) {
-        const body = values(ctx);
-        if (!body.stepId || !body.rating) {
-          ctx.throw(400, 'stepId and rating are required');
-          return;
+      async escalate(ctx, next) {
+        try {
+          const values = valuesFromCtx(ctx);
+          ctx.body = {
+            data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'waiting_human', {
+              values: { escalationReason: stringValue(values.reason) || 'Escalated by user.' },
+              eventType: 'run_escalated',
+            }),
+          };
+        } catch (error) {
+          throwResourceError(ctx, error);
         }
-        if (!['positive', 'negative'].includes(body.rating)) {
-          ctx.throw(400, 'rating must be "positive" or "negative"');
-          return;
+        await next();
+      },
+
+      async acceptResult(ctx, next) {
+        try {
+          ctx.body = {
+            data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'succeeded', {
+              humanAccepted: true,
+              eventType: 'run_result_accepted',
+            }),
+          };
+        } catch (error) {
+          throwResourceError(ctx, error);
         }
-        ctx.body = {
-          data: await service.stepFeedback(
-            body.stepId,
-            { rating: body.rating, comment: body.comment, category: body.category },
-            { userId: currentUserId(ctx) },
-          ),
-        };
+        await next();
+      },
+
+      async status(ctx, next) {
+        try {
+          const actor = requestActor(ctx);
+          const runId = runIdFromContext(ctx);
+          if (!runId) ctx.throw(400, 'runId is required');
+          const run = await repository.requireOwnedRun(runId, actor.userId, actor.isAdmin);
+          ctx.body = { data: { id: run.id, status: statusValue(run.status), runtimeVersion: run.runtimeVersion } };
+        } catch (error) {
+          throwResourceError(ctx, error);
+        }
         await next();
       },
     },

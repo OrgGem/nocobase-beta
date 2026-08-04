@@ -36,7 +36,7 @@ export const defineActions = (plugin: DocumentUnderstandingPluginLike) => {
 
   return {
     async getConfig(ctx: Context, next: () => Promise<any>) {
-      ctx.body = await service.getConfig();
+      ctx.body = await service.getConfigForClient();
       await next();
     },
 

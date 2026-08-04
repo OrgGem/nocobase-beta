@@ -11,6 +11,10 @@ export default defineCollection({
       primaryKey: true,
     },
     {
+      name: 'runId',
+      type: 'bigInt',
+    },
+    {
       name: 'run',
       type: 'belongsTo',
       target: 'agentLoopRuns',
@@ -26,6 +30,62 @@ export default defineCollection({
       name: 'planKey',
       type: 'string',
       length: 100,
+    },
+    {
+      name: 'runtimeVersion',
+      type: 'string',
+      length: 40,
+      defaultValue: 'control-plane-v2',
+    },
+    {
+      name: 'sequence',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
+      name: 'role',
+      type: 'string',
+      length: 30,
+    },
+    {
+      name: 'kind',
+      type: 'string',
+      length: 30,
+    },
+    {
+      name: 'employeeUsername',
+      type: 'string',
+      length: 100,
+    },
+    {
+      name: 'toolName',
+      type: 'string',
+      length: 200,
+    },
+    {
+      name: 'toolCallId',
+      type: 'string',
+      length: 200,
+    },
+    {
+      name: 'inputHash',
+      type: 'string',
+      length: 128,
+    },
+    {
+      name: 'policyDecision',
+      type: 'json',
+      defaultValue: {},
+    },
+    {
+      name: 'errorSignature',
+      type: 'string',
+      length: 300,
+    },
+    {
+      name: 'evidenceArtifactIds',
+      type: 'json',
+      defaultValue: [],
     },
     {
       name: 'index',
@@ -139,6 +199,15 @@ export default defineCollection({
     },
     {
       fields: ['planKey'],
+    },
+    {
+      fields: ['runId', 'sequence'],
+    },
+    {
+      fields: ['toolCallId'],
+    },
+    {
+      fields: ['agentExecutionSpanId'],
     },
   ],
 });

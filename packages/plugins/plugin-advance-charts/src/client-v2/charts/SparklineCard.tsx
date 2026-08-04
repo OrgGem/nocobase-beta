@@ -78,8 +78,19 @@ export class SparklineCard extends Chart {
   });
 
   getProps({ data, general, fieldProps }: RenderProps) {
+    const xField = general?.xField;
     const yField = general?.yField;
-    const values = data.map((row) => toNumber(row[yField]));
+    const sortedData = xField
+      ? [...data].sort((a, b) => {
+          const left = new Date(String(a[xField] ?? '')).valueOf();
+          const right = new Date(String(b[xField] ?? '')).valueOf();
+          if (Number.isNaN(left) && Number.isNaN(right)) return 0;
+          if (Number.isNaN(left)) return 1;
+          if (Number.isNaN(right)) return -1;
+          return left - right;
+        })
+      : data;
+    const values = sortedData.map((row) => toNumber(row[yField]));
     return {
       ...general,
       title: general?.title || fieldProps[yField]?.label || yField,

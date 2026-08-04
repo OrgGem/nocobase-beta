@@ -11,6 +11,11 @@ export interface ServiceConfig {
   webhookSecret?: string;
 }
 
+export type ClientServiceConfig = Omit<ServiceConfig, 'authKey' | 'webhookSecret'> & {
+  hasAuthKey: boolean;
+  hasWebhookSecret: boolean;
+};
+
 export interface EndpointDef {
   id: number;
   name: string;
