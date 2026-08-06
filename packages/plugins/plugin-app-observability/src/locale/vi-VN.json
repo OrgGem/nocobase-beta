@@ -1,0 +1,12 @@
+{
+  "App observability": "Khả năng quan sát ứng dụng", "Overview": "Tổng quan", "Nodes": "Nút", "Services": "Dịch vụ", "Capacity": "Dung lượng", "Settings": "Cài đặt",
+  "Loading": "Đang tải", "Unable to load data": "Không thể tải dữ liệu", "Retry": "Thử lại", "No observability data yet": "Chưa có dữ liệu quan sát",
+  "Active users": "Người dùng hoạt động", "HTTP inflight": "HTTP đang xử lý", "HTTP p95": "HTTP P95", "Error rate": "Tỷ lệ lỗi", "LLM services": "Dịch vụ LLM",
+  "Service": "Dịch vụ", "Operation": "Thao tác", "Inflight": "Đang xử lý", "TTFT": "Thời gian phản hồi đầu", "Tokens": "Token", "Redis aggregation": "Tổng hợp Redis", "Single-node mode": "Chế độ một nút",
+  "Node": "Nút", "Worker mode": "Chế độ tiến trình", "CPU": "CPU", "RSS": "RSS", "Heap used": "Heap đã dùng", "ELU": "Mức dùng event loop", "Event-loop p99": "Event loop P99",
+  "Requests": "Yêu cầu", "Latency p95": "Độ trễ P95", "Capacity state": "Trạng thái dung lượng", "Confidence": "Độ tin cậy", "Evidence": "Bằng chứng",
+  "healthy": "Tốt", "watch": "Theo dõi", "scale-soon": "Sớm tăng dung lượng", "critical": "Nghiêm trọng", "unknown": "Không rõ", "cpu": "CPU", "memory": "Bộ nhớ", "event-loop": "Event loop", "event-loop-delay": "Độ trễ event loop", "db-wait": "Chờ cơ sở dữ liệu", "errors": "Lỗi",
+  "Recommendations are advisory only; this plugin never auto-scales resources.": "Khuyến nghị chỉ mang tính tư vấn; plugin không bao giờ tự động mở rộng tài nguyên.",
+  "Enabled": "Bật", "Redis snapshots": "Ảnh chụp Redis", "Prometheus export": "Xuất Prometheus", "Sample interval seconds": "Chu kỳ lấy mẫu (giây)", "Bucket seconds": "Chu kỳ bucket (giây)", "Retention days": "Số ngày lưu giữ", "Active-user window seconds": "Cửa sổ người dùng hoạt động (giây)",
+  "CPU threshold": "Ngưỡng CPU", "Memory threshold": "Ngưỡng bộ nhớ", "Event-loop threshold": "Ngưỡng event loop", "DB wait threshold": "Ngưỡng chờ DB", "Save": "Lưu", "Settings saved": "Đã lưu cài đặt", "Unable to save settings": "Không thể lưu cài đặt"
+}

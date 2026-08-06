@@ -22,8 +22,12 @@ import { startUsageRecord, finishUsageRecord } from '../usage';
 import { isStreamingRequested } from '../utils/streaming';
 import type PluginAiApiServer from '../plugin';
 import { finalizeLlmBilling } from '../billing';
+import { finishAiApiObservation, startAiApiObservation } from '../utils/app-observability';
 
 const API_PREFIX = '/api/ai-llm/v1';
+
+/** Shared so the plugin can disable the core body parser for exactly these routes. */
+export const AI_LLM_PREFIX = API_PREFIX;
 
 type DataWrappingContext = Context & { withoutDataWrapping?: boolean };
 
@@ -90,22 +94,9 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     const requestId = `req-${crypto.randomBytes(12).toString('hex')}`;
     ctx.set('X-Request-Id', requestId);
 
-    // ─── Parse body for POST requests if not already parsed ───────────────
-    if (method === 'POST' && !ctx.request.body) {
-      try {
-        const rawBody = await getRawBody(ctx);
-        ctx.request.body = JSON.parse(rawBody);
-      } catch (bodyErr: unknown) {
-        const status =
-          bodyErr && typeof bodyErr === 'object' && 'statusCode' in bodyErr && bodyErr.statusCode === 413 ? 413 : 400;
-        const message = status === 413 ? 'Request body too large (max 10 MB)' : 'Invalid JSON in request body';
-        ctx.status = status;
-        ctx.body = toOpenAIError(status, message, 'invalid_request_error');
-        return;
-      }
-    }
-
     // ─── Authenticate ─────────────────────────────────────────────────────
+    // Runs before the body is read: buffering a multi-megabyte payload for an
+    // anonymous caller would let unauthenticated traffic pin memory.
     const isAuth = await authenticateBearer(ctx);
     if (!isAuth) {
       logRequest(ctx, requestId, '-', 'auth_failed', 0);
@@ -124,6 +115,32 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     if (!allowed) {
       logRequest(ctx, requestId, '-', 'rate_limited', 0);
       return;
+    }
+
+    // ─── Parse body for POST requests if not already parsed ───────────────
+    if (method === 'POST' && !ctx.request.body) {
+      const maxBodyBytes = await resolveMaxBodyBytes(ctx);
+      const declaredLength = Number(ctx.get('Content-Length'));
+      if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+        respondBodyTooLarge(ctx, maxBodyBytes);
+        logRequest(ctx, requestId, '-', 'body_too_large', 0);
+        return;
+      }
+      try {
+        const rawBody = await getRawBody(ctx, maxBodyBytes);
+        ctx.request.body = JSON.parse(rawBody);
+      } catch (bodyErr: unknown) {
+        const tooLarge =
+          bodyErr && typeof bodyErr === 'object' && 'statusCode' in bodyErr && bodyErr.statusCode === 413;
+        if (tooLarge) {
+          respondBodyTooLarge(ctx, maxBodyBytes);
+          logRequest(ctx, requestId, '-', 'body_too_large', 0);
+          return;
+        }
+        ctx.status = 400;
+        ctx.body = toOpenAIError(400, 'Invalid JSON in request body', 'invalid_request_error');
+        return;
+      }
     }
 
     // ─── Route matching ───────────────────────────────────────────────────
@@ -145,6 +162,23 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       };
     }
     const t0 = Date.now();
+    if (isUsageEndpoint) {
+      const service =
+        subPath === '/embeddings'
+          ? 'llm.embedding'
+          : resolvedMode === 'agent'
+            ? 'llm.agent'
+            : subPath === '/completions'
+              ? 'llm.completion'
+              : 'llm.chat';
+      startAiApiObservation(ctx, {
+        service,
+        operation: subPath,
+        streaming,
+        model: model === '-' ? undefined : model,
+        mode: resolvedMode,
+      });
+    }
     let usageId: unknown;
     try {
       usageId = isUsageEndpoint
@@ -275,32 +309,108 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
           ctx.log.error('AI API quota reservation could not be finalized:', billingError);
         }
       }
+      if (isUsageEndpoint) {
+        const streamResult = ctx.state.aiApiStreamResult;
+        finishAiApiObservation(ctx, {
+          status:
+            streamResult?.errorCode === 'client_disconnected'
+              ? 'cancelled'
+              : streamResult
+                ? streamResult.succeeded
+                  ? 'succeeded'
+                  : 'failed'
+                : ctx.status >= 200 && ctx.status < 400
+                  ? 'succeeded'
+                  : ctx.status >= 500
+                    ? 'failed'
+                    : 'rejected',
+          errorCode: streamResult?.errorCode,
+        });
+      }
     }
   };
 }
 
-/** Maximum allowed request body size (10 MB) to prevent OOM DoS attacks. */
-const MAX_BODY_BYTES = 10 * 1024 * 1024;
+/** Body size cap used when aiApiConfig has no usable maxRequestBodyMb. */
+const DEFAULT_MAX_BODY_MB = 10;
 
 /**
- * Read raw body from request stream (fallback if bodyparser didn't handle it).
- * Rejects with a 413-style error if the body exceeds MAX_BODY_BYTES.
+ * Upper bound an admin can configure.
+ *
+ * The gateway buffers the whole payload in memory (raw chunks, the decoded
+ * string, and the parsed object all coexist briefly), so an unbounded value
+ * would turn a config typo into an out-of-memory risk.
  */
-function getRawBody(ctx: Context): Promise<string> {
+export const MAX_REQUEST_BODY_MB_LIMIT = 100;
+
+/** Clamp a configured megabyte value into the supported range. */
+export function normalizeMaxRequestBodyMb(value: unknown): number {
+  const mb = Number(value);
+  if (!Number.isSafeInteger(mb) || mb <= 0) return DEFAULT_MAX_BODY_MB;
+  return Math.min(mb, MAX_REQUEST_BODY_MB_LIMIT);
+}
+
+async function resolveMaxBodyBytes(ctx: Context): Promise<number> {
+  let configuredMb: unknown;
+  try {
+    const config = await ctx.db.getRepository('aiApiConfig').findOne();
+    configuredMb = config?.get('maxRequestBodyMb');
+  } catch (err) {
+    ctx.log?.warn?.('AI API: could not read maxRequestBodyMb, using default:', err);
+  }
+  return normalizeMaxRequestBodyMb(configuredMb) * 1024 * 1024;
+}
+
+function formatMb(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+function respondBodyTooLarge(ctx: Context, maxBodyBytes: number): void {
+  ctx.status = 413;
+  ctx.body = toOpenAIError(
+    413,
+    `Request body too large (max ${formatMb(maxBodyBytes)}). ` +
+      `Inline base64 images inflate payloads by ~33%; raise "Max request body size" in Settings → AI API Gateway if needed.`,
+    'invalid_request_error',
+  );
+}
+
+/**
+ * Read the raw request body.
+ *
+ * The plugin disables the core koa-bodyparser for these routes (see plugin.ts),
+ * so this cap is the one that actually governs gateway payload size.
+ * Rejects with a 413-style error once maxBodyBytes is exceeded.
+ *
+ * Exported so tests can drive the real implementation over a live socket rather
+ * than a copy that cannot catch a regression here.
+ */
+export function getRawBody(ctx: Pick<Context, 'req'>, maxBodyBytes: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    let body = '';
+    const chunks: Buffer[] = [];
     let byteCount = 0;
+    let aborted = false;
 
     ctx.req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
       byteCount += chunk.length;
-      if (byteCount > MAX_BODY_BYTES) {
-        ctx.req.destroy();
-        reject(Object.assign(new Error('Request body too large (max 10 MB)'), { statusCode: 413 }));
+      if (byteCount > maxBodyBytes) {
+        // Drop what we buffered and drain the rest instead of destroying the
+        // socket: ctx.req and the response share one connection, so destroying
+        // it replaces our 413 JSON with an ECONNRESET on the client.
+        aborted = true;
+        chunks.length = 0;
+        ctx.req.resume();
+        reject(Object.assign(new Error(`Request body too large (max ${formatMb(maxBodyBytes)})`), { statusCode: 413 }));
         return;
       }
-      body += chunk.toString();
+      chunks.push(chunk);
     });
-    ctx.req.on('end', () => resolve(body));
+    // Decode once at the end: a multi-byte UTF-8 character can straddle a chunk
+    // boundary, and per-chunk toString() would corrupt it.
+    ctx.req.on('end', () => {
+      if (!aborted) resolve(Buffer.concat(chunks).toString('utf8'));
+    });
     ctx.req.on('error', reject);
   });
 }

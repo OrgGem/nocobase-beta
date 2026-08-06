@@ -1,5 +1,16 @@
 import { DocumentUnderstandingService } from '../services/DocumentUnderstandingService';
 
+// Repository.findOne() resolves to a Sequelize model whose attributes are prototype
+// getters, so `{ ...model }` yields an empty object. Mirror that here so the mock
+// cannot pass code that spreads the model directly.
+function modelLike<T extends object>(attributes: T): T {
+  const proto: Record<string, unknown> = { toJSON: () => ({ ...attributes }) };
+  for (const [key, value] of Object.entries(attributes)) {
+    Object.defineProperty(proto, key, { get: () => value, enumerable: true });
+  }
+  return Object.create(proto) as T;
+}
+
 describe('DocumentUnderstandingService configuration exposure', () => {
   const config = {
     id: 1,
@@ -15,7 +26,7 @@ describe('DocumentUnderstandingService configuration exposure', () => {
 
   it('does not expose stored secrets to a browser caller', async () => {
     const db = {
-      getRepository: () => ({ findOne: vi.fn().mockResolvedValue(config) }),
+      getRepository: () => ({ findOne: vi.fn().mockResolvedValue(modelLike(config)) }),
     };
     const service = new DocumentUnderstandingService({ logger: {} } as never, db as never);
 
@@ -36,7 +47,7 @@ describe('DocumentUnderstandingService configuration exposure', () => {
   it('keeps existing secrets when an update omits them', async () => {
     const update = vi.fn().mockResolvedValue(undefined);
     const db = {
-      getRepository: () => ({ findOne: vi.fn().mockResolvedValue(config), update }),
+      getRepository: () => ({ findOne: vi.fn().mockResolvedValue(modelLike(config)), update }),
     };
     const service = new DocumentUnderstandingService({ logger: {} } as never, db as never);
 

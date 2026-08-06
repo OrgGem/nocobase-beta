@@ -90,7 +90,9 @@ export class DocumentUnderstandingService {
       });
     }
 
-    return config;
+    // Attributes live on the Sequelize model prototype, so callers that spread the
+    // result would otherwise get an object with none of the config fields.
+    return config.toJSON();
   }
 
   isReady(): boolean {

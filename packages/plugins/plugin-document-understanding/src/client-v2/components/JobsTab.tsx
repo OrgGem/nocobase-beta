@@ -1,32 +1,50 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Table, Tag, Button, Drawer, Select, Space, Badge } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
+import { useFlowContext } from '@nocobase/flow-engine';
+import { useT } from '../locale';
+import { JobState, PipelineDef, formatDateTime, unwrapData } from '../types';
 
-const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-  pending: { color: 'default', label: 'Pending' },
-  running: { color: 'processing', label: 'Running' },
-  polling: { color: 'processing', label: 'Polling' },
-  completed: { color: 'success', label: 'Completed' },
-  failed: { color: 'error', label: 'Failed' },
-  timeout: { color: 'error', label: 'Timeout' },
+const STATUS_COLORS: Record<string, string> = {
+  pending: 'default',
+  running: 'processing',
+  polling: 'processing',
+  completed: 'success',
+  failed: 'error',
+  timeout: 'error',
 };
 
+interface JobFilter {
+  status?: string;
+  pipelineId?: number;
+}
+
 export const JobsTab = () => {
-  const app = useApp();
-  const api = app.apiClient;
-  const [data, setData] = useState<any[]>([]);
-  const [pipelines, setPipelines] = useState<any[]>([]);
+  const ctx = useFlowContext();
+  const api = ctx.api;
+  const t = useT();
+  const [data, setData] = useState<JobState[]>([]);
+  const [pipelines, setPipelines] = useState<PipelineDef[]>([]);
   const [loading, setLoading] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
-  const [activeJob, setActiveJob] = useState<any>(null);
+  const [activeJob, setActiveJob] = useState<JobState | null>(null);
   const [filterStatus, setFilterStatus] = useState<string | undefined>(undefined);
   const [filterPipeline, setFilterPipeline] = useState<number | undefined>(undefined);
+
+  const statusLabels: Record<string, string> = {
+    pending: t('Pending'),
+    running: t('Running'),
+    polling: t('Polling'),
+    completed: t('Completed'),
+    failed: t('Failed'),
+    timeout: t('Timeout'),
+  };
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     try {
-      const filter: any = {};
+      const filter: JobFilter = {};
       if (filterStatus) filter.status = filterStatus;
       if (filterPipeline) filter.pipelineId = filterPipeline;
 
@@ -34,7 +52,7 @@ export const JobsTab = () => {
         url: 'docUnderstanding:listJobs',
         params: { filter: Object.keys(filter).length > 0 ? filter : undefined },
       });
-      setData(res.data?.data || []);
+      setData(unwrapData<JobState[]>(res, []));
     } finally {
       setLoading(false);
     }
@@ -43,9 +61,9 @@ export const JobsTab = () => {
   const fetchPipelines = useCallback(async () => {
     try {
       const res = await api.request({ url: 'docUnderstanding:listPipelines' });
-      setPipelines(res.data?.data || []);
+      setPipelines(unwrapData<PipelineDef[]>(res, []));
     } catch {
-      // ignore
+      // Pipeline names are only used to label rows; failing to load them is not fatal.
     }
   }, [api]);
 
@@ -59,67 +77,70 @@ export const JobsTab = () => {
     return () => clearInterval(timer);
   }, [fetchJobs]);
 
-  const pipelineMap = new Map(pipelines.map((p: any) => [p.id, p.name]));
+  const pipelineMap = new Map(pipelines.map((p) => [p.id, p.name]));
 
-  const viewDetails = async (record: any) => {
-    // Fetch fresh job data for detail view
+  const viewDetails = async (record: JobState) => {
     try {
       const res = await api.request({
         url: 'docUnderstanding:getJobStatus',
         params: { filterByTk: record.id },
       });
-      setActiveJob(res.data?.data || record);
+      setActiveJob(unwrapData<JobState>(res, record));
     } catch {
       setActiveJob(record);
     }
     setDrawerVisible(true);
   };
 
-  const columns = [
-    { title: 'ID', dataIndex: 'id', width: 60 },
+  const columns: ColumnsType<JobState> = [
+    { title: t('ID'), dataIndex: 'id', width: 60 },
     {
-      title: 'Pipeline',
+      title: t('Pipeline'),
       dataIndex: 'pipelineId',
       width: 180,
       render: (id: number) => pipelineMap.get(id) || `#${id}`,
     },
     {
-      title: 'Status',
+      title: t('Status'),
       dataIndex: 'status',
       width: 100,
-      render: (status: string) => {
-        const cfg = STATUS_CONFIG[status] || { color: 'default', label: status };
-        return <Tag color={cfg.color}>{cfg.label}</Tag>;
-      },
+      render: (status: string) => (
+        <Tag color={STATUS_COLORS[status] || 'default'}>{statusLabels[status] || status}</Tag>
+      ),
     },
     {
-      title: 'Current Step',
+      title: t('Current Step'),
       dataIndex: 'currentStep',
       width: 90,
-      render: (v: number, record: any) => {
-        if (record.status === 'completed') return <Tag color="success">Done</Tag>;
-        if (record.status === 'failed') return <Tag color="error">Step {v}</Tag>;
-        return <Badge status="processing" text={`Step ${v}`} />;
+      render: (v: number, record) => {
+        if (record.status === 'completed') return <Tag color="success">{t('Done')}</Tag>;
+        if (record.status === 'failed') return <Tag color="error">{`${t('Step')} ${v}`}</Tag>;
+        return <Badge status="processing" text={`${t('Step')} ${v}`} />;
       },
     },
     {
-      title: 'Started',
+      title: t('Started'),
       dataIndex: 'startedAt',
       width: 160,
-      render: (val: string) => (val ? new Date(val).toLocaleString() : '-'),
+      render: (val: string) => formatDateTime(val),
     },
     {
-      title: 'Completed',
+      title: t('Completed'),
       dataIndex: 'completedAt',
       width: 160,
-      render: (val: string) => (val ? new Date(val).toLocaleString() : '-'),
+      render: (val: string) => formatDateTime(val),
     },
     {
-      title: 'Action',
+      title: t('Action'),
       width: 80,
-      render: (_: any, record: any) => (
-        <Button size="small" icon={<EyeOutlined />} onClick={() => viewDetails(record)}>
-          View
+      render: (_: unknown, record) => (
+        <Button
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => viewDetails(record)}
+          aria-label={`${t('View')} #${record.id}`}
+        >
+          {t('View')}
         </Button>
       ),
     },
@@ -130,22 +151,24 @@ export const JobsTab = () => {
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           allowClear
-          placeholder="Filter by status"
+          placeholder={t('Filter by status')}
+          aria-label={t('Filter by status')}
           value={filterStatus}
           onChange={setFilterStatus}
           style={{ width: 160 }}
-          options={Object.entries(STATUS_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))}
+          options={Object.keys(STATUS_COLORS).map((key) => ({ value: key, label: statusLabels[key] }))}
         />
         <Select
           allowClear
-          placeholder="Filter by pipeline"
+          placeholder={t('Filter by pipeline')}
+          aria-label={t('Filter by pipeline')}
           value={filterPipeline}
           onChange={setFilterPipeline}
           style={{ width: 200 }}
-          options={pipelines.map((p: any) => ({ value: p.id, label: p.name }))}
+          options={pipelines.map((p) => ({ value: p.id, label: p.name }))}
         />
         <Button icon={<ReloadOutlined />} onClick={fetchJobs}>
-          Refresh
+          {t('Refresh')}
         </Button>
       </Space>
 
@@ -160,7 +183,9 @@ export const JobsTab = () => {
 
       <Drawer
         title={
-          activeJob ? `Job #${activeJob.id} — ${pipelineMap.get(activeJob.pipelineId) || 'Unknown'}` : 'Job Details'
+          activeJob
+            ? `${t('Job')} #${activeJob.id} — ${pipelineMap.get(activeJob.pipelineId) || t('Unknown')}`
+            : t('Job Details')
         }
         width={640}
         open={drawerVisible}
@@ -169,10 +194,20 @@ export const JobsTab = () => {
         {activeJob && (
           <div>
             <div style={{ marginBottom: 16 }}>
-              <Space>
-                <Tag color={STATUS_CONFIG[activeJob.status]?.color}>{activeJob.status}</Tag>
-                {activeJob.startedAt && <span>Started: {new Date(activeJob.startedAt).toLocaleString()}</span>}
-                {activeJob.completedAt && <span>Completed: {new Date(activeJob.completedAt).toLocaleString()}</span>}
+              <Space wrap>
+                <Tag color={STATUS_COLORS[activeJob.status] || 'default'}>
+                  {statusLabels[activeJob.status] || activeJob.status}
+                </Tag>
+                {activeJob.startedAt && (
+                  <span>
+                    {t('Started')}: {formatDateTime(activeJob.startedAt)}
+                  </span>
+                )}
+                {activeJob.completedAt && (
+                  <span>
+                    {t('Completed')}: {formatDateTime(activeJob.completedAt)}
+                  </span>
+                )}
               </Space>
             </div>
 
@@ -186,12 +221,12 @@ export const JobsTab = () => {
                   marginBottom: 16,
                 }}
               >
-                <strong style={{ color: '#cf1322' }}>Error:</strong>
+                <strong style={{ color: '#cf1322' }}>{t('Error')}:</strong>
                 <pre style={{ margin: '4px 0 0', whiteSpace: 'pre-wrap', color: '#cf1322' }}>{activeJob.error}</pre>
               </div>
             )}
 
-            <h4>Input</h4>
+            <h4>{t('Input')}</h4>
             <pre
               style={{
                 background: '#f5f5f5',
@@ -205,7 +240,7 @@ export const JobsTab = () => {
               {JSON.stringify(activeJob.input, null, 2)}
             </pre>
 
-            <h4 style={{ marginTop: 16 }}>Step Results</h4>
+            <h4 style={{ marginTop: 16 }}>{t('Step Results')}</h4>
             {activeJob.stepResults && Object.keys(activeJob.stepResults).length > 0 ? (
               Object.entries(activeJob.stepResults).map(([key, val]) => (
                 <div key={key} style={{ marginBottom: 8 }}>
@@ -226,10 +261,10 @@ export const JobsTab = () => {
                 </div>
               ))
             ) : (
-              <div style={{ color: '#999' }}>No step results yet</div>
+              <div style={{ color: '#999' }}>{t('No step results yet')}</div>
             )}
 
-            <h4 style={{ marginTop: 16 }}>Final Result</h4>
+            <h4 style={{ marginTop: 16 }}>{t('Final Result')}</h4>
             <pre
               style={{
                 background: '#f0f5ff',
@@ -240,12 +275,12 @@ export const JobsTab = () => {
                 overflow: 'auto',
               }}
             >
-              {activeJob.finalResult ? JSON.stringify(activeJob.finalResult, null, 2) : '(not yet available)'}
+              {activeJob.finalResult ? JSON.stringify(activeJob.finalResult, null, 2) : t('(not yet available)')}
             </pre>
 
             {activeJob.externalTaskIds && Object.keys(activeJob.externalTaskIds).length > 0 && (
               <>
-                <h4 style={{ marginTop: 16 }}>External Task IDs</h4>
+                <h4 style={{ marginTop: 16 }}>{t('External Task IDs')}</h4>
                 <pre style={{ background: '#f5f5f5', padding: 8, borderRadius: 4, fontSize: 11 }}>
                   {JSON.stringify(activeJob.externalTaskIds, null, 2)}
                 </pre>

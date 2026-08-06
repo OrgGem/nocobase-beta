@@ -42,6 +42,12 @@ export default defineCollection({
       comment: 'Max requests per user per minute',
     },
     {
+      name: 'maxRequestBodyMb',
+      type: 'integer',
+      defaultValue: 10,
+      comment: 'Max request body size in MB. Raise this to accept inline base64 images in vision requests.',
+    },
+    {
       name: 'quotaEnabled',
       type: 'boolean',
       defaultValue: false,

@@ -8,12 +8,13 @@
  */
 
 import { Plugin } from '@nocobase/server';
-import { createAiLlmRouter } from './routes/router';
+import { createAiLlmRouter, AI_LLM_PREFIX } from './routes/router';
 import aiApiConfigResource from './resource/ai-api-config';
 import aiApiUsageMonitorResource from './resource/ai-api-usage-monitor';
 import { RateLimiter } from './utils/rate-limiter';
 import { invalidateRolePermissionCache } from './middleware/role-permission';
-import { validateModelPrice, validateQuotaPolicy } from './validation';
+import { validateModelPrice, validateModelMetadata, validateQuotaPolicy } from './validation';
+import { AI_API_ACL_SNIPPET } from '../constants';
 
 // Ensure dayjs timezone + utc plugins are loaded.
 // Some Docker builds ship an older @nocobase/utils whose dayjs.js does not
@@ -43,13 +44,31 @@ export class PluginAiApiServer extends Plugin {
     this.app.db.on('aiApiModelPrices.beforeSave', async (model) => {
       await validateModelPrice(this.db, model);
     });
+    this.app.db.on('aiApiModelMetadata.beforeSave', (model) => {
+      validateModelMetadata(model);
+    });
     this.app.db.on('aiApiUserQuotaPolicies.beforeSave', (model) => {
       validateQuotaPolicy(model);
     });
   }
 
   async load() {
-    // 1. Register raw Koa middleware for OpenAI-compatible endpoints
+    // 1. Claim body parsing for our own routes before the core bodyParser runs.
+    //    Core registers koa-bodyparser with a global REQUEST_BODY_LIMIT (10mb by
+    //    default) much earlier in the stack, so without this the gateway's own
+    //    configurable limit is unreachable: an oversized vision request would be
+    //    rejected by core with a non-OpenAI error shape. `disableBodyParser` makes
+    //    koa-bodyparser skip the request, leaving ctx.request.body undefined so
+    //    createAiLlmRouter reads and caps the raw stream itself.
+    this.app.use(
+      async (ctx, next) => {
+        if (ctx.path.startsWith(AI_LLM_PREFIX)) ctx.disableBodyParser = true;
+        await next();
+      },
+      { tag: 'aiApiDisableBodyParser', before: 'bodyParser' },
+    );
+
+    // 2. Register raw Koa middleware for OpenAI-compatible endpoints
     //    Must run before 'resourcer' so URL paths match OpenAI convention
     // OIDC access tokens must first pass through plugin-idp-oauth, which validates
     // issuer/audience/scope and rewrites them to a NocoBase internal token.
@@ -68,11 +87,12 @@ export class PluginAiApiServer extends Plugin {
 
     // 3. Set ACL permissions for admin config + role permissions management
     this.app.acl.registerSnippet({
-      name: `pm.${this.name}.configuration`,
+      name: AI_API_ACL_SNIPPET,
       actions: [
         'aiApiConfig:*',
         'aiApiRolePermissions:*',
         'aiApiModelPrices:*',
+        'aiApiModelMetadata:*',
         'aiApiUserQuotaPolicies:*',
         'aiApiUserQuotaBuckets:list',
         'aiApiUserQuotaBuckets:get',

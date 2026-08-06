@@ -10,10 +10,16 @@
 import { Context } from '@nocobase/actions';
 import { generateCompletionId, toOpenAIError, formatSSE, formatSSEDone } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
-import { createRequestAbortController, isStreamingRequested, writeResponse } from '../utils/streaming';
+import {
+  createRequestAbortController,
+  isClientDisconnected,
+  isStreamingRequested,
+  writeResponse,
+} from '../utils/streaming';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
+import { markAiApiFirstProviderOutput } from '../utils/app-observability';
 
 /**
  * POST /api/ai-llm/v1/completions
@@ -257,6 +263,7 @@ async function handleStreamingTextCompletion(
       }
 
       if (text) {
+        markAiApiFirstProviderOutput(ctx);
         await writeResponse(
           ctx,
           formatSSE({
@@ -306,6 +313,7 @@ async function handleStreamingTextCompletion(
     setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
     ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
   } catch (err) {
+    const cancelled = isClientDisconnected(ctx, err);
     ctx.log.error('AI API completions streaming error:', err);
     if (!ctx.res.destroyed && !ctx.res.writableEnded) {
       await writeResponse(
@@ -319,7 +327,11 @@ async function handleStreamingTextCompletion(
       );
     }
     setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
-    ctx.state.aiApiStreamResult = { succeeded: false, id: completionId, errorCode: 'stream_error' };
+    ctx.state.aiApiStreamResult = {
+      succeeded: false,
+      id: completionId,
+      errorCode: cancelled ? 'client_disconnected' : 'stream_error',
+    };
   } finally {
     requestAbort.dispose();
     if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();

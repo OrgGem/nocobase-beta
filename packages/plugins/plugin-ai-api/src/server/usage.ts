@@ -1,5 +1,6 @@
 import { Context } from '@nocobase/actions';
 import { finalizeLlmBilling, type LlmBillingState } from './billing';
+import { addAiApiUsage } from './utils/app-observability';
 
 export type Usage = {
   prompt_tokens: number | null;
@@ -76,6 +77,7 @@ export function setAiApiUsageResult(
   getAiApiState(ctx).aiApiUsageResult = usage
     ? { source: 'provider', usage, ...metadata }
     : { source: 'unavailable', ...metadata };
+  addAiApiUsage(ctx, usage);
   return usage;
 }
 

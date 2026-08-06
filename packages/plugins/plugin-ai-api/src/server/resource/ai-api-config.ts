@@ -8,6 +8,24 @@
  */
 
 import { ResourceOptions } from '@nocobase/resourcer';
+import { MAX_REQUEST_BODY_MB_LIMIT } from '../routes/router';
+
+const DEFAULT_MAX_REQUEST_BODY_MB = 10;
+
+/**
+ * The gateway buffers each request body in memory, so an out-of-range value
+ * here is a denial-of-service footgun rather than a harmless setting.
+ */
+function coerceMaxRequestBodyMb(value: unknown): number {
+  const mb = Number(value);
+  if (!Number.isSafeInteger(mb) || mb <= 0) {
+    throw new Error(`maxRequestBodyMb must be a positive integer (1-${MAX_REQUEST_BODY_MB_LIMIT}).`);
+  }
+  if (mb > MAX_REQUEST_BODY_MB_LIMIT) {
+    throw new Error(`maxRequestBodyMb cannot exceed ${MAX_REQUEST_BODY_MB_LIMIT}.`);
+  }
+  return mb;
+}
 
 /**
  * Resource for managing AI API configuration via NocoBase admin UI.
@@ -29,6 +47,7 @@ const aiApiConfigResource: ResourceOptions = {
             defaultLlmService: '',
             enabledLlmServices: [],
             rateLimitPerMinute: 60,
+            maxRequestBodyMb: 10,
             quotaEnabled: false,
             defaultReservationOutputTokens: 4096,
             options: {},
@@ -52,6 +71,7 @@ const aiApiConfigResource: ResourceOptions = {
             defaultLlmService: values.defaultLlmService ?? '',
             enabledLlmServices: values.enabledLlmServices ?? [],
             rateLimitPerMinute: values.rateLimitPerMinute ?? 60,
+            maxRequestBodyMb: coerceMaxRequestBodyMb(values.maxRequestBodyMb ?? DEFAULT_MAX_REQUEST_BODY_MB),
             quotaEnabled: values.quotaEnabled ?? false,
             defaultReservationOutputTokens: values.defaultReservationOutputTokens ?? 4096,
             options: values.options ?? {},
@@ -64,6 +84,9 @@ const aiApiConfigResource: ResourceOptions = {
         if (values.defaultLlmService !== undefined) updateData.defaultLlmService = values.defaultLlmService;
         if (values.enabledLlmServices !== undefined) updateData.enabledLlmServices = values.enabledLlmServices;
         if (values.rateLimitPerMinute !== undefined) updateData.rateLimitPerMinute = values.rateLimitPerMinute;
+        if (values.maxRequestBodyMb !== undefined) {
+          updateData.maxRequestBodyMb = coerceMaxRequestBodyMb(values.maxRequestBodyMb);
+        }
         if (values.quotaEnabled !== undefined) updateData.quotaEnabled = values.quotaEnabled;
         if (values.defaultReservationOutputTokens !== undefined) {
           updateData.defaultReservationOutputTokens = values.defaultReservationOutputTokens;

@@ -42,6 +42,33 @@ export async function validateModelPrice(db: Database, model: Model): Promise<vo
   if (overlap) throw new Error('An enabled price already overlaps this effective period.');
 }
 
+function requirePositiveIntegerOrNull(value: unknown, field: string): void {
+  if (value === null || value === undefined || value === '') return;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${field} must be a positive integer.`);
+}
+
+export function validateModelMetadata(model: Model): void {
+  if (!String(model.get('llmService') ?? '').trim()) throw new Error('llmService is required.');
+  if (!String(model.get('model') ?? '').trim()) throw new Error('model is required.');
+  requirePositiveIntegerOrNull(model.get('contextWindow'), 'contextWindow');
+  requirePositiveIntegerOrNull(model.get('maxCompletionTokens'), 'maxCompletionTokens');
+
+  const contextWindow = model.get('contextWindow');
+  const maxCompletionTokens = model.get('maxCompletionTokens');
+  if (
+    contextWindow !== null &&
+    contextWindow !== undefined &&
+    contextWindow !== '' &&
+    maxCompletionTokens !== null &&
+    maxCompletionTokens !== undefined &&
+    maxCompletionTokens !== '' &&
+    Number(maxCompletionTokens) > Number(contextWindow)
+  ) {
+    throw new Error('maxCompletionTokens cannot exceed contextWindow.');
+  }
+}
+
 export function validateQuotaPolicy(model: Model): void {
   if (!['daily', 'monthly'].includes(String(model.get('periodType')))) {
     throw new Error('periodType must be daily or monthly.');

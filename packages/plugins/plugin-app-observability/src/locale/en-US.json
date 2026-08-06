@@ -1,0 +1,14 @@
+{
+  "App observability": "App observability", "Overview": "Overview", "Nodes": "Nodes", "Services": "Services", "Capacity": "Capacity", "Settings": "Settings",
+  "Loading": "Loading", "Unable to load data": "Unable to load data", "Retry": "Retry", "No observability data yet": "No observability data yet",
+  "Active users": "Active users", "HTTP inflight": "HTTP inflight", "HTTP p95": "HTTP p95", "Error rate": "Error rate", "LLM services": "LLM services",
+  "Service": "Service", "Operation": "Operation", "Inflight": "Inflight", "TTFT": "TTFT", "Tokens": "Tokens", "Redis aggregation": "Redis aggregation", "Single-node mode": "Single-node mode",
+  "Node": "Node", "Worker mode": "Worker mode", "CPU": "CPU", "RSS": "RSS", "Heap used": "Heap used", "ELU": "ELU", "Event-loop p99": "Event-loop p99",
+  "Requests": "Requests", "Latency p95": "Latency p95", "Capacity state": "Capacity state", "Confidence": "Confidence", "Evidence": "Evidence",
+  "healthy": "Healthy", "watch": "Watch", "scale-soon": "Scale soon", "critical": "Critical", "unknown": "Unknown",
+  "cpu": "CPU", "memory": "Memory", "event-loop": "Event loop", "event-loop-delay": "Event-loop delay", "db-wait": "Database wait", "errors": "Errors",
+  "Recommendations are advisory only; this plugin never auto-scales resources.": "Recommendations are advisory only; this plugin never auto-scales resources.",
+  "Enabled": "Enabled", "Redis snapshots": "Redis snapshots", "Prometheus export": "Prometheus export", "Sample interval seconds": "Sample interval seconds", "Bucket seconds": "Bucket seconds",
+  "Retention days": "Retention days", "Active-user window seconds": "Active-user window seconds", "CPU threshold": "CPU threshold", "Memory threshold": "Memory threshold",
+  "Event-loop threshold": "Event-loop threshold", "DB wait threshold": "DB wait threshold", "Save": "Save", "Settings saved": "Settings saved", "Unable to save settings": "Unable to save settings"
+}

@@ -1,5 +1,17 @@
 import type { Context } from '@nocobase/actions';
 
+export class AiApiClientDisconnectedError extends Error {
+  readonly code = 'client_disconnected';
+  constructor() {
+    super('Client disconnected');
+    this.name = 'AiApiClientDisconnectedError';
+  }
+}
+
+export function isClientDisconnected(ctx: Context, error: unknown): boolean {
+  return ctx.req.aborted === true || error instanceof AiApiClientDisconnectedError;
+}
+
 export function isStreamingRequested(value: unknown) {
   return value !== false;
 }
@@ -7,7 +19,7 @@ export function isStreamingRequested(value: unknown) {
 export function createRequestAbortController(ctx: Context) {
   const controller = new AbortController();
   const abort = () => {
-    if (!ctx.res.writableEnded) controller.abort(new Error('Client disconnected'));
+    if (!ctx.res.writableEnded) controller.abort(new AiApiClientDisconnectedError());
   };
   ctx.req.once('aborted', abort);
   ctx.res.once('close', abort);

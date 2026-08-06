@@ -44,6 +44,7 @@ export async function handleListModels(ctx: Context, plugin: PluginAiApiServer) 
       sort: 'sort',
     });
 
+    const metadataMap = await loadModelMetadata(ctx);
     const now = Math.floor(Date.now() / 1000);
     const models: any[] = [];
 
@@ -54,14 +55,11 @@ export async function handleListModels(ctx: Context, plugin: PluginAiApiServer) 
       const serviceLabel = service.title || service.name;
 
       for (const model of enabledModels) {
-        models.push({
-          // Use "serviceName/modelId" format so the ID can be used directly in
-          // POST /v1/chat/completions without ambiguity in multi-service setups.
-          id: `${service.name}/${model.value}`,
-          object: 'model',
-          created: now,
-          owned_by: serviceLabel,
-        });
+        const fullId = `${service.name}/${model.value}`;
+        const meta = metadataMap.get(fullId);
+        // An override row with enabled=false hides the model from the catalog.
+        if (meta && meta.enabled === false) continue;
+        models.push(buildModelObject(fullId, now, serviceLabel, meta));
       }
     }
 
@@ -97,6 +95,7 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
       sort: 'sort',
     });
 
+    const metadataMap = await loadModelMetadata(ctx);
     const now = Math.floor(Date.now() / 1000);
     let found: any = null;
 
@@ -109,12 +108,10 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
         const fullId = `${service.name}/${model.value}`;
         // Accept both new "serviceName/modelId" format AND bare model ID (backward compat)
         if (fullId === modelId || model.value === modelId) {
-          found = {
-            id: fullId,
-            object: 'model',
-            created: now,
-            owned_by: serviceLabel,
-          };
+          const meta = metadataMap.get(fullId);
+          // A disabled override hides the model — treat as not found.
+          if (meta && meta.enabled === false) continue;
+          found = buildModelObject(fullId, now, serviceLabel, meta);
           break;
         }
       }
@@ -137,6 +134,93 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
 }
 
 // ─── Helpers ───
+
+export interface ModelMetadataOverride {
+  contextWindow?: number | null;
+  maxCompletionTokens?: number | null;
+  ownedByOverride?: string | null;
+  displayName?: string | null;
+  description?: string | null;
+  enabled?: boolean;
+}
+
+/**
+ * Load all model metadata overrides keyed by "serviceName/modelId".
+ * Returns an empty map if the collection is unavailable (e.g. mid-migration).
+ */
+async function loadModelMetadata(ctx: Context): Promise<Map<string, ModelMetadataOverride>> {
+  const map = new Map<string, ModelMetadataOverride>();
+  try {
+    const rows = await ctx.db.getRepository('aiApiModelMetadata').find();
+    for (const row of rows) {
+      const service = row.get('llmService');
+      const model = row.get('model');
+      if (!service || !model) continue;
+      map.set(`${service}/${model}`, {
+        contextWindow: row.get('contextWindow'),
+        maxCompletionTokens: row.get('maxCompletionTokens'),
+        ownedByOverride: row.get('ownedByOverride'),
+        displayName: row.get('displayName'),
+        description: row.get('description'),
+        enabled: row.get('enabled'),
+      });
+    }
+  } catch (err) {
+    ctx.log?.warn?.('AI API model metadata unavailable, skipping overrides:', err);
+  }
+  return map;
+}
+
+/**
+ * Build an OpenAI-compatible model object, merging any admin override.
+ *
+ * Context window is emitted under BOTH keys for maximum client compatibility:
+ *   - `context_window`  (Groq / most OpenAI-compatible gateways)
+ *   - `context_length`  (OpenRouter and its consumers)
+ * Both carry the same value so a client reading either key sees the override.
+ */
+export function buildModelObject(
+  fullId: string,
+  created: number,
+  serviceLabel: string,
+  meta?: ModelMetadataOverride,
+): Record<string, unknown> {
+  const model: Record<string, unknown> = {
+    id: fullId,
+    object: 'model',
+    created,
+    owned_by: meta?.ownedByOverride || serviceLabel,
+  };
+
+  const contextWindow = toPositiveInt(meta?.contextWindow);
+  if (contextWindow !== null) {
+    model.context_window = contextWindow;
+    model.context_length = contextWindow;
+  }
+  const maxCompletionTokens = toPositiveInt(meta?.maxCompletionTokens);
+  if (maxCompletionTokens !== null) {
+    model.max_completion_tokens = maxCompletionTokens;
+  }
+  if (meta?.displayName) {
+    model.display_name = meta.displayName;
+    model.name = meta.displayName;
+  }
+  if (meta?.description) {
+    model.description = meta.description;
+  }
+  // Only surface `active` when an override row exists; a plain model stays
+  // implicitly active (matching the previous response shape).
+  if (meta) {
+    model.active = meta.enabled !== false;
+  }
+
+  return model;
+}
+
+function toPositiveInt(value: unknown): number | null {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
 
 async function getPluginConfig(ctx: Context) {
   return ctx.db.getRepository('aiApiConfig').findOne();
@@ -181,15 +265,26 @@ function resolveEnabledModels(service: any): { label: string; value: string }[] 
  *
  * Uses dynamic require() to avoid a hard compile-time import path dependency.
  * plugin-ai is always available at runtime (it's a peerDependency).
- * Falls back to [] if the module is unavailable or the provider has no recommendations.
+ *
+ * Resolves the built `dist/` module first — that is what ships in a packed
+ * plugin (package.json `main` points at `dist/`, and `src/` is not published).
+ * Falls back to `src/` for the monorepo dev runtime where only sources exist.
+ * Falls back to [] if neither is available or the provider has no recommendations.
  */
 function getRecommendedModelsForProvider(provider: string): { label: string; value: string }[] {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getRecommendedModels } = require('@nocobase/plugin-ai/src/common/recommended-models');
-    const models = getRecommendedModels(provider);
-    return Array.isArray(models) ? models : [];
-  } catch {
-    return [];
+  const modulePaths = [
+    '@nocobase/plugin-ai/dist/common/recommended-models',
+    '@nocobase/plugin-ai/src/common/recommended-models',
+  ];
+  for (const modulePath of modulePaths) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { getRecommendedModels } = require(modulePath);
+      const models = getRecommendedModels(provider);
+      return Array.isArray(models) ? models : [];
+    } catch {
+      // Try the next candidate path.
+    }
   }
+  return [];
 }

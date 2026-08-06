@@ -3,10 +3,19 @@ import os from 'os';
 import { promises as fsp } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { get as httpGet } from 'http';
+import { get as httpsGet } from 'https';
 import { RedisNodeRegistry } from '../adapters/redis-node-registry';
+import { RedisLockAdapter } from '../adapters/redis-lock-adapter';
 import { getRedis } from '../utils/redis';
 import { getLocalNodeId, getNodeRoleFrom, isWorkerMode } from '../utils/node';
 import { packagesFromConfig, type CustomPackageMap, type WorkerPackageMap } from '../../shared/packages';
+import {
+  RollingRestartError,
+  runRollingRestartSequence,
+  type RollingRestartMode,
+  type RollingRestartNode,
+} from '../services/rolling-restart';
 
 const LOG_RESPONSE_KEY_PREFIX = 'cluster-manager:log-response:';
 const LEGACY_MULTI_APP_PLUGINS = ['multi-app-manager', 'multi-app-share-collection'];
@@ -21,14 +30,17 @@ interface ClusterNodeRecord {
   isSandbox?: boolean;
   status?: string;
   url?: string | null;
+  probeUrl?: string | null;
   available?: boolean;
   lastHeartbeatAt?: number;
+  generationId?: string;
   pid?: number;
   nodeDetails?: {
     node?: {
       nodeVersion?: string;
       platform?: string;
       arch?: string;
+      appPort?: string;
     };
   };
 }
@@ -55,8 +67,8 @@ interface NormalizedPackages {
   python: string[];
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeList(value: unknown): string[] {
@@ -244,6 +256,239 @@ async function getApplicationPluginRows(ctx: Context) {
 
 function getPayload(ctx: Context) {
   return (ctx.action.params.values || (ctx as any).request?.body?.values || (ctx as any).request?.body || {}) as any;
+}
+
+type RollingRestartPayload = {
+  role?: unknown;
+  mode?: unknown;
+  delayMs?: unknown;
+  recoveryTimeoutMs?: unknown;
+  nodeIds?: unknown;
+};
+
+type RollingRestartActionResult = {
+  restartId: string;
+  mode: RollingRestartMode;
+  role: 'app' | 'worker' | 'sandbox' | 'all';
+  stabilizationMs: number;
+  recoveryTimeoutMs: number;
+  published: Array<Record<string, unknown>>;
+  coordinator?: RollingRestartNode;
+};
+
+function toRollingRestartNode(node: ClusterNodeRecord): RollingRestartNode | null {
+  if (!node.id) return null;
+  return {
+    id: node.id,
+    generationId: node.generationId,
+    name: node.name,
+    hostname: node.hostname,
+    role: getNodeRole(node),
+    status: node.status,
+    lastHeartbeatAt: node.lastHeartbeatAt,
+    url: node.url,
+    probeUrl: node.probeUrl,
+    appPort: node.nodeDetails?.node?.appPort,
+  };
+}
+
+async function listRollingRestartNodes(ctx: Context): Promise<RollingRestartNode[]> {
+  return (await getClusterNodes(ctx))
+    .map(toRollingRestartNode)
+    .filter((node): node is RollingRestartNode => node !== null);
+}
+
+function probeRollingRestartNode(node: RollingRestartNode, timeoutMs = 5000): Promise<boolean> {
+  const baseUrl = node.probeUrl || (node.hostname ? `http://${node.hostname}:${node.appPort || '13000'}` : '');
+  if (!baseUrl) return Promise.resolve(false);
+
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL('/api/app:getInfo', baseUrl);
+  } catch {
+    return Promise.resolve(false);
+  }
+
+  const get = targetUrl.protocol === 'https:' ? httpsGet : httpGet;
+  return new Promise((resolve) => {
+    const request = get(targetUrl, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => {
+        body += chunk;
+      });
+      response.on('end', () => {
+        try {
+          const payload = JSON.parse(body) as { data?: { version?: unknown } };
+          resolve(response.statusCode === 200 && typeof payload.data?.version === 'string');
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+    request.setTimeout(timeoutMs, () => {
+      request.destroy();
+      resolve(false);
+    });
+    request.on('error', () => resolve(false));
+  });
+}
+
+function rollingRestartErrorMessage(ctx: Context, error: RollingRestartError): string {
+  const node = error.node?.name || error.node?.hostname || error.node?.id || 'unknown';
+  if (error.code === 'generation-unavailable') {
+    return ctx.t('Rolling restart generation is unavailable for node "{{node}}". Redeploy the updated plugin first.', {
+      ns: 'cluster-manager',
+      node,
+    });
+  }
+  if (error.code === 'no-ready-peer') {
+    return ctx.t('Rolling restart stopped because no other healthy app node is available for "{{node}}".', {
+      ns: 'cluster-manager',
+      node,
+    });
+  }
+  return ctx.t('Node "{{node}}" did not become healthy before the rolling restart timeout.', {
+    ns: 'cluster-manager',
+    node,
+  });
+}
+
+async function performRollingRestart(
+  ctx: Context,
+  payload: RollingRestartPayload,
+  defaultRole: 'app' | 'worker' = 'worker',
+): Promise<RollingRestartActionResult> {
+  const mode: RollingRestartMode = payload.mode === 'soft' ? 'soft' : 'hard';
+  const requestedRole = typeof payload.role === 'string' ? payload.role : defaultRole;
+  const role =
+    requestedRole === 'app' || requestedRole === 'worker' || requestedRole === 'sandbox' || requestedRole === 'all'
+      ? requestedRole
+      : defaultRole;
+  const stabilizationMs = Math.min(Math.max(Number(payload.delayMs) || 5000, 1000), 60000);
+  const recoveryTimeoutMs = Math.min(Math.max(Number(payload.recoveryTimeoutMs) || 300000, 60000), 900000);
+  const requestedNodeIds = Array.isArray(payload.nodeIds) ? payload.nodeIds.map(String) : [];
+  const pubSub = (ctx.app as unknown as { pubSubManager?: { publish: (channel: string, payload: string) => unknown } })
+    .pubSubManager;
+  if (!pubSub) {
+    ctx.throw(500, 'PubSub manager is not initialized. HA requires PUBSUB_ADAPTER_REDIS_URL to be set.');
+  }
+
+  const nodes = (await listRollingRestartNodes(ctx)).filter((node) => {
+    if (node.status === 'offline') return false;
+    if (requestedNodeIds.length > 0) return requestedNodeIds.includes(node.id);
+    return role === 'all' || node.role === role;
+  });
+  if (nodes.length === 0) {
+    ctx.throw(404, 'No online nodes match the rolling restart target.');
+  }
+
+  const redis = getRedis(ctx);
+  if (!redis) {
+    ctx.throw(503, 'Redis is required for safe rolling restart coordination.');
+  }
+
+  const restartId = crypto.randomBytes(8).toString('hex');
+  const coordinatorId = getLocalNodeId(ctx.app);
+  const lockAdapter = new RedisLockAdapter({ app: ctx.app });
+
+  try {
+    const lock = await lockAdapter.tryAcquire('cluster-manager:rolling-restart', 0);
+    const result = await lock.runExclusive(
+      () =>
+        runRollingRestartSequence(
+          {
+            restartId,
+            mode,
+            nodes,
+            coordinatorId,
+            stabilizationMs,
+            recoveryTimeoutMs,
+            pollIntervalMs: 2000,
+            heartbeatMaxAgeMs: 25000,
+          },
+          {
+            listNodes: () => listRollingRestartNodes(ctx),
+            probeNode: probeRollingRestartNode,
+            restartNode: async (node, restartMode, currentRestartId) => {
+              await Promise.resolve(
+                pubSub.publish(
+                  'cluster-manager:restart',
+                  JSON.stringify({
+                    restartId: currentRestartId,
+                    targetNodeId: node.id,
+                    hostname: node.hostname,
+                    mode: restartMode,
+                  }),
+                ),
+              );
+            },
+            sleep,
+            now: Date.now,
+          },
+        ),
+      30000,
+    );
+
+    const published: Array<Record<string, unknown>> = result.published.map((node) => ({ ...node }));
+    if (result.coordinator) {
+      published.push({
+        id: result.coordinator.id,
+        name: result.coordinator.name,
+        hostname: result.coordinator.hostname,
+        role: result.coordinator.role,
+        mode,
+        scheduled: true,
+        coordinator: true,
+      });
+    }
+
+    return {
+      restartId,
+      mode,
+      role,
+      stabilizationMs,
+      recoveryTimeoutMs,
+      published,
+      coordinator: result.coordinator,
+    };
+  } catch (error: unknown) {
+    if (error instanceof RollingRestartError) {
+      ctx.throw(error.code === 'node-recovery-timeout' ? 504 : 409, rollingRestartErrorMessage(ctx, error));
+    }
+    const message = getErrorMessage(error);
+    if (message.includes('Lock acquire timed out')) {
+      ctx.throw(409, ctx.t('Another rolling restart is already running.', { ns: 'cluster-manager' }));
+    }
+    ctx.throw(500, message);
+  }
+}
+
+function scheduleCoordinatorRestart(ctx: Context, result: RollingRestartActionResult, delayMs = 2000): void {
+  if (!result.coordinator) return;
+  const pubSub = (ctx.app as unknown as { pubSubManager: { publish: (channel: string, payload: string) => unknown } })
+    .pubSubManager;
+  const logger = ctx.app.logger;
+  const timer = setTimeout(() => {
+    Promise.resolve(
+      pubSub.publish(
+        'cluster-manager:restart',
+        JSON.stringify({
+          restartId: result.restartId,
+          targetNodeId: result.coordinator?.id,
+          hostname: result.coordinator?.hostname,
+          mode: result.mode,
+        }),
+      ),
+    ).catch((error: unknown) => {
+      logger.error(
+        `[ClusterManager] Failed to restart rolling-restart coordinator ${result.coordinator?.id}: ${getErrorMessage(
+          error,
+        )}`,
+      );
+    });
+  }, delayMs);
+  timer.unref?.();
 }
 
 /**
@@ -732,6 +977,21 @@ export const clusterActions = {
     const { hostname, mode = 'hard' } = ctx.action.params.values || ctx.action.params;
     if (!hostname) ctx.throw(400, 'Hostname required');
 
+    if (hostname === '*') {
+      const result = await performRollingRestart(ctx, { role: 'app', mode }, 'app');
+      ctx.body = {
+        success: true,
+        restartId: result.restartId,
+        mode: result.mode,
+        role: result.role,
+        published: result.published,
+        coordinatorRestartScheduled: Boolean(result.coordinator),
+      };
+      await next();
+      scheduleCoordinatorRestart(ctx, result);
+      return;
+    }
+
     // NocoBase initializes pubSubManager ONLY IF PUBSUB_ADAPTER_REDIS_URL is provided natively.
     if ((ctx.app as any).pubSubManager) {
       await (ctx.app as any).pubSubManager.publish('cluster-manager:restart', JSON.stringify({ hostname, mode }));
@@ -744,92 +1004,25 @@ export const clusterActions = {
 
   /**
    * POST /clusterManagerCluster:rollingRestart
-   * Restarts online nodes one-by-one, optionally filtered by role.
+   * Restarts online nodes one-by-one and waits for a new healthy generation
+   * before moving to the next node. The request-serving coordinator is always
+   * scheduled last, after at least one healthy app peer has been verified.
    */
   async rollingRestart(ctx: Context, next: () => Promise<void>) {
-    const payload = getPayload(ctx);
-    const mode = payload.mode === 'soft' ? 'soft' : 'hard';
-    const role = payload.role || 'worker';
-    const delayMs = Math.min(Math.max(Number(payload.delayMs) || 5000, 1000), 60000);
-    const requestedNodeIds = Array.isArray(payload.nodeIds) ? payload.nodeIds.map(String) : [];
-
-    const pubSub = (ctx.app as any).pubSubManager;
-    if (!pubSub) {
-      ctx.throw(500, 'PubSub manager is not initialized. HA requires PUBSUB_ADAPTER_REDIS_URL to be set.');
-    }
-
-    const nodes = (await getClusterNodes(ctx)).filter((node) => {
-      if (node.status === 'offline') return false;
-      if (requestedNodeIds.length > 0) return node.id && requestedNodeIds.includes(node.id);
-      if (role === 'all') return true;
-      return getNodeRole(node) === role;
-    });
-
-    if (nodes.length === 0) {
-      ctx.throw(404, 'No online nodes match the rolling restart target.');
-    }
-
-    const myNodeId = getLocalNodeId(ctx.app);
-    const sortedNodes = nodes.sort((a, b) => {
-      if (a.id === myNodeId) return 1;
-      if (b.id === myNodeId) return -1;
-      return String(a.name || a.id).localeCompare(String(b.name || b.id));
-    });
-
-    const restartId = crypto.randomBytes(8).toString('hex');
-    const startedAt = Date.now();
-    const logger = ctx.app.logger;
-    const published = sortedNodes.map((node, index) => ({
-      id: node.id,
-      name: node.name,
-      hostname: node.hostname,
-      role: getNodeRole(node),
-      mode,
-      order: index + 1,
-      scheduledDelayMs: index * delayMs,
-      scheduledAt: new Date(startedAt + index * delayMs).toISOString(),
-    }));
-
-    sortedNodes.forEach((node, index) => {
-      setTimeout(() => {
-        try {
-          const publishResult = pubSub.publish(
-            'cluster-manager:restart',
-            JSON.stringify({
-              restartId,
-              targetNodeId: node.id,
-              hostname: node.hostname,
-              mode,
-            }),
-          );
-          Promise.resolve(publishResult).catch((error) => {
-            logger.error(
-              `[ClusterManager] Failed to publish rolling restart ${restartId} for ${
-                node.id || node.hostname
-              }: ${getErrorMessage(error)}`,
-            );
-          });
-        } catch (error) {
-          logger.error(
-            `[ClusterManager] Failed to schedule rolling restart ${restartId} for ${
-              node.id || node.hostname
-            }: ${getErrorMessage(error)}`,
-          );
-        }
-      }, index * delayMs);
-    });
+    const result = await performRollingRestart(ctx, getPayload(ctx) as RollingRestartPayload);
 
     ctx.body = {
       success: true,
-      restartId,
-      mode,
-      role,
-      delayMs,
-      scheduled: true,
-      estimatedDurationMs: Math.max(0, (sortedNodes.length - 1) * delayMs),
-      published,
+      restartId: result.restartId,
+      mode: result.mode,
+      role: result.role,
+      stabilizationMs: result.stabilizationMs,
+      recoveryTimeoutMs: result.recoveryTimeoutMs,
+      published: result.published,
+      coordinatorRestartScheduled: Boolean(result.coordinator),
     };
     await next();
+    scheduleCoordinatorRestart(ctx, result);
   },
 
   /**

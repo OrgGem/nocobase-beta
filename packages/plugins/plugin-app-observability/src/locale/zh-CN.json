@@ -1,0 +1,12 @@
+{
+  "App observability": "应用可观测性", "Overview": "概览", "Nodes": "节点", "Services": "服务", "Capacity": "容量", "Settings": "设置",
+  "Loading": "加载中", "Unable to load data": "无法加载数据", "Retry": "重试", "No observability data yet": "暂无可观测性数据",
+  "Active users": "活跃用户", "HTTP inflight": "HTTP 进行中", "HTTP p95": "HTTP P95", "Error rate": "错误率", "LLM services": "LLM 服务",
+  "Service": "服务", "Operation": "操作", "Inflight": "进行中", "TTFT": "首字节时间", "Tokens": "令牌", "Redis aggregation": "Redis 聚合", "Single-node mode": "单节点模式",
+  "Node": "节点", "Worker mode": "工作模式", "CPU": "CPU", "RSS": "RSS", "Heap used": "堆内存使用", "ELU": "事件循环利用率", "Event-loop p99": "事件循环 P99",
+  "Requests": "请求数", "Latency p95": "延迟 P95", "Capacity state": "容量状态", "Confidence": "置信度", "Evidence": "依据",
+  "healthy": "健康", "watch": "观察", "scale-soon": "尽快扩容", "critical": "严重", "unknown": "未知", "cpu": "CPU", "memory": "内存", "event-loop": "事件循环", "event-loop-delay": "事件循环延迟", "db-wait": "数据库等待", "errors": "错误",
+  "Recommendations are advisory only; this plugin never auto-scales resources.": "建议仅供参考；此插件绝不会自动扩缩容资源。",
+  "Enabled": "启用", "Redis snapshots": "Redis 快照", "Prometheus export": "Prometheus 导出", "Sample interval seconds": "采样间隔（秒）", "Bucket seconds": "聚合桶（秒）", "Retention days": "保留天数", "Active-user window seconds": "活跃用户窗口（秒）",
+  "CPU threshold": "CPU 阈值", "Memory threshold": "内存阈值", "Event-loop threshold": "事件循环阈值", "DB wait threshold": "数据库等待阈值", "Save": "保存", "Settings saved": "设置已保存", "Unable to save settings": "无法保存设置"
+}

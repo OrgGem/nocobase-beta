@@ -47,7 +47,20 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
         const rolesRepository = ctx.db.getRepository('users.roles', ctx.state.currentUser.id);
         const roles = await rolesRepository.find({ fields: ['name'] });
         const roleNames = roles.map((role: { name: string }) => role.name);
-        ctx.state.currentRole = roleNames.includes(requestedRole) ? requestedRole : roleNames[0];
+        // An explicit X-Role that the user does not hold must be rejected, not
+        // silently downgraded to the first role — otherwise a caller could probe
+        // for access under a role they were never granted.
+        if (requestedRole && !roleNames.includes(requestedRole)) {
+          ctx.status = 403;
+          ctx.body = toOpenAIError(
+            403,
+            `Requested role '${requestedRole}' is not assigned to this user`,
+            'permission_denied',
+            'role_not_permitted',
+          );
+          return false;
+        }
+        ctx.state.currentRole = requestedRole || roleNames[0];
         ctx.state.currentRoles = ctx.state.currentRole ? [ctx.state.currentRole] : roleNames;
       }
       return true;

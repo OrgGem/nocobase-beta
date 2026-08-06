@@ -10,6 +10,7 @@ interface GeneralSettings {
   defaultLlmService?: string;
   enabledLlmServices: string[];
   rateLimitPerMinute: number;
+  maxRequestBodyMb: number;
   quotaEnabled: boolean;
   defaultReservationOutputTokens: number;
 }
@@ -28,9 +29,13 @@ const defaults: GeneralSettings = {
   mode: 'llm',
   enabledLlmServices: [],
   rateLimitPerMinute: 60,
+  maxRequestBodyMb: 10,
   quotaEnabled: false,
   defaultReservationOutputTokens: 4096,
 };
+
+/** Mirrors MAX_REQUEST_BODY_MB_LIMIT in server/routes/router.ts, which rejects anything higher. */
+const MAX_REQUEST_BODY_MB = 100;
 
 export default function GeneralPage() {
   const ctx = useFlowContext();
@@ -120,6 +125,14 @@ export default function GeneralPage() {
         ) : null}
         <Form.Item name="rateLimitPerMinute" label={t('Rate Limit')} rules={[{ required: true }]}>
           <InputNumber min={1} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item
+          name="maxRequestBodyMb"
+          label={t('Max request body size (MB)')}
+          extra={t('Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.')}
+          rules={[{ required: true }]}
+        >
+          <InputNumber min={1} max={MAX_REQUEST_BODY_MB} precision={0} style={{ width: '100%' }} />
         </Form.Item>
         <Form.Item name="quotaEnabled" label={t('Enable user quotas')} valuePropName="checked">
           <Switch />

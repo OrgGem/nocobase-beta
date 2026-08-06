@@ -255,5 +255,9 @@
   ,"APP": "APP"
   ,"QUEUE FALLBACK": "é˜Ÿåˆ—å…œåº•"
   ,"WORKER": "WORKER"
+  ,"Rolling restart generation is unavailable for node \"{{node}}\". Redeploy the updated plugin first.": "节点 \"{{node}}\" 缺少滚动重启代次信息，请先重新部署更新后的插件。"
+  ,"Rolling restart stopped because no other healthy app node is available for \"{{node}}\".": "滚动重启已停止：重启 \"{{node}}\" 时没有其他健康的应用节点可用。"
+  ,"Node \"{{node}}\" did not become healthy before the rolling restart timeout.": "节点 \"{{node}}\" 未能在滚动重启超时前恢复健康。"
+  ,"Another rolling restart is already running.": "另一个滚动重启任务正在运行。"
   ,"ALL QUEUES": "æ‰€æœ‰é˜Ÿåˆ—"
 }

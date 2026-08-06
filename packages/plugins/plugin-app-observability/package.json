@@ -1,0 +1,23 @@
+{
+  "name": "plugin-app-observability",
+  "displayName": "App Observability",
+  "displayName.zh-CN": "应用可观测性",
+  "displayName.vi-VN": "Khả năng quan sát ứng dụng",
+  "description": "Monitor application traffic, runtime saturation, service health and capacity recommendations.",
+  "description.zh-CN": "监控应用流量、运行时饱和度、服务健康和容量建议。",
+  "description.vi-VN": "Giám sát lưu lượng ứng dụng, độ bão hòa runtime, sức khỏe dịch vụ và khuyến nghị dung lượng.",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": ["Observability", "Metrics", "Capacity", "Prometheus"],
+  "files": ["dist", "src", "client-v2.js", "client-v2.d.ts", "server.js", "server.d.ts"],
+  "nocobase": { "supportedVersions": ["2.x"], "editionLevel": 0 },
+  "peerDependencies": {
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/sdk": "2.x",
+    "antd": "5.x",
+    "react": "^18.x"
+  }
+}

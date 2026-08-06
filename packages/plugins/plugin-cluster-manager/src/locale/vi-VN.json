@@ -254,5 +254,9 @@
   ,"APP": "APP"
   ,"QUEUE FALLBACK": "Dá»° PHÃ’NG HÃ€NG Äá»¢I"
   ,"WORKER": "WORKER"
+  ,"Rolling restart generation is unavailable for node \"{{node}}\". Redeploy the updated plugin first.": "Node \"{{node}}\" chưa có mã thế hệ rolling restart. Hãy triển khai plugin đã cập nhật trước."
+  ,"Rolling restart stopped because no other healthy app node is available for \"{{node}}\".": "Đã dừng rolling restart vì không còn app node khỏe mạnh khác khi restart \"{{node}}\"."
+  ,"Node \"{{node}}\" did not become healthy before the rolling restart timeout.": "Node \"{{node}}\" không trở lại trạng thái khỏe mạnh trước khi rolling restart hết thời gian chờ."
+  ,"Another rolling restart is already running.": "Một rolling restart khác đang chạy."
   ,"ALL QUEUES": "Táº¤T Cáº¢ HÃ€NG Äá»¢I"
 }

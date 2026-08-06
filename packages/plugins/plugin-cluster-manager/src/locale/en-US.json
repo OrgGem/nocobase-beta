@@ -253,5 +253,9 @@
   ,"APP": "APP"
   ,"QUEUE FALLBACK": "QUEUE FALLBACK"
   ,"WORKER": "WORKER"
+  ,"Rolling restart generation is unavailable for node \"{{node}}\". Redeploy the updated plugin first.": "Rolling restart generation is unavailable for node \"{{node}}\". Redeploy the updated plugin first."
+  ,"Rolling restart stopped because no other healthy app node is available for \"{{node}}\".": "Rolling restart stopped because no other healthy app node is available for \"{{node}}\"."
+  ,"Node \"{{node}}\" did not become healthy before the rolling restart timeout.": "Node \"{{node}}\" did not become healthy before the rolling restart timeout."
+  ,"Another rolling restart is already running.": "Another rolling restart is already running."
   ,"ALL QUEUES": "ALL QUEUES"
 }

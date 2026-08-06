@@ -46,3 +46,5 @@ export const PluginSettings = () => {
     </div>
   );
 };
+
+export default PluginSettings;

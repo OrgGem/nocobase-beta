@@ -19,6 +19,7 @@ import {
   Badge,
   Alert,
 } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import {
   PlusOutlined,
   DeleteOutlined,
@@ -29,26 +30,37 @@ import {
   PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
+import { useFlowContext } from '@nocobase/flow-engine';
+import { useT } from '../locale';
+import { EndpointDef, JobState, PipelineDef, PipelineStepDef, errorMessage, unwrapData } from '../types';
 
 const { TextArea } = Input;
 const { Panel } = Collapse;
 
-const STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-  pending: { color: 'default', label: 'Pending' },
-  running: { color: 'processing', label: 'Running' },
-  polling: { color: 'processing', label: 'Polling' },
-  completed: { color: 'success', label: 'Completed' },
-  failed: { color: 'error', label: 'Failed' },
-  timeout: { color: 'error', label: 'Timeout' },
+const STATUS_COLORS: Record<string, string> = {
+  pending: 'default',
+  running: 'processing',
+  polling: 'processing',
+  completed: 'success',
+  failed: 'error',
+  timeout: 'error',
 };
 
-const extractResponseData = (res: any) => res?.data?.data ?? res?.data ?? res;
+const TERMINAL_STATUSES = ['completed', 'failed', 'timeout'];
 
-const stringifyJson = (value: any) => JSON.stringify(value ?? {}, null, 2);
+interface JsonSchemaNode {
+  type?: string;
+  properties?: Record<string, JsonSchemaNode>;
+  default?: unknown;
+}
 
-const buildDefaultInputFromSchema = (schema: any): any => {
-  if (!schema || typeof schema !== 'object') {
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+const stringifyJson = (value: unknown) => JSON.stringify(value ?? {}, null, 2);
+
+const buildDefaultInputFromSchema = (schema: unknown): unknown => {
+  if (!isPlainObject(schema)) {
     return {};
   }
 
@@ -56,8 +68,10 @@ const buildDefaultInputFromSchema = (schema: any): any => {
     return schema.default;
   }
 
-  if (schema.type === 'object' || schema.properties) {
-    return Object.entries(schema.properties || {}).reduce<Record<string, any>>((acc, [key, propertySchema]: any) => {
+  const node = schema as JsonSchemaNode;
+
+  if (node.type === 'object' || node.properties) {
+    return Object.entries(node.properties || {}).reduce<Record<string, unknown>>((acc, [key, propertySchema]) => {
       const value = buildDefaultInputFromSchema(propertySchema);
       if (value !== undefined) {
         acc[key] = value;
@@ -66,23 +80,16 @@ const buildDefaultInputFromSchema = (schema: any): any => {
     }, {});
   }
 
-  if (schema.type === 'array') {
+  if (node.type === 'array') {
     return [];
   }
 
   return undefined;
 };
 
-const mergeDefaults = (defaults: any, value: any): any => {
-  if (
-    defaults &&
-    value &&
-    typeof defaults === 'object' &&
-    typeof value === 'object' &&
-    !Array.isArray(defaults) &&
-    !Array.isArray(value)
-  ) {
-    return Object.entries(defaults).reduce(
+const mergeDefaults = (defaults: unknown, value: unknown): unknown => {
+  if (isPlainObject(defaults) && isPlainObject(value)) {
+    return Object.entries(defaults).reduce<Record<string, unknown>>(
       (acc, [key, defaultValue]) => ({
         ...acc,
         [key]: mergeDefaults(defaultValue, acc[key]),
@@ -96,11 +103,12 @@ const mergeDefaults = (defaults: any, value: any): any => {
 
 /* ─── JSON Editor ───────────────────────────────────────────────── */
 const JsonEditor: React.FC<{
-  value?: any;
-  onChange?: (v: any) => void;
+  value?: unknown;
+  onChange?: (v: unknown) => void;
   placeholder?: string;
   rows?: number;
 }> = ({ value, onChange, placeholder, rows = 5 }) => {
+  const t = useT();
   const [text, setText] = useState('');
   const [error, setError] = useState('');
 
@@ -111,7 +119,7 @@ const JsonEditor: React.FC<{
     }
     try {
       setText(typeof value === 'string' ? JSON.stringify(JSON.parse(value), null, 2) : JSON.stringify(value, null, 2));
-    } catch (e) {
+    } catch {
       setText(typeof value === 'string' ? value : '');
     }
   }, [value]);
@@ -127,7 +135,7 @@ const JsonEditor: React.FC<{
       setError('');
       onChange?.(parsed);
     } catch {
-      setError('Invalid JSON');
+      setError(t('Invalid JSON'));
     }
   };
 
@@ -139,24 +147,31 @@ const JsonEditor: React.FC<{
         onChange={(e) => setText(e.target.value)}
         onBlur={handleBlur}
         placeholder={placeholder || '{}'}
+        status={error ? 'error' : undefined}
         style={{ fontFamily: 'monospace', fontSize: 12 }}
       />
-      {error && <div style={{ color: '#ff4d4f', fontSize: 12 }}>{error}</div>}
+      {error && (
+        <div role="alert" style={{ color: '#ff4d4f', fontSize: 12 }}>
+          {error}
+        </div>
+      )}
     </div>
   );
 };
 
 /* ─── Step Editor ───────────────────────────────────────────────── */
+type StepErrorMode = 'fail' | 'skip' | 'retry';
+
 interface StepData {
   _key: string; // client-side key for React
   id?: number;
   stepOrder: number;
   name: string;
   endpointId: number | null;
-  inputMapping: Record<string, any> | null;
+  inputMapping: Record<string, unknown> | null;
   outputAlias: string;
-  condition: any;
-  onError: string;
+  condition: unknown;
+  onError: StepErrorMode;
   retryCount: number;
 }
 
@@ -174,9 +189,11 @@ const emptyStep = (order: number): StepData => ({
 
 const StepEditor: React.FC<{
   steps: StepData[];
-  endpoints: any[];
+  endpoints: EndpointDef[];
   onChange: (steps: StepData[]) => void;
 }> = ({ steps, endpoints, onChange }) => {
+  const t = useT();
+
   const moveStep = (index: number, direction: -1 | 1) => {
     const newSteps = [...steps];
     const target = index + direction;
@@ -187,9 +204,9 @@ const StepEditor: React.FC<{
     onChange(newSteps);
   };
 
-  const updateStep = (index: number, field: string, value: any) => {
+  const updateStep = <K extends keyof StepData>(index: number, field: K, value: StepData[K]) => {
     const newSteps = [...steps];
-    (newSteps[index] as any)[field] = value;
+    newSteps[index] = { ...newSteps[index], [field]: value };
     onChange(newSteps);
   };
 
@@ -206,9 +223,9 @@ const StepEditor: React.FC<{
   if (steps.length === 0) {
     return (
       <div style={{ textAlign: 'center', padding: '20px 0' }}>
-        <Empty description="No steps yet" imageStyle={{ height: 40 }} />
+        <Empty description={t('No steps yet')} imageStyle={{ height: 40 }} />
         <Button type="dashed" icon={<PlusOutlined />} onClick={addStep} style={{ marginTop: 8 }}>
-          Add First Step
+          {t('Add First Step')}
         </Button>
       </div>
     );
@@ -218,7 +235,7 @@ const StepEditor: React.FC<{
     <div>
       <Collapse size="small" defaultActiveKey={steps.map((s) => s._key)}>
         {steps.map((step, index) => {
-          const ep = endpoints.find((e: any) => e.id === step.endpointId);
+          const ep = endpoints.find((e) => e.id === step.endpointId);
           const headerExtra = (
             <Space size={4} onClick={(e) => e.stopPropagation()}>
               <Button
@@ -226,15 +243,17 @@ const StepEditor: React.FC<{
                 disabled={index === 0}
                 icon={<ArrowUpOutlined />}
                 onClick={() => moveStep(index, -1)}
+                aria-label={t('Move step up')}
               />
               <Button
                 size="small"
                 disabled={index === steps.length - 1}
                 icon={<ArrowDownOutlined />}
                 onClick={() => moveStep(index, 1)}
+                aria-label={t('Move step down')}
               />
-              <Popconfirm title="Remove step?" onConfirm={() => removeStep(index)}>
-                <Button size="small" danger icon={<DeleteOutlined />} />
+              <Popconfirm title={t('Remove step?')} okText={t('Delete')} onConfirm={() => removeStep(index)}>
+                <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('Remove step?')} />
               </Popconfirm>
             </Space>
           );
@@ -242,70 +261,88 @@ const StepEditor: React.FC<{
           const label = (
             <Space>
               <Badge count={step.stepOrder} style={{ backgroundColor: '#1677ff' }} />
-              <span>{step.name || '(unnamed)'}</span>
+              <span>{step.name || t('(unnamed)')}</span>
               {ep && <Tag>{ep.name}</Tag>}
               {step.onError === 'skip' && (
-                <Tooltip title="Step can be skipped on error">
-                  <Tag color="orange">skip on error</Tag>
+                <Tooltip title={t('Step can be skipped on error')}>
+                  <Tag color="orange">{t('skip on error')}</Tag>
                 </Tooltip>
               )}
               {step.condition && (
-                <Tooltip title="Has condition">
-                  <Tag color="purple">conditional</Tag>
+                <Tooltip title={t('Has condition')}>
+                  <Tag color="purple">{t('conditional')}</Tag>
                 </Tooltip>
               )}
             </Space>
           );
 
+          const nameId = `step-name-${step._key}`;
+          const endpointId = `step-endpoint-${step._key}`;
+          const aliasId = `step-alias-${step._key}`;
+
           return (
             <Panel key={step._key} header={label} extra={headerExtra}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
                 <div>
-                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>Step Name *</label>
+                  <label htmlFor={nameId} style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
+                    {t('Step Name')} *
+                  </label>
                   <Input
+                    id={nameId}
                     value={step.name}
                     onChange={(e) => updateStep(index, 'name', e.target.value)}
                     placeholder="OCR, Classify, Extract..."
                   />
                 </div>
                 <div>
-                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>Endpoint *</label>
+                  <label htmlFor={endpointId} style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
+                    {t('Endpoint')} *
+                  </label>
                   <Select
+                    id={endpointId}
                     value={step.endpointId}
                     onChange={(v) => updateStep(index, 'endpointId', v)}
-                    placeholder="Select endpoint"
+                    placeholder={t('Select endpoint')}
                     style={{ width: '100%' }}
-                    options={endpoints.map((ep: any) => ({
-                      value: ep.id,
-                      label: `${ep.name} (${ep.method} ${ep.subpath})`,
+                    options={endpoints.map((endpoint) => ({
+                      value: endpoint.id,
+                      label: `${endpoint.name} (${endpoint.method} ${endpoint.subpath})`,
                     }))}
                   />
                 </div>
                 <div>
-                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4, marginTop: 12 }}>
-                    Output Alias
+                  <label
+                    htmlFor={aliasId}
+                    style={{ fontWeight: 500, display: 'block', marginBottom: 4, marginTop: 12 }}
+                  >
+                    {t('Output Alias')}
                   </label>
                   <Input
+                    id={aliasId}
                     value={step.outputAlias}
                     onChange={(e) => updateStep(index, 'outputAlias', e.target.value)}
                     placeholder="ocr_result"
                   />
                   <div style={{ color: '#888', fontSize: 11 }}>
-                    Other steps reference this as: $step[{step.outputAlias || step.stepOrder}].response.field
+                    {t('Other steps reference this as')}: $step[{step.outputAlias || step.stepOrder}].response.field
                   </div>
                 </div>
                 <div>
-                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4, marginTop: 12 }}>On Error</label>
+                  <label style={{ fontWeight: 500, display: 'block', marginBottom: 4, marginTop: 12 }}>
+                    {t('On Error')}
+                  </label>
                   <Space>
                     <Select
                       value={step.onError}
-                      onChange={(v) => updateStep(index, 'onError', v)}
+                      onChange={(v: StepErrorMode) => updateStep(index, 'onError', v)}
                       style={{ width: 120 }}
-                    >
-                      <Select.Option value="fail">Fail</Select.Option>
-                      <Select.Option value="skip">Skip</Select.Option>
-                      <Select.Option value="retry">Retry</Select.Option>
-                    </Select>
+                      aria-label={t('On Error')}
+                      options={[
+                        { value: 'fail', label: t('Fail') },
+                        { value: 'skip', label: t('Skip') },
+                        { value: 'retry', label: t('Retry') },
+                      ]}
+                    />
                     {step.onError === 'retry' && (
                       <InputNumber
                         value={step.retryCount}
@@ -314,6 +351,7 @@ const StepEditor: React.FC<{
                         max={10}
                         addonBefore="x"
                         style={{ width: 100 }}
+                        aria-label={t('Retry')}
                       />
                     )}
                   </Space>
@@ -322,14 +360,18 @@ const StepEditor: React.FC<{
 
               <div style={{ marginTop: 12 }}>
                 <label style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
-                  Input Mapping (JSON)
-                  <Tooltip title="Map endpoint input fields. Use $input.field, $step[alias].response.field, $files, or literal values.">
+                  {t('Input Mapping (JSON)')}
+                  <Tooltip
+                    title={t(
+                      'Map endpoint input fields. Use $input.field, $step[alias].response.field, $files, or literal values.',
+                    )}
+                  >
                     <span style={{ fontWeight: 'normal', color: '#888', marginLeft: 6, cursor: 'help' }}>?</span>
                   </Tooltip>
                 </label>
                 <JsonEditor
                   value={step.inputMapping}
-                  onChange={(v) => updateStep(index, 'inputMapping', v)}
+                  onChange={(v) => updateStep(index, 'inputMapping', v as Record<string, unknown> | null)}
                   placeholder='{ "text": "$step[ocr_result].response.text", "lang": "vi" }'
                   rows={3}
                 />
@@ -337,8 +379,8 @@ const StepEditor: React.FC<{
 
               <div style={{ marginTop: 12 }}>
                 <label style={{ fontWeight: 500, display: 'block', marginBottom: 4 }}>
-                  Condition (optional JSON)
-                  <Tooltip title='Only run this step if condition matches. Format: { "field": "$step[x].response.y", "op": "eq", "value": "..." }'>
+                  {t('Condition (optional JSON)')}
+                  <Tooltip title={t('Only run this step if the condition matches.')}>
                     <span style={{ fontWeight: 'normal', color: '#888', marginLeft: 6, cursor: 'help' }}>?</span>
                   </Tooltip>
                 </label>
@@ -354,30 +396,48 @@ const StepEditor: React.FC<{
         })}
       </Collapse>
       <Button type="dashed" icon={<PlusOutlined />} onClick={addStep} style={{ marginTop: 8, width: '100%' }}>
-        Add Step
+        {t('Add Step')}
       </Button>
     </div>
   );
 };
 
 /* ─── Pipelines Tab ─────────────────────────────────────────────── */
+interface PipelineFormValues {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  inputSchema?: unknown;
+  outputMapping?: Record<string, unknown> | null;
+}
+
 export const PipelinesTab = () => {
-  const app = useApp();
-  const api = app.apiClient;
-  const [pipelines, setPipelines] = useState<any[]>([]);
-  const [endpoints, setEndpoints] = useState<any[]>([]);
+  const ctx = useFlowContext();
+  const api = ctx.api;
+  const t = useT();
+  const [pipelines, setPipelines] = useState<PipelineDef[]>([]);
+  const [endpoints, setEndpoints] = useState<EndpointDef[]>([]);
   const [loading, setLoading] = useState(false);
   const [visible, setVisible] = useState(false);
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<PipelineFormValues>();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [steps, setSteps] = useState<StepData[]>([]);
   const [playgroundVisible, setPlaygroundVisible] = useState(false);
-  const [playgroundPipeline, setPlaygroundPipeline] = useState<any>(null);
+  const [playgroundPipeline, setPlaygroundPipeline] = useState<PipelineDef | null>(null);
   const [playgroundInput, setPlaygroundInput] = useState('{}');
   const [playgroundInputError, setPlaygroundInputError] = useState('');
-  const [playgroundJob, setPlaygroundJob] = useState<any>(null);
+  const [playgroundJob, setPlaygroundJob] = useState<JobState | null>(null);
   const [playgroundRunning, setPlaygroundRunning] = useState(false);
   const playgroundTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const statusLabels: Record<string, string> = {
+    pending: t('Pending'),
+    running: t('Running'),
+    polling: t('Polling'),
+    completed: t('Completed'),
+    failed: t('Failed'),
+    timeout: t('Timeout'),
+  };
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -386,8 +446,8 @@ export const PipelinesTab = () => {
         api.request({ url: 'docUnderstanding:listPipelines' }),
         api.request({ url: 'docUnderstanding:listEndpoints' }),
       ]);
-      setPipelines(pRes.data?.data || []);
-      setEndpoints(eRes.data?.data || []);
+      setPipelines(unwrapData<PipelineDef[]>(pRes, []));
+      setEndpoints(unwrapData<EndpointDef[]>(eRes, []));
     } finally {
       setLoading(false);
     }
@@ -412,7 +472,7 @@ export const PipelinesTab = () => {
     setVisible(true);
   };
 
-  const openEdit = (record: any) => {
+  const openEdit = (record: PipelineDef) => {
     setEditingId(record.id);
     form.setFieldsValue({
       name: record.name,
@@ -422,15 +482,15 @@ export const PipelinesTab = () => {
       outputMapping: record.outputMapping,
     });
     // Convert steps from server format
-    const serverSteps = [...(record.steps || [])].sort((a: any, b: any) => a.stepOrder - b.stepOrder);
+    const serverSteps = [...(record.steps || [])].sort((a, b) => a.stepOrder - b.stepOrder);
     setSteps(
-      serverSteps.map((s: any) => ({
+      serverSteps.map((s) => ({
         _key: `srv_${s.id}`,
         id: s.id,
         stepOrder: s.stepOrder,
         name: s.name,
         endpointId: s.endpointId,
-        inputMapping: s.inputMapping,
+        inputMapping: s.inputMapping ?? null,
         outputAlias: s.outputAlias || '',
         condition: s.condition,
         onError: s.onError || 'fail',
@@ -446,7 +506,7 @@ export const PipelinesTab = () => {
       method: 'POST',
       params: { filterByTk: id },
     });
-    message.success('Deleted');
+    message.success(t('Deleted'));
     fetchData();
   };
 
@@ -463,10 +523,10 @@ export const PipelinesTab = () => {
         url: 'docUnderstanding:getJobStatus',
         params: { filterByTk: jobId },
       });
-      const job = extractResponseData(res);
+      const job = unwrapData<JobState | null>(res, null);
       setPlaygroundJob(job);
 
-      if (['completed', 'failed', 'timeout'].includes(job?.status)) {
+      if (job && TERMINAL_STATUSES.includes(job.status)) {
         stopPlaygroundPolling();
         setPlaygroundRunning(false);
       }
@@ -479,17 +539,17 @@ export const PipelinesTab = () => {
     (jobId: number) => {
       stopPlaygroundPolling();
       playgroundTimerRef.current = setInterval(() => {
-        fetchPlaygroundJob(jobId).catch((err: any) => {
+        fetchPlaygroundJob(jobId).catch((err: unknown) => {
           stopPlaygroundPolling();
           setPlaygroundRunning(false);
-          message.error(err?.message || 'Failed to refresh test job');
+          message.error(errorMessage(err) || t('Failed to refresh test job'));
         });
       }, 1500);
     },
-    [fetchPlaygroundJob, stopPlaygroundPolling],
+    [fetchPlaygroundJob, stopPlaygroundPolling, t],
   );
 
-  const openPlayground = (record: any) => {
+  const openPlayground = (record: PipelineDef) => {
     stopPlaygroundPolling();
     setPlaygroundPipeline(record);
     setPlaygroundJob(null);
@@ -510,13 +570,13 @@ export const PipelinesTab = () => {
   const runPlayground = async () => {
     if (!playgroundPipeline) return;
 
-    let input: any;
+    let input: unknown;
     try {
       const parsedInput = playgroundInput.trim() ? JSON.parse(playgroundInput) : {};
       input = mergeDefaults(buildDefaultInputFromSchema(playgroundPipeline.inputSchema), parsedInput);
       setPlaygroundInputError('');
     } catch {
-      setPlaygroundInputError('Invalid JSON input');
+      setPlaygroundInputError(t('Invalid JSON input'));
       return;
     }
 
@@ -533,20 +593,19 @@ export const PipelinesTab = () => {
           input,
         },
       });
-      const result = extractResponseData(res);
-      const jobId = result?.jobId;
+      const jobId = unwrapData<{ jobId?: number }>(res, {}).jobId;
       if (!jobId) {
-        throw new Error('Pipeline did not return a job ID');
+        throw new Error(t('Pipeline did not return a job ID'));
       }
 
       const job = await fetchPlaygroundJob(jobId);
-      if (!['completed', 'failed', 'timeout'].includes(job?.status)) {
+      if (!job || !TERMINAL_STATUSES.includes(job.status)) {
         startPlaygroundPolling(jobId);
       }
-      message.success(`Test job #${jobId} started`);
-    } catch (err: any) {
+      message.success(`${t('Test job started')}: #${jobId}`);
+    } catch (err: unknown) {
       setPlaygroundRunning(false);
-      message.error(err?.message || 'Failed to run pipeline test');
+      message.error(errorMessage(err) || t('Failed to run pipeline test'));
     }
   };
 
@@ -557,11 +616,11 @@ export const PipelinesTab = () => {
       // Validate steps
       for (const step of steps) {
         if (!step.name) {
-          message.error('All steps must have a name');
+          message.error(t('All steps must have a name'));
           return;
         }
         if (!step.endpointId) {
-          message.error(`Step "${step.name || step.stepOrder}" must have an endpoint`);
+          message.error(`${t('Step')} "${step.name || step.stepOrder}" ${t('must have an endpoint')}`);
           return;
         }
       }
@@ -569,7 +628,7 @@ export const PipelinesTab = () => {
       // Check alias uniqueness
       const aliases = steps.map((s) => s.outputAlias).filter(Boolean);
       if (new Set(aliases).size !== aliases.length) {
-        message.error('Step output aliases must be unique');
+        message.error(t('Step output aliases must be unique'));
         return;
       }
 
@@ -602,29 +661,29 @@ export const PipelinesTab = () => {
           data: payload,
         });
       }
-      message.success('Saved');
+      message.success(t('Saved'));
       setVisible(false);
       fetchData();
     } catch {
-      // form validation error
+      // Form validation errors are already surfaced inline by antd.
     }
   };
 
-  const columns = [
-    { title: 'Name', dataIndex: 'name', width: 200 },
+  const columns: ColumnsType<PipelineDef> = [
+    { title: t('Name'), dataIndex: 'name', width: 200 },
     {
-      title: 'Steps',
+      title: t('Steps'),
       dataIndex: 'steps',
       width: 300,
-      render: (stepsArr: any[]) => {
-        if (!stepsArr || stepsArr.length === 0) return <Tag>0 steps</Tag>;
-        const sorted = [...stepsArr].sort((a: any, b: any) => a.stepOrder - b.stepOrder);
+      render: (stepsArr: PipelineStepDef[]) => {
+        if (!stepsArr || stepsArr.length === 0) return <Tag>0 {t('steps')}</Tag>;
+        const sorted = [...stepsArr].sort((a, b) => a.stepOrder - b.stepOrder);
         return (
           <Space size={2} wrap>
-            {sorted.map((s: any, i: number) => (
+            {sorted.map((s, i) => (
               <React.Fragment key={s.id}>
                 {i > 0 && <span style={{ color: '#ccc' }}>&rarr;</span>}
-                <Tag>{s.name || `Step ${s.stepOrder}`}</Tag>
+                <Tag>{s.name || `${t('Step')} ${s.stepOrder}`}</Tag>
               </React.Fragment>
             ))}
           </Space>
@@ -632,29 +691,31 @@ export const PipelinesTab = () => {
       },
     },
     {
-      title: 'Enabled',
+      title: t('Enabled'),
       dataIndex: 'enabled',
       width: 80,
-      render: (v: boolean) => (v ? <Tag color="success">Yes</Tag> : <Tag>No</Tag>),
+      render: (v: boolean) => (v ? <Tag color="success">{t('Yes')}</Tag> : <Tag>{t('No')}</Tag>),
     },
     {
-      title: 'AI Tool',
+      title: t('AI Tool'),
       width: 100,
-      render: (_: any, record: any) =>
+      render: (_: unknown, record) =>
         record.enabled ? (
-          <Tooltip title={`Registered as: doc_understanding.${record.name?.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`}>
+          <Tooltip
+            title={`${t('Registered as')}: doc_understanding.${record.name?.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`}
+          >
             <Tag color="blue" icon={<ThunderboltOutlined />}>
-              Active
+              {t('Active')}
             </Tag>
           </Tooltip>
         ) : (
-          <Tag>Inactive</Tag>
+          <Tag>{t('Inactive')}</Tag>
         ),
     },
     {
-      title: 'Action',
+      title: t('Action'),
       width: 190,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record) => (
         <Space>
           <Button
             type="link"
@@ -662,15 +723,28 @@ export const PipelinesTab = () => {
             icon={<PlayCircleOutlined />}
             disabled={!record.enabled}
             onClick={() => openPlayground(record)}
+            aria-label={`${t('Test')} ${record.name}`}
           >
-            Test
+            {t('Test')}
           </Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-            Edit
+          <Button
+            type="link"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => openEdit(record)}
+            aria-label={`${t('Edit')} ${record.name}`}
+          >
+            {t('Edit')}
           </Button>
-          <Popconfirm title="Delete this pipeline?" onConfirm={() => handleDelete(record.id)}>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              Delete
+          <Popconfirm title={t('Delete this pipeline?')} okText={t('Delete')} onConfirm={() => handleDelete(record.id)}>
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label={`${t('Delete')} ${record.name}`}
+            >
+              {t('Delete')}
             </Button>
           </Popconfirm>
         </Space>
@@ -682,54 +756,60 @@ export const PipelinesTab = () => {
     <div>
       <div style={{ marginBottom: 16 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>
-          Add Pipeline
+          {t('Add Pipeline')}
         </Button>
       </div>
       <Table rowKey="id" columns={columns} dataSource={pipelines} loading={loading} size="small" />
 
       <Modal
-        title={editingId ? 'Edit Pipeline' : 'New Pipeline'}
+        title={editingId ? t('Edit Pipeline') : t('New Pipeline')}
         open={visible}
         onOk={handleSave}
         onCancel={() => setVisible(false)}
+        okText={t('Save')}
+        cancelText={t('Cancel')}
         width={800}
         destroyOnClose
       >
         <Form form={form} layout="vertical" preserve={false}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px' }}>
-            <Form.Item name="name" label="Pipeline Name" rules={[{ required: true }]}>
+            <Form.Item name="name" label={t('Pipeline Name')} rules={[{ required: true }]}>
               <Input placeholder="full_document_processing" />
             </Form.Item>
-            <Form.Item name="enabled" label="Enabled" valuePropName="checked" initialValue={true}>
+            <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked" initialValue={true}>
               <Switch />
             </Form.Item>
           </div>
-          <Form.Item name="description" label="Description">
-            <TextArea rows={2} placeholder="What this pipeline does" />
+          <Form.Item name="description" label={t('Description')}>
+            <TextArea rows={2} placeholder={t('What this pipeline does')} />
           </Form.Item>
 
           <Card
-            title="Pipeline Steps"
+            title={t('Pipeline Steps')}
             size="small"
             style={{ marginBottom: 16 }}
-            extra={<Tag color="blue">{steps.length} step(s)</Tag>}
+            extra={
+              <Tag color="blue">
+                {steps.length} {t('step(s)')}
+              </Tag>
+            }
           >
             <StepEditor steps={steps} endpoints={endpoints} onChange={setSteps} />
           </Card>
 
           <Collapse size="small" ghost>
-            <Panel header="Advanced: Input Schema & Output Mapping" key="advanced">
+            <Panel header={t('Advanced: Input Schema & Output Mapping')} key="advanced">
               <Form.Item
                 name="inputSchema"
-                label="Input Schema (JSON Schema)"
-                help="Defines what input this pipeline accepts. Used by AI tool schema."
+                label={t('Input Schema (JSON Schema)')}
+                help={t('Defines what input this pipeline accepts. Used by AI tool schema.')}
               >
                 <JsonEditor placeholder='{ "type": "object", "properties": { "document_url": { "type": "string" } }, "required": ["document_url"] }' />
               </Form.Item>
               <Form.Item
                 name="outputMapping"
-                label="Output Mapping (JSON)"
-                help="Map final step results to pipeline output. If empty, all step results are returned."
+                label={t('Output Mapping (JSON)')}
+                help={t('Map final step results to pipeline output. If empty, all step results are returned.')}
               >
                 <JsonEditor placeholder='{ "text": "$step[ocr_result].response.text", "category": "$step[classify].response.category" }' />
               </Form.Item>
@@ -739,14 +819,14 @@ export const PipelinesTab = () => {
       </Modal>
 
       <Modal
-        title={playgroundPipeline ? `Test Playground: ${playgroundPipeline.name}` : 'Test Playground'}
+        title={playgroundPipeline ? `${t('Test Playground')}: ${playgroundPipeline.name}` : t('Test Playground')}
         open={playgroundVisible}
         onCancel={closePlayground}
         width={860}
         destroyOnClose
         footer={[
           <Button key="close" onClick={closePlayground}>
-            Close
+            {t('Close')}
           </Button>,
           playgroundJob?.id && (
             <Button
@@ -755,7 +835,7 @@ export const PipelinesTab = () => {
               disabled={playgroundRunning}
               onClick={() => fetchPlaygroundJob(playgroundJob.id)}
             >
-              Refresh
+              {t('Refresh')}
             </Button>
           ),
           <Button
@@ -765,14 +845,17 @@ export const PipelinesTab = () => {
             loading={playgroundRunning}
             onClick={runPlayground}
           >
-            Run test
+            {t('Run test')}
           </Button>,
         ].filter(Boolean)}
       >
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 16 }}>
           <div>
-            <div style={{ fontWeight: 500, marginBottom: 6 }}>Input JSON</div>
+            <label htmlFor="playground-input" style={{ fontWeight: 500, marginBottom: 6, display: 'block' }}>
+              {t('Input JSON')}
+            </label>
             <TextArea
+              id="playground-input"
               rows={16}
               value={playgroundInput}
               onChange={(e) => {
@@ -780,6 +863,7 @@ export const PipelinesTab = () => {
                 if (playgroundInputError) setPlaygroundInputError('');
               }}
               placeholder='{ "document_url": "https://..." }'
+              status={playgroundInputError ? 'error' : undefined}
               style={{ fontFamily: 'monospace', fontSize: 12 }}
             />
             {playgroundInputError && (
@@ -787,7 +871,7 @@ export const PipelinesTab = () => {
             )}
 
             <Collapse size="small" ghost style={{ marginTop: 12 }}>
-              <Panel header="Input Schema" key="schema">
+              <Panel header={t('Input Schema')} key="schema">
                 <pre
                   style={{
                     background: '#f5f5f5',
@@ -806,34 +890,40 @@ export const PipelinesTab = () => {
 
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <span style={{ fontWeight: 500 }}>Result</span>
+              <span style={{ fontWeight: 500 }}>{t('Result')}</span>
               {playgroundJob?.status && (
-                <Tag color={STATUS_CONFIG[playgroundJob.status]?.color || 'default'}>
-                  {STATUS_CONFIG[playgroundJob.status]?.label || playgroundJob.status}
+                <Tag color={STATUS_COLORS[playgroundJob.status] || 'default'}>
+                  {statusLabels[playgroundJob.status] || playgroundJob.status}
                 </Tag>
               )}
             </div>
 
             {!playgroundJob ? (
-              <Empty description="Run a test to see job output" imageStyle={{ height: 48 }} />
+              <Empty description={t('Run a test to see job output')} imageStyle={{ height: 48 }} />
             ) : (
               <div>
                 <Space style={{ marginBottom: 8 }} wrap>
-                  <Tag>Job #{playgroundJob.id}</Tag>
-                  {playgroundJob.currentStep && <Tag>Step {playgroundJob.currentStep}</Tag>}
+                  <Tag>
+                    {t('Job')} #{playgroundJob.id}
+                  </Tag>
+                  {playgroundJob.currentStep && (
+                    <Tag>
+                      {t('Step')} {playgroundJob.currentStep}
+                    </Tag>
+                  )}
                 </Space>
 
                 {playgroundJob.error && (
                   <Alert
                     type="error"
                     showIcon
-                    message="Pipeline error"
+                    message={t('Pipeline error')}
                     description={<pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{playgroundJob.error}</pre>}
                     style={{ marginBottom: 12 }}
                   />
                 )}
 
-                <div style={{ fontWeight: 500, marginBottom: 4 }}>Final Result</div>
+                <div style={{ fontWeight: 500, marginBottom: 4 }}>{t('Final Result')}</div>
                 <pre
                   style={{
                     background: '#f0f5ff',
@@ -846,10 +936,10 @@ export const PipelinesTab = () => {
                 >
                   {playgroundJob.finalResult !== undefined && playgroundJob.finalResult !== null
                     ? stringifyJson(playgroundJob.finalResult)
-                    : '(not yet available)'}
+                    : t('(not yet available)')}
                 </pre>
 
-                <div style={{ fontWeight: 500, margin: '12px 0 4px' }}>Step Results</div>
+                <div style={{ fontWeight: 500, margin: '12px 0 4px' }}>{t('Step Results')}</div>
                 <pre
                   style={{
                     background: '#f5f5f5',

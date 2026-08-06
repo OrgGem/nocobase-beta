@@ -1,4 +1,5 @@
 import os from 'os';
+import { randomUUID } from 'crypto';
 import { scanKeys, getRedisClient, isClusterRedisConfigured } from '../utils/redis';
 import { getLocalNodeId } from '../utils/node';
 
@@ -11,6 +12,7 @@ export class RedisNodeRegistry {
   private lastHeartbeatAt: number | null = null;
   private lastHeartbeatError: string | null = null;
   private lastReadError: string | null = null;
+  private generationId = randomUUID();
 
   constructor(private app: any) {
     const appName = process.env.APP_NAME || app?.name || 'main';
@@ -21,6 +23,11 @@ export class RedisNodeRegistry {
     if (this.timer) {
       clearInterval(this.timer);
     }
+
+    // Changes on every application start, including a soft restart in the same
+    // Node.js process. Rolling restart uses this value to distinguish the new
+    // application generation from a stale heartbeat left in Redis.
+    this.generationId = randomUUID();
 
     // Initial heartbeat
     this.heartbeat();
@@ -63,6 +70,7 @@ export class RedisNodeRegistry {
 
     const metadata = {
       id: nodeId,
+      generationId: this.generationId,
       name: `${appName} (${os.hostname()})`,
       hostname: os.hostname(),
       appVersion: process.env.NOCOBASE_VERSION || process.version,
@@ -71,6 +79,7 @@ export class RedisNodeRegistry {
       isSandbox: process.env.SKILL_HUB_SANDBOX === 'true',
       pid: process.pid,
       url: process.env.APP_PUBLIC_URL || null,
+      probeUrl: process.env.CLUSTER_MANAGER_NODE_URL || null,
       available: true,
       lastHeartbeatAt: Date.now(),
       status: 'online', // Implicitly online since it just reported

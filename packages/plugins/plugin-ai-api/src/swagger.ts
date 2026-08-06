@@ -258,6 +258,15 @@ export default {
             type: 'integer',
             description: 'Max requests per minute per user (0 = unlimited)',
           },
+          maxRequestBodyMb: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 100,
+            default: 10,
+            description:
+              'Max request body size in megabytes. Requests above this return 413. ' +
+              'The gateway buffers each body in memory, so values above 100 are rejected.',
+          },
         },
       },
       ModelObject: {
@@ -269,11 +278,39 @@ export default {
           owned_by: { type: 'string' },
         },
       },
+      ContentBlock: {
+        type: 'object',
+        description:
+          'A multimodal content block. Only text and image_url blocks are forwarded to the provider; ' +
+          'any other type is rejected with 400 unsupported_content_block.',
+        properties: {
+          type: { type: 'string', enum: ['text', 'image_url'] },
+          text: { type: 'string' },
+          image_url: {
+            type: 'object',
+            properties: {
+              url: {
+                type: 'string',
+                description: 'An https URL or a base64 data URL, e.g. data:image/png;base64,iVBORw0KGgo...',
+                example: 'data:image/png;base64,iVBORw0KGgo...',
+              },
+              detail: { type: 'string', enum: ['auto', 'low', 'high'] },
+            },
+            required: ['url'],
+          },
+        },
+        required: ['type'],
+      },
       ChatMessage: {
         type: 'object',
         properties: {
           role: { type: 'string', enum: ['system', 'user', 'assistant', 'tool'] },
-          content: { type: 'string' },
+          content: {
+            description:
+              'Plain text, or an array of content blocks for multimodal requests. ' +
+              'Inline base64 images inflate the payload by about 33%; see "Max request body size" in the gateway settings.',
+            oneOf: [{ type: 'string' }, { type: 'array', items: { $ref: '#/components/schemas/ContentBlock' } }],
+          },
           name: { type: 'string' },
           tool_call_id: { type: 'string' },
           tool_calls: { type: 'array', items: { $ref: '#/components/schemas/ToolCall' } },
