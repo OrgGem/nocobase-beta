@@ -10,6 +10,7 @@
 import { Context } from '@nocobase/actions';
 import { toOpenAIError, toOpenAIEmbeddingsResponse } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { enforceModelAccess } from '../utils/user-permissions';
 import { setAiApiUsageUnavailable } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
@@ -112,24 +113,18 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
     return;
   }
 
-  // ─── Check service whitelist ──────────────────────────────────────────────
+  // ─── Check service whitelist (global config ∩ per-user grant) ─────────────
+  // A config read failure falls open on the global list, but the per-user grant is
+  // still enforced: an explicit deny must never be bypassed by an unreadable config.
+  let globalEnabledServices: unknown = [];
   try {
     const config = await ctx.db.getRepository('aiApiConfig').findOne();
-    if (config?.enabledLlmServices?.length) {
-      const allowed = config.enabledLlmServices.some((s: string) => s === service.name || s === service.title);
-      if (!allowed) {
-        ctx.status = 403;
-        ctx.body = toOpenAIError(
-          403,
-          `LLM service '${service.title || service.name}' is not enabled for API access`,
-          'invalid_request_error',
-          'model_not_available',
-        );
-        return;
-      }
-    }
+    globalEnabledServices = config?.enabledLlmServices ?? [];
   } catch {
-    // Config read failure: fail open
+    // Config read failure: fail open on the global whitelist only.
+  }
+  if (!(await enforceModelAccess(ctx, globalEnabledServices, service, modelId))) {
+    return;
   }
 
   // ─── Get embedding provider ───────────────────────────────────────────────

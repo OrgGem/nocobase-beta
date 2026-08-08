@@ -101,5 +101,16 @@
   "Select which AI Employees this role may use:": "选择此角色可使用的 AI 员工：",
   "Select allowed AI Employees": "选择允许的 AI 员工",
   "Max request body size (MB)": "请求体大小上限（MB）",
-  "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.": "调高此值以接收内联 base64 图片。base64 编码会使体积增加约 33%。"
+  "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.": "调高此值以接收内联 base64 图片。base64 编码会使体积增加约 33%。",
+  "User LLM permissions": "用户 LLM 权限",
+  "Add permission": "添加权限",
+  "Edit permission": "编辑权限",
+  "Delete this permission?": "确定删除此权限？",
+  "Allowed LLM services": "允许的 LLM 服务",
+  "Allow all models": "允许所有模型",
+  "Allowed models": "允许的模型",
+  "No service allowed": "未允许任何服务",
+  "All models of allowed services": "允许服务下的所有模型",
+  "Users listed here are limited to the services selected below. Users without a record fall back to the general configuration.": "此处列出的用户仅能使用下方所选的服务；没有记录的用户按通用配置处理。",
+  "Only services also enabled in the general configuration take effect.": "仅当服务同时在通用配置中启用时才会生效。"
 }

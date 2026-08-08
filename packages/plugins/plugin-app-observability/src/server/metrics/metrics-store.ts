@@ -23,9 +23,7 @@ export class MetricsStore {
   }
   start(input: ObservationStart): ObservationHandle {
     if (!this.accepting) return NOOP_HANDLE;
-    const key = this.resolveSeriesKey(input);
-    const metric = this.services.get(key) ?? createServiceMetric(input);
-    if (!this.services.has(key)) this.services.set(key, metric);
+    let metric = this.resolveMetric(input);
     const startedAt = this.now();
     let firstByteMarked = false;
     let finished = false;
@@ -46,10 +44,11 @@ export class MetricsStore {
         if (!finished) metric.outputTokens += positive(value);
       },
       finish: (result) => {
-        if (!finished) {
-          finished = true;
-          this.finish(metric, startedAt, result);
-        }
+        if (finished) return;
+        finished = true;
+        if (result.operation && result.operation !== metric.operation)
+          metric = this.reassign(metric, { ...input, operation: result.operation });
+        this.finish(metric, startedAt, result);
       },
     };
   }
@@ -70,6 +69,7 @@ export class MetricsStore {
   }
   getSnapshot(): NodeObservabilitySnapshot {
     return {
+      schemaVersion: 1,
       appName: this.options.appName,
       nodeId: this.options.nodeId,
       timestamp: this.now(),
@@ -79,16 +79,46 @@ export class MetricsStore {
       services: Object.fromEntries([...this.services].map(([key, metric]) => [key, snapshotService(metric)])),
     };
   }
-  private resolveSeriesKey(input: ObservationStart): string {
+  /**
+   * Captures one persistence interval and then carries active requests into the
+   * next interval. This prevents an old concurrency spike from being written to
+   * every subsequent bucket.
+   */
+  getBucketSnapshot(): NodeObservabilitySnapshot {
+    const snapshot = this.getSnapshot();
+    for (const metric of this.services.values()) metric.maxInflight = metric.inflight;
+    return snapshot;
+  }
+  private resolveMetric(input: ObservationStart): MutableServiceMetric {
     const key = seriesKey(input);
-    if (this.services.has(key)) return key;
+    const existing = this.services.get(key);
+    if (existing) return existing;
 
     const maxSeries = Math.max(1, this.options.maxSeries ?? 500);
-    const overflowKey = 'custom|overflow|0|{}';
-    if (this.services.has(overflowKey)) return overflowKey;
-
     // Reserve the final bounded slot for overflow so cardinality never exceeds maxSeries.
-    return this.services.size < maxSeries - 1 ? key : overflowKey;
+    if (this.services.size < maxSeries - 1) {
+      const metric = createServiceMetric(input);
+      this.services.set(key, metric);
+      return metric;
+    }
+    const overflow = this.services.get(OVERFLOW_KEY);
+    if (overflow) return overflow;
+    // Label the shared bucket generically; the first overflowing request must not
+    // brand every later one with its own service/operation.
+    const metric = createServiceMetric({ service: 'custom', operation: 'overflow' });
+    this.services.set(OVERFLOW_KEY, metric);
+    return metric;
+  }
+  // Moves an in-flight observation to another series once its real identity is known.
+  private reassign(from: MutableServiceMetric, input: ObservationStart): MutableServiceMetric {
+    const target = this.resolveMetric(input);
+    if (target === from) return from;
+    from.requestCount = Math.max(0, from.requestCount - 1);
+    from.inflight = Math.max(0, from.inflight - 1);
+    target.requestCount += 1;
+    target.inflight += 1;
+    target.maxInflight = Math.max(target.maxInflight, target.inflight);
+    return target;
   }
   private finish(metric: MutableServiceMetric, startedAt: number, result: ObservationFinish): void {
     metric.inflight = Math.max(0, metric.inflight - 1);
@@ -103,6 +133,7 @@ export class MetricsStore {
     if (result.status === 'rejected') metric.rejectedCount += 1;
   }
 }
+const OVERFLOW_KEY = seriesKey({ service: 'custom', operation: 'overflow' });
 const NOOP_HANDLE: ObservationHandle = { markFirstByte() {}, addInputTokens() {}, addOutputTokens() {}, finish() {} };
 function positive(value?: number): number {
   return Number.isFinite(value) && Number(value) > 0 ? Number(value) : 0;

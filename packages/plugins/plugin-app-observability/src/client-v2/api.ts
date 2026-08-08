@@ -6,6 +6,7 @@ export interface ApiEnvelope<T> {
 export interface ServiceMetric {
   service: string;
   operation?: string;
+  streaming?: boolean;
   inflight?: number;
   requestCount?: number;
   errorRate?: number;
@@ -31,25 +32,32 @@ export interface NodeSnapshot {
 }
 export interface OverviewData {
   activeUsers?: number;
+  activeUserScope?: 'cluster-estimate' | 'node-local' | 'single-node';
   sessionWindowSeconds?: number;
   http?: ServiceMetric;
   llm?: ServiceMetric[];
   aggregationMode?: 'redis' | 'single-node';
   nodes?: number;
 }
+export interface CapacityMessage {
+  key: string;
+  values?: Record<string, number | string>;
+}
 export interface CapacitySignal {
   key: string;
   utilization?: number | null;
   headroom?: number | null;
   reliable?: boolean;
-  evidence?: string;
+  evidence?: CapacityMessage;
 }
 export interface CapacityData {
   state?: 'healthy' | 'watch' | 'scale-soon' | 'critical';
   confidence?: number;
-  recommendation?: string;
-  evidence?: string[];
+  recommendation?: CapacityMessage;
+  evidence?: CapacityMessage[];
   signals?: CapacitySignal[];
+  assessedNodeId?: string;
+  nodeCount?: number;
 }
 export interface SettingsData {
   enabled: boolean;

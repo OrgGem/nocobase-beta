@@ -7,10 +7,32 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { describe, expect, it } from 'vitest';
-import { buildModelObject } from '../routes/models';
+import { Context } from '@nocobase/actions';
+import { describe, expect, it, vi } from 'vitest';
+import { buildModelObject, handleGetModel, handleListModels } from '../routes/models';
 
 const CREATED = 1_700_000_000;
+
+function permissionLookupFailureContext() {
+  const ctx = {
+    app: { name: 'main', pm: { get: () => ({}) } },
+    state: { currentUser: { id: 1 } },
+    db: {
+      getRepository: (name: string) => {
+        if (name === 'aiApiConfig') return { findOne: vi.fn(async () => null) };
+        if (name === 'llmServices') return { find: vi.fn(async () => []) };
+        if (name === 'aiApiUserPermissions') {
+          return { findOne: vi.fn(async () => Promise.reject(new Error('permission database unavailable'))) };
+        }
+        return { find: vi.fn(async () => []) };
+      },
+    },
+    log: { error: vi.fn(), warn: vi.fn() },
+    status: 0,
+    body: undefined,
+  } as unknown as Context;
+  return ctx;
+}
 
 describe('buildModelObject', () => {
   it('returns the base OpenAI model shape with no override', () => {
@@ -70,5 +92,25 @@ describe('buildModelObject', () => {
     expect(buildModelObject('svc/m', CREATED, 'Svc', { enabled: false }).active).toBe(false);
     // Override present with enabled undefined → treated as active.
     expect(buildModelObject('svc/m', CREATED, 'Svc', { contextWindow: 10 }).active).toBe(true);
+  });
+});
+
+describe('model catalog permission lookup failures', () => {
+  it('returns a retryable 503 when listing models', async () => {
+    const ctx = permissionLookupFailureContext();
+
+    await handleListModels(ctx, undefined as never);
+
+    expect(ctx.status).toBe(503);
+    expect(ctx.body).toMatchObject({ error: { code: 'permission_check_failed' } });
+  });
+
+  it('returns a retryable 503 when retrieving a model', async () => {
+    const ctx = permissionLookupFailureContext();
+
+    await handleGetModel(ctx, 'openai/gpt-4o', undefined as never);
+
+    expect(ctx.status).toBe(503);
+    expect(ctx.body).toMatchObject({ error: { code: 'permission_check_failed' } });
   });
 });

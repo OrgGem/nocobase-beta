@@ -26,4 +26,20 @@ describe('app observability contract', () => {
     expect(service.failureCount).toBe(0);
     expect(service.inflight).toBe(0);
   });
+
+  it('stays callable while collection is paused and resumes afterwards', () => {
+    // Disabling observability pauses the store but keeps the contract registered,
+    // so consumers that captured it must still get a usable no-op handle.
+    const store = new MetricsStore({ appName: 'main', nodeId: 'node-1' });
+    const contract = createAppObservabilityContract(store);
+    store.stopAccepting();
+
+    const handle = contract.start({ service: 'custom', operation: 'sync' });
+    expect(() => handle.finish({ status: 'succeeded' })).not.toThrow();
+    expect(Object.keys(store.getSnapshot().services)).toHaveLength(0);
+
+    store.startAccepting();
+    contract.start({ service: 'custom', operation: 'sync' }).finish({ status: 'succeeded' });
+    expect(Object.values(store.getSnapshot().services)[0].requestCount).toBe(1);
+  });
 });

@@ -1,4 +1,4 @@
-import { toOpenAIResponse, toOpenAIStreamChunk } from '../utils/openai-format';
+import { toOpenAIResponse, toOpenAIStreamChunk, toOpenAIUsageChunk } from '../utils/openai-format';
 import { isStreamingRequested } from '../utils/streaming';
 import { applyProviderRequestParameters, getProviderRequestParameters } from '../routes/chat-completions';
 
@@ -49,6 +49,57 @@ describe('AI API OpenAI tool-call formatting', () => {
     });
 
     expect(chunk.choices[0].delta.tool_calls?.[0].function?.name).toBe('get_weather');
+  });
+});
+
+describe('AI API OpenAI usage-only streaming chunks', () => {
+  it('includes a null usage field for normal chunks', () => {
+    const chunk = toOpenAIStreamChunk({
+      id: 'chatcmpl-1',
+      model: 'service/model',
+      delta: { content: 'Hello' },
+    });
+
+    expect(chunk.choices).toHaveLength(1);
+    expect(chunk).toHaveProperty('usage', null);
+  });
+
+  it('includes a null usage field for finish chunks', () => {
+    const chunk = toOpenAIStreamChunk({
+      id: 'chatcmpl-1',
+      model: 'service/model',
+      delta: {},
+      finishReason: 'stop',
+    });
+
+    expect(chunk.choices[0].finish_reason).toBe('stop');
+    expect(chunk).toHaveProperty('usage', null);
+  });
+
+  it('formats a usage-only chat completion chunk with an empty choices array', () => {
+    const chunk = toOpenAIUsageChunk({
+      id: 'chatcmpl-1',
+      model: 'service/model',
+      usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 },
+      object: 'chat.completion.chunk',
+    });
+
+    expect(chunk.object).toBe('chat.completion.chunk');
+    expect(chunk.choices).toEqual([]);
+    expect(chunk.usage).toEqual({ prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 });
+  });
+
+  it('formats a usage-only legacy text completion chunk', () => {
+    const chunk = toOpenAIUsageChunk({
+      id: 'cmpl-1',
+      model: 'service/model',
+      usage: { prompt_tokens: 2, completion_tokens: 5, total_tokens: 7 },
+      object: 'text_completion',
+    });
+
+    expect(chunk.object).toBe('text_completion');
+    expect(chunk.choices).toEqual([]);
+    expect(chunk.usage).toEqual({ prompt_tokens: 2, completion_tokens: 5, total_tokens: 7 });
   });
 });
 

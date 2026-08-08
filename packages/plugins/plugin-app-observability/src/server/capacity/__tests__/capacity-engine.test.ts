@@ -19,6 +19,6 @@ describe('assessCapacity', () => {
     const assessment = assessCapacity({ cpuPercent: null, memoryPercent: null, eventLoopUtilizationPercent: null });
     expect(assessment.state).toBe('watch');
     expect(assessment.confidence).toBeLessThan(0.5);
-    expect(assessment.evidence.join(' ')).toContain('Insufficient');
+    expect(assessment.evidence[0].key).toContain('Insufficient');
   });
 });

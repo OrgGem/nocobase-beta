@@ -63,7 +63,7 @@ also call `db.sync()`:
 app-main install/version check/upgrade -> healthy
 app-backup-1 start                      -> healthy
 app-backup-2 start                      -> healthy
-nginx routes HTTP to app-main and uses the backups only for failover
+nginx balances new requests across all healthy app nodes
 ```
 
 `app-main` is the only migration leader. It performs a full upgrade when
@@ -139,8 +139,18 @@ docker cp plugin-worker-monitor-1.0.0.tgz <container>:/tmp/
 docker exec -it <container> bash -c \
   "cd /app/nocobase && yarn pm add /tmp/plugin-worker-monitor-1.0.0.tgz && yarn pm enable plugin-worker-monitor"
 
-# Restart the migration leader; backups will wait for its readiness gate.
-docker compose restart app-main app-backup-1 app-backup-2 nginx
+# Preferred: use Cluster Manager -> Hard Restart Cluster. It restarts one app
+# node at a time, waits for a new healthy generation, and restarts its own
+# coordinator last.
+
+# CLI fallback: recreate one app node at a time and wait for health before
+# moving to the next node. Never pass all app services to one restart command.
+docker compose up -d --no-deps --force-recreate --wait app-backup-1
+docker compose up -d --no-deps --force-recreate --wait app-backup-2
+docker compose up -d --no-deps --force-recreate --wait app-main
+
+# Recreate nginx last only when its configuration changed.
+docker compose up -d --no-deps --force-recreate --wait nginx
 ```
 
 Or add `APPEND_PRESET_LOCAL_PLUGINS=plugin-worker-monitor` in `.env` if the plugin is
@@ -169,10 +179,11 @@ services:
 Then update `nginx.conf` upstream:
 ```nginx
 upstream apps {
-    server app-main:13000;
-    server app-backup-1:13000 backup;
-    server app-backup-2:13000 backup;
-    server app-backup-3:13000 backup;
+    least_conn;
+    server app-main:13000 max_fails=1 fail_timeout=5s;
+    server app-backup-1:13000 max_fails=1 fail_timeout=5s;
+    server app-backup-2:13000 max_fails=1 fail_timeout=5s;
+    server app-backup-3:13000 max_fails=1 fail_timeout=5s;
 }
 ```
 

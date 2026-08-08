@@ -19,3 +19,10 @@
  * Shared by both client runtimes so a rename cannot silently desynchronise them.
  */
 export const AI_API_ACL_SNIPPET = 'pm.plugin-ai-api.configuration';
+
+/**
+ * Child snippet for the per-user LLM permission surface, deliberately separate from
+ * AI_API_ACL_SNIPPET so granting someone the gateway settings does not also let them
+ * hand out model access. Same `plugin-ai-api` prefix constraint as above applies.
+ */
+export const AI_API_USER_PERMISSIONS_SNIPPET = 'pm.plugin-ai-api.user-permissions';

@@ -2,6 +2,9 @@ export interface RedisSnapshotClient {
   set(key: string, value: string, options: { EX: number }): Promise<unknown>;
   get(key: string): Promise<string | null>;
   scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<string>;
+  pfAdd?(key: string, elements: string[]): Promise<number>;
+  pfCount?(keys: string[]): Promise<number>;
+  expire?(key: string, seconds: number): Promise<number>;
 }
 interface RedisConnectionManagerLike {
   getConnection(key?: string): RedisSnapshotClient | null;

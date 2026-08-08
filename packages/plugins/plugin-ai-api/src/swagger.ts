@@ -57,7 +57,10 @@ export default {
         tags: ['ai-llm'],
         summary: 'List available models',
         description:
-          'Returns all LLM models available across registered services. Model IDs are formatted as `serviceName/modelId`.',
+          'Returns the LLM models available to the authenticated caller across registered services. Model IDs are formatted as `serviceName/modelId`.\n\n' +
+          "The catalog is user-scoped: it starts from `enabledLlmServices` in the AI API configuration, then narrows to the caller's " +
+          '`aiApiUserPermissions` record when one exists. A user grant can only narrow the global whitelist, never widen it, so two ' +
+          'users may receive different lists from the same request.',
         security: [{ BearerAuth: [] }],
         responses: {
           200: {
@@ -84,6 +87,8 @@ export default {
       get: {
         tags: ['ai-llm'],
         summary: 'Get model details',
+        description:
+          'User-scoped in the same way as `GET /v1/models`: a model the caller is not granted is reported as not found rather than disclosed.',
         security: [{ BearerAuth: [] }],
         parameters: [
           {
@@ -103,7 +108,7 @@ export default {
               },
             },
           },
-          404: { description: 'Model not found' },
+          404: { description: 'Model not found, or not available to this user' },
         },
       },
     },
@@ -252,7 +257,8 @@ export default {
           enabledLlmServices: {
             type: 'array',
             items: { type: 'string' },
-            description: 'List of enabled LLM service names',
+            description:
+              'List of enabled LLM service names. This is the outer bound for every caller; per-user `aiApiUserPermissions` records can only narrow it further.',
           },
           rateLimitPerMinute: {
             type: 'integer',

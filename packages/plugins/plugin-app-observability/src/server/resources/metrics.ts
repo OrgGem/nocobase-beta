@@ -6,6 +6,7 @@ interface MetricsContext {
   body: unknown;
   type?: string;
   status?: number;
+  withoutDataWrapping?: boolean;
   get(name: string): string;
 }
 interface ResourceManagerLike {
@@ -26,6 +27,9 @@ export function registerMetricsResource(
     name: 'appObservabilityMetrics',
     actions: {
       metrics: async (ctx, next) => {
+        // Prometheus requires a bare text/plain exposition body; dataWrapping is enabled by
+        // default and would rewrite ctx.body to { data: ... }, making it unparseable.
+        ctx.withoutDataWrapping = true;
         const expected = options.token();
         const supplied = bearer(ctx.get('authorization'));
         if (!options.enabled() || !expected) {

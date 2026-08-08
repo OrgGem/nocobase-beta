@@ -60,4 +60,18 @@ describe('MetricsStore', () => {
     expect(Object.keys(snapshot.services)).toHaveLength(2);
     expect(JSON.stringify(snapshot)).not.toContain('secret');
   });
+
+  it('resets persistence peaks while retaining active requests for the next bucket', () => {
+    const store = new MetricsStore({ appName: 'main', nodeId: 'node-1' });
+    const first = store.start({ service: 'http', operation: 'users:list' });
+    const second = store.start({ service: 'http', operation: 'users:list' });
+    first.finish({ status: 'succeeded' });
+
+    const firstBucket = Object.values(store.getBucketSnapshot().services)[0];
+    expect(firstBucket.maxInflight).toBe(2);
+
+    second.finish({ status: 'succeeded' });
+    const secondBucket = Object.values(store.getBucketSnapshot().services)[0];
+    expect(secondBucket.maxInflight).toBe(1);
+  });
 });

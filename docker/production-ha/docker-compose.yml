@@ -408,6 +408,7 @@ services:
   app-main:
     <<: *nocobase-base
     container_name: app-main
+    hostname: app-main
     command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
     environment:
       <<: *nocobase-env
@@ -425,6 +426,7 @@ services:
   app-backup-1:
     <<: *nocobase-base
     container_name: app-backup-1
+    hostname: app-backup-1
     depends_on:
       postgres:
         condition: service_healthy
@@ -447,6 +449,7 @@ services:
   app-backup-2:
     <<: *nocobase-base
     container_name: app-backup-2
+    hostname: app-backup-2
     depends_on:
       postgres:
         condition: service_healthy

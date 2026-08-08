@@ -18,6 +18,7 @@ import {
 } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
 import { checkEmployeeAccess } from '../middleware/role-permission';
+import { enforceModelAccess } from '../utils/user-permissions';
 import { isStreamingRequested } from '../utils/streaming';
 import {
   AgentRuntimeContext,
@@ -118,6 +119,12 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
   if (service.enabled === false) {
     ctx.status = 404;
     ctx.body = toOpenAIError(404, 'LLM service is disabled', 'invalid_request_error', 'model_not_found');
+    return;
+  }
+
+  // ─── Check whitelist (global config ∩ per-user grant) ──────────────────────
+  const globalEnabledServices = config ? config.get('enabledLlmServices') || config.enabledLlmServices : [];
+  if (!(await enforceModelAccess(ctx, globalEnabledServices, service, modelId))) {
     return;
   }
 

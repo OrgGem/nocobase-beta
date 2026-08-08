@@ -101,5 +101,16 @@
   "Select which AI Employees this role may use:": "Chọn AI Employee mà vai trò này được dùng:",
   "Select allowed AI Employees": "Chọn AI Employee được phép",
   "Max request body size (MB)": "Giới hạn kích thước request body (MB)",
-  "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.": "Tăng giá trị này để nhận ảnh base64 gửi trực tiếp. Base64 làm tăng khoảng 33% so với kích thước tệp gốc."
+  "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.": "Tăng giá trị này để nhận ảnh base64 gửi trực tiếp. Base64 làm tăng khoảng 33% so với kích thước tệp gốc.",
+  "User LLM permissions": "Phân quyền LLM theo người dùng",
+  "Add permission": "Thêm phân quyền",
+  "Edit permission": "Sửa phân quyền",
+  "Delete this permission?": "Xoá phân quyền này?",
+  "Allowed LLM services": "Dịch vụ LLM được phép",
+  "Allow all models": "Cho phép tất cả model",
+  "Allowed models": "Model được phép",
+  "No service allowed": "Không được phép dịch vụ nào",
+  "All models of allowed services": "Tất cả model của các dịch vụ được phép",
+  "Users listed here are limited to the services selected below. Users without a record fall back to the general configuration.": "Người dùng có trong danh sách này chỉ được dùng các dịch vụ được chọn bên dưới. Người dùng không có bản ghi sẽ dùng theo cấu hình chung.",
+  "Only services also enabled in the general configuration take effect.": "Chỉ những dịch vụ đồng thời được bật trong cấu hình chung mới có hiệu lực."
 }

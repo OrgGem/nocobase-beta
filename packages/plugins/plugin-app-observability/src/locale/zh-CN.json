@@ -9,4 +9,9 @@
   "Recommendations are advisory only; this plugin never auto-scales resources.": "建议仅供参考；此插件绝不会自动扩缩容资源。",
   "Enabled": "启用", "Redis snapshots": "Redis 快照", "Prometheus export": "Prometheus 导出", "Sample interval seconds": "采样间隔（秒）", "Bucket seconds": "聚合桶（秒）", "Retention days": "保留天数", "Active-user window seconds": "活跃用户窗口（秒）",
   "CPU threshold": "CPU 阈值", "Memory threshold": "内存阈值", "Event-loop threshold": "事件循环阈值", "DB wait threshold": "数据库等待阈值", "Save": "保存", "Settings saved": "设置已保存", "Unable to save settings": "无法保存设置"
+,
+  "Active users (cluster estimate)": "\u6d3b\u8dc3\u7528\u6237\uff08\u96c6\u7fa4\u4f30\u7b97\uff09", "Active users (this node)": "\u6d3b\u8dc3\u7528\u6237\uff08\u672c\u8282\u70b9\uff09", "Assessed node": "\u8bc4\u4f30\u8282\u70b9",
+  "Insufficient reliable runtime signals.": "\u53ef\u9760\u7684\u8fd0\u884c\u65f6\u4fe1\u53f7\u4e0d\u8db3\u3002", "Collect more runtime samples before changing capacity.": "\u8bf7\u5728\u8c03\u6574\u5bb9\u91cf\u524d\u6536\u96c6\u66f4\u591a\u8fd0\u884c\u65f6\u6837\u672c\u3002", "No capacity change is recommended.": "\u4e0d\u5efa\u8bae\u8fdb\u884c\u5bb9\u91cf\u8c03\u6574\u3002",
+  "Watch {{signal}} and validate trends.": "\u8bf7\u5173\u6ce8 {{signal}} \u5e76\u9a8c\u8bc1\u8d8b\u52bf\u3002", "Plan capacity for {{signal}}; no automatic scaling is performed.": "\u8bf7\u4e3a {{signal}} \u89c4\u5212\u5bb9\u91cf\uff1b\u7cfb\u7edf\u4e0d\u4f1a\u81ea\u52a8\u6269\u7f29\u5bb9\u3002", "Investigate {{signal}} saturation immediately; no automatic scaling is performed.": "\u8bf7\u7acb\u5373\u8c03\u67e5 {{signal}} \u9971\u548c\u60c5\u51b5\uff1b\u7cfb\u7edf\u4e0d\u4f1a\u81ea\u52a8\u6269\u7f29\u5bb9\u3002",
+  "{{signal}} is unavailable.": "{{signal}} \u4e0d\u53ef\u7528\u3002", "{{signal}} is {{value}}{{unit}} against {{threshold}}{{unit}}.": "{{signal}} \u4e3a {{value}}{{unit}}\uff0c\u9608\u503c\u4e3a {{threshold}}{{unit}}\u3002"
 }

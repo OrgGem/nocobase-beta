@@ -101,5 +101,16 @@
   "Select which AI Employees this role may use:": "Select which AI Employees this role may use:",
   "Select allowed AI Employees": "Select allowed AI Employees",
   "Max request body size (MB)": "Max request body size (MB)",
-  "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.": "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size."
+  "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.": "Raise this to accept inline base64 images. Base64 adds about 33% to the original file size.",
+  "User LLM permissions": "User LLM permissions",
+  "Add permission": "Add permission",
+  "Edit permission": "Edit permission",
+  "Delete this permission?": "Delete this permission?",
+  "Allowed LLM services": "Allowed LLM services",
+  "Allow all models": "Allow all models",
+  "Allowed models": "Allowed models",
+  "No service allowed": "No service allowed",
+  "All models of allowed services": "All models of allowed services",
+  "Users listed here are limited to the services selected below. Users without a record fall back to the general configuration.": "Users listed here are limited to the services selected below. Users without a record fall back to the general configuration.",
+  "Only services also enabled in the general configuration take effect.": "Only services also enabled in the general configuration take effect."
 }

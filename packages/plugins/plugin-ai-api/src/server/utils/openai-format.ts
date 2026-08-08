@@ -97,6 +97,14 @@ export function toOpenAIResponse(options: {
 
 // ─── OpenAI Streaming chunk format ───
 
+export type OpenAIUsage = {
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+};
+
+export type OpenAIStreamObject = 'chat.completion.chunk' | 'text_completion';
+
 export function toOpenAIStreamChunk(options: {
   id: string;
   model: string;
@@ -118,6 +126,24 @@ export function toOpenAIStreamChunk(options: {
         finish_reason: finishReason,
       },
     ],
+    usage: null,
+  };
+}
+
+export function toOpenAIUsageChunk(options: {
+  id: string;
+  model: string;
+  usage: OpenAIUsage;
+  object?: OpenAIStreamObject;
+}) {
+  const { id, model, usage, object = 'chat.completion.chunk' } = options;
+  return {
+    id,
+    object,
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [],
+    usage,
   };
 }
 

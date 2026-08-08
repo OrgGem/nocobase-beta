@@ -12,6 +12,7 @@ import {
   generateCompletionId,
   toOpenAIResponse,
   toOpenAIStreamChunk,
+  toOpenAIUsageChunk,
   toOpenAIError,
   formatSSE,
   formatSSEDone,
@@ -26,6 +27,7 @@ import {
   writeResponse,
 } from '../utils/streaming';
 import { checkEmployeeAccess } from '../middleware/role-permission';
+import { enforceModelAccess } from '../utils/user-permissions';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
@@ -126,22 +128,10 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
       return;
     }
 
-    // ─── Check whitelist ───
+    // ─── Check whitelist (global config ∩ per-user grant) ───
     const config = await ctx.db.getRepository('aiApiConfig').findOne();
-    if (config?.enabledLlmServices?.length) {
-      const serviceName = service.name;
-      const serviceTitle = service.title;
-      const isAllowed = config.enabledLlmServices.some((s: string) => s === serviceName || s === serviceTitle);
-      if (!isAllowed) {
-        ctx.status = 403;
-        ctx.body = toOpenAIError(
-          403,
-          `LLM service '${service.title || service.name}' is not enabled for API access`,
-          'invalid_request_error',
-          'model_not_available',
-        );
-        return;
-      }
+    if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) {
+      return;
     }
 
     // ─── Create LLM provider instance ───
@@ -155,6 +145,13 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     await prepareLlmBilling(ctx, resolved);
 
     const providerRequestParameters = getProviderRequestParameters(body);
+    if (stream) {
+      const streamOptions = isRecord(body.stream_options) ? body.stream_options : {};
+      providerRequestParameters.stream_options = {
+        ...streamOptions,
+        include_usage: true,
+      };
+    }
     const modelOptions: Record<string, unknown> = {
       model: modelId,
       llmService: service.name,
@@ -380,7 +377,13 @@ async function handleStreamingCompletion(
         finishReason = 'tool_calls';
         await writeResponse(
           ctx,
-          formatSSE(toOpenAIStreamChunk({ id: completionId, model: modelName, delta: { tool_calls: toolCallChunks } })),
+          formatSSE(
+            toOpenAIStreamChunk({
+              id: completionId,
+              model: modelName,
+              delta: { tool_calls: toolCallChunks },
+            }),
+          ),
         );
       }
       if (chunk.usage_metadata) {
@@ -401,6 +404,19 @@ async function handleStreamingCompletion(
         }),
       ),
     );
+
+    if (usage) {
+      await writeResponse(
+        ctx,
+        formatSSE(
+          toOpenAIUsageChunk({
+            id: completionId,
+            model: modelName,
+            usage,
+          }),
+        ),
+      );
+    }
 
     // Send [DONE]
     await writeResponse(ctx, formatSSEDone());

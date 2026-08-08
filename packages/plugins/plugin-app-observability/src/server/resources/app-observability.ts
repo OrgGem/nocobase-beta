@@ -31,7 +31,7 @@ export function registerAppObservabilityResources(
       nodes: action(async () => services.query.nodes()),
       services: action(async () => services.query.services()),
       history: action(async (ctx) => services.query.history(ctx.action.params ?? {})),
-      capacity: action(async () => services.contract.getCapacityAssessment()),
+      capacity: action(async () => services.query.capacity()),
       settings: action(async () => services.settings.get()),
       updateSettings: action(async (ctx) => {
         const settings = await services.settings.update(

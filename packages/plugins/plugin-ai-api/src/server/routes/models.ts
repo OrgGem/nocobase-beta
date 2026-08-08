@@ -9,6 +9,7 @@
 
 import { Context } from '@nocobase/actions';
 import { toOpenAIError } from '../utils/openai-format';
+import { isModelAllowed, isServiceAllowed, resolveUserAccessScope } from '../utils/user-permissions';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -18,6 +19,9 @@ import type PluginAiApiServer from '../plugin';
  * Model IDs use the "serviceName/modelId" format (e.g. "my-openai/gpt-4o")
  * so clients can copy-paste the ID directly into POST /v1/chat/completions
  * without needing to configure a defaultLlmService.
+ *
+ * The catalog is scoped to the caller: a user with an aiApiUserPermissions row only
+ * sees the intersection of the global whitelist and their own grant.
  *
  * Backward compatibility: resolveModelString() in resolve-service.ts still
  * accepts bare model IDs via its 3-tier fallback (defaultLlmService / single service).
@@ -44,18 +48,25 @@ export async function handleListModels(ctx: Context, plugin: PluginAiApiServer) 
       sort: 'sort',
     });
 
+    const scope = await resolveUserAccessScope(ctx);
+    if (scope.lookupFailed) {
+      respondPermissionCheckFailed(ctx);
+      return;
+    }
     const metadataMap = await loadModelMetadata(ctx);
     const now = Math.floor(Date.now() / 1000);
     const models: any[] = [];
 
     for (const service of services) {
       if (service.enabled === false) continue;
+      if (!isServiceAllowed(scope, config?.enabledLlmServices, service)) continue;
 
       const enabledModels = resolveEnabledModels(service);
       const serviceLabel = service.title || service.name;
 
       for (const model of enabledModels) {
         const fullId = `${service.name}/${model.value}`;
+        if (!isModelAllowed(scope, fullId)) continue;
         const meta = metadataMap.get(fullId);
         // An override row with enabled=false hides the model from the catalog.
         if (meta && meta.enabled === false) continue;
@@ -95,12 +106,18 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
       sort: 'sort',
     });
 
+    const scope = await resolveUserAccessScope(ctx);
+    if (scope.lookupFailed) {
+      respondPermissionCheckFailed(ctx);
+      return;
+    }
     const metadataMap = await loadModelMetadata(ctx);
     const now = Math.floor(Date.now() / 1000);
     let found: any = null;
 
     for (const service of services) {
       if (service.enabled === false) continue;
+      if (!isServiceAllowed(scope, config?.enabledLlmServices, service)) continue;
       const enabledModels = resolveEnabledModels(service);
       const serviceLabel = service.title || service.name;
 
@@ -108,6 +125,7 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
         const fullId = `${service.name}/${model.value}`;
         // Accept both new "serviceName/modelId" format AND bare model ID (backward compat)
         if (fullId === modelId || model.value === modelId) {
+          if (!isModelAllowed(scope, fullId)) continue;
           const meta = metadataMap.get(fullId);
           // A disabled override hides the model — treat as not found.
           if (meta && meta.enabled === false) continue;
@@ -134,6 +152,16 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
 }
 
 // ─── Helpers ───
+
+function respondPermissionCheckFailed(ctx: Context): void {
+  ctx.status = 503;
+  ctx.body = toOpenAIError(
+    503,
+    'Unable to verify LLM permissions for this user. Please retry shortly.',
+    'service_unavailable',
+    'permission_check_failed',
+  );
+}
 
 export interface ModelMetadataOverride {
   contextWindow?: number | null;

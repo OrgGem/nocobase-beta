@@ -8,8 +8,15 @@
  */
 
 import { Context } from '@nocobase/actions';
-import { generateCompletionId, toOpenAIError, formatSSE, formatSSEDone } from '../utils/openai-format';
+import {
+  generateCompletionId,
+  toOpenAIError,
+  formatSSE,
+  formatSSEDone,
+  toOpenAIUsageChunk,
+} from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { enforceModelAccess } from '../utils/user-permissions';
 import {
   createRequestAbortController,
   isClientDisconnected,
@@ -93,22 +100,10 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
       return;
     }
 
-    // ─── Check whitelist ───
+    // ─── Check whitelist (global config ∩ per-user grant) ───
     const config = await ctx.db.getRepository('aiApiConfig').findOne();
-    if (config?.enabledLlmServices?.length) {
-      const serviceName = service.name;
-      const serviceTitle = service.title;
-      const isAllowed = config.enabledLlmServices.some((s: string) => s === serviceName || s === serviceTitle);
-      if (!isAllowed) {
-        ctx.status = 403;
-        ctx.body = toOpenAIError(
-          403,
-          `LLM service '${service.title || service.name}' is not enabled for API access`,
-          'invalid_request_error',
-          'model_not_available',
-        );
-        return;
-      }
+    if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) {
+      return;
     }
 
     // ─── Create LLM provider instance ───
@@ -166,7 +161,14 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
     markLlmProviderAttempted(ctx);
 
     if (stream) {
-      await handleStreamingTextCompletion(ctx, chatModel, langchainMessages, completionId, body.model);
+      await handleStreamingTextCompletion(
+        ctx,
+        chatModel,
+        langchainMessages,
+        completionId,
+        body.model,
+        body.stream_options,
+      );
     } else {
       await handleNonStreamingTextCompletion(ctx, chatModel, langchainMessages, completionId, body.model);
     }
@@ -237,6 +239,7 @@ async function handleStreamingTextCompletion(
   messages: [string, string][],
   completionId: string,
   modelName: string,
+  streamOptions: Record<string, unknown> | undefined,
 ) {
   ctx.set({
     'Content-Type': 'text/event-stream',
@@ -250,7 +253,10 @@ async function handleStreamingTextCompletion(
   let usage: Usage | undefined;
   let providerRequestId: string | undefined;
   try {
-    const stream = await chatModel.stream(messages, { signal: requestAbort.signal });
+    const stream = await chatModel.stream(messages, {
+      stream_options: { ...streamOptions, include_usage: true },
+      signal: requestAbort.signal,
+    });
 
     for await (const chunk of stream) {
       if (requestAbort.signal.aborted) throw requestAbort.signal.reason;
@@ -280,6 +286,7 @@ async function handleStreamingTextCompletion(
                 finish_reason: null,
               },
             ],
+            usage: null,
           }),
         );
       }
@@ -306,8 +313,23 @@ async function handleStreamingTextCompletion(
             finish_reason: 'stop',
           },
         ],
+        usage: null,
       }),
     );
+
+    if (usage) {
+      await writeResponse(
+        ctx,
+        formatSSE(
+          toOpenAIUsageChunk({
+            id: completionId,
+            model: modelName,
+            object: 'text_completion',
+            usage,
+          }),
+        ),
+      );
+    }
 
     await writeResponse(ctx, formatSSEDone());
     setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });

@@ -1,5 +1,6 @@
 import type { NodeObservabilitySnapshot, ServiceSnapshot } from '../contracts';
 import type { AppObservabilityContract } from '../contracts';
+import type { CapacityAssessment } from '../capacity/types';
 import { FIRST_BYTE_BOUNDARIES_MS, histogramQuantile, LATENCY_BOUNDARIES_MS } from '../metrics/histogram';
 import type { RedisSnapshotAdapter } from '../adapters/redis-snapshot-adapter';
 
@@ -8,11 +9,18 @@ interface HistoryRepository {
     options: Record<string, unknown>,
   ): Promise<Array<{ toJSON?(): Record<string, unknown> } & Record<string, unknown>>>;
 }
+export interface ClusterCapacityAssessment extends CapacityAssessment {
+  assessedNodeId: string;
+  nodeCount: number;
+}
 export class QueryService {
   constructor(
     private readonly contract: AppObservabilityContract,
     private readonly historyRepository: HistoryRepository,
     private readonly redisAdapter: () => RedisSnapshotAdapter | null,
+    private readonly activeUserWindowSeconds: () => number = () => 300,
+    private readonly assessCapacity?: (snapshot: NodeObservabilitySnapshot) => CapacityAssessment,
+    private readonly clusterActiveUsers: () => Promise<number | null> = async () => null,
   ) {}
   async nodes(): Promise<NodeObservabilitySnapshot[]> {
     const local = this.contract.getNodeSnapshot();
@@ -20,25 +28,39 @@ export class QueryService {
       (await this.redisAdapter()
         ?.list()
         .catch(() => [])) ?? [];
-    return [...new Map([local, ...remote].map((node) => [node.nodeId, node])).values()];
+    // The local node publishes itself to Redis, so its remote copy is up to one
+    // publish interval stale. Insert it last so it overwrites that stale entry.
+    return [...new Map([...remote, local].map((node) => [node.nodeId, node])).values()];
   }
   async overview(): Promise<Record<string, unknown>> {
     const nodes = await this.nodes();
     const services = nodes.flatMap((node) => Object.values(node.services));
+    const clusterActiveUsers = await this.clusterActiveUsers().catch(() => null);
+    const aggregationMode = this.redisAdapter() ? 'redis' : 'single-node';
     return {
-      activeUsers: nodes.reduce((sum, node) => sum + node.activeUsers, 0),
-      sessionWindowSeconds: 300,
+      activeUsers: clusterActiveUsers ?? this.contract.getNodeSnapshot().activeUsers,
+      activeUserScope:
+        clusterActiveUsers !== null ? 'cluster-estimate' : aggregationMode === 'redis' ? 'node-local' : 'single-node',
+      sessionWindowSeconds: this.activeUserWindowSeconds(),
       http: summarizeServices(services.filter((service) => service.service === 'http')),
       llm: groupServices(services.filter((service) => service.service.startsWith('llm.'))),
-      aggregationMode: this.redisAdapter() ? 'redis' : 'single-node',
+      aggregationMode,
       nodes: nodes.length,
     };
   }
   async services(): Promise<Record<string, unknown>[]> {
     return groupServices((await this.nodes()).flatMap((node) => Object.values(node.services)));
   }
-  capacity() {
-    return this.contract.getCapacityAssessment();
+  async capacity(): Promise<ClusterCapacityAssessment> {
+    const nodes = await this.nodes();
+    const assessments = nodes.map((node) => ({
+      nodeId: node.nodeId,
+      assessment: this.assessCapacity?.(node) ?? this.contract.getCapacityAssessment(),
+    }));
+    const selected = assessments.reduce((current, candidate) =>
+      compareCapacity(candidate.assessment, current.assessment) > 0 ? candidate : current,
+    );
+    return { ...selected.assessment, assessedNodeId: selected.nodeId, nodeCount: nodes.length };
   }
   async history(params: {
     from?: string;
@@ -60,6 +82,15 @@ export class QueryService {
     });
     return models.map((model) => model.toJSON?.() ?? model);
   }
+}
+
+function compareCapacity(left: CapacityAssessment, right: CapacityAssessment): number {
+  const stateRank = { healthy: 0, watch: 1, 'scale-soon': 2, critical: 3 } as const;
+  const stateDifference = stateRank[left.state] - stateRank[right.state];
+  if (stateDifference) return stateDifference;
+  const utilization = (assessment: CapacityAssessment) =>
+    assessment.signals.find((signal) => signal.key === assessment.constrainingSignal)?.utilization ?? -1;
+  return utilization(left) - utilization(right);
 }
 function groupServices(services: ServiceSnapshot[]): Record<string, unknown>[] {
   const grouped = new Map<string, ServiceSnapshot[]>();

@@ -13,6 +13,12 @@ export default function OverviewPage() {
   );
   const query = useVisiblePolling(load);
   const data = query.data;
+  const activeUserTitle =
+    data?.activeUserScope === 'cluster-estimate'
+      ? t('Active users (cluster estimate)')
+      : data?.activeUserScope === 'node-local'
+        ? t('Active users (this node)')
+        : t('Active users');
   return (
     <main aria-labelledby="app-observability-overview">
       <Typography.Title id="app-observability-overview" level={2}>
@@ -22,7 +28,7 @@ export default function OverviewPage() {
         <Row gutter={[16, 16]}>
           <Col xs={24} md={12} xl={6}>
             <Card>
-              <Statistic title={t('Active users')} value={data?.activeUsers ?? 0} />
+              <Statistic title={activeUserTitle} value={data?.activeUsers ?? 0} />
             </Card>
           </Col>
           <Col xs={24} md={12} xl={6}>
@@ -44,7 +50,7 @@ export default function OverviewPage() {
         <Card title={t('LLM services')}>
           <Table
             scroll={{ x: 720 }}
-            rowKey={(record) => `${record.service}:${record.operation}`}
+            rowKey={(record) => `${record.service}:${record.operation}:${record.streaming ? 'stream' : 'standard'}`}
             pagination={false}
             dataSource={data?.llm ?? []}
             columns={[

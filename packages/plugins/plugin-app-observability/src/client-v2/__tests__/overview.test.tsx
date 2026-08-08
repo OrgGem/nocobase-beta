@@ -10,7 +10,15 @@ import { useVisiblePolling } from '../hooks';
 describe('OverviewPage', () => {
   beforeEach(() => {
     vi.mocked(useVisiblePolling).mockReturnValue({
-      data: { activeUsers: 3, aggregationMode: 'single-node', llm: [] },
+      data: {
+        activeUsers: 3,
+        activeUserScope: 'cluster-estimate',
+        aggregationMode: 'single-node',
+        llm: [
+          { service: 'llm.chat', operation: 'chat', streaming: false },
+          { service: 'llm.chat', operation: 'chat', streaming: true },
+        ],
+      },
       error: undefined,
       loading: false,
       refresh: vi.fn(),
@@ -18,7 +26,9 @@ describe('OverviewPage', () => {
   });
   it('renders operational summary without raw request content', () => {
     render(<OverviewPage />);
-    expect(screen.getByText('Active users')).toBeInTheDocument();
+    expect(screen.getByText('Active users (cluster estimate)')).toBeInTheDocument();
     expect(screen.getByText('Single-node mode')).toBeInTheDocument();
+    expect(document.querySelectorAll('[data-row-key="llm.chat:chat:standard"]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-row-key="llm.chat:chat:stream"]')).toHaveLength(1);
   });
 });

@@ -33,8 +33,8 @@ export function assessCapacity(input: CapacityInput, thresholds: CapacityThresho
       confidence: 0.15,
       constrainingSignal: null,
       signals,
-      evidence: ['Insufficient reliable runtime signals.'],
-      recommendation: 'Collect more runtime samples before changing capacity.',
+      evidence: [{ key: 'Insufficient reliable runtime signals.' }],
+      recommendation: { key: 'Collect more runtime samples before changing capacity.' },
       thresholdCrossingAt: null,
       calibration: null,
     };
@@ -84,14 +84,23 @@ export function assessCapacityFromSnapshot(
 }
 function signal(key: string, value: number | null | undefined, threshold: number, unit: string): CapacitySignal {
   if (value == null || !Number.isFinite(value))
-    return { key, utilization: null, headroom: null, reliable: false, evidence: `${key} is unavailable.` };
+    return {
+      key,
+      utilization: null,
+      headroom: null,
+      reliable: false,
+      evidence: { key: '{{signal}} is unavailable.', values: { signal: key } },
+    };
   const utilization = Math.max(0, (value / threshold) * 100);
   return {
     key,
     utilization,
     headroom: Math.max(0, 100 - utilization),
     reliable: true,
-    evidence: `${key} is ${round(value)}${unit} against ${threshold}${unit}.`,
+    evidence: {
+      key: '{{signal}} is {{value}}{{unit}} against {{threshold}}{{unit}}.',
+      values: { signal: key, value: round(value), threshold, unit },
+    },
   };
 }
 function stateFor(value: number): CapacityState {
@@ -100,11 +109,15 @@ function stateFor(value: number): CapacityState {
   if (value >= 80) return 'watch';
   return 'healthy';
 }
-function recommendationFor(state: CapacityState, key: string): string {
-  if (state === 'healthy') return 'No capacity change is recommended.';
-  if (state === 'watch') return `Watch ${key} and validate trends.`;
-  if (state === 'scale-soon') return `Plan capacity for ${key}; no automatic scaling is performed.`;
-  return `Investigate ${key} saturation immediately; no automatic scaling is performed.`;
+function recommendationFor(state: CapacityState, key: string): CapacityAssessment['recommendation'] {
+  if (state === 'healthy') return { key: 'No capacity change is recommended.' };
+  if (state === 'watch') return { key: 'Watch {{signal}} and validate trends.', values: { signal: key } };
+  if (state === 'scale-soon')
+    return { key: 'Plan capacity for {{signal}}; no automatic scaling is performed.', values: { signal: key } };
+  return {
+    key: 'Investigate {{signal}} saturation immediately; no automatic scaling is performed.',
+    values: { signal: key },
+  };
 }
 function round(value: number): number {
   return Math.round(value * 10) / 10;

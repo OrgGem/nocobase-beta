@@ -11,4 +11,9 @@
   "Enabled": "Enabled", "Redis snapshots": "Redis snapshots", "Prometheus export": "Prometheus export", "Sample interval seconds": "Sample interval seconds", "Bucket seconds": "Bucket seconds",
   "Retention days": "Retention days", "Active-user window seconds": "Active-user window seconds", "CPU threshold": "CPU threshold", "Memory threshold": "Memory threshold",
   "Event-loop threshold": "Event-loop threshold", "DB wait threshold": "DB wait threshold", "Save": "Save", "Settings saved": "Settings saved", "Unable to save settings": "Unable to save settings"
+,
+  "Active users (cluster estimate)": "Active users (cluster estimate)", "Active users (this node)": "Active users (this node)", "Assessed node": "Assessed node",
+  "Insufficient reliable runtime signals.": "Insufficient reliable runtime signals.", "Collect more runtime samples before changing capacity.": "Collect more runtime samples before changing capacity.", "No capacity change is recommended.": "No capacity change is recommended.",
+  "Watch {{signal}} and validate trends.": "Watch {{signal}} and validate trends.", "Plan capacity for {{signal}}; no automatic scaling is performed.": "Plan capacity for {{signal}}; no automatic scaling is performed.", "Investigate {{signal}} saturation immediately; no automatic scaling is performed.": "Investigate {{signal}} saturation immediately; no automatic scaling is performed.",
+  "{{signal}} is unavailable.": "{{signal}} is unavailable.", "{{signal}} is {{value}}{{unit}} against {{threshold}}{{unit}}.": "{{signal}} is {{value}}{{unit}} against {{threshold}}{{unit}}."
 }

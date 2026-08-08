@@ -75,6 +75,9 @@ export class BucketAggregator {
     this.buckets.clear();
     return result;
   }
+  isEmpty(): boolean {
+    return this.buckets.size === 0;
+  }
   restore(buckets: ObservabilityBucket[]): void {
     for (const bucket of buckets) {
       const key = `${bucket.bucketStart}|${bucket.service}|${bucket.operation}|${bucket.streaming ? 1 : 0}`;
@@ -161,6 +164,7 @@ function subtractService(current: ServiceSnapshot, previous?: ServiceSnapshot): 
   return {
     ...current,
     requestCount: Math.max(0, current.requestCount - previous.requestCount),
+    maxInflight: current.maxInflight,
     successCount: Math.max(0, current.successCount - previous.successCount),
     failureCount: Math.max(0, current.failureCount - previous.failureCount),
     cancelledCount: Math.max(0, current.cancelledCount - previous.cancelledCount),

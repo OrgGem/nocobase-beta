@@ -20,7 +20,7 @@ export default function ServicesPage() {
       <DataState {...query} empty={!data.length} retry={query.refresh}>
         <Table
           scroll={{ x: 900 }}
-          rowKey={(record) => `${record.service}:${record.operation}`}
+          rowKey={(record) => `${record.service}:${record.operation}:${record.streaming ? 'stream' : 'standard'}`}
           dataSource={data}
           columns={[
             { title: t('Service'), dataIndex: 'service' },

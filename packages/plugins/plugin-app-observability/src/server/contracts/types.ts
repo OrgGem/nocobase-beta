@@ -26,6 +26,8 @@ export interface ObservationFinish {
   outputTokens?: number;
   bytesIn?: number;
   bytesOut?: number;
+  /** Late-resolved operation name, for callers that only learn it downstream. */
+  operation?: string;
 }
 export interface ObservationHandle {
   markFirstByte(): void;
@@ -59,6 +61,7 @@ export interface ServiceSnapshot {
   firstByte: HistogramSnapshot;
 }
 export interface NodeObservabilitySnapshot {
+  schemaVersion: 1;
   appName: string;
   nodeId: string;
   timestamp: number;
