@@ -31,6 +31,7 @@ import { enforceModelAccess } from '../utils/user-permissions';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
+import { DirectLlmContextError, prepareDirectLlmContext, type OpenAIMessage } from '../utils/direct-llm-context';
 import { markAiApiFirstProviderOutput } from '../utils/app-observability';
 
 /**
@@ -142,8 +143,6 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
       return;
     }
 
-    await prepareLlmBilling(ctx, resolved);
-
     const providerRequestParameters = getProviderRequestParameters(body);
     if (stream) {
       const streamOptions = isRecord(body.stream_options) ? body.stream_options : {};
@@ -165,13 +164,6 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     if (body.frequency_penalty !== undefined) modelOptions.frequencyPenalty = body.frequency_penalty;
     if (body.presence_penalty !== undefined) modelOptions.presencePenalty = body.presence_penalty;
     if (body.stop !== undefined) modelOptions.stop = body.stop;
-
-    const Provider = providerMeta.provider;
-    const provider = new Provider({
-      app: ctx.app,
-      serviceOptions: service.options,
-      modelOptions,
-    });
 
     // ─── Build system prompt from AI Employee ───
     let systemPrompt = '';
@@ -197,11 +189,30 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     }
 
     // ─── Build messages (inject system prompt if not provided by client) ───
-    const messages = [...body.messages];
+    let messages: OpenAIMessage[] = [...body.messages];
     const hasSystemMessage = messages.some((m: any) => m.role === 'system');
     if (systemPrompt && !hasSystemMessage) {
       messages.unshift({ role: 'system', content: systemPrompt });
     }
+
+    const preparedContext = await prepareDirectLlmContext(ctx, {
+      serviceName: service.name,
+      modelId,
+      messages,
+      tools: body.tools,
+      maxCompletionTokens: body.max_completion_tokens,
+      maxTokens: body.max_tokens,
+    });
+    messages = preparedContext.messages;
+
+    await prepareLlmBilling(ctx, resolved);
+
+    const Provider = providerMeta.provider;
+    const provider = new Provider({
+      app: ctx.app,
+      serviceOptions: service.options,
+      modelOptions,
+    });
 
     // ─── Build message tuples for LangChain model ───
     // LangChain chat models accept [role, content] tuples or BaseMessage objects.
@@ -257,15 +268,16 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     }
   } catch (err) {
     ctx.log.error('AI API chat completions error:', err);
-    if (!ctx.res.headersSent) {
+    if (!ctx.res?.headersSent) {
       const isQuotaError = err instanceof AiApiQuotaError;
-      ctx.status = isQuotaError ? 429 : 500;
+      const isContextError = err instanceof DirectLlmContextError;
+      ctx.status = isQuotaError ? 429 : isContextError ? 400 : 500;
       if (isQuotaError) ctx.set('X-RateLimit-Reason', err.code);
       ctx.body = toOpenAIError(
         ctx.status,
         getErrorMessage(err, 'Internal server error'),
-        isQuotaError ? 'quota_error' : 'server_error',
-        isQuotaError ? err.code : undefined,
+        isQuotaError ? 'quota_error' : isContextError ? 'invalid_request_error' : 'server_error',
+        isQuotaError || isContextError ? err.code : undefined,
       );
     }
   }

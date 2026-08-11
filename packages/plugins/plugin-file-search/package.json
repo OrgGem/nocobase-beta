@@ -39,8 +39,7 @@
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/server": "2.x",
     "plugin-cluster-manager": "2.x",
-    "plugin-document-parser": "2.x",
-    "plugin-markitdown-parser": "2.x"
+    "plugin-document-parser": "1.x"
   },
   "dependencies": {}
 }

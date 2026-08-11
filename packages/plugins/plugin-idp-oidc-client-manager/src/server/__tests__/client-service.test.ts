@@ -1,199 +1,157 @@
 import type { Repository } from '@nocobase/database';
-import type { AesEncryptor } from '@nocobase/server';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  DatabaseOidcClientResolver,
-  generateClientSecret,
-  normalizeClientInput,
-  serializeClient,
-} from '../client-service';
+import { DatabaseOidcClientResolver, normalizeClientInput, serializeClient } from '../client-service';
 
-describe('OIDC client service', () => {
-  it('normalizes a confidential authorization-code client', () => {
-    expect(
-      normalizeClientInput({
-        name: 'CRM',
-        clientId: 'crm-production',
-        redirectUris: ['https://crm.example.com/signin-oidc'],
-        postLogoutRedirectUris: ['https://crm.example.com/signout-callback-oidc'],
-        scopes: ['openid', 'profile', 'email', 'offline_access'],
-        clientType: 'confidential',
-        allowDynamicLoopbackPort: false,
-        tokenEndpointAuthMethod: 'client_secret_basic',
-        enabled: true,
-      }),
-    ).toEqual({
-      name: 'CRM',
-      clientId: 'crm-production',
-      redirectUris: ['https://crm.example.com/signin-oidc'],
-      postLogoutRedirectUris: ['https://crm.example.com/signout-callback-oidc'],
-      scopes: ['openid', 'profile', 'email', 'offline_access'],
-      clientType: 'confidential',
+const publicInput = {
+  name: 'Desktop app',
+  clientId: 'desktop-app',
+  redirectUris: ['https://desktop.example.com/callback'],
+  postLogoutRedirectUris: [],
+  scopes: ['openid', 'profile'],
+  clientType: 'public',
+  allowDynamicLoopbackPort: false,
+  tokenEndpointAuthMethod: 'none',
+  enabled: true,
+};
+
+describe('OIDC public client service', () => {
+  it('normalizes a public authorization-code client with PKCE metadata', () => {
+    expect(normalizeClientInput(publicInput)).toEqual({
+      name: 'Desktop app',
+      clientId: 'desktop-app',
+      redirectUris: ['https://desktop.example.com/callback'],
+      postLogoutRedirectUris: [],
+      scopes: ['openid', 'profile'],
+      clientType: 'public',
       allowDynamicLoopbackPort: false,
-      tokenEndpointAuthMethod: 'client_secret_basic',
+      tokenEndpointAuthMethod: 'none',
       autoApprove: false,
       enabled: true,
     });
   });
 
-  it('rejects insecure remote callbacks and reserved client IDs', () => {
-    const base = {
-      name: 'CRM',
-      postLogoutRedirectUris: [],
-      scopes: ['openid'],
-      clientType: 'confidential',
-      allowDynamicLoopbackPort: false,
-      tokenEndpointAuthMethod: 'client_secret_basic',
-      enabled: true,
-    };
-    expect(() =>
-      normalizeClientInput({ ...base, clientId: 'crm', redirectUris: ['http://crm.example.com/callback'] }),
-    ).toThrow('HTTPS');
-    expect(() =>
-      normalizeClientInput({ ...base, clientId: 'app:crm', redirectUris: ['https://crm.example.com/callback'] }),
-    ).toThrow('automatic approval');
+  it('rejects confidential, client-credentials, and secret-bearing configurations', () => {
+    expect(() => normalizeClientInput({ ...publicInput, clientType: 'confidential' })).toThrow(
+      'Only public clients are supported',
+    );
+    expect(() => normalizeClientInput({ ...publicInput, grantTypes: ['client_credentials'] })).toThrow(
+      'Only the authorization_code grant type is supported',
+    );
+    expect(() => normalizeClientInput({ ...publicInput, tokenEndpointAuthMethod: 'client_secret_basic' })).toThrow(
+      'Public clients must use token endpoint authentication none',
+    );
+    expect(() => normalizeClientInput({ ...publicInput, serviceUserId: 7 })).toThrow(
+      'Client secret and service-user credentials are disabled',
+    );
+    expect(() => normalizeClientInput({ ...publicInput, clientSecret: 'secret' })).toThrow(
+      'Client secret and service-user credentials are disabled',
+    );
   });
 
-  it('allows HTTP loopback callbacks for local development', () => {
+  it('requires the public client type instead of defaulting to confidential', () => {
+    const { clientType: _clientType, ...missingType } = publicInput;
+    expect(() => normalizeClientInput(missingType)).toThrow('Only public clients are supported');
+  });
+
+  it('rejects insecure callbacks and preserves client IDs exactly', () => {
+    expect(() =>
+      normalizeClientInput({ ...publicInput, redirectUris: ['http://desktop.example.com/callback'] }),
+    ).toThrow('HTTPS');
     expect(
       normalizeClientInput({
-        name: 'Local CRM',
-        clientId: 'local-crm',
-        redirectUris: ['http://localhost:5000/signin-oidc'],
-        postLogoutRedirectUris: [],
-        scopes: ['openid', 'profile'],
-        clientType: 'confidential',
-        allowDynamicLoopbackPort: false,
-        tokenEndpointAuthMethod: 'client_secret_post',
-        enabled: true,
-      }).redirectUris,
-    ).toEqual(['http://localhost:5000/signin-oidc']);
+        ...publicInput,
+        clientId: 'app:desktop-app',
+        autoApprove: true,
+      }).clientId,
+    ).toBe('app:desktop-app');
   });
 
-  it('returns provider metadata only for enabled clients', async () => {
-    const record = {
-      id: 1,
-      name: 'CRM',
-      clientId: 'crm-production',
-      clientSecret: 'encrypted-field-decrypted-value',
-      redirectUris: ['https://crm.example.com/signin-oidc'],
-      postLogoutRedirectUris: [],
-      scopes: ['openid', 'profile'],
-      clientType: 'confidential' as const,
-      allowDynamicLoopbackPort: false,
-      tokenEndpointAuthMethod: 'client_secret_basic' as const,
-      enabled: true,
-    };
-    const findOne = vi.fn().mockResolvedValue(record);
-    const decrypt = vi.fn().mockResolvedValue('decrypted-client-secret');
-    const resolver = new DatabaseOidcClientResolver(
-      { findOne } as unknown as Repository,
-      { decrypt } as unknown as AesEncryptor,
-    );
-
-    await expect(resolver.resolveClient('crm-production')).resolves.toMatchObject({
-      client_id: 'crm-production',
-      client_secret: 'decrypted-client-secret',
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      scope: 'openid profile',
-    });
-    expect(findOne).toHaveBeenCalledWith({ filter: { clientId: 'crm-production', enabled: true } });
-    expect(decrypt).toHaveBeenCalledWith('encrypted-field-decrypted-value');
-  });
-
-  it('never serializes the client secret in list responses', () => {
-    const publicRecord = serializeClient({
-      id: 1,
-      name: 'CRM',
-      clientId: 'crm-production',
-      clientSecret: 'must-not-leak',
-      redirectUris: ['https://crm.example.com/callback'],
-      postLogoutRedirectUris: [],
-      scopes: ['openid'],
-      clientType: 'confidential',
-      allowDynamicLoopbackPort: false,
-      tokenEndpointAuthMethod: 'client_secret_basic',
-      enabled: true,
-    });
-    expect(publicRecord).not.toHaveProperty('clientSecret');
-  });
-
-  it('generates high-entropy, URL-safe unique secrets', () => {
-    const first = generateClientSecret();
-    const second = generateClientSecret();
-    expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(second).not.toBe(first);
+  it('allows HTTP loopback callbacks and dynamic ports for native public clients', () => {
+    expect(
+      normalizeClientInput({
+        ...publicInput,
+        redirectUris: ['http://127.0.0.1/callback'],
+        allowDynamicLoopbackPort: true,
+      }).allowDynamicLoopbackPort,
+    ).toBe(true);
+    expect(() =>
+      normalizeClientInput({
+        ...publicInput,
+        redirectUris: ['https://desktop.example.com/callback'],
+        allowDynamicLoopbackPort: true,
+      }),
+    ).toThrow('HTTP loopback');
   });
 
   it('requires openid and rejects provider-unsupported scopes', () => {
-    const base = {
-      name: 'CRM',
-      clientId: 'crm-production',
-      redirectUris: ['https://crm.example.com/callback'],
-      postLogoutRedirectUris: [],
-      tokenEndpointAuthMethod: 'client_secret_basic',
-      enabled: true,
-    };
-    expect(() => normalizeClientInput({ ...base, scopes: ['profile'] })).toThrow('include openid');
-    expect(() => normalizeClientInput({ ...base, scopes: ['openid', 'custom:write'] })).toThrow('not supported');
+    expect(() => normalizeClientInput({ ...publicInput, scopes: ['profile'] })).toThrow('include openid');
+    expect(() => normalizeClientInput({ ...publicInput, scopes: ['openid', 'custom:write'] })).toThrow('not supported');
   });
 
-  it('resolves a public native client without decrypting or returning a client secret', async () => {
+  it('resolves only enabled public clients without a client secret', async () => {
     const findOne = vi.fn().mockResolvedValue({
-      id: 2,
+      id: 1,
       name: 'Desktop app',
       clientId: 'desktop-app',
       clientSecret: null,
       redirectUris: ['http://127.0.0.1/callback'],
       postLogoutRedirectUris: [],
       scopes: ['openid', 'profile', 'offline_access'],
-      clientType: 'public',
+      clientType: 'public' as const,
       allowDynamicLoopbackPort: true,
-      tokenEndpointAuthMethod: 'client_secret_basic',
-      autoApprove: false,
+      tokenEndpointAuthMethod: 'none' as const,
       enabled: true,
     });
-    const decrypt = vi.fn();
-    const resolver = new DatabaseOidcClientResolver(
-      { findOne } as unknown as Repository,
-      { decrypt } as unknown as AesEncryptor,
-    );
+    const resolver = new DatabaseOidcClientResolver({ findOne } as unknown as Repository);
 
-    const metadata = await resolver.resolveClient('desktop-app');
-    expect(metadata).toMatchObject({
+    await expect(resolver.resolveClient('desktop-app')).resolves.toMatchObject({
       client_id: 'desktop-app',
       application_type: 'native',
       token_endpoint_auth_method: 'none',
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
       redirect_uris: ['http://127.0.0.1/callback'],
     });
-    expect(metadata).not.toHaveProperty('client_secret');
-    expect(decrypt).not.toHaveBeenCalled();
+    await expect(resolver.resolveClient('desktop-app')).resolves.not.toHaveProperty('client_secret');
+    expect(findOne).toHaveBeenCalledWith({ filter: { clientId: 'desktop-app', enabled: true } });
   });
 
-  it('only enables dynamic ports for public HTTP loopback redirects', () => {
-    const base = {
+  it('does not resolve an existing confidential record after public-only mode is enabled', async () => {
+    const resolver = new DatabaseOidcClientResolver({
+      findOne: vi.fn().mockResolvedValue({ clientId: 'legacy-confidential', clientType: 'confidential' }),
+    } as unknown as Repository);
+
+    await expect(resolver.resolveClient('legacy-confidential')).resolves.toBeUndefined();
+  });
+
+  it('never serializes a client secret and hides non-public records', () => {
+    const publicRecord = serializeClient({
+      id: 1,
       name: 'Desktop app',
       clientId: 'desktop-app',
+      clientSecret: 'must-not-leak',
+      redirectUris: ['https://desktop.example.com/callback'],
       postLogoutRedirectUris: [],
       scopes: ['openid'],
       clientType: 'public',
-      allowDynamicLoopbackPort: true,
+      allowDynamicLoopbackPort: false,
+      tokenEndpointAuthMethod: 'none',
+      enabled: true,
+    });
+    expect(publicRecord).not.toHaveProperty('clientSecret');
+    const legacyRecord = {
+      id: 2,
+      name: 'Legacy confidential',
+      clientId: 'legacy-confidential',
+      redirectUris: ['https://legacy.example.com/callback'],
+      postLogoutRedirectUris: [],
+      scopes: ['openid'],
+      clientType: 'confidential',
+      allowDynamicLoopbackPort: false,
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      autoApprove: false,
       enabled: true,
     };
-    expect(
-      normalizeClientInput({ ...base, redirectUris: ['http://127.0.0.1/callback'] }).allowDynamicLoopbackPort,
-    ).toBe(true);
-    expect(() => normalizeClientInput({ ...base, redirectUris: ['https://desktop.example.com/callback'] })).toThrow(
-      'HTTP loopback',
-    );
-    expect(() =>
-      normalizeClientInput({
-        ...base,
-        clientType: 'confidential',
-        tokenEndpointAuthMethod: 'client_secret_basic',
-        redirectUris: ['http://127.0.0.1/callback'],
-      }),
-    ).toThrow('only available to public');
+    expect(serializeClient(legacyRecord as unknown as Parameters<typeof serializeClient>[0])).toBeNull();
   });
 });

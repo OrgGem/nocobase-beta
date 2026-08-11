@@ -1,101 +1,80 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
-
 import { Context } from '@nocobase/actions';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { writeFile, unlink } from 'fs/promises';
 import type { Repository } from '@nocobase/database';
-import { callExternalOcr, OcrProviderConfig } from './external-ocr-client';
-import type { InternalParserRegistry, AttachmentLike } from './internal-parser-registry';
+import type { AttachmentLike } from './internal-parser-registry';
+import type { DocumentParseService } from './document-parse-service';
 import { resolveExtname, sanitizeForXmlAttr } from './utils';
-import { DEFAULT_SETTINGS } from '../../shared/defaults';
+import { DEFAULT_SETTINGS, resolvePipeline } from '../../shared/defaults';
+import type { DocumentParserPipeline } from './document-parse.types';
 
 export type ParsedAttachmentResult = {
   placement: string;
-  content: any;
+  content: unknown;
 };
 
 export type DefaultParserFn = () => Promise<ParsedAttachmentResult>;
 
 type Settings = {
-  mode: 'default' | 'internal' | 'external' | 'smart-fallback';
-  activeProviderId?: number | string | null;
-  fallbackToDefault: boolean;
   imagePassThrough: boolean;
   includedExtnames: string[];
   useDocpixie: boolean;
+  pipeline: DocumentParserPipeline;
 };
 
-/**
- * Decides how to process each attachment:
- *
- *  1. If `imagePassThrough` is true and the file is an image → default
- *  2. If `includedExtnames` is non-empty and extname is not in the list → default
- *  3. Based on `mode`:
- *     - default  → call the original provider.parseAttachment()
- *     - internal → run through InternalParserRegistry
- *     - external → call the configured external OCR API
- *  4. On failure, if `fallbackToDefault` → call original provider as fallback
- */
+type DocpixieService = {
+  isReady(): boolean;
+  processDocument(path: string, options: { name: string }): Promise<number>;
+};
+
+type DocpixiePlugin = {
+  service?: DocpixieService;
+};
+
 export class ParseRouter {
   constructor(
     private readonly getSettingsRepo: () => Repository,
-    private readonly getProvidersRepo: () => Repository,
-    private readonly internalRegistry: InternalParserRegistry,
+    private readonly documentParseService: DocumentParseService,
     private readonly getFileBuffer: (
       ctx: Context,
       attachment: AttachmentLike,
     ) => Promise<{ buffer: Buffer; url: string }>,
-    /** Returns the docpixie plugin instance if it is loaded & active, else null */
-    private readonly getDocpixiePlugin: () => any | null = () => null,
+    private readonly getDocpixiePlugin: () => DocpixiePlugin | null = () => null,
   ) {}
-
-  // ── Settings cache (invalidated every N ms) ───────────────────────────────
 
   private cachedSettings: Settings | null = null;
   private settingsCachedAt = 0;
-  private readonly CACHE_TTL_MS = 5_000;
+  private readonly cacheTtlMs = 5_000;
 
   private async getSettings(): Promise<Settings> {
     const now = Date.now();
-    if (this.cachedSettings && now - this.settingsCachedAt < this.CACHE_TTL_MS) {
+    if (this.cachedSettings && now - this.settingsCachedAt < this.cacheTtlMs) {
       return this.cachedSettings;
     }
 
     const repo = this.getSettingsRepo();
     let record = await repo.findOne({});
     if (!record) {
-      // Auto-create defaults on first access
-      record = await repo.create({
-        values: { ...DEFAULT_SETTINGS },
-      });
+      record = await repo.create({ values: { ...DEFAULT_SETTINGS } });
     }
 
     this.cachedSettings = {
-      mode: record.get('mode') ?? 'default',
-      activeProviderId: record.get('activeProviderId') ?? null,
-      fallbackToDefault: record.get('fallbackToDefault') ?? true,
       imagePassThrough: record.get('imagePassThrough') ?? true,
-      includedExtnames: record.get('includedExtnames') ?? [],
+      includedExtnames: Array.isArray(record.get('includedExtnames')) ? record.get('includedExtnames') : [],
       useDocpixie: record.get('useDocpixie') ?? false,
+      pipeline: resolvePipeline(record.get('pipeline'), {
+        activeProviderId: record.get('activeProviderId'),
+        fallbackToDefault: record.get('fallbackToDefault'),
+      }),
     };
     this.settingsCachedAt = now;
-    return this.cachedSettings!;
+    return this.cachedSettings;
   }
 
-  /** Call after saving settings so the next request reads fresh values */
   invalidateSettingsCache(): void {
     this.cachedSettings = null;
   }
-
-  // ── Main entry point ──────────────────────────────────────────────────────
 
   async route(
     ctx: Context,
@@ -104,72 +83,35 @@ export class ParseRouter {
   ): Promise<ParsedAttachmentResult> {
     const settings = await this.getSettings();
 
-    // 1. Always pass images through if configured
     if (settings.imagePassThrough && attachment.mimetype?.startsWith('image/')) {
       return defaultParser();
     }
 
-    // 2. If an explicit extension whitelist is set and this file isn't in it → default
-    if (settings.includedExtnames.length > 0) {
-      const ext = resolveExtname(attachment);
-      if (!settings.includedExtnames.includes(ext)) {
-        return defaultParser();
+    if (settings.includedExtnames.length > 0 && !settings.includedExtnames.includes(resolveExtname(attachment))) {
+      return defaultParser();
+    }
+
+    if (settings.useDocpixie) {
+      const docpixieResult = await this.routeDocpixie(ctx, attachment);
+      if (docpixieResult) {
+        return docpixieResult;
       }
     }
 
-    // 3. DocPixie indexing — runs BEFORE normal mode routing when enabled
-    //    Indexes the document asynchronously and returns a metadata reference block
-    //    so the LLM uses docpixie:query tool instead of reading raw file content.
-    if (settings.useDocpixie) {
-      const docpixieResult = await this.routeDocpixie(ctx, attachment);
-      if (docpixieResult) return docpixieResult;
-      // docpixie unavailable/failed — fall through to normal routing
+    const result = await this.documentParseService.parseAttachment(ctx, attachment, { useCase: 'chat' });
+    if (result.handled) {
+      return textToContentBlock(result.text, attachment);
     }
 
-    // 4. Route based on mode
-    switch (settings.mode) {
-      case 'default':
-        return defaultParser();
-
-      case 'internal':
-        return this.routeInternal(ctx, attachment, settings, defaultParser);
-
-      case 'external':
-        return this.routeExternal(ctx, attachment, settings, defaultParser);
-
-      case 'smart-fallback':
-        return this.routeSmartFallback(ctx, attachment, settings, defaultParser);
-
-      default:
-        return defaultParser();
+    if (settings.pipeline.chat.fallbackToProviderDefault) {
+      return defaultParser();
     }
+    return unsupportedResult(attachment);
   }
 
-  // ── DocPixie routing ─────────────────────────────────────────────────────
-
-  /**
-   * Index the attachment into DocPixie and return a metadata reference block.
-   *
-   * Strategy:
-   *   1. Get the DocPixie plugin instance (returns null if not loaded/active)
-   *   2. Download the file buffer and write to a temp file (works for S3 / local)
-   *   3. Call docpixieService.processDocument() — this:
-   *        a. Creates a DB record immediately → returns documentId fast
-   *        b. Continues extracting pages + summarizing in the background
-   *   4. Build a content block with metadata + LLM instructions to use docpixie:query
-   *   5. Clean up temp file
-   *
-   * Returns null if DocPixie is unavailable or not ready so caller can fall through.
-   */
   private async routeDocpixie(ctx: Context, attachment: AttachmentLike): Promise<ParsedAttachmentResult | null> {
-    const docpixiePlugin = this.getDocpixiePlugin();
-    if (!docpixiePlugin?.service) {
-      return null;
-    }
-
-    const service = docpixiePlugin.service;
-    if (!service.isReady()) {
-      ctx.log?.warn?.('[DocumentParser] DocPixie service is not ready (not configured) — skipping');
+    const service = this.getDocpixiePlugin()?.service;
+    if (!service?.isReady()) {
       return null;
     }
 
@@ -178,208 +120,51 @@ export class ParseRouter {
     let tempPath: string | null = null;
 
     try {
-      // Download file bytes (handles S3 URLs and local paths uniformly)
       const { buffer } = await this.getFileBuffer(ctx, attachment);
-
-      // Write to a uniquely-named temp file so DocPixie can read it by path
-      const ext = resolveExtname(attachment) || '.bin';
-      tempPath = join(tmpdir(), `docparser-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
-      await writeFile(tempPath, buffer);
-
-      // Kick off DocPixie indexing — processDocument creates the DB record fast
-      // and continues ingestion (OCR + LLM summarization) asynchronously
-      const documentId: number = await service.processDocument(tempPath, { name: filename });
-
-      ctx.log?.info?.(`[DocumentParser] DocPixie indexing started: documentId=${documentId} file="${filename}"`);
-
-      return docpixieReferenceBlock(documentId, filename, mimetype);
-    } catch (err) {
-      ctx.log?.warn?.(`[DocumentParser] DocPixie indexing failed for "${filename}": ${err}`);
-      return null; // fall through to normal routing
-    } finally {
-      // Clean up temp file (best-effort — DocPixie has already read it)
-      if (tempPath) {
-        unlink(tempPath).catch(() => {});
-      }
-    }
-  }
-
-  // ── Internal routing ──────────────────────────────────────────────────────
-
-  private async routeInternal(
-    ctx: Context,
-    attachment: AttachmentLike,
-    settings: Settings,
-    defaultParser: DefaultParserFn,
-  ): Promise<ParsedAttachmentResult> {
-    try {
-      const result = await this.internalRegistry.parse(attachment, ctx);
-
-      if (result.handled && result.text && result.text.trim().length > 0) {
-        return textToContentBlock(result.text, attachment);
-      }
-
-      // Not handled or empty text — try external OCR if a provider is configured
-      ctx.log?.info?.(
-        `[DocumentParser] internal parse returned empty or unhandled for "${attachment.filename}" — attempting external OCR fallback`,
+      tempPath = join(
+        tmpdir(),
+        `docparser-${Date.now()}-${Math.random().toString(36).slice(2)}${resolveExtname(attachment) || '.bin'}`,
       );
-      return this.fallbackToExternalThenDefault(ctx, attachment, settings, defaultParser);
-    } catch (err) {
-      ctx.log?.warn?.(`[DocumentParser] internal parse failed for "${attachment.filename}": ${err} — attempting external OCR fallback`);
-      return this.fallbackToExternalThenDefault(ctx, attachment, settings, defaultParser);
-    }
-  }
-
-  /**
-   * Try external OCR as an intermediate fallback before falling back to default.
-   * If no external provider is configured or external fails, fall back to default.
-   */
-  private async fallbackToExternalThenDefault(
-    ctx: Context,
-    attachment: AttachmentLike,
-    settings: Settings,
-    defaultParser: DefaultParserFn,
-  ): Promise<ParsedAttachmentResult> {
-    if (settings.activeProviderId) {
-      try {
-        return await this.routeExternal(ctx, attachment, { ...settings, fallbackToDefault: false }, defaultParser);
-      } catch (err) {
-        ctx.log?.warn?.(
-          `[DocumentParser] external OCR fallback also failed for "${attachment.filename}": ${err} — falling back to default`,
-        );
+      await writeFile(tempPath, buffer);
+      const documentId = await service.processDocument(tempPath, { name: filename });
+      return docpixieReferenceBlock(documentId, filename, mimetype);
+    } catch (error) {
+      ctx.log?.warn?.(`[DocumentParser] DocPixie indexing failed for ${filename}: ${getErrorName(error)}`);
+      return null;
+    } finally {
+      if (tempPath) {
+        await unlink(tempPath).catch(() => undefined);
       }
     }
-    return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
-  }
-
-  // ── Smart Fallback routing ───────────────────────────────────────────────
-
-  private async routeSmartFallback(
-    ctx: Context,
-    attachment: AttachmentLike,
-    settings: Settings,
-    defaultParser: DefaultParserFn,
-  ): Promise<ParsedAttachmentResult> {
-    // Smart fallback reuses the same Internal → External → Default chain
-    return this.routeInternal(ctx, attachment, settings, defaultParser);
-  }
-
-  // ── External routing ──────────────────────────────────────────────────────
-
-  private async routeExternal(
-    ctx: Context,
-    attachment: AttachmentLike,
-    settings: Settings,
-    defaultParser: DefaultParserFn,
-  ): Promise<ParsedAttachmentResult> {
-    if (!settings.activeProviderId) {
-      ctx.log?.warn?.('[DocumentParser] mode=external but no activeProviderId configured');
-      return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
-    }
-
-    const providerRecord = await this.getProvidersRepo().findOne({ filterByTk: settings.activeProviderId });
-    if (!providerRecord || !providerRecord.get('enabled')) {
-      ctx.log?.warn?.(`[DocumentParser] External provider ${settings.activeProviderId} not found or disabled`);
-      return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
-    }
-
-    const providerConfig = this.recordToProviderConfig(providerRecord);
-
-    // Check MIME type scope if the provider declares one
-    const supportedMimetypes: string[] = providerConfig['supportedMimetypes'] ?? [];
-    if (supportedMimetypes.length > 0 && attachment.mimetype && !supportedMimetypes.includes(attachment.mimetype)) {
-      // This provider doesn't handle this MIME type — fall back
-      return settings.fallbackToDefault ? defaultParser() : this.unsupportedResult(attachment);
-    }
-
-    try {
-      const { buffer, url } = await this.getFileBuffer(ctx, attachment);
-
-      const text = await callExternalOcr(providerConfig, {
-        fileBuffer: buffer,
-        filename: attachment.filename ?? attachment.name ?? 'file',
-        mimetype: attachment.mimetype ?? 'application/octet-stream',
-        fileUrl: url,
-      });
-
-      return textToContentBlock(text, attachment);
-    } catch (err) {
-      ctx.log?.warn?.(`[DocumentParser] external OCR failed for "${attachment.filename}": ${err}`);
-      if (settings.fallbackToDefault) {
-        return defaultParser();
-      }
-      throw err;
-    }
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  private recordToProviderConfig(record: any): OcrProviderConfig & { supportedMimetypes?: string[] } {
-    return {
-      apiEndpoint: record.get('apiEndpoint'),
-      authType: record.get('authType'),
-      apiKey: record.get('apiKey'),
-      authConfig: record.get('authConfig') ?? {},
-      requestFormat: record.get('requestFormat') ?? 'multipart',
-      requestConfig: record.get('requestConfig') ?? {},
-      responseTextPath: record.get('responseTextPath') ?? 'text',
-      timeout: record.get('timeout') ?? 60000,
-      supportedMimetypes: record.get('supportedMimetypes') ?? [],
-    };
-  }
-
-  private unsupportedResult(attachment: AttachmentLike): ParsedAttachmentResult {
-    return {
-      placement: 'contentBlocks',
-      content: {
-        type: 'text',
-        text: `[Attachment: ${attachment.filename ?? attachment.name ?? 'file'} — no parser available]`,
-      },
-    };
   }
 }
 
-// ─── Pure helpers ─────────────────────────────────────────────────────────────
+function unsupportedResult(attachment: AttachmentLike): ParsedAttachmentResult {
+  return {
+    placement: 'contentBlocks',
+    content: {
+      type: 'text',
+      text: `[Attachment: ${attachment.filename ?? attachment.name ?? 'file'} — no parser available]`,
+    },
+  };
+}
 
-// resolveExtname is now imported from './utils'
-
-/**
- * Build a content block that tells the LLM:
- *   "This document is indexed in DocPixie — do NOT try to read it inline,
- *    use the docpixie:query tool with the given documentId instead."
- *
- * The block intentionally omits full text content to avoid filling the
- * context window.  Instead it provides:
- *   - Document metadata (name, type, DocPixie ID)
- *   - Explicit instructions for tool usage
- *   - A ready-to-use query example
- */
 function docpixieReferenceBlock(documentId: number, filename: string, mimetype: string): ParsedAttachmentResult {
   const safeFilename = sanitizeForXmlAttr(filename);
   const safeMimetype = sanitizeForXmlAttr(mimetype);
   const text = [
     `<document_indexed filename="${safeFilename}" type="${safeMimetype}" docpixie_id="${documentId}">`,
     `This document has been submitted to DocPixie for deep indexing (Document ID: ${documentId}).`,
-    ``,
-    `IMPORTANT: Do NOT attempt to read the raw file content inline.`,
-    `Instead, use the \`docpixie:query\` tool to retrieve information from this document.`,
-    ``,
-    `Usage examples:`,
-    `  - Summarize: docpixie:query { "query": "summarize this document", "documentIds": [${documentId}] }`,
-    `  - Find info: docpixie:query { "query": "<user question>", "documentIds": [${documentId}] }`,
-    ``,
-    `Note: Indexing runs in the background. If you query immediately and get no results,`,
-    `wait a moment and retry — complex documents (PDF with many pages) take longer to index.`,
-    `</document_indexed>`,
+    '',
+    'IMPORTANT: Do NOT attempt to read the raw file content inline.',
+    'Instead, use the `docpixie:query` tool to retrieve information from this document.',
+    '',
+    '</document_indexed>',
   ].join('\n');
 
-  return {
-    placement: 'contentBlocks',
-    content: { type: 'text', text },
-  };
+  return { placement: 'contentBlocks', content: { type: 'text', text } };
 }
 
-/** Wrap extracted text into the `ParsedAttachmentResult` shape that plugin-ai expects */
 function textToContentBlock(text: string, attachment: AttachmentLike): ParsedAttachmentResult {
   const filename = sanitizeForXmlAttr(attachment.filename ?? attachment.name ?? 'document');
   const mimetype = sanitizeForXmlAttr(attachment.mimetype ?? '');
@@ -390,4 +175,8 @@ function textToContentBlock(text: string, attachment: AttachmentLike): ParsedAtt
       text: `<document filename="${filename}" type="${mimetype}">\n${text}\n</document>`,
     },
   };
+}
+
+function getErrorName(error: unknown): string {
+  return error instanceof Error ? error.name : 'Error';
 }

@@ -16,6 +16,12 @@ describe('plugin-file-search settings', () => {
     expect(settings.timeoutMs).toBe(90000);
   });
 
+  it('migrates the legacy MarkItDown strategy to Document Parser', () => {
+    const settings = normalizeSettings({ parserStrategy: 'markitdown' });
+
+    expect(settings.parserStrategy).toBe('document-parser');
+  });
+
   it('falls back to safe defaults for unknown parser strategy', () => {
     const settings = normalizeSettings({
       parserStrategy: 'unknown',

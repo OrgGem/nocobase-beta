@@ -18,22 +18,25 @@ export default defineCollection({
   title: 'Document Parser Settings',
   fields: [
     {
+      // Retained only to normalize settings saved before the canonical pipeline.
       name: 'mode',
       type: 'string',
       defaultValue: 'default',
-      comment: "'default' | 'internal' | 'external'",
+      comment: 'Legacy compatibility field; not user-editable',
     },
     {
-      // FK to docParserProviders — which external provider is active
+      // Retained only to normalize settings saved before the canonical pipeline.
       name: 'activeProviderId',
       type: 'bigInt',
       allowNull: true,
+      comment: 'Legacy compatibility field; not user-editable',
     },
     {
-      // When internal/external parsing fails, fall back to the default provider logic
+      // Retained only to normalize settings saved before the canonical pipeline.
       name: 'fallbackToDefault',
       type: 'boolean',
       defaultValue: true,
+      comment: 'Legacy compatibility field; not user-editable',
     },
     {
       // Images are always passed through to the default provider (they don't need OCR)
@@ -47,6 +50,12 @@ export default defineCollection({
       type: 'json',
       defaultValue: [],
       comment: 'e.g. [".pdf", ".docx"] — empty means all non-image files',
+    },
+    {
+      name: 'pipeline',
+      type: 'json',
+      allowNull: true,
+      comment: 'Canonical PDF and OCR pipeline configuration',
     },
     {
       name: 'options',

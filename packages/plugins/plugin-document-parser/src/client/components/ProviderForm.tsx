@@ -59,7 +59,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
     if (initialValues) {
       form.setFieldsValue(initialValues);
     }
-  }, [initialValues]);
+  }, [form, initialValues]);
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
@@ -106,11 +106,11 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
       <Form.Item name="authType" label={t('Auth Type')}>
         <Select
           options={[
-            { label: 'None', value: 'none' },
-            { label: 'Bearer Token', value: 'bearer' },
-            { label: 'API Key Header', value: 'api-key-header' },
-            { label: 'Basic Auth', value: 'basic' },
-            { label: 'Custom Headers', value: 'custom-headers' },
+            { label: t('None'), value: 'none' },
+            { label: t('Bearer Token'), value: 'bearer' },
+            { label: t('API Key Header'), value: 'api-key-header' },
+            { label: t('Basic Auth'), value: 'basic' },
+            { label: t('Custom Headers'), value: 'custom-headers' },
           ]}
           style={{ maxWidth: 260 }}
         />
@@ -147,7 +147,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
         <Form.Item
           name={['authConfig', 'customHeaders']}
           label={t('Custom Headers')}
-          help={<Text type="secondary">JSON: {'{"X-Tenant": "abc", "X-Secret": "xxx"}'}</Text>}
+          help={<Text type="secondary">{t('JSON object with custom request headers.')}</Text>}
           rules={[
             {
               validator: (_, value) => {
@@ -156,7 +156,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
                   JSON.parse(value);
                   return Promise.resolve();
                 } catch {
-                  return Promise.reject(new Error('Must be valid JSON'));
+                  return Promise.reject(new Error(t('Must be valid JSON')));
                 }
               },
             },
@@ -176,7 +176,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
           options={[
             { label: t('Multipart Form Data'), value: 'multipart' },
             { label: t('JSON Base64'), value: 'json-base64' },
-            { label: 'URL (provider fetches)', value: 'url' },
+            { label: t('URL (provider fetches)'), value: 'url' },
           ]}
           style={{ maxWidth: 260 }}
         />
@@ -237,7 +237,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
             children: (
               <Form.Item
                 name={['requestConfig', requestFormat === 'multipart' ? 'extraFields' : 'extraBody']}
-                help={<Text type="secondary">JSON object — merged into request body/fields</Text>}
+                help={<Text type="secondary">{t('JSON object merged into the request body or fields.')}</Text>}
                 rules={[
                   {
                     validator: (_, value) => {
@@ -246,7 +246,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
                         JSON.parse(value);
                         return Promise.resolve();
                       } catch {
-                        return Promise.reject(new Error('Must be valid JSON'));
+                        return Promise.reject(new Error(t('Must be valid JSON')));
                       }
                     },
                   },
@@ -261,7 +261,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
 
       {/* ── Response ───────────────────────────────────────── */}
       <Divider orientation="left" plain>
-        Response
+        {t('Response')}
       </Divider>
 
       <Row gutter={16}>
@@ -269,9 +269,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
           <Form.Item
             name="responseTextPath"
             label={t('Response Text Path')}
-            help={
-              <Text type="secondary">Dot-path, e.g. &quot;data.text&quot; or &quot;result.pages.0.content&quot;</Text>
-            }
+            help={<Text type="secondary">{t('Use a dot path such as data.text or result.pages.0.content.')}</Text>}
           >
             <Input placeholder="text" />
           </Form.Item>
@@ -285,7 +283,7 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
 
       {/* ── Scope ──────────────────────────────────────────── */}
       <Divider orientation="left" plain>
-        Scope
+        {t('Scope')}
       </Divider>
 
       <Form.Item
@@ -313,9 +311,9 @@ export const ProviderForm: React.FC<Props> = ({ initialValues, onSubmit, onCance
       <Form.Item style={{ marginBottom: 0, marginTop: 24 }}>
         <Space>
           <Button type="primary" onClick={handleSubmit} loading={submitting}>
-            Save
+            {t('Save')}
           </Button>
-          <Button onClick={onCancel}>Cancel</Button>
+          <Button onClick={onCancel}>{t('Cancel')}</Button>
         </Space>
       </Form.Item>
     </Form>

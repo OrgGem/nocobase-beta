@@ -54,7 +54,7 @@ export function buildIntegrationValues(client: ClientRecord, provider: GuideProv
   const authorizationEndpoint = `${issuer}/idpOAuth/authorize`;
   const tokenEndpoint = `${issuer}/idpOAuth/token`;
   const resource = withTrailingSlash(issuer);
-  const configuredRedirect = client.redirectUris[0] || '<redirect-uri>';
+  const configuredRedirect = client.redirectUris[0] || '<callback-url>';
   const redirectUri = client.allowDynamicLoopbackPort ? dynamicLoopbackExample(configuredRedirect) : configuredRedirect;
   const scope = client.scopes.join(' ');
   const params = new URLSearchParams({
@@ -94,37 +94,36 @@ function CodeBlock({ value }: { value: string }) {
 export function IntegrationGuide({ client, provider, t, onClose }: Props) {
   if (!client) return null;
   const values = buildIntegrationValues(client, provider);
-  const isPublic = client.clientType === 'public';
   const tokenBody = [
     'grant_type=authorization_code',
-    `client_id=${client.clientId}`,
+    `client_id=${encodeURIComponent(client.clientId)}`,
     'code=<authorization-code>',
     `redirect_uri=${encodeURIComponent(values.redirectUri)}`,
     'code_verifier=<original-pkce-code-verifier>',
     ...(client.scopes.includes('api') ? [`resource=${encodeURIComponent(values.resource)}`] : []),
-    ...(!isPublic && client.tokenEndpointAuthMethod === 'client_secret_post' ? ['client_secret=<client-secret>'] : []),
   ].join('&\n');
-  const rawTokenRequest = `POST ${values.tokenEndpoint}\nContent-Type: application/x-www-form-urlencoded${
-    !isPublic && client.tokenEndpointAuthMethod === 'client_secret_basic'
-      ? '\nAuthorization: Basic <base64(client_id:client_secret)>'
-      : ''
-  }\n\n${tokenBody}`;
-  const nodeConfig = `const oidc = {\n  issuer: '${values.issuer}',\n  discoveryUrl: '${
-    values.discoveryUrl
-  }',\n  clientId: '${client.clientId}',\n  clientSecret: ${
-    isPublic ? 'undefined' : 'process.env.OIDC_CLIENT_SECRET'
-  },\n  redirectUri: '${values.redirectUri}',\n  scope: '${values.scope}',\n  resource: '${
-    values.resource
-  }',\n};\n\n// For every login, generate new state, nonce, code_verifier and S256 code_challenge.\n// Exchange the callback code with the SAME redirectUri and original code_verifier.`;
-  const dotnetConfig = `.AddOpenIdConnect("NocoBase", options =>\n{\n    options.Authority = "${
-    values.issuer
-  }";\n    options.ClientId = "${client.clientId}";${
-    isPublic ? '' : '\n    options.ClientSecret = configuration["NocoBaseOidc:ClientSecret"];'
-  }\n    options.ResponseType = "code";\n    options.UsePkce = true;\n    options.SaveTokens = true;\n    options.CallbackPath = "${callbackPath(
-    values.redirectUri,
-  )}";\n    options.Scope.Clear();${client.scopes
-    .map((scope) => `\n    options.Scope.Add("${scope}");`)
-    .join('')}\n});`;
+  const rawTokenRequest = `POST ${values.tokenEndpoint}\nContent-Type: application/x-www-form-urlencoded\n\n${tokenBody}`;
+  const authorizationCodeNodeConfig = `const oidc = {
+  issuer: '${values.issuer}',
+  discoveryUrl: '${values.discoveryUrl}',
+  clientId: '${client.clientId}',
+  redirectUri: '${values.redirectUri}',
+  scope: '${values.scope}',
+  resource: '${values.resource}',
+};
+
+// For every login, generate new state, nonce, code_verifier and S256 code_challenge.
+// Exchange the callback code with the SAME redirectUri and original code_verifier.`;
+  const authorizationCodeDotnetConfig = `.AddOpenIdConnect("NocoBase", options =>
+{
+    options.Authority = "${values.issuer}";
+    options.ClientId = "${client.clientId}";
+    options.ResponseType = "code";
+    options.UsePkce = true;
+    options.SaveTokens = true;
+    options.CallbackPath = "${callbackPath(values.redirectUri)}";
+    options.Scope.Clear();${client.scopes.map((scope) => `\n    options.Scope.Add("${scope}");`).join('')}
+});`;
 
   return (
     <Modal title={`${t('Integration guide')}: ${client.name}`} open width={960} footer={null} onCancel={onClose}>
@@ -143,11 +142,12 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
                   }
                 />
                 <Descriptions bordered size="small" column={1}>
-                  <Descriptions.Item label={t('Client type')}>
-                    {t(isPublic ? 'Public' : 'Confidential')}
-                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Client type')}>{t('Public')}</Descriptions.Item>
                   <Descriptions.Item label={t('Client ID')}>
                     <Typography.Text copyable>{client.clientId}</Typography.Text>
+                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Grant types')}>
+                    <Tag>authorization_code</Tag>
                   </Descriptions.Item>
                   <Descriptions.Item label={t('Issuer')}>
                     <Typography.Text copyable>{values.issuer}</Typography.Text>
@@ -175,11 +175,7 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
                     <ul>
                       <li>{t('Use Authorization Code flow with PKCE S256.')}</li>
                       <li>{t('Generate new state, nonce and PKCE values for every login.')}</li>
-                      <li>
-                        {isPublic
-                          ? t('Do not send a client secret for this public client.')
-                          : t('Keep the client secret only on the backend.')}
-                      </li>
+                      <li>{t('Do not send a client secret for this public client.')}</li>
                       {client.scopes.includes('offline_access') ? (
                         <li>{t('Send prompt=consent or offline_access will be removed.')}</li>
                       ) : null}
@@ -201,11 +197,11 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
             children: (
               <>
                 <Alert type="info" showIcon message={t('Use a standards-compliant OIDC library and discovery.')} />
-                <CodeBlock value={nodeConfig} />
+                <CodeBlock value={authorizationCodeNodeConfig} />
               </>
             ),
           },
-          { key: 'dotnet', label: 'ASP.NET Core', children: <CodeBlock value={dotnetConfig} /> },
+          { key: 'dotnet', label: 'ASP.NET Core', children: <CodeBlock value={authorizationCodeDotnetConfig} /> },
           {
             key: 'http',
             label: t('Raw HTTP'),
@@ -221,20 +217,22 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
             label: t('Troubleshooting'),
             children: (
               <ul>
-                <li>
-                  {t('No refresh token: include offline_access and prompt=consent in the authorization request.')}
-                </li>
-                <li>{t('Opaque access token or API 401: include scope api and the exact API resource parameter.')}</li>
+                {client.scopes.includes('offline_access') ? (
+                  <li>
+                    {t('No refresh token: include offline_access and prompt=consent in the authorization request.')}
+                  </li>
+                ) : null}
+                {client.scopes.includes('api') ? (
+                  <li>
+                    {t('Opaque access token or API 401: include scope api and the exact API resource parameter.')}
+                  </li>
+                ) : null}
                 <li>
                   {t(
                     'invalid_redirect_uri: scheme, host, path and query must match; only an enabled native loopback port may vary.',
                   )}
                 </li>
-                <li>
-                  {t(
-                    'invalid_client: public clients must not send a secret; confidential clients must use the configured authentication method.',
-                  )}
-                </li>
+                <li>{t('invalid_client: public clients must not send a secret.')}</li>
                 <li>{t('PKCE failure: reuse the original code_verifier and do not regenerate it in the callback.')}</li>
               </ul>
             ),

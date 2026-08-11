@@ -2,9 +2,9 @@ import { resolve } from 'node:path';
 import { Plugin } from '@nocobase/server';
 import type { IdpOauthService } from '@nocobase/plugin-idp-oauth';
 import {
+  type ClientInput,
   COLLECTION_NAME,
   DatabaseOidcClientResolver,
-  generateClientSecret,
   normalizeClientInput,
   serializeClient,
 } from './client-service';
@@ -32,66 +32,59 @@ export class PluginIdpOidcClientManagerServer extends Plugin {
     this.idpService = idpPlugin.service;
     this.idpService.registerClientResolver(
       'oidc-client-manager',
-      new DatabaseOidcClientResolver(this.db.getRepository(COLLECTION_NAME), this.app.aesEncryptor),
+      new DatabaseOidcClientResolver(this.db.getRepository(COLLECTION_NAME)),
     );
 
     this.app.resourceManager.define({
       name: 'oidcClientManager',
       actions: {
         list: async (ctx, next) => {
-          const records = await ctx.db.getRepository(COLLECTION_NAME).find({ sort: ['name'] });
-          ctx.body = records.map(serializeClient);
+          const records = await ctx.db.getRepository(COLLECTION_NAME).find({
+            filter: { clientType: 'public' },
+            sort: ['name'],
+          });
+          ctx.body = records.map(serializeClient).filter(Boolean);
           await next();
         },
         create: async (ctx, next) => {
-          let input;
+          let input: ClientInput;
           try {
             input = normalizeClientInput(valuesFromContext(ctx));
           } catch (error) {
             const key = error instanceof Error ? error.message : String(error);
             ctx.throw(400, ctx.t(key, { ns: this.name }));
           }
-          const clientSecret = input.clientType === 'confidential' ? generateClientSecret() : undefined;
-          const encryptedClientSecret = clientSecret ? await this.app.aesEncryptor.encrypt(clientSecret) : null;
           const record = await ctx.db
             .getRepository(COLLECTION_NAME)
-            .create({ values: { ...input, clientSecret: encryptedClientSecret } });
-          ctx.body = clientSecret ? { ...serializeClient(record), clientSecret } : serializeClient(record);
+            .create({ values: { ...input, clientSecret: null } });
+          ctx.body = serializeClient(record);
           await next();
         },
         update: async (ctx, next) => {
           const id = ctx.action.params.filterByTk;
-          let input;
+          let input: ClientInput;
           try {
             input = normalizeClientInput(valuesFromContext(ctx));
           } catch (error) {
             const key = error instanceof Error ? error.message : String(error);
             ctx.throw(400, ctx.t(key, { ns: this.name }));
           }
-          await ctx.db.getRepository(COLLECTION_NAME).update({ filterByTk: id, values: input });
+          const existing = await ctx.db.getRepository(COLLECTION_NAME).findOne({ filterByTk: id });
+          if (!existing || existing.clientType !== 'public') ctx.throw(404);
+          await ctx.db
+            .getRepository(COLLECTION_NAME)
+            .update({ filterByTk: id, values: { ...input, clientSecret: null } });
           const record = await ctx.db.getRepository(COLLECTION_NAME).findOne({ filterByTk: id });
           if (!record) ctx.throw(404);
           ctx.body = serializeClient(record);
           await next();
         },
         destroy: async (ctx, next) => {
-          await ctx.db.getRepository(COLLECTION_NAME).destroy({ filterByTk: ctx.action.params.filterByTk });
-          ctx.body = { success: true };
-          await next();
-        },
-        resetSecret: async (ctx, next) => {
           const id = ctx.action.params.filterByTk;
           const record = await ctx.db.getRepository(COLLECTION_NAME).findOne({ filterByTk: id });
-          if (!record) ctx.throw(404);
-          if ((record.clientType || 'confidential') === 'public') {
-            ctx.throw(400, ctx.t('Public clients do not use client secrets', { ns: this.name }));
-          }
-          const clientSecret = generateClientSecret();
-          const encryptedClientSecret = await this.app.aesEncryptor.encrypt(clientSecret);
-          await ctx.db
-            .getRepository(COLLECTION_NAME)
-            .update({ filterByTk: id, values: { clientSecret: encryptedClientSecret } });
-          ctx.body = { clientSecret };
+          if (!record || record.clientType !== 'public') ctx.throw(404);
+          await ctx.db.getRepository(COLLECTION_NAME).destroy({ filterByTk: id });
+          ctx.body = { success: true };
           await next();
         },
         providerInfo: async (ctx, next) => {

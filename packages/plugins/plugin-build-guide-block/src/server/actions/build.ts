@@ -243,7 +243,7 @@ function getDocumentParserPlugin(app: any) {
 function unsupportedDocumentMessage(file: any) {
   const filename = file?.filename || file?.name || file?.id || 'document';
   const type = file?.mimetype || resolveExtname(file) || 'unknown type';
-  return `[Unsupported document type: ${filename} (${type}). Install or enable plugin-document-parser/MarkItDown to extract this file.]`;
+  return `[Unsupported document type: ${filename} (${type}). Enable and configure Document Parser to extract this file.]`;
 }
 
 async function fetchTextFileContent(app: any, file: any): Promise<string> {

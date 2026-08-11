@@ -8,6 +8,8 @@
  */
 
 import { Plugin, type Application } from '@nocobase/server';
+import type { Context } from '@nocobase/actions';
+import type { AttachmentLike, DocumentParseService } from 'plugin-document-parser';
 import { koaMulter as multer } from '@nocobase/utils';
 import { ExcelParserHandler } from './excel-parser-handler';
 import { readFile, unlink } from 'fs/promises';
@@ -24,6 +26,10 @@ const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
 const MAX_RAW_PARSE_UPLOAD_BYTES = 200 * 1024 * 1024;
 const OFFICE_PREVIEWER_PLUGIN_NAMES = ['file-previewer-office', '@nocobase/plugin-file-previewer-office'];
+
+type DocumentParserPlugin = {
+  documentParseService?: DocumentParseService;
+};
 
 export class PluginFilePreviewAuthServer extends Plugin {
   private cache: any;
@@ -117,14 +123,14 @@ export class PluginFilePreviewAuthServer extends Plugin {
             : await this.resolveAttachment(ctx, fileInput);
           this.assertAuthenticated(ctx);
 
-          const cacheKey = `markitdown_parsed_text:${
+          const cacheKey = `document_parser_parsed_text:${
             attachment.id || attachment.key || attachment.url || attachment.path || uploaded?.cacheKey
           }`;
           let text = await this.cache.get(cacheKey);
 
           if (text == null) {
             text = uploaded
-              ? await this.extractUploadedFileText(uploaded.buffer, attachment)
+              ? await this.extractUploadedFileText(ctx, uploaded.buffer, attachment)
               : await this.extractAttachmentText(ctx, attachment);
             // Cache the extracted text for 1 day (86400000 ms)
             // Even if empty string, we cache it so it doesn't repeatedly fail
@@ -801,23 +807,20 @@ export class PluginFilePreviewAuthServer extends Plugin {
     };
   }
 
-  private async extractUploadedFileText(buffer: Buffer, attachment: any): Promise<string> {
-    const markitdownPlugin = this.getMarkItDownParserPlugin();
-    const service = markitdownPlugin?.service;
-    if (service?.convertBuffer) {
+  private async extractUploadedFileText(ctx: Context, buffer: Buffer, attachment: AttachmentLike): Promise<string> {
+    const service = this.getDocumentParseService();
+    if (service) {
       try {
-        if (!service.supports || service.supports(attachment)) {
-          const text = await service.convertBuffer(buffer, attachment);
-          if (text?.trim()) {
-            return text;
-          }
+        const result = await service.parseBuffer(ctx, buffer, attachment, { useCase: 'api' });
+        if (result.handled && result.text.trim()) {
+          return result.text;
         }
       } catch (err) {
-        this.log.warn(`[FilePreviewAuth] MarkItDown parser failed: ${err}`);
+        this.log.warn(`[FilePreviewAuth] Document Parser failed for uploaded file: ${err}`);
       }
     } else {
       this.log.warn(
-        '[FilePreviewAuth] plugin-markitdown-parser not found; uploaded raw text parsing fallback will be used',
+        '[FilePreviewAuth] Document Parser is not available; uploaded raw text parsing fallback will be used',
       );
     }
 
@@ -828,13 +831,12 @@ export class PluginFilePreviewAuthServer extends Plugin {
     return '';
   }
 
-  private getMarkItDownParserPlugin(): any | null {
-    const candidates = ['@nocobase/plugin-markitdown-parser', 'plugin-markitdown-parser', 'markitdown-parser'];
-    for (const name of candidates) {
+  private getDocumentParseService(): DocumentParseService | null {
+    for (const name of ['plugin-document-parser', '@nocobase/plugin-document-parser']) {
       try {
-        const plugin = this.pm.get(name) as any;
-        if (plugin?.service?.convertBuffer) {
-          return plugin;
+        const plugin = this.pm.get(name) as DocumentParserPlugin | undefined;
+        if (plugin?.documentParseService) {
+          return plugin.documentParseService;
         }
       } catch {
         // Try the next known plugin name.
@@ -843,18 +845,21 @@ export class PluginFilePreviewAuthServer extends Plugin {
     return null;
   }
 
-  private async extractAttachmentText(ctx: any, attachment: any): Promise<string> {
-    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') ||
-      this.pm.get('plugin-document-parser')) as any;
-    if (docParserPlugin?.internalParserRegistry) {
+  private async extractAttachmentText(ctx: Context, attachment: AttachmentLike): Promise<string> {
+    const service = this.getDocumentParseService();
+    if (service) {
       try {
-        const result = await docParserPlugin.internalParserRegistry.parse(attachment, ctx);
-        if (result?.handled && result.text?.trim()) {
+        const result = await service.parseAttachment(ctx, attachment, { useCase: 'api' });
+        if (result.handled && result.text.trim()) {
           return result.text;
         }
       } catch (err) {
-        this.log.warn(`[FilePreviewAuth] Document parser failed: ${err}`);
+        this.log.warn(`[FilePreviewAuth] Document Parser failed: ${err}`);
       }
+    } else {
+      this.log.warn(
+        '[FilePreviewAuth] Document Parser is not available; attachment text parsing fallback will be used',
+      );
     }
 
     if (isPlainTextAttachment(attachment)) {

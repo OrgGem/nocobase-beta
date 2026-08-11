@@ -15,18 +15,20 @@ interface ModelResult {
   usage_metadata?: Record<string, unknown>;
 }
 
-function createContext(result: ModelResult): Context {
+function createContext(result: ModelResult) {
   const model = {
     invoke: vi.fn().mockResolvedValue(result),
     modelKwargs: {},
   };
+  let providerCreateCount = 0;
   class TestProvider {
     createModel() {
+      providerCreateCount += 1;
       return model;
     }
   }
 
-  return {
+  const ctx = {
     app: {
       pm: {
         get: vi.fn().mockReturnValue({
@@ -37,7 +39,16 @@ function createContext(result: ModelResult): Context {
       },
     },
     db: {
-      getRepository: vi.fn().mockReturnValue({ findOne: vi.fn().mockResolvedValue(null) }),
+      getRepository: vi.fn((name: string) => {
+        if (name === 'aiApiModelMetadata') {
+          return {
+            findOne: vi.fn().mockResolvedValue({
+              get: (key: string) => (key === 'contextWindow' ? 128_000 : key === 'maxCompletionTokens' ? 16_384 : true),
+            }),
+          };
+        }
+        return { findOne: vi.fn().mockResolvedValue(null) };
+      }),
     },
     log: { error: vi.fn() },
     request: {
@@ -50,6 +61,8 @@ function createContext(result: ModelResult): Context {
     state: {},
     set: vi.fn(),
   } as unknown as Context;
+
+  return { ctx, model, getProviderCreateCount: () => providerCreateCount };
 }
 
 class ListenerTarget {
@@ -139,7 +152,16 @@ function createStreamingContext(
       },
     },
     db: {
-      getRepository: vi.fn().mockReturnValue({ findOne: vi.fn().mockResolvedValue(null) }),
+      getRepository: vi.fn((name: string) => {
+        if (name === 'aiApiModelMetadata') {
+          return {
+            findOne: vi.fn().mockResolvedValue({
+              get: (key: string) => (key === 'contextWindow' ? 128_000 : key === 'maxCompletionTokens' ? 16_384 : true),
+            }),
+          };
+        }
+        return { findOne: vi.fn().mockResolvedValue(null) };
+      }),
     },
     log: { error: vi.fn() },
     req,
@@ -174,7 +196,7 @@ describe('AI API chat usage collection', () => {
   });
 
   it('keeps the public zero fallback but marks missing provider usage as unavailable internally', async () => {
-    const ctx = createContext({ content: 'Hello back' });
+    const { ctx } = createContext({ content: 'Hello back' });
 
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
@@ -195,7 +217,7 @@ describe('AI API chat usage collection', () => {
   });
 
   it('stores provider usage and provider request ID separately from the gateway response ID', async () => {
-    const ctx = createContext({
+    const { ctx } = createContext({
       content: 'Hello back',
       response_metadata: { request_id: 'provider-request-1' },
       usage_metadata: { input_tokens: 8, output_tokens: 3, total_tokens: 11 },
@@ -301,6 +323,31 @@ describe('AI API chat usage collection', () => {
         stream_options: { include_usage: true, include_obfuscation: false },
       }),
     );
+  });
+
+  it('rejects context overflow before creating a provider or reserving quota', async () => {
+    const { ctx, getProviderCreateCount } = createContext({ content: 'unused' });
+    (ctx.request.body as Record<string, unknown>).messages = [{ role: 'user', content: 'x'.repeat(600_000) }];
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(400);
+    expect(ctx.body).toMatchObject({ error: { code: 'context_length_exceeded' } });
+    expect(ctx.state.aiApiLlmBilling).toBeUndefined();
+    expect(getProviderCreateCount()).toBe(0);
+  });
+
+  it('rejects oversized legacy prompts before creating a provider or reserving quota', async () => {
+    const { ctx, model, getProviderCreateCount } = createContext({ content: 'unused' });
+    (ctx.request.body as Record<string, unknown>).prompt = 'x'.repeat(600_000);
+
+    await handleCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(400);
+    expect(ctx.body).toMatchObject({ error: { code: 'context_length_exceeded' } });
+    expect(ctx.state.aiApiLlmBilling).toBeUndefined();
+    expect(getProviderCreateCount()).toBe(0);
+    expect(model.invoke).not.toHaveBeenCalled();
   });
 
   it('does not emit a usage-only chunk when the provider omits usage metadata', async () => {

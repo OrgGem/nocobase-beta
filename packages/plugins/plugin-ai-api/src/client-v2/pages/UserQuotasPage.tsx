@@ -39,6 +39,7 @@ interface QuotaPolicy {
   currency: string;
   rejectUnpricedModel: boolean;
   missingUsageBehavior: 'allow' | 'use_reserved';
+  contextOverflowBehavior: 'reject' | 'truncate';
 }
 
 export default function UserQuotasPage() {
@@ -85,6 +86,7 @@ export default function UserQuotasPage() {
       currency: 'USD',
       rejectUnpricedModel: true,
       missingUsageBehavior: 'use_reserved',
+      contextOverflowBehavior: 'reject',
     } as QuotaPolicy);
     setOpen(true);
   };
@@ -156,6 +158,14 @@ export default function UserQuotasPage() {
       key: 'costLimit',
       width: 120,
       render: (value, record) => (value == null ? t('Unlimited') : `${value} ${record.currency}`),
+    },
+    {
+      title: t('Context overflow behavior'),
+      dataIndex: 'contextOverflowBehavior',
+      key: 'contextOverflowBehavior',
+      width: 150,
+      render: (value: QuotaPolicy['contextOverflowBehavior']) =>
+        value === 'truncate' ? t('Truncate oldest conversation turns') : t('Reject request'),
     },
     { title: t('Timezone'), dataIndex: 'timezone', key: 'timezone', width: 140 },
     {
@@ -245,6 +255,14 @@ export default function UserQuotasPage() {
               options={[
                 { label: t('Use reserved estimate'), value: 'use_reserved' },
                 { label: t('Allow without token charge'), value: 'allow' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="contextOverflowBehavior" label={t('Context overflow behavior')} rules={[{ required: true }]}>
+            <Select
+              options={[
+                { label: t('Reject request'), value: 'reject' },
+                { label: t('Truncate oldest conversation turns'), value: 'truncate' },
               ]}
             />
           </Form.Item>

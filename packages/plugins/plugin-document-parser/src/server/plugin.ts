@@ -19,9 +19,18 @@ import { InternalParserRegistry } from './services/internal-parser-registry';
 import { BuiltinAIDocumentHandler } from './services/builtin-ai-handler';
 import { BuiltinExcelHandler } from './services/builtin-excel-handler';
 import { BuiltinMarkitdownHandler } from './services/builtin-markitdown-handler';
+import { DocumentParseService } from './services/document-parse-service';
+import { MarkItDownService } from './services/markitdown-service';
 import { ParseRouter } from './services/parse-router';
+import { ExternalOcrEngine } from './services/external-ocr-engine';
+import { PdfInspectorEngine } from './services/pdf-inspector-engine';
+import { VisionOcrEngine, type VisionAiManager } from './services/vision-ocr-engine';
+import { resolvePipeline } from '../shared/defaults';
 import { testConnection, getSettings, saveSettings } from './resource/docParserProviders';
+import { normalizeProviderConfig } from './services/provider-config';
+import { defineDocumentParserActions } from './resource/doc-parser';
 import type { AttachmentLike } from './services/internal-parser-registry';
+import type { DocumentParserPipeline } from './services/document-parse.types';
 
 export class PluginDocumentParserServer extends Plugin {
   /**
@@ -31,24 +40,13 @@ export class PluginDocumentParserServer extends Plugin {
    *   docParser.internalParserRegistry.register({ name, supports, parse });
    */
   readonly internalParserRegistry = new InternalParserRegistry();
-
+  readonly markitdownService = new MarkItDownService();
+  readonly pdfInspectorEngine = new PdfInspectorEngine();
+  documentParseService!: DocumentParseService;
   parseRouter!: ParseRouter;
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
-
   async beforeLoad() {
-    // Excel handler — higher priority than the AI loader (prepend: true)
-    this.internalParserRegistry.register(new BuiltinExcelHandler(this.fetchFileBuffer.bind(this)), { prepend: true });
-
-    // MarkItDown handler - uses python markitdown CLI
-    this.internalParserRegistry.register(
-      new BuiltinMarkitdownHandler(this.fetchFileBuffer.bind(this), () => this.db.getRepository('docParserSettings')),
-      { prepend: true },
-    );
-
-    // Built-in AI document handler (lowest priority — appended last)
-    // Done in beforeLoad so other plugins' load() can prepend higher-priority handlers
-    this.internalParserRegistry.register(new BuiltinAIDocumentHandler(this.fetchFileBuffer.bind(this)));
+    this.markitdownService.setAttachmentBufferFetcher(this.fetchFileBuffer.bind(this));
   }
 
   async load() {
@@ -57,15 +55,48 @@ export class PluginDocumentParserServer extends Plugin {
       directory: resolve(__dirname, 'collections'),
     });
 
+    this.db.getCollection('docParserProviders').model.beforeSave((provider) => {
+      const { authConfig, requestConfig } = normalizeProviderConfig(
+        provider.get('authConfig'),
+        provider.get('requestConfig'),
+      );
+      provider.set('authConfig', authConfig ?? {});
+      provider.set('requestConfig', requestConfig ?? {});
+    });
+
+    this.documentParseService = new DocumentParseService(
+      {
+        getFileBuffer: this.fetchFileBuffer.bind(this),
+        getPipeline: this.getPipeline.bind(this),
+      },
+      this.internalParserRegistry,
+      [
+        this.pdfInspectorEngine,
+        new BuiltinExcelHandler(),
+        new BuiltinMarkitdownHandler(this.markitdownService),
+        new BuiltinAIDocumentHandler(),
+      ],
+      [
+        new ExternalOcrEngine(() => this.db.getRepository('docParserProviders')),
+        new VisionOcrEngine(() => this.getAiManager()),
+      ],
+    );
+
     // 2. Wire up the parse router
     this.parseRouter = new ParseRouter(
       () => this.db.getRepository('docParserSettings'),
-      () => this.db.getRepository('docParserProviders'),
-      this.internalParserRegistry,
+      this.documentParseService,
       this.fetchFileBuffer.bind(this),
       () => {
-        const p = this.pm.get('@nocobase/plugin-docpixie') as any;
-        return p?.service ? p : null;
+        const p = this.pm.get('@nocobase/plugin-docpixie') as { service?: unknown } | undefined;
+        return p?.service
+          ? (p as {
+              service: {
+                isReady(): boolean;
+                processDocument(path: string, options: { name: string }): Promise<number>;
+              };
+            })
+          : null;
       },
     );
 
@@ -78,6 +109,15 @@ export class PluginDocumentParserServer extends Plugin {
       actions: {
         testConnection,
       },
+    });
+
+    this.app.resourceManager.define({
+      name: 'docParser',
+      actions: defineDocumentParserActions({
+        documentParseService: this.documentParseService,
+        markitdownService: this.markitdownService,
+        pdfInspectorEngine: this.pdfInspectorEngine,
+      }),
     });
 
     this.app.resourceManager.define({
@@ -101,8 +141,31 @@ export class PluginDocumentParserServer extends Plugin {
       ],
     });
     this.app.acl.registerSnippet({
-      name: `pm.plugin-document-parser.settings`,
-      actions: ['docParserSettings:get', 'docParserSettings:save'],
+      name: `pm.plugin-document-parser.diagnostics`,
+      actions: ['docParser:getRuntime', 'docParser:checkEngine', 'docParser:parse'],
+    });
+    this.app.acl.registerSnippet({
+      name: 'pm.document-parser.settings',
+      actions: [
+        'docParserSettings:get',
+        'docParserSettings:save',
+        'docParser:getRuntime',
+        'docParser:checkEngine',
+        'docParser:parse',
+      ],
+    });
+  }
+
+  private getAiManager(): VisionAiManager | null {
+    const aiPlugin = this.pm.get('@nocobase/plugin-ai') as { aiManager?: VisionAiManager } | undefined;
+    return aiPlugin?.aiManager ?? null;
+  }
+
+  private async getPipeline(): Promise<DocumentParserPipeline> {
+    const record = await this.db.getRepository('docParserSettings').findOne({});
+    return resolvePipeline(record?.get('pipeline'), {
+      activeProviderId: record?.get('activeProviderId'),
+      fallbackToDefault: record?.get('fallbackToDefault'),
     });
   }
 
@@ -256,11 +319,8 @@ export class PluginDocumentParserServer extends Plugin {
   }
 
   async parseAttachmentToText(ctx: Context, attachment: AttachmentLike): Promise<string> {
-    const result = await this.internalParserRegistry.parse(attachment, ctx);
-    if (result.handled && result.text) {
-      return result.text;
-    }
-    return '';
+    const result = await this.documentParseService.parseAttachment(ctx, attachment);
+    return result.handled ? result.text : '';
   }
 }
 

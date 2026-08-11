@@ -33,7 +33,7 @@ export class PluginDocumentParserClient extends Plugin {
       title: '{{t("Document Parser", { ns: "' + NAMESPACE + '" })}}',
       icon: 'FileTextOutlined',
       Component: SettingsPage,
-      aclSnippet: `pm.${NAMESPACE}.settings`,
+      aclSnippet: 'pm.document-parser.settings',
     });
   }
 }

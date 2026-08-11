@@ -1,6 +1,6 @@
 import { Plugin, lazy } from '@nocobase/client';
 
-const { UiPathSettingsPage } = lazy(() => import('./components/UiPathSettingsPage'), 'UiPathSettingsPage');
+const { UiPathSettingsPage } = lazy(() => import('../client-v2/components/UiPathSettingsPage'), 'UiPathSettingsPage');
 
 export class PluginUiPathOrchestratorClient extends Plugin {
   async load() {

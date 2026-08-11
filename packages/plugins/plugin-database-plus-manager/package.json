@@ -1,0 +1,13 @@
+{
+  "name": "plugin-database-plus-manager",
+  "version": "1.0.0",
+  "main": "dist/server/index.js",
+  "license": "Apache-2.0",
+  "files": ["dist", "src"],
+  "peerDependencies": {
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/server": "2.x"
+  },
+  "nocobase": { "supportedVersions": ["2.x"], "editionLevel": 0 }
+}

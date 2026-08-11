@@ -26,6 +26,7 @@
     "@nocobase/database": "2.x",
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
+    "plugin-document-parser": "1.x",
     "@nocobase/server": "2.x",
     "@nocobase/utils": "2.x",
     "@nocobase/client-v2": "2.x",

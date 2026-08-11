@@ -12,6 +12,7 @@
     "server.js",
     "server.d.ts",
     "src",
+    "vendor",
     "client-v2.js",
     "client-v2.d.ts"
   ],
@@ -36,6 +37,7 @@
     "@nocobase/test": "2.x"
   },
   "dependencies": {
+    "@firecrawl/pdf-inspector": "^1.12.0",
     "axios": "^1.6.0",
     "form-data": "^4.0.0",
     "xlsx": "^0.18.5"

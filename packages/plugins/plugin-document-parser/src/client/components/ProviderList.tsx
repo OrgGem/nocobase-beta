@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Table, Tag, Space, Popconfirm, Modal, message, Tooltip, Badge } from 'antd';
 import {
   PlusOutlined,
@@ -17,11 +17,21 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
 } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
+import { useApp } from '@nocobase/client';
 import { ProviderForm, ProviderFormValues } from './ProviderForm';
 import { useDocParserTranslation } from '../locale';
 
 type Provider = ProviderFormValues & { id: number };
+
+type ProviderPayload = Omit<ProviderFormValues, 'authConfig' | 'requestConfig'> & {
+  authConfig?: Omit<NonNullable<ProviderFormValues['authConfig']>, 'customHeaders'> & {
+    customHeaders?: Record<string, string>;
+  };
+  requestConfig?: Omit<NonNullable<ProviderFormValues['requestConfig']>, 'extraFields' | 'extraBody'> & {
+    extraFields?: Record<string, string>;
+    extraBody?: Record<string, unknown>;
+  };
+};
 
 export const ProviderList: React.FC = () => {
   const { t } = useDocParserTranslation();
@@ -33,7 +43,7 @@ export const ProviderList: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [testingId, setTestingId] = useState<number | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.request({ url: 'docParserProviders:list', params: { pageSize: 200 } });
@@ -41,11 +51,11 @@ export const ProviderList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [api]);
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   const openCreate = () => {
     setEditing(null);
@@ -66,15 +76,16 @@ export const ProviderList: React.FC = () => {
   const handleSubmit = async (values: ProviderFormValues) => {
     setSubmitting(true);
     try {
+      const payload = normalizeProviderPayload(values);
       if (editing) {
         await api.request({
           url: 'docParserProviders:update',
           method: 'POST',
           params: { filterByTk: editing.id },
-          data: values,
+          data: payload,
         });
       } else {
-        await api.request({ url: 'docParserProviders:create', method: 'POST', data: values });
+        await api.request({ url: 'docParserProviders:create', method: 'POST', data: payload });
       }
       message.success(t('Provider saved'));
       setModalOpen(false);
@@ -95,10 +106,10 @@ export const ProviderList: React.FC = () => {
       if (result?.ok) {
         message.success(`${t('Connection successful')}${result.status ? ` (HTTP ${result.status})` : ''}`);
       } else {
-        message.error(`${t('Connection failed')}: ${result?.message ?? 'Unknown error'}`);
+        message.error(`${t('Connection failed')}: ${result?.message ?? t('Request failed')}`);
       }
-    } catch (err: any) {
-      message.error(`${t('Connection failed')}: ${err?.message}`);
+    } catch (error: unknown) {
+      message.error(`${t('Connection failed')}: ${errorMessage(error, t)}`);
     } finally {
       setTestingId(null);
     }
@@ -142,9 +153,9 @@ export const ProviderList: React.FC = () => {
         v ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : <CloseCircleOutlined style={{ color: '#ccc' }} />,
     },
     {
-      title: 'Actions',
+      title: t('Actions'),
       key: 'actions',
-      render: (_: any, record: Provider) => (
+      render: (_: unknown, record: Provider) => (
         <Space>
           <Tooltip title={t('Test Connection')}>
             <Button
@@ -159,7 +170,7 @@ export const ProviderList: React.FC = () => {
           </Tooltip>
           <Popconfirm
             title={t('Delete Provider')}
-            description="Are you sure you want to delete this provider?"
+            description={t('Confirm provider deletion')}
             onConfirm={() => handleDelete(record.id)}
           >
             <Tooltip title={t('Delete Provider')}>
@@ -198,7 +209,7 @@ export const ProviderList: React.FC = () => {
         destroyOnClose
       >
         <ProviderForm
-          initialValues={editing ?? undefined}
+          initialValues={editing ? toProviderFormValues(editing) : undefined}
           onSubmit={handleSubmit}
           onCancel={() => setModalOpen(false)}
           submitting={submitting}
@@ -207,3 +218,66 @@ export const ProviderList: React.FC = () => {
     </>
   );
 };
+
+function toProviderFormValues(provider: Provider): ProviderFormValues {
+  return {
+    ...provider,
+    authConfig: {
+      ...provider.authConfig,
+      customHeaders: stringifyJson(provider.authConfig?.customHeaders),
+    },
+    requestConfig: {
+      ...provider.requestConfig,
+      extraFields: stringifyJson(provider.requestConfig?.extraFields),
+      extraBody: stringifyJson(provider.requestConfig?.extraBody),
+    },
+  };
+}
+
+function normalizeProviderPayload(values: ProviderFormValues): ProviderPayload {
+  return {
+    ...values,
+    authConfig: values.authConfig
+      ? {
+          ...values.authConfig,
+          customHeaders: parseJsonObject(values.authConfig.customHeaders),
+        }
+      : undefined,
+    requestConfig: values.requestConfig
+      ? {
+          ...values.requestConfig,
+          extraFields: parseJsonStringMap(values.requestConfig.extraFields),
+          extraBody: parseJsonObject(values.requestConfig.extraBody),
+        }
+      : undefined,
+  };
+}
+
+function stringifyJson(value: unknown): string | undefined {
+  return value && typeof value === 'object' ? JSON.stringify(value, null, 2) : undefined;
+}
+
+function parseJsonObject(value: string | undefined): Record<string, unknown> | undefined {
+  if (!value?.trim()) return undefined;
+  const parsed: unknown = JSON.parse(value);
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Expected a JSON object.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseJsonStringMap(value: string | undefined): Record<string, string> | undefined {
+  const parsed = parseJsonObject(value);
+  if (parsed && Object.values(parsed).some((entry) => typeof entry !== 'string')) {
+    throw new Error('Expected a JSON object with string values.');
+  }
+  return parsed as Record<string, string> | undefined;
+}
+
+function errorMessage(error: unknown, t: (key: string) => string): string {
+  return isRecord(error) && typeof error.message === 'string' ? error.message : t('Request failed');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

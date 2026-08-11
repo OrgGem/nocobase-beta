@@ -2,7 +2,7 @@
   "name": "plugin-idp-oidc-client-manager",
   "displayName": "OIDC applications",
   "displayName.zh-CN": "OIDC 应用",
-  "description": "Manage confidential OIDC clients that use NocoBase as their identity provider.",
+  "description": "Manage public OIDC clients that use NocoBase as their identity provider.",
   "version": "1.0.1",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",

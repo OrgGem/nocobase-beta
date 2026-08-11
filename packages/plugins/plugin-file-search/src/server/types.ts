@@ -5,7 +5,7 @@ export type FileSearchSettings = {
   enabled: boolean;
   autoIndex: boolean;
   enableAiTool: boolean;
-  parserStrategy: 'document-parser' | 'markitdown' | 'direct';
+  parserStrategy: 'document-parser' | 'direct';
   llmService?: string | null;
   indexModel?: string | null;
   retrieveModel?: string | null;

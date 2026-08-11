@@ -1,13 +1,19 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Form, Input, message, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd';
-import { BookOutlined, CopyOutlined, DeleteOutlined, EditOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Form, Input, message, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd';
+import { BookOutlined, DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import IntegrationGuide from './IntegrationGuide';
 import type { GuideProviderInfo } from './IntegrationGuide';
 
 type ApiResponse = { data?: { data?: unknown } };
 export type ApiClientLike = {
-  request(options: { url: string; method?: string; data?: unknown }): Promise<ApiResponse>;
+  request(options: {
+    url: string;
+    method?: string;
+    data?: unknown;
+    params?: Record<string, unknown>;
+  }): Promise<ApiResponse>;
 };
+
 export type ClientRecord = {
   id: number;
   name: string;
@@ -15,26 +21,39 @@ export type ClientRecord = {
   redirectUris: string[];
   postLogoutRedirectUris: string[];
   scopes: string[];
-  clientType: 'confidential' | 'public';
+  clientType: 'public';
   allowDynamicLoopbackPort: boolean;
-  tokenEndpointAuthMethod: 'client_secret_basic' | 'client_secret_post';
-  autoApprove: boolean;
+  tokenEndpointAuthMethod: 'none';
   enabled: boolean;
 };
-type FormValues = Omit<ClientRecord, 'id' | 'redirectUris' | 'postLogoutRedirectUris'> & {
+
+type FormValues = {
+  name: string;
+  clientId: string;
   redirectUrisText: string;
   postLogoutRedirectUrisText?: string;
+  scopes: string[];
+  allowDynamicLoopbackPort: boolean;
+  enabled: boolean;
 };
+
 type Props = { api: ApiClientLike; t: (key: string) => string };
 
 function readPayload(response: ApiResponse): unknown {
   return response.data?.data;
 }
+
 function isClientRecord(value: unknown): value is ClientRecord {
   if (!value || typeof value !== 'object') return false;
   const record = value as Partial<ClientRecord>;
-  return typeof record.id === 'number' && typeof record.clientId === 'string' && Array.isArray(record.redirectUris);
+  return (
+    typeof record.id === 'number' &&
+    typeof record.clientId === 'string' &&
+    record.clientType === 'public' &&
+    Array.isArray(record.redirectUris)
+  );
 }
+
 function lines(value?: string) {
   return (value || '')
     .split(/\r?\n/)
@@ -44,12 +63,10 @@ function lines(value?: string) {
 
 export function OidcClientsPage({ api, t }: Props) {
   const [form] = Form.useForm<FormValues>();
-  const selectedClientType = Form.useWatch('clientType', form) || 'confidential';
   const [clients, setClients] = useState<ClientRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<ClientRecord | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [secret, setSecret] = useState<string | null>(null);
   const [guideClient, setGuideClient] = useState<ClientRecord | null>(null);
   const [providerInfo, setProviderInfo] = useState<GuideProviderInfo>({});
 
@@ -82,24 +99,27 @@ export function OidcClientsPage({ api, t }: Props) {
       clientId: '',
       redirectUrisText: '',
       postLogoutRedirectUrisText: '',
-      tokenEndpointAuthMethod: 'client_secret_basic',
       scopes: ['openid', 'profile', 'email'],
-      clientType: 'confidential',
       allowDynamicLoopbackPort: false,
-      autoApprove: false,
       enabled: true,
     });
     setFormOpen(true);
   };
+
   const openEdit = (record: ClientRecord) => {
     setEditing(record);
     form.setFieldsValue({
-      ...record,
+      name: record.name,
+      clientId: record.clientId,
       redirectUrisText: record.redirectUris.join('\n'),
       postLogoutRedirectUrisText: record.postLogoutRedirectUris.join('\n'),
+      scopes: record.scopes,
+      allowDynamicLoopbackPort: record.allowDynamicLoopbackPort,
+      enabled: record.enabled,
     });
     setFormOpen(true);
   };
+
   const save = async () => {
     const values = await form.validateFields();
     const data = {
@@ -107,30 +127,22 @@ export function OidcClientsPage({ api, t }: Props) {
       clientId: values.clientId,
       redirectUris: lines(values.redirectUrisText),
       postLogoutRedirectUris: lines(values.postLogoutRedirectUrisText),
-      tokenEndpointAuthMethod: values.tokenEndpointAuthMethod,
       scopes: values.scopes,
-      clientType: values.clientType,
+      clientType: 'public' as const,
       allowDynamicLoopbackPort: values.allowDynamicLoopbackPort,
-      autoApprove: values.autoApprove,
+      tokenEndpointAuthMethod: 'none' as const,
       enabled: values.enabled,
     };
-    const response = await api.request({
+    await api.request({
       url: editing ? `oidcClientManager:update/${editing.id}` : 'oidcClientManager:create',
       method: 'post',
       data,
     });
-    const payload = readPayload(response);
-    if (
-      !editing &&
-      payload &&
-      typeof payload === 'object' &&
-      typeof (payload as { clientSecret?: unknown }).clientSecret === 'string'
-    )
-      setSecret((payload as { clientSecret: string }).clientSecret);
     setFormOpen(false);
     message.success(t(editing ? 'OIDC application updated' : 'OIDC application created'));
     await load();
   };
+
   const remove = (record: ClientRecord) =>
     Modal.confirm({
       title: t('Delete OIDC application?'),
@@ -142,25 +154,6 @@ export function OidcClientsPage({ api, t }: Props) {
         await load();
       },
     });
-  const resetSecret = (record: ClientRecord) =>
-    Modal.confirm({
-      title: t('Reset client secret?'),
-      content: t('The current secret will stop working immediately.'),
-      onOk: async () => {
-        const response = await api.request({ url: `oidcClientManager:resetSecret/${record.id}`, method: 'post' });
-        const payload = readPayload(response);
-        if (
-          payload &&
-          typeof payload === 'object' &&
-          typeof (payload as { clientSecret?: unknown }).clientSecret === 'string'
-        )
-          setSecret((payload as { clientSecret: string }).clientSecret);
-      },
-    });
-  const copy = async (value: string) => {
-    await navigator.clipboard.writeText(value);
-    message.success(t('Copied'));
-  };
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -213,7 +206,7 @@ export function OidcClientsPage({ api, t }: Props) {
               title: t('Client type'),
               dataIndex: 'clientType',
               width: 130,
-              render: (value: ClientRecord['clientType']) => t(value === 'public' ? 'Public' : 'Confidential'),
+              render: () => t('Public'),
             },
             {
               title: t('Status'),
@@ -233,7 +226,7 @@ export function OidcClientsPage({ api, t }: Props) {
               title: t('Actions'),
               key: 'actions',
               fixed: 'right',
-              width: 220,
+              width: 180,
               render: (_value, record) => (
                 <Space>
                   <Button aria-label={t('Edit')} icon={<EditOutlined />} onClick={() => openEdit(record)} />
@@ -242,9 +235,6 @@ export function OidcClientsPage({ api, t }: Props) {
                     icon={<BookOutlined />}
                     onClick={() => setGuideClient(record)}
                   />
-                  {record.clientType !== 'public' ? (
-                    <Button aria-label={t('Reset secret')} icon={<KeyOutlined />} onClick={() => resetSecret(record)} />
-                  ) : null}
                   <Button danger aria-label={t('Delete')} icon={<DeleteOutlined />} onClick={() => remove(record)} />
                 </Space>
               ),
@@ -259,21 +249,16 @@ export function OidcClientsPage({ api, t }: Props) {
         onCancel={() => setFormOpen(false)}
         destroyOnClose
       >
-        <Form form={form} layout="vertical">
+        <Alert type="info" showIcon message={t('Only public clients are supported. Client secrets are disabled.')} />
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label={t('Name')} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
           <Form.Item name="clientId" label={t('Client ID')} rules={[{ required: true }]}>
             <Input disabled={Boolean(editing)} />
           </Form.Item>
-          <Form.Item name="clientType" label={t('Client type')} rules={[{ required: true }]}>
-            <Select
-              disabled={Boolean(editing)}
-              options={[
-                { value: 'confidential', label: t('Confidential — uses client secret') },
-                { value: 'public', label: t('Public / native — PKCE without client secret') },
-              ]}
-            />
+          <Form.Item label={t('Client type')}>
+            <Input value={t('Public')} disabled />
           </Form.Item>
           <Form.Item
             name="redirectUrisText"
@@ -290,34 +275,17 @@ export function OidcClientsPage({ api, t }: Props) {
           >
             <Input.TextArea rows={3} />
           </Form.Item>
-          {selectedClientType === 'confidential' ? (
-            <Form.Item
-              name="tokenEndpointAuthMethod"
-              label={t('Token endpoint authentication')}
-              rules={[{ required: true }]}
-            >
-              <Select
-                options={[
-                  { value: 'client_secret_basic', label: 'client_secret_basic' },
-                  { value: 'client_secret_post', label: 'client_secret_post' },
-                ]}
-              />
-            </Form.Item>
-          ) : (
-            <Form.Item label={t('Token endpoint authentication')}>
-              <Input value="none" disabled />
-            </Form.Item>
-          )}
-          {selectedClientType === 'public' ? (
-            <Form.Item
-              name="allowDynamicLoopbackPort"
-              label={t('Allow dynamic loopback redirect port')}
-              extra={t('The actual redirect URI may use any port, but its loopback host and path must match exactly.')}
-              valuePropName="checked"
-            >
-              <Switch />
-            </Form.Item>
-          ) : null}
+          <Form.Item label={t('Token endpoint authentication')}>
+            <Input value="none" disabled />
+          </Form.Item>
+          <Form.Item
+            name="allowDynamicLoopbackPort"
+            label={t('Allow dynamic loopback redirect port')}
+            extra={t('The actual redirect URI may use any port, but its loopback host and path must match exactly.')}
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
           <Form.Item
             name="scopes"
             label={t('Allowed scopes')}
@@ -331,41 +299,12 @@ export function OidcClientsPage({ api, t }: Props) {
               )}
             />
           </Form.Item>
-          <Form.Item
-            name="autoApprove"
-            label={t('Skip consent confirmation')}
-            extra={t('After login, immediately redirect to the callback without asking the user to confirm access.')}
-            valuePropName="checked"
-          >
-            <Switch />
-          </Form.Item>
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />
           </Form.Item>
         </Form>
       </Modal>
       <IntegrationGuide client={guideClient} provider={providerInfo} t={t} onClose={() => setGuideClient(null)} />
-      <Modal
-        title={t('Client secret')}
-        open={Boolean(secret)}
-        onCancel={() => setSecret(null)}
-        footer={
-          <Button type="primary" onClick={() => setSecret(null)}>
-            {t('I have saved the secret')}
-          </Button>
-        }
-      >
-        <Typography.Paragraph type="warning">
-          {t('This secret is shown only once. Store it in the application secret manager now.')}
-        </Typography.Paragraph>
-        <Input
-          value={secret || ''}
-          readOnly
-          suffix={
-            <Button type="text" aria-label={t('Copy')} icon={<CopyOutlined />} onClick={() => secret && copy(secret)} />
-          }
-        />
-      </Modal>
     </Space>
   );
 }

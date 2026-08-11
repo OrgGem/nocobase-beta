@@ -76,6 +76,9 @@ export function validateQuotaPolicy(model: Model): void {
   if (!['allow', 'use_reserved'].includes(String(model.get('missingUsageBehavior')))) {
     throw new Error('missingUsageBehavior must be allow or use_reserved.');
   }
+  if (!['reject', 'truncate'].includes(String(model.get('contextOverflowBehavior') ?? 'reject'))) {
+    throw new Error('contextOverflowBehavior must be reject or truncate.');
+  }
   try {
     dayjs().tz(String(model.get('timezone') || 'UTC'));
   } catch {

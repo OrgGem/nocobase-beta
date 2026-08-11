@@ -26,6 +26,7 @@ import {
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
+import { DirectLlmContextError, prepareDirectLlmContext, type OpenAIMessage } from '../utils/direct-llm-context';
 import { markAiApiFirstProviderOutput } from '../utils/app-observability';
 
 /**
@@ -114,8 +115,6 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
       return;
     }
 
-    await prepareLlmBilling(ctx, resolved);
-
     const modelOptions: Record<string, any> = {
       model: modelId,
       llmService: service.name,
@@ -126,13 +125,6 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
     if (body.max_tokens !== undefined) modelOptions.maxTokens = body.max_tokens;
     if (body.stop !== undefined) modelOptions.stop = body.stop;
 
-    const Provider = providerMeta.provider;
-    const provider = new Provider({
-      app: ctx.app,
-      serviceOptions: service.options,
-      modelOptions,
-    });
-
     // ─── Convert prompt to message tuple ───
     const prompt =
       typeof body.prompt === 'string'
@@ -142,7 +134,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
           : String(body.prompt);
 
     // Inject system prompt from AI Employee if configured
-    const langchainMessages: [string, string][] = [];
+    const messages: OpenAIMessage[] = [];
     if (config?.defaultAiEmployee) {
       const employee = await ctx.db.getRepository('aiEmployees').findOne({
         filter: { username: config.defaultAiEmployee },
@@ -150,11 +142,30 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
       if (employee) {
         const systemPrompt = employee.about || employee.defaultPrompt || '';
         if (systemPrompt) {
-          langchainMessages.push(['system', systemPrompt]);
+          messages.push({ role: 'system', content: systemPrompt });
         }
       }
     }
-    langchainMessages.push(['human', prompt]);
+    messages.push({ role: 'user', content: prompt });
+
+    const preparedContext = await prepareDirectLlmContext(ctx, {
+      serviceName: service.name,
+      modelId,
+      messages,
+      maxTokens: body.max_tokens,
+    });
+    await prepareLlmBilling(ctx, resolved);
+
+    const Provider = providerMeta.provider;
+    const provider = new Provider({
+      app: ctx.app,
+      serviceOptions: service.options,
+      modelOptions,
+    });
+    const langchainMessages = preparedContext.messages.map((message): [string, string] => [
+      message.role === 'user' ? 'human' : message.role,
+      String(message.content ?? ''),
+    ]);
 
     const completionId = generateCompletionId().replace('chatcmpl-', 'cmpl-');
     const chatModel = provider.createModel();
@@ -174,15 +185,16 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
     }
   } catch (err) {
     ctx.log.error('AI API completions error:', err);
-    if (!ctx.res.headersSent) {
+    if (!ctx.res?.headersSent) {
       const isQuotaError = err instanceof AiApiQuotaError;
-      ctx.status = isQuotaError ? 429 : 500;
+      const isContextError = err instanceof DirectLlmContextError;
+      ctx.status = isQuotaError ? 429 : isContextError ? 400 : 500;
       if (isQuotaError) ctx.set('X-RateLimit-Reason', err.code);
       ctx.body = toOpenAIError(
         ctx.status,
         getErrorMessage(err, 'Internal server error'),
-        isQuotaError ? 'quota_error' : 'server_error',
-        isQuotaError ? err.code : undefined,
+        isQuotaError ? 'quota_error' : isContextError ? 'invalid_request_error' : 'server_error',
+        isQuotaError || isContextError ? err.code : undefined,
       );
     }
   }

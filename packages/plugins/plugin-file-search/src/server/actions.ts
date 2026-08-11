@@ -105,13 +105,9 @@ export function createActions(plugin: any) {
         const settings = await getOrCreateSettings(ctx.db);
         const llm = await new LlmServiceMapper(ctx.app).resolveEnv(settings);
         const pageIndex = await new PageIndexRunnerService(ctx.app).healthCheck(settings, llm.env);
-        const docParser = Boolean(
-          ctx.app.pm?.get?.('@nocobase/plugin-document-parser') || ctx.app.pm?.get?.('plugin-document-parser'),
-        );
-        const markitdown = ctx.app.pm?.get?.('plugin-markitdown-parser');
-        const markitdownCheck = markitdown?.service?.checkAvailability
-          ? await markitdown.service.checkAvailability()
-          : { available: false, message: 'plugin-markitdown-parser is not loaded.' };
+        const docParserPlugin =
+          ctx.app.pm?.get?.('@nocobase/plugin-document-parser') || ctx.app.pm?.get?.('plugin-document-parser');
+        const docParser = Boolean(docParserPlugin);
         ctx.body = {
           pageIndex,
           llm: { ok: llm.ok, message: llm.message },
@@ -119,7 +115,6 @@ export function createActions(plugin: any) {
             ok: docParser,
             message: docParser ? 'Document Parser is available.' : 'Document Parser is missing.',
           },
-          markitdown: { ok: Boolean(markitdownCheck.available), message: markitdownCheck.message },
           queue: getFileSearchQueueStatus(),
           requiredPythonPackages: REQUIRED_PYTHON_PACKAGES,
         };
@@ -216,9 +211,7 @@ export function createActions(plugin: any) {
 
         const refRepo = ctx.db.getRepository('fileSearchReferences');
         const docIds = docs.map((doc) => doc.get('id')).filter(Boolean);
-        const allRefs = docIds.length
-          ? await refRepo.find({ filter: { documentId: { $in: docIds } } })
-          : [];
+        const allRefs = docIds.length ? await refRepo.find({ filter: { documentId: { $in: docIds } } }) : [];
 
         const refsByDocId = new Map<string, any[]>();
         for (const ref of allRefs) {

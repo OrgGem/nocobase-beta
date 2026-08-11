@@ -6,30 +6,30 @@ function createClient(overrides: Partial<ClientRecord> = {}): ClientRecord {
   return {
     id: 1,
     name: 'Desktop app',
-    clientId: 'desktop-client',
+    clientId: 'desktop-app',
     redirectUris: ['http://127.0.0.1/callback'],
     postLogoutRedirectUris: [],
     scopes: ['openid', 'profile'],
     clientType: 'public',
     allowDynamicLoopbackPort: false,
-    tokenEndpointAuthMethod: 'client_secret_basic',
-    autoApprove: true,
+    tokenEndpointAuthMethod: 'none',
     enabled: true,
     ...overrides,
   };
 }
 
 const provider = {
-  issuer: 'https://nocobase.example.com/',
+  issuer: 'https://nocobase.example.com',
   discoveryUrl: 'https://nocobase.example.com/.well-known/openid-configuration',
 };
 
 describe('buildIntegrationValues', () => {
-  it('shows a concrete dynamic port for a public native loopback client', () => {
+  it('shows a concrete dynamic port and mandatory PKCE S256 for a native client', () => {
     const values = buildIntegrationValues(createClient({ allowDynamicLoopbackPort: true }), provider);
 
     expect(values.redirectUri).toBe('http://127.0.0.1:49152/callback');
     expect(values.authorizationUrl).toContain('code_challenge_method=S256');
+    expect(values.authorizationUrl).toContain('response_type=code');
   });
 
   it('adds consent and resource parameters when refresh and API access are enabled', () => {
@@ -42,13 +42,17 @@ describe('buildIntegrationValues', () => {
   });
 
   it('does not add optional parameters when their scopes are absent', () => {
-    const values = buildIntegrationValues(
-      createClient({ clientType: 'confidential', allowDynamicLoopbackPort: false }),
-      provider,
-    );
+    const values = buildIntegrationValues(createClient(), provider);
     const authorizationUrl = new URL(values.authorizationUrl);
 
     expect(authorizationUrl.searchParams.has('prompt')).toBe(false);
     expect(authorizationUrl.searchParams.has('resource')).toBe(false);
+  });
+
+  it('uses provider-derived authorization and token endpoints', () => {
+    const values = buildIntegrationValues(createClient(), provider);
+
+    expect(values.authorizationEndpoint).toBe('https://nocobase.example.com/idpOAuth/authorize');
+    expect(values.tokenEndpoint).toBe('https://nocobase.example.com/idpOAuth/token');
   });
 });

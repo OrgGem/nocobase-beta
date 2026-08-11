@@ -180,7 +180,6 @@ export function SettingsPage() {
     ['PageIndex', health?.pageIndex],
     ['LLM', health?.llm],
     ['Parser', health?.parser],
-    ['MarkItDown', health?.markitdown],
   ];
 
   return (
@@ -340,7 +339,6 @@ export function SettingsPage() {
                       <Select
                         options={[
                           { label: 'Document Parser', value: 'document-parser' },
-                          { label: 'MarkItDown', value: 'markitdown' },
                           { label: 'Direct PDF/Markdown', value: 'direct' },
                         ]}
                       />

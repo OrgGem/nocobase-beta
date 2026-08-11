@@ -22,6 +22,7 @@ export default defineCollection({
     { name: 'currency', type: 'string', allowNull: false, defaultValue: 'USD' },
     { name: 'rejectUnpricedModel', type: 'boolean', defaultValue: true },
     { name: 'missingUsageBehavior', type: 'string', allowNull: false, defaultValue: 'use_reserved' },
+    { name: 'contextOverflowBehavior', type: 'string', allowNull: false, defaultValue: 'reject' },
   ],
   indexes: [
     {

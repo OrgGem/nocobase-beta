@@ -37,7 +37,7 @@ export class DocumentTextExtractor {
       };
     }
 
-    const text = await this.parseToText(ctx, attachment, settings);
+    const text = await this.parseToText(ctx, buffer, attachment, settings);
     if (!text.trim()) {
       throw new Error(`No text could be extracted from ${getDisplayFilename(attachment)}.`);
     }
@@ -50,25 +50,23 @@ export class DocumentTextExtractor {
     };
   }
 
-  private async parseToText(ctx: Context, attachment: AttachmentLike, settings: FileSearchSettings) {
+  private async parseToText(
+    ctx: Context,
+    buffer: Buffer,
+    attachment: AttachmentLike,
+    settings: FileSearchSettings,
+  ): Promise<string> {
     const docParser = this.getDocumentParser();
-    const markitdown = this.getMarkItDown();
-
-    if (settings.parserStrategy === 'markitdown' && markitdown?.service?.parseAttachment) {
-      return markitdown.service.parseAttachment(ctx, attachment);
+    const service = docParser?.documentParseService;
+    if (!service?.parseBuffer) {
+      throw new Error('plugin-document-parser is required to parse indexed files.');
     }
 
-    if (docParser?.parseAttachmentToText) {
-      const text = await docParser.parseAttachmentToText(ctx, attachment);
-      if (text) return text;
-    }
-
-    if (markitdown?.service?.parseAttachment) {
-      return markitdown.service.parseAttachment(ctx, attachment);
-    }
-
-    const result = await docParser?.internalParserRegistry?.parse?.(attachment, ctx);
-    return result?.handled ? result.text || '' : '';
+    const result = await service.parseBuffer(ctx, buffer, attachment, {
+      useCase: 'file-search',
+      maxBytes: Math.floor(settings.maxFileSizeMb * 1024 * 1024),
+    });
+    return result.handled ? result.text : '';
   }
 
   private getDocumentParser() {
@@ -77,10 +75,6 @@ export class DocumentTextExtractor {
       this.app.pm?.get?.('plugin-document-parser') ||
       this.app.pm?.get?.('document-parser')
     );
-  }
-
-  private getMarkItDown() {
-    return this.app.pm?.get?.('plugin-markitdown-parser') || this.app.pm?.get?.('markitdown-parser');
   }
 
   private async writeTempFile(buffer: Buffer, extname: string) {

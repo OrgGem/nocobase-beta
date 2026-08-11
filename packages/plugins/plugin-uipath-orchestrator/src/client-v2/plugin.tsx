@@ -1,5 +1,4 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
 
 export class PluginUipathOrchestratorClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -14,10 +13,9 @@ export class PluginUipathOrchestratorClient extends Plugin<Record<string, never>
       menuKey: 'uipath-orchestrator',
       key: 'index',
       title: this.t('UiPath Orchestrator'),
-      
-      componentLoader: () => import('../client/components/UiPathSettingsPage').then(m => ({ default: m.UiPathSettingsPage })),
-    });
 
+      componentLoader: () => import('./components/UiPathSettingsPage').then((m) => ({ default: m.UiPathSettingsPage })),
+    });
   }
 }
 

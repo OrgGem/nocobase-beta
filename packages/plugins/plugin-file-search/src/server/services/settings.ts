@@ -27,10 +27,7 @@ export function normalizeSettings(record: Record<string, unknown> = {}): FileSea
     enabled: record.enabled !== undefined ? Boolean(record.enabled) : DEFAULT_SETTINGS.enabled,
     autoIndex: record.autoIndex !== undefined ? Boolean(record.autoIndex) : DEFAULT_SETTINGS.autoIndex,
     enableAiTool: record.enableAiTool !== undefined ? Boolean(record.enableAiTool) : DEFAULT_SETTINGS.enableAiTool,
-    parserStrategy:
-      record.parserStrategy === 'markitdown' || record.parserStrategy === 'direct'
-        ? record.parserStrategy
-        : DEFAULT_SETTINGS.parserStrategy,
+    parserStrategy: record.parserStrategy === 'direct' ? 'direct' : DEFAULT_SETTINGS.parserStrategy,
     llmService: typeof record.llmService === 'string' && record.llmService ? record.llmService : null,
     indexModel: typeof record.indexModel === 'string' && record.indexModel ? record.indexModel : null,
     retrieveModel: typeof record.retrieveModel === 'string' && record.retrieveModel ? record.retrieveModel : null,

@@ -336,7 +336,7 @@ describe('UiPathCorrelationService', () => {
 
     expect(result.job?.Key).toBe('job-key');
     expect(result.queueItems[0].record.Id).toBe(100);
-    expect(result.queueItems[0].confidence).toBe('medium');
+    expect(result.queueItems[0].confidence).toBe('low');
   });
 
   it('prioritizes an exact queue reference from the log over unrelated overlapping items', async () => {
@@ -413,6 +413,106 @@ describe('UiPathCorrelationService', () => {
     expect(result.logs).toHaveLength(1);
     expect(result.queueItems[0].record.Reference).toBe('INV-1');
     expect(result.queueItems[0].confidence).toBe('high');
+  });
+  it('confirms an overlapping queue item when its processing history contains the job key', async () => {
+    const client = {
+      get: vi.fn(async (endpoint: string) => {
+        if (endpoint === '/odata/Jobs(10)') {
+          return {
+            Id: 10,
+            Key: 'job-key',
+            RobotId: 7,
+            StartTime: '2026-01-01T10:00:00.000Z',
+            EndTime: '2026-01-01T10:05:00.000Z',
+          };
+        }
+        if (endpoint === '/odata/RobotLogs') return { value: [] };
+        if (endpoint === '/odata/QueueItems') {
+          return {
+            value: [
+              {
+                Id: 100,
+                Robot: { Id: 7 },
+                StartProcessing: '2026-01-01T10:00:00.000Z',
+                EndProcessing: '2026-01-01T10:05:00.000Z',
+              },
+            ],
+          };
+        }
+        if (endpoint.includes('QueueItems(100)/UiPathODataSvc.GetItemProcessingHistory')) {
+          return { value: [{ Job: { Key: 'job-key' } }] };
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const result = await new UiPathCorrelationService(client).fromJob({ jobId: 10 });
+
+    expect(result.queueItems[0]).toMatchObject({ confidence: 'high', record: { Id: 100 } });
+    expect(result.queueItems[0].reason).toContain('processing history');
+  });
+  it('prefers a job ID from processing history over overlapping jobs', async () => {
+    const calls: string[] = [];
+    const client = {
+      get: vi.fn(async (endpoint: string) => {
+        calls.push(endpoint);
+        if (endpoint === '/odata/QueueItems(100)') {
+          return {
+            Id: 100,
+            StartProcessing: '2026-01-01T10:00:00.000Z',
+            EndProcessing: '2026-01-01T10:05:00.000Z',
+            Robot: { Id: 7 },
+          };
+        }
+        if (endpoint.includes('GetItemProcessingHistory')) {
+          return {
+            value: [
+              {
+                JobId: 11,
+                StartTime: '2026-01-01T10:00:00.000Z',
+                EndTime: '2026-01-01T10:05:00.000Z',
+              },
+            ],
+          };
+        }
+        if (endpoint === '/odata/Jobs(11)') return { Id: 11, Key: 'history-job' };
+        if (endpoint === '/odata/Jobs') return { value: [{ Id: 12, Key: 'overlap-job' }] };
+        if (endpoint === '/odata/RobotLogs') return { value: [] };
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const result = await new UiPathCorrelationService(client).fromQueueItem({ queueItemId: 100 });
+
+    expect(calls).toContain('/odata/Jobs(11)');
+    expect(result.jobs[0]).toMatchObject({ confidence: 'high', record: { Id: 11 } });
+    expect(result.jobs[0].reason).toContain('processing-history Job ID');
+  });
+
+  it('keeps queue tracing available and reports fallback when processing history is unavailable', async () => {
+    const client = {
+      get: vi.fn(async (endpoint: string) => {
+        if (endpoint === '/odata/QueueItems(100)') {
+          return {
+            Id: 100,
+            StartProcessing: '2026-01-01T10:00:00.000Z',
+            EndProcessing: '2026-01-01T10:05:00.000Z',
+            Robot: { Id: 7 },
+          };
+        }
+        if (endpoint.includes('GetItemProcessingHistory')) throw new Error('Not supported');
+        if (endpoint === '/odata/Jobs') return { value: [{ Id: 10, Key: 'job-key', RobotId: 7 }] };
+        if (endpoint === '/odata/RobotLogs') return { value: [] };
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      }),
+    };
+
+    const result = await new UiPathCorrelationService(client).fromQueueItem({ queueItemId: 100 });
+
+    expect(result.jobs[0]).toMatchObject({ confidence: 'medium', record: { Id: 10 } });
+    expect(result.diagnostics).toContain(
+      'Processing history is unavailable; using queue time and execution identity fallback.',
+    );
   });
 });
 
