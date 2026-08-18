@@ -1,4 +1,5 @@
 import type { Database, Model } from '@nocobase/database';
+import { getRunEventBus } from './RunEventBus';
 
 export type LoopRunRecord = Record<string, unknown>;
 
@@ -182,6 +183,104 @@ export class LoopRunRepository {
       throw new LoopRunAccessError(403, 'You cannot access this agent loop approval.');
     }
     return approval;
+  }
+
+  // Records a human decision on one approval and requeues the run once every pending approval of
+  // the run has been decided. Fail-closed throughout: an expired window, a decided row, or a run
+  // that moved on all reject the decision instead of guessing what the human meant.
+  async decideApproval(input: {
+    approvalId: string | number;
+    userId: number | undefined;
+    isAdmin: boolean;
+    decision: 'approved' | 'rejected';
+    note?: string;
+    editedInput?: unknown;
+  }) {
+    const decidedById = requireUserId(input.userId);
+    const id = positiveId(input.approvalId, 'Agent loop approval');
+    // Fast access check before taking row locks; the transaction re-reads the rows anyway.
+    await this.requireAccessibleApproval(id, input.userId, input.isAdmin);
+
+    const committed = await this.database.sequelize.transaction(async (transaction) => {
+      const approvals = this.database.getRepository('agentLoopActionApprovals');
+      const runs = this.database.getRepository('agentLoopRuns');
+      const record = await approvals.findOne({ filterByTk: id, transaction, lock: transaction.LOCK.UPDATE });
+      if (!record) throw new LoopRunAccessError(404, `Agent loop approval ${id} was not found.`);
+      const approval = plain(record);
+
+      if (approval.status !== 'pending') {
+        throw new LoopRunAccessError(409, `This approval has already been ${String(approval.status)}.`);
+      }
+      const expiresAt = approval.expiresAt ? new Date(String(approval.expiresAt)) : null;
+      if (expiresAt && !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() <= Date.now()) {
+        throw new LoopRunAccessError(409, 'The approval window has expired. Retry the run to request approval again.');
+      }
+
+      const runId = positiveId(approval.runId, 'Agent loop run');
+      const runRecord = await runs.findOne({ filterByTk: runId, transaction, lock: transaction.LOCK.UPDATE });
+      if (!runRecord) throw new LoopRunAccessError(404, `Agent loop run ${runId} was not found.`);
+      const run = plain(runRecord);
+      if (run.runtimeVersion !== 'control-plane-v2') {
+        throw new LoopRunAccessError(409, 'Historical plan-era runs are read-only.');
+      }
+      // A paused run keeps its decisions; the human resume requeues it later. Any other status
+      // means the run moved on and the decision can no longer be applied.
+      if (run.status !== 'waiting_approval' && run.status !== 'paused') {
+        throw new LoopRunAccessError(409, 'The run is no longer waiting for approval.');
+      }
+
+      const now = new Date();
+      await approvals.update({
+        filterByTk: id,
+        values: {
+          status: input.decision,
+          decidedById,
+          decidedAt: now,
+          decisionNote: input.note || null,
+          ...(input.decision === 'approved' && input.editedInput !== undefined
+            ? { editedInput: input.editedInput }
+            : {}),
+        },
+        transaction,
+      });
+
+      const remaining = await approvals.find({ filter: { runId, status: 'pending' }, transaction });
+      let requeued = false;
+      let event: LoopRunRecord | null = null;
+      if (!remaining.length && run.status === 'waiting_approval') {
+        await runs.update({
+          filterByTk: runId,
+          values: { status: 'queued', approvalStatus: 'decided' },
+          transaction,
+        });
+        const created = await this.database.getRepository('agentLoopEvents').create({
+          values: {
+            runId,
+            type: 'run_approval_decided',
+            title: 'Approvals decided',
+            content: 'All pending action approvals were decided. Run requeued to resume.',
+            status: 'queued',
+            payload: { decision: input.decision },
+            actorType: 'human',
+            actorIdentity: String(decidedById),
+            correlationKey: `approval-decided:${runId}`,
+            createdAt: now,
+          },
+          transaction,
+        });
+        event = typeof created.toJSON === 'function' ? created.toJSON() : created;
+        requeued = true;
+      }
+      return { approval, runId, requeued, event };
+    });
+
+    if (committed.requeued && committed.event) getRunEventBus().emit(committed.runId, committed.event);
+    return {
+      ...committed.approval,
+      status: input.decision,
+      decidedById,
+      requeued: committed.requeued,
+    };
   }
 
   async listArtifacts(input: {

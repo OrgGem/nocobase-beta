@@ -128,4 +128,87 @@ describe('HarnessCompiler', () => {
     expect(decideTool(compiled, 'trusted_write')).toBe('allow');
     expect(decideTool(compiled, 'unknown_tool')).toBe('ask');
   });
+
+  it('merges per-tool timeouts taking the smallest value per tool', () => {
+    const compiled = compileHarness([
+      {
+        source: 'platform',
+        settings: { tools: { timeouts: { skill_hub_execute: 120_000, skill_hub_report: 60_000 } } },
+      },
+      {
+        source: 'run',
+        settings: { tools: { timeouts: { skill_hub_execute: 30_000 } } },
+      },
+    ]);
+
+    expect(compiled.tools.timeouts).toEqual({ skill_hub_execute: 30_000, skill_hub_report: 60_000 });
+  });
+
+  it('compiles spill budget, redaction and sharing with safety-first merging', () => {
+    const compiled = compileHarness([
+      {
+        source: 'platform',
+        settings: {
+          context: { spill: { maxInlineBytes: 100_000 } },
+          observability: { redactSecrets: false, sharing: 'full' },
+        },
+      },
+      {
+        source: 'run',
+        settings: {
+          context: { spill: { maxInlineBytes: 40_000 } },
+          observability: { sharing: 'feedback-only' },
+        },
+      },
+    ]);
+
+    expect(compiled.context.spill.maxInlineBytes).toBe(40_000);
+    // Redaction is a union of concerns: any layer demanding it wins.
+    expect(compiled.observability.redactSecrets).toBe(true);
+    expect(compiled.observability.sharing).toBe('feedback-only');
+  });
+
+  it('defaults spill to null and sharing to full when no layer sets them', () => {
+    const compiled = compileHarness([{ source: 'default', settings: {} }]);
+
+    expect(compiled.context.spill.maxInlineBytes).toBeNull();
+    expect(compiled.tools.timeouts).toEqual({});
+    expect(compiled.observability.redactSecrets).toBe(true);
+    expect(compiled.observability.sharing).toBe('full');
+  });
+
+  it('disabled sharing outranks every other sharing level', () => {
+    const compiled = compileHarness([
+      { source: 'a', settings: { observability: { sharing: 'full' } } },
+      { source: 'b', settings: { observability: { sharing: 'disabled' } } },
+    ]);
+
+    expect(compiled.observability.sharing).toBe('disabled');
+  });
+
+  it('intersects escalatable tools across layers like allow', () => {
+    const compiled = compileHarness([
+      {
+        source: 'platform',
+        settings: { tools: { escalate: ['deployService', 'runShell', 'resetIndex'] } },
+      },
+      {
+        source: 'pattern',
+        settings: { tools: { escalate: ['deployService', 'runShell'] } },
+      },
+    ]);
+
+    expect(compiled.tools.escalate).toEqual(['deployService', 'runShell']);
+    // Escalatable tools are never granted outright: every call still resolves to ask.
+    expect(decideTool(compiled, 'deployService')).toBe('ask');
+  });
+
+  it('treats an empty escalate list as no opinion', () => {
+    const compiled = compileHarness([
+      { source: 'platform', settings: { tools: { escalate: ['deployService'] } } },
+      { source: 'pattern', settings: {} },
+    ]);
+
+    expect(compiled.tools.escalate).toEqual(['deployService']);
+  });
 });

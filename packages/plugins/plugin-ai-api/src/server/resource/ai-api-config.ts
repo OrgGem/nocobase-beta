@@ -46,8 +46,8 @@ const aiApiConfigResource: ResourceOptions = {
             defaultAiEmployee: '',
             defaultLlmService: '',
             enabledLlmServices: [],
-            rateLimitPerMinute: 60,
             maxRequestBodyMb: 10,
+            pdfRenderPagesAsImages: false,
             quotaEnabled: false,
             defaultReservationOutputTokens: 4096,
             options: {},
@@ -70,8 +70,8 @@ const aiApiConfigResource: ResourceOptions = {
             defaultAiEmployee: values.defaultAiEmployee ?? '',
             defaultLlmService: values.defaultLlmService ?? '',
             enabledLlmServices: values.enabledLlmServices ?? [],
-            rateLimitPerMinute: values.rateLimitPerMinute ?? 60,
             maxRequestBodyMb: coerceMaxRequestBodyMb(values.maxRequestBodyMb ?? DEFAULT_MAX_REQUEST_BODY_MB),
+            pdfRenderPagesAsImages: values.pdfRenderPagesAsImages ?? false,
             quotaEnabled: values.quotaEnabled ?? false,
             defaultReservationOutputTokens: values.defaultReservationOutputTokens ?? 4096,
             options: values.options ?? {},
@@ -83,9 +83,11 @@ const aiApiConfigResource: ResourceOptions = {
         if (values.defaultAiEmployee !== undefined) updateData.defaultAiEmployee = values.defaultAiEmployee;
         if (values.defaultLlmService !== undefined) updateData.defaultLlmService = values.defaultLlmService;
         if (values.enabledLlmServices !== undefined) updateData.enabledLlmServices = values.enabledLlmServices;
-        if (values.rateLimitPerMinute !== undefined) updateData.rateLimitPerMinute = values.rateLimitPerMinute;
         if (values.maxRequestBodyMb !== undefined) {
           updateData.maxRequestBodyMb = coerceMaxRequestBodyMb(values.maxRequestBodyMb);
+        }
+        if (values.pdfRenderPagesAsImages !== undefined) {
+          updateData.pdfRenderPagesAsImages = Boolean(values.pdfRenderPagesAsImages);
         }
         if (values.quotaEnabled !== undefined) updateData.quotaEnabled = values.quotaEnabled;
         if (values.defaultReservationOutputTokens !== undefined) {

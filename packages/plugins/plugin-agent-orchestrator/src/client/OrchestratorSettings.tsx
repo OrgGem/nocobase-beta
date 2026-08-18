@@ -2,6 +2,7 @@ import React from 'react';
 import { Tabs } from 'antd';
 import {
   ApiOutlined,
+  AuditOutlined,
   BarChartOutlined,
   CheckCircleOutlined,
   CodeOutlined,
@@ -19,6 +20,7 @@ import { RetrievalTraceTab } from '../client-v2/components/RetrievalTraceTab';
 import { MemoryInspectorTab } from '../client-v2/components/MemoryInspectorTab';
 import { AgentRunsTab } from './AgentRunsTab';
 import { HarnessProfilesTab } from './HarnessProfilesTab';
+import { ApprovalsTab } from './ApprovalsTab';
 import { AIEmployeesProvider } from '../client-v2/components/AIEmployeesContext';
 import { useT } from './skill-hub/locale';
 import { SkillManager, ExecutionHistory, SkillMetrics, LoopSettings } from './skill-hub';
@@ -58,6 +60,15 @@ const OrchestratorSettings: React.FC = () => {
                 </span>
               ),
               children: <HarnessProfilesTab />,
+            },
+            {
+              key: 'approvals',
+              label: (
+                <span>
+                  <AuditOutlined /> {t('Approvals')}
+                </span>
+              ),
+              children: <ApprovalsTab />,
             },
             {
               key: 'agent-bindings',

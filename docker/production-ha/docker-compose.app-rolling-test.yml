@@ -1,0 +1,296 @@
+name: nocobase-rolling-test
+
+# Isolated HA app-node test stack.
+# It intentionally keeps only the services required to boot and exercise
+# app-main, app-backup-1, app-backup-2, Cluster Manager, and Nginx failover.
+
+x-nocobase-env: &nocobase-env
+  APP_ENV: production
+  APP_NAME: main
+  APP_KEY: ${APP_KEY:?Set APP_KEY in docker/production-ha/.env}
+  ENCRYPTION_FIELD_KEY: ${ENCRYPTION_FIELD_KEY:?Set ENCRYPTION_FIELD_KEY in docker/production-ha/.env}
+  DB_DIALECT: postgres
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: ${ROLLING_TEST_DB_DATABASE:-nocobase_rolling_test}
+  DB_USER: ${DB_USER:-nocobase}
+  DB_PASSWORD: ${DB_PASSWORD:-nocobase}
+  DB_LOGGING: 'off'
+  CACHE_DEFAULT_STORE: redis
+  CACHE_REDIS_URL: redis://redis:6379/0
+  REDIS_URL: redis://redis:6379/1
+  WORKER_ID_REDIS_URL: redis://redis:6379/1
+  PUBSUB_ADAPTER: redis
+  PUBSUB_ADAPTER_REDIS_URL: redis://redis:6379/2
+  QUEUE_ADAPTER: redis
+  QUEUE_ADAPTER_REDIS_URL: redis://redis:6379/3
+  # A fresh NocoBase database runs core install hooks before Cluster Manager can
+  # register its Redis lock adapter. Keep the disposable test bootstrap on the
+  # built-in adapter; Cluster Manager rolling-restart coordination still uses
+  # its dedicated Redis connection below.
+  LOCK_ADAPTER_DEFAULT: local
+  LOCK_ADAPTER_REDIS_URL: redis://redis:6379/4
+  ORCHESTRATOR_ADAPTER: docker
+  CLUSTER_MANAGER_WORKER_READY_URL: http://app-main:13000/api/app:getInfo
+  CLUSTER_MANAGER_WORKER_IMAGE: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}
+  APPEND_PRESET_LOCAL_PLUGINS: plugin-cluster-manager
+  LOGGER_LEVEL: info
+  LOGGER_TRANSPORT: console
+  TZ: ${TZ:-Asia/Saigon}
+  NOCOBASE_IMAGE_VERSION: ${NOCOBASE_VERSION:-2.1.30-full}
+  NPM_REGISTRY_URL: http://nginx-cache-registry/npm/
+  APT_MIRROR_URL: http://nginx-cache-registry/debian/
+  PYPI_INDEX_URL: http://nginx-cache-registry/pypi-simple/
+
+x-nocobase-base: &nocobase-base
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}
+  restart: unless-stopped
+  init: true
+  stop_grace_period: 90s
+  networks:
+    - nocobase-rolling-test
+  volumes:
+    - app-storage:/app/nocobase/storage
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./scripts/app-runtime-entrypoint.sh:/usr/local/bin/app-runtime-entrypoint.sh:ro
+  depends_on:
+    plugin-seed:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+x-nocobase-healthcheck: &nocobase-healthcheck
+  test:
+    - CMD-SHELL
+    - >-
+      node -e 'const http=require("http");const req=http.get("http://127.0.0.1:13000/api/app:getInfo",res=>{let body="";res.setEncoding("utf8");res.on("data",chunk=>body+=chunk);res.on("end",()=>{try{const payload=JSON.parse(body);process.exit(res.statusCode===200&&typeof payload?.data?.version==="string"?0:1)}catch(_error){process.exit(1)}})});req.setTimeout(5000,()=>{req.destroy();process.exit(1)});req.on("error",()=>process.exit(1));'
+  interval: 10s
+  timeout: 8s
+  retries: 30
+  start_period: 300s
+
+services:
+  plugin-seed:
+    image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}
+    restart: 'no'
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        set -eu
+        mkdir -p /storage/plugins/plugin-cluster-manager
+        cp -a /plugin-source/. /storage/plugins/plugin-cluster-manager/
+    volumes:
+      - app-storage:/storage
+      - ../../packages/plugins/plugin-cluster-manager:/plugin-source:ro
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    image: custom-postgres-pgvector:16-alpine
+    restart: unless-stopped
+    command: >-
+      postgres
+      -c wal_level=logical
+      -c max_connections=100
+      -c shared_buffers=128MB
+    environment:
+      POSTGRES_USER: ${DB_USER:-nocobase}
+      POSTGRES_DB: ${ROLLING_TEST_DB_DATABASE:-nocobase_rolling_test}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-nocobase}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - nocobase-rolling-test
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-nocobase} -d ${ROLLING_TEST_DB_DATABASE:-nocobase_rolling_test}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: >-
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --appendonly yes
+      --appendfsync everysec
+    volumes:
+      - redis-data:/data
+    networks:
+      - nocobase-rolling-test
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  nginx-cache-registry:
+    image: nginx:1.25-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx-cache-registry.conf:/etc/nginx/nginx.conf:ro
+      - nginx-cache-data:/var/cache/nginx/packages
+    networks:
+      - nocobase-rolling-test
+
+  app-main:
+    <<: *nocobase-base
+    container_name: rolling-test-app-main
+    hostname: app-main
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
+    environment:
+      <<: *nocobase-env
+      APP_ROLE: app
+      APP_NODE_ROLE: main
+      CLUSTER_MANAGER_NODE_URL: http://app-main:13000
+      WORKER_MODE: ''
+      APP_PORT: 13000
+      APP_BIND: 0.0.0.0
+      SKILL_HUB_SANDBOX: 'false'
+    ports:
+      - '23000:13000'
+    healthcheck: *nocobase-healthcheck
+
+  app-backup-1:
+    <<: *nocobase-base
+    container_name: rolling-test-app-backup-1
+    hostname: app-backup-1
+    depends_on:
+      plugin-seed:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app-main:
+        condition: service_healthy
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
+    environment:
+      <<: *nocobase-env
+      APP_ROLE: app
+      APP_NODE_ROLE: backup
+      CLUSTER_MANAGER_NODE_URL: http://app-backup-1:13000
+      APP_START_AFTER_URL: http://app-main:13000/api/app:getInfo
+      WORKER_MODE: ''
+      APP_PORT: 13000
+      APP_BIND: 0.0.0.0
+      SKILL_HUB_SANDBOX: 'false'
+    healthcheck: *nocobase-healthcheck
+
+  app-backup-2:
+    <<: *nocobase-base
+    container_name: rolling-test-app-backup-2
+    hostname: app-backup-2
+    depends_on:
+      plugin-seed:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      app-backup-1:
+        condition: service_healthy
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
+    environment:
+      <<: *nocobase-env
+      APP_ROLE: app
+      APP_NODE_ROLE: backup
+      CLUSTER_MANAGER_NODE_URL: http://app-backup-2:13000
+      APP_START_AFTER_URL: http://app-backup-1:13000/api/app:getInfo
+      WORKER_MODE: ''
+      APP_PORT: 13000
+      APP_BIND: 0.0.0.0
+      SKILL_HUB_SANDBOX: 'false'
+    healthcheck: *nocobase-healthcheck
+
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: rolling-test-nginx
+    restart: unless-stopped
+    ports:
+      - '18080:80'
+    networks:
+      - nocobase-rolling-test
+    depends_on:
+      app-main:
+        condition: service_healthy
+      app-backup-1:
+        condition: service_healthy
+      app-backup-2:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        cat > /etc/nginx/nginx.conf <<'NGINXEOF'
+        events { worker_connections 1024; }
+        http {
+            upstream nocobase {
+                least_conn;
+                server app-main:13000 max_fails=1 fail_timeout=5s;
+                server app-backup-1:13000 max_fails=1 fail_timeout=5s;
+                server app-backup-2:13000 max_fails=1 fail_timeout=5s;
+                keepalive 32;
+            }
+
+            server {
+                listen 80;
+                server_name _;
+
+                proxy_next_upstream error timeout invalid_header http_500 http_502 http_503 http_504;
+                proxy_next_upstream_tries 3;
+                proxy_next_upstream_timeout 15s;
+
+                location /nginx-health {
+                    access_log off;
+                    return 200 "ok\n";
+                }
+
+                location /ws {
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection "Upgrade";
+                    proxy_set_header Host $$host;
+                    proxy_read_timeout 86400;
+                    proxy_send_timeout 86400;
+                }
+
+                location / {
+                    proxy_pass http://nocobase;
+                    proxy_http_version 1.1;
+                    proxy_set_header Connection "";
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$scheme;
+                    proxy_connect_timeout 10s;
+                    proxy_send_timeout 600s;
+                    proxy_read_timeout 600s;
+                }
+            }
+        }
+        NGINXEOF
+        exec nginx -g 'daemon off;'
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O - http://127.0.0.1/api/app:getInfo | grep -q '"version"' && wget -q --spider http://127.0.0.1/nginx-health
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+networks:
+  nocobase-rolling-test:
+    driver: bridge
+
+volumes:
+  app-storage:
+  postgres-data:
+  redis-data:
+  nginx-cache-data:

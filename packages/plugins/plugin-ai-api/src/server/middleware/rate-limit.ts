@@ -10,14 +10,14 @@
 import { Context } from '@nocobase/actions';
 import { RateLimiter } from '../utils/rate-limiter';
 import { toOpenAIError } from '../utils/openai-format';
+import { resolveRequestUserGroup } from '../utils/request-cache';
 
 /**
  * Creates a rate-limiting check function for use in the AI API router.
  *
  * Must be called AFTER authenticateBearer() so ctx.state.currentUser is set.
- * Reads rateLimitPerMinute from aiApiConfig on each request (cheap single-row read,
- * allows config changes to take effect immediately without restart).
- * Falls back to 60 req/min if the config record is missing or the field is 0/null.
+ * Resolves the user's group and reads rateLimitPerMinute from that group.
+ * Falls back to 60 req/min if the default group is missing or misconfigured.
  *
  * Returns false (and writes the 429 response) when the rate limit is exceeded.
  * Returns true when the request is allowed.
@@ -35,21 +35,19 @@ export function createRateLimitMiddleware(limiter: RateLimiter) {
 
     let limit = 60;
     try {
-      const config = await ctx.db.getRepository('aiApiConfig').findOne();
-      const configLimit = config?.rateLimitPerMinute;
-      if (configLimit && configLimit > 0) {
-        limit = configLimit;
+      const group = await resolveRequestUserGroup(ctx, userId);
+      const groupLimit = group?.rateLimitPerMinute;
+      if (groupLimit && groupLimit > 0) {
+        limit = groupLimit;
       }
-    } catch (configErr) {
-      // Config read failure: fail open — don't block legitimate requests
-      // Log at WARN so admins can detect DB connectivity issues
-      ctx.app?.logger?.warn('[ai-api] Rate limit config read failed, using default (60/min)', configErr);
+    } catch (err) {
+      ctx.app?.logger?.warn('[ai-api] Rate limit group resolution failed, using default (60/min)', err);
     }
 
     const result = limiter.check(userId, limit);
 
     if (!result.allowed) {
-      const retryAfterSec = Math.ceil((result as any).retryAfterMs / 1000);
+      const retryAfterSec = Math.ceil(result.retryAfterMs / 1000);
       ctx.set('Retry-After', String(retryAfterSec));
       ctx.set('X-RateLimit-Limit', String(limit));
       ctx.set('X-RateLimit-Remaining', '0');

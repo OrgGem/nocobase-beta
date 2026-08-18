@@ -27,6 +27,7 @@ function harness(tools: {
   allow?: string[];
   ask?: string[];
   deny?: string[];
+  escalate?: string[];
   effects?: Record<string, 'read' | 'write' | 'external'>;
   trustedPreHandlerTools?: string[];
 }) {
@@ -88,6 +89,29 @@ describe('planHarnessTools', () => {
 
     expect(plan.filter).toEqual(['searchWeb']);
     expect(plan.employeeTools).toEqual([{ name: 'searchWeb', autoCall: false }]);
+  });
+
+  it('offers escalatable tools as ask-gated candidates without granting them', async () => {
+    const app = createApp({ deployService: { scope: 'CUSTOM' }, readFile: { scope: 'CUSTOM' } });
+    const plan = await planHarnessTools(
+      app,
+      harness({ allow: ['readFile'], escalate: ['deployService'], effects: { readFile: 'read' } }),
+    );
+
+    expect(plan.filter).toEqual(['deployService', 'readFile']);
+    expect(plan.employeeTools).toEqual([
+      { name: 'deployService', autoCall: false },
+      { name: 'readFile', autoCall: true },
+    ]);
+  });
+
+  it('withholds an escalatable tool whose approval gate plugin-ai would ignore', async () => {
+    const app = createApp({ searchWeb: { scope: 'GENERAL', defaultPermission: 'ALLOW' } });
+    const plan = await planHarnessTools(app, harness({ escalate: ['searchWeb'] }));
+
+    expect(plan.filter).toEqual([]);
+    expect(plan.employeeTools).toEqual([]);
+    expect(plan.withheld).toEqual([{ name: 'searchWeb', reason: 'approval cannot be enforced for this tool' }]);
   });
 
   it('withholds denied and unregistered tools', async () => {

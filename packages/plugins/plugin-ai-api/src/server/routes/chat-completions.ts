@@ -26,13 +26,14 @@ import {
   isStreamingRequested,
   writeResponse,
 } from '../utils/streaming';
-import { checkEmployeeAccess } from '../middleware/role-permission';
 import { enforceModelAccess } from '../utils/user-permissions';
+import { getAiApiConfig } from '../utils/request-cache';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
 import { DirectLlmContextError, prepareDirectLlmContext, type OpenAIMessage } from '../utils/direct-llm-context';
 import { markAiApiFirstProviderOutput } from '../utils/app-observability';
+import { FileContentBlock, FileProcessorError } from '../services/file-processor';
 
 /**
  * POST /api/ai-llm/v1/chat/completions
@@ -130,7 +131,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     }
 
     // ─── Check whitelist (global config ∩ per-user grant) ───
-    const config = await ctx.db.getRepository('aiApiConfig').findOne();
+    const config = await getAiApiConfig(ctx);
     if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) {
       return;
     }
@@ -165,35 +166,18 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     if (body.presence_penalty !== undefined) modelOptions.presencePenalty = body.presence_penalty;
     if (body.stop !== undefined) modelOptions.stop = body.stop;
 
-    // ─── Build system prompt from AI Employee ───
-    let systemPrompt = '';
-    if (config?.defaultAiEmployee) {
-      // Check role is allowed to use this employee
-      if (!checkEmployeeAccess(ctx, config.defaultAiEmployee)) {
-        ctx.status = 403;
-        ctx.body = toOpenAIError(
-          403,
-          `Role is not permitted to use AI Employee '${config.defaultAiEmployee}'. ` +
-            `An admin must grant access in Settings → Users & Permissions → [Role] → AI API.`,
-          'permission_denied',
-          'employee_not_permitted',
-        );
-        return;
-      }
-      const employee = await ctx.db.getRepository('aiEmployees').findOne({
-        filter: { username: config.defaultAiEmployee },
-      });
-      if (employee) {
-        systemPrompt = employee.about || employee.defaultPrompt || '';
-      }
-    }
-
-    // ─── Build messages (inject system prompt if not provided by client) ───
+    // Direct LLM mode ignores the default AI Employee: its prompt belongs to agent
+    // mode only. The model metadata system prompt is still applied later by
+    // prepareDirectLlmContext.
     let messages: OpenAIMessage[] = [...body.messages];
-    const hasSystemMessage = messages.some((m: any) => m.role === 'system');
-    if (systemPrompt && !hasSystemMessage) {
-      messages.unshift({ role: 'system', content: systemPrompt });
-    }
+
+    // ─── Process file / file_url blocks through the file processor service ───
+    messages = await Promise.all(
+      messages.map(async (msg) => ({
+        ...msg,
+        content: await processMessageContentFileBlocks(msg.content, ctx, plugin),
+      })),
+    );
 
     const preparedContext = await prepareDirectLlmContext(ctx, {
       serviceName: service.name,
@@ -271,13 +255,14 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     if (!ctx.res?.headersSent) {
       const isQuotaError = err instanceof AiApiQuotaError;
       const isContextError = err instanceof DirectLlmContextError;
-      ctx.status = isQuotaError ? 429 : isContextError ? 400 : 500;
+      const isFileError = err instanceof FileProcessorError;
+      ctx.status = isQuotaError ? 429 : isContextError || isFileError ? 400 : 500;
       if (isQuotaError) ctx.set('X-RateLimit-Reason', err.code);
       ctx.body = toOpenAIError(
         ctx.status,
         getErrorMessage(err, 'Internal server error'),
-        isQuotaError ? 'quota_error' : isContextError ? 'invalid_request_error' : 'server_error',
-        isQuotaError || isContextError ? err.code : undefined,
+        isQuotaError ? 'quota_error' : isContextError || isFileError ? 'invalid_request_error' : 'server_error',
+        isQuotaError || isContextError || isFileError ? err.code : undefined,
       );
     }
   }
@@ -305,19 +290,26 @@ async function handleNonStreamingCompletion(
   }
 
   // Extract usage if available
-  const usage = setAiApiUsageResult(ctx, result.usage_metadata, {
-    gatewayResponseId: completionId,
-    providerRequestId: extractProviderRequestId(result),
-  });
+  const usage = setAiApiUsageResult(
+    ctx,
+    result.usage_metadata,
+    {
+      gatewayResponseId: completionId,
+      providerRequestId: extractProviderRequestId(result),
+    },
+    result.response_metadata,
+  );
 
   ctx.status = 200;
   const toolCalls = normalizeToolCalls(result.tool_calls);
+  const providerFinishReason = extractFinishReason(result);
   ctx.body = toOpenAIResponse({
     id: completionId,
     model: modelName,
     content,
     usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     toolCalls,
+    ...(providerFinishReason ? { finishReason: providerFinishReason } : {}),
   });
 }
 
@@ -354,8 +346,10 @@ async function handleStreamingCompletion(
 
   const requestAbort = createRequestAbortController(ctx);
   let usage: Usage | undefined;
+  let usageResponseMetadata: unknown;
   let providerRequestId: string | undefined;
-  let finishReason = 'stop';
+  let providerFinishReason: string | undefined;
+  let sawToolCalls = false;
   try {
     const stream = await chatModel.stream(messages, { ...providerRequestParameters, signal: requestAbort.signal });
 
@@ -386,7 +380,7 @@ async function handleStreamingCompletion(
       const toolCallChunks = normalizeToolCallChunks(chunk.tool_call_chunks);
       if (toolCallChunks.length) {
         markAiApiFirstProviderOutput(ctx);
-        finishReason = 'tool_calls';
+        sawToolCalls = true;
         await writeResponse(
           ctx,
           formatSSE(
@@ -399,8 +393,14 @@ async function handleStreamingCompletion(
         );
       }
       if (chunk.usage_metadata) {
-        usage = normalizeUsage(chunk.usage_metadata) ?? usage;
+        const normalized = normalizeUsage(chunk.usage_metadata);
+        if (normalized) {
+          usage = normalized;
+          usageResponseMetadata = chunk.response_metadata;
+        }
       }
+      const chunkFinishReason = extractFinishReason(chunk);
+      if (chunkFinishReason) providerFinishReason = chunkFinishReason;
       providerRequestId = providerRequestId ?? extractProviderRequestId(chunk);
     }
 
@@ -412,7 +412,7 @@ async function handleStreamingCompletion(
           id: completionId,
           model: modelName,
           delta: {},
-          finishReason,
+          finishReason: providerFinishReason ?? (sawToolCalls ? 'tool_calls' : 'stop'),
         }),
       ),
     );
@@ -432,7 +432,7 @@ async function handleStreamingCompletion(
 
     // Send [DONE]
     await writeResponse(ctx, formatSSEDone());
-    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId }, usageResponseMetadata);
     ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
   } catch (err) {
     const cancelled = isClientDisconnected(ctx, err);
@@ -449,7 +449,7 @@ async function handleStreamingCompletion(
         }),
       );
     }
-    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId }, usageResponseMetadata);
     ctx.state.aiApiStreamResult = {
       succeeded: false,
       id: completionId,
@@ -466,6 +466,24 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 /**
+ * Reads the provider's finish_reason from a LangChain result or stream chunk.
+ * LangChain surfaces it in response_metadata.finish_reason; some adapters put it
+ * in additional_kwargs.finish_reason instead. Returns undefined when the provider
+ * reported nothing, so callers can fall back to their own default.
+ */
+export function extractFinishReason(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const candidates = [
+    isRecord(value.response_metadata) ? value.response_metadata.finish_reason : undefined,
+    isRecord(value.additional_kwargs) ? value.additional_kwargs.finish_reason : undefined,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) return candidate;
+  }
+  return undefined;
+}
+
+/**
  * Content block types every provider adapter in `@nocobase/plugin-ai` maps to a
  * native equivalent.
  *
@@ -475,7 +493,7 @@ function getErrorMessage(error: unknown, fallback: string) {
  * the model answers as if the attachment was never sent. A 400 is far easier to
  * debug than a confidently wrong completion.
  */
-const SUPPORTED_CONTENT_BLOCK_TYPES = new Set(['text', 'image_url']);
+const SUPPORTED_CONTENT_BLOCK_TYPES = new Set(['text', 'image_url', 'file', 'file_url']);
 
 /**
  * Deliberately mirrors the exact grammar `@langchain/core`'s `parseBase64DataUrl`
@@ -485,6 +503,14 @@ const SUPPORTED_CONTENT_BLOCK_TYPES = new Set(['text', 'image_url']);
  * Compound subtypes such as `image/svg+xml` are rejected for that reason.
  */
 const BASE64_DATA_URL_PATTERN = /^data:(\w+\/\w+);base64,([A-Za-z0-9+/]+=*)$/;
+
+/**
+ * File blocks accept a wider range of MIME types than `image_url` blocks:
+ * documents such as `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+ * or `image/svg+xml` are valid attachments. The grammar still requires a proper
+ * `type/subtype` and standard base64 payload.
+ */
+const FILE_BASE64_DATA_URL_PATTERN = /^data:([^;\s]+);base64,([A-Za-z0-9+/]+=*)$/;
 
 /**
  * The regex above is LangChain's, and LangChain's is lenient: `A===`, `A=`,
@@ -591,8 +617,8 @@ function describeContentBlockProblem(block: unknown): string | undefined {
   if (!type) return "each content block requires a 'type' field";
   if (!SUPPORTED_CONTENT_BLOCK_TYPES.has(type)) {
     return (
-      `content block type '${type}' is not supported — this gateway forwards 'text' and 'image_url' only. ` +
-      `Send documents as text, or inline them as an 'image_url' data URL if the model reads images`
+      `content block type '${type}' is not supported — this gateway forwards 'text', 'image_url', ` +
+      `'file', and 'file_url' only. Send documents as text, or inline them as a 'file' / 'file_url' block`
     );
   }
 
@@ -600,7 +626,54 @@ function describeContentBlockProblem(block: unknown): string | undefined {
     return typeof block.text === 'string' ? undefined : "a 'text' block requires a string 'text' field";
   }
 
+  if (type === 'file') {
+    return describeFileProblem(block.file);
+  }
+
+  if (type === 'file_url') {
+    return describeFileUrlProblem(block.file_url);
+  }
+
   return describeImageUrlProblem(block.image_url);
+}
+
+function describeFileProblem(file: unknown): string | undefined {
+  if (!isRecord(file)) return "a 'file' block requires an object 'file' field";
+  const fileData = typeof file.file_data === 'string' ? file.file_data : undefined;
+  if (!fileData) return "a 'file' block requires a string 'file.file_data' field";
+  if (!fileData.startsWith('data:')) {
+    return "a 'file' block's 'file_data' must be a base64 data URL starting with 'data:'";
+  }
+  const match = FILE_BASE64_DATA_URL_PATTERN.exec(fileData);
+  if (!match || !match[1].includes('/')) {
+    return (
+      `malformed base64 data URL. Expected 'data:<mime-type>;base64,<base64>' ` +
+      `with a valid type/subtype and standard base64 (no whitespace or URL-safe characters)`
+    );
+  }
+  if (!isDecodableBase64(match[2])) {
+    return (
+      `base64 payload is not decodable. Check the padding and length — ` +
+      `the data must be a multiple of 4 characters with at most two trailing '='`
+    );
+  }
+  return undefined;
+}
+
+function describeFileUrlProblem(fileUrl: unknown): string | undefined {
+  if (!isRecord(fileUrl)) return "a 'file_url' block requires an object 'file_url' field";
+  const url = typeof fileUrl.url === 'string' ? fileUrl.url : undefined;
+  if (!url) return "a 'file_url' block requires a string 'file_url.url' field";
+  let protocol: string;
+  try {
+    protocol = new URL(url).protocol;
+  } catch {
+    return `'${url}' is not a valid URL. Use an http(s) URL`;
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    return `URL protocol '${protocol}' is not supported. Use an http(s) URL`;
+  }
+  return undefined;
 }
 
 function describeImageUrlProblem(imageUrl: unknown): string | undefined {
@@ -681,7 +754,60 @@ export function normalizeMessageContent(content: unknown): MessageContent {
   return JSON.stringify(content);
 }
 
-const GATEWAY_MANAGED_PARAMETERS = new Set(['model', 'messages', 'tools', 'tool_choice', 'stream', 'n']);
+/**
+ * Run any `file` or `file_url` content blocks through the plugin's file
+ * processor service. Custom plugins can register processors to fetch URLs,
+ * extract text, OCR, etc. Other block types are left untouched.
+ *
+ * The service is invoked repeatedly if a processor returns another file-like
+ * block (e.g. a `file_url` becomes a `file` block, which may then be converted
+ * to images by the PDF processor).
+ */
+async function processMessageContentFileBlocks(
+  content: unknown,
+  ctx: Context,
+  plugin: PluginAiApiServer,
+): Promise<unknown> {
+  if (!Array.isArray(content)) return content;
+  const processed: unknown[] = [];
+  for (const block of content) {
+    processed.push(...(await processFileBlockChain(block, ctx, plugin, 0)));
+  }
+  return processed;
+}
+
+const MAX_FILE_PROCESSOR_CHAIN_DEPTH = 3;
+
+async function processFileBlockChain(
+  block: unknown,
+  ctx: Context,
+  plugin: PluginAiApiServer,
+  depth: number,
+): Promise<unknown[]> {
+  if (!isRecord(block) || (block.type !== 'file' && block.type !== 'file_url')) {
+    return [block];
+  }
+  if (depth > MAX_FILE_PROCESSOR_CHAIN_DEPTH) {
+    return [block];
+  }
+
+  const result = await plugin.fileProcessorService.process(block as FileContentBlock, { ctx });
+  const results = Array.isArray(result) ? result : [result];
+
+  const next: unknown[] = [];
+  for (const item of results) {
+    if (isRecord(item) && (item.type === 'file' || item.type === 'file_url')) {
+      // The output is still a file-like block; run it through the chain again
+      // so that a `file_url` -> `file` -> images pipeline can complete.
+      next.push(...(await processFileBlockChain(item, ctx, plugin, depth + 1)));
+    } else {
+      next.push(item);
+    }
+  }
+  return next;
+}
+
+const GATEWAY_MANAGED_PARAMETERS = new Set(['model', 'messages', 'prompt', 'tools', 'tool_choice', 'stream', 'n']);
 
 export function getProviderRequestParameters(body: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(

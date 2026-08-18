@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { Card, Col, Row, Empty, Spin, Statistic, Tooltip } from 'antd';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { Card, Col, Row, Empty, Spin, Statistic, Select, Space } from 'antd';
 import {
   DashboardOutlined,
   CloudServerOutlined,
@@ -12,9 +12,12 @@ import { useApp } from '@nocobase/client-v2';
 import { useCurrentInstance } from '../context/InstanceContext';
 import { useT } from '../locale';
 
+type HistoryRange = '1h' | '6h' | '24h' | '7d';
+
 interface MetricsSnapshot {
-  timestamp: number;
+  timestamp: number | string;
   cpu: number;
+  cpuRate: number;
   memoryRss: number;
   heapUsed: number;
   heapTotal: number;
@@ -26,6 +29,8 @@ interface MetricsSnapshot {
   queueActive: number;
   queueCompleted: number;
   queueFailed: number;
+  queueThroughput: number;
+  queueFailRate: number;
   activeWorkflows: number;
 }
 
@@ -62,7 +67,8 @@ const LineChart: React.FC<{
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
         <span style={{ fontSize: 12, color: '#666', fontWeight: 500 }}>{title}</span>
         <span style={{ fontSize: 13, fontWeight: 600, color: data[0].color }}>
-          {latestValues[0]?.toFixed(1)}{unit}
+          {latestValues[0]?.toFixed(1)}
+          {unit}
         </span>
       </div>
       <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
@@ -70,18 +76,26 @@ const LineChart: React.FC<{
         {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
           <line
             key={pct}
-            x1={padL} y1={toY(minVal + range * pct)}
-            x2={w} y2={toY(minVal + range * pct)}
-            stroke="#f0f0f0" strokeWidth={0.5}
+            x1={padL}
+            y1={toY(minVal + range * pct)}
+            x2={w}
+            y2={toY(minVal + range * pct)}
+            stroke="#f0f0f0"
+            strokeWidth={0.5}
           />
         ))}
         {/* Threshold lines */}
         {thresholds?.map((th, i) => (
           <line
             key={`th-${i}`}
-            x1={padL} y1={toY(th.value)}
-            x2={w} y2={toY(th.value)}
-            stroke={th.color} strokeWidth={1} strokeDasharray="4,3" opacity={0.6}
+            x1={padL}
+            y1={toY(th.value)}
+            x2={w}
+            y2={toY(th.value)}
+            stroke={th.color}
+            strokeWidth={1}
+            strokeDasharray="4,3"
+            opacity={0.6}
           />
         ))}
         {/* Data lines */}
@@ -116,12 +130,19 @@ const LineChart: React.FC<{
         <div style={{ display: 'flex', gap: 12, fontSize: 10, color: '#888', marginTop: 4 }}>
           {data.map((d, i) => (
             <span key={i}>
-              <span style={{
-                display: 'inline-block', width: 12, height: 2,
-                backgroundColor: d.color, marginRight: 4, verticalAlign: 'middle',
-                borderBottom: d.dashed ? '1px dashed ' + d.color : undefined,
-              }} />
-              {d.label}: {latestValues[i]?.toFixed(1)}{unit}
+              <span
+                style={{
+                  display: 'inline-block',
+                  width: 12,
+                  height: 2,
+                  backgroundColor: d.color,
+                  marginRight: 4,
+                  verticalAlign: 'middle',
+                  borderBottom: d.dashed ? '1px dashed ' + d.color : undefined,
+                }}
+              />
+              {d.label}: {latestValues[i]?.toFixed(1)}
+              {unit}
             </span>
           ))}
         </div>
@@ -140,16 +161,17 @@ export const MetricsPanel: React.FC = () => {
   const t = useT();
   const api = useApp().apiClient;
   const { instanceId } = useCurrentInstance();
+  const [range, setRange] = useState<HistoryRange>('1h');
   const [history, setHistory] = useState<MetricsSnapshot[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     if (!instanceId) return;
     setLoading(true);
     try {
       const res = await api.request({
         url: 'n8nMonitoring:metricsHistory',
-        params: { instanceId },
+        params: { instanceId, range },
       });
       const responseData = res?.data?.data ?? res?.data;
       setHistory(Array.isArray(responseData) ? responseData : []);
@@ -157,23 +179,23 @@ export const MetricsPanel: React.FC = () => {
       // ignore
     }
     setLoading(false);
-  };
+  }, [api, instanceId, range]);
 
   useEffect(() => {
     fetchHistory();
-    const interval = setInterval(fetchHistory, 20000);
+    const interval = setInterval(fetchHistory, 30000);
     return () => clearInterval(interval);
-  }, [instanceId]);
+  }, [fetchHistory]);
 
-  // Ensure history is strictly an array before useMemo to prevent map errors
-  const safeHistory = Array.isArray(history) ? history : [];
+  const safeHistory = useMemo(() => (Array.isArray(history) ? history : []), [history]);
 
   const labels = useMemo(
-    () => safeHistory.map((s) => {
-      const d = new Date(s.timestamp);
-      return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
-    }),
-    [history],
+    () =>
+      safeHistory.map((s) => {
+        const d = new Date(s.timestamp);
+        return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+      }),
+    [safeHistory],
   );
 
   const latest = safeHistory.length > 0 ? safeHistory[safeHistory.length - 1] : null;
@@ -185,11 +207,40 @@ export const MetricsPanel: React.FC = () => {
   const mb = (bytes: number) => bytes / 1024 / 1024;
   const heapPct = latest ? (latest.heapUsed / (latest.heapTotal || 1)) * 100 : 0;
   const lagMs = latest ? latest.eventLoopLag * 1000 : 0;
+  const cpuPct = latest ? Math.min(100, (latest.cpuRate || 0) * 100) : 0;
 
   return (
     <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <Space>
+          <span style={{ fontSize: 12, color: '#666' }}>{t('Time Range')}:</span>
+          <Select
+            value={range}
+            onChange={(v) => setRange(v as HistoryRange)}
+            options={[
+              { value: '1h', label: t('Last Hour') },
+              { value: '6h', label: t('Last 6 Hours') },
+              { value: '24h', label: t('Last 24 Hours') },
+              { value: '7d', label: t('Last 7 Days') },
+            ]}
+            style={{ width: 140 }}
+            size="small"
+          />
+        </Space>
+      </div>
       {/* KPI Summary Cards */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
+            <Statistic
+              title={t('CPU Usage')}
+              value={cpuPct.toFixed(0)}
+              suffix="%"
+              prefix={<DashboardOutlined />}
+              valueStyle={{ fontSize: 18, color: kpiColor(cpuPct, 70, 90) }}
+            />
+          </Card>
+        </Col>
         <Col xs={12} sm={8} lg={4}>
           <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
             <Statistic
@@ -246,6 +297,17 @@ export const MetricsPanel: React.FC = () => {
         <Col xs={12} sm={8} lg={4}>
           <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
             <Statistic
+              title={t('Queue Throughput')}
+              value={(latest?.queueThroughput || 0).toFixed(2)}
+              suffix="/s"
+              prefix={<ThunderboltOutlined />}
+              valueStyle={{ fontSize: 18 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <Card size="small" bodyStyle={{ padding: '12px 16px' }}>
+            <Statistic
               title={t('Active Workflows')}
               value={latest?.activeWorkflows || 0}
               prefix={<ThunderboltOutlined />}
@@ -260,10 +322,20 @@ export const MetricsPanel: React.FC = () => {
         <Col xs={24} md={12}>
           <Card size="small">
             <LineChart
-              data={[{ values: safeHistory.map((s) => s.cpu), color: '#1890ff', label: 'CPU' }]}
+              data={[
+                {
+                  values: safeHistory.map((s) => Math.min(100, (s.cpuRate || 0) * 100)),
+                  color: '#1890ff',
+                  label: 'CPU',
+                },
+              ]}
               labels={labels}
-              title={t('CPU (seconds total)')}
-              unit="s"
+              title={t('CPU Usage (%)')}
+              unit="%"
+              thresholds={[
+                { value: 70, color: '#faad14', label: 'Warning' },
+                { value: 90, color: '#ff4d4f', label: 'Danger' },
+              ]}
             />
           </Card>
         </Col>
@@ -313,8 +385,6 @@ export const MetricsPanel: React.FC = () => {
               data={[
                 { values: safeHistory.map((s) => s.queueWaiting), color: '#722ed1', label: t('Waiting') },
                 { values: safeHistory.map((s) => s.queueActive), color: '#13c2c2', label: t('Active') },
-                { values: safeHistory.map((s) => s.queueCompleted), color: '#52c41a', label: t('Completed'), dashed: true },
-                { values: safeHistory.map((s) => s.queueFailed), color: '#ff4d4f', label: t('Failed'), dashed: true },
               ]}
               labels={labels}
               title={t('Queue Jobs')}
@@ -325,8 +395,31 @@ export const MetricsPanel: React.FC = () => {
           <Card size="small">
             <LineChart
               data={[
+                { values: safeHistory.map((s) => s.queueThroughput || 0), color: '#52c41a', label: t('Throughput') },
+                {
+                  values: safeHistory.map((s) => s.queueFailRate || 0),
+                  color: '#ff4d4f',
+                  label: t('Fail Rate'),
+                  dashed: true,
+                },
+              ]}
+              labels={labels}
+              title={t('Queue Throughput (jobs/s)')}
+              unit="/s"
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={12}>
+          <Card size="small">
+            <LineChart
+              data={[
                 { values: safeHistory.map((s) => s.activeHandles), color: '#1890ff', label: t('Handles') },
-                { values: safeHistory.map((s) => s.activeRequests), color: '#eb2f96', label: t('Requests'), dashed: true },
+                {
+                  values: safeHistory.map((s) => s.activeRequests),
+                  color: '#eb2f96',
+                  label: t('Requests'),
+                  dashed: true,
+                },
               ]}
               labels={labels}
               title={t('Active Resources')}

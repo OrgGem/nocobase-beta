@@ -1,0 +1,49 @@
+{
+  "name": "plugin-api-manager",
+  "displayName": "API Manager",
+  "displayName.zh-CN": "API 管理器",
+  "displayName.vi-VN": "Quản lý API",
+  "description": "API proxy gateway with centralized payload encryption. Register inbound/outbound routes, forward requests with timeout/retry, and encrypt/decrypt payloads (AES-256-GCM or PGP via Crypto Toolkit) before they leave or enter the system.",
+  "description.zh-CN": "集中式负载加密的 API 代理网关。注册入站/出站路由，转发请求（超时/重试），并在 payload 离开或进入系统前进行加密/解密（AES-256-GCM 或通过加密工具箱的 PGP）。",
+  "description.vi-VN": "API proxy gateway với tầng mã hóa payload tập trung. Đăng ký route inbound/outbound, forward request (timeout/retry), và mã hóa/giải mã payload (AES-256-GCM hoặc PGP qua Crypto Toolkit) trước khi gửi ra ngoài hoặc nhận vào.",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "api",
+    "proxy",
+    "gateway",
+    "encryption",
+    "integration"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "client-v2.js",
+    "server.js",
+    "client.d.ts",
+    "client-v2.d.ts",
+    "server.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "dependencies": {
+    "openpgp": "^5.11.0"
+  },
+  "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/test": "2.x",
+    "@nocobase/utils": "2.x",
+    "plugin-crypto-toolkit": "1.x"
+  }
+}

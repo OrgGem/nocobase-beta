@@ -804,7 +804,18 @@ function createMappingFetch(responseMapping: Record<string, string>) {
 
     // Handle non-streaming JSON responses
     if (contentType.includes('application/json')) {
-      const body = await response.json();
+      const rawBody = await response.text();
+      let body: any;
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        // Not valid JSON despite the content-type — pass the body through
+        return new Response(rawBody, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: new Headers({ 'content-type': contentType }),
+        });
+      }
       const mappedContent = getByPath(body, contentPath);
 
       // Extract tool_calls for non-streaming (Issue #1)
@@ -853,6 +864,16 @@ function createMappingFetch(responseMapping: Record<string, string>) {
           }),
         });
       }
+
+      // Mapping found nothing — reconstruct the response because the body
+      // was already consumed above
+      return new Response(JSON.stringify(body), {
+        status: response.status,
+        statusText: response.statusText,
+        headers: new Headers({
+          'content-type': 'application/json',
+        }),
+      });
     }
 
     return response;
@@ -1020,7 +1041,15 @@ function patchRunnableForSanitization(
           sanitizeAIMessageToolCalls(result);
           return result;
         } catch (e: any) {
-          if (attempt === retries) {
+          // Only retry model-output failures (e.g. invalid tool-call JSON).
+          // HTTP/transport errors (auth, rate limit, network, aborts) would
+          // fail again and the corrective prompt below does not apply.
+          const isTransportError =
+            typeof e?.status === 'number' ||
+            e?.name === 'AbortError' ||
+            e?.code === 'ECONNABORTED' ||
+            e?.code === 'ETIMEDOUT';
+          if (attempt === retries || isTransportError) {
             throw e;
           }
           if (Array.isArray(messages)) {
@@ -1627,7 +1656,8 @@ export class CustomLLMProvider extends LLMProvider {
 
   async parseAttachment(ctx: Context, attachment: any) {
     const mimetype: string = attachment.mimetype || 'application/octet-stream';
-    const filename: string = attachment.filename || attachment.name || 'file';
+    // basename only — raw filenames are interpolated into prompt XML below
+    const filename: string = path.basename(String(attachment.filename || attachment.name || 'file'));
     const fileData = await this.readFileData(ctx, attachment);
     const { base64: data } = fileData;
 
@@ -1728,11 +1758,11 @@ export class CustomEmbeddingProvider extends EmbeddingProvider {
   createEmbedding(): EmbeddingsInterface {
     const { OpenAIEmbeddings } = requireFromApp('@langchain/openai');
     return new OpenAIEmbeddings({
-      apiKey: (this as any).apiKey,
+      apiKey: this.apiKey,
       configuration: {
-        baseURL: (this as any).baseURL,
+        baseURL: this.baseURL,
       },
-      model: (this as any).model,
+      model: this.model,
     });
   }
 }

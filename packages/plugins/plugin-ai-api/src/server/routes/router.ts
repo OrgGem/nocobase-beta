@@ -20,6 +20,7 @@ import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import { checkRolePermission } from '../middleware/role-permission';
 import { startUsageRecord, finishUsageRecord } from '../usage';
 import { isStreamingRequested } from '../utils/streaming';
+import { getAiApiConfig } from '../utils/request-cache';
 import type PluginAiApiServer from '../plugin';
 import { finalizeLlmBilling } from '../billing';
 import { finishAiApiObservation, startAiApiObservation } from '../utils/app-observability';
@@ -43,7 +44,7 @@ type DataWrappingContext = Context & { withoutDataWrapping?: boolean };
  * - OPTIONS preflight handling (204)
  * - X-Request-Id on every response
  * - Bearer token authentication
- * - Sliding window rate limiting (enforces rateLimitPerMinute from config)
+ * - Sliding window rate limiting (enforces rateLimitPerMinute from the user's usage group)
  * - Structured request logging via app.logger
  *
  * Supported endpoints:
@@ -353,7 +354,7 @@ export function normalizeMaxRequestBodyMb(value: unknown): number {
 async function resolveMaxBodyBytes(ctx: Context): Promise<number> {
   let configuredMb: unknown;
   try {
-    const config = await ctx.db.getRepository('aiApiConfig').findOne();
+    const config = await getAiApiConfig(ctx);
     configuredMb = config?.get('maxRequestBodyMb');
   } catch (err) {
     ctx.log?.warn?.('AI API: could not read maxRequestBodyMb, using default:', err);
@@ -431,7 +432,7 @@ async function resolveMode(ctx: Context): Promise<'llm' | 'agent'> {
   }
 
   try {
-    const config = await ctx.db.getRepository('aiApiConfig').findOne();
+    const config = await getAiApiConfig(ctx);
     if (config) {
       const dbMode = config.get('mode') || config.mode;
       if (dbMode === 'agent' || dbMode === 'llm') {

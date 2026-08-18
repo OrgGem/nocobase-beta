@@ -15,6 +15,11 @@ export class RedisLockAdapter implements ILockAdapter {
   constructor(private readonly options: { url?: string; app: Application }) {
     if (options.url) {
       this.client = createClient({ url: options.url });
+      // Without an 'error' listener, any connection failure emits an unhandled
+      // 'error' event and crashes the Node process.
+      this.client.on('error', (error) => {
+        options.app.logger.error(`[RedisLockAdapter] Redis error: ${error.message}`);
+      });
       this.ownsClient = true;
     } else {
       const client = options.app.redisConnectionManager?.getConnection();
@@ -54,9 +59,14 @@ export class RedisLockAdapter implements ILockAdapter {
     let leaseError: Error | null = null;
     const renewInterval = Math.max(100, Math.floor(ttl / 3));
     const timer = setInterval(() => {
-      this.renew(redisKey, token, ttl).catch((error: unknown) => {
-        leaseError = error instanceof Error ? error : new Error(String(error));
-      });
+      this.renew(redisKey, token, ttl)
+        .then(() => {
+          // A successful renewal heals any earlier transient failure.
+          leaseError = null;
+        })
+        .catch((error: unknown) => {
+          leaseError = error instanceof Error ? error : new Error(String(error));
+        });
     }, renewInterval);
     timer.unref?.();
 
@@ -88,9 +98,14 @@ export class RedisLockAdapter implements ILockAdapter {
         let leaseError: Error | null = null;
         const timer = setInterval(
           () => {
-            this.renew(redisKey, token, ttl).catch((error: unknown) => {
-              leaseError = error instanceof Error ? error : new Error(String(error));
-            });
+            this.renew(redisKey, token, ttl)
+              .then(() => {
+                // A successful renewal heals any earlier transient failure.
+                leaseError = null;
+              })
+              .catch((error: unknown) => {
+                leaseError = error instanceof Error ? error : new Error(String(error));
+              });
           },
           Math.max(100, Math.floor(ttl / 3)),
         );

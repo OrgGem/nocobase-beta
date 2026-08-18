@@ -244,6 +244,15 @@ export class VaultClient {
     return typeof value === 'string' ? value : JSON.stringify(value);
   }
 
+  /** Read a secret value, returning null when the path or key does not exist (404). */
+  async readSecretOrNull(secretPath: string, secretKey: string): Promise<string | null> {
+    const secretData = await this.fetchSecretData(secretPath);
+    if (!secretData) return null;
+    const value = secretData[secretKey];
+    if (value === undefined || value === null) return null;
+    return typeof value === 'string' ? value : JSON.stringify(value);
+  }
+
   /** Write a full secret payload (replaces every key at the path). */
   async writeSecret(secretPath: string, data: Record<string, unknown>): Promise<void> {
     assertSafePath(secretPath);

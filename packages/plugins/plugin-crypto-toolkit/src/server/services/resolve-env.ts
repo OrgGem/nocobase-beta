@@ -22,8 +22,25 @@ export function isEnvTemplate(val: string | null | undefined): boolean {
 
 export function createEnvGetter(app: unknown): EnvVariableGetter {
   return (name: string) => {
-    const envService = (app as { environment?: { getVariable?: (n: string) => unknown } }).environment;
-    const value = envService?.getVariable?.(name);
+    const envService = (
+      app as {
+        environment?: {
+          getVariable?: (n: string) => unknown;
+          getVariables?: () => Record<string, unknown> | undefined;
+        };
+      }
+    ).environment;
+    let value: unknown;
+    if (envService) {
+      if (typeof envService.getVariable === 'function') {
+        value = envService.getVariable(name);
+      }
+      // The real NocoBase Environment class exposes getVariables() (a name->value map),
+      // not getVariable(name). Fall back to the map so DB-stored secret env vars resolve.
+      if (value == null && typeof envService.getVariables === 'function') {
+        value = envService.getVariables()?.[name];
+      }
+    }
     if (value != null) return String(value);
     const fromProcess = process.env[name];
     return fromProcess == null ? undefined : fromProcess;

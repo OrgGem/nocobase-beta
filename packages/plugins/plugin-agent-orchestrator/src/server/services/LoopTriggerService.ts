@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Database, Model } from '@nocobase/database';
 import { LoopControlService } from './LoopControlService';
 import { LoopPatternService } from './LoopPatternService';
+import type { CompiledPatternSnapshot, HarnessSnapshot } from './LoopPatternService';
 
 type TriggerType = 'manual' | 'cron' | 'event';
 
@@ -18,6 +19,22 @@ function plain(record: Model | Record<string, unknown>) {
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.name === 'SequelizeUniqueConstraintError';
+}
+
+// One audit row per role naming the exact profile version the run was frozen with. The snapshot
+// on the run row is authoritative for execution; these events make the application itself auditable
+// without diffing snapshots.
+function harnessAppliedEvents(compiled: CompiledPatternSnapshot) {
+  const roles: Array<{ role: 'leader' | 'maker' | 'verifier'; username: string; snapshot: HarnessSnapshot }> = [
+    { role: 'leader', username: compiled.roleBindings.leader, snapshot: compiled.leaderHarness },
+    ...compiled.roleBindings.makers.map((username) => ({
+      role: 'maker' as const,
+      username,
+      snapshot: compiled.makerHarnesses[username],
+    })),
+    { role: 'verifier', username: compiled.roleBindings.verifier, snapshot: compiled.verifierHarness },
+  ];
+  return roles.filter((entry) => entry.snapshot);
 }
 
 export class LoopTriggerService {
@@ -101,6 +118,31 @@ export class LoopTriggerService {
           },
           transaction,
         });
+        for (const entry of harnessAppliedEvents(compiled)) {
+          await this.database.getRepository('agentLoopEvents').create({
+            values: {
+              runId,
+              type: 'harness_applied',
+              title: `Harness ${entry.snapshot.tag}@v${entry.snapshot.version} applied to ${entry.role}`,
+              content: `${entry.role} ${entry.username} executes under harness profile ${entry.snapshot.tag} version ${entry.snapshot.version}.`,
+              status: 'queued',
+              payload: {
+                role: entry.role,
+                username: entry.username,
+                tag: entry.snapshot.tag,
+                version: entry.snapshot.version,
+                versionId: entry.snapshot.versionId,
+                schemaVersion: entry.snapshot.schemaVersion,
+              },
+              actorType: input.triggerType === 'manual' ? 'user' : 'system',
+              actorIdentity: input.userId ? String(input.userId) : input.triggerType,
+              correlationKey: `harness:${entry.role}:${entry.username}`,
+              userId: input.userId || null,
+              createdAt: now,
+            },
+            transaction,
+          });
+        }
         return { created: true, run: plain(run) };
       });
     } catch (error) {

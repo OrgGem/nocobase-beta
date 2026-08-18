@@ -312,7 +312,11 @@ function getSafeEnv() {
   };
 }
 
-function redactText(value: string) {
+/**
+ * Redact common secret patterns (tokens, passwords, bearer headers, embedded
+ * URL credentials). Shared by every endpoint that returns raw log material.
+ */
+export function redactText(value: string) {
   return value
     .replace(
       /(authorization|cookie|set-cookie|token|secret|password|passwd|pwd|api[-_]?key)=([^,\s&]+)/gi,
@@ -1216,6 +1220,148 @@ async function getWorkerProcessCoverage(app: Application, requiredProcesses: str
   return result;
 }
 
+// Mirrors LoopRunStateMachine in plugin-agent-orchestrator: only these statuses hold a worker
+// lease, and only queued/waiting_lock runs are claimable. Keep in sync if the state machine changes.
+const AGENT_LOOP_ACTIVE_STATUSES = ['preparing', 'running', 'verifying'];
+const AGENT_LOOP_CLAIMABLE_STATUSES = ['queued', 'waiting_lock'];
+const AGENT_LOOP_STALE_QUEUED_MS = 10 * 60 * 1000;
+
+type AgentLoopDiagnostics =
+  | { available: false }
+  | {
+      available: true;
+      claimableRuns: number | null;
+      staleQueuedRuns: number | null;
+      activeRuns: number | null;
+      expiredLeaseRuns: number | null;
+      pendingSkillExecutions: number | null;
+      sandbox: {
+        stackProviders: string[];
+        sandboxNodes: number;
+        appFallbackNodes: number;
+        hasCapacity: boolean;
+      };
+    };
+
+async function getAgentLoopDiagnostics(app: Application, nodes: DoctorNodeRecord[]): Promise<AgentLoopDiagnostics> {
+  let installed = false;
+  try {
+    installed = Boolean(getApp(app).pm?.get?.('plugin-agent-orchestrator'));
+  } catch {
+    // Ignore plugin-manager lookup errors
+  }
+  if (!installed) {
+    return { available: false };
+  }
+
+  const runtimeVersion = 'control-plane-v2';
+  const now = Date.now();
+
+  const claimableRuns = await safeCount(app, 'agentLoopRuns', {
+    runtimeVersion,
+    status: { $in: AGENT_LOOP_CLAIMABLE_STATUSES },
+  });
+  const staleQueuedRuns = await safeCount(app, 'agentLoopRuns', {
+    runtimeVersion,
+    status: { $in: AGENT_LOOP_CLAIMABLE_STATUSES },
+    createdAt: { $lt: new Date(now - AGENT_LOOP_STALE_QUEUED_MS) },
+  });
+  const activeRuns = await safeCount(app, 'agentLoopRuns', {
+    runtimeVersion,
+    status: { $in: AGENT_LOOP_ACTIVE_STATUSES },
+  });
+  // A null lease on an active run is also expired per the state machine's isLeaseExpired check.
+  const expiredLeaseRuns = await safeCount(app, 'agentLoopRuns', {
+    runtimeVersion,
+    status: { $in: AGENT_LOOP_ACTIVE_STATUSES },
+    $or: [{ lockedUntil: null }, { lockedUntil: { $lt: new Date(now) } }],
+  });
+  const pendingSkillExecutions = await safeCount(app, 'skillExecutions', { status: 'pending' });
+
+  const sandboxStackProviders: string[] = [];
+  try {
+    const repo = getRepository(app, 'orchestratorStacks');
+    const stacks = await repo.find({ filter: { enabled: true } });
+    for (const stack of stacks) {
+      const envVars = stack.get?.('envVars') as { WORKER_MODE?: string; SKILL_HUB_SANDBOX?: string } | undefined;
+      // shouldRunSkillSandbox() treats SKILL_HUB_SANDBOX='false' as a hard disable.
+      if (envVars?.SKILL_HUB_SANDBOX === 'false') continue;
+      const workerMode =
+        normalizeWorkerMode((stack.get?.('workerMode') as string | undefined) || envVars?.WORKER_MODE) || '*';
+      if (workerMode === '*' || workerMode.split(',').includes('skill-hub:sandbox')) {
+        sandboxStackProviders.push(String(stack.get?.('name') || stack.get?.('id')));
+      }
+    }
+  } catch {
+    // Orchestrator stacks not available
+  }
+
+  // Heartbeats serialize an empty WORKER_MODE as "main"; app nodes in that fallback mode serve
+  // every process, so they count as assumed sandbox capacity.
+  const sandboxNodes = nodes.filter((node) => node.isSandbox).length;
+  const appFallbackNodes = nodes.filter(
+    (node) => node.appRole === 'app' && (!node.workerMode || node.workerMode === 'main'),
+  ).length;
+
+  return {
+    available: true,
+    claimableRuns,
+    staleQueuedRuns,
+    activeRuns,
+    expiredLeaseRuns,
+    pendingSkillExecutions,
+    sandbox: {
+      stackProviders: sandboxStackProviders,
+      sandboxNodes,
+      appFallbackNodes,
+      hasCapacity: sandboxStackProviders.length > 0 || sandboxNodes > 0 || appFallbackNodes > 0,
+    },
+  };
+}
+
+// Mirrors the ownership/lease model in plugin-document-understanding: pending/running jobs
+// hold an execution lease, and polling jobs whose lease expired lost their poller. The
+// plugin's maintenance sweep normally heals both within a minute, so persistent counts
+// here indicate the sweep is not running anywhere.
+type DocUnderstandingDiagnostics =
+  | { available: false }
+  | {
+      available: true;
+      activeJobs: number | null;
+      orphanedActiveJobs: number | null;
+      stuckPollingJobs: number | null;
+    };
+
+async function getDocUnderstandingDiagnostics(app: Application): Promise<DocUnderstandingDiagnostics> {
+  let installed = false;
+  try {
+    installed = Boolean(getApp(app).pm?.get?.('plugin-document-understanding'));
+  } catch {
+    // Ignore plugin-manager lookup errors
+  }
+  if (!installed) {
+    return { available: false };
+  }
+
+  const now = Date.now();
+  const activeJobs = await safeCount(app, 'doc_understanding_jobs', {
+    status: { $in: ['pending', 'running'] },
+  });
+  // A null lease on an active job predates ownership tracking and is orphaned too.
+  const orphanedActiveJobs = await safeCount(app, 'doc_understanding_jobs', {
+    status: { $in: ['pending', 'running'] },
+    $or: [{ leaseExpiresAt: null }, { leaseExpiresAt: { $lt: new Date(now) } }],
+  });
+  // Webhook jobs intentionally have no lease (any node serves the callback), so only
+  // lease-expired polling jobs count as stuck.
+  const stuckPollingJobs = await safeCount(app, 'doc_understanding_jobs', {
+    status: 'polling',
+    leaseExpiresAt: { $lt: new Date(now) },
+  });
+
+  return { available: true, activeJobs, orphanedActiveJobs, stuckPollingJobs };
+}
+
 async function getOrchestratorDiagnostics(app: Application, options: DoctorSnapshotOptions) {
   const plugin = getApp(app).pm?.get('plugin-cluster-manager') as {
     orchestrator?: {
@@ -1297,6 +1443,16 @@ function buildRecommendations(params: {
   redisEvictionUnsafe: boolean;
   databaseOk: boolean;
   queueCoverageMissing?: string[];
+  agentLoop?: {
+    staleQueuedRuns: number | null;
+    expiredLeaseRuns: number | null;
+    pendingSkillExecutions: number | null;
+    sandbox: { hasCapacity: boolean };
+  };
+  docUnderstanding?: {
+    orphanedActiveJobs: number | null;
+    stuckPollingJobs: number | null;
+  };
 }) {
   const recommendations = [];
   if (!params.redisAvailable) {
@@ -1355,6 +1511,51 @@ function buildRecommendations(params: {
       message: `No explicit worker stack covers: ${params.queueCoverageMissing.join(', ')}.`,
     });
   }
+  if (params.agentLoop) {
+    const staleQueued = params.agentLoop.staleQueuedRuns || 0;
+    const expiredLease = params.agentLoop.expiredLeaseRuns || 0;
+    const loopUnserved = params.queueCoverageMissing?.includes('agent-loop:worker');
+    if ((staleQueued > 0 || expiredLease > 0) && loopUnserved) {
+      recommendations.push({
+        level: 'critical',
+        code: 'agent_loop_worker_not_served',
+        message:
+          'Agent loop runs are waiting but no worker stack serves "agent-loop:worker". ' +
+          'Queued runs will never be claimed until a node serves this process.',
+      });
+    } else if (staleQueued > 0 || expiredLease > 0) {
+      recommendations.push({
+        level: 'warning',
+        code: 'agent_loop_runs_stalled',
+        message:
+          `${staleQueued} agent-loop run(s) waited over 10 minutes and ${expiredLease} hold expired leases. ` +
+          'Check worker capacity and concurrency limits.',
+      });
+    }
+    const pendingSkills = params.agentLoop.pendingSkillExecutions || 0;
+    if (pendingSkills > 0 && !params.agentLoop.sandbox.hasCapacity) {
+      recommendations.push({
+        level: 'warning',
+        code: 'skill_sandbox_no_capacity',
+        message:
+          `${pendingSkills} skill execution(s) are pending but no node or stack serves "skill-hub:sandbox". ` +
+          'Enable a sandbox stack (SKILL_HUB_SANDBOX=true) or run an app node with an empty WORKER_MODE.',
+      });
+    }
+  }
+  if (params.docUnderstanding) {
+    const orphaned = params.docUnderstanding.orphanedActiveJobs || 0;
+    const stuckPolling = params.docUnderstanding.stuckPollingJobs || 0;
+    if (orphaned > 0 || stuckPolling > 0) {
+      recommendations.push({
+        level: 'warning',
+        code: 'doc_understanding_jobs_stalled',
+        message:
+          `${orphaned} document-understanding job(s) have expired leases and ${stuckPolling} polling job(s) lost their poller. ` +
+          'The maintenance sweep should recover these within a minute; if they persist, check that plugin-document-understanding is enabled on a running node.',
+      });
+    }
+  }
   if (params.topErrors > 0) {
     recommendations.push({
       level: 'warning',
@@ -1386,6 +1587,8 @@ async function buildDoctorReport(app: Application, run: Record<string, unknown>,
   const redisDiagnostics = await getRedisDiagnostics(app);
   const queueDiagnostics = await getQueueDiagnostics(app);
   const orchestratorDiagnostics = await getOrchestratorDiagnostics(app, { sinceMs, untilMs });
+  const agentLoopDiagnostics = await getAgentLoopDiagnostics(app, nodes);
+  const docUnderstandingDiagnostics = await getDocUnderstandingDiagnostics(app);
   const topSignatures = aggregateTopSignatures(snapshots, orchestratorDiagnostics);
   const snapshotErrors = snapshots.filter((snapshot) => snapshot.error).length;
   const recommendations = buildRecommendations({
@@ -1402,6 +1605,8 @@ async function buildDoctorReport(app: Application, run: Record<string, unknown>,
       !['noeviction', 'unknown'].includes(String(redisDiagnostics.memory?.maxMemoryPolicy || 'unknown')),
     databaseOk: Boolean(databaseDiagnostics.ping.ok),
     queueCoverageMissing: queueDiagnostics.coverage?.missing || [],
+    agentLoop: agentLoopDiagnostics.available ? agentLoopDiagnostics : undefined,
+    docUnderstanding: docUnderstandingDiagnostics.available ? docUnderstandingDiagnostics : undefined,
   });
   const criticalFindings = recommendations.filter((item) => item.level === 'critical').length;
   const warningFindings = recommendations.filter((item) => item.level === 'warning').length;
@@ -1437,6 +1642,8 @@ async function buildDoctorReport(app: Application, run: Record<string, unknown>,
     redisDiagnostics,
     queueDiagnostics,
     orchestratorDiagnostics,
+    agentLoopDiagnostics,
+    docUnderstandingDiagnostics,
     logAnalysis: {
       topSignatures,
       byNode: snapshots.map((snapshot) => ({

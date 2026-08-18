@@ -7,6 +7,7 @@ interface UsageSummaryRow {
   inputTokens?: string | number;
   outputTokens?: string | number;
   totalTokens?: string | number;
+  promptCacheTokens?: string | number;
 }
 
 interface CostSummaryRow {
@@ -45,6 +46,7 @@ const aiApiUsageMonitorResource: ResourceOptions = {
           [fn('COALESCE', fn('SUM', col('inputTokens')), 0), 'inputTokens'],
           [fn('COALESCE', fn('SUM', col('outputTokens')), 0), 'outputTokens'],
           [fn('COALESCE', fn('SUM', col('totalTokens')), 0), 'totalTokens'],
+          [fn('COALESCE', fn('SUM', col('promptCacheTokens')), 0), 'promptCacheTokens'],
         ],
         where,
         raw: true,
@@ -61,6 +63,7 @@ const aiApiUsageMonitorResource: ResourceOptions = {
         inputTokens: Number(totals?.inputTokens ?? 0),
         outputTokens: Number(totals?.outputTokens ?? 0),
         totalTokens: Number(totals?.totalTokens ?? 0),
+        promptCacheTokens: Number(totals?.promptCacheTokens ?? 0),
         costsByCurrency: costs.map((item) => ({
           currency: item.currency || 'USD',
           totalCost: String(item.totalCost ?? 0),

@@ -32,6 +32,7 @@ interface UsageRecord {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  promptCacheTokens?: number;
   estimatedCost?: string;
   currency?: string;
   costStatus?: string;
@@ -51,6 +52,7 @@ interface UsageSummary {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  promptCacheTokens: number;
   costsByCurrency: { currency: string; totalCost: string }[];
 }
 
@@ -65,6 +67,7 @@ const emptySummary: UsageSummary = {
   inputTokens: 0,
   outputTokens: 0,
   totalTokens: 0,
+  promptCacheTokens: 0,
   costsByCurrency: [],
 };
 
@@ -153,6 +156,7 @@ export default function UsagePage() {
     { title: t('Input tokens'), dataIndex: 'inputTokens', key: 'inputTokens', width: 110 },
     { title: t('Output tokens'), dataIndex: 'outputTokens', key: 'outputTokens', width: 110 },
     { title: t('Total tokens'), dataIndex: 'totalTokens', key: 'totalTokens', width: 110 },
+    { title: t('Prompt cache tokens'), dataIndex: 'promptCacheTokens', key: 'promptCacheTokens', width: 140 },
     {
       title: t('Cost'),
       key: 'cost',
@@ -232,6 +236,11 @@ export default function UsagePage() {
         <Col xs={24} sm={12} lg={6}>
           <Card size="small">
             <Statistic title={t('Total tokens')} value={summary.totalTokens} />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={6}>
+          <Card size="small">
+            <Statistic title={t('Prompt cache tokens')} value={summary.promptCacheTokens} />
           </Card>
         </Col>
         <Col xs={24}>

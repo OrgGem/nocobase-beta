@@ -3,6 +3,7 @@ import type { CompiledHarness } from './HarnessCompiler';
 import type { LoopPatternPolicy } from './LoopPatternSchema';
 import type { LoopRunStateMachine } from './LoopRunStateMachine';
 import type { PluginAiRuntimeAdapter } from './PluginAiRuntimeAdapter';
+import { ToolLoopDetectionService, toolLoopReason } from './ToolLoopDetectionService';
 import { parseVerificationVerdict } from './VerificationSchema';
 import type { VerificationVerdict } from './VerificationSchema';
 
@@ -19,12 +20,13 @@ export type VerificationRequest = {
   userId?: number;
   workerId: string;
   leaseToken: string;
+  loopNotices?: string[];
   signal: AbortSignal;
 };
 
 export type VerificationOutcome = {
   verdict: VerificationVerdict;
-  finalStatus: 'succeeded' | 'waiting_human' | 'failed';
+  finalStatus: 'succeeded' | 'waiting_human' | 'failed' | 'halted';
 };
 
 function read(record: Model | Record<string, unknown>, key: string) {
@@ -61,6 +63,7 @@ function verifierPrompt(input: VerificationRequest, artifacts: Array<Record<stri
     '',
     `Required checks: ${input.policy.verification.requiredChecks.join(', ')}`,
     '',
+    ...(input.loopNotices ?? []),
     'Reply with a single JSON object and nothing else:',
     '{"verdict":"pass|reject|escalate","summary":"...","checks":[{"name":"...","status":"pass|fail|skipped",',
     '"evidenceArtifactIds":[<artifact ids from the list above>]}],"residualRisks":["..."]}',
@@ -70,16 +73,28 @@ function verifierPrompt(input: VerificationRequest, artifacts: Array<Record<stri
 }
 
 export class VerificationService {
+  private readonly loopGuard: ToolLoopDetectionService;
+
   constructor(
     private readonly database: Database,
     private readonly runtime: PluginAiRuntimeAdapter,
     private readonly stateMachine: LoopRunStateMachine,
-  ) {}
+  ) {
+    this.loopGuard = new ToolLoopDetectionService(database);
+  }
 
   async verifyAndFinalize(input: VerificationRequest): Promise<VerificationOutcome> {
     this.assertIndependentVerifier(input);
     const artifacts = await this.runArtifacts(input.runId);
     const verdict = await this.collectVerdict(input, artifacts);
+
+    // The guard also sees the verifier's own tool calls: a verifier retrying the same evidence
+    // lookup over and over is the same behavioral failure as a maker looping on its tools.
+    const guard = await this.enforceToolLoopGuard(input);
+    if (guard === 'halt') {
+      return { verdict, finalStatus: 'halted' };
+    }
+
     await this.assertEvidenceBelongsToRun(verdict, artifacts, input.verifierUsername);
 
     const finalStatus = this.finalStatusFor(verdict, input.autonomyLevel);
@@ -110,12 +125,68 @@ export class VerificationService {
     }
   }
 
+  private async enforceToolLoopGuard(input: VerificationRequest): Promise<'continue' | 'halt'> {
+    const finding = await this.loopGuard.scanRun(input.runId, input.policy);
+    if (!finding) return 'continue';
+
+    await this.loopGuard.recordFinding(
+      {
+        runId: input.runId,
+        role: 'verifier',
+        username: input.verifierUsername,
+        runStatus: 'verifying',
+        actorType: 'worker',
+        actorIdentity: input.workerId,
+      },
+      finding,
+    );
+    if (finding.level === 'warn') return 'continue';
+
+    const reason = toolLoopReason(finding);
+    await this.stateMachine.transition({
+      runId: input.runId,
+      to: finding.level === 'block' ? 'blocked' : 'waiting_human',
+      actorType: 'worker',
+      actorIdentity: input.workerId,
+      leaseToken: input.leaseToken,
+      eventType: finding.level === 'block' ? 'run_blocked' : 'run_escalated',
+      title: finding.level === 'block' ? 'Run blocked by tool loop detection' : 'Run escalated by tool loop detection',
+      content: reason,
+      correlationKey: `tool-loop-${finding.level}:${input.runId}:${finding.signature}`,
+      values: finding.level === 'block' ? { blockedReason: reason } : { escalationReason: reason },
+    });
+    return 'halt';
+  }
+
+  private async nextSequence(runId: number) {
+    const steps = await this.database.getRepository('agentLoopSteps').find({ filter: { runId } });
+    return steps.length;
+  }
+
   private async collectVerdict(input: VerificationRequest, artifacts: Array<Record<string, unknown>>) {
     const sessionId = await this.runtime.createConversation({
       username: input.verifierUsername,
       userId: input.userId,
       runId: input.runId,
       title: `Verification of run ${input.runId}`,
+    });
+    // Recording the session on a step row is what lets the tool loop guard include the verifier's
+    // own tool calls in its run-level scan.
+    const step = await this.database.getRepository('agentLoopSteps').create({
+      values: {
+        runId: input.runId,
+        runtimeVersion: 'control-plane-v2',
+        sequence: await this.nextSequence(input.runId),
+        role: 'verifier',
+        kind: 'invocation',
+        type: 'verification',
+        employeeUsername: input.verifierUsername,
+        sessionId,
+        title: 'verifier invocation',
+        status: 'running',
+        startedAt: new Date(),
+        createdAt: new Date(),
+      },
     });
     const outcome = await this.runtime.invoke({
       username: input.verifierUsername,
@@ -126,6 +197,14 @@ export class VerificationService {
       harness: input.verifierHarness,
       prompt: verifierPrompt(input, artifacts),
       signal: input.signal,
+    });
+    await this.database.getRepository('agentLoopSteps').update({
+      filterByTk: read(step, 'id'),
+      values: {
+        status: 'succeeded',
+        output: { content: outcome.content },
+        endedAt: new Date(),
+      },
     });
     // A verifier that stops to ask for approval cannot produce a trustworthy verdict, and its
     // interrupted tool call would otherwise be silently dropped.

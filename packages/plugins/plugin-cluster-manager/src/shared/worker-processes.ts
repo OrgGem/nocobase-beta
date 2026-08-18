@@ -1,4 +1,4 @@
-export type WorkerProcessKind = 'event-queue' | 'redis-list' | 'pubsub';
+export type WorkerProcessKind = 'event-queue' | 'redis-list' | 'pubsub' | 'db-poll';
 
 export type WorkerProcessDefinition = {
   name: string;
@@ -113,6 +113,17 @@ export const WORKER_PROCESS_DEFINITIONS: WorkerProcessDefinition[] = [
     pluginName: 'plugin-agent-orchestrator',
     sandbox: true,
   },
+  {
+    // LoopWorkerService gates on app.serving('agent-loop:worker'); without a node serving it,
+    // queued agent-loop runs are never claimed. Common so default worker stacks include it.
+    name: 'agent-loop:worker',
+    label: 'Agent Loop',
+    description: 'Claim and execute agent loop runs (polls the run queue)',
+    kind: 'db-poll',
+    aliases: ['agent-loop.worker'],
+    pluginName: 'plugin-agent-orchestrator',
+    common: true,
+  },
 ];
 
 const PROCESS_BY_NAME = new Map(WORKER_PROCESS_DEFINITIONS.map((definition) => [definition.name, definition]));
@@ -217,9 +228,4 @@ export function getWorkerProcessDefinition(nameOrAlias: string): WorkerProcessDe
 
 export function getCommonWorkerProcesses(): WorkerProcessDefinition[] {
   return WORKER_PROCESS_DEFINITIONS.filter((definition) => definition.common && !definition.sandbox);
-}
-
-export function getWorkerProcessByChannel(channel: string): WorkerProcessDefinition | undefined {
-  const processName = resolveWorkerProcessName(channel);
-  return PROCESS_BY_NAME.get(processName);
 }

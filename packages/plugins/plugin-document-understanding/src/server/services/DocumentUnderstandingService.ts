@@ -15,11 +15,17 @@ export class DocumentUnderstandingService {
   private initialized = false;
   private startupRecoveryCompleted = false;
   private initializationPromise?: Promise<void>;
+  private maintenanceTimer?: NodeJS.Timeout;
+  // Unique per process; used as the job owner so other nodes can tell orphaned
+  // jobs apart from jobs that are still being processed.
+  private readonly nodeId: string;
   private static readonly HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+  private static readonly MAINTENANCE_INTERVAL_MS = 30_000;
 
   constructor(app: Application, db: Database) {
     this.app = app;
     this.db = db;
+    this.nodeId = `${app?.name || 'app'}:${process.pid}:${crypto.randomUUID()}`;
   }
 
   async initialize(options: { recoverJobs?: boolean } = {}): Promise<void> {
@@ -43,6 +49,7 @@ export class DocumentUnderstandingService {
     const config = await this.ensureConfig();
 
     this.jobManager?.destroy();
+    this.stopMaintenance();
     this.apiClient = new ExternalApiClient(config);
     this.jobManager = new AsyncJobManager(
       this.db,
@@ -60,17 +67,55 @@ export class DocumentUnderstandingService {
         },
       },
       this.app.logger,
+      this.nodeId,
     );
 
-    this.pipelineExecutor = new PipelineExecutor(this.db, this.apiClient, this.jobManager, this.app.logger);
+    this.pipelineExecutor = new PipelineExecutor(
+      this.db,
+      this.apiClient,
+      this.jobManager,
+      this.app.logger,
+      this.nodeId,
+    );
 
     if (recoverJobs && !this.startupRecoveryCompleted) {
-      await this.jobManager.cleanupStuckJobs();
-      await this.jobManager.recoverPollingJobs();
+      await this.maintainJobs();
       this.startupRecoveryCompleted = true;
     }
+    this.startMaintenance();
 
     this.initialized = true;
+  }
+
+  /**
+   * Cluster maintenance sweep: fails active jobs whose owner is gone and
+   * re-adopts orphaned polling jobs. Safe to run on every node — all state
+   * transitions are guarded by ownership checks and row-level claims.
+   */
+  async maintainJobs(): Promise<void> {
+    if (!this.jobManager) return;
+    try {
+      await this.jobManager.failOrphanedActiveJobs();
+      await this.jobManager.adoptOrphanedPollingJobs();
+    } catch (err) {
+      this.app.logger.warn('Document Understanding: job maintenance sweep failed.', err);
+    }
+  }
+
+  private startMaintenance(): void {
+    this.stopMaintenance();
+    this.maintenanceTimer = setInterval(() => {
+      this.maintainJobs();
+    }, DocumentUnderstandingService.MAINTENANCE_INTERVAL_MS);
+    // The sweep must never keep the process alive on shutdown.
+    this.maintenanceTimer.unref?.();
+  }
+
+  private stopMaintenance(): void {
+    if (this.maintenanceTimer) {
+      clearInterval(this.maintenanceTimer);
+      this.maintenanceTimer = undefined;
+    }
   }
 
   private async ensureConfig(): Promise<ServiceConfig> {
@@ -126,6 +171,7 @@ export class DocumentUnderstandingService {
   }
 
   destroy(): void {
+    this.stopMaintenance();
     this.jobManager?.destroy();
     this.initialized = false;
     this.startupRecoveryCompleted = false;

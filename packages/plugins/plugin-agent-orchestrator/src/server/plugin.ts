@@ -5,6 +5,7 @@ import { registerTracingResource } from './resources/tracing';
 import { registerAgentMonitorResource } from './resources/agent-monitor';
 import { registerAgentLoopResource } from './resources/agent-loop';
 import { registerAgentLoopApprovalResource } from './resources/agent-loop-approval';
+import { registerAgentHarnessProfileResource } from './resources/agent-harness-profile';
 import { registerAgentLoopArtifactResource } from './resources/agent-loop-artifact';
 import { registerAgentLoopEventsStreamResource } from './resources/agent-loop-events-stream';
 import { registerAgentKnowledgeInsightsResource } from './resources/agent-knowledge-insights';
@@ -249,7 +250,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
       ['list', 'get', 'runNow', 'pause', 'resume', 'cancel', 'retry', 'escalate', 'acceptResult', 'status'],
       'loggedIn',
     );
-    this.app.acl.allow('agentLoopApprovals', ['list', 'get'], 'loggedIn');
+    this.app.acl.allow('agentLoopApprovals', ['list', 'get', 'decide'], 'loggedIn');
     this.app.acl.allow('agentLoopArtifactsView', ['list', 'get'], 'loggedIn');
     this.app.acl.allow('agentLoopEventsStream', ['stream'], 'loggedIn');
 
@@ -371,6 +372,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     registerAgentLoopApprovalResource(this);
     registerAgentLoopArtifactResource(this);
     registerAgentLoopEventsStreamResource(this);
+    registerAgentHarnessProfileResource(this);
 
     // --- Native plugin-ai Monitor Resource ---
     registerAgentMonitorResource(this);

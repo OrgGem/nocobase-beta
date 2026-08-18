@@ -9,6 +9,8 @@
 
 import { Context } from '@nocobase/actions';
 import { toOpenAIError } from './openai-format';
+import { resolveRequestUserGroup } from './request-cache';
+import type { AiApiUsageGroup } from '../quota-groups';
 
 const SCOPE_TTL_MS = 15_000;
 
@@ -20,66 +22,51 @@ interface CachedScope {
 const scopeCache = new Map<string, CachedScope>();
 
 /**
- * Resolved per-user LLM access, layered *under* the global `aiApiConfig.enabledLlmServices`
- * whitelist. A user grant can only ever narrow global access, never widen it.
+ * Resolved LLM access of a user's usage group, layered *under* the global
+ * `aiApiConfig.enabledLlmServices` whitelist. Group settings can only ever narrow global
+ * access, never widen it. Empty lists on the group mean "no narrowing" — the group inherits
+ * the full global configuration, so the default group never locks everyone out.
  */
 export interface AiApiAccessScope {
-  /** False when the user has no aiApiUserPermissions row — global config alone decides. */
-  hasUserRecord: boolean;
-  /** True when a row exists but is switched off, denying every service. */
-  denyAll: boolean;
-  /** null means "no user-level narrowing"; an empty array denies every service. */
-  allowedServices: string[] | null;
+  /** The group whose settings produced this scope. */
+  groupId?: string | number | bigint;
+  /** Empty means no narrowing; non-empty restricts to these services. */
+  allowedServices: string[];
   allowAllModels: boolean;
   allowedModels: Set<string>;
   /**
-   * True when the lookup itself failed. Distinct from hasUserRecord:false — "this user has no
-   * restrictions" and "we cannot tell whether this user has restrictions" must not be conflated,
-   * or a mid-rolling-upgrade missing table silently lifts every user's restrictions.
+   * True when the lookup itself failed. Distinct from an open scope — "this user has no
+   * restrictions" and "we cannot tell whether this user has restrictions" must not be
+   * conflated, or a mid-rolling-upgrade missing table silently lifts every user's restrictions.
    */
   lookupFailed: boolean;
 }
 
-const NO_RECORD_SCOPE: AiApiAccessScope = {
-  hasUserRecord: false,
-  denyAll: false,
-  allowedServices: null,
+const OPEN_SCOPE: AiApiAccessScope = {
+  allowedServices: [],
   allowAllModels: true,
   allowedModels: new Set(),
   lookupFailed: false,
 };
 
-const LOOKUP_FAILED_SCOPE: AiApiAccessScope = { ...NO_RECORD_SCOPE, denyAll: true, lookupFailed: true };
+const LOOKUP_FAILED_SCOPE: AiApiAccessScope = { ...OPEN_SCOPE, lookupFailed: true };
 
 /**
- * Invalidate cached scopes for one user across every app in this process, or all users when
- * called with no argument. Keys are `${appName}:${userId}`, and the afterSave hook only knows
- * the user id, so the match is on the suffix.
+ * Invalidate cached scopes for one group across every app in this process, or all groups
+ * when called with no argument. Keys are `${appName}:group:${groupId}`.
  *
- * This is per-process only: in a multi-node deployment other nodes keep serving their cached
- * scope until the 15s TTL expires.
+ * Per-process only: in a multi-node deployment other nodes keep serving their cached scope
+ * until the 15s TTL expires or the sync message arrives.
  */
-export function invalidateUserPermissionCache(userId?: string | number | bigint): void {
-  if (userId === undefined || userId === null) {
+export function invalidateGroupAccessCache(groupId?: string | number | bigint): void {
+  if (groupId === undefined || groupId === null) {
     scopeCache.clear();
     return;
   }
-  const suffix = `:${userId}`;
+  const suffix = `:group:${groupId}`;
   for (const key of scopeCache.keys()) {
     if (key.endsWith(suffix)) scopeCache.delete(key);
   }
-}
-
-/**
- * Sequelize instances expose columns through .get() only — a plain property read returns
- * undefined for most fields. Mirrors valueOf() in billing.ts so plain-object test fixtures
- * work too.
- */
-function valueOf<T>(row: unknown, name: string): T {
-  if (!row) return undefined as T;
-  const candidate = row as { get?: (key: string) => unknown };
-  if (typeof candidate.get === 'function') return candidate.get(name) as T;
-  return (row as Record<string, unknown>)[name] as T;
 }
 
 function toStringArray(value: unknown): string[] {
@@ -87,47 +74,42 @@ function toStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
 }
 
-/** Build a scope from an aiApiUserPermissions row (or absence of one). */
-export function buildAccessScope(row: unknown): AiApiAccessScope {
-  if (!row) return NO_RECORD_SCOPE;
-  if (valueOf<boolean>(row, 'enabled') === false) {
-    return { ...NO_RECORD_SCOPE, hasUserRecord: true, denyAll: true, allowedServices: [] };
-  }
+/** Build a scope from a usage group. Empty lists mean no narrowing. */
+export function buildAccessScope(group: AiApiUsageGroup): AiApiAccessScope {
   return {
-    hasUserRecord: true,
-    denyAll: false,
-    allowedServices: toStringArray(valueOf(row, 'allowedLlmServices')),
-    allowAllModels: valueOf<boolean>(row, 'allowAllModels') !== false,
-    allowedModels: new Set(toStringArray(valueOf(row, 'allowedModels'))),
+    groupId: group.id,
+    allowedServices: toStringArray(group.allowedLlmServices),
+    allowAllModels: group.allowAllModels !== false,
+    allowedModels: new Set(toStringArray(group.allowedModels)),
     lookupFailed: false,
   };
 }
 
 /**
- * Load the current user's access scope, cached for 15s per user id — the same TTL the role
- * permission cache uses. Invalidated by afterSave/afterDestroy hooks in plugin.ts.
+ * Load the access scope of the current user's usage group, cached for 15s per group id —
+ * the same TTL the role permission cache uses. Membership is resolved live on every request
+ * and memoized for its duration (one indexed query even though several call sites ask), so
+ * moving a user between groups needs no invalidation; group edits are invalidated by the
+ * afterSave/afterDestroy hooks in plugin.ts.
  */
 export async function resolveUserAccessScope(ctx: Context): Promise<AiApiAccessScope> {
   const userId = ctx.state.currentUser?.id;
-  if (userId === undefined || userId === null) return NO_RECORD_SCOPE;
 
-  // Sub-apps share this process but have separate databases, so user id 1 in one app is a
-  // different person than user id 1 in another. Without the app prefix they collide here.
-  const key = `${ctx.app?.name ?? 'main'}:${userId}`;
-  const cached = scopeCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.scope;
-
-  let scope: AiApiAccessScope;
+  let group: AiApiUsageGroup;
   try {
-    const row = await ctx.db.getRepository('aiApiUserPermissions').findOne({ filter: { userId } });
-    scope = buildAccessScope(row);
+    group = await resolveRequestUserGroup(ctx, userId);
   } catch (err) {
     // Fail closed. A failed lookup cannot be treated as "no restrictions": during a rolling
-    // upgrade the table may not exist yet, and that must not lift every user's restrictions.
-    ctx.log?.error?.('AI API user permissions lookup failed, denying access:', err);
+    // upgrade the tables may not exist yet, and that must not lift every user's restrictions.
+    ctx.log?.error?.('AI API group access lookup failed, denying access:', err);
     return LOOKUP_FAILED_SCOPE;
   }
 
+  const key = `${ctx.app?.name ?? 'main'}:group:${group.id}`;
+  const cached = scopeCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.scope;
+
+  const scope = buildAccessScope(group);
   scopeCache.set(key, { scope, expiresAt: Date.now() + SCOPE_TTL_MS });
   return scope;
 }
@@ -137,28 +119,26 @@ function matchesService(list: string[], serviceName?: string, serviceTitle?: str
 }
 
 /**
- * Effective service check: the global whitelist AND the user grant must both allow it.
+ * Effective service check: the global whitelist AND the group settings must both allow it.
  *
  * An empty global whitelist means "expose all services", preserving existing behaviour.
- * An empty user grant means "deny everything" — the record itself is the opt-in.
+ * An empty group list means "no narrowing" — the group inherits the global configuration.
  */
 export function isServiceAllowed(
   scope: AiApiAccessScope,
   globalEnabledServices: unknown,
   service: { name?: string; title?: string },
 ): boolean {
-  // denyAll is checked before hasUserRecord: a failed lookup denies without having a record.
-  if (scope.denyAll) return false;
+  if (scope.lookupFailed) return false;
   const globalList = toStringArray(globalEnabledServices);
   if (globalList.length && !matchesService(globalList, service.name, service.title)) return false;
-  if (!scope.hasUserRecord) return true;
-  return matchesService(scope.allowedServices ?? [], service.name, service.title);
+  if (!scope.allowedServices.length) return true;
+  return matchesService(scope.allowedServices, service.name, service.title);
 }
 
 /** Model-level narrowing on top of isServiceAllowed, keyed by "serviceName/modelId". */
 export function isModelAllowed(scope: AiApiAccessScope, fullModelId: string): boolean {
-  if (scope.denyAll) return false;
-  if (!scope.hasUserRecord) return true;
+  if (scope.lookupFailed) return false;
   if (scope.allowAllModels) return true;
   return scope.allowedModels.has(fullModelId);
 }

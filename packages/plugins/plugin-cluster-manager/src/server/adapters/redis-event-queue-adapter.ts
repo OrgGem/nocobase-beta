@@ -42,6 +42,7 @@ export class RedisEventQueueAdapter implements IEventQueueAdapter {
   private readonly consuming = new Map<string, Promise<void>>();
   private readonly processing = new Map<string, Set<Promise<void>>>();
   private readonly initializedStreams = new Set<string>();
+  private readonly consumerBackoff = new Map<string, number>();
   private readonly consumerName: string;
   private connected = false;
 
@@ -127,10 +128,22 @@ export class RedisEventQueueAdapter implements IEventQueueAdapter {
             `[RedisEventQueueAdapter] Consumer failed for ${channel}: ${this.getErrorMessage(error)}`,
           );
         }
+        if (this.isNoGroupError(error)) {
+          // The stream/consumer group disappeared (e.g. Redis restarted empty).
+          // Forget it so ensureConsumerGroup recreates it on the next attempt.
+          this.initializedStreams.delete(channel);
+        }
       })
       .finally(() => {
         this.consuming.delete(channel);
-        if (this.connected && this.events.has(channel)) this.startConsumer(channel);
+        if (this.connected && this.events.has(channel)) {
+          // Back off restarts so a persistent error cannot hot-loop against Redis.
+          const attempts = (this.consumerBackoff.get(channel) || 0) + 1;
+          this.consumerBackoff.set(channel, attempts);
+          const delay = Math.min(1_000 * 2 ** Math.min(attempts - 1, 5), 30_000);
+          const timer = setTimeout(() => this.startConsumer(channel), delay);
+          timer.unref?.();
+        }
       });
     this.consuming.set(channel, consumer);
   }
@@ -154,12 +167,24 @@ export class RedisEventQueueAdapter implements IEventQueueAdapter {
 
       const reclaimed = await this.claimStale(channel, available);
       const entries = reclaimed.length ? reclaimed : await this.readNew(channel, available);
+      // A successful read cycle proves the stream/group is healthy again.
+      this.consumerBackoff.delete(channel);
       if (entries.length === 0) {
         await this.sleep(event.interval || DEFAULT_INTERVAL_MS);
         continue;
       }
       for (const entry of entries) {
-        const task = this.processEntry(channel, event, entry).finally(() => active.delete(task));
+        // Never let a per-entry failure become an unhandled rejection
+        // (Node >= 15 crashes the process on unhandledRejection by default).
+        const task = this.processEntry(channel, event, entry)
+          .catch((error: unknown) => {
+            this.options.app.logger.error(
+              `[RedisEventQueueAdapter] Failed to process entry ${
+                entry.streamId
+              } for ${channel}: ${this.getErrorMessage(error)}`,
+            );
+          })
+          .finally(() => active.delete(task));
         active.add(task);
       }
     }
@@ -322,5 +347,9 @@ export class RedisEventQueueAdapter implements IEventQueueAdapter {
 
   private getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private isNoGroupError(error: unknown): boolean {
+    return this.getErrorMessage(error).includes('NOGROUP');
   }
 }

@@ -1,11 +1,52 @@
 import { Context } from '@nocobase/actions';
 import { scanKeys } from '../utils/redis';
 
-// Must match the prefix used by RedisLockAdapter
-const REDIS_LOCK_PREFIX = 'nocobase:lock:';
+// Must match getKey() in RedisLockAdapter: nocobase:<appName>:lock:<name>
+function getLockPrefix(app: any): string {
+  return `nocobase:${app.name || 'main'}:lock:`;
+}
+
+// Prefix used by older builds of the adapter; kept so existing keys stay visible.
+const LEGACY_LOCK_PREFIX = 'nocobase:lock:';
+
+// Synthetic key prefix for agent-loop path locks (stored in the agentLoopPathLocks collection,
+// not in the lock manager). Recognized so release() refuses them instead of DEL-ing Redis keys.
+const PATH_LOCK_KEY_PREFIX = 'agent-loop:path:';
 
 function getRedis(ctx: Context) {
   return ctx.app.redisConnectionManager?.getConnection();
+}
+
+/**
+ * Agent-loop path locks live in the database (agentLoopPathLocks) and their lifecycle is owned
+ * by the loop state machine, so they are surfaced read-only for visibility only.
+ */
+async function getPathLocks(ctx: Context): Promise<any[]> {
+  try {
+    const db = ctx.app.db;
+    if (db.hasCollection && !db.hasCollection('agentLoopPathLocks')) return [];
+    const rows = await db.getRepository('agentLoopPathLocks').find({
+      filter: { status: 'held' },
+      sort: ['-acquiredAt'],
+    });
+    const now = Date.now();
+    return rows.map((row: any) => {
+      const runId = row.get('runId');
+      const repositoryKey = String(row.get('repositoryKey') || '');
+      const expiresAt = row.get('expiresAt');
+      const ttl = expiresAt ? Math.max(0, new Date(expiresAt).getTime() - now) : null;
+      return {
+        key: `${PATH_LOCK_KEY_PREFIX}${repositoryKey}:run:${runId}`,
+        displayKey: `${repositoryKey} (run ${runId})`,
+        locked: true,
+        ttl,
+        adapter: 'path-lock',
+        readOnly: true,
+      };
+    });
+  } catch {
+    return [];
+  }
 }
 
 export const lockActions = {
@@ -43,8 +84,9 @@ export const lockActions = {
       try {
         const redis = getRedis(ctx);
         if (redis) {
-          const keys = await scanKeys(redis, `${REDIS_LOCK_PREFIX}*`);
-          activeLocks = keys.length;
+          const keys = await scanKeys(redis, `${getLockPrefix(ctx.app)}*`);
+          const legacyKeys = await scanKeys(redis, `${LEGACY_LOCK_PREFIX}*`);
+          activeLocks = keys.length + legacyKeys.length;
         }
       } catch {
         // Ignore
@@ -54,6 +96,7 @@ export const lockActions = {
     ctx.body = {
       adapter: adapterType,
       activeLocks,
+      pathLocks: (await getPathLocks(ctx)).length,
     };
     await next();
   },
@@ -91,12 +134,17 @@ export const lockActions = {
       try {
         const redis = getRedis(ctx);
         if (redis) {
-          const keys = await scanKeys(redis, `${REDIS_LOCK_PREFIX}*`);
-          for (const key of keys) {
+          const lockPrefix = getLockPrefix(ctx.app);
+          const keys = await scanKeys(redis, `${lockPrefix}*`);
+          const legacyKeys = await scanKeys(redis, `${LEGACY_LOCK_PREFIX}*`);
+          for (const key of [...keys, ...legacyKeys]) {
             const ttl = (await redis.sendCommand(['PTTL', key])) as number;
+            const displayKey = key.startsWith(lockPrefix)
+              ? key.slice(lockPrefix.length)
+              : key.slice(LEGACY_LOCK_PREFIX.length);
             locks.push({
               key,
-              displayKey: key.replace(REDIS_LOCK_PREFIX, ''),
+              displayKey,
               locked: true,
               ttl: ttl > 0 ? ttl : null,
               adapter: 'redis',
@@ -108,7 +156,8 @@ export const lockActions = {
       }
     }
 
-    ctx.body = { data: locks, meta: { count: locks.length } };
+    const pathLocks = await getPathLocks(ctx);
+    ctx.body = { data: [...locks, ...pathLocks], meta: { count: locks.length + pathLocks.length } };
     await next();
   },
 
@@ -121,6 +170,9 @@ export const lockActions = {
     const { key } = ctx.action.params.values || ctx.action.params;
     if (!key) {
       ctx.throw(400, 'Lock key is required');
+    }
+    if (String(key).startsWith(PATH_LOCK_KEY_PREFIX)) {
+      ctx.throw(400, 'Agent loop path locks are managed by the loop state machine and cannot be released here');
     }
 
     const lm = ctx.app.lockManager;
@@ -151,11 +203,11 @@ export const lockActions = {
         const redis = getRedis(ctx);
         if (redis) {
           // The key from the UI may be the full Redis key or just the lock name.
-          // Try the exact key first, then try with prefix.
-          let result = await redis.sendCommand(['DEL', key]);
-          if (Number(result) === 0 && !key.startsWith(REDIS_LOCK_PREFIX)) {
-            result = await redis.sendCommand(['DEL', `${REDIS_LOCK_PREFIX}${key}`]);
-          }
+          // Normalize it into the lock namespace so DEL never targets other keys.
+          const lockPrefix = getLockPrefix(ctx.app);
+          const lockKey =
+            key.startsWith(lockPrefix) || key.startsWith(LEGACY_LOCK_PREFIX) ? key : `${lockPrefix}${key}`;
+          const result = await redis.sendCommand(['DEL', lockKey]);
           released = Number(result) > 0;
         }
       } catch {

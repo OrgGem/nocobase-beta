@@ -62,6 +62,7 @@ export function toOpenAIResponse(options: {
     prompt_tokens?: number | null;
     completion_tokens?: number | null;
     total_tokens?: number | null;
+    prompt_cache_tokens?: number | null;
   };
   toolCalls?: OpenAIToolCall[];
 }) {
@@ -91,7 +92,21 @@ export function toOpenAIResponse(options: {
         finish_reason: finishReason,
       },
     ],
-    usage: usage || { prompt_tokens: null, completion_tokens: null, total_tokens: null },
+    usage: usage
+      ? {
+          prompt_tokens: usage.prompt_tokens ?? null,
+          completion_tokens: usage.completion_tokens ?? null,
+          total_tokens: usage.total_tokens ?? null,
+          prompt_tokens_details: {
+            cached_tokens: usage.prompt_cache_tokens ?? null,
+          },
+        }
+      : {
+          prompt_tokens: null,
+          completion_tokens: null,
+          total_tokens: null,
+          prompt_tokens_details: { cached_tokens: null },
+        },
   };
 }
 
@@ -101,6 +116,7 @@ export type OpenAIUsage = {
   prompt_tokens: number | null;
   completion_tokens: number | null;
   total_tokens: number | null;
+  prompt_cache_tokens?: number | null;
 };
 
 export type OpenAIStreamObject = 'chat.completion.chunk' | 'text_completion';
@@ -143,7 +159,14 @@ export function toOpenAIUsageChunk(options: {
     created: Math.floor(Date.now() / 1000),
     model,
     choices: [],
-    usage,
+    usage: {
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      total_tokens: usage.total_tokens,
+      prompt_tokens_details: {
+        cached_tokens: usage.prompt_cache_tokens ?? null,
+      },
+    },
   };
 }
 

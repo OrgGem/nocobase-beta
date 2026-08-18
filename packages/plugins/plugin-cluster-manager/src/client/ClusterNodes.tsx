@@ -60,11 +60,11 @@ function LogViewerModal({ open, node, onClose }: { open: boolean; node: any; onC
         setLogMeta(data.node);
       }
     } catch {
-      message.error('Failed to load logs');
+      message.error(t('Failed to load logs'));
     } finally {
       setLoading(false);
     }
-  }, [api, open, node]);
+  }, [api, open, node, t]);
 
   useEffect(() => {
     if (open) {
@@ -277,10 +277,14 @@ export function ClusterNodes() {
         method: 'POST',
         data: { hostname, mode },
       });
-      message.success(`[${mode}] Restart signal sent to ${hostname === '*' ? 'all nodes' : hostname}`);
+      message.success(
+        t('[{mode}] Restart signal sent to {target}')
+          .replace('{mode}', mode)
+          .replace('{target}', hostname === '*' ? t('All nodes') : hostname),
+      );
       setTimeout(fetchData, 3000);
     } catch {
-      message.error(`Failed to send restart signal to ${hostname}`);
+      message.error(t('Failed to send restart signal to {hostname}').replace('{hostname}', hostname));
     }
   };
 
@@ -350,7 +354,7 @@ export function ClusterNodes() {
       render: (mode: string, record: any) => {
         const role = getNodeRole(record);
         if (role === 'sandbox') {
-          return <Tag color="purple">SANDBOX</Tag>;
+          return <Tag color="purple">{t('SANDBOX')}</Tag>;
         }
         if (role === 'app' && (isWorkerOnlyMode(mode) || !mode || mode === 'main')) {
           return (
@@ -368,14 +372,14 @@ export function ClusterNodes() {
             </Space>
           );
         }
-        return <Tag color={role === 'worker' ? 'blue' : 'green'}>{role === 'worker' ? 'WORKER' : 'APP'}</Tag>;
+        return <Tag color={role === 'worker' ? 'blue' : 'green'}>{role === 'worker' ? t('WORKER') : t('APP')}</Tag>;
       },
     },
     { title: t('PID'), dataIndex: 'pid', key: 'pid', width: 80 },
     { title: t('Version'), dataIndex: 'appVersion', key: 'appVersion', width: 120 },
     { title: t('Last Heartbeat'), dataIndex: 'lastHeartbeatAt', key: 'lastHeartbeatAt', width: 200 },
     {
-      title: 'Action',
+      title: t('Action'),
       key: 'action',
       width: 100,
       render: (_: any, r: any) => (
@@ -429,15 +433,15 @@ export function ClusterNodes() {
             onChange={setAutoRefresh}
             style={{ width: 140 }}
             options={[
-              { value: 5, label: '5s' },
-              { value: 10, label: '10s' },
-              { value: 30, label: '30s' },
+              { value: 5, label: t('5s') },
+              { value: 10, label: t('10s') },
+              { value: 30, label: t('30s') },
             ]}
           />
           <Space>
             <Popconfirm
-              title="Soft Restart ALL Nodes?"
-              description="Sends a soft reload signal to all active Nodes simultaneously."
+              title={t('Soft Restart ALL Nodes?')}
+              description={t('Sends a soft reload signal to all active Nodes simultaneously.')}
               onConfirm={() => handleRestartNode('*', 'soft')}
             >
               <Button style={{ color: '#faad14', borderColor: '#ffe58f' }} icon={<ReloadOutlined />}>
@@ -445,8 +449,8 @@ export function ClusterNodes() {
               </Button>
             </Popconfirm>
             <Popconfirm
-              title="Hard Restart ALL Nodes?"
-              description="Sends a lethal signal. Docker will reboot ALL container infrastructure."
+              title={t('Hard Restart ALL Nodes?')}
+              description={t('Sends a lethal signal. Docker will reboot ALL container infrastructure.')}
               onConfirm={() => handleRestartNode('*', 'hard')}
             >
               <Button danger icon={<ReloadOutlined />}>
@@ -733,7 +737,7 @@ export function ClusterNodes() {
             title={
               <Space>
                 {t('Current Node Details')}
-                <Tag color="green">APP</Tag>
+                <Tag color="green">{t('APP')}</Tag>
               </Space>
             }
             size="small"
@@ -748,18 +752,20 @@ export function ClusterNodes() {
             )}
             <Descriptions size="small" column={3}>
               <Descriptions.Item label={t('Hostname')}>{currentNode.node.hostname}</Descriptions.Item>
-              <Descriptions.Item label="PID">{currentNode.node.pid}</Descriptions.Item>
-              <Descriptions.Item label="Node.js">{currentNode.node.nodeVersion}</Descriptions.Item>
+              <Descriptions.Item label={t('PID')}>{currentNode.node.pid}</Descriptions.Item>
+              <Descriptions.Item label={t('Node.js')}>{currentNode.node.nodeVersion}</Descriptions.Item>
               <Descriptions.Item label={t('Worker Mode')}>
-                {currentNode.node.workerMode || '(default)'}
+                {currentNode.node.workerMode || t('(default)')}
               </Descriptions.Item>
               <Descriptions.Item label={t('App Port')}>{currentNode.node.appPort}</Descriptions.Item>
               <Descriptions.Item label={t('Cluster Mode')}>
-                {currentNode.node.clusterMode || '(disabled)'}
+                {currentNode.node.clusterMode || t('(disabled)')}
               </Descriptions.Item>
               <Descriptions.Item label={t('RSS Memory')}>{formatBytes(currentNode.memory.rss)}</Descriptions.Item>
               <Descriptions.Item label={t('OS Memory')}>
-                {formatBytes(currentNode.os.freeMemory)} free / {formatBytes(currentNode.os.totalMemory)}
+                {t('{free} free / {total}')
+                  .replace('{free}', formatBytes(currentNode.os.freeMemory))
+                  .replace('{total}', formatBytes(currentNode.os.totalMemory))}
               </Descriptions.Item>
               <Descriptions.Item label={t('CPU Cores')}>{currentNode.os.cpuCount}</Descriptions.Item>
             </Descriptions>

@@ -95,13 +95,13 @@ async function resolveForStack(ctx: Context, stackId: unknown) {
     ctx.throw(400, 'stackId is required');
   }
   const stacks = ctx.db.getRepository('orchestratorStacks');
-  const model = (await stacks.findOne({ filterByTk: stackId })) as ModelLike | null;
+  const model = (await stacks.findOne({ filterByTk: String(stackId) })) as ModelLike | null;
   if (!model) {
     ctx.throw(404, `Stack #${stackId} not found`);
   }
   const variables = await findVariables(ctx);
-  return resolveWorkerTemplate({
-    stack: model.toJSON() as StackConfig,
+  const result = resolveWorkerTemplate({
+    stack: model.toJSON() as unknown as StackConfig,
     variables,
     inheritedEnv: {
       CLUSTER_MANAGER_WORKER_READY_URL: process.env.CLUSTER_MANAGER_WORKER_READY_URL,
@@ -109,6 +109,26 @@ async function resolveForStack(ctx: Context, stackId: unknown) {
     },
     fallbackReadyUrl: process.env.CLUSTER_MANAGER_WORKER_READY_URL,
   });
+  // Keys whose resolved values came from an encrypted secret variable.
+  const secretKeys = new Set(
+    variables.filter((variable) => variable.secret && variable.enabled !== false).map((variable) => variable.key),
+  );
+  return { result, secretKeys };
+}
+
+const SECRET_MASK = '••••••••';
+
+/**
+ * Never return decrypted secret values through the API. Mask by the secret
+ * flag (exact) and by the conservative key-name heuristic (defense in depth).
+ */
+function maskResolvedEnvVars(envVars: Record<string, string>, secretKeys: Set<string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(envVars).map(([key, value]) => [
+      key,
+      secretKeys.has(key) || /PASSWORD|SECRET|TOKEN|KEY/i.test(key) ? SECRET_MASK : value,
+    ]),
+  );
 }
 
 export const workerTemplateVariableActions = {
@@ -121,7 +141,7 @@ export const workerTemplateVariableActions = {
     const values = getValues(ctx);
     const repo = ctx.db.getRepository('workerTemplateVariables');
     const id = values.id;
-    const existingModel = id ? ((await repo.findOne({ filterByTk: id })) as ModelLike | null) : null;
+    const existingModel = id ? ((await repo.findOne({ filterByTk: String(id) })) as ModelLike | null) : null;
     const existing = existingModel ? toVariable(existingModel) : undefined;
     if (existing?.systemManaged && !['WORKER_MODE', 'WORKER_READY_URL', 'WORKER_IMAGE'].includes(existing.key)) {
       ctx.throw(403, `${existing.key} is system-managed`);
@@ -141,7 +161,7 @@ export const workerTemplateVariableActions = {
       ctx.throw(409, `Variable ${variable.key} already exists in this scope`);
     }
     const stored = existingModel
-      ? await repo.update({ filterByTk: id, values: variable })
+      ? await repo.update({ filterByTk: String(id), values: variable })
       : await repo.create({ values: variable });
     ctx.body = { data: maskWorkerTemplateVariable(toVariable(stored as ModelLike)) };
     await next();
@@ -164,24 +184,24 @@ export const workerTemplateVariableActions = {
   },
 
   async preview(ctx: Context, next: () => Promise<void>) {
-    const result = await resolveForStack(ctx, getValues(ctx).stackId || ctx.action.params.stackId);
+    const { result, secretKeys } = await resolveForStack(ctx, getValues(ctx).stackId || ctx.action.params.stackId);
     ctx.body = {
       data: {
         ...result,
-        envVars: Object.fromEntries(
-          Object.entries(result.envVars).map(([key, value]) => [
-            key,
-            /PASSWORD|SECRET|TOKEN|KEY/i.test(key) ? '••••••••' : value,
-          ]),
-        ),
+        envVars: maskResolvedEnvVars(result.envVars, secretKeys),
       },
     };
     await next();
   },
 
   async resolved(ctx: Context, next: () => Promise<void>) {
-    const result = await resolveForStack(ctx, getValues(ctx).stackId || ctx.action.params.stackId);
-    ctx.body = { data: result };
+    const { result, secretKeys } = await resolveForStack(ctx, getValues(ctx).stackId || ctx.action.params.stackId);
+    ctx.body = {
+      data: {
+        ...result,
+        envVars: maskResolvedEnvVars(result.envVars, secretKeys),
+      },
+    };
     await next();
   },
 };

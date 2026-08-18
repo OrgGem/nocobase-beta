@@ -7,13 +7,15 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { useCallback } from 'react';
 import { tExpr as _tExpr, useFlowEngine } from '@nocobase/flow-engine';
 // @ts-ignore
 import pkg from './../../package.json';
 
 export function useT() {
   const engine = useFlowEngine();
-  return (str: string) => engine.context.t(str, { ns: [pkg.name, 'client'] });
+  // Stable identity so callers can safely list `t` in hook dependency arrays.
+  return useCallback((str: string) => engine.context.t(str, { ns: [pkg.name, 'client'] }), [engine]);
 }
 
 export function tExpr(key: string) {

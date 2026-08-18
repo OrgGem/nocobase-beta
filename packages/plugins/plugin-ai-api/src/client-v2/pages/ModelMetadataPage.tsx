@@ -28,6 +28,7 @@ interface ModelMetadata {
   ownedByOverride?: string | null;
   displayName?: string | null;
   description?: string | null;
+  systemPrompt?: string | null;
   enabled: boolean;
 }
 
@@ -136,6 +137,7 @@ export default function ModelMetadataPage() {
       ownedByOverride: values.ownedByOverride?.trim() || null,
       displayName: values.displayName?.trim() || null,
       description: values.description?.trim() || null,
+      systemPrompt: values.systemPrompt?.trim() || null,
     };
     setSaving(true);
     try {
@@ -171,6 +173,14 @@ export default function ModelMetadataPage() {
     { title: t('Max completion tokens'), dataIndex: 'maxCompletionTokens', key: 'maxCompletionTokens', width: 170 },
     { title: t('Owned by'), dataIndex: 'ownedByOverride', key: 'ownedByOverride', width: 140 },
     { title: t('Display name'), dataIndex: 'displayName', key: 'displayName', width: 160 },
+    {
+      title: t('Initial system prompt'),
+      dataIndex: 'systemPrompt',
+      key: 'systemPrompt',
+      width: 220,
+      ellipsis: true,
+      render: (value?: string | null) => value || '-',
+    },
     {
       title: t('Status'),
       dataIndex: 'enabled',
@@ -209,7 +219,7 @@ export default function ModelMetadataPage() {
         </Button>
       }
     >
-      <Table rowKey="id" columns={columns} dataSource={rows} loading={loading} scroll={{ x: 1200 }} />
+      <Table rowKey="id" columns={columns} dataSource={rows} loading={loading} scroll={{ x: 1450 }} />
       <Modal
         title={editing ? t('Edit override') : t('Add override')}
         open={open}
@@ -269,6 +279,15 @@ export default function ModelMetadataPage() {
           </Form.Item>
           <Form.Item name="description" label={t('Description')}>
             <Input.TextArea rows={3} />
+          </Form.Item>
+          <Form.Item
+            name="systemPrompt"
+            label={t('Initial system prompt')}
+            tooltip={t(
+              'Prepended as the first system message, before any system prompt sent by the client. If the client sends no system prompt, this becomes the system prompt sent to the provider.',
+            )}
+          >
+            <Input.TextArea rows={4} placeholder={t('Leave empty to not override')} />
           </Form.Item>
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />

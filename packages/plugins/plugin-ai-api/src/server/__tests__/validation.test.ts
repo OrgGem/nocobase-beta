@@ -16,6 +16,7 @@ function quotaPolicy(values: Record<string, unknown>): Model {
 const requiredPolicy = {
   periodType: 'monthly',
   missingUsageBehavior: 'use_reserved',
+  quotaMode: 'per_user',
   timezone: 'UTC',
 };
 
@@ -31,6 +32,16 @@ describe('AI API quota policy validation', () => {
   it('rejects an unsupported context overflow behavior', () => {
     expect(() => validateQuotaPolicy(quotaPolicy({ ...requiredPolicy, contextOverflowBehavior: 'compact' }))).toThrow(
       'contextOverflowBehavior must be reject or truncate.',
+    );
+  });
+
+  it.each(['share', 'per_user'] as const)('accepts %s quota mode', (quotaMode) => {
+    expect(() => validateQuotaPolicy(quotaPolicy({ ...requiredPolicy, quotaMode }))).not.toThrow();
+  });
+
+  it('rejects an unsupported quota mode', () => {
+    expect(() => validateQuotaPolicy(quotaPolicy({ ...requiredPolicy, quotaMode: 'global' }))).toThrow(
+      'quotaMode must be share or per_user.',
     );
   });
 });

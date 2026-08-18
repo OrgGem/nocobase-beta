@@ -53,6 +53,10 @@ export function validateModelMetadata(model: Model): void {
   if (!String(model.get('model') ?? '').trim()) throw new Error('model is required.');
   requirePositiveIntegerOrNull(model.get('contextWindow'), 'contextWindow');
   requirePositiveIntegerOrNull(model.get('maxCompletionTokens'), 'maxCompletionTokens');
+  const systemPrompt = model.get('systemPrompt');
+  if (systemPrompt !== null && systemPrompt !== undefined && typeof systemPrompt !== 'string') {
+    throw new Error('systemPrompt must be a string.');
+  }
 
   const contextWindow = model.get('contextWindow');
   const maxCompletionTokens = model.get('maxCompletionTokens');
@@ -72,6 +76,9 @@ export function validateModelMetadata(model: Model): void {
 export function validateQuotaPolicy(model: Model): void {
   if (!['daily', 'monthly'].includes(String(model.get('periodType')))) {
     throw new Error('periodType must be daily or monthly.');
+  }
+  if (!['share', 'per_user'].includes(String(model.get('quotaMode')))) {
+    throw new Error('quotaMode must be share or per_user.');
   }
   if (!['allow', 'use_reserved'].includes(String(model.get('missingUsageBehavior')))) {
     throw new Error('missingUsageBehavior must be allow or use_reserved.');

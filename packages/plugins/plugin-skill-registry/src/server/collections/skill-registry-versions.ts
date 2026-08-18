@@ -34,7 +34,7 @@ export default defineCollection({
       target: 'skillRegistrySourceItems',
       foreignKey: 'sourceItemId',
       onDelete: 'RESTRICT',
-      allowNull: false,
+      allowNull: true,
     },
     { type: 'string', name: 'version', length: 64, allowNull: false },
     { type: 'string', name: 'channel', length: 20, defaultValue: 'stable' },

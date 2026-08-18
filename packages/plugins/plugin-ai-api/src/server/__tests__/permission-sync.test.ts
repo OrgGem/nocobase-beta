@@ -10,60 +10,61 @@
 import { Context } from '@nocobase/actions';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginAiApiServer } from '../plugin';
-import { invalidateUserPermissionCache, resolveUserAccessScope } from '../utils/user-permissions';
+import { invalidateGroupAccessCache, resolveUserAccessScope } from '../utils/user-permissions';
 
 /**
- * Covers the cross-node half of permission revocation.
+ * Covers the cross-node half of group-access invalidation.
  *
  * syncMessageManager hardcodes `skipSelf: true` (sync-message-manager.ts:59,73), so the node
  * that writes the change never receives its own broadcast. That makes two things load-bearing
  * and easy to regress: the writer must invalidate its own cache locally, and every other node
  * must invalidate on receipt. Neither is observable from a single-node test of the cache alone.
  */
-function mockContext(userId: number, row: unknown) {
-  const findOne = vi.fn(async () => row);
+function row(values: Record<string, unknown>) {
+  return { get: (key?: string) => (key === undefined ? values : values[key]) };
+}
+
+function mockContext(userId: number, groupValues: Record<string, unknown>) {
+  const group = row({ allowedLlmServices: [], allowAllModels: true, allowedModels: [], ...groupValues });
+  const findOne = vi.fn(async () => row({ group }));
   const ctx = {
     state: { currentUser: { id: userId } },
-    db: { getRepository: () => ({ findOne }) },
+    db: {
+      getRepository: (name: string) =>
+        name === 'aiApiGroupMembers' ? { findOne } : { findOne: async () => null, create: vi.fn() },
+    },
     app: { name: 'main' },
     log: { warn: vi.fn(), error: vi.fn() },
   } as unknown as Context;
   return { ctx, findOne };
 }
 
-function row(values: Record<string, unknown>) {
-  return { get: (key: string) => values[key] };
-}
-
 beforeEach(() => {
-  invalidateUserPermissionCache();
+  invalidateGroupAccessCache();
 });
 
-describe('cross-node permission invalidation', () => {
+describe('cross-node group access invalidation', () => {
   it("drops the receiving node's cached scope", async () => {
     const plugin = Object.create(PluginAiApiServer.prototype) as PluginAiApiServer;
-    const { ctx, findOne } = mockContext(1, row({ allowedLlmServices: ['openai'] }));
+    const { ctx } = mockContext(1, { id: 5, allowedLlmServices: ['openai'] });
 
-    await resolveUserAccessScope(ctx);
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(1);
+    const before = await resolveUserAccessScope(ctx);
+    expect(await resolveUserAccessScope(ctx)).toBe(before);
 
-    await plugin.handleSyncMessage({ type: 'invalidateUserPermissions', userId: 1 });
+    await plugin.handleSyncMessage({ type: 'invalidateGroupAccess', groupId: 5 });
 
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(2);
+    expect(await resolveUserAccessScope(ctx)).not.toBe(before);
   });
 
-  it('ignores unrelated message types and other users', async () => {
+  it('ignores unrelated message types and other groups', async () => {
     const plugin = Object.create(PluginAiApiServer.prototype) as PluginAiApiServer;
-    const { ctx, findOne } = mockContext(1, row({ allowedLlmServices: ['openai'] }));
-    await resolveUserAccessScope(ctx);
+    const { ctx } = mockContext(1, { id: 5, allowedLlmServices: ['openai'] });
+    const before = await resolveUserAccessScope(ctx);
 
-    await plugin.handleSyncMessage({ type: 'somethingElse', userId: 1 });
-    await plugin.handleSyncMessage({ type: 'invalidateUserPermissions', userId: 2 });
+    await plugin.handleSyncMessage({ type: 'somethingElse', groupId: 5 });
+    await plugin.handleSyncMessage({ type: 'invalidateGroupAccess', groupId: 6 });
 
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(1);
+    expect(await resolveUserAccessScope(ctx)).toBe(before);
   });
 
   it('tolerates a malformed message instead of throwing into the subscriber', async () => {
@@ -77,18 +78,16 @@ describe('cross-node permission invalidation', () => {
     const sendSyncMessage = vi.fn(async () => undefined);
     Object.assign(plugin, { sendSyncMessage });
 
-    const { ctx, findOne } = mockContext(1, row({ allowedLlmServices: ['openai'] }));
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(1);
+    const { ctx } = mockContext(1, { id: 5, allowedLlmServices: ['openai'] });
+    const before = await resolveUserAccessScope(ctx);
 
-    // revokeUserPermissions is private; reach it the way the db hook does.
-    (plugin as unknown as { revokeUserPermissions: (id: unknown, tx?: unknown) => void }).revokeUserPermissions(1);
+    // invalidateGroupAccess is private; reach it the way the db hook does.
+    (plugin as unknown as { invalidateGroupAccess: (id: unknown, tx?: unknown) => void }).invalidateGroupAccess(5);
 
     // Local cache cleared without any message coming back to us.
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(2);
+    expect(await resolveUserAccessScope(ctx)).not.toBe(before);
     expect(sendSyncMessage).toHaveBeenCalledWith(
-      { type: 'invalidateUserPermissions', userId: 1 },
+      { type: 'invalidateGroupAccess', groupId: 5 },
       { transaction: undefined },
     );
   });
@@ -99,11 +98,11 @@ describe('cross-node permission invalidation', () => {
     Object.assign(plugin, { sendSyncMessage });
     const transaction = { id: 'tx-1' };
 
-    (plugin as unknown as { revokeUserPermissions: (id: unknown, tx?: unknown) => void }).revokeUserPermissions(
+    (plugin as unknown as { invalidateGroupAccess: (id: unknown, tx?: unknown) => void }).invalidateGroupAccess(
       7,
       transaction,
     );
 
-    expect(sendSyncMessage).toHaveBeenCalledWith({ type: 'invalidateUserPermissions', userId: 7 }, { transaction });
+    expect(sendSyncMessage).toHaveBeenCalledWith({ type: 'invalidateGroupAccess', groupId: 7 }, { transaction });
   });
 });

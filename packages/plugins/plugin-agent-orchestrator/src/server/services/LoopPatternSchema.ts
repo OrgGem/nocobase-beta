@@ -54,8 +54,26 @@ export const loopPatternPolicySchema = z
         maxAttempts: z.number().int().positive().default(2),
       })
       .default({}),
+    loopDetection: z
+      .object({
+        enabled: z.boolean().default(true),
+        warnAt: z.number().int().positive().default(3),
+        blockAt: z.number().int().positive().default(5),
+        escalateAt: z.number().int().positive().default(8),
+      })
+      .default({}),
   })
-  .strict();
+  .strict()
+  .superRefine((policy, context) => {
+    const { warnAt, blockAt, escalateAt } = policy.loopDetection;
+    if (!(warnAt < blockAt && blockAt < escalateAt)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['loopDetection'],
+        message: 'Loop detection thresholds must satisfy warnAt < blockAt < escalateAt.',
+      });
+    }
+  });
 
 export const loopPatternSchema = z
   .object({

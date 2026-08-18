@@ -139,6 +139,14 @@ export default {
       foreignKey: 'triggeredById',
     },
     {
+      // Harness-derived overrides resolved when the execution is queued, e.g.
+      // { timeoutSeconds, spillMaxInlineBytes }. The worker applies them on top of the skill's
+      // own defaults; storing them here keeps the worker from needing harness access.
+      name: 'runtimePolicy',
+      type: 'json',
+      allowNull: true,
+    },
+    {
       name: 'createdAt',
       type: 'date',
     },

@@ -5,6 +5,8 @@ import timezone from 'dayjs/plugin/timezone';
 import type { Model } from '@nocobase/database';
 import type { Transaction } from 'sequelize';
 import type { Usage } from './usage';
+import { type QuotaMode } from './quota-groups';
+import { getAiApiConfig, resolveRequestUserGroup } from './utils/request-cache';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -28,7 +30,8 @@ export interface PriceSnapshot {
 
 interface QuotaReservation {
   bucketId: string | number | bigint;
-  policyId: string | number | bigint;
+  groupId: string | number | bigint;
+  quotaMode: QuotaMode;
   estimatedInputTokens: number;
   estimatedOutputTokens: number;
   reservedTokens: number;
@@ -54,6 +57,8 @@ export interface BillingFinalization {
   costStatus?: 'calculated' | 'estimated' | 'unpriced' | 'usage_unavailable';
   modelPriceId?: string | number | bigint;
   quotaPolicyId?: string | number | bigint;
+  groupId?: string | number | bigint;
+  quotaMode?: QuotaMode;
   inputPricePerMillionTokens?: string;
   outputPricePerMillionTokens?: string;
   fixedCostPerRequest?: string;
@@ -195,27 +200,23 @@ export async function prepareLlmBilling(ctx: Context, resolved: ResolvedLlmModel
   };
   stateOf(ctx).aiApiLlmBilling = billing;
 
-  const config = await ctx.db.getRepository('aiApiConfig').findOne();
+  const config = await getAiApiConfig(ctx);
   if (!valueOf<boolean | undefined>(config, 'quotaEnabled') || userId === undefined || userId === null) return;
 
-  const policy = await ctx.db.getRepository('aiApiUserQuotaPolicies').findOne({
-    filter: { userId, enabled: true },
-    sort: '-updatedAt',
-  });
-  if (!policy) return;
+  const group = await resolveRequestUserGroup(ctx, userId);
+  if (!group.enabled) return;
 
-  const rejectUnpriced = valueOf<boolean>(policy, 'rejectUnpricedModel');
+  const rejectUnpriced = group.rejectUnpricedModel;
   if (!price && rejectUnpriced) {
     throw new AiApiQuotaError(
       'model_price_not_configured',
       `Pricing is not configured for '${serviceName}/${resolved.modelId}'.`,
     );
   }
-  const policyCurrency = valueOf<string>(policy, 'currency');
-  if (price && policyCurrency !== price.currency) {
+  if (price && group.currency !== price.currency) {
     throw new AiApiQuotaError(
       'quota_currency_mismatch',
-      `Quota currency '${policyCurrency}' does not match model price currency '${price.currency}'.`,
+      `Quota currency '${group.currency}' does not match model price currency '${price.currency}'.`,
     );
   }
 
@@ -225,14 +226,16 @@ export async function prepareLlmBilling(ctx: Context, resolved: ResolvedLlmModel
   const estimatedOutputTokens = normalizePositiveInteger(body.max_completion_tokens ?? body.max_tokens, defaultOutput);
   const reservedTokens = estimatedInputTokens + estimatedOutputTokens;
   const reservedCost = price ? calculateLlmCost(estimatedInputTokens, estimatedOutputTokens, price) : '0.00000000';
-  const period = getPeriodBounds(valueOf<string>(policy, 'periodType'), valueOf<string>(policy, 'timezone'));
-  const Bucket = ctx.db.getModel('aiApiUserQuotaBuckets');
+  const period = getPeriodBounds(group.periodType, group.timezone);
+  const bucketUserId = group.quotaMode === 'share' ? 0 : userId;
+  const Bucket = ctx.db.getModel('aiApiGroupQuotaBuckets');
 
   const reservation = await ctx.db.sequelize.transaction(async (transaction: Transaction) => {
     const [bucket] = await Bucket.findOrCreate({
-      where: { policyId: valueOf(policy, 'id'), periodStart: period.start },
+      where: { groupId: group.id, userId: bucketUserId, periodStart: period.start },
       defaults: {
-        userId,
+        groupId: group.id,
+        userId: bucketUserId,
         periodEnd: period.end,
         requestCount: 0,
         totalTokens: 0,
@@ -247,32 +250,20 @@ export async function prepareLlmBilling(ctx: Context, resolved: ResolvedLlmModel
 
     const requestCount = BigInt(String(bucket.get('requestCount') ?? 0));
     const reservedRequests = BigInt(String(bucket.get('reservedRequests') ?? 0));
-    if (exceedsIntegerLimit(requestCount + reservedRequests, 1n, valueOf(policy, 'requestLimit'))) {
-      throw new AiApiQuotaError('request_quota_exceeded', 'The request quota for this user has been exceeded.');
+    if (exceedsIntegerLimit(requestCount + reservedRequests, 1n, group.requestLimit)) {
+      throw new AiApiQuotaError('request_quota_exceeded', 'The request quota for this group has been exceeded.');
     }
 
     const totalTokens = BigInt(String(bucket.get('totalTokens') ?? 0));
     const alreadyReservedTokens = BigInt(String(bucket.get('reservedTokens') ?? 0));
-    if (
-      exceedsIntegerLimit(
-        totalTokens + alreadyReservedTokens,
-        BigInt(reservedTokens),
-        valueOf(policy, 'totalTokenLimit'),
-      )
-    ) {
-      throw new AiApiQuotaError('token_quota_exceeded', 'The token quota for this user has been exceeded.');
+    if (exceedsIntegerLimit(totalTokens + alreadyReservedTokens, BigInt(reservedTokens), group.totalTokenLimit)) {
+      throw new AiApiQuotaError('token_quota_exceeded', 'The token quota for this group has been exceeded.');
     }
 
     const cost = decimalUnits(bucket.get('cost'), COST_SCALE);
     const alreadyReservedCost = decimalUnits(bucket.get('reservedCost'), COST_SCALE);
-    if (
-      exceedsDecimalLimit(
-        cost + alreadyReservedCost,
-        decimalUnits(reservedCost, COST_SCALE),
-        valueOf(policy, 'costLimit'),
-      )
-    ) {
-      throw new AiApiQuotaError('cost_quota_exceeded', 'The cost quota for this user has been exceeded.');
+    if (exceedsDecimalLimit(cost + alreadyReservedCost, decimalUnits(reservedCost, COST_SCALE), group.costLimit)) {
+      throw new AiApiQuotaError('cost_quota_exceeded', 'The cost quota for this group has been exceeded.');
     }
 
     await bucket.update(
@@ -285,13 +276,13 @@ export async function prepareLlmBilling(ctx: Context, resolved: ResolvedLlmModel
     );
     return {
       bucketId: bucket.get('id') as string | number | bigint,
-      policyId: valueOf<string | number | bigint>(policy, 'id'),
+      groupId: group.id,
+      quotaMode: group.quotaMode,
       estimatedInputTokens,
       estimatedOutputTokens,
       reservedTokens,
       reservedCost,
-      missingUsageBehavior:
-        valueOf<string>(policy, 'missingUsageBehavior') === 'allow' ? ('allow' as const) : ('use_reserved' as const),
+      missingUsageBehavior: group.missingUsageBehavior === 'allow' ? ('allow' as const) : ('use_reserved' as const),
     };
   });
   billing.reservation = reservation;
@@ -337,7 +328,7 @@ export async function finalizeLlmBilling(
   const cost = numbers && billing.price ? calculateLlmCost(numbers.input, numbers.output, billing.price) : undefined;
   const reservation = billing.reservation;
   if (reservation) {
-    const Bucket = ctx.db.getModel('aiApiUserQuotaBuckets');
+    const Bucket = ctx.db.getModel('aiApiGroupQuotaBuckets');
     await ctx.db.sequelize.transaction(async (transaction: Transaction) => {
       const bucket = await Bucket.findByPk(reservation.bucketId, { transaction, lock: transaction.LOCK.UPDATE });
       if (!bucket) return;
@@ -373,13 +364,19 @@ export async function finalizeLlmBilling(
 
   return {
     usage: numbers
-      ? { prompt_tokens: numbers.input, completion_tokens: numbers.output, total_tokens: numbers.total }
+      ? {
+          prompt_tokens: numbers.input,
+          completion_tokens: numbers.output,
+          total_tokens: numbers.total,
+          prompt_cache_tokens: providerUsage?.prompt_cache_tokens ?? null,
+        }
       : providerUsage,
     estimatedCost: cost,
     currency: billing.price?.currency,
     costStatus,
     modelPriceId: billing.price?.id,
-    quotaPolicyId: reservation?.policyId,
+    groupId: reservation?.groupId,
+    quotaMode: reservation?.quotaMode,
     inputPricePerMillionTokens: billing.price?.inputPricePerMillionTokens,
     outputPricePerMillionTokens: billing.price?.outputPricePerMillionTokens,
     fixedCostPerRequest: billing.price?.fixedCostPerRequest,

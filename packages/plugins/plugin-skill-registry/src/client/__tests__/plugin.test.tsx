@@ -17,15 +17,22 @@ describe('PluginSkillRegistryClient', () => {
       aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
     });
     expect(app.pluginSettingsManager.get('skill-registry.index')).toMatchObject({
-      title: 'Catalog',
+      title: 'Skills',
       aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
+    });
+    expect(app.pluginSettingsManager.get('skill-registry.markdown-skills')).toMatchObject({
+      title: 'Markdown skills',
+      aclSnippet: SKILL_REGISTRY_SNIPPETS.markdown,
     });
     expect(app.pluginSettingsManager.get('skill-registry.sources')).toMatchObject({ title: 'Sources' });
     expect(app.pluginSettingsManager.get('skill-registry.runs')).toMatchObject({ title: 'Sync runs' });
-    expect(app.pluginSettingsManager.get('skill-registry.versions')).toMatchObject({ title: 'Versions' });
-    expect(app.pluginSettingsManager.get('skill-registry.guide')).toMatchObject({ title: 'Guide' });
+    expect(app.pluginSettingsManager.get('skill-registry.versions')).toMatchObject({ title: 'Version audit' });
+    expect(app.pluginSettingsManager.get('skill-registry.settings')).toMatchObject({ title: 'Settings' });
     expect(app.pluginSettingsManager.get('skill-registry.sources')?.Component.displayName).toBe(
       'LegacySkillRegistryPage(SourcesPage)',
+    );
+    expect(app.pluginSettingsManager.get('skill-registry.markdown-skills')?.Component.displayName).toBe(
+      'LegacySkillRegistryPage(MarkdownSkillsPage)',
     );
   });
 });

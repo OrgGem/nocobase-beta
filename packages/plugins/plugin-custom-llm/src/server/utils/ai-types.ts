@@ -8,14 +8,55 @@
  */
 
 import type { EmbeddingsInterface } from '@langchain/core/embeddings';
+import { checkUrlAgainstWhitelist } from '@nocobase/utils';
 
 // Local stubs for types not publicly exported from @nocobase/plugin-ai.
-// These mirror the minimal runtime shape needed by CustomEmbeddingProvider.
-// Keep in sync with the upstream definitions in that package.
+// These mirror the minimal runtime shape needed by CustomEmbeddingProvider,
+// including the SSRF whitelist check and env-template rendering applied by
+// the upstream EmbeddingProvider. Keep in sync with the upstream
+// definitions in that package (server/llm-providers/provider.ts).
 
 export enum SupportedModel {
   LLM = 'LLM',
   EMBEDDING = 'EMBEDDING',
+}
+
+function assertBaseURLString(baseURL: unknown): asserts baseURL is string {
+  if (typeof baseURL !== 'string') {
+    throw new Error('baseURL must be a string');
+  }
+}
+
+function normalizeBaseURL(baseURL: unknown): string {
+  assertBaseURLString(baseURL);
+  const trimmedBaseURL = baseURL.trim();
+  checkUrlAgainstWhitelist(trimmedBaseURL);
+  return new URL(trimmedBaseURL).toString().replace(/\/$/, '');
+}
+
+function isBlankBaseURL(baseURL: string): boolean {
+  return baseURL.trim() === '';
+}
+
+function getServiceBaseURL(serviceOptions?: Record<string, any>): unknown {
+  const baseURL = serviceOptions?.baseURL;
+  if (typeof baseURL === 'string' && isBlankBaseURL(baseURL)) {
+    return null;
+  }
+  return baseURL;
+}
+
+function resolveServiceOptions(serviceOptions: Record<string, any> | undefined, app: any) {
+  const rendered = app.environment.renderJsonTemplate(serviceOptions ?? {});
+  if (rendered?.baseURL != null) {
+    assertBaseURLString(rendered.baseURL);
+    if (isBlankBaseURL(rendered.baseURL)) {
+      delete rendered.baseURL;
+      return rendered;
+    }
+    rendered.baseURL = normalizeBaseURL(rendered.baseURL);
+  }
+  return rendered;
 }
 
 export class EmbeddingProvider {
@@ -28,7 +69,7 @@ export class EmbeddingProvider {
     this.opts = opts;
     const { app, serviceOptions, modelOptions } = opts;
     this.app = app;
-    this.serviceOptions = serviceOptions;
+    this.serviceOptions = resolveServiceOptions(serviceOptions, app);
     this.modelOptions = modelOptions;
   }
 
@@ -40,15 +81,27 @@ export class EmbeddingProvider {
     return '';
   }
 
-  protected get apiKey(): any {
-    return this.serviceOptions?.apiKey;
+  protected get apiKey(): string {
+    const { apiKey } = this.serviceOptions ?? {};
+    if (!apiKey) {
+      throw new Error('apiKey is required');
+    }
+    return apiKey;
   }
 
-  protected get baseURL(): any {
-    return this.serviceOptions?.baseURL ?? this.getDefaultUrl();
+  protected get baseURL(): string {
+    const baseURL = getServiceBaseURL(this.serviceOptions) ?? this.getDefaultUrl();
+    if (!baseURL) {
+      throw new Error('baseURL is required');
+    }
+    return normalizeBaseURL(baseURL);
   }
 
-  protected get model(): any {
-    return this.modelOptions?.model;
+  protected get model(): string {
+    const { model } = this.modelOptions ?? {};
+    if (!model) {
+      throw new Error('Embedding model is required');
+    }
+    return model;
   }
 }

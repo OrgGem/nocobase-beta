@@ -130,6 +130,40 @@ export class LeaderElection {
   }
 
   /**
+   * Fresh leadership check against Redis (fencing).
+   *
+   * The in-memory isLeader flag can be stale for up to one renewal interval if
+   * this node was paused (long GC pause, container freeze, network stall) past
+   * the lock TTL and another node took over. Orchestrator write operations
+   * must call this before mutating anything so a resumed stale leader cannot
+   * write alongside the new leader.
+   */
+  async verifyLeadership(): Promise<boolean> {
+    if (!this.enabled || !this._isLeader) {
+      return false;
+    }
+    if (!this.redis) {
+      return this.standaloneMode;
+    }
+    try {
+      const current = await this.redis.sendCommand(['GET', this.leaderKey]);
+      if (current === this._leaderId) {
+        return true;
+      }
+    } catch {
+      // Redis unreachable — refuse writes rather than risk split-brain.
+      return false;
+    }
+    // The lock expired or another node owns it now: step down immediately.
+    this.app.logger.warn('[LeaderElection] Leadership verification failed — stepping down');
+    this._isLeader = false;
+    if (this.renewTimer) clearInterval(this.renewTimer);
+    this.renewTimer = null;
+    this.startRetry();
+    return false;
+  }
+
+  /**
    * Gracefully release leadership.
    */
   async release(): Promise<void> {
@@ -160,6 +194,7 @@ export class LeaderElection {
     if (this.renewTimer) clearInterval(this.renewTimer);
 
     this.renewTimer = setInterval(async () => {
+      let definitelyLost = false;
       try {
         const script = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end`;
         const res = await this.redis.sendCommand([
@@ -171,9 +206,29 @@ export class LeaderElection {
           String(LEADER_TTL),
         ]);
         if (res !== 1) {
+          definitelyLost = true;
           throw new Error('Lock no longer held by this node');
         }
+        return;
       } catch (err: any) {
+        if (!definitelyLost) {
+          // Transport error, not a confirmed loss. The lock may still be ours
+          // (e.g. a brief network blip). Verify before stepping down: stepping
+          // down on every transient failure means we cannot re-acquire our own
+          // unexpired lock via SET NX, leaving the cluster leaderless until
+          // the TTL lapses.
+          try {
+            const current = await this.redis.sendCommand(['GET', this.leaderKey]);
+            if (current === this._leaderId) {
+              this.app.logger.warn(
+                `[LeaderElection] Renewal failed but the lock is still held — keeping leadership: ${err.message}`,
+              );
+              return;
+            }
+          } catch {
+            // Verification inconclusive — fall through and step down.
+          }
+        }
         this._isLeader = false;
         this.app.logger.warn(`[LeaderElection] ⚠️ Lost leadership — lock renewal failed: ${err.message}`);
         if (this.renewTimer) clearInterval(this.renewTimer);

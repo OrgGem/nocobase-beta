@@ -52,6 +52,11 @@ export function getRedisClient(app?: any) {
   if (!url) return null;
 
   globalRedisClient = createClient({ url });
+  // Without an 'error' listener, any connection failure emits an unhandled
+  // 'error' event and crashes the Node process.
+  globalRedisClient.on('error', (err: Error) => {
+    console.error('[ClusterManager] Redis fallback connection error:', err.message);
+  });
   globalRedisClient.connect().catch((err: any) => {
     console.error('[ClusterManager] Redis fallback connection error:', err);
   });

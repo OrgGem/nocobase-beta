@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Table, Tag, Button, Space, Popconfirm, message, Select, Dropdown } from 'antd';
 import { ReloadOutlined, StopOutlined, UnorderedListOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
+import { useT } from './utils';
 import dayjs from 'dayjs';
 
 const EXEC_STATUS: Record<string, { label: string; color: string }> = {
@@ -27,20 +28,32 @@ const JOB_STATUS: Record<string, { label: string; color: string }> = {
 
 export function WorkflowExecutions() {
   const api = useApp().apiClient;
+  const t = useT();
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
   const [expandedJobs, setExpandedJobs] = useState<Record<string, any[]>>({});
   const [loadingJobs, setLoadingJobs] = useState<Record<string, boolean>>({});
+  const paginationRef = useRef(pagination);
+
+  useEffect(() => {
+    paginationRef.current = pagination;
+  }, [pagination]);
 
   const fetchData = useCallback(
-    async (page = pagination.current, pageSize = pagination.pageSize) => {
+    async (page?: number, pageSize?: number) => {
+      const currentPage = page ?? paginationRef.current.current;
+      const currentPageSize = pageSize ?? paginationRef.current.pageSize;
       setLoading(true);
       try {
         const res = await api.request({
           url: 'clusterManagerWorkflow:list',
-          params: { page, pageSize, statusFilter: statusFilter === undefined ? '' : statusFilter },
+          params: {
+            page: currentPage,
+            pageSize: currentPageSize,
+            statusFilter: statusFilter === undefined ? '' : statusFilter,
+          },
         });
         const body = res.data;
         const rows = Array.isArray(body?.data?.data)
@@ -53,21 +66,21 @@ export function WorkflowExecutions() {
         setData(rows);
         setPagination((prev) => ({
           ...prev,
-          current: body.meta?.page || page,
+          current: body.meta?.page || currentPage,
           total: body.meta?.count || 0,
         }));
       } catch {
-        message.error('Failed to load executions');
+        message.error(t('Failed to load executions'));
       } finally {
         setLoading(false);
       }
     },
-    [api, pagination.current, pagination.pageSize, statusFilter],
+    [api, statusFilter, t],
   );
 
   useEffect(() => {
     fetchData();
-  }, [statusFilter]);
+  }, [fetchData]);
 
   const fetchJobs = async (executionId: string) => {
     if (expandedJobs[executionId]) return;
@@ -86,53 +99,57 @@ export function WorkflowExecutions() {
             : [];
       setExpandedJobs((prev) => ({ ...prev, [executionId]: jobs }));
     } catch {
-      message.error('Failed to load jobs');
+      message.error(t('Failed to load jobs'));
     } finally {
       setLoadingJobs((prev) => ({ ...prev, [executionId]: false }));
     }
   };
 
   const handleCancel = async (id: string) => {
-    await api.request({ url: 'clusterManagerWorkflow:cancel', params: { filterByTk: id } });
-    message.success('Execution canceled');
-    fetchData();
+    try {
+      await api.request({ url: 'clusterManagerWorkflow:cancel', params: { filterByTk: id } });
+      message.success(t('Execution canceled'));
+      fetchData();
+    } catch {
+      message.error(t('Failed to cancel execution'));
+    }
   };
 
   const handlePurge = async (days: number) => {
     try {
       const res = await api.request({ url: `clusterManagerWorkflow:purge`, method: 'post', data: { days } });
-      message.success(`Purged ${res?.data?.deletedCount || 0} executions`);
+      message.success(t('Purged {count} executions').replace('{count}', String(res?.data?.deletedCount || 0)));
       fetchData();
     } catch {
-      message.error('Failed to purge executions');
+      message.error(t('Failed to purge executions'));
     }
   };
 
   const purgeItems = [
-    { key: '7', label: 'Older than 7 days', onClick: () => handlePurge(7) },
-    { key: '30', label: 'Older than 30 days', onClick: () => handlePurge(30) },
-    { key: '0', label: 'All completed/failed', danger: true, onClick: () => handlePurge(0) },
+    { key: '7', label: t('Older than 7 days'), onClick: () => handlePurge(7) },
+    { key: '30', label: t('Older than 30 days'), onClick: () => handlePurge(30) },
+    { key: '0', label: t('All completed/failed'), danger: true, onClick: () => handlePurge(0) },
   ];
 
   const jobColumns = [
-    { title: 'Job ID', dataIndex: 'id', width: 100 },
+    { title: t('Job ID'), dataIndex: 'id', width: 100 },
     {
-      title: 'Node',
+      title: t('Node'),
       key: 'node',
       width: 200,
       render: (_: any, r: any) => r.node?.title || r.nodeKey || '-',
     },
     {
-      title: 'Status',
+      title: t('Status'),
       dataIndex: 'status',
       width: 100,
       render: (val: number) => {
         const s = JOB_STATUS[String(val)] || { label: String(val), color: 'default' };
-        return <Tag color={s.color}>{s.label}</Tag>;
+        return <Tag color={s.color}>{t(s.label)}</Tag>;
       },
     },
     {
-      title: 'Result',
+      title: t('Result'),
       dataIndex: 'result',
       ellipsis: true,
       render: (val: any) => (val ? JSON.stringify(val).slice(0, 120) : '-'),
@@ -140,42 +157,42 @@ export function WorkflowExecutions() {
   ];
 
   const columns = [
-    { title: 'ID', dataIndex: 'id', width: 100 },
+    { title: t('ID'), dataIndex: 'id', width: 100 },
     {
-      title: 'Workflow',
+      title: t('Workflow'),
       key: 'workflow',
       width: 200,
       render: (_: any, r: any) => r.workflow?.title || '-',
     },
     {
-      title: 'Status',
+      title: t('Status'),
       dataIndex: 'status',
       width: 120,
       render: (val: number | null) => {
         const s = EXEC_STATUS[String(val)] || { label: String(val), color: 'default' };
-        return <Tag color={s.color}>{s.label}</Tag>;
+        return <Tag color={s.color}>{t(s.label)}</Tag>;
       },
     },
     {
-      title: 'Executing Node',
+      title: t('Executing Node'),
       dataIndex: 'workerNode',
       width: 150,
       render: (val: string) => (val && val !== '-' ? <Tag color="blue">{val}</Tag> : <Tag>{val || '-'}</Tag>),
     },
     {
-      title: 'Manual',
+      title: t('Manual'),
       dataIndex: 'manually',
       width: 80,
-      render: (val: boolean) => (val ? <Tag color="blue">Yes</Tag> : '-'),
+      render: (val: boolean) => (val ? <Tag color="blue">{t('Yes')}</Tag> : '-'),
     },
     {
-      title: 'Triggered At',
+      title: t('Triggered At'),
       dataIndex: 'createdAt',
       width: 160,
       render: (val: string) => (val ? dayjs(val).format('YYYY-MM-DD HH:mm:ss') : '-'),
     },
     {
-      title: 'Actions',
+      title: t('Actions'),
       key: 'actions',
       width: 120,
       render: (_: any, record: any) => (
@@ -187,10 +204,10 @@ export function WorkflowExecutions() {
             onClick={() => fetchJobs(record.id)}
             loading={loadingJobs[record.id]}
           >
-            Jobs
+            {t('Jobs')}
           </Button>
           {(record.status === 0 || record.status === null) && (
-            <Popconfirm title="Cancel execution?" onConfirm={() => handleCancel(record.id)}>
+            <Popconfirm title={t('Cancel execution?')} onConfirm={() => handleCancel(record.id)}>
               <Button type="link" size="small" icon={<StopOutlined />} danger />
             </Popconfirm>
           )}
@@ -203,18 +220,18 @@ export function WorkflowExecutions() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Select
-          placeholder="Filter by status"
+          placeholder={t('Filter by status')}
           allowClear
           style={{ width: 160 }}
           value={statusFilter}
           onChange={setStatusFilter}
-          options={Object.entries(EXEC_STATUS).map(([k, v]) => ({ value: k, label: v.label }))}
+          options={Object.entries(EXEC_STATUS).map(([k, v]) => ({ value: k, label: t(v.label) }))}
         />
         <Button icon={<ReloadOutlined />} onClick={() => fetchData()}>
-          Refresh
+          {t('Refresh')}
         </Button>
         <Dropdown menu={{ items: purgeItems }} trigger={['click']}>
-          <Button danger>Clear History</Button>
+          <Button danger>{t('Clear History')}</Button>
         </Dropdown>
       </Space>
       <Table
@@ -227,14 +244,14 @@ export function WorkflowExecutions() {
         expandable={{
           expandedRowRender: (record) => {
             const jobs = expandedJobs[record.id];
-            if (!jobs) return <div style={{ padding: 8 }}>Click &quot;Jobs&quot; to load</div>;
+            if (!jobs) return <div style={{ padding: 8 }}>{t('Click "Jobs" to load')}</div>;
             return <Table rowKey="id" columns={jobColumns} dataSource={jobs} size="small" pagination={false} />;
           },
         }}
         pagination={{
           ...pagination,
           showSizeChanger: true,
-          showTotal: (total) => `Total ${total}`,
+          showTotal: (total) => t('Total {total}').replace('{total}', String(total)),
           onChange: (page, pageSize) => fetchData(page, pageSize),
         }}
       />

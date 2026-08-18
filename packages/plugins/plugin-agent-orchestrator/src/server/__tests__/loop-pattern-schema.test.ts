@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateLoopPattern } from '../services/LoopPatternSchema';
+import { loopPatternPolicySchema, validateLoopPattern } from '../services/LoopPatternSchema';
 
 const basePattern = {
   key: 'dependency-audit',
@@ -52,5 +52,22 @@ describe('LoopPatternSchema', () => {
         policy: { harness: { isolation: { mode: 'worktree', requireWorktree: true } } },
       }).success,
     ).toBe(true);
+  });
+});
+
+describe('LoopPatternSchema loop detection policy', () => {
+  it('defaults the tool loop thresholds', () => {
+    const policy = loopPatternPolicySchema.parse({});
+    expect(policy.loopDetection).toEqual({ enabled: true, warnAt: 3, blockAt: 5, escalateAt: 8 });
+  });
+
+  it('requires warnAt < blockAt < escalateAt', () => {
+    expect(loopPatternPolicySchema.safeParse({ loopDetection: { warnAt: 5, blockAt: 5 } }).success).toBe(false);
+    expect(loopPatternPolicySchema.safeParse({ loopDetection: { warnAt: 6, blockAt: 5, escalateAt: 8 } }).success).toBe(
+      false,
+    );
+    expect(loopPatternPolicySchema.safeParse({ loopDetection: { warnAt: 2, blockAt: 4, escalateAt: 6 } }).success).toBe(
+      true,
+    );
   });
 });

@@ -23,6 +23,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   MinusCircleOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
@@ -33,7 +34,7 @@ interface DiscoveredQueue {
   name: string;
   label: string;
   description: string;
-  type: 'event-queue' | 'redis-list';
+  type: 'event-queue' | 'redis-list' | 'db-poll';
   pending: number | null;
   workerProcessName?: string;
 }
@@ -92,11 +93,11 @@ export function QueueAssignment() {
       setMappings(data.registered || []);
       setUnmapped(data.unmapped || []);
     } catch (err: any) {
-      message.error(`Scan failed: ${err.message}`);
+      message.error(t('Scan failed: {error}').replace('{error}', err.message));
     } finally {
       setScanning(false);
     }
-  }, [api]);
+  }, [api, t]);
 
   const handleAutoMap = async () => {
     setLoading(true);
@@ -107,10 +108,10 @@ export function QueueAssignment() {
         data: {},
       });
       const { created } = res.data?.data || res.data;
-      message.success(`Auto-mapped ${created.length} queue(s)`);
+      message.success(t('Auto-mapped {count} queue(s)').replace('{count}', String(created.length)));
       await scanQueues();
     } catch (err: any) {
-      message.error(`Auto-map failed: ${err.message}`);
+      message.error(t('Auto-map failed: {error}').replace('{error}', err.message));
     } finally {
       setLoading(false);
     }
@@ -127,7 +128,7 @@ export function QueueAssignment() {
       });
       await fetchMappings();
     } catch (err: any) {
-      message.error(`Update failed: ${err.message}`);
+      message.error(t('Update failed: {error}').replace('{error}', err.message));
     } finally {
       setLoading(false);
     }
@@ -148,10 +149,10 @@ export function QueueAssignment() {
           enabled: true,
         },
       });
-      message.success(`Mapping created for "${queue.name}"`);
+      message.success(t('Mapping created for "{name}"').replace('{name}', queue.name));
       await scanQueues();
     } catch (err: any) {
-      message.error(`Create failed: ${err.message}`);
+      message.error(t('Create failed: {error}').replace('{error}', err.message));
     } finally {
       setLoading(false);
     }
@@ -165,10 +166,10 @@ export function QueueAssignment() {
         method: 'POST',
         params: { filterByTk: id },
       });
-      message.success('Mapping deleted');
+      message.success(t('Mapping deleted'));
       await scanQueues();
     } catch (err: any) {
-      message.error(`Delete failed: ${err.message}`);
+      message.error(t('Delete failed: {error}').replace('{error}', err.message));
     } finally {
       setLoading(false);
     }
@@ -206,6 +207,8 @@ export function QueueAssignment() {
         <Space>
           {record.type === 'event-queue' ? (
             <BranchesOutlined style={{ color: '#1890ff' }} />
+          ) : record.type === 'db-poll' ? (
+            <ClockCircleOutlined style={{ color: '#722ed1' }} />
           ) : (
             <MinusCircleOutlined style={{ color: '#52c41a' }} />
           )}
@@ -228,8 +231,8 @@ export function QueueAssignment() {
       dataIndex: 'type',
       width: 110,
       render: (type: string) => (
-        <Tag color={type === 'event-queue' ? 'blue' : 'green'}>
-          {type === 'event-queue' ? 'EventQueue' : 'Redis List'}
+        <Tag color={type === 'event-queue' ? 'blue' : type === 'db-poll' ? 'purple' : 'green'}>
+          {type === 'event-queue' ? t('EventQueue') : type === 'db-poll' ? t('DB Poll') : t('Redis List')}
         </Tag>
       ),
     },
@@ -324,7 +327,7 @@ export function QueueAssignment() {
               </Button>
               {unmapped.length > 0 && (
                 <Button onClick={handleAutoMap} loading={loading}>
-                  {t('Auto-map ({count})', { count: unmapped.length })}
+                  {t('Auto-map ({count})').replace('{count}', String(unmapped.length))}
                 </Button>
               )}
               <Button
@@ -346,7 +349,9 @@ export function QueueAssignment() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message={`${unmapped.length} queue(s) discovered but not yet registered. Click "Register" on each row or use "Auto-map" to create mappings.`}
+          message={t(
+            '{count} queue(s) discovered but not yet registered. Click "Register" on each row or use "Auto-map" to create mappings.',
+          ).replace('{count}', String(unmapped.length))}
         />
       )}
 

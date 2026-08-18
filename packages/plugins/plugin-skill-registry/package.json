@@ -4,7 +4,7 @@
   "displayName.zh-CN": "技能注册中心",
   "displayName.vi-VN": "Kho đăng ký Kỹ năng",
   "description": "Public, immutable skill catalog and artifact registry for NocoBase Skill Hub sources.",
-  "version": "0.2.2",
+  "version": "0.2.4",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

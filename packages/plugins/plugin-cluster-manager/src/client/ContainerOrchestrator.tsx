@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
   Table,
@@ -40,9 +40,11 @@ import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 import {
   getCommonWorkerProcesses,
+  getWorkerProcessDefinition,
   normalizeWorkerMode,
   resolveWorkerProcessName,
   workerModeTokens,
+  WORKER_PROCESS_DEFINITIONS,
 } from '../shared/worker-processes';
 
 const { Text, Title } = Typography;
@@ -89,7 +91,7 @@ interface DiscoveredQueue {
   name: string;
   label: string;
   description: string;
-  type: 'event-queue' | 'redis-list';
+  type: 'event-queue' | 'redis-list' | 'db-poll';
   pending: number | null;
   workerProcessName?: string;
 }
@@ -97,11 +99,13 @@ interface DiscoveredQueue {
 const DEFAULT_WORKER_MODE = '*';
 
 const COMMON_WORKER_MODES = getCommonWorkerProcesses();
+// Sandbox processes are excluded from the common set but must stay selectable,
+// otherwise dedicated sandbox stacks can only be configured by hand-typing env vars.
+const SANDBOX_WORKER_MODES = WORKER_PROCESS_DEFINITIONS.filter((definition) => definition.sandbox);
 const ALL_WORKER_MODE = { name: '*', label: 'All processes', description: 'Consume every worker process' };
 
 const DEFAULT_WORKER_ENV = {
   APP_PORT: '13000',
-  SKILL_HUB_SANDBOX: 'false',
 };
 
 const DEFAULT_K8S_ENV_FROM = [
@@ -234,7 +238,11 @@ function formValuesToStack(values: any) {
 
   const envVars = parseJsonText(values.envVars, {}, 'Environment variables');
   if (envVars.SKILL_HUB_SANDBOX === undefined) {
-    envVars.SKILL_HUB_SANDBOX = 'false';
+    // shouldRunSkillSandbox() in plugin-agent-orchestrator treats SKILL_HUB_SANDBOX='false'
+    // as a hard disable regardless of WORKER_MODE, so stacks that explicitly select a sandbox
+    // process get the env enabled by default.
+    const servesSandbox = workerMode.split(',').some((token) => getWorkerProcessDefinition(token)?.sandbox);
+    envVars.SKILL_HUB_SANDBOX = servesSandbox ? 'true' : 'false';
   }
 
   return {
@@ -352,10 +360,10 @@ export function ContainerOrchestrator() {
         setContainers((prev) => ({ ...prev, [stackId]: data.data || [] }));
         setContainerMeta((prev) => ({ ...prev, [stackId]: data.meta || {} }));
       } catch (err: any) {
-        message.error(`Failed to load containers: ${err.message}`);
+        message.error(t('Failed to load containers: {error}').replace('{error}', err.message));
       }
     },
-    [api],
+    [api, t],
   );
 
   // Load settings
@@ -382,7 +390,7 @@ export function ContainerOrchestrator() {
       await fetchPing();
       await fetchStacks();
     } catch (err: any) {
-      message.error(`Failed to save settings: ${err.message}`);
+      message.error(t('Failed to save settings: {error}').replace('{error}', err.message));
     } finally {
       setLoading(false);
     }
@@ -423,7 +431,10 @@ export function ContainerOrchestrator() {
       closeStackModal();
       await fetchStacks();
     } catch (err: any) {
-      message.error(err?.response?.data?.errors?.[0]?.message || err.message || t('Failed to save worker stack'));
+      message.error(
+        err?.response?.data?.errors?.[0]?.message ||
+          (err?.message ? t(err.message) : t('Failed to save worker stack')),
+      );
     } finally {
       setLoading(false);
     }
@@ -437,10 +448,16 @@ export function ContainerOrchestrator() {
     fetchQueues();
   }, [fetchPing, fetchStacks, fetchSettings, fetchQueues]);
 
-  // Load containers for each stack and poll every 10s
+  // Load containers for each stack and poll every 10s.
+  // Keyed on the stack IDs (not the stacks array, which gets a new identity on
+  // every poll) so the interval is not torn down and re-fired each cycle.
+  const stacksRef = useRef(stacks);
+  stacksRef.current = stacks;
+  const stackIds = stacks.map((s) => s.id).join(',');
+
   useEffect(() => {
     const doFetch = () => {
-      stacks.forEach((s) => fetchContainers(s.id));
+      stacksRef.current.forEach((s) => fetchContainers(s.id));
     };
     doFetch();
 
@@ -450,7 +467,7 @@ export function ContainerOrchestrator() {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [stacks, fetchContainers, fetchStacks]);
+  }, [stackIds, fetchContainers, fetchStacks]);
 
   // Scale action
   const handleScale = async (stackId: number) => {
@@ -464,7 +481,11 @@ export function ContainerOrchestrator() {
         data: { stackId, replicas },
       });
       const result = res.data?.data || res.data;
-      message.success(`Scaled: ${result.previousReplicas} → ${result.currentReplicas} replicas`);
+      message.success(
+        t('Scaled: {from} → {to} replicas')
+          .replace('{from}', String(result.previousReplicas))
+          .replace('{to}', String(result.currentReplicas)),
+      );
       await fetchContainers(stackId);
       await fetchStacks();
     } catch (err: any) {
@@ -483,7 +504,12 @@ export function ContainerOrchestrator() {
         method: 'POST',
         data: { stackId, containerId },
       });
-      message.success(`${action} ${containerId} successful`);
+      const actionLabels: Record<string, string> = { stop: t('Stop'), start: t('Start'), remove: t('Remove') };
+      message.success(
+        t('{action} {container} successful')
+          .replace('{action}', actionLabels[action] || action)
+          .replace('{container}', containerId),
+      );
       await fetchContainers(stackId);
     } catch (err: any) {
       message.error(err.response?.data?.errors?.[0]?.message || err.message);
@@ -502,7 +528,7 @@ export function ContainerOrchestrator() {
       const data = res.data?.data || res.data;
       setLogModal({ visible: true, containerId, logs: data.lines || [] });
     } catch (err: any) {
-      message.error(`Failed to get logs: ${err.message}`);
+      message.error(t('Failed to get logs: {error}').replace('{error}', err.message));
     }
   };
 
@@ -538,20 +564,28 @@ export function ContainerOrchestrator() {
         let color = 'processing';
         if (pStatus.initStatus === 'succeeded') color = 'success';
         if (pStatus.initStatus === 'failed') color = 'error';
+        const openLogs = () =>
+          setPkgLogModal({ visible: true, containerName: record.name, logs: pStatus.lastInitLog || '' });
         return (
-          <Tooltip title={pStatus.initProgressLog || 'Click to view logs'}>
+          <Tooltip title={pStatus.initProgressLog || t('Click to view logs')}>
             <Tag
               color={color}
               style={{ cursor: 'pointer' }}
-              onClick={() =>
-                setPkgLogModal({ visible: true, containerName: record.name, logs: pStatus.lastInitLog || '' })
-              }
+              role="button"
+              tabIndex={0}
+              onClick={openLogs}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openLogs();
+                }
+              }}
             >
               {pStatus.initStatus === 'running' && <ReloadOutlined spin style={{ marginRight: 4 }} />}
               {pStatus.initStatus === 'succeeded'
-                ? 'Installed'
+                ? t('Installed')
                 : pStatus.initStatus === 'failed'
-                  ? 'Failed'
+                  ? t('Failed')
                   : `${pStatus.initProgressPercent || 0}%`}
             </Tag>
           </Tooltip>
@@ -630,15 +664,18 @@ export function ContainerOrchestrator() {
 
   const workerModeSelectOptions = Array.from(
     new Map(
-      [ALL_WORKER_MODE, ...COMMON_WORKER_MODES, ...queueOptions].map((queue) => {
+      [ALL_WORKER_MODE, ...COMMON_WORKER_MODES, ...SANDBOX_WORKER_MODES, ...queueOptions].map((queue) => {
         const workerProcessName = 'workerProcessName' in queue ? queue.workerProcessName : undefined;
         const processName = workerProcessName || resolveWorkerProcessName(queue.name);
         return [
           processName,
           {
             value: processName,
-            label: `${queue.label} (${processName})`,
-            title: queue.name === processName ? queue.description : `${queue.description} - alias: ${queue.name}`,
+            label: `${t(queue.label)} (${processName})`,
+            title:
+              queue.name === processName
+                ? t(queue.description)
+                : `${t(queue.description)} - ${t('alias')}: ${queue.name}`,
           },
         ];
       }),
@@ -663,7 +700,7 @@ export function ContainerOrchestrator() {
             <Space>
               <ApiOutlined style={{ fontSize: 18 }} />
               <Text strong>{t('Adapter')}: </Text>
-              <Tag color="blue">{pingResult.adapter?.toUpperCase() || 'NONE'}</Tag>
+              <Tag color="blue">{pingResult.adapter?.toUpperCase() || t('NONE')}</Tag>
               <Badge
                 status={pingResult.connected ? 'success' : 'error'}
                 text={pingResult.connected ? t('Connected') : t('Disconnected')}
@@ -1161,7 +1198,7 @@ export function ContainerOrchestrator() {
                     <Form.Item
                       name="dockerHost"
                       label={t('TCP Host')}
-                      extra="e.g. tcp://192.168.1.10:2376 (Overrides socket)"
+                      extra={t('e.g. tcp://192.168.1.10:2376 (Overrides socket)')}
                     >
                       <Input />
                     </Form.Item>
@@ -1177,7 +1214,7 @@ export function ContainerOrchestrator() {
                     <Form.Item
                       name="k8sKubeconfig"
                       label={t('Kubeconfig')}
-                      extra="Paste kubeconfig YAML or enter a file path. Leave empty to use in-cluster ServiceAccount."
+                      extra={t('Paste kubeconfig YAML or enter a file path. Leave empty to use in-cluster ServiceAccount.')}
                     >
                       <Input.TextArea rows={4} />
                     </Form.Item>
@@ -1191,7 +1228,7 @@ export function ContainerOrchestrator() {
           <Form.Item
             name="workerLabelSelector"
             label={t('Worker Label Selector')}
-            extra="Only containers with this label will be managed. Example: role=worker"
+            extra={t('Only containers with this label will be managed. Example: role=worker')}
           >
             <Input />
           </Form.Item>

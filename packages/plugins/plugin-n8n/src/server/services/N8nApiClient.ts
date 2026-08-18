@@ -20,7 +20,6 @@ export class N8nApiClient {
         headers['Content-Type'] = 'application/json';
       }
       const url = `${this.baseUrl}${path}`;
-      console.log(`[plugin-n8n] fetch ${method} ${url}`);
       const res = await fetch(url, {
         method,
         headers,
@@ -91,11 +90,14 @@ export class N8nApiClient {
   }
 
   // Executions
-  async listExecutions(params: { status?: string; workflowId?: string; limit?: number; cursor?: string } = {}) {
+  async listExecutions(
+    params: { status?: string; workflowId?: string; limit?: number; cursor?: string; includeData?: boolean } = {},
+  ) {
     const qs = new URLSearchParams();
     if (params.status) qs.set('status', params.status);
     if (params.workflowId) qs.set('workflowId', params.workflowId);
     qs.set('limit', String(params.limit || 20));
+    if (params.includeData === false) qs.set('includeData', 'false');
     if (params.cursor) qs.set('cursor', params.cursor);
     return this.request(`/api/v1/executions?${qs}`);
   }
@@ -200,9 +202,7 @@ export class N8nApiClient {
     const getValue = (name: string, labelFilter?: Record<string, string>): number => {
       const entries = raw[name] || [];
       if (!labelFilter) return entries[0]?.value ?? 0;
-      const entry = entries.find((e) =>
-        Object.entries(labelFilter).every(([k, v]) => e.labels[k] === v),
-      );
+      const entry = entries.find((e) => Object.entries(labelFilter).every(([k, v]) => e.labels[k] === v));
       return entry?.value ?? 0;
     };
 

@@ -10,6 +10,7 @@
 import { Context } from '@nocobase/actions';
 import { toOpenAIError } from '../utils/openai-format';
 import { isModelAllowed, isServiceAllowed, resolveUserAccessScope } from '../utils/user-permissions';
+import { getAiApiConfig } from '../utils/request-cache';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -20,8 +21,8 @@ import type PluginAiApiServer from '../plugin';
  * so clients can copy-paste the ID directly into POST /v1/chat/completions
  * without needing to configure a defaultLlmService.
  *
- * The catalog is scoped to the caller: a user with an aiApiUserPermissions row only
- * sees the intersection of the global whitelist and their own grant.
+ * The catalog is scoped to the caller: it starts from the global whitelist and is
+ * narrowed by the caller's usage group settings (allowedLlmServices / allowedModels).
  *
  * Backward compatibility: resolveModelString() in resolve-service.ts still
  * accepts bare model IDs via its 3-tier fallback (defaultLlmService / single service).
@@ -251,7 +252,7 @@ function toPositiveInt(value: unknown): number | null {
 }
 
 async function getPluginConfig(ctx: Context) {
-  return ctx.db.getRepository('aiApiConfig').findOne();
+  return getAiApiConfig(ctx);
 }
 
 /**

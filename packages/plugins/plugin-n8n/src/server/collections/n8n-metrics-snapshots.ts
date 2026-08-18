@@ -1,0 +1,31 @@
+import { CollectionOptions } from '@nocobase/database';
+
+export default {
+  name: 'n8nMetricsSnapshots',
+  title: 'n8n Metrics Snapshots',
+  indexes: [{ fields: ['instanceId', 'timestamp'] }],
+  fields: [
+    { name: 'id', type: 'bigInt', autoIncrement: true, primaryKey: true },
+    { name: 'instanceId', type: 'bigInt' },
+    { name: 'timestamp', type: 'date' },
+    { name: 'cpu', type: 'float' },
+    { name: 'cpuRate', type: 'float' },
+    { name: 'memoryRss', type: 'float' },
+    { name: 'heapUsed', type: 'float' },
+    { name: 'heapTotal', type: 'float' },
+    { name: 'eventLoopLag', type: 'float' },
+    { name: 'eventLoopP99', type: 'float' },
+    { name: 'activeHandles', type: 'float' },
+    { name: 'activeRequests', type: 'float' },
+    { name: 'queueWaiting', type: 'float' },
+    { name: 'queueActive', type: 'float' },
+    { name: 'queueCompleted', type: 'float' },
+    { name: 'queueFailed', type: 'float' },
+    { name: 'queueThroughput', type: 'float' },
+    { name: 'queueFailRate', type: 'float' },
+    { name: 'activeWorkflows', type: 'float' },
+    { name: 'healthStatus', type: 'string', length: 20 },
+    { name: 'healthLatency', type: 'float' },
+    { name: 'createdAt', type: 'date' },
+  ],
+} as CollectionOptions;

@@ -26,9 +26,12 @@ export const SkillMetrics: React.FC = () => {
       });
       const rawData = data?.data?.data ?? data?.data ?? [];
       setExecutions(Array.isArray(rawData) ? rawData : []);
-    } catch (err: any) {
+    } catch (err) {
+      const response = err as { response?: { data?: { errors?: { message?: string }[] } } };
       setExecutions([]);
-      setError(err?.response?.data?.errors?.[0]?.message || err?.message || t('Failed to load metrics'));
+      setError(
+        response?.response?.data?.errors?.[0]?.message || (err as Error)?.message || t('Failed to load metrics'),
+      );
     } finally {
       setLoading(false);
     }

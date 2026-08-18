@@ -1,19 +1,19 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Card, Table, Typography, Space, Row, Col, Statistic, Progress } from 'antd';
+import { Alert, Card, Table, Space, Row, Col, Statistic, Progress } from 'antd';
 import { SyncOutlined, CheckCircleOutlined, CloseCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
-
-const { Title, Text } = Typography;
 
 export const SkillMetrics: React.FC = () => {
   const api = useApp().apiClient;
   const t = useT();
   const [executions, setExecutions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchExecutions = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       // Fetch up to 1000 recent executions to calculate basic metrics
       const { data } = await api.request({
@@ -26,12 +26,16 @@ export const SkillMetrics: React.FC = () => {
       });
       const rawData = data?.data?.data ?? data?.data ?? [];
       setExecutions(Array.isArray(rawData) ? rawData : []);
-    } catch {
-      // ignore
+    } catch (err) {
+      const response = err as { response?: { data?: { errors?: { message?: string }[] } } };
+      setExecutions([]);
+      setError(
+        response?.response?.data?.errors?.[0]?.message || (err as Error)?.message || t('Failed to load metrics'),
+      );
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, t]);
 
   useEffect(() => {
     fetchExecutions();
@@ -103,16 +107,17 @@ export const SkillMetrics: React.FC = () => {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%', padding: '0 16px' }}>
+      {error && <Alert type="error" showIcon message={error} />}
       <Row gutter={16}>
         <Col span={6}>
           <Card size="small">
-            <Statistic title="Total Executions (Recent)" value={metrics.total} prefix={<SyncOutlined />} />
+            <Statistic title={t('Total Executions (Recent)')} value={metrics.total} prefix={<SyncOutlined />} />
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Succeeded"
+              title={t('Succeeded')}
               value={metrics.succeeded}
               valueStyle={{ color: '#3f8600' }}
               prefix={<CheckCircleOutlined />}
@@ -122,7 +127,7 @@ export const SkillMetrics: React.FC = () => {
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Failed"
+              title={t('Failed')}
               value={metrics.failed}
               valueStyle={{ color: '#cf1322' }}
               prefix={<CloseCircleOutlined />}
@@ -132,7 +137,7 @@ export const SkillMetrics: React.FC = () => {
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Timeout/Canceled"
+              title={t('Timeout/Canceled')}
               value={metrics.timeout + metrics.canceled}
               valueStyle={{ color: '#faad14' }}
               prefix={<ClockCircleOutlined />}

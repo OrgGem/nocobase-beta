@@ -9,14 +9,13 @@
 
 import { Plugin, lazy } from '@nocobase/client';
 import PluginACLClient from '@nocobase/plugin-acl/client';
-import { AI_API_ACL_SNIPPET, AI_API_USER_PERMISSIONS_SNIPPET } from '../constants';
+import { AI_API_ACL_SNIPPET } from '../constants';
 import React from 'react';
 
 const AiApiConfigPage = React.lazy(() => import('../client-v2/pages/GeneralPage'));
 const AiApiModelPricingPage = React.lazy(() => import('../client-v2/pages/ModelPricingPage'));
 const AiApiModelMetadataPage = React.lazy(() => import('../client-v2/pages/ModelMetadataPage'));
-const AiApiUserPermissionsPage = React.lazy(() => import('../client-v2/pages/UserPermissionsPage'));
-const AiApiUserQuotasPage = React.lazy(() => import('../client-v2/pages/UserQuotasPage'));
+const AiApiUsageGroupsPage = React.lazy(() => import('../client-v2/pages/UsageGroupsPage'));
 const AiApiUsagePage = React.lazy(() => import('../client-v2/pages/UsagePage'));
 const { AiApiRolePermissions } = lazy(() => import('./components/AiApiRolePermissions'), 'AiApiRolePermissions');
 
@@ -49,19 +48,9 @@ export class PluginAiApiClient extends Plugin {
       sort: 3,
     });
 
-    // Keep the legacy settings layout aligned with client-v2. The v1 settings
-    // manager evaluates the parent ACL first, so this tab additionally requires
-    // access to the AI API settings parent even though it keeps its own snippet.
-    this.app.pluginSettingsManager.add('ai-api.user-permissions', {
-      title: this.t('User LLM permissions'),
-      Component: AiApiUserPermissionsPage,
-      aclSnippet: AI_API_USER_PERMISSIONS_SNIPPET,
-      sort: 4,
-    });
-
-    this.app.pluginSettingsManager.add('ai-api.user-quotas', {
-      title: this.t('User quotas'),
-      Component: AiApiUserQuotasPage,
+    this.app.pluginSettingsManager.add('ai-api.usage-groups', {
+      title: this.t('Usage groups'),
+      Component: AiApiUsageGroupsPage,
       aclSnippet: AI_API_ACL_SNIPPET,
       sort: 5,
     });

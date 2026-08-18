@@ -93,6 +93,24 @@ function afterFilter(
 export class CatalogService {
   constructor(private readonly database: RegistryDatabase) {}
 
+  private async sharedPackageIds(userId: string): Promise<string[]> {
+    const shares = await this.database.getRepository('skillRegistryPackageShares').find({
+      filter: { userId },
+    });
+    return shares.map((share) => getString(share, 'packageId'));
+  }
+
+  private baseFilter(userId?: string): Record<string, unknown> {
+    if (!userId) {
+      return { visibility: 'public', status: 'published' };
+    }
+    const sharedIds = this.sharedPackageIds(userId);
+    return {
+      status: 'published',
+      $or: [{ visibility: 'public' }, { ownerId: userId }, { visibility: 'shared', id: { $in: sharedIds } }],
+    };
+  }
+
   async list(input: {
     q?: string;
     tag?: string;
@@ -100,10 +118,18 @@ export class CatalogService {
     channel?: string;
     limit: number;
     after?: PublicCursorAnchor;
+    userId?: string;
   }): Promise<CatalogPage<RegistryPublicPackage>> {
     const packagesRepository = this.database.getRepository('skillRegistryPackages');
     const channel = input.channel || 'stable';
-    const baseFilter: Record<string, unknown> = { visibility: 'public', status: 'published' };
+    const sharedIds = input.userId ? await this.sharedPackageIds(input.userId) : [];
+    const baseFilter: Record<string, unknown> = input.userId
+      ? {
+          status: 'published',
+          $or: [{ visibility: 'public' }, { ownerId: input.userId }, { visibility: 'shared', id: { $in: sharedIds } }],
+        }
+      : { visibility: 'public', status: 'published' };
+
     if (input.q) {
       const query = input.q.trim();
       const clauses: Record<string, unknown>[] = [
@@ -116,12 +142,12 @@ export class CatalogService {
       if (namespacePart && slugPart) {
         clauses.push({ $and: [{ namespace: { $includes: namespacePart } }, { slug: { $includes: slugPart } }] });
       }
-      baseFilter.$or = clauses;
+      const accessOr = baseFilter.$or as Record<string, unknown>[];
+      baseFilter.$and = [{ status: baseFilter.status }, { $or: accessOr }, { $or: clauses }];
+      delete baseFilter.$or;
+      delete baseFilter.status;
     }
 
-    // tag (json array) and runtime (version attribute) cannot be filtered portably in SQL,
-    // so scan bounded keyset pages. A scan cursor can advance even when a page has no
-    // post-filter matches, preventing rare tags from turning one request into an unbounded query.
     const results: Array<{ row: RegistryPublicPackage; anchor: PublicCursorAnchor }> = [];
     let scanAnchor = input.after;
     let scanned = 0;
@@ -200,10 +226,6 @@ export class CatalogService {
     }
 
     const versions = this.database.getRepository('skillRegistryVersions');
-    // The production repository supports findOne. Resolve one row per package
-    // so a package with a very long history cannot make a catalog request load
-    // every historical version. The fallback keeps lightweight unit doubles
-    // (which only implement find) compatible while still imposing a hard cap.
     if (typeof versions.findOne !== 'function') {
       const rows = await versions.find({
         filter: { packageId: { $in: packageIds }, channel, status: 'published' },
@@ -259,14 +281,15 @@ export class CatalogService {
     return latest;
   }
 
-  async getPackage(packageName: string): Promise<RegistryModel> {
+  async getPackage(packageName: string, userId?: string): Promise<RegistryModel> {
     const identity = splitPackageName(packageName);
     const packageRecord = await this.database.getRepository('skillRegistryPackages').findOne({
-      filter: { ...identity, visibility: 'public', status: 'published' },
+      filter: { ...identity, status: 'published' },
     });
     if (!packageRecord) {
       throw new RegistryError('PACKAGE_NOT_FOUND', 404, 'Package was not found.');
     }
+    await this.assertAccess(packageRecord, userId);
     return packageRecord;
   }
 
@@ -282,7 +305,9 @@ export class CatalogService {
     channel: string,
     limit: number,
     after?: PublicCursorAnchor,
+    userId?: string,
   ): Promise<CatalogPage<RegistryModel>> {
+    await this.assertAccess(packageRecord, userId);
     const rows = await this.database.getRepository('skillRegistryVersions').find({
       filter: afterFilter({ packageId: modelId(packageRecord), channel, status: 'published' }, after, 'descending'),
       sort: ['-publishedAt', '-id'],
@@ -304,8 +329,9 @@ export class CatalogService {
     packageName: string,
     version?: string,
     channel = 'stable',
+    userId?: string,
   ): Promise<{ packageRecord: RegistryModel; versionRecord: RegistryModel }> {
-    const packageRecord = await this.getPackage(packageName);
+    const packageRecord = await this.getPackage(packageName, userId);
     const versions = this.database.getRepository('skillRegistryVersions');
     const versionRecord = version
       ? await versions.findOne({ filter: { packageId: modelId(packageRecord), version, channel, status: 'published' } })
@@ -314,5 +340,27 @@ export class CatalogService {
       throw new RegistryError('VERSION_NOT_FOUND', 404, 'Published package version was not found.');
     }
     return { packageRecord, versionRecord };
+  }
+
+  private async assertAccess(packageRecord: RegistryModel, userId?: string): Promise<void> {
+    const visibility = getString(packageRecord, 'visibility') || 'public';
+    if (visibility === 'public') {
+      return;
+    }
+    if (!userId) {
+      throw new RegistryError('PACKAGE_NOT_FOUND', 404, 'Package was not found.');
+    }
+    if (String(packageRecord.get('ownerId')) === String(userId)) {
+      return;
+    }
+    if (visibility === 'shared') {
+      const share = await this.database.getRepository('skillRegistryPackageShares').findOne({
+        filter: { packageId: modelId(packageRecord), userId },
+      });
+      if (share) {
+        return;
+      }
+    }
+    throw new RegistryError('PACKAGE_NOT_FOUND', 404, 'Package was not found.');
   }
 }

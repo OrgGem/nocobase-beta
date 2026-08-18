@@ -21,7 +21,7 @@ function permissionLookupFailureContext() {
       getRepository: (name: string) => {
         if (name === 'aiApiConfig') return { findOne: vi.fn(async () => null) };
         if (name === 'llmServices') return { find: vi.fn(async () => []) };
-        if (name === 'aiApiUserPermissions') {
+        if (name === 'aiApiGroupMembers') {
           return { findOne: vi.fn(async () => Promise.reject(new Error('permission database unavailable'))) };
         }
         return { find: vi.fn(async () => []) };

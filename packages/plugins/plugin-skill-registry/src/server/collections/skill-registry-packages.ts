@@ -24,6 +24,12 @@ export default defineCollection({
     { type: 'string', name: 'defaultChannel', length: 20, defaultValue: 'stable' },
     {
       type: 'belongsTo',
+      name: 'owner',
+      target: 'users',
+      foreignKey: 'ownerId',
+    },
+    {
+      type: 'belongsTo',
       name: 'latestStableVersion',
       target: 'skillRegistryVersions',
       foreignKey: 'latestStableVersionId',

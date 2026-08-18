@@ -12,12 +12,18 @@ import type { Transactionable } from '@nocobase/database';
 import { createAiLlmRouter, AI_LLM_PREFIX } from './routes/router';
 import aiApiConfigResource from './resource/ai-api-config';
 import aiApiUsageMonitorResource from './resource/ai-api-usage-monitor';
-import aiApiUserPermissionsResource from './resource/ai-api-user-permissions';
+import aiApiUsageGroupsResource from './resource/ai-api-usage-groups';
 import { RateLimiter } from './utils/rate-limiter';
 import { invalidateRolePermissionCache } from './middleware/role-permission';
-import { invalidateUserPermissionCache } from './utils/user-permissions';
+import { invalidateGroupAccessCache } from './utils/user-permissions';
 import { validateModelPrice, validateModelMetadata, validateQuotaPolicy } from './validation';
-import { AI_API_ACL_SNIPPET, AI_API_USER_PERMISSIONS_SNIPPET } from '../constants';
+import { AI_API_ACL_SNIPPET } from '../constants';
+import {
+  FileProcessorService,
+  base64FileForwarder,
+  httpFileUrlFetcher,
+  pdfFileProcessor,
+} from './services/file-processor';
 
 // Ensure dayjs timezone + utc plugins are loaded.
 // Some Docker builds ship an older @nocobase/utils whose dayjs.js does not
@@ -35,9 +41,15 @@ import timezonePlugin from 'dayjs/plugin/timezone';
 export class PluginAiApiServer extends Plugin {
   /**
    * Singleton rate limiter — lives for the entire plugin lifetime, shared across all requests.
-   * Uses a 1-minute sliding window to enforce rateLimitPerMinute from aiApiConfig.
+   * Uses a 1-minute sliding window to enforce rateLimitPerMinute from the user's usage group.
    */
   rateLimiter = new RateLimiter(60_000);
+
+  /**
+   * Extensible file processor service. Other plugins can register custom processors
+   * to transform file/file_url content blocks before they reach the LLM.
+   */
+  fileProcessorService = new FileProcessorService();
 
   private gcInterval: NodeJS.Timeout | null = null;
 
@@ -50,12 +62,71 @@ export class PluginAiApiServer extends Plugin {
     this.app.db.on('aiApiModelMetadata.beforeSave', (model) => {
       validateModelMetadata(model);
     });
-    this.app.db.on('aiApiUserQuotaPolicies.beforeSave', (model) => {
+    this.app.db.on('aiApiUsageGroups.beforeSave', async (model, options) => {
       validateQuotaPolicy(model);
+      // The partial unique index on isDefault is not supported on MySQL,
+      // so enforce single-default-group here as well.
+      if (model.get('isDefault')) {
+        const filter: Record<string, unknown> = { isDefault: true };
+        if (model.get('id')) filter.id = { $ne: model.get('id') };
+        const other = await this.db.getRepository('aiApiUsageGroups').findOne({
+          filter,
+          transaction: options?.transaction,
+        });
+        if (other) {
+          throw new Error('Only one default usage group is allowed.');
+        }
+      }
+    });
+
+    this.app.db.on('aiApiGroupMembers.beforeSave', async (model, options) => {
+      const userId = model.get('userId');
+      if (!userId) return;
+      const existing = await this.db.getRepository('aiApiGroupMembers').findOne({
+        filter: { userId },
+        transaction: options?.transaction,
+      });
+      if (existing && existing.get('id') !== model.get('id')) {
+        throw new Error('User already belongs to another usage group.');
+      }
+    });
+
+    this.app.db.on('aiApiUsageGroups.beforeDestroy', async (model, options) => {
+      if (model.get('isDefault')) {
+        throw new Error('The default usage group cannot be deleted.');
+      }
+      const members = await this.db.getRepository('aiApiGroupMembers').find({
+        filter: { groupId: model.get('id') },
+        transaction: options?.transaction,
+      });
+      if (members.length === 0) return;
+
+      const defaultGroup = await this.db.getRepository('aiApiUsageGroups').findOne({
+        filter: { isDefault: true },
+        transaction: options?.transaction,
+      });
+      if (!defaultGroup) {
+        throw new Error('Default usage group is missing; cannot reassign members.');
+      }
+
+      for (const member of members) {
+        await this.db.getRepository('aiApiGroupMembers').update({
+          filterByTk: member.get('id'),
+          values: { groupId: defaultGroup.get('id') },
+          transaction: options?.transaction,
+        });
+      }
     });
   }
 
   async load() {
+    // Register default file processors. Custom plugins can register additional
+    // processors by retrieving this plugin instance and calling
+    // `fileProcessorService.register(processor)`.
+    this.fileProcessorService.register(base64FileForwarder);
+    this.fileProcessorService.register(httpFileUrlFetcher);
+    this.fileProcessorService.register(pdfFileProcessor);
+
     // 1. Claim body parsing for our own routes before the core bodyParser runs.
     //    Core registers koa-bodyparser with a global REQUEST_BODY_LIMIT (10mb by
     //    default) much earlier in the stack, so without this the gateway's own
@@ -80,7 +151,7 @@ export class PluginAiApiServer extends Plugin {
     // 2. Register admin config resource
     this.app.resourceManager.define(aiApiConfigResource);
     this.app.resourceManager.define(aiApiUsageMonitorResource);
-    this.app.resourceManager.define(aiApiUserPermissionsResource);
+    this.app.resourceManager.define(aiApiUsageGroupsResource);
 
     this.app.db.on('aiApiRolePermissions.afterSave', (model) => {
       invalidateRolePermissionCache(model.get('roleName'));
@@ -89,11 +160,11 @@ export class PluginAiApiServer extends Plugin {
       invalidateRolePermissionCache(model.get('roleName'));
     });
 
-    this.app.db.on('aiApiUserPermissions.afterSave', (model, options) => {
-      this.revokeUserPermissions(model.get('userId'), options?.transaction);
+    this.app.db.on('aiApiUsageGroups.afterSave', (model, options) => {
+      this.invalidateGroupAccess(model.get('id'), options?.transaction);
     });
-    this.app.db.on('aiApiUserPermissions.afterDestroy', (model, options) => {
-      this.revokeUserPermissions(model.get('userId'), options?.transaction);
+    this.app.db.on('aiApiUsageGroups.afterDestroy', (model, options) => {
+      this.invalidateGroupAccess(model.get('id'), options?.transaction);
     });
 
     // 3. Set ACL permissions for admin config + role permissions management
@@ -104,22 +175,14 @@ export class PluginAiApiServer extends Plugin {
         'aiApiRolePermissions:*',
         'aiApiModelPrices:*',
         'aiApiModelMetadata:*',
-        'aiApiUserQuotaPolicies:*',
-        'aiApiUserQuotaBuckets:list',
-        'aiApiUserQuotaBuckets:get',
+        'aiApiUsageGroups:*',
+        'aiApiGroupMembers:*',
+        'aiApiGroupQuotaBuckets:list',
+        'aiApiGroupQuotaBuckets:get',
         'aiApiUsageRecords:list',
         'aiApiUsageRecords:get',
         'aiApiUsageMonitor:summary',
       ],
-    });
-
-    // Per-user LLM grants are a separate child permission: handing out model access is a
-    // stronger capability than editing gateway settings, so it ticks independently.
-    // The wildcard also covers `listUsers`, which backs the page's user picker — without it
-    // the page would depend on `pm.plugin-users` and break for a role holding only this snippet.
-    this.app.acl.registerSnippet({
-      name: AI_API_USER_PERMISSIONS_SNIPPET,
-      actions: ['aiApiUserPermissions:*'],
     });
 
     // 4. GC the rate limiter every 5 minutes to evict stale user entries.
@@ -129,23 +192,23 @@ export class PluginAiApiServer extends Plugin {
   }
 
   /**
-   * Drop a user's cached LLM scope on every node.
+   * Drop a group's cached model-access scope on every node.
    *
    * The local call is not redundant: syncMessageManager hardcodes skipSelf, so the publishing
    * node never receives its own message. Passing the transaction defers the broadcast until
    * the write commits, so other nodes cannot re-read the old row and re-cache it.
    */
-  private revokeUserPermissions(userId: unknown, transaction?: Transactionable['transaction']) {
-    invalidateUserPermissionCache(userId as string | number | bigint);
-    this.sendSyncMessage({ type: 'invalidateUserPermissions', userId }, { transaction });
+  private invalidateGroupAccess(groupId: unknown, transaction?: Transactionable['transaction']) {
+    invalidateGroupAccessCache(groupId as string | number | bigint);
+    this.sendSyncMessage({ type: 'invalidateGroupAccess', groupId }, { transaction });
   }
 
   /**
    * Received only on the *other* nodes (skipSelf), so this must not re-broadcast.
    */
-  async handleSyncMessage(message: { type?: string; userId?: unknown }) {
-    if (message?.type === 'invalidateUserPermissions') {
-      invalidateUserPermissionCache(message.userId as string | number | bigint);
+  async handleSyncMessage(message: { type?: string; groupId?: unknown }) {
+    if (message?.type === 'invalidateGroupAccess') {
+      invalidateGroupAccessCache(message.groupId as string | number | bigint);
     }
   }
 
@@ -157,9 +220,37 @@ export class PluginAiApiServer extends Plugin {
         values: {
           defaultAiEmployee: '',
           enabledLlmServices: [],
-          rateLimitPerMinute: 60,
           quotaEnabled: false,
+          pdfRenderPagesAsImages: false,
           defaultReservationOutputTokens: 4096,
+        },
+      });
+    }
+
+    // Create default usage group on first install
+    const defaultGroup = await this.db.getRepository('aiApiUsageGroups').findOne({
+      filter: { isDefault: true },
+    });
+    if (!defaultGroup) {
+      await this.db.getRepository('aiApiUsageGroups').create({
+        values: {
+          name: 'Default',
+          isDefault: true,
+          quotaMode: 'per_user',
+          rateLimitPerMinute: 60,
+          enabled: false,
+          periodType: 'monthly',
+          timezone: 'UTC',
+          requestLimit: null,
+          totalTokenLimit: null,
+          costLimit: null,
+          currency: 'USD',
+          rejectUnpricedModel: true,
+          missingUsageBehavior: 'use_reserved',
+          contextOverflowBehavior: 'reject',
+          allowedLlmServices: [],
+          allowAllModels: true,
+          allowedModels: [],
         },
       });
     }

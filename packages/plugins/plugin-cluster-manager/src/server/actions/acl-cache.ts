@@ -105,34 +105,60 @@ export function createAclCacheMiddleware(app: any) {
       return next();
     }
 
-    // Try reading from cache first
+    // Try reading from cache first. Only the cache read/parse is guarded —
+    // the downstream next() must stay outside the try so its errors propagate.
+    // (A swallowed rejection there would fall through and invoke next() twice,
+    // which koa-compose rejects with "next() called multiple times".)
+    let cached: unknown;
     try {
-      const cached = await cache.get(cacheKey);
-      if (cached !== undefined && cached !== null) {
-        recordStat(role, true);
-        if (cached === '__DENIED__') {
-          ctx.throw(403, 'No permissions');
-          return;
-        }
-
-        // Replace the permission object computed for this request with the cached value.
-        ctx.permission = ctx.permission || {};
-        ctx.permission.can = JSON.parse(cached);
-        return next();
-      }
+      cached = await cache.get(cacheKey);
     } catch {
       // Cache read failed, proceed normally
     }
 
+    if (cached !== undefined && cached !== null) {
+      if (cached === '__DENIED__') {
+        recordStat(role, true);
+        ctx.throw(403, 'No permissions');
+        return;
+      }
+
+      let cachedPermission: unknown;
+      try {
+        cachedPermission = typeof cached === 'string' ? JSON.parse(cached) : cached;
+      } catch {
+        // Corrupt cache entry — treat as a miss
+      }
+
+      if (cachedPermission !== undefined) {
+        recordStat(role, true);
+        // Replace the permission object computed for this request with the cached value.
+        ctx.permission = ctx.permission || {};
+        ctx.permission.can = cachedPermission;
+        return next();
+      }
+    }
+
     recordStat(role, false);
 
-    // Let the rest of the ACL middleware run normally. Cache explicit denials too,
-    // but never turn a cached denial into a skipped permission check.
+    // Let the rest of the ACL middleware run normally. Cache denials issued by
+    // the ACL core only — never turn a cached denial into a skipped permission
+    // check, and never cache action-level 403s.
     try {
       await next();
     } catch (error: any) {
       if (error?.status === 403 || error?.statusCode === 403) {
-        cache.set(cacheKey, '__DENIED__', ACL_CACHE_TTL).catch(() => {});
+        // The core ACL middleware throws 403 before the action runs, and only
+        // when permission.can is falsy. Once the core has passed, can is an
+        // object, so any later 403 comes from business logic inside the action
+        // (e.g. "system-managed variable") and must not poison this cache —
+        // otherwise legitimate calls to the same action would be rejected
+        // until the TTL expires.
+        const can = ctx.permission?.can;
+        const coreDenied = !ctx.permission?.skip && (!can || typeof can !== 'object');
+        if (coreDenied) {
+          cache.set(cacheKey, '__DENIED__', ACL_CACHE_TTL).catch(() => {});
+        }
       }
       throw error;
     }
@@ -192,12 +218,13 @@ export const aclCacheActions = {
       if (redis) {
         const rawKeys = await scanKeys(redis, `*${ACL_CACHE_PREFIX}*`);
         for (const key of rawKeys) {
+          // Key layout after the prefix: app:dataSource:g<v>:r<v>:role:u<id>:resource:action
           const parts = key.replace(ACL_CACHE_PREFIX, '').split(':');
           keys.push({
             key,
-            role: parts[0] || '',
-            resource: parts[1] || '',
-            action: parts[2] || '',
+            role: parts[4] || '',
+            resource: parts[6] || '',
+            action: parts.slice(7).join(':'),
           });
         }
       }
@@ -288,10 +315,12 @@ export const aclCacheActions = {
     try {
       const redis = (ctx.app as any).redisConnectionManager?.getConnection();
       if (redis) {
-        const pattern = `*${ACL_CACHE_PREFIX}${roleName}:*`;
-        const rawKeys = await scanKeys(redis, pattern);
-        if (rawKeys.length > 0) {
-          deletedCount = await deleteKeysChunked(redis, rawKeys);
+        // The role is the 5th segment after the prefix (app:dataSource:g<v>:r<v>:role:...),
+        // so scan the whole namespace and filter by segment instead of pattern.
+        const rawKeys = await scanKeys(redis, `*${ACL_CACHE_PREFIX}*`);
+        const roleKeys = rawKeys.filter((key) => key.replace(ACL_CACHE_PREFIX, '').split(':')[4] === roleName);
+        if (roleKeys.length > 0) {
+          deletedCount = await deleteKeysChunked(redis, roleKeys);
         }
       }
     } catch {

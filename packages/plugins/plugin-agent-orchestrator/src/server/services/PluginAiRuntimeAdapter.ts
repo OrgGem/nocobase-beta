@@ -17,6 +17,12 @@ const SYSTEM_TOOL_KNOWLEDGE_BASE = 'knowledge-base-retrieve';
 
 export type LoopRole = 'leader' | 'maker' | 'verifier';
 
+export type ToolCallDecision = {
+  type: 'approve' | 'edit' | 'reject';
+  message?: string;
+  editedAction?: { name: string; args: unknown };
+};
+
 export type InterruptedToolCall = {
   toolCallId: string;
   toolName: string;
@@ -128,7 +134,9 @@ export async function planHarnessTools(
   discovery?: { ctx?: unknown; sessionId?: string },
 ): Promise<HarnessToolPlan> {
   const toolsManager = getAIToolsManager(app);
-  const candidates = Array.from(new Set([...harness.tools.allow, ...harness.tools.ask]));
+  // Escalatable tools join the plan as ask-gated candidates: the model can invoke them, but every
+  // call interrupts and parks the run until a human approves that single call.
+  const candidates = Array.from(new Set([...harness.tools.allow, ...harness.tools.ask, ...harness.tools.escalate]));
   const plan: HarnessToolPlan = { filter: [], employeeTools: [], withheld: [], blockedSystemTools: [] };
   const filter = discovery ? { ctx: discovery.ctx, sessionId: discovery.sessionId } : undefined;
 
@@ -208,6 +216,8 @@ export class PluginAiRuntimeAdapter {
 
   // Resume mirrors the official workflow employee node: flip the persisted tool call to
   // `waiting` with a decision, then re-invoke so plugin-ai resumes its own checkpoint.
+  // Decisions are per tool call: plugin-ai stores one `userDecision` per interrupted row and
+  // `getUserDecisions` only unblocks once every interrupted call of the message has one.
   async resume(input: {
     username: string;
     sessionId: string;
@@ -215,17 +225,24 @@ export class PluginAiRuntimeAdapter {
     userId?: number;
     systemMessage: string;
     harness: CompiledHarness;
-    decision: { type: 'approve' | 'reject'; message?: string; editedAction?: { name: string; args: unknown } };
+    decisions: Array<{ toolCallId: string; decision: ToolCallDecision }>;
     signal: AbortSignal;
   }): Promise<InvocationOutcome> {
     const plugin = this.plugin();
 
-    await this.app.db
-      .getModel('aiToolMessages')
-      .update(
-        { userDecision: input.decision, invokeStatus: 'waiting' },
-        { where: { sessionId: input.sessionId, messageId: input.messageId, invokeStatus: 'interrupted' } },
+    for (const entry of input.decisions) {
+      await this.app.db.getModel('aiToolMessages').update(
+        { userDecision: entry.decision, invokeStatus: 'waiting' },
+        {
+          where: {
+            sessionId: input.sessionId,
+            messageId: input.messageId,
+            toolCallId: entry.toolCallId,
+            invokeStatus: 'interrupted',
+          },
+        },
       );
+    }
     const userDecisions = await plugin.aiConversationsManager.getUserDecisions(input.messageId);
     if (!userDecisions) throw new Error('The interrupted tool calls are not all ready to resume.');
 

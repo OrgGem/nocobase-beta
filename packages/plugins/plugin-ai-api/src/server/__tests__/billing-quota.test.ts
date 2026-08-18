@@ -3,7 +3,7 @@ import { createMockDatabase, type Database } from '@nocobase/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AiApiQuotaError, finalizeLlmBilling, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
 
-describe('AI API user quota reservation', () => {
+describe('AI API group quota reservation', () => {
   let db: Database;
 
   beforeEach(async () => {
@@ -30,9 +30,12 @@ describe('AI API user quota reservation', () => {
       ],
     });
     db.collection({
-      name: 'aiApiUserQuotaPolicies',
+      name: 'aiApiUsageGroups',
       fields: [
-        { name: 'userId', type: 'bigInt' },
+        { name: 'name', type: 'string' },
+        { name: 'isDefault', type: 'boolean' },
+        { name: 'quotaMode', type: 'string' },
+        { name: 'rateLimitPerMinute', type: 'integer' },
         { name: 'enabled', type: 'boolean' },
         { name: 'periodType', type: 'string' },
         { name: 'timezone', type: 'string' },
@@ -42,12 +45,21 @@ describe('AI API user quota reservation', () => {
         { name: 'currency', type: 'string' },
         { name: 'rejectUnpricedModel', type: 'boolean' },
         { name: 'missingUsageBehavior', type: 'string' },
+        { name: 'contextOverflowBehavior', type: 'string' },
       ],
     });
     db.collection({
-      name: 'aiApiUserQuotaBuckets',
+      name: 'aiApiGroupMembers',
       fields: [
-        { name: 'policyId', type: 'bigInt' },
+        { name: 'groupId', type: 'bigInt' },
+        { name: 'userId', type: 'bigInt' },
+      ],
+      indexes: [{ fields: ['userId'], unique: true }],
+    });
+    db.collection({
+      name: 'aiApiGroupQuotaBuckets',
+      fields: [
+        { name: 'groupId', type: 'bigInt' },
         { name: 'userId', type: 'bigInt' },
         { name: 'periodStart', type: 'datetimeTz' },
         { name: 'periodEnd', type: 'datetimeTz' },
@@ -58,7 +70,7 @@ describe('AI API user quota reservation', () => {
         { name: 'reservedTokens', type: 'bigInt' },
         { name: 'reservedCost', type: 'decimal', precision: 20, scale: 8 },
       ],
-      indexes: [{ fields: ['policyId', 'periodStart'], unique: true }],
+      indexes: [{ fields: ['groupId', 'userId', 'periodStart'], unique: true }],
     });
     await db.sync({ force: true });
     await db.getRepository('aiApiConfig').create({
@@ -76,9 +88,12 @@ describe('AI API user quota reservation', () => {
         effectiveFrom: new Date('2020-01-01T00:00:00Z'),
       },
     });
-    await db.getRepository('aiApiUserQuotaPolicies').create({
+    const group = await db.getRepository('aiApiUsageGroups').create({
       values: {
-        userId: 7,
+        name: 'Default',
+        isDefault: true,
+        quotaMode: 'per_user',
+        rateLimitPerMinute: 60,
         enabled: true,
         periodType: 'monthly',
         timezone: 'UTC',
@@ -88,7 +103,11 @@ describe('AI API user quota reservation', () => {
         currency: 'USD',
         rejectUnpricedModel: true,
         missingUsageBehavior: 'use_reserved',
+        contextOverflowBehavior: 'reject',
       },
+    });
+    await db.getRepository('aiApiGroupMembers').create({
+      values: { groupId: group.get('id'), userId: 7 },
     });
   });
 
@@ -126,7 +145,7 @@ describe('AI API user quota reservation', () => {
     );
     expect(finalized).toMatchObject({ estimatedCost: '0.00012500', costStatus: 'calculated' });
 
-    const bucket = await db.getRepository('aiApiUserQuotaBuckets').findOne();
+    const bucket = await db.getRepository('aiApiGroupQuotaBuckets').findOne();
     expect(String(bucket?.get('requestCount'))).toBe('1');
     expect(String(bucket?.get('totalTokens'))).toBe('15');
     expect(String(bucket?.get('reservedRequests'))).toBe('0');

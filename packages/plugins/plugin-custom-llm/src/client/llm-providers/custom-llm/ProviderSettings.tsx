@@ -69,7 +69,7 @@ export const ProviderSettingsForm: React.FC = () => {
             'x-decorator': 'FormItem',
             'x-component': 'InputNumber',
             'x-component-props': {
-              placeholder: '120000',
+              placeholder: '1800000',
               min: 0,
               step: 1000,
               style: { width: '100%' },

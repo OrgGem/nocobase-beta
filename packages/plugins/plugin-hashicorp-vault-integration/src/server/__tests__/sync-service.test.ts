@@ -143,12 +143,32 @@ describe('SyncService.processMapping', () => {
       direction: 'push',
       envVariable: 'TEST',
     });
-    const client: any = { readSecret: vi.fn(), setSecretKey: vi.fn() };
-    client.readSecret.mockResolvedValueOnce('old');
+    const client: any = { readSecretOrNull: vi.fn(), setSecretKey: vi.fn() };
+    client.readSecretOrNull.mockResolvedValueOnce('old');
 
     await svc.processMapping(mapping, client as any);
 
     expect(client.setSecretKey).toHaveBeenCalledWith('apps/billing', 'password', 'new');
+    expect(cache.get('TEST')).toBe('new');
+  });
+
+  it('push creates the secret when the path does not exist yet', async () => {
+    const plugin = makePlugin({ TEST: 'new' });
+    const cache = new SecretCache();
+    const svc = new SyncService(plugin, cache);
+    const mapping = makeModel({
+      variableKey: 'TEST',
+      secretPath: 'apps/new-app',
+      secretKey: 'password',
+      direction: 'push',
+      envVariable: 'TEST',
+    });
+    const client: any = { readSecretOrNull: vi.fn(), setSecretKey: vi.fn() };
+    client.readSecretOrNull.mockResolvedValueOnce(null);
+
+    await svc.processMapping(mapping, client as any);
+
+    expect(client.setSecretKey).toHaveBeenCalledWith('apps/new-app', 'password', 'new');
     expect(cache.get('TEST')).toBe('new');
   });
 
@@ -163,8 +183,8 @@ describe('SyncService.processMapping', () => {
       direction: 'push',
       envVariable: 'TEST',
     });
-    const client: any = { readSecret: vi.fn(), setSecretKey: vi.fn() };
-    client.readSecret.mockResolvedValueOnce('same');
+    const client: any = { readSecretOrNull: vi.fn(), setSecretKey: vi.fn() };
+    client.readSecretOrNull.mockResolvedValueOnce('same');
 
     await svc.processMapping(mapping, client as any);
 

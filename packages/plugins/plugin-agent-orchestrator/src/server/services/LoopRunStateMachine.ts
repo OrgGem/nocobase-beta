@@ -24,10 +24,28 @@ export type LoopRunStatus = (typeof loopRunStatuses)[number];
 
 const transitions: Record<LoopRunStatus, ReadonlySet<LoopRunStatus>> = {
   queued: new Set(['preparing', 'paused', 'blocked', 'canceled']),
-  preparing: new Set(['queued', 'waiting_lock', 'running', 'paused', 'blocked', 'failed', 'canceled']),
+  preparing: new Set([
+    'queued',
+    'waiting_lock',
+    'waiting_approval',
+    'running',
+    'paused',
+    'blocked',
+    'failed',
+    'canceled',
+  ]),
   waiting_lock: new Set(['preparing', 'paused', 'blocked', 'canceled']),
-  running: new Set(['queued', 'waiting_approval', 'verifying', 'paused', 'blocked', 'failed', 'canceled']),
-  waiting_approval: new Set(['running', 'waiting_human', 'paused', 'blocked', 'failed', 'canceled']),
+  running: new Set([
+    'queued',
+    'waiting_approval',
+    'verifying',
+    'waiting_human',
+    'paused',
+    'blocked',
+    'failed',
+    'canceled',
+  ]),
+  waiting_approval: new Set(['queued', 'running', 'waiting_human', 'paused', 'blocked', 'failed', 'canceled']),
   verifying: new Set(['running', 'waiting_human', 'paused', 'blocked', 'succeeded', 'failed', 'canceled']),
   waiting_human: new Set(['running', 'succeeded', 'failed', 'canceled']),
   paused: new Set(['queued', 'preparing', 'running', 'waiting_approval', 'verifying', 'blocked', 'canceled']),
@@ -298,6 +316,85 @@ export class LoopRunStateMachine {
       leaseToken: committed.claimed.leaseToken,
       leaseUntil: committed.claimed.leaseUntil,
     };
+  }
+
+  // Approval windows fail closed: an unanswered request blocks the run instead of silently
+  // turning into an approval. Runs only move while they are still `waiting_approval`, so a
+  // decision recorded through another path always wins the race against this sweep.
+  async expireOverdueApprovals(now: Date): Promise<number[]> {
+    const blockedRunIds: number[] = [];
+    const committedEvents: Array<{ runId: number; event: unknown }> = [];
+
+    await this.database.sequelize.transaction(async (transaction) => {
+      const approvals = this.database.getRepository('agentLoopActionApprovals');
+      const runs = this.database.getRepository('agentLoopRuns');
+      const pending = await approvals.find({ filter: { status: 'pending' }, transaction });
+
+      const overdueByRun = new Map<number, Array<Model | Record<string, unknown>>>();
+      for (const approval of pending) {
+        const expiresAt = asDate(read(approval, 'expiresAt'));
+        if (!expiresAt || expiresAt.getTime() > now.getTime()) continue;
+        const runId = Number(read(approval, 'runId'));
+        if (!Number.isSafeInteger(runId) || runId <= 0) continue;
+        const bucket = overdueByRun.get(runId) || [];
+        bucket.push(approval);
+        overdueByRun.set(runId, bucket);
+      }
+
+      for (const [runId, overdue] of overdueByRun) {
+        const run = await runs.findOne({ filterByTk: runId, transaction, lock: transaction.LOCK.UPDATE });
+        if (!run) continue;
+        if (String(read(run, 'runtimeVersion')) !== 'control-plane-v2') continue;
+        if (asStatus(read(run, 'status')) !== 'waiting_approval') continue;
+
+        assertRunTransition({
+          from: 'waiting_approval',
+          to: 'blocked',
+          runtimeVersion: String(read(run, 'runtimeVersion') || ''),
+        });
+
+        for (const approval of overdue) {
+          await approvals.update({
+            filterByTk: Number(read(approval, 'id')),
+            values: { status: 'expired', decidedAt: now },
+            transaction,
+          });
+        }
+
+        const reason = `${overdue.length} action approval(s) expired before a decision was made.`;
+        await runs.update({
+          filterByTk: runId,
+          values: {
+            status: 'blocked',
+            blockedReason: reason,
+            approvalStatus: 'expired',
+            lockedBy: null,
+            lockedUntil: null,
+          },
+          transaction,
+        });
+        const event = await this.createEvent(
+          {
+            runId,
+            type: 'run_approval_expired',
+            title: 'Approval window expired',
+            content: reason,
+            status: 'blocked',
+            payload: { reason, expiredApprovals: overdue.length },
+            actorType: 'system',
+            actorIdentity: 'approval-reaper',
+            correlationKey: `approval-expired:${runId}`,
+            createdAt: now,
+          },
+          transaction,
+        );
+        blockedRunIds.push(runId);
+        committedEvents.push({ runId, event });
+      }
+    });
+
+    for (const blocked of committedEvents) getRunEventBus().emit(blocked.runId, blocked.event);
+    return blockedRunIds;
   }
 
   async renewLease(runId: number, leaseToken: string, leaseMs: number) {

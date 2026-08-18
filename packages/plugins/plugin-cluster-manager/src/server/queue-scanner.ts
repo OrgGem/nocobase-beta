@@ -16,7 +16,7 @@ export type QueueItem = {
   name: string;
   label: string;
   description: string;
-  type: 'event-queue' | 'redis-list';
+  type: 'event-queue' | 'redis-list' | 'db-poll';
   pending: number | null;
   workerProcessName?: string;
 };
@@ -90,7 +90,12 @@ function scanKnownWorkerModes(app: Application): QueueItem[] {
     name: definition.name,
     label: definition.label,
     description: definition.description,
-    type: definition.kind === 'redis-list' ? 'redis-list' : ('event-queue' as const),
+    type:
+      definition.kind === 'redis-list'
+        ? ('redis-list' as const)
+        : definition.kind === 'db-poll'
+          ? ('db-poll' as const)
+          : ('event-queue' as const),
     pending: null,
     workerProcessName: definition.name,
   }));

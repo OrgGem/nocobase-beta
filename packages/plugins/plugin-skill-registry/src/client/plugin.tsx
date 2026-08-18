@@ -1,6 +1,7 @@
 import { Plugin } from '@nocobase/client';
 
 import CatalogPage from '../client-v2/pages/CatalogPage';
+import MarkdownSkillsPage from '../client-v2/pages/MarkdownSkillsPage';
 import SourcesPage from '../client-v2/pages/SourcesPage';
 import SyncRunsPage from '../client-v2/pages/SyncRunsPage';
 import VersionsPage from '../client-v2/pages/VersionsPage';
@@ -11,6 +12,12 @@ import { withLegacySkillRegistryPermissions } from './LegacySkillRegistryPage';
 const SETTINGS_KEY = 'skill-registry';
 const SETTINGS_PAGES = [
   { key: 'index', title: 'Skills', Component: withLegacySkillRegistryPermissions(CatalogPage), sort: -1 },
+  {
+    key: 'markdown-skills',
+    title: 'Markdown skills',
+    Component: withLegacySkillRegistryPermissions(MarkdownSkillsPage),
+    aclSnippet: SKILL_REGISTRY_SNIPPETS.markdown,
+  },
   { key: 'sources', title: 'Sources', Component: withLegacySkillRegistryPermissions(SourcesPage) },
   { key: 'runs', title: 'Sync runs', Component: withLegacySkillRegistryPermissions(SyncRunsPage) },
   { key: 'versions', title: 'Version audit', Component: withLegacySkillRegistryPermissions(VersionsPage) },
@@ -30,7 +37,7 @@ export class PluginSkillRegistryClient extends Plugin {
         title: this.t(page.title),
         Component: page.Component,
         sort: 'sort' in page ? page.sort : undefined,
-        aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
+        aclSnippet: 'aclSnippet' in page ? page.aclSnippet : SKILL_REGISTRY_SNIPPETS.read,
       });
     }
   }

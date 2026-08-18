@@ -9,6 +9,7 @@ import { PackageInstaller } from './PackageInstaller';
 import { PluginOperations } from './PluginOperations';
 import { Doctor } from './Doctor';
 import { QueueAssignment } from './QueueAssignment';
+import WorkerTemplateVariables from './WorkerTemplateVariables';
 import { useT } from './utils';
 
 export function ClusterManagerLayout() {
@@ -62,6 +63,11 @@ export function ClusterManagerLayout() {
             key: 'queues',
             label: t('Queue Assignment'),
             children: <QueueAssignment />,
+          },
+          {
+            key: 'worker-template',
+            label: t('Worker template'),
+            children: <WorkerTemplateVariables />,
           },
         ]}
       />

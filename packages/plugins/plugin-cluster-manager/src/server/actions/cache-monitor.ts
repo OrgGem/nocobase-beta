@@ -5,6 +5,8 @@ import path from 'path';
 import { exec } from 'child_process';
 import http from 'http';
 import https from 'https';
+import dns from 'dns';
+import net from 'net';
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -15,44 +17,19 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-function isSafePath(dirPath: string): boolean {
-  if (!dirPath) return false;
+/**
+ * Allowlist check: the target must be (or live under) a cache path that was
+ * detected in the nginx configuration. A denylist of "dangerous" paths is
+ * bypassable (e.g. /var/www/html slipped past the old /var$ pattern), so we
+ * fail closed instead.
+ */
+function isAllowedCachePath(dirPath: string, allowedPaths: string[]): boolean {
+  if (!dirPath || allowedPaths.length === 0) return false;
   const resolved = path.resolve(dirPath);
-  const normalized = resolved.toLowerCase().replace(/\\/g, '/');
-
-  const restrictedPatterns = [
-    '^/$',
-    '^[a-z]:/?$',
-    '^/[^/]+$',
-    '^[a-z]:/[^/]+$',
-    '/windows',
-    '/system32',
-    '/program files',
-    '/etc',
-    '/var$',
-    '/usr$',
-    '/boot',
-    '/sys',
-    '/proc',
-    '/dev',
-    '/home$',
-    '/root$',
-  ];
-
-  for (const pat of restrictedPatterns) {
-    const re = new RegExp(pat);
-    if (re.test(normalized)) {
-      return false;
-    }
-  }
-
-  const parts = normalized.split('/').filter(Boolean);
-  const nonDriveParts = parts.filter((p) => !/^[a-z]:$/.test(p));
-  if (nonDriveParts.length < 2) {
-    return false;
-  }
-
-  return true;
+  return allowedPaths.some((allowed) => {
+    const allowedResolved = path.resolve(allowed);
+    return resolved === allowedResolved || resolved.startsWith(allowedResolved + path.sep);
+  });
 }
 
 async function findNginxConfig(): Promise<string | null> {
@@ -159,9 +136,12 @@ function extractCachePaths(configText: string): string[] {
   return paths;
 }
 
-async function emptyDirectory(dirPath: string): Promise<{ success: boolean; clearedCount: number; error?: string }> {
-  if (!isSafePath(dirPath)) {
-    return { success: false, clearedCount: 0, error: 'Path is classified as unsafe or restricted' };
+async function emptyDirectory(
+  dirPath: string,
+  allowedPaths: string[],
+): Promise<{ success: boolean; clearedCount: number; error?: string }> {
+  if (!isAllowedCachePath(dirPath, allowedPaths)) {
+    return { success: false, clearedCount: 0, error: 'Directory is not a detected nginx cache path' };
   }
 
   try {
@@ -188,6 +168,81 @@ async function emptyDirectory(dirPath: string): Promise<{ success: boolean; clea
   }
 }
 
+async function detectNginxCachePaths(): Promise<{
+  nginxInstalled: boolean;
+  mainConfigPath: string | null;
+  detectedPaths: string[];
+}> {
+  let nginxInstalled = false;
+  let mainConfigPath: string | null = null;
+  let detectedPaths: string[] = [];
+
+  try {
+    // 1. Try running "nginx -T" to get fully resolved configuration
+    const configText = await new Promise<string | null>((resolve) => {
+      exec('nginx -T', { maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
+        if (err) {
+          resolve(null);
+        } else {
+          nginxInstalled = true;
+          resolve(stdout);
+        }
+      });
+    });
+
+    if (configText) {
+      detectedPaths = extractCachePaths(configText);
+      mainConfigPath = await findNginxConfig();
+    } else {
+      // Fallback: search main config and manually trace includes
+      mainConfigPath = await findNginxConfig();
+      if (mainConfigPath) {
+        nginxInstalled = true;
+        detectedPaths = extractCachePaths(await readConfigRecursive(mainConfigPath));
+      }
+    }
+  } catch {
+    // Detection failed — report nothing and let callers fail closed
+  }
+
+  return { nginxInstalled, mainConfigPath, detectedPaths };
+}
+
+const ALLOWED_PURGE_METHODS = new Set(['PURGE', 'GET', 'HEAD']);
+const BLOCKED_METADATA_HOSTS = new Set(['metadata.google.internal', 'metadata.goog']);
+
+function isBlockedAddress(address: string): boolean {
+  if (net.isIPv4(address)) {
+    // The link-local range holds the cloud metadata endpoint (169.254.169.254).
+    return address.startsWith('169.254.');
+  }
+  const lower = address.toLowerCase();
+  // fe80::/10 is IPv6 link-local; the other forms are IPv4-mapped 169.254.x.x.
+  return lower.startsWith('fe80') || lower.includes('ffff:a9fe') || lower.includes('ffff:169.254');
+}
+
+/**
+ * DNS lookup hook that rejects link-local/metadata addresses. Runs at connect
+ * time on the actually-resolved addresses, so it cannot be bypassed by DNS
+ * rebinding or multi-A-record responses. Private ranges (nginx legitimately
+ * runs on RFC1918/loopback) remain allowed.
+ */
+const safeLookup: net.LookupFunction = (hostname, options, callback) => {
+  dns.lookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err || !addresses || addresses.length === 0) {
+      callback(err || new Error(`DNS lookup failed for ${hostname}`), []);
+      return;
+    }
+    for (const entry of addresses) {
+      if (isBlockedAddress(entry.address)) {
+        callback(new Error(`Blocked request to reserved address ${entry.address}`), []);
+        return;
+      }
+    }
+    callback(null, addresses);
+  });
+};
+
 function makePurgeRequest(
   urlStr: string,
   method = 'PURGE',
@@ -196,6 +251,22 @@ function makePurgeRequest(
   return new Promise((resolve) => {
     try {
       const url = new URL(urlStr);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        resolve({ success: false, error: 'Only http and https URLs are allowed' });
+        return;
+      }
+      const normalizedMethod = String(method || 'PURGE').toUpperCase();
+      if (!ALLOWED_PURGE_METHODS.has(normalizedMethod)) {
+        resolve({ success: false, error: `HTTP method ${method} is not allowed (use PURGE, GET or HEAD)` });
+        return;
+      }
+      // IP literals bypass the lookup hook, so check them here as well.
+      const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+      if (BLOCKED_METADATA_HOSTS.has(hostname) || (net.isIP(hostname) !== 0 && isBlockedAddress(hostname))) {
+        resolve({ success: false, error: 'Requests to cloud metadata endpoints are blocked' });
+        return;
+      }
+
       const isHttps = url.protocol === 'https:';
       const client = isHttps ? https : http;
 
@@ -204,9 +275,10 @@ function makePurgeRequest(
       const req = client.request(
         urlStr,
         {
-          method,
+          method: normalizedMethod,
           headers: reqHeaders,
           timeout: 10000,
+          lookup: safeLookup,
         },
         (res) => {
           let body = '';
@@ -365,38 +437,7 @@ export const cacheMonitorActions = {
    * Detect if Nginx is installed, locate conf, and auto-load cache paths
    */
   async nginxCacheStatus(ctx: Context, next: () => Promise<void>) {
-    let nginxInstalled = false;
-    let mainConfigPath: string | null = null;
-    let detectedPaths: string[] = [];
-
-    try {
-      // 1. Try running "nginx -T" to get fully resolved configuration
-      const configText = await new Promise<string | null>((resolve) => {
-        exec('nginx -T', { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-          if (err) {
-            resolve(null);
-          } else {
-            nginxInstalled = true;
-            resolve(stdout);
-          }
-        });
-      });
-
-      if (configText) {
-        detectedPaths = extractCachePaths(configText);
-        mainConfigPath = await findNginxConfig();
-      } else {
-        // Fallback: search main config and manually trace includes
-        mainConfigPath = await findNginxConfig();
-        if (mainConfigPath) {
-          nginxInstalled = true;
-          const fullConfigText = await readConfigRecursive(mainConfigPath);
-          detectedPaths = extractCachePaths(fullConfigText);
-        }
-      }
-    } catch (err) {
-      // Catch any unexpected exceptions to ensure endpoint never crashes
-    }
+    const { nginxInstalled, mainConfigPath, detectedPaths } = await detectNginxCachePaths();
 
     ctx.body = {
       nginxInstalled,
@@ -418,7 +459,9 @@ export const cacheMonitorActions = {
         ctx.throw(400, 'Directory path is required for physical cache clearing');
       }
 
-      const result = await emptyDirectory(directory);
+      // Only directories detected in the nginx config may be emptied (fail closed).
+      const { detectedPaths } = await detectNginxCachePaths();
+      const result = await emptyDirectory(directory, detectedPaths);
       if (!result.success) {
         ctx.throw(400, result.error || 'Failed to clear cache directory');
       }

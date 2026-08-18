@@ -12,8 +12,10 @@ import { createSourceMutationPolicy } from './middlewares/source-mutation-policy
 import { GitManagerSourceProvider } from './providers/git-manager-provider';
 import { SkillHubSourceProvider } from './providers/skill-hub-provider';
 import { CatalogService } from './services/catalog-service';
+import { CatalogSkillDetailService } from './services/catalog-skill-detail-service';
 import { AgentInstallationBridge } from './services/agent-installation-bridge';
 import { FilesystemArtifactStore } from './services/filesystem-artifact-store';
+import { MarkdownSkillService } from './services/markdown-skill-service';
 import { PublishService } from './services/publish-service';
 import { PublicRateLimiter } from './services/public-rate-limiter';
 import { RegistryMaintenanceService } from './services/registry-maintenance-service';
@@ -34,6 +36,8 @@ const managementResourceNames = new Set([
   'skillRegistryArtifacts',
   'skillRegistryDownloads',
   'skillRegistrySettings',
+  'skillRegistryMarkdownSkills',
+  'skillRegistryPackageShares',
 ]);
 
 export class PluginSkillRegistryServer extends Plugin {
@@ -45,6 +49,7 @@ export class PluginSkillRegistryServer extends Plugin {
     ['git-manager', new GitManagerSourceProvider(this.app.pm)],
   ]);
   private readonly catalogService = new CatalogService(this.database);
+  private readonly catalogSkillDetailService = new CatalogSkillDetailService(this.database, this.artifactStore);
   private readonly installationBridge = new AgentInstallationBridge(
     this.database,
     this.artifactStore,
@@ -68,6 +73,12 @@ export class PluginSkillRegistryServer extends Plugin {
   private readonly publishService = new PublishService(
     this.database,
     this.sourceProviders,
+    this.artifactStore,
+    this.signatureService,
+    this.app.lockManager,
+  );
+  private readonly markdownSkillService = new MarkdownSkillService(
+    this.database,
     this.artifactStore,
     this.signatureService,
     this.app.lockManager,
@@ -144,6 +155,8 @@ export class PluginSkillRegistryServer extends Plugin {
         database: this.database,
         sync: this.sourceSyncService,
         publish: this.publishService,
+        markdownSkill: this.markdownSkillService,
+        catalogSkillDetail: this.catalogSkillDetailService,
         installationBridge: this.installationBridge,
         lockManager: this.app.lockManager,
         settings: this.registrySettingsService,
@@ -169,8 +182,22 @@ export class PluginSkillRegistryServer extends Plugin {
       'skillRegistryHealth:readiness',
       'skillRegistryAdmin:getSettings',
       'skillRegistryAdmin:installationStates',
+      'skillRegistryAdmin:getCatalogSkillDetail',
     ];
     const syncActions = ['skillRegistryAdmin:discover', 'skillRegistryAdmin:sync', 'skillRegistryAdmin:retry'];
+    // Markdown skills are created and published directly in the app, without a source.
+    const markdownActions = [
+      'skillRegistryAdmin:createMarkdown',
+      'skillRegistryAdmin:updateMarkdown',
+      'skillRegistryAdmin:deleteMarkdown',
+      'skillRegistryAdmin:getMarkdown',
+      'skillRegistryAdmin:getMarkdownDetail',
+      'skillRegistryAdmin:publishMarkdown',
+      'skillRegistryAdmin:shareMarkdown',
+      'skillRegistryAdmin:unshareMarkdown',
+      'skillRegistryAdmin:listMarkdownShares',
+      'skillRegistryAdmin:listMyMarkdownSkills',
+    ];
     // ADR-0002 §13: identity mapping (resolve) belongs to the publish permission, not sync.
     const publishActions = [
       'skillRegistryAdmin:resolve',
@@ -187,6 +214,7 @@ export class PluginSkillRegistryServer extends Plugin {
     this.app.acl.registerSnippet({ name: `pm.${this.name}.sync`, actions: syncActions });
     this.app.acl.registerSnippet({ name: `pm.${this.name}.publish`, actions: publishActions });
     this.app.acl.registerSnippet({ name: `pm.${this.name}.install`, actions: installActions });
+    this.app.acl.registerSnippet({ name: `pm.${this.name}.markdown`, actions: markdownActions });
     // ACL snippets match resource:action patterns only; snippet names inside `actions` do not expand.
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.manage`,
@@ -196,6 +224,7 @@ export class PluginSkillRegistryServer extends Plugin {
           ...syncActions,
           ...publishActions,
           ...installActions,
+          ...markdownActions,
           'skillRegistrySources:create',
           'skillRegistrySources:update',
           'skillRegistrySources:destroy',

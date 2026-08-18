@@ -9,10 +9,11 @@
 
 import { Context } from '@nocobase/actions';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AiApiUsageGroup } from '../quota-groups';
 import {
   buildAccessScope,
   enforceModelAccess,
-  invalidateUserPermissionCache,
+  invalidateGroupAccessCache,
   isModelAllowed,
   isServiceAllowed,
   resolveUserAccessScope,
@@ -21,48 +22,112 @@ import {
 const OPENAI = { name: 'openai', title: 'OpenAI' };
 const ANTHROPIC = { name: 'anthropic', title: 'Anthropic' };
 
-/** Sequelize instances only expose columns via .get(); rows must be shaped that way. */
-function row(values: Record<string, unknown>) {
-  return { get: (key: string) => values[key] };
+function group(values: Partial<AiApiUsageGroup> = {}): AiApiUsageGroup {
+  return {
+    id: 1,
+    name: 'Test group',
+    isDefault: false,
+    quotaMode: 'per_user',
+    rateLimitPerMinute: 60,
+    enabled: false,
+    periodType: 'monthly',
+    timezone: 'UTC',
+    requestLimit: null,
+    totalTokenLimit: null,
+    costLimit: null,
+    currency: 'USD',
+    rejectUnpricedModel: true,
+    missingUsageBehavior: 'use_reserved',
+    contextOverflowBehavior: 'reject',
+    allowedLlmServices: [],
+    allowAllModels: true,
+    allowedModels: [],
+    ...values,
+  };
 }
 
-function mockContext(options: { userId?: number | null; row?: unknown; throws?: boolean; appName?: string } = {}) {
-  const findOne = vi.fn(async () => {
+/** Sequelize models expose columns via .get(); .get() with no argument returns the full record. */
+function row(values: Record<string, unknown>) {
+  return { get: (key?: string) => (key === undefined ? values : values[key]) };
+}
+
+const DEFAULT_GROUP_ROW = row({
+  id: 99,
+  name: 'Default',
+  isDefault: true,
+  allowedLlmServices: [],
+  allowAllModels: true,
+  allowedModels: [],
+});
+
+interface MockOptions {
+  /** Default 1; null simulates an unauthenticated caller. */
+  userId?: number | null;
+  /** The group row attached to the caller's membership; omit = no membership row. */
+  memberGroup?: unknown;
+  /** Membership exists but points at a missing group. */
+  memberWithoutGroup?: boolean;
+  /** Default group row; omit = DEFAULT_GROUP_ROW, null = missing (lazy-create path). */
+  defaultGroup?: unknown;
+  throws?: boolean;
+  appName?: string;
+}
+
+function mockContext(options: MockOptions = {}) {
+  const memberGroup = options.memberGroup ?? null;
+  const memberFindOne = vi.fn(async () => {
     if (options.throws) throw new Error('collection unavailable');
-    return options.row ?? null;
+    if (options.memberWithoutGroup) return row({ group: null });
+    if (!memberGroup) return null;
+    return row({ group: memberGroup });
   });
+  const hasDefault = 'defaultGroup' in options;
+  const groupFindOne = vi.fn(async () => {
+    if (options.throws) throw new Error('collection unavailable');
+    return hasDefault ? options.defaultGroup : DEFAULT_GROUP_ROW;
+  });
+  const groupCreate = vi.fn(async ({ values }: { values: Record<string, unknown> }) =>
+    row({ id: 99, isDefault: true, allowedLlmServices: [], allowAllModels: true, allowedModels: [], ...values }),
+  );
   const ctx = {
     state: { currentUser: options.userId === null ? undefined : { id: options.userId ?? 1 } },
-    db: { getRepository: () => ({ findOne }) },
+    db: {
+      getRepository: (name: string) =>
+        name === 'aiApiGroupMembers' ? { findOne: memberFindOne } : { findOne: groupFindOne, create: groupCreate },
+    },
     app: { name: options.appName ?? 'main' },
     log: { warn: vi.fn(), error: vi.fn() },
     status: 200,
     body: undefined,
   } as unknown as Context;
-  return { ctx, findOne };
+  return {
+    ctx,
+    memberFindOne,
+    groupFindOne,
+    groupCreate,
+  };
 }
 
 beforeEach(() => {
-  invalidateUserPermissionCache();
+  invalidateGroupAccessCache();
 });
 
 describe('buildAccessScope', () => {
-  it('treats a missing row as "no user-level narrowing"', () => {
-    const scope = buildAccessScope(null);
-    expect(scope.hasUserRecord).toBe(false);
-    expect(scope.denyAll).toBe(false);
-    expect(scope.allowedServices).toBeNull();
-  });
-
-  it('marks a disabled row as deny-all', () => {
-    const scope = buildAccessScope(row({ enabled: false, allowedLlmServices: ['openai'] }));
-    expect(scope.denyAll).toBe(true);
+  it('treats empty group lists as no narrowing', () => {
+    const scope = buildAccessScope(group());
     expect(scope.allowedServices).toEqual([]);
+    expect(scope.allowAllModels).toBe(true);
+    expect(scope.allowedModels.size).toBe(0);
+    expect(scope.lookupFailed).toBe(false);
   });
 
-  it('reads columns through .get() rather than plain property access', () => {
+  it('carries the group id for cache keying', () => {
+    expect(buildAccessScope(group({ id: 7 })).groupId).toBe(7);
+  });
+
+  it('narrows services and models from the group settings', () => {
     const scope = buildAccessScope(
-      row({ allowedLlmServices: ['openai'], allowAllModels: false, allowedModels: ['openai/gpt-4o'] }),
+      group({ allowedLlmServices: ['openai'], allowAllModels: false, allowedModels: ['openai/gpt-4o'] }),
     );
     expect(scope.allowedServices).toEqual(['openai']);
     expect(scope.allowAllModels).toBe(false);
@@ -70,12 +135,15 @@ describe('buildAccessScope', () => {
   });
 
   it('defaults allowAllModels to true when the column is unset', () => {
-    expect(buildAccessScope(row({ allowedLlmServices: [] })).allowAllModels).toBe(true);
+    expect(buildAccessScope(group({ allowAllModels: undefined })).allowAllModels).toBe(true);
   });
 
   it('discards non-string entries in the json arrays', () => {
     const scope = buildAccessScope(
-      row({ allowedLlmServices: ['openai', null, 42, ''], allowedModels: [{}, 'openai/gpt-4o'] }),
+      group({
+        allowedLlmServices: ['openai', null, 42, ''] as unknown as string[],
+        allowedModels: [{}, 'openai/gpt-4o'] as unknown as string[],
+      }),
     );
     expect(scope.allowedServices).toEqual(['openai']);
     expect([...scope.allowedModels]).toEqual(['openai/gpt-4o']);
@@ -83,174 +151,185 @@ describe('buildAccessScope', () => {
 });
 
 describe('isServiceAllowed', () => {
-  const noRecord = buildAccessScope(null);
+  const open = buildAccessScope(group());
 
-  it('leaves behaviour unchanged for a user with no record', () => {
-    expect(isServiceAllowed(noRecord, ['openai'], OPENAI)).toBe(true);
-    expect(isServiceAllowed(noRecord, ['openai'], ANTHROPIC)).toBe(false);
-    expect(isServiceAllowed(noRecord, [], ANTHROPIC)).toBe(true);
-  });
-
-  it('denies everything when the record is disabled', () => {
-    const scope = buildAccessScope(row({ enabled: false, allowedLlmServices: ['openai'] }));
-    expect(isServiceAllowed(scope, ['openai'], OPENAI)).toBe(false);
-  });
-
-  it('denies everything when the service list is empty', () => {
-    const scope = buildAccessScope(row({ allowedLlmServices: [] }));
-    expect(isServiceAllowed(scope, ['openai'], OPENAI)).toBe(false);
-    expect(isServiceAllowed(scope, [], OPENAI)).toBe(false);
+  it('an open group inherits the global whitelist', () => {
+    expect(isServiceAllowed(open, ['openai'], OPENAI)).toBe(true);
+    expect(isServiceAllowed(open, ['openai'], ANTHROPIC)).toBe(false);
+    expect(isServiceAllowed(open, [], ANTHROPIC)).toBe(true);
   });
 
   it('never widens the global whitelist (strict subset)', () => {
-    const scope = buildAccessScope(row({ allowedLlmServices: ['openai', 'anthropic'] }));
+    const scope = buildAccessScope(group({ allowedLlmServices: ['openai', 'anthropic'] }));
     expect(isServiceAllowed(scope, ['openai'], OPENAI)).toBe(true);
-    // Granted to the user, but absent from the global whitelist → still denied.
+    // Granted to the group, but absent from the global whitelist → still denied.
     expect(isServiceAllowed(scope, ['openai'], ANTHROPIC)).toBe(false);
   });
 
-  it('matches a service by title as well as by name', () => {
-    const byTitle = buildAccessScope(row({ allowedLlmServices: ['OpenAI'] }));
-    expect(isServiceAllowed(byTitle, ['OpenAI'], OPENAI)).toBe(true);
-    expect(isServiceAllowed(byTitle, [], OPENAI)).toBe(true);
-    expect(isServiceAllowed(byTitle, [], ANTHROPIC)).toBe(false);
-  });
-
   it('narrows within an empty global whitelist', () => {
-    const scope = buildAccessScope(row({ allowedLlmServices: ['openai'] }));
+    const scope = buildAccessScope(group({ allowedLlmServices: ['openai'] }));
     expect(isServiceAllowed(scope, [], OPENAI)).toBe(true);
     expect(isServiceAllowed(scope, [], ANTHROPIC)).toBe(false);
   });
 
+  it('matches a service by title as well as by name', () => {
+    const scope = buildAccessScope(group({ allowedLlmServices: ['OpenAI'] }));
+    expect(isServiceAllowed(scope, [], OPENAI)).toBe(true);
+    expect(isServiceAllowed(scope, [], ANTHROPIC)).toBe(false);
+  });
+
+  it('denies everything when the lookup failed', () => {
+    const failed = { ...open, lookupFailed: true };
+    expect(isServiceAllowed(failed, [], OPENAI)).toBe(false);
+    expect(isServiceAllowed(failed, ['openai'], OPENAI)).toBe(false);
+  });
+
   it('tolerates a null or malformed global whitelist', () => {
-    expect(isServiceAllowed(noRecord, null, OPENAI)).toBe(true);
-    expect(isServiceAllowed(noRecord, 'openai', OPENAI)).toBe(true);
+    expect(isServiceAllowed(open, null, OPENAI)).toBe(true);
+    expect(isServiceAllowed(open, 'openai', OPENAI)).toBe(true);
   });
 });
 
 describe('isModelAllowed', () => {
-  it('allows every model when the user has no record', () => {
-    expect(isModelAllowed(buildAccessScope(null), 'openai/gpt-4o')).toBe(true);
-  });
-
-  it('allows every model of the granted services when allowAllModels is true', () => {
-    const scope = buildAccessScope(row({ allowedLlmServices: ['openai'], allowAllModels: true }));
-    expect(isModelAllowed(scope, 'openai/anything')).toBe(true);
+  it('allows every model when the group allows all', () => {
+    expect(isModelAllowed(buildAccessScope(group()), 'openai/gpt-4o')).toBe(true);
   });
 
   it('restricts to the listed models when allowAllModels is false', () => {
-    const scope = buildAccessScope(
-      row({ allowedLlmServices: ['openai'], allowAllModels: false, allowedModels: ['openai/gpt-4o'] }),
-    );
+    const scope = buildAccessScope(group({ allowAllModels: false, allowedModels: ['openai/gpt-4o'] }));
     expect(isModelAllowed(scope, 'openai/gpt-4o')).toBe(true);
     expect(isModelAllowed(scope, 'openai/gpt-4o-mini')).toBe(false);
   });
 
-  it('denies every model when the record is disabled', () => {
-    const scope = buildAccessScope(row({ enabled: false, allowAllModels: true }));
-    expect(isModelAllowed(scope, 'openai/gpt-4o')).toBe(false);
+  it('denies every model when the lookup failed', () => {
+    const failed = { ...buildAccessScope(group()), lookupFailed: true };
+    expect(isModelAllowed(failed, 'openai/gpt-4o')).toBe(false);
   });
 });
 
 describe('resolveUserAccessScope', () => {
-  it('returns the no-record scope for an unauthenticated context', async () => {
-    const { ctx, findOne } = mockContext({ userId: null });
-    expect((await resolveUserAccessScope(ctx)).hasUserRecord).toBe(false);
-    expect(findOne).not.toHaveBeenCalled();
+  it('resolves the default group for an unauthenticated caller without a membership lookup', async () => {
+    const { ctx, memberFindOne, groupFindOne } = mockContext({ userId: null });
+    const scope = await resolveUserAccessScope(ctx);
+    expect(scope.allowedServices).toEqual([]);
+    expect(scope.allowAllModels).toBe(true);
+    expect(memberFindOne).not.toHaveBeenCalled();
+    expect(groupFindOne).toHaveBeenCalledTimes(1);
   });
 
-  it('caches the scope per user instead of querying on every request', async () => {
-    const { ctx, findOne } = mockContext({ row: row({ allowedLlmServices: ['openai'] }) });
-    await resolveUserAccessScope(ctx);
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(1);
+  it('lazily creates the default group when it is missing', async () => {
+    const { ctx, groupCreate } = mockContext({ userId: null, defaultGroup: null });
+    const scope = await resolveUserAccessScope(ctx);
+    expect(groupCreate).toHaveBeenCalledTimes(1);
+    expect(scope.allowAllModels).toBe(true);
   });
 
-  it('re-queries after the cache is invalidated for that user', async () => {
-    const { ctx, findOne } = mockContext({ userId: 7, row: row({ allowedLlmServices: ['openai'] }) });
-    await resolveUserAccessScope(ctx);
-    invalidateUserPermissionCache(7);
-    await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(2);
+  it('narrows the scope by the membership group', async () => {
+    const { ctx } = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    const scope = await resolveUserAccessScope(ctx);
+    expect(scope.groupId).toBe(5);
+    expect(scope.allowedServices).toEqual(['openai']);
   });
 
-  it('keeps other users cached when one user is invalidated', async () => {
-    const first = mockContext({ userId: 1, row: row({ allowedLlmServices: ['openai'] }) });
-    const second = mockContext({ userId: 2, row: row({ allowedLlmServices: ['openai'] }) });
-    await resolveUserAccessScope(first.ctx);
-    await resolveUserAccessScope(second.ctx);
-    invalidateUserPermissionCache(2);
-    await resolveUserAccessScope(first.ctx);
-    expect(first.findOne).toHaveBeenCalledTimes(1);
+  it('falls back to the default group when the membership points at a missing group', async () => {
+    const { ctx, groupFindOne } = mockContext({ memberWithoutGroup: true });
+    const scope = await resolveUserAccessScope(ctx);
+    expect(scope.allowedServices).toEqual([]);
+    expect(groupFindOne).toHaveBeenCalledTimes(1);
   });
 
-  it('fails closed when the collection is unavailable', async () => {
+  it('keeps serving the cached scope when the group row changes within the TTL', async () => {
+    const first = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    expect((await resolveUserAccessScope(first.ctx)).allowedServices).toEqual(['openai']);
+
+    // The next request resolves membership live, but the scope for group 5 is still cached.
+    const second = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['anthropic'] })) });
+    expect((await resolveUserAccessScope(second.ctx)).allowedServices).toEqual(['openai']);
+    expect(second.memberFindOne).toHaveBeenCalledTimes(1);
+
+    invalidateGroupAccessCache(5);
+    const third = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['anthropic'] })) });
+    expect((await resolveUserAccessScope(third.ctx)).allowedServices).toEqual(['anthropic']);
+  });
+
+  it('needs no invalidation when a user moves to another group', async () => {
+    const first = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    expect((await resolveUserAccessScope(first.ctx)).allowedServices).toEqual(['openai']);
+
+    // The next request resolves the new membership live, so no cache invalidation is needed.
+    const second = mockContext({ memberGroup: row(group({ id: 6, allowedLlmServices: ['anthropic'] })) });
+    expect((await resolveUserAccessScope(second.ctx)).allowedServices).toEqual(['anthropic']);
+  });
+
+  it('shares one cache entry between members of the same group', async () => {
+    const first = mockContext({ userId: 1, memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    const second = mockContext({ userId: 2, memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    const a = await resolveUserAccessScope(first.ctx);
+    const b = await resolveUserAccessScope(second.ctx);
+    expect(b).toBe(a);
+  });
+
+  it('fails closed when the membership lookup is unavailable', async () => {
     const { ctx } = mockContext({ throws: true });
     const scope = await resolveUserAccessScope(ctx);
-    // Treating a failed lookup as "no record" would silently lift every user's restrictions
-    // during a rolling upgrade where the table does not exist yet.
+    // Treating a failed lookup as "open" would silently lift every user's restrictions
+    // during a rolling upgrade where the tables do not exist yet.
     expect(scope.lookupFailed).toBe(true);
-    expect(scope.denyAll).toBe(true);
     expect(ctx.log.error).toHaveBeenCalled();
-  });
-
-  it('denies every service and model when the lookup failed', async () => {
-    const { ctx } = mockContext({ throws: true });
-    const scope = await resolveUserAccessScope(ctx);
     expect(isServiceAllowed(scope, [], OPENAI)).toBe(false);
     expect(isModelAllowed(scope, 'openai/gpt-4o')).toBe(false);
   });
 
   it('does not cache a failed lookup', async () => {
-    const { ctx, findOne } = mockContext({ throws: true });
+    const { ctx, memberFindOne } = mockContext({ throws: true });
     await resolveUserAccessScope(ctx);
     await resolveUserAccessScope(ctx);
-    expect(findOne).toHaveBeenCalledTimes(2);
+    expect(memberFindOne).toHaveBeenCalledTimes(2);
   });
 
-  it('does not share a cache entry between apps with the same user id', async () => {
-    const main = mockContext({ userId: 1, appName: 'main', row: row({ allowedLlmServices: ['openai'] }) });
-    const sub = mockContext({ userId: 1, appName: 'sub', row: row({ allowedLlmServices: ['anthropic'] }) });
-    await resolveUserAccessScope(main.ctx);
-    const subScope = await resolveUserAccessScope(sub.ctx);
-    // Sub-apps share this process but have separate databases, so user 1 in "sub" is a
-    // different person than user 1 in "main" and must not inherit their grant.
-    expect(sub.findOne).toHaveBeenCalledTimes(1);
-    expect(subScope.allowedServices).toEqual(['anthropic']);
+  it('does not share a cache entry between apps with the same group id', async () => {
+    const main = mockContext({ appName: 'main', memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    const sub = mockContext({ appName: 'sub', memberGroup: row(group({ id: 5, allowedLlmServices: ['anthropic'] })) });
+    expect((await resolveUserAccessScope(main.ctx)).allowedServices).toEqual(['openai']);
+    // Sub-apps share this process but have separate databases, so group 5 in "sub" is a
+    // different group than group 5 in "main" and must not inherit its cached scope.
+    expect((await resolveUserAccessScope(sub.ctx)).allowedServices).toEqual(['anthropic']);
+    expect(sub.memberFindOne).toHaveBeenCalledTimes(1);
   });
 
-  it('invalidates a user across every app', async () => {
-    const main = mockContext({ userId: 1, appName: 'main', row: row({ allowedLlmServices: ['openai'] }) });
-    const sub = mockContext({ userId: 1, appName: 'sub', row: row({ allowedLlmServices: ['openai'] }) });
-    await resolveUserAccessScope(main.ctx);
-    await resolveUserAccessScope(sub.ctx);
-    invalidateUserPermissionCache(1);
-    await resolveUserAccessScope(main.ctx);
-    await resolveUserAccessScope(sub.ctx);
-    expect(main.findOne).toHaveBeenCalledTimes(2);
-    expect(sub.findOne).toHaveBeenCalledTimes(2);
+  it('invalidates a group across every app', async () => {
+    const main = mockContext({ appName: 'main', memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    const sub = mockContext({ appName: 'sub', memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
+    const mainBefore = await resolveUserAccessScope(main.ctx);
+    const subBefore = await resolveUserAccessScope(sub.ctx);
+
+    invalidateGroupAccessCache(5);
+
+    expect(await resolveUserAccessScope(main.ctx)).not.toBe(mainBefore);
+    expect(await resolveUserAccessScope(sub.ctx)).not.toBe(subBefore);
   });
 
-  it('does not invalidate a user whose id is a suffix of another', async () => {
-    const first = mockContext({ userId: 1, row: row({ allowedLlmServices: ['openai'] }) });
-    const second = mockContext({ userId: 21, row: row({ allowedLlmServices: ['openai'] }) });
+  it('does not invalidate a group whose id is a suffix of another', async () => {
+    const first = mockContext({ userId: 1, memberGroup: row(group({ id: 1, allowedLlmServices: ['openai'] })) });
+    const second = mockContext({ userId: 2, memberGroup: row(group({ id: 21, allowedLlmServices: ['openai'] })) });
+    const secondBefore = await resolveUserAccessScope(second.ctx);
     await resolveUserAccessScope(first.ctx);
-    await resolveUserAccessScope(second.ctx);
-    invalidateUserPermissionCache(1);
-    await resolveUserAccessScope(second.ctx);
-    expect(second.findOne).toHaveBeenCalledTimes(1);
+
+    invalidateGroupAccessCache(1);
+
+    expect(await resolveUserAccessScope(second.ctx)).toBe(secondBefore);
   });
 });
 
 describe('enforceModelAccess', () => {
   it('passes a permitted service and model through untouched', async () => {
-    const { ctx } = mockContext({ row: row({ allowedLlmServices: ['openai'] }) });
+    const { ctx } = mockContext({});
     expect(await enforceModelAccess(ctx, ['openai'], OPENAI, 'gpt-4o')).toBe(true);
     expect(ctx.status).toBe(200);
   });
 
   it('returns 403 model_not_available for a denied service', async () => {
-    const { ctx } = mockContext({ row: row({ allowedLlmServices: ['openai'] }) });
+    const { ctx } = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['openai'] })) });
     expect(await enforceModelAccess(ctx, ['openai', 'anthropic'], ANTHROPIC, 'claude')).toBe(false);
     expect(ctx.status).toBe(403);
     // `permission_denied` is what every other 403 in this plugin reports; keeping the type
@@ -260,15 +339,17 @@ describe('enforceModelAccess', () => {
 
   it('returns 403 model_not_available for a denied model of a granted service', async () => {
     const { ctx } = mockContext({
-      row: row({ allowedLlmServices: ['openai'], allowAllModels: false, allowedModels: ['openai/gpt-4o'] }),
+      memberGroup: row(
+        group({ id: 5, allowedLlmServices: ['openai'], allowAllModels: false, allowedModels: ['openai/gpt-4o'] }),
+      ),
     });
     expect(await enforceModelAccess(ctx, ['openai'], OPENAI, 'gpt-4o-mini')).toBe(false);
     expect(ctx.status).toBe(403);
     expect(ctx.body).toMatchObject({ error: { code: 'model_not_available', type: 'permission_denied' } });
   });
 
-  it('denies a user-granted service that the global whitelist excludes', async () => {
-    const { ctx } = mockContext({ row: row({ allowedLlmServices: ['anthropic'] }) });
+  it('denies a group-granted service that the global whitelist excludes', async () => {
+    const { ctx } = mockContext({ memberGroup: row(group({ id: 5, allowedLlmServices: ['anthropic'] })) });
     expect(await enforceModelAccess(ctx, ['openai'], ANTHROPIC, 'claude')).toBe(false);
     expect(ctx.status).toBe(403);
   });

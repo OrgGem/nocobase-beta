@@ -9,7 +9,7 @@
 
 import { Application } from '@nocobase/client';
 import { describe, expect, it } from 'vitest';
-import { AI_API_ACL_SNIPPET, AI_API_USER_PERMISSIONS_SNIPPET } from '../../constants';
+import { AI_API_ACL_SNIPPET } from '../../constants';
 import { PluginAiApiClient } from '../plugin';
 
 describe('AI API v1 settings registration', () => {
@@ -29,40 +29,17 @@ describe('AI API v1 settings registration', () => {
       'ai-api.config',
       'ai-api.model-pricing',
       'ai-api.model-metadata',
-      'ai-api.user-permissions',
-      'ai-api.user-quotas',
+      'ai-api.usage-groups',
       'ai-api.usage',
     ]);
-    expect(app.pluginSettingsManager.getAclSnippet('ai-api.user-permissions')).toBe(AI_API_USER_PERMISSIONS_SNIPPET);
-    expect(app.pluginSettingsManager.getRoutePath('ai-api.user-permissions')).toBe(
-      '/admin/settings/ai-api/user-permissions',
-    );
-    expect(app.pluginSettingsManager.getList().map((item) => item.name)).not.toContain('ai-api-user-permissions');
+    for (const child of menu?.children ?? []) {
+      expect(app.pluginSettingsManager.getAclSnippet(child.name), child.name).toBe(AI_API_ACL_SNIPPET);
+    }
   });
 
-  it('requires access to the legacy parent before exposing the user permissions tab', async () => {
+  it('hides the whole settings surface when the snippet is denied', async () => {
     const app = await loadPlugin();
     app.pluginSettingsManager.setAclSnippets([`!${AI_API_ACL_SNIPPET}`]);
-
-    expect(app.pluginSettingsManager.getList()).toEqual([]);
-  });
-
-  it('hides only the user permissions tab when its own snippet is denied', async () => {
-    const app = await loadPlugin();
-    app.pluginSettingsManager.setAclSnippets([`!${AI_API_USER_PERMISSIONS_SNIPPET}`]);
-
-    expect(app.pluginSettingsManager.get('ai-api')?.children?.map((item) => item.name)).toEqual([
-      'ai-api.config',
-      'ai-api.model-pricing',
-      'ai-api.model-metadata',
-      'ai-api.user-quotas',
-      'ai-api.usage',
-    ]);
-  });
-
-  it('hides both settings surfaces when both snippets are denied', async () => {
-    const app = await loadPlugin();
-    app.pluginSettingsManager.setAclSnippets([`!${AI_API_ACL_SNIPPET}`, `!${AI_API_USER_PERMISSIONS_SNIPPET}`]);
 
     expect(app.pluginSettingsManager.getList()).toEqual([]);
   });

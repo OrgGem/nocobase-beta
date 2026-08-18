@@ -12,9 +12,7 @@ export const InstanceManager: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>(() =>
-    api.resource('n8nInstances').list({ pageSize: 100 }),
-  );
+  const { data, loading, refresh } = useRequest<any>(() => api.resource('n8nInstances').list({ pageSize: 100 }));
 
   const instances = data?.data || [];
 
@@ -78,6 +76,12 @@ export const InstanceManager: React.FC = () => {
       render: (v: boolean) => (v ? '✓' : ''),
     },
     {
+      title: t('Collector'),
+      dataIndex: 'collectEnabled',
+      key: 'collectEnabled',
+      render: (v: boolean, record: any) => (v ? `✓ (${record.collectIntervalSeconds || 60}s)` : ''),
+    },
+    {
       title: t('Enabled'),
       dataIndex: 'enabled',
       key: 'enabled',
@@ -123,7 +127,17 @@ export const InstanceManager: React.FC = () => {
         }}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" initialValues={{ environment: 'production', enabled: true }}>
+        <Form
+          form={form}
+          layout="vertical"
+          initialValues={{
+            environment: 'production',
+            enabled: true,
+            collectEnabled: true,
+            collectIntervalSeconds: 60,
+            retentionDays: 7,
+          }}
+        >
           <Form.Item name="name" label={t('Name')} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
@@ -151,10 +165,36 @@ export const InstanceManager: React.FC = () => {
           <Form.Item name="metricsEnabled" label={t('Metrics Enabled')} valuePropName="checked">
             <Switch />
           </Form.Item>
+
+          <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 500 }}>{t('Monitoring Collector')}</div>
+          <Form.Item name="collectEnabled" label={t('Collector Enabled')} valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item name="collectIntervalSeconds" label={t('Collect Interval')}>
+            <Select
+              options={[
+                { label: t('Every 30 seconds'), value: 30 },
+                { label: t('Every 1 minute'), value: 60 },
+                { label: t('Every 2 minutes'), value: 120 },
+                { label: t('Every 5 minutes'), value: 300 },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item name="retentionDays" label={t('Data Retention')}>
+            <Select
+              options={[
+                { label: t('3 days'), value: 3 },
+                { label: t('7 days'), value: 7 },
+                { label: t('14 days'), value: 14 },
+                { label: t('30 days'), value: 30 },
+              ]}
+            />
+          </Form.Item>
+
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />
           </Form.Item>
-          
+
           <div style={{ marginTop: 24, marginBottom: 8, fontWeight: 500 }}>{t('Worker Nodes')}</div>
           <Form.List name="workers">
             {(fields, { add, remove }) => (
@@ -168,11 +208,7 @@ export const InstanceManager: React.FC = () => {
                     >
                       <Input placeholder="Worker Hostname" />
                     </Form.Item>
-                    <Form.Item
-                      {...restField}
-                      name={[name, 'url']}
-                      rules={[{ required: true, message: 'Missing URL' }]}
-                    >
+                    <Form.Item {...restField} name={[name, 'url']} rules={[{ required: true, message: 'Missing URL' }]}>
                       <Input placeholder="http://internal:5678" />
                     </Form.Item>
                     <Popconfirm title="Remove worker?" onConfirm={() => remove(name)}>

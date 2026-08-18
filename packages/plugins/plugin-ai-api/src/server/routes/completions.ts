@@ -23,6 +23,8 @@ import {
   isStreamingRequested,
   writeResponse,
 } from '../utils/streaming';
+import { getProviderRequestParameters, applyProviderRequestParameters, extractFinishReason } from './chat-completions';
+import { getAiApiConfig } from '../utils/request-cache';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
@@ -102,7 +104,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
     }
 
     // ─── Check whitelist (global config ∩ per-user grant) ───
-    const config = await ctx.db.getRepository('aiApiConfig').findOne();
+    const config = await getAiApiConfig(ctx);
     if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) {
       return;
     }
@@ -133,20 +135,8 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
           ? body.prompt.join('\n')
           : String(body.prompt);
 
-    // Inject system prompt from AI Employee if configured
-    const messages: OpenAIMessage[] = [];
-    if (config?.defaultAiEmployee) {
-      const employee = await ctx.db.getRepository('aiEmployees').findOne({
-        filter: { username: config.defaultAiEmployee },
-      });
-      if (employee) {
-        const systemPrompt = employee.about || employee.defaultPrompt || '';
-        if (systemPrompt) {
-          messages.push({ role: 'system', content: systemPrompt });
-        }
-      }
-    }
-    messages.push({ role: 'user', content: prompt });
+    // Direct LLM mode ignores the default AI Employee: its prompt belongs to agent mode only.
+    const messages: OpenAIMessage[] = [{ role: 'user', content: prompt }];
 
     const preparedContext = await prepareDirectLlmContext(ctx, {
       serviceName: service.name,
@@ -169,6 +159,8 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
 
     const completionId = generateCompletionId().replace('chatcmpl-', 'cmpl-');
     const chatModel = provider.createModel();
+    const providerRequestParameters = getProviderRequestParameters(body);
+    applyProviderRequestParameters(chatModel, providerRequestParameters);
     markLlmProviderAttempted(ctx);
 
     if (stream) {
@@ -179,9 +171,17 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
         completionId,
         body.model,
         body.stream_options,
+        providerRequestParameters,
       );
     } else {
-      await handleNonStreamingTextCompletion(ctx, chatModel, langchainMessages, completionId, body.model);
+      await handleNonStreamingTextCompletion(
+        ctx,
+        chatModel,
+        langchainMessages,
+        completionId,
+        body.model,
+        providerRequestParameters,
+      );
     }
   } catch (err) {
     ctx.log.error('AI API completions error:', err);
@@ -208,8 +208,9 @@ async function handleNonStreamingTextCompletion(
   messages: [string, string][],
   completionId: string,
   modelName: string,
+  providerRequestParameters: Record<string, unknown>,
 ) {
-  const result = await chatModel.invoke(messages);
+  const result = await chatModel.invoke(messages, providerRequestParameters);
 
   let text = '';
   if (typeof result.content === 'string') {
@@ -219,10 +220,15 @@ async function handleNonStreamingTextCompletion(
     text = textPart?.text || JSON.stringify(result.content);
   }
 
-  const usage = setAiApiUsageResult(ctx, result.usage_metadata, {
-    gatewayResponseId: completionId,
-    providerRequestId: extractProviderRequestId(result),
-  });
+  const usage = setAiApiUsageResult(
+    ctx,
+    result.usage_metadata,
+    {
+      gatewayResponseId: completionId,
+      providerRequestId: extractProviderRequestId(result),
+    },
+    result.response_metadata,
+  );
 
   ctx.status = 200;
   ctx.body = {
@@ -236,10 +242,17 @@ async function handleNonStreamingTextCompletion(
         text,
         index: 0,
         logprobs: null,
-        finish_reason: 'stop',
+        finish_reason: extractFinishReason(result) ?? 'stop',
       },
     ],
-    usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    usage: usage
+      ? {
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          total_tokens: usage.total_tokens,
+          prompt_tokens_details: { cached_tokens: usage.prompt_cache_tokens ?? null },
+        }
+      : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0, prompt_tokens_details: { cached_tokens: null } },
   };
 }
 
@@ -252,6 +265,7 @@ async function handleStreamingTextCompletion(
   completionId: string,
   modelName: string,
   streamOptions: Record<string, unknown> | undefined,
+  providerRequestParameters: Record<string, unknown> | undefined,
 ) {
   ctx.set({
     'Content-Type': 'text/event-stream',
@@ -263,9 +277,12 @@ async function handleStreamingTextCompletion(
 
   const requestAbort = createRequestAbortController(ctx);
   let usage: Usage | undefined;
+  let usageResponseMetadata: unknown;
   let providerRequestId: string | undefined;
+  let providerFinishReason: string | undefined;
   try {
     const stream = await chatModel.stream(messages, {
+      ...providerRequestParameters,
       stream_options: { ...streamOptions, include_usage: true },
       signal: requestAbort.signal,
     });
@@ -303,8 +320,14 @@ async function handleStreamingTextCompletion(
         );
       }
       if (chunk.usage_metadata) {
-        usage = normalizeUsage(chunk.usage_metadata) ?? usage;
+        const normalized = normalizeUsage(chunk.usage_metadata);
+        if (normalized) {
+          usage = normalized;
+          usageResponseMetadata = chunk.response_metadata;
+        }
       }
+      const chunkFinishReason = extractFinishReason(chunk);
+      if (chunkFinishReason) providerFinishReason = chunkFinishReason;
       providerRequestId = providerRequestId ?? extractProviderRequestId(chunk);
     }
 
@@ -322,7 +345,7 @@ async function handleStreamingTextCompletion(
             text: '',
             index: 0,
             logprobs: null,
-            finish_reason: 'stop',
+            finish_reason: providerFinishReason ?? 'stop',
           },
         ],
         usage: null,
@@ -344,7 +367,7 @@ async function handleStreamingTextCompletion(
     }
 
     await writeResponse(ctx, formatSSEDone());
-    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId }, usageResponseMetadata);
     ctx.state.aiApiStreamResult = { succeeded: true, id: completionId };
   } catch (err) {
     const cancelled = isClientDisconnected(ctx, err);
@@ -360,7 +383,7 @@ async function handleStreamingTextCompletion(
         }),
       );
     }
-    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId });
+    setAiApiUsageResult(ctx, usage, { gatewayResponseId: completionId, providerRequestId }, usageResponseMetadata);
     ctx.state.aiApiStreamResult = {
       succeeded: false,
       id: completionId,

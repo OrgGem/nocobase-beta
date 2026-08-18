@@ -364,7 +364,10 @@ export class PluginClusterManagerServer extends Plugin {
       name: 'clusterManagerHealth',
       actions: healthActions,
     });
+    // Both probes must be reachable without auth: load balancers and the
+    // docker healthcheck call readiness/liveness without a session token.
     this.app.acl.allow('clusterManagerHealth', 'liveness', 'public');
+    this.app.acl.allow('clusterManagerHealth', 'readiness', 'public');
 
     // Package manager (installs apt/npm/python packages across nodes)
     this.app.resourcer.define({

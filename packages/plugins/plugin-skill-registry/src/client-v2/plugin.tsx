@@ -22,6 +22,14 @@ export class PluginSkillRegistryClientV2 extends Plugin<Record<string, never>, A
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'skill-registry',
+      key: 'markdown-skills',
+      title: this.t('Markdown skills'),
+      componentLoader: () => import('./pages/MarkdownSkillsPage'),
+      aclSnippet: SKILL_REGISTRY_SNIPPETS.markdown,
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'skill-registry',
       key: 'sources',
       title: this.t('Sources'),
       componentLoader: () => import('./pages/SourcesPage'),

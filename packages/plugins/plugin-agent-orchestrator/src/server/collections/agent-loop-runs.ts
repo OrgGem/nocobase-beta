@@ -130,7 +130,13 @@ export default defineCollection({
       type: 'string',
       length: 30,
       defaultValue: 'none',
-      comment: 'none, pending, approved, rejected, changes_requested',
+      comment: 'none, pending, decided, expired, approved, rejected, changes_requested',
+    },
+    {
+      name: 'resumeContext',
+      type: 'json',
+      allowNull: true,
+      comment: 'Where an interrupted run must continue: role, username, session, message, reports so far.',
     },
     {
       name: 'approvedBy',

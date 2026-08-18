@@ -1,4 +1,5 @@
 import {
+  getCommonWorkerProcesses,
   isWorkerOnlyMode,
   normalizeWorkerMode,
   resolveWorkerProcessName,
@@ -32,6 +33,14 @@ describe('worker process resolver', () => {
   it('keeps unknown custom process keys stable', () => {
     expect(resolveWorkerProcessName('custom-plugin:process')).toBe('custom-plugin:process');
     expect(workerModeServesProcess('custom-plugin:process', 'custom-plugin:process')).toBe(true);
+  });
+
+  it('registers the agent loop worker so worker stacks can serve it', () => {
+    expect(resolveWorkerProcessName('agent-loop.worker')).toBe('agent-loop:worker');
+    expect(workerModeServesProcess('agent-loop:worker', 'agent-loop:worker')).toBe(true);
+    expect(workerModeServesProcess('agent-loop.worker', 'agent-loop:worker')).toBe(true);
+    expect(workerModeServesProcess('workflow:process', 'agent-loop:worker')).toBe(false);
+    expect(getCommonWorkerProcesses().some((definition) => definition.name === 'agent-loop:worker')).toBe(true);
   });
 
   it('lets explicit APP_ROLE override worker mode for local node classification', () => {

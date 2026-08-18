@@ -64,6 +64,14 @@ export default defineCollection({
       length: 100,
     },
     {
+      // Delegation depth of a sub-agent span: 1 for a sub-agent dispatched from a top-level
+      // conversation, parent depth + 1 below that. Persisted so a resumed child can never reset
+      // its depth, and the harness delegation.maxDepth cap is enforceable across restarts.
+      name: 'depth',
+      type: 'integer',
+      defaultValue: 0,
+    },
+    {
       name: 'source',
       type: 'string',
       length: 100,

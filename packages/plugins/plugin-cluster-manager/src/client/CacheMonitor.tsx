@@ -63,7 +63,7 @@ export function CacheMonitor() {
       dataIndex: 'isDefault',
       key: 'isDefault',
       width: 100,
-      render: (v: boolean) => (v ? <Tag color="green">Yes</Tag> : '-'),
+      render: (v: boolean) => (v ? <Tag color="green">{t('Yes')}</Tag> : '-'),
     },
   ];
 

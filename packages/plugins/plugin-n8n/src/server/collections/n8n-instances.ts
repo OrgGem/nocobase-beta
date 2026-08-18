@@ -16,5 +16,19 @@ export default {
     { name: 'createdAt', type: 'date' },
     { name: 'updatedAt', type: 'date' },
     { name: 'workers', type: 'json' },
+    // Collector settings
+    { name: 'collectEnabled', type: 'boolean', defaultValue: true },
+    { name: 'collectIntervalSeconds', type: 'integer', defaultValue: 60 },
+    { name: 'retentionDays', type: 'integer', defaultValue: 7 },
+    // Collector state
+    { name: 'lastCollectedAt', type: 'date' },
+    { name: 'lastExecSyncAt', type: 'date' },
+    { name: 'lastWorkflowSyncAt', type: 'date' },
+    { name: 'lastHealthStatus', type: 'string', length: 20 },
+    { name: 'lastHealthLatency', type: 'float' },
+    { name: 'totalWorkflows', type: 'integer', defaultValue: 0 },
+    { name: 'activeWorkflows', type: 'integer', defaultValue: 0 },
+    { name: 'workerStatus', type: 'json' },
+    { name: 'lastWorkerCheckAt', type: 'date' },
   ],
 } as CollectionOptions;

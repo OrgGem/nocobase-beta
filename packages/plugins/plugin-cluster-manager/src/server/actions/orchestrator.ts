@@ -24,8 +24,8 @@ function getAdapter(ctx: Context): IOrchestratorAdapter {
   return plugin.orchestrator;
 }
 
-/** Helper: check if this node is the leader */
-function assertLeader(ctx: Context) {
+/** Helper: check if this node is the leader (fresh Redis check for fencing) */
+async function assertLeader(ctx: Context) {
   const plugin = ctx.app.pm.get('plugin-cluster-manager') as any;
   if (!plugin?.leaderElection) {
     ctx.throw(503, 'Orchestrator leader election is not initialized.');
@@ -33,6 +33,12 @@ function assertLeader(ctx: Context) {
   if (!plugin.leaderElection.isLeader) {
     const reason = plugin.leaderElection.disabledReason;
     ctx.throw(409, reason || 'This node is not the orchestrator leader. The leader handles write operations.');
+  }
+  // Re-check against Redis: the in-memory flag can be stale if this node was
+  // paused past the lock TTL and another node took over.
+  const verified = await plugin.leaderElection.verifyLeadership();
+  if (!verified) {
+    ctx.throw(409, 'Leadership was lost during the request. The leader handles write operations.');
   }
 }
 
@@ -180,7 +186,7 @@ export const orchestratorActions = {
    * Queue mappings remain as a fallback for legacy stacks.
    */
   async scale(ctx: Context, next: () => Promise<void>) {
-    assertLeader(ctx);
+    await assertLeader(ctx);
     const adapter = getAdapter(ctx);
 
     const { stackId, replicas } = ctx.action.params.values || ctx.action.params;
@@ -251,7 +257,7 @@ export const orchestratorActions = {
    * Leader-only
    */
   async start(ctx: Context, next: () => Promise<void>) {
-    assertLeader(ctx);
+    await assertLeader(ctx);
     const adapter = getAdapter(ctx);
 
     const { stackId, containerId } = ctx.action.params.values || ctx.action.params;
@@ -272,7 +278,7 @@ export const orchestratorActions = {
    * Leader-only
    */
   async stop(ctx: Context, next: () => Promise<void>) {
-    assertLeader(ctx);
+    await assertLeader(ctx);
     const adapter = getAdapter(ctx);
 
     const { stackId, containerId } = ctx.action.params.values || ctx.action.params;
@@ -293,7 +299,7 @@ export const orchestratorActions = {
    * Leader-only
    */
   async remove(ctx: Context, next: () => Promise<void>) {
-    assertLeader(ctx);
+    await assertLeader(ctx);
     const adapter = getAdapter(ctx);
 
     const { stackId, containerId } = ctx.action.params.values || ctx.action.params;

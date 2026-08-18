@@ -4,6 +4,11 @@ import { HarnessProfileService } from '../services/HarnessProfileService';
 
 type Row = Record<string, unknown>;
 
+function readField(record: unknown, key: string) {
+  const model = record as { get?: (name: string) => unknown; [key: string]: unknown };
+  return typeof model?.get === 'function' ? model.get(key) : model?.[key];
+}
+
 function matches(row: Row, filter: Row) {
   return Object.entries(filter).every(([key, value]) => row[key] === value);
 }
@@ -112,5 +117,51 @@ describe('HarnessProfileService', () => {
     expect(service.validate({ limits: { timeoutMs: -1 } }).success).toBe(false);
     await expect(service.createDraft({ profileId: 1, settings: { limits: { timeoutMs: -1 } } })).rejects.toThrow();
     expect(versions.rows).toHaveLength(0);
+  });
+
+  it('saveDraft keeps a single open draft and starts a new version after publish', async () => {
+    const { versions, service } = createService();
+
+    const first = await service.saveDraft({ profileId: 1, settings: { memory: { maxChars: 1000 } } });
+    expect(first).toMatchObject({ version: 1, status: 'draft' });
+
+    // The open draft is updated in place instead of accumulating another draft row.
+    const updated = await service.saveDraft({ profileId: 1, settings: { memory: { maxChars: 2000 } } });
+    expect(updated.id).toBe(first.id);
+    expect(updated.settings.memory.maxChars).toBe(2000);
+    expect(versions.rows).toHaveLength(1);
+
+    await service.publish(first.id, 9);
+    const next = await service.saveDraft({ profileId: 1, settings: { memory: { maxChars: 3000 } } });
+    expect(next).toMatchObject({ version: 2, status: 'draft' });
+    expect(versions.rows).toHaveLength(2);
+  });
+
+  it('createProfile publishes the first version atomically with the profile row', async () => {
+    const { profiles, service } = createService();
+
+    const { profile, version } = await service.createProfile({
+      tag: 'strict',
+      title: 'Strict policy',
+      settings: { memory: { scopes: ['public'] } },
+      publishedById: 9,
+    });
+
+    expect(readField(profile, 'tag')).toBe('strict');
+    expect(version).toMatchObject({ version: 1, status: 'published', publishedById: 9 });
+    const row = profiles.rows.find((item) => item.tag === 'strict');
+    expect(row?.currentVersionId).toBe(version.id);
+
+    // The published version is resolvable by tag immediately after create.
+    const published = await service.getPublishedByTag('strict');
+    expect(published?.version).toBe(1);
+    expect(published?.settings.memory.scopes).toEqual(['public']);
+  });
+
+  it('rejects createProfile when settings fail validation', async () => {
+    const { profiles, service } = createService();
+
+    await expect(service.createProfile({ tag: 'broken', settings: { limits: { timeoutMs: -1 } } })).rejects.toThrow();
+    expect(profiles.rows.find((item) => item.tag === 'broken')).toBeUndefined();
   });
 });

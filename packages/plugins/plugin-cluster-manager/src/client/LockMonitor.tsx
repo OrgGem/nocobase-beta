@@ -1,10 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Table, Tag, Button, Space, Row, Col, Statistic, Select, Spin, Popconfirm, message } from 'antd';
-import {
-  ReloadOutlined,
-  LockOutlined,
-  UnlockOutlined,
-} from '@ant-design/icons';
+import { Card, Table, Tag, Button, Space, Row, Col, Statistic, Select, Spin, Popconfirm, Tooltip, message } from 'antd';
+import { ReloadOutlined, LockOutlined, UnlockOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from './utils';
 
@@ -81,19 +77,26 @@ export function LockMonitor() {
       title: t('Actions'),
       key: 'actions',
       width: 120,
-      render: (_: any, record: any) => (
-        <Popconfirm
-          title={t('Force release this lock?')}
-          description={t('This may cause data inconsistency. Use with caution.')}
-          onConfirm={() => handleRelease(record.key)}
-          okText={t('Release')}
-          cancelText={t('Cancel')}
-        >
-          <Button size="small" danger icon={<UnlockOutlined />}>
-            {t('Release')}
-          </Button>
-        </Popconfirm>
-      ),
+      render: (_: any, record: any) =>
+        record.readOnly ? (
+          <Tooltip title={t('Managed by the agent loop state machine')}>
+            <Button size="small" disabled icon={<LockOutlined />}>
+              {t('Managed')}
+            </Button>
+          </Tooltip>
+        ) : (
+          <Popconfirm
+            title={t('Force release this lock?')}
+            description={t('This may cause data inconsistency. Use with caution.')}
+            onConfirm={() => handleRelease(record.key)}
+            okText={t('Release')}
+            cancelText={t('Cancel')}
+          >
+            <Button size="small" danger icon={<UnlockOutlined />}>
+              {t('Release')}
+            </Button>
+          </Popconfirm>
+        ),
     },
   ];
 
@@ -101,7 +104,9 @@ export function LockMonitor() {
     <Spin spinning={loading}>
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
         <Space>
-          <Button icon={<ReloadOutlined />} onClick={fetchData}>{t('Refresh')}</Button>
+          <Button icon={<ReloadOutlined />} onClick={fetchData}>
+            {t('Refresh')}
+          </Button>
           <Select
             placeholder={t('Auto Refresh')}
             allowClear
@@ -109,15 +114,15 @@ export function LockMonitor() {
             onChange={setAutoRefresh}
             style={{ width: 140 }}
             options={[
-              { value: 5, label: '5s' },
-              { value: 10, label: '10s' },
-              { value: 30, label: '30s' },
+              { value: 5, label: t('5s') },
+              { value: 10, label: t('10s') },
+              { value: 30, label: t('30s') },
             ]}
           />
         </Space>
 
         <Row gutter={16}>
-          <Col span={8}>
+          <Col span={6}>
             <Card size="small">
               <Statistic
                 title={t('Adapter Type')}
@@ -127,7 +132,7 @@ export function LockMonitor() {
               />
             </Card>
           </Col>
-          <Col span={8}>
+          <Col span={6}>
             <Card size="small">
               <Statistic
                 title={t('Active Locks')}
@@ -137,29 +142,28 @@ export function LockMonitor() {
               />
             </Card>
           </Col>
-          <Col span={8}>
+          <Col span={6}>
             <Card size="small">
               <Statistic
-                title={t('Total Listed')}
-                value={locks.length}
+                title={t('Path Locks')}
+                value={info?.pathLocks ?? 0}
+                prefix={<LockOutlined />}
+                valueStyle={{ color: (info?.pathLocks || 0) > 0 ? '#722ed1' : '#3f8600' }}
               />
+            </Card>
+          </Col>
+          <Col span={6}>
+            <Card size="small">
+              <Statistic title={t('Total Listed')} value={locks.length} />
             </Card>
           </Col>
         </Row>
 
         <Card title={t('Active Locks')} size="small">
           {locks.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: 24, color: '#999' }}>
-              {t('No active locks')}
-            </div>
+            <div style={{ textAlign: 'center', padding: 24, color: '#999' }}>{t('No active locks')}</div>
           ) : (
-            <Table
-              dataSource={locks}
-              columns={columns}
-              rowKey="key"
-              size="small"
-              pagination={{ pageSize: 20 }}
-            />
+            <Table dataSource={locks} columns={columns} rowKey="key" size="small" pagination={{ pageSize: 20 }} />
           )}
         </Card>
       </Space>

@@ -10,6 +10,7 @@ describe('AI API usage monitor summary', () => {
       inputTokens: '100',
       outputTokens: '25',
       totalTokens: '125',
+      promptCacheTokens: '40',
     });
     const findAll = vi.fn().mockResolvedValue([
       { currency: 'USD', totalCost: '0.12500000' },
@@ -53,6 +54,7 @@ describe('AI API usage monitor summary', () => {
       inputTokens: 100,
       outputTokens: 25,
       totalTokens: 125,
+      promptCacheTokens: 40,
       costsByCurrency: [
         { currency: 'USD', totalCost: '0.12500000' },
         { currency: 'EUR', totalCost: '0.05000000' },

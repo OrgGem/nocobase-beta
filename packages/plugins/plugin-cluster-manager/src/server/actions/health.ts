@@ -37,7 +37,7 @@ export const healthActions = {
     checks.cache = await runCheck(async () => {
       const expected = randomUUID();
       await ctx.app.cache.set(probeKey, expected, 10_000);
-      const actual = await ctx.app.cache.get<string>(probeKey);
+      const actual = await ctx.app.cache.get(probeKey);
       await ctx.app.cache.del(probeKey);
       if (actual !== expected) throw new Error('Shared cache read-after-write check failed');
     });
@@ -79,14 +79,24 @@ export const healthActions = {
       .map(([name]) => name);
     const ready = failed.length === 0 && !ctx.app.maintainingMessage;
     if (!ready) ctx.status = 503;
+
+    // This endpoint is public (load balancers and docker healthchecks call it
+    // without a session). Raw check errors can expose internal topology
+    // (DB host/port, Redis address, auth failures), so detailed results are
+    // only returned to authenticated callers.
+    const includeDetails = Boolean(ctx.state?.currentUser);
     ctx.body = {
       status: ready ? 'ready' : 'not-ready',
-      version: process.env.NOCOBASE_VERSION || process.version,
-      mode: process.env.WORKER_MODE || 'main',
       maintaining: ctx.app.maintainingMessage || null,
       failed,
-      checks,
       timestamp: new Date().toISOString(),
+      ...(includeDetails
+        ? {
+            version: process.env.NOCOBASE_VERSION || process.version,
+            mode: process.env.WORKER_MODE || 'main',
+            checks,
+          }
+        : {}),
     };
     await next();
   },

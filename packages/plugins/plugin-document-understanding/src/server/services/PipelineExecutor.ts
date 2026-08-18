@@ -3,7 +3,7 @@ import { basename, resolve, sep } from 'path';
 import { Database } from '@nocobase/database';
 import mime from 'mime-types';
 import { ExternalApiClient, FileInput } from './ExternalApiClient';
-import { AsyncJobManager } from './AsyncJobManager';
+import { AsyncJobManager, JOB_RUN_LEASE_MS, pollLeaseMs } from './AsyncJobManager';
 import { PipelineDef, PipelineStepDef, JobState, EndpointDef } from '../types';
 
 interface LoggerLike {
@@ -74,12 +74,20 @@ export class PipelineExecutor {
   private apiClient: ExternalApiClient;
   private jobManager: AsyncJobManager;
   private logger: LoggerLike;
+  private nodeId: string;
 
-  constructor(db: Database, apiClient: ExternalApiClient, jobManager: AsyncJobManager, logger: LoggerLike) {
+  constructor(
+    db: Database,
+    apiClient: ExternalApiClient,
+    jobManager: AsyncJobManager,
+    logger: LoggerLike,
+    nodeId = '',
+  ) {
     this.db = db;
     this.apiClient = apiClient;
     this.jobManager = jobManager;
     this.logger = logger;
+    this.nodeId = nodeId;
   }
 
   private async resolveFile(urlOrPath: string, fieldName = 'file'): Promise<FileInput | null> {
@@ -140,6 +148,8 @@ export class PipelineExecutor {
         externalTaskIds: {},
         startedAt: new Date(),
         createdById: userId,
+        ownedBy: this.nodeId,
+        leaseExpiresAt: new Date(Date.now() + JOB_RUN_LEASE_MS),
       },
     });
 
@@ -239,7 +249,10 @@ export class PipelineExecutor {
     let currentOrder = startFromOrder;
 
     try {
-      await jobsRepo.update({ filterByTk: job.id, values: { status: 'running' } });
+      await jobsRepo.update({
+        filterByTk: job.id,
+        values: { status: 'running', ownedBy: this.nodeId, leaseExpiresAt: new Date(Date.now() + JOB_RUN_LEASE_MS) },
+      });
 
       for (const step of steps) {
         if (step.stepOrder < startFromOrder) continue;
@@ -247,7 +260,10 @@ export class PipelineExecutor {
         context.jobId = job.id;
         currentOrder = step.stepOrder;
 
-        await jobsRepo.update({ filterByTk: job.id, values: { currentStep: currentOrder } });
+        await jobsRepo.update({
+          filterByTk: job.id,
+          values: { currentStep: currentOrder, leaseExpiresAt: new Date(Date.now() + JOB_RUN_LEASE_MS) },
+        });
 
         if (!this.evaluateCondition(step.condition, context)) {
           continue; // Skip step
@@ -293,7 +309,12 @@ export class PipelineExecutor {
 
               await jobsRepo.update({
                 filterByTk: job.id,
-                values: { status: 'polling', externalTaskIds },
+                values: {
+                  status: 'polling',
+                  externalTaskIds,
+                  // This node keeps polling and refreshes the lease on every tick.
+                  leaseExpiresAt: new Date(Date.now() + pollLeaseMs(step.endpoint.pollInterval)),
+                },
               });
 
               await this.jobManager.startPolling(job.id, step.endpoint, taskId);
@@ -309,7 +330,13 @@ export class PipelineExecutor {
 
               await jobsRepo.update({
                 filterByTk: job.id,
-                values: { status: 'polling', externalTaskIds },
+                values: {
+                  status: 'polling',
+                  externalTaskIds,
+                  // No process actively owns a webhook wait: the callback may arrive
+                  // at any node, so there is no lease to renew.
+                  leaseExpiresAt: null,
+                },
               });
 
               // End execution. Webhook will resume.
@@ -343,39 +370,59 @@ export class PipelineExecutor {
     const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
     const pipelineRepo = this.db.getRepository<any>('doc_understanding_pipelines');
 
-    const job = await jobsRepo.findOne({ filterByTk: jobId });
-    if (!job) throw new Error(`Job ${jobId} not found`);
+    // Atomic claim: webhooks can be delivered more than once and a polling tick can
+    // race with a webhook, so only the first caller that still finds the job in
+    // 'polling' may resume it. The row lock plus status re-check makes the claim
+    // safe across nodes.
+    type ResumeClaim = { job: any; steps: PipelineStepDef[]; stepResults: Record<string, any>; currentStep: number };
+    const resume: ResumeClaim | undefined = await this.db.sequelize.transaction(
+      async (transaction: { LOCK: { UPDATE: string } }): Promise<ResumeClaim | undefined> => {
+        const locked = await jobsRepo.findOne({ filterByTk: jobId, transaction, lock: transaction.LOCK.UPDATE });
+        if (!locked || String(locked.get('status')) !== 'polling') return undefined;
 
-    const pipeline = await pipelineRepo.findOne({
-      filter: { id: job.pipelineId },
-      appends: ['steps', 'steps.endpoint'],
-    });
+        const pipeline = await pipelineRepo.findOne({
+          filter: { id: locked.get('pipelineId') },
+          appends: ['steps', 'steps.endpoint'],
+          transaction,
+        });
+        if (!pipeline) return undefined;
 
-    if (!pipeline) throw new Error(`Pipeline not found for job ${jobId}`);
+        const steps = [...((pipeline as any).steps || [])].sort(
+          (a: PipelineStepDef, b: PipelineStepDef) => a.stepOrder - b.stepOrder,
+        );
+        const currentStep = Number(locked.get('currentStep'));
+        const step = steps.find((s) => s.stepOrder === currentStep);
+        const stepResults = { ...((locked.get('stepResults') as Record<string, any>) || {}) };
+        if (step) {
+          stepResults[step.outputAlias || step.stepOrder.toString()] = asyncResult;
+        }
 
-    const steps = [...(pipeline.steps || [])].sort((a, b) => a.stepOrder - b.stepOrder);
-    const step = steps.find((s) => s.stepOrder === job.currentStep);
+        await jobsRepo.update({
+          filterByTk: jobId,
+          values: {
+            status: 'running',
+            ownedBy: this.nodeId,
+            leaseExpiresAt: new Date(Date.now() + JOB_RUN_LEASE_MS),
+            stepResults,
+          },
+          transaction,
+        });
+        return { job: locked, steps, stepResults, currentStep };
+      },
+    );
 
-    if (step) {
-      job.stepResults = job.stepResults || {};
-      job.stepResults[step.outputAlias || step.stepOrder.toString()] = asyncResult;
-
-      await jobsRepo.update({
-        filterByTk: jobId,
-        values: { stepResults: job.stepResults }, // updating stepResults json
-      });
-    }
+    if (!resume) return;
 
     const context: ExecutionContext = {
-      input: job.input,
+      input: resume.job.get('input'),
       files: [], // Files cannot easily persist across webhook unless stored in bucket. For now assume next steps use only json.
-      stepResults: job.stepResults,
-      jobId: job.id,
+      stepResults: resume.stepResults,
+      jobId: resume.job.id,
     };
 
     // resume from next step
-    this.runSteps(job, steps, context, job.currentStep + 1).catch((err) => {
-      this.logger.error(`Failed executing step ${job.currentStep + 1} for job ${job.id}`, err);
+    this.runSteps(resume.job, resume.steps, context, resume.currentStep + 1).catch((err) => {
+      this.logger.error(`Failed executing step ${resume.currentStep + 1} for job ${resume.job.id}`, err);
     });
   }
 

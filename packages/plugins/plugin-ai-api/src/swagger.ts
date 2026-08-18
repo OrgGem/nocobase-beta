@@ -59,8 +59,8 @@ export default {
         description:
           'Returns the LLM models available to the authenticated caller across registered services. Model IDs are formatted as `serviceName/modelId`.\n\n' +
           "The catalog is user-scoped: it starts from `enabledLlmServices` in the AI API configuration, then narrows to the caller's " +
-          '`aiApiUserPermissions` record when one exists. A user grant can only narrow the global whitelist, never widen it, so two ' +
-          'users may receive different lists from the same request.',
+          'usage group settings (`allowedLlmServices` / `allowedModels`). Group settings can only narrow the global whitelist, never ' +
+          'widen it, so two users may receive different lists from the same request.',
         security: [{ BearerAuth: [] }],
         responses: {
           200: {
@@ -252,17 +252,16 @@ export default {
             enum: ['llm', 'agent'],
             description: 'Default AI mode',
           },
-          defaultAiEmployee: { type: 'string', description: 'Default AI employee name' },
+          defaultAiEmployee: {
+            type: 'string',
+            description: 'Default AI employee name (agent mode only; direct LLM mode ignores it)',
+          },
           defaultLlmService: { type: 'string', description: 'Default LLM service name' },
           enabledLlmServices: {
             type: 'array',
             items: { type: 'string' },
             description:
-              'List of enabled LLM service names. This is the outer bound for every caller; per-user `aiApiUserPermissions` records can only narrow it further.',
-          },
-          rateLimitPerMinute: {
-            type: 'integer',
-            description: 'Max requests per minute per user (0 = unlimited)',
+              'List of enabled LLM service names. This is the outer bound for every caller; usage group settings can only narrow it further.',
           },
           maxRequestBodyMb: {
             type: 'integer',
@@ -272,6 +271,13 @@ export default {
             description:
               'Max request body size in megabytes. Requests above this return 413. ' +
               'The gateway buffers each body in memory, so values above 100 are rejected.',
+          },
+          pdfRenderPagesAsImages: {
+            type: 'boolean',
+            default: false,
+            description:
+              'When true, PDF file/file_url blocks are rendered to per-page PNG images and sent as image_url blocks. ' +
+              'Requires a registered PdfToImageRenderer. When false or no renderer is available, PDFs are forwarded as file blocks.',
           },
         },
       },
@@ -287,10 +293,10 @@ export default {
       ContentBlock: {
         type: 'object',
         description:
-          'A multimodal content block. Only text and image_url blocks are forwarded to the provider; ' +
-          'any other type is rejected with 400 unsupported_content_block.',
+          'A multimodal content block. text, image_url, file and file_url blocks are forwarded; ' +
+          'file and file_url blocks are first run through the configurable file processor service.',
         properties: {
-          type: { type: 'string', enum: ['text', 'image_url'] },
+          type: { type: 'string', enum: ['text', 'image_url', 'file', 'file_url'] },
           text: { type: 'string' },
           image_url: {
             type: 'object',
@@ -301,6 +307,35 @@ export default {
                 example: 'data:image/png;base64,iVBORw0KGgo...',
               },
               detail: { type: 'string', enum: ['auto', 'low', 'high'] },
+            },
+            required: ['url'],
+          },
+          file: {
+            type: 'object',
+            properties: {
+              file_data: {
+                type: 'string',
+                description: 'A base64 data URL, e.g. data:application/pdf;base64,JVBERi0...',
+                example: 'data:application/pdf;base64,JVBERi0...',
+              },
+              filename: { type: 'string' },
+              mime_type: {
+                type: 'string',
+                description: 'MIME type of the file, e.g. application/pdf',
+                example: 'application/pdf',
+              },
+            },
+            required: ['file_data'],
+          },
+          file_url: {
+            type: 'object',
+            properties: {
+              url: {
+                type: 'string',
+                description:
+                  'An http(s) URL pointing to a file. The gateway downloads the file and converts it to a file block.',
+                example: 'https://example.com/document.pdf',
+              },
             },
             required: ['url'],
           },
@@ -366,6 +401,12 @@ export default {
               prompt_tokens: { type: 'integer' },
               completion_tokens: { type: 'integer' },
               total_tokens: { type: 'integer' },
+              prompt_tokens_details: {
+                type: 'object',
+                properties: {
+                  cached_tokens: { type: 'integer' },
+                },
+              },
             },
           },
         },

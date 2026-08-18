@@ -1,13 +1,14 @@
 import Application from '@nocobase/server';
-import { cpSync, existsSync, readFileSync, rmSync } from 'fs';
+import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { resolve, sep } from 'path';
 import { SandboxRunner } from '../../services/SandboxRunner';
 import { FileManager } from '../../services/FileManager';
 import { SkillRepositoryService } from '../../services/SkillRepositoryService';
 import { CodeValidator } from '../../services/CodeValidator';
+import { spilledText } from '../../services/harness-runtime-policy';
 import { createHash } from 'crypto';
 import { assertSkillToolNameAvailable, buildSkillToolName } from '../../utils/skill-tool-name';
-import { parseJsonText, stringifyJsonText } from '../utils/json-fields';
+import { parseJsonLike, parseJsonText, stringifyJsonText } from '../utils/json-fields';
 
 /**
  * Lightweight abort controller compatible with the SandboxRunner signal interface.
@@ -159,6 +160,20 @@ export class SkillExecutionTask {
         }
       }
 
+      // Harness-derived overrides resolved when the execution was queued. They cap (never widen)
+      // the skill's own limits, so a permissive skill cannot outrun a restrictive harness.
+      const runtimePolicy = parseJsonLike(
+        this.execution.get ? this.execution.get('runtimePolicy') : this.execution.runtimePolicy,
+        {},
+      ) as Record<string, unknown>;
+      if (typeof runtimePolicy?.timeoutSeconds === 'number' && runtimePolicy.timeoutSeconds > 0) {
+        timeoutSeconds = Math.min(Number(timeoutSeconds) || 60, runtimePolicy.timeoutSeconds);
+      }
+      const spillMaxInlineBytes =
+        typeof runtimePolicy?.spillMaxInlineBytes === 'number' && runtimePolicy.spillMaxInlineBytes > 0
+          ? runtimePolicy.spillMaxInlineBytes
+          : null;
+
       if (!rawCodeTemplate) {
         throw new Error(
           `Skill "${skillName}" has no codeTemplate. Add a code file, inline codeTemplate, or bind it to an installed plugin skill.`,
@@ -280,6 +295,32 @@ export class SkillExecutionTask {
         status = 'timeout';
       } else {
         status = result.success ? 'succeeded' : 'failed';
+      }
+
+      // Spill oversized stdout: the full text moves to the execution's output directory (served
+      // by the existing download endpoint) and the inline result becomes a head/tail preview, so
+      // one huge output cannot blow up the model's context.
+      if (spillMaxInlineBytes && typeof result.stdout === 'string') {
+        const spillName = 'stdout-full.txt';
+        const spillPath = resolve(this.fileManager.getOutputDir(execId), spillName);
+        const locator = `/api/skillHub:download?execId=${execId}&f=${Buffer.from(spillName).toString('base64url')}`;
+        const replaced = spilledText(result.stdout, spillMaxInlineBytes, locator);
+        if (replaced) {
+          try {
+            writeFileSync(spillPath, result.stdout, 'utf8');
+            result.stdout = replaced;
+            result.files = [
+              ...(result.files || []),
+              { name: spillName, size: statSync(spillPath).size, mimeType: 'text/plain' },
+            ];
+          } catch (spillError) {
+            // Best effort like dsh: a spill failure keeps the original inline output rather
+            // than turning a successful execution into an error.
+            (this as any).app.logger.warn(`[skill-hub] Task ${execId}: stdout spill failed`, {
+              error: spillError,
+            });
+          }
+        }
       }
 
       const completed = await this.updateIfOwned(execId, workerId, {

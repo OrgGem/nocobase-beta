@@ -1,4 +1,6 @@
 import { asObject, toPlain, trimText } from '../utils/ctx-utils';
+import { HarnessProfileService } from './HarnessProfileService';
+import type { HarnessSettings } from './HarnessSchema';
 
 type MemoryScope = 'public' | 'user' | 'agent_user';
 
@@ -49,6 +51,20 @@ function normalizeText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+// Published version settings are stored in the normalized nested shape, but the observer and the
+// memory injection still read the legacy flat keys. Flatten the contract the consumers expect and
+// keep the nested sections alongside them for the harness compiler (nested values win there).
+function flattenPublishedSettings(settings: HarnessSettings): Record<string, unknown> {
+  return {
+    ...settings,
+    nativeObserverEnabled: settings.observability.enabled,
+    memoryInjectionEnabled: settings.memory.enabled,
+    memoryScopes: settings.memory.scopes,
+    maxMemoryContextChars: settings.memory.maxChars,
+    tracingRetentionDays: settings.observability.tracingRetentionDays,
+  };
+}
+
 function formatRecordSection(record: ContextRecord) {
   const content = normalizeText(record.contentMd);
   const graph = normalizeText(record.graphMd);
@@ -75,6 +91,16 @@ export class AgentMemoryContextService {
       normalizeText(employeeSettings.orchestratorHarnessTag) ||
       (await this.resolveConfiguredHarnessTag(task)) ||
       'default';
+
+    // The published version is the revision-controlled source of truth; raw row settings below
+    // only apply to legacy profiles that never went through draft/publish.
+    const published = await this.resolvePublishedSettings(requestedTag);
+    if (published) {
+      return {
+        ...published.settings,
+        harnessTag: published.tag,
+      };
+    }
 
     const profile = await this.findHarnessProfile(requestedTag);
     const fallbackProfile = profile || (requestedTag === 'default' ? null : await this.findHarnessProfile('default'));
@@ -163,6 +189,24 @@ export class AgentMemoryContextService {
       });
     } catch (error) {
       this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to load policy profile', error);
+      return null;
+    }
+  }
+
+  private async resolvePublishedSettings(
+    requestedTag: string,
+  ): Promise<{ tag: string; settings: Record<string, unknown> } | null> {
+    try {
+      const profiles = new HarnessProfileService(this.plugin.db);
+      const direct = await profiles.getPublishedByTag(requestedTag);
+      if (direct) return { tag: requestedTag, settings: flattenPublishedSettings(direct.settings) };
+      if (requestedTag !== 'default') {
+        const fallback = await profiles.getPublishedByTag('default');
+        if (fallback) return { tag: 'default', settings: flattenPublishedSettings(fallback.settings) };
+      }
+      return null;
+    } catch (error) {
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to load published policy profile', error);
       return null;
     }
   }

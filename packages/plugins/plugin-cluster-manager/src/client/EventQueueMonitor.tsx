@@ -83,7 +83,8 @@ export function EventQueueMonitor() {
       dataIndex: 'pending',
       key: 'pending',
       width: 100,
-      render: (v: number | null) => (v === null ? <Tag>N/A</Tag> : <Tag color={v > 0 ? 'orange' : 'green'}>{v}</Tag>),
+      render: (v: number | null) =>
+        v === null ? <Tag>{t('N/A')}</Tag> : <Tag color={v > 0 ? 'orange' : 'green'}>{v}</Tag>,
     },
     { title: t('Concurrency'), dataIndex: 'concurrency', key: 'concurrency', width: 120 },
     {
@@ -113,7 +114,7 @@ export function EventQueueMonitor() {
   ];
 
   const messageColumns = [
-    { title: 'ID', dataIndex: 'id', key: 'id', width: 280, ellipsis: true },
+    { title: t('ID'), dataIndex: 'id', key: 'id', width: 280, ellipsis: true },
     {
       title: t('Content'),
       dataIndex: 'content',
@@ -193,9 +194,9 @@ export function EventQueueMonitor() {
             onChange={setAutoRefresh}
             style={{ width: 140 }}
             options={[
-              { value: 5, label: '5s' },
-              { value: 10, label: '10s' },
-              { value: 30, label: '30s' },
+              { value: 5, label: t('5s') },
+              { value: 10, label: t('10s') },
+              { value: 30, label: t('30s') },
             ]}
           />
           {stats && <Tag color={stats.connected ? 'green' : 'red'}>{stats.adapter}</Tag>}
@@ -232,7 +233,7 @@ export function EventQueueMonitor() {
               <Card size="small">
                 <Statistic
                   title={t('Connected')}
-                  value={stats.connected ? 'Yes' : 'No'}
+                  value={stats.connected ? t('Yes') : t('No')}
                   prefix={<ThunderboltOutlined />}
                   valueStyle={{ color: stats.connected ? '#3f8600' : '#cf1322' }}
                 />
@@ -266,7 +267,7 @@ export function EventQueueMonitor() {
               <Card size="small">
                 <Statistic
                   title={t('Redis Connected')}
-                  value={stats.redisQueues.connected ? 'Yes' : 'No'}
+                  value={stats.redisQueues.connected ? t('Yes') : t('No')}
                   prefix={<ThunderboltOutlined />}
                   valueStyle={{ color: stats.redisQueues.connected ? '#3f8600' : '#cf1322' }}
                 />
@@ -302,7 +303,7 @@ export function EventQueueMonitor() {
             size="small"
             extra={
               <Button size="small" onClick={() => setSelectedChannel(null)}>
-                Close
+                {t('Close')}
               </Button>
             }
           >

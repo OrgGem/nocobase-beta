@@ -11,6 +11,7 @@ import { Context } from '@nocobase/actions';
 import { toOpenAIError, toOpenAIEmbeddingsResponse } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
 import { enforceModelAccess } from '../utils/user-permissions';
+import { getAiApiConfig } from '../utils/request-cache';
 import { setAiApiUsageUnavailable } from '../usage';
 import type PluginAiApiServer from '../plugin';
 
@@ -118,7 +119,7 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
   // still enforced: an explicit deny must never be bypassed by an unreadable config.
   let globalEnabledServices: unknown = [];
   try {
-    const config = await ctx.db.getRepository('aiApiConfig').findOne();
+    const config = await getAiApiConfig(ctx);
     globalEnabledServices = config?.enabledLlmServices ?? [];
   } catch {
     // Config read failure: fail open on the global whitelist only.

@@ -138,7 +138,7 @@ export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose })
     }
   }, [step, selectedRepoId, selectedRef, currentTreePath, loadFolders]);
 
-  // Load skills from selected folder (without prefix â€” prefix is applied only on sync)
+  // Load skills from selected folder (without prefix — prefix is applied only on sync)
   const loadSkills = useCallback(async () => {
     if (!selectedRepoId || selectedRootFolder === null) return;
     setSkillsLoading(true);
@@ -263,7 +263,7 @@ export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose })
     },
   ];
 
-  // Result columns â€” show name with prefix applied
+  // Result columns — show name with prefix applied
   const resultColumns = [
     {
       title: t('Skill'),
@@ -506,7 +506,7 @@ export const GitSkillImport: React.FC<GitSkillImportProps> = ({ open, onClose })
                   {filteredSkills.length} / {skills.length} {t('skills found')}
                   {importPrefix && (
                     <span style={{ marginLeft: 8 }}>
-                      â€¢ {t('Prefix')}: <Tag style={{ margin: 0 }}>{importPrefix}</Tag>{' '}
+                      • {t('Prefix')}: <Tag style={{ margin: 0 }}>{importPrefix}</Tag>{' '}
                       <Text type="secondary" style={{ fontSize: 11 }}>
                         ({t('applied on sync')})
                       </Text>

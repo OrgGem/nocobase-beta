@@ -24,6 +24,7 @@ describe('AI API usage normalization', () => {
       prompt_tokens: 12,
       completion_tokens: 5,
       total_tokens: 17,
+      prompt_cache_tokens: null,
     });
   });
 
@@ -32,6 +33,62 @@ describe('AI API usage normalization', () => {
       prompt_tokens: 0,
       completion_tokens: 0,
       total_tokens: 0,
+      prompt_cache_tokens: null,
+    });
+  });
+
+  it('extracts prompt_cache_tokens when present in various provider formats', () => {
+    expect(
+      normalizeUsage({ prompt_tokens: 10, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 8 } }),
+    ).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+      prompt_cache_tokens: 8,
+    });
+    expect(normalizeUsage({ input_tokens: 20, output_tokens: 10, input_token_details: { cache_read: 15 } })).toEqual({
+      prompt_tokens: 20,
+      completion_tokens: 10,
+      total_tokens: 30,
+      prompt_cache_tokens: 15,
+    });
+  });
+
+  it('is idempotent so streaming double-normalization keeps prompt_cache_tokens', () => {
+    const streamChunkUsage = {
+      input_tokens: 100,
+      output_tokens: 50,
+      total_tokens: 150,
+      input_token_details: { cache_read: 80 },
+    };
+    const firstPass = normalizeUsage(streamChunkUsage);
+    expect(firstPass?.prompt_cache_tokens).toBe(80);
+
+    // Streaming routes normalize the chunk once, then setAiApiUsageResult
+    // normalizes the result again — the extracted value must survive.
+    expect(normalizeUsage(firstPass)).toEqual(firstPass);
+  });
+
+  it('keeps prompt_cache_tokens when setAiApiUsageResult receives pre-normalized usage', () => {
+    const ctx = createContext();
+    const preNormalized = normalizeUsage({
+      input_tokens: 100,
+      output_tokens: 50,
+      total_tokens: 150,
+      input_token_details: { cache_read: 80 },
+    });
+
+    const usage = setAiApiUsageResult(ctx, preNormalized, { gatewayResponseId: 'gateway-stream-id' });
+
+    expect(usage).toEqual({
+      prompt_tokens: 100,
+      completion_tokens: 50,
+      total_tokens: 150,
+      prompt_cache_tokens: 80,
+    });
+    expect(ctx.state.aiApiUsageResult).toMatchObject({
+      source: 'provider',
+      usage: { prompt_cache_tokens: 80 },
     });
   });
 

@@ -14,6 +14,7 @@ describe('Skill Registry client ACL', () => {
       sync: 'pm.skill-registry.sync',
       publish: 'pm.skill-registry.publish',
       install: 'pm.skill-registry.install',
+      markdown: 'pm.skill-registry.markdown',
       manage: 'pm.skill-registry.manage',
     });
   });
@@ -25,6 +26,7 @@ describe('Skill Registry client ACL', () => {
     expect(canUseSkillRegistryCapability(allowSync, 'read')).toBe(false);
     expect(canUseSkillRegistryCapability(allowSync, 'publish')).toBe(false);
     expect(canUseSkillRegistryCapability(allowSync, 'install')).toBe(false);
+    expect(canUseSkillRegistryCapability(allowSync, 'markdown')).toBe(false);
   });
 
   it('treats manage as the server-defined capability superset', () => {
@@ -34,6 +36,7 @@ describe('Skill Registry client ACL', () => {
     expect(canUseSkillRegistryCapability(allowManage, 'sync')).toBe(true);
     expect(canUseSkillRegistryCapability(allowManage, 'publish')).toBe(true);
     expect(canUseSkillRegistryCapability(allowManage, 'install')).toBe(true);
+    expect(canUseSkillRegistryCapability(allowManage, 'markdown')).toBe(true);
     expect(canUseSkillRegistryCapability(allowManage, 'manage')).toBe(true);
   });
 
@@ -45,6 +48,7 @@ describe('Skill Registry client ACL', () => {
       canSync: true,
       canPublish: true,
       canInstall: true,
+      canMarkdown: true,
       canManage: true,
     });
   });
@@ -63,10 +67,13 @@ describe('Skill Registry client ACL', () => {
     expect(app.pluginSettingsManager.get('skill-registry')).toMatchObject({
       aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
     });
-    for (const pageName of ['index', 'sources', 'runs', 'versions', 'guide']) {
+    for (const pageName of ['index', 'sources', 'runs', 'versions', 'settings']) {
       expect(app.pluginSettingsManager.get(`skill-registry.${pageName}`)).toMatchObject({
         aclSnippet: SKILL_REGISTRY_SNIPPETS.read,
       });
     }
+    expect(app.pluginSettingsManager.get('skill-registry.markdown-skills')).toMatchObject({
+      aclSnippet: SKILL_REGISTRY_SNIPPETS.markdown,
+    });
   });
 });

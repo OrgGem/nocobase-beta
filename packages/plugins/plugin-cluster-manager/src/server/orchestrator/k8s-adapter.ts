@@ -134,8 +134,13 @@ export class K8sAdapter implements IOrchestratorAdapter {
       this.assertDeploymentManagedByStack(stack, deployment.body);
       const previousReplicas = deployment.body.spec?.replicas || 0;
 
-      // Update the entire deployment to apply any changes made to the stack config
-      await this.appsApi.replaceNamespacedDeployment(deploymentName, ns, this.buildDeployment(stack, replicas));
+      // Update the entire deployment to apply any changes made to the stack config.
+      // The API server rejects PUT without the current resourceVersion.
+      await this.appsApi.replaceNamespacedDeployment(
+        deploymentName,
+        ns,
+        this.buildDeployment(stack, replicas, deployment.body.metadata?.resourceVersion),
+      );
 
       return {
         previousReplicas,
@@ -265,7 +270,7 @@ export class K8sAdapter implements IOrchestratorAdapter {
     return { ns: defaultNamespace, podName: containerId };
   }
 
-  private buildDeployment(stack: StackConfig, replicas: number): any {
+  private buildDeployment(stack: StackConfig, replicas: number, resourceVersion?: string): any {
     if (!stack.image?.trim()) {
       throw new Error(`Stack "${stack.name}" must define an image before Kubernetes can create a worker deployment`);
     }
@@ -319,6 +324,9 @@ export class K8sAdapter implements IOrchestratorAdapter {
         name: deploymentName,
         namespace,
         labels,
+        // Required by the API server on updates (replaceNamespacedDeployment);
+        // omit for creates.
+        ...(resourceVersion ? { resourceVersion } : {}),
       },
       spec: {
         replicas,

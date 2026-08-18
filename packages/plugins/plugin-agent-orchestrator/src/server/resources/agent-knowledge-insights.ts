@@ -220,9 +220,11 @@ export function registerAgentKnowledgeInsightsResource(plugin: Plugin) {
           sort: ['username'],
           appends: ['roles'],
         });
-        const knowledgeBases = await ctx.db.getRepository('aiKnowledgeBases').find({
-          sort: ['name'],
-        });
+        // plugin-knowledge-base is an optional integration: when it is disabled the collection
+        // is not registered, and the matrix degrades to employees without knowledge bases.
+        const knowledgeBases = ctx.db.hasCollection('aiKnowledgeBases')
+          ? await ctx.db.getRepository('aiKnowledgeBases').find({ sort: ['name'] })
+          : [];
         ctx.body = { data: buildKnowledgeAccessMatrix(employees, knowledgeBases) };
         await next();
       },

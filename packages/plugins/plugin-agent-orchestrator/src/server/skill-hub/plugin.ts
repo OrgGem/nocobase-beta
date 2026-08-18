@@ -13,6 +13,7 @@ import { gitListSkills, gitSyncSkills } from './actions/git-import';
 import { createGitImportRequestMethodPolicy } from './middlewares/git-import-request-method-policy';
 import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fields';
 import { getOrchestratorTraceContext } from '../services/ExecutionSpanService';
+import { harnessTimeoutMs, resolveTraceHarness } from '../services/harness-runtime-policy';
 import { tryGetAIToolsManager } from '../utils/ai-manager';
 import type { ToolsRuntime } from '@nocobase/ai';
 import { SkillAccessService } from '../services/SkillAccessService';
@@ -443,6 +444,40 @@ export class SkillHubSubFeature {
   }
 
   /**
+   * Resolve harness-derived enforcement overrides for one skill execution. The worker node owns
+   * the sandbox but not the harness, so the decision is made here (run snapshot for loop runs,
+   * employee harness-tag profile otherwise) and persisted on the execution row. A resolution
+   * failure must never block execution: the skill falls back to its own defaults.
+   */
+  private async resolveRuntimePolicy(
+    traceContext: ReturnType<typeof getOrchestratorTraceContext>,
+    skill: any,
+    aiEmployeeUsername?: string,
+  ): Promise<{ timeoutSeconds?: number; spillMaxInlineBytes?: number } | null> {
+    try {
+      const harness = await resolveTraceHarness((this as any).db, {
+        agentLoopRunId: traceContext?.agentLoopRunId,
+        employeeUsername: traceContext?.employeeUsername || aiEmployeeUsername,
+      });
+      if (!harness) return null;
+
+      const policy: { timeoutSeconds?: number; spillMaxInlineBytes?: number } = {};
+      const timeoutMs = harnessTimeoutMs(harness, getSkillToolName(skill));
+      if (timeoutMs) {
+        const skillTimeoutSeconds = Number(skill.timeoutSeconds || skill.get?.('timeoutSeconds') || 60);
+        policy.timeoutSeconds = Math.min(skillTimeoutSeconds, Math.ceil(timeoutMs / 1000));
+      }
+      if (harness.context.spill.maxInlineBytes) {
+        policy.spillMaxInlineBytes = harness.context.spill.maxInlineBytes;
+      }
+      return Object.keys(policy).length ? policy : null;
+    } catch (error) {
+      (this as any).app.logger?.warn?.('[skill-hub] Failed to resolve harness runtime policy.', { error });
+      return null;
+    }
+  }
+
+  /**
    * Execute skill — called by both AI tool and REST test endpoint.
    * Dispatches to sandbox workers via PubSub, waits for result via PubSub.
    * Pushes progress to SSE via runtime.writer (if within AI tool context).
@@ -456,7 +491,6 @@ export class SkillHubSubFeature {
   ): Promise<any> {
     validateSkillInput(readRecordValue(skill, 'inputSchema'), inputArgs);
     const aiEmployeeUsername = await this.skillAccessService.assertCanExecute(ctx, skill, options);
-
     // ── Rate limiting ──
     const userId = currentUserId(ctx);
     if (userId) {
@@ -470,6 +504,7 @@ export class SkillHubSubFeature {
     }
 
     const traceContext = getOrchestratorTraceContext(ctx);
+    const runtimePolicy = await this.resolveRuntimePolicy(traceContext, skill, aiEmployeeUsername);
     const execution = await (this as any).db.getRepository('skillExecutions').create({
       values: {
         skillId: skill.id,
@@ -485,6 +520,7 @@ export class SkillHubSubFeature {
         agentLoopRunId: traceContext?.agentLoopRunId,
         agentLoopStepId: traceContext?.agentLoopStepId,
         triggeredById: ctx?.state?.currentUser?.id,
+        runtimePolicy,
       },
     });
 
@@ -532,10 +568,12 @@ export class SkillHubSubFeature {
         rejectPromise = reject;
       });
 
-      const timeoutMs = ((skill.timeoutSeconds || skill.get?.('timeoutSeconds') || 60) + 15) * 1000;
+      const effectiveTimeoutSeconds =
+        runtimePolicy?.timeoutSeconds || skill.timeoutSeconds || skill.get?.('timeoutSeconds') || 60;
+      const timeoutMs = (effectiveTimeoutSeconds + 15) * 1000;
       const timeout = setTimeout(() => {
         clearInterval(poll);
-        rejectPromise(new Error(`Skill execution timeout after ${skill.timeoutSeconds || 60}s`));
+        rejectPromise(new Error(`Skill execution timeout after ${effectiveTimeoutSeconds}s`));
       }, timeoutMs);
       const poll = setInterval(async () => {
         try {

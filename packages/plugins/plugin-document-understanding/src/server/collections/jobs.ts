@@ -19,11 +19,24 @@ export default {
     { type: 'json', name: 'externalTaskIds' },
     { type: 'date', name: 'startedAt' },
     { type: 'date', name: 'completedAt' },
+    // Cluster ownership: which node is executing/polling this job, and until when
+    // its lease is valid. Orphaned jobs (owner restarted or lease expired) are
+    // failed or re-adopted by the maintenance sweep.
+    { type: 'string', name: 'ownedBy', length: 255 },
+    { type: 'date', name: 'leaseExpiresAt' },
     {
       type: 'belongsTo',
       name: 'createdBy',
       target: 'users',
       foreignKey: 'createdById',
+    },
+  ],
+  indexes: [
+    {
+      fields: ['status'],
+    },
+    {
+      fields: ['leaseExpiresAt'],
     },
   ],
 } as CollectionOptions;

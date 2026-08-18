@@ -8,7 +8,7 @@ import {
   FieldTimeOutlined,
 } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import { formatBytes, formatUptime } from './utils';
+import { formatBytes, formatUptime, useT } from './utils';
 
 const { Text } = Typography;
 
@@ -41,6 +41,7 @@ interface RedisInfo {
 
 export function RedisMonitor() {
   const api = useApp().apiClient;
+  const t = useT();
   const [info, setInfo] = useState<RedisInfo | null>(null);
   const [channels, setChannels] = useState<Record<string, number>>({});
   const [totalChannels, setTotalChannels] = useState(0);
@@ -73,15 +74,15 @@ export function RedisMonitor() {
       const slowlogs = Array.isArray(slowlogRes?.data?.data?.data) ? slowlogRes.data.data.data : Array.isArray(slowlogRes?.data?.data) ? slowlogRes.data.data : Array.isArray(slowlogRes?.data) ? slowlogRes.data : [];
       setSlowlog(slowlogs);
     } catch (err: any) {
-      setError(err?.response?.data?.errors?.[0]?.message || 'Failed to connect to Redis');
+      setError(err?.response?.data?.errors?.[0]?.message || t('Failed to connect to Redis'));
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, t]);
 
   useEffect(() => {
     fetchAll();
-  }, []);
+  }, [fetchAll]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -95,7 +96,7 @@ export function RedisMonitor() {
         <Text type="danger">{error}</Text>
         <br />
         <Button style={{ marginTop: 8 }} onClick={fetchAll}>
-          Retry
+          {t('Retry')}
         </Button>
       </Card>
     );
@@ -112,22 +113,24 @@ export function RedisMonitor() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Button icon={<ReloadOutlined />} onClick={fetchAll} loading={loading}>
-          Refresh
+          {t('Refresh')}
         </Button>
         <Select
-          placeholder="Auto refresh"
+          placeholder={t('Auto Refresh')}
           allowClear
           style={{ width: 160 }}
           value={autoRefresh}
           onChange={setAutoRefresh}
           options={[
-            { value: 5, label: 'Every 5s' },
-            { value: 10, label: 'Every 10s' },
-            { value: 30, label: 'Every 30s' },
+            { value: 5, label: t('Every 5s') },
+            { value: 10, label: t('Every 10s') },
+            { value: 30, label: t('Every 30s') },
           ]}
         />
         <Tag color="blue">Redis {info.server.version}</Tag>
-        <Tag>Uptime: {formatUptime(info.server.uptime_seconds)}</Tag>
+        <Tag>
+          {t('Uptime')}: {formatUptime(info.server.uptime_seconds)}
+        </Tag>
       </Space>
 
       {/* Server stats */}
@@ -135,54 +138,64 @@ export function RedisMonitor() {
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Memory Used"
+              title={t('Memory Used')}
               value={info.memory.used}
               prefix={<DatabaseOutlined />}
               suffix={memUsagePct !== null ? `(${memUsagePct}%)` : undefined}
             />
-            <Text type="secondary">Peak: {info.memory.peak}</Text>
+            <Text type="secondary">
+              {t('Peak')}: {info.memory.peak}
+            </Text>
             <br />
-            <Text type="secondary">Max: {info.memory.max_memory}</Text>
+            <Text type="secondary">
+              {t('Max')}: {info.memory.max_memory}
+            </Text>
             <br />
-            <Text type="secondary">Policy: {info.memory.max_memory_policy}</Text>
+            <Text type="secondary">
+              {t('Policy')}: {info.memory.max_memory_policy}
+            </Text>
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Ops/sec"
+              title={t('Ops/sec')}
               value={info.stats.ops_per_sec}
               prefix={<ThunderboltOutlined />}
             />
-            <Text type="secondary">Total commands: {info.stats.total_commands.toLocaleString()}</Text>
+            <Text type="secondary">
+              {t('Total commands')}: {info.stats.total_commands.toLocaleString()}
+            </Text>
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Connected Clients"
+              title={t('Connected Clients')}
               value={info.clients.connected}
               prefix={<CloudServerOutlined />}
             />
-            <Text type="secondary">Blocked: {info.clients.blocked}</Text>
+            <Text type="secondary">
+              {t('Blocked')}: {info.clients.blocked}
+            </Text>
           </Card>
         </Col>
         <Col span={6}>
           <Card size="small">
             <Statistic
-              title="Cache Hit Rate"
+              title={t('Cache Hit Rate')}
               value={info.stats.hit_rate}
               suffix="%"
               prefix={<FieldTimeOutlined />}
               valueStyle={{ color: info.stats.hit_rate > 90 ? '#3f8600' : info.stats.hit_rate > 50 ? '#faad14' : '#cf1322' }}
             />
             <Text type="secondary">
-              Hits: {info.stats.keyspace_hits.toLocaleString()} / Misses:{' '}
+              {t('Hits')}: {info.stats.keyspace_hits.toLocaleString()} / {t('Misses')}:{' '}
               {info.stats.keyspace_misses.toLocaleString()}
             </Text>
             <br />
             <Text type="secondary">
-              Expired: {info.stats.expired_keys.toLocaleString()} / Evicted:{' '}
+              {t('Expired')}: {info.stats.expired_keys.toLocaleString()} / {t('Evicted')}:{' '}
               {info.stats.evicted_keys.toLocaleString()}
             </Text>
           </Card>
@@ -192,9 +205,9 @@ export function RedisMonitor() {
       {/* Keyspace */}
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col span={12}>
-          <Card title="Keyspace" size="small">
+          <Card title={t('Keyspace')} size="small">
             {Object.keys(info.keyspace).length === 0 ? (
-              <Text type="secondary">No databases in use</Text>
+              <Text type="secondary">{t('No databases in use')}</Text>
             ) : (
               <Table
                 rowKey={(_, i) => String(i)}
@@ -207,11 +220,11 @@ export function RedisMonitor() {
                   avg_ttl: vals.avg_ttl,
                 }))}
                 columns={[
-                  { title: 'Database', dataIndex: 'db', width: 80 },
-                  { title: 'Keys', dataIndex: 'keys', width: 80 },
-                  { title: 'Expires', dataIndex: 'expires', width: 80 },
+                  { title: t('Database'), dataIndex: 'db', width: 80 },
+                  { title: t('Keys'), dataIndex: 'keys', width: 80 },
+                  { title: t('Expires'), dataIndex: 'expires', width: 80 },
                   {
-                    title: 'Avg TTL',
+                    title: t('Avg TTL'),
                     dataIndex: 'avg_ttl',
                     render: (v: string) => (v ? `${(Number(v) / 1000).toFixed(1)}s` : '-'),
                   },
@@ -223,9 +236,9 @@ export function RedisMonitor() {
 
         {/* Pub/Sub channels */}
         <Col span={12}>
-          <Card title={`Pub/Sub Channels (${totalChannels})`} size="small">
+          <Card title={`${t('Pub/Sub Channels')} (${totalChannels})`} size="small">
             {totalChannels === 0 ? (
-              <Text type="secondary">No active channels</Text>
+              <Text type="secondary">{t('No active channels')}</Text>
             ) : (
               <Table
                 rowKey={(_, i) => String(i)}
@@ -233,8 +246,8 @@ export function RedisMonitor() {
                 pagination={false}
                 dataSource={Object.entries(channels).map(([name, subs]) => ({ name, subs }))}
                 columns={[
-                  { title: 'Channel', dataIndex: 'name', ellipsis: true },
-                  { title: 'Subscribers', dataIndex: 'subs', width: 100 },
+                  { title: t('Channel'), dataIndex: 'name', ellipsis: true },
+                  { title: t('Subscribers'), dataIndex: 'subs', width: 100 },
                 ]}
               />
             )}
@@ -245,9 +258,9 @@ export function RedisMonitor() {
       {/* Slow log */}
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col span={12}>
-          <Card title="Slow Log (recent)" size="small">
+          <Card title={t('Slow Log (recent)')} size="small">
             {slowlog.length === 0 ? (
-              <Text type="secondary">No slow queries</Text>
+              <Text type="secondary">{t('No slow queries')}</Text>
             ) : (
               <Table
                 rowKey="id"
@@ -255,14 +268,14 @@ export function RedisMonitor() {
                 pagination={false}
                 dataSource={slowlog}
                 columns={[
-                  { title: 'ID', dataIndex: 'id', width: 60 },
+                  { title: t('ID'), dataIndex: 'id', width: 60 },
                   {
-                    title: 'Duration',
+                    title: t('Duration'),
                     dataIndex: 'duration_us',
                     width: 100,
                     render: (v: number) => `${(v / 1000).toFixed(1)}ms`,
                   },
-                  { title: 'Command', dataIndex: 'command', ellipsis: true },
+                  { title: t('Command'), dataIndex: 'command', ellipsis: true },
                 ]}
               />
             )}
@@ -271,20 +284,20 @@ export function RedisMonitor() {
 
         {/* Connected clients */}
         <Col span={12}>
-          <Card title={`Connected Clients (${clients.length})`} size="small">
+          <Card title={`${t('Connected Clients')} (${clients.length})`} size="small">
             <Table
               rowKey={(_, i) => String(i)}
               size="small"
               pagination={{ pageSize: 5, size: 'small' }}
               dataSource={clients}
               columns={[
-                { title: 'Addr', dataIndex: 'addr', width: 140 },
-                { title: 'Age', dataIndex: 'age', width: 60, render: (v: string) => `${v}s` },
-                { title: 'Idle', dataIndex: 'idle', width: 60, render: (v: string) => `${v}s` },
-                { title: 'DB', dataIndex: 'db', width: 40 },
-                { title: 'Cmd', dataIndex: 'cmd', width: 80 },
+                { title: t('Addr'), dataIndex: 'addr', width: 140 },
+                { title: t('Age'), dataIndex: 'age', width: 60, render: (v: string) => `${v}s` },
+                { title: t('Idle'), dataIndex: 'idle', width: 60, render: (v: string) => `${v}s` },
+                { title: t('DB'), dataIndex: 'db', width: 40 },
+                { title: t('Cmd'), dataIndex: 'cmd', width: 80 },
                 {
-                  title: 'Flags',
+                  title: t('Flags'),
                   dataIndex: 'flags',
                   width: 60,
                   render: (v: string) => <Tag>{v}</Tag>,
@@ -307,6 +320,7 @@ export function RedisMonitor() {
 
 function SyncMessagesSection() {
   const api = useApp().apiClient;
+  const t = useT();
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {
@@ -318,14 +332,17 @@ function SyncMessagesSection() {
   if (!data) return null;
 
   return (
-    <Card title={`Sync Messages (PubSub ${data.pubSubConnected ? 'Connected' : 'Disconnected'})`} size="small">
+    <Card
+      title={`${t('Sync Messages')} (PubSub ${data.pubSubConnected ? t('Connected') : t('Disconnected')})`}
+      size="small"
+    >
       <Table
         rowKey="channel"
         size="small"
         pagination={false}
         dataSource={data.channels || []}
         columns={[
-          { title: 'Channel', dataIndex: 'channel', key: 'channel' },
+          { title: t('Channel'), dataIndex: 'channel', key: 'channel' },
         ]}
       />
     </Card>

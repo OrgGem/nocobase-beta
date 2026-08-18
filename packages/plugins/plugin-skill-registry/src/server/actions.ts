@@ -25,6 +25,8 @@ import { RegistryReadinessService } from './services/registry-readiness-service'
 import { SignatureService } from './services/signature-service';
 import { SourceSyncService } from './services/source-sync-service';
 import { RegistrySettingsService, type RegistryRuntimeOverrides } from './services/registry-settings-service';
+import { MarkdownSkillService } from './services/markdown-skill-service';
+import { CatalogSkillDetailService } from './services/catalog-skill-detail-service';
 import {
   assertChannel,
   assertSemver,
@@ -320,6 +322,7 @@ export function createPublicActions(input: {
           channel,
           limit,
           after,
+          userId: currentUserId(ctx),
         });
         const rows = includeCompatibility
           ? result.rows
@@ -346,7 +349,7 @@ export function createPublicActions(input: {
       runAction(ctx, next, async () => {
         const packageName = publicPackageParam(ctx);
         const channel = publicChannelParam(ctx);
-        const packageRecord = await input.catalog.getPackage(packageName);
+        const packageRecord = await input.catalog.getPackage(packageName, currentUserId(ctx));
         const latest = await input.catalog.findLatestVersion(modelId(packageRecord), channel);
         const response = {
           name: `${getString(packageRecord, 'namespace')}/${getString(packageRecord, 'slug')}`,
@@ -379,8 +382,8 @@ export function createPublicActions(input: {
           query: { package: packageName, channel },
         };
         const after = decodePublicCursor(cursorParam(ctx), cursorScope);
-        const packageRecord = await input.catalog.getPackage(packageName);
-        const versions = await input.catalog.listVersions(packageRecord, channel, limit, after);
+        const packageRecord = await input.catalog.getPackage(packageName, currentUserId(ctx));
+        const versions = await input.catalog.listVersions(packageRecord, channel, limit, after, currentUserId(ctx));
         const response = {
           // Version history is deliberately a bounded summary. Returning up to
           // 100 full 10 MiB manifests would let one anonymous request allocate
@@ -407,7 +410,12 @@ export function createPublicActions(input: {
         const packageName = publicPackageParam(ctx);
         const version = publicVersionParam(ctx);
         const channel = publicChannelParam(ctx);
-        const { packageRecord, versionRecord } = await input.catalog.resolveVersion(packageName, version, channel);
+        const { packageRecord, versionRecord } = await input.catalog.resolveVersion(
+          packageName,
+          version,
+          channel,
+          currentUserId(ctx),
+        );
         const artifactId = getString(versionRecord, 'artifactId');
         const artifact = artifactId
           ? await input.database.getRepository('skillRegistryArtifacts').findOne({ filterByTk: artifactId })
@@ -576,6 +584,8 @@ export function createPublicActions(input: {
 export function createAdminActions(input: {
   sync: SourceSyncService;
   publish: PublishService;
+  markdownSkill: MarkdownSkillService;
+  catalogSkillDetail: CatalogSkillDetailService;
   database: RegistryDatabase;
   installationBridge: AgentInstallationBridge;
   lockManager?: RegistryOperationLockManager;
@@ -948,6 +958,185 @@ export function createAdminActions(input: {
           isLatestStable,
           replacementVersion: replacement ? getString(replacement, 'version') : null,
           packageWillBecomeDraft: !remaining,
+        };
+      }),
+    createMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const body = values(ctx);
+        const created = await input.markdownSkill.createSkill(
+          {
+            namespace: boundedStringParam(ctx, 'namespace', 80) || '',
+            slug: boundedStringParam(ctx, 'slug', 120) || '',
+            displayName: boundedStringParam(ctx, 'displayName', 200) || '',
+            description: boundedStringParam(ctx, 'description', 20_000) || '',
+            content: typeof body.content === 'string' ? body.content : '',
+            tags: Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === 'string') : [],
+            visibility: body.visibility === 'private' ? 'private' : 'shared',
+          },
+          userId,
+        );
+        (ctx as ActionContext).body = created;
+      }),
+    updateMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        if (!id) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId is required.');
+        }
+        const body = values(ctx);
+        const updateValues: Parameters<typeof input.markdownSkill.updateSkill>[1] = {};
+        if (body.namespace !== undefined) updateValues.namespace = String(body.namespace);
+        if (body.slug !== undefined) updateValues.slug = String(body.slug);
+        if (body.displayName !== undefined) updateValues.displayName = String(body.displayName);
+        if (body.description !== undefined) updateValues.description = String(body.description);
+        if (body.content !== undefined) updateValues.content = String(body.content);
+        if (Array.isArray(body.tags)) {
+          updateValues.tags = body.tags.filter((tag): tag is string => typeof tag === 'string');
+        }
+        if (body.visibility === 'private' || body.visibility === 'shared') {
+          updateValues.visibility = body.visibility;
+        }
+        const updated = await input.markdownSkill.updateSkill(id, updateValues, userId);
+        (ctx as ActionContext).body = updated;
+      }),
+    deleteMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        if (!id) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId is required.');
+        }
+        await input.markdownSkill.deleteSkill(id, userId);
+        (ctx as ActionContext).body = { status: 'deleted' };
+      }),
+    getMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        if (!id) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId is required.');
+        }
+        const skill = await input.markdownSkill.getSkill(id, userId);
+        (ctx as ActionContext).body = skill;
+      }),
+    getMarkdownDetail: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        if (!id) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId is required.');
+        }
+        const detail = await input.markdownSkill.getSkillDetail(id, userId);
+        (ctx as ActionContext).body = {
+          skill: detail.skill,
+          markdown: detail.markdown,
+          versions: detail.versions,
+        };
+      }),
+    getCatalogSkillDetail: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const packageId = boundedIdentifierParam(ctx, 'packageId', 128);
+        if (!packageId) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'packageId is required.');
+        }
+        const detail = await input.catalogSkillDetail.getPackageDetail(packageId);
+        (ctx as ActionContext).body = {
+          skill: detail.skill,
+          markdown: detail.markdown,
+          versions: detail.versions,
+        };
+      }),
+    publishMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        if (!id) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId is required.');
+        }
+        const rawVersion = boundedStringParam(ctx, 'version', PUBLIC_INPUT_LIMITS.version);
+        if (!rawVersion) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'version is required.');
+        }
+        const version = assertSemver(rawVersion);
+        const rawChannel = boundedStringParam(ctx, 'channel', PUBLIC_INPUT_LIMITS.channel);
+        const published = await input.markdownSkill.publish({
+          markdownSkillId: id,
+          version,
+          channel: rawChannel ? assertChannel(rawChannel) : undefined,
+          changelog: boundedStringParam(ctx, 'changelog', 20_000),
+          publishedById: userId,
+        });
+        (ctx as ActionContext).body = versionResponse(published);
+      }),
+    shareMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        const targetUserId = boundedIdentifierParam(ctx, 'userId', 128);
+        if (!id || !targetUserId) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId and userId are required.');
+        }
+        await input.markdownSkill.share(id, targetUserId, userId);
+        (ctx as ActionContext).body = { status: 'shared' };
+      }),
+    unshareMarkdown: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        const targetUserId = boundedIdentifierParam(ctx, 'userId', 128);
+        if (!id || !targetUserId) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId and userId are required.');
+        }
+        await input.markdownSkill.unshare(id, targetUserId, userId);
+        (ctx as ActionContext).body = { status: 'unshared' };
+      }),
+    listMarkdownShares: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const id = boundedIdentifierParam(ctx, 'markdownSkillId', 128);
+        if (!id) {
+          throw new RegistryError('INVALID_REQUEST', 400, 'markdownSkillId is required.');
+        }
+        const shares = await input.markdownSkill.listShares(id, userId);
+        (ctx as ActionContext).body = shares;
+      }),
+    listMyMarkdownSkills: async (ctx: Context, next: () => Promise<void>) =>
+      runAction(ctx, next, async () => {
+        const userId = currentUserId(ctx);
+        if (!userId) {
+          throw new RegistryError('AUTHENTICATION_REQUIRED', 401, 'Authentication is required.');
+        }
+        const rawPage = values(ctx).page;
+        const rawPageSize = values(ctx).pageSize;
+        const page = typeof rawPage === 'number' && rawPage > 0 ? rawPage : 1;
+        const pageSize = typeof rawPageSize === 'number' && rawPageSize > 0 ? rawPageSize : 20;
+        const result = await input.markdownSkill.listOwnSkills(userId, page, pageSize);
+        (ctx as ActionContext).body = {
+          data: result.rows,
+          meta: { count: result.count, page, pageSize },
         };
       }),
     install: async (ctx: Context, next: () => Promise<void>) =>

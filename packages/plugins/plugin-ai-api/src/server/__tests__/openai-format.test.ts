@@ -86,7 +86,12 @@ describe('AI API OpenAI usage-only streaming chunks', () => {
 
     expect(chunk.object).toBe('chat.completion.chunk');
     expect(chunk.choices).toEqual([]);
-    expect(chunk.usage).toEqual({ prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 });
+    expect(chunk.usage).toEqual({
+      prompt_tokens: 8,
+      completion_tokens: 3,
+      total_tokens: 11,
+      prompt_tokens_details: { cached_tokens: null },
+    });
   });
 
   it('formats a usage-only legacy text completion chunk', () => {
@@ -99,7 +104,12 @@ describe('AI API OpenAI usage-only streaming chunks', () => {
 
     expect(chunk.object).toBe('text_completion');
     expect(chunk.choices).toEqual([]);
-    expect(chunk.usage).toEqual({ prompt_tokens: 2, completion_tokens: 5, total_tokens: 7 });
+    expect(chunk.usage).toEqual({
+      prompt_tokens: 2,
+      completion_tokens: 5,
+      total_tokens: 7,
+      prompt_tokens_details: { cached_tokens: null },
+    });
   });
 });
 

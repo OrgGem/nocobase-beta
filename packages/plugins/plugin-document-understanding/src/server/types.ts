@@ -75,4 +75,6 @@ export interface JobState {
   externalTaskIds: Record<string, string>;
   startedAt?: Date;
   completedAt?: Date;
+  ownedBy?: string;
+  leaseExpiresAt?: Date | null;
 }

@@ -217,6 +217,42 @@ describe('VaultClient', () => {
     await expect(client.readSecret('apps/billing', 'password')).rejects.toThrow('Key "password" not found');
   });
 
+  it('readSecretOrNull returns the value when present', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: { data: { data: { password: 'v' } } } } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.readSecretOrNull('apps/billing', 'password')).resolves.toBe('v');
+  });
+
+  it('readSecretOrNull returns null when the path does not exist', async () => {
+    mockedRequest.mockRejectedValueOnce({ message: '404', response: { status: 404, data: { errors: [] } } });
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.readSecretOrNull('apps/missing', 'password')).resolves.toBeNull();
+  });
+
+  it('readSecretOrNull returns null when the key is missing', async () => {
+    mockedRequest.mockResolvedValueOnce({ data: { data: { data: { other: 'x' } } } } as never);
+    const client = new VaultClient({
+      address: 'https://vault.example.com:8200',
+      authMethod: 'token',
+      token: 't',
+      kvVersion: 2,
+      mount: 'secret',
+    });
+    await expect(client.readSecretOrNull('apps/billing', 'password')).resolves.toBeNull();
+  });
+
   it('logs in via AppRole and reuses the client token within the lease', async () => {
     mockedRequest
       .mockResolvedValueOnce({ data: { auth: { client_token: 'approle-token', lease_duration: 3600 } } } as never)

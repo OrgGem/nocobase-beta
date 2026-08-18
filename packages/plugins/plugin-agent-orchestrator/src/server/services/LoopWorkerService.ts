@@ -11,13 +11,19 @@ import { LoopRunStateMachine } from './LoopRunStateMachine';
 import type { ClaimedLoopRun } from './LoopRunStateMachine';
 import { PathLockService } from './PathLockService';
 import { PluginAiRuntimeAdapter } from './PluginAiRuntimeAdapter';
-import type { InvocationOutcome } from './PluginAiRuntimeAdapter';
+import type { InvocationOutcome, ToolCallDecision } from './PluginAiRuntimeAdapter';
+import { ToolLoopDetectionService, toolLoopNotice, toolLoopReason } from './ToolLoopDetectionService';
 import { VerificationService } from './VerificationService';
 
 const POLL_INTERVAL_MS = 3_000;
 const LEASE_MS = 120_000;
 const HEARTBEAT_MS = 30_000;
 const PATH_LOCK_TTL_MS = 900_000;
+
+const LEADER_SYSTEM_MESSAGE =
+  'You lead an autonomous run. Break the goal into concrete work for your makers, then finish with a concise plan of what must be built and which evidence will prove it. You do not modify anything yourself.';
+const MAKER_SYSTEM_MESSAGE =
+  'You are a maker on an autonomous run. Do the work assigned by the leader using only the tools you were granted, and report exactly what you changed and the evidence for it.';
 
 export type LoopWorkerSyncMessage = {
   type: 'loop-run-abort-requested';
@@ -27,6 +33,15 @@ export type LoopWorkerSyncMessage = {
 export function loopWorkerAbortMessage(runId: number): LoopWorkerSyncMessage {
   return { type: 'loop-run-abort-requested', runId };
 }
+
+type ResumeContext = {
+  role: 'leader' | 'maker';
+  username: string;
+  sessionId: string;
+  messageId: string;
+  makerReports: string[];
+  makerQueue: string[];
+};
 
 type RunSnapshot = {
   id: number;
@@ -43,6 +58,8 @@ type RunSnapshot = {
   repositoryKey: string;
   actingOn: string[];
   userId?: number;
+  approvalStatus: string;
+  resumeContext: ResumeContext | null;
 };
 
 function read(record: Model | Record<string, unknown>, key: string) {
@@ -69,6 +86,24 @@ function harnessFrom(value: unknown): CompiledHarness {
   return effective as unknown as CompiledHarness;
 }
 
+function resumeContextFrom(value: unknown): ResumeContext | null {
+  const context = asObject(value);
+  if (!context) return null;
+  const role = context.role === 'leader' || context.role === 'maker' ? context.role : null;
+  const username = typeof context.username === 'string' ? context.username : '';
+  const sessionId = typeof context.sessionId === 'string' ? context.sessionId : '';
+  const messageId = typeof context.messageId === 'string' ? context.messageId : '';
+  if (!role || !username || !sessionId || !messageId) return null;
+  return {
+    role,
+    username,
+    sessionId,
+    messageId,
+    makerReports: asStringArray(context.makerReports),
+    makerQueue: asStringArray(context.makerQueue),
+  };
+}
+
 function inputHash(value: unknown) {
   return createHash('sha256')
     .update(JSON.stringify(value ?? null))
@@ -83,6 +118,7 @@ export class LoopWorkerService {
   private readonly pathLocks: PathLockService;
   private readonly runtime: PluginAiRuntimeAdapter;
   private readonly verification: VerificationService;
+  private readonly loopGuard: ToolLoopDetectionService;
   private readonly workerId: string;
   private readonly active = new Map<number, AbortController>();
   private readonly heldPathLocks = new Map<number, string>();
@@ -105,6 +141,7 @@ export class LoopWorkerService {
     this.pathLocks = new PathLockService(database, distributedLock);
     this.runtime = new PluginAiRuntimeAdapter(app);
     this.verification = new VerificationService(database, this.runtime, this.stateMachine);
+    this.loopGuard = new ToolLoopDetectionService(database);
     this.workerId = `${app.name}:${process.pid}:${randomUUID()}`;
   }
 
@@ -152,6 +189,9 @@ export class LoopWorkerService {
 
   private async poll() {
     if (!this.running) return;
+    await this.stateMachine.expireOverdueApprovals(new Date()).catch((error) => {
+      this.app.logger.error('[AgentOrchestrator] Approval expiry sweep failed.', { error });
+    });
     const claimed = await this.stateMachine.claimNext(this.workerId, LEASE_MS);
     if (!claimed) return;
     await this.execute(claimed);
@@ -211,6 +251,24 @@ export class LoopWorkerService {
 
     if (!(await this.acquirePaths(snapshot, leaseToken))) return;
 
+    // A run requeued from a pause while its approvals are still pending has nothing to execute:
+    // the decisions never arrived, so it parks again instead of restarting from the leader.
+    if (snapshot.resumeContext && snapshot.approvalStatus === 'pending') {
+      await this.stateMachine.transition({
+        runId: snapshot.id,
+        to: 'waiting_approval',
+        actorType: 'worker',
+        actorIdentity: this.workerId,
+        leaseToken,
+        eventType: 'run_waiting_approval',
+        title: 'Waiting for action approval',
+        content: 'Run requeued while its approval decisions are still pending.',
+        correlationKey: `approval-repark:${snapshot.id}`,
+        values: { approvalStatus: 'pending' },
+      });
+      return;
+    }
+
     await this.stateMachine.transition({
       runId: snapshot.id,
       to: 'running',
@@ -218,35 +276,91 @@ export class LoopWorkerService {
       actorIdentity: this.workerId,
       leaseToken,
       eventType: 'run_started',
-      title: 'Run started',
-      content: `Leader ${snapshot.leaderUsername} began working on the goal.`,
+      title: snapshot.resumeContext ? 'Run resumed' : 'Run started',
+      content: snapshot.resumeContext
+        ? `${snapshot.resumeContext.username} resumed after approval decisions.`
+        : `Leader ${snapshot.leaderUsername} began working on the goal.`,
       correlationKey: `started:${snapshot.id}`,
-      values: { currentRole: 'leader' },
+      values: { currentRole: snapshot.resumeContext ? snapshot.resumeContext.role : 'leader' },
     });
 
-    const leader = await this.invokeRole(snapshot, {
-      role: 'leader',
-      username: snapshot.leaderUsername,
-      harness: snapshot.leaderHarness,
-      systemMessage:
-        'You lead an autonomous run. Break the goal into concrete work for your makers, then finish with a concise plan of what must be built and which evidence will prove it. You do not modify anything yourself.',
-      prompt: snapshot.goal,
-      leaseToken,
-      signal,
-    });
+    // Loops recorded before this claim (for example before a park for approval) keep warning the
+    // prompts composed later in the run.
+    const loopNotices = await this.loopGuard.existingNotices(snapshot.id);
 
-    // plugin-ai stops the graph on an approval-gated tool. Approval is a human decision, so the
-    // run parks here instead of the worker deciding on the operator's behalf.
-    if (leader.interrupted.length) {
-      await this.parkForApproval(snapshot, leader, leaseToken);
-      return;
+    let makerReports: string[];
+    let makerQueue: string[];
+
+    if (snapshot.resumeContext) {
+      const resume = snapshot.resumeContext;
+      const decisions = await this.consumeDecisions(snapshot.id);
+      const resumed = await this.resumeRole(snapshot, resume, decisions, signal);
+
+      const resumeGuard = await this.enforceToolLoopGuard(
+        snapshot,
+        leaseToken,
+        { role: resume.role, username: resume.username },
+        loopNotices,
+      );
+      if (resumeGuard === 'halt') return;
+
+      // A resumed conversation can hit another approval gate; park with the same role context so
+      // the next resume continues exactly where this one stopped.
+      if (resumed.interrupted.length) {
+        await this.parkForApproval(snapshot, resumed, leaseToken, {
+          role: resume.role,
+          username: resume.username,
+          makerReports: resume.makerReports,
+          makerQueue: resume.makerQueue,
+        });
+        return;
+      }
+      if (resume.role === 'leader') {
+        makerReports = [resumed.content];
+        makerQueue = [...snapshot.makerUsernames];
+      } else {
+        makerReports = [...resume.makerReports, `# ${resume.username}\n${resumed.content}`];
+        makerQueue = [...resume.makerQueue];
+      }
+    } else {
+      const leader = await this.invokeRole(snapshot, {
+        role: 'leader',
+        username: snapshot.leaderUsername,
+        harness: snapshot.leaderHarness,
+        systemMessage: LEADER_SYSTEM_MESSAGE,
+        prompt: snapshot.goal,
+        leaseToken,
+        signal,
+      });
+
+      const leaderGuard = await this.enforceToolLoopGuard(
+        snapshot,
+        leaseToken,
+        { role: 'leader', username: snapshot.leaderUsername },
+        loopNotices,
+      );
+      if (leaderGuard === 'halt') return;
+
+      // plugin-ai stops the graph on an approval-gated tool. Approval is a human decision, so the
+      // run parks here instead of the worker deciding on the operator's behalf.
+      if (leader.interrupted.length) {
+        await this.parkForApproval(snapshot, leader, leaseToken, {
+          role: 'leader',
+          username: snapshot.leaderUsername,
+          makerReports: [],
+          makerQueue: snapshot.makerUsernames,
+        });
+        return;
+      }
+      makerReports = [leader.content];
+      makerQueue = [...snapshot.makerUsernames];
     }
 
     // Each maker executes with its own compiled harness snapshot. Reusing one harness would apply
     // the wrong per-employee tool grants, so the snapshot is looked up by username and a maker with
     // no snapshot is a compile error, not a silent skip.
-    const makerReports: string[] = [leader.content];
-    for (const username of snapshot.makerUsernames) {
+    while (makerQueue.length) {
+      const username = makerQueue[0];
       const harness = snapshot.makerHarnesses[username]?.effective;
       if (!harness) {
         throw new Error(`The claimed run has no harness snapshot for maker "${username}".`);
@@ -255,22 +369,35 @@ export class LoopWorkerService {
         role: 'maker',
         username,
         harness,
-        systemMessage:
-          'You are a maker on an autonomous run. Do the work assigned by the leader using only the tools you were granted, and report exactly what you changed and the evidence for it.',
+        systemMessage: MAKER_SYSTEM_MESSAGE,
         prompt: [
           `Goal: ${snapshot.goal}`,
           '',
           "Leader's plan:",
-          leader.content || '(the leader produced no textual plan)',
+          makerReports[0] || '(the leader produced no textual plan)',
+          ...loopNotices,
         ].join('\n'),
         leaseToken,
         signal,
       });
+      const makerGuard = await this.enforceToolLoopGuard(
+        snapshot,
+        leaseToken,
+        { role: 'maker', username },
+        loopNotices,
+      );
+      if (makerGuard === 'halt') return;
       if (maker.interrupted.length) {
-        await this.parkForApproval(snapshot, maker, leaseToken);
+        await this.parkForApproval(snapshot, maker, leaseToken, {
+          role: 'maker',
+          username,
+          makerReports,
+          makerQueue: makerQueue.slice(1),
+        });
         return;
       }
       makerReports.push(`# ${username}\n${maker.content}`);
+      makerQueue = makerQueue.slice(1);
     }
     const makerSummary = makerReports.join('\n\n');
 
@@ -306,8 +433,13 @@ export class LoopWorkerService {
       userId: snapshot.userId,
       workerId: this.workerId,
       leaseToken,
+      loopNotices,
       signal,
     });
+
+    // The tool loop guard already moved the run to blocked or waiting_human; the circuit breaker
+    // tracks failed attempts, not behavioral stops, so it must not see this as a failure.
+    if (outcome.finalStatus === 'halted') return;
 
     if (outcome.finalStatus === 'failed') {
       await this.circuits.recordFailure({
@@ -387,6 +519,7 @@ export class LoopWorkerService {
         kind: 'invocation',
         type: 'reasoning',
         employeeUsername: input.username,
+        sessionId,
         title: `${input.role} invocation`,
         inputHash: inputHash(input.prompt),
         status: 'running',
@@ -420,21 +553,166 @@ export class LoopWorkerService {
     return outcome;
   }
 
-  private async parkForApproval(snapshot: RunSnapshot, outcome: InvocationOutcome, leaseToken: string) {
+  private async resumeRole(
+    snapshot: RunSnapshot,
+    resume: ResumeContext,
+    decisions: Array<{ toolCallId: string; decision: ToolCallDecision }>,
+    signal: AbortSignal,
+  ) {
+    await this.budgets.reserve({
+      runId: snapshot.id,
+      patternId: snapshot.patternId,
+      policy: snapshot.policy,
+      delta: { invocations: 1 },
+    });
+    const harness =
+      resume.role === 'leader' ? snapshot.leaderHarness : snapshot.makerHarnesses[resume.username]?.effective;
+    if (!harness) {
+      throw new Error(`The claimed run has no harness snapshot for ${resume.role} "${resume.username}".`);
+    }
+    const step = await this.database.getRepository('agentLoopSteps').create({
+      values: {
+        runId: snapshot.id,
+        runtimeVersion: 'control-plane-v2',
+        sequence: await this.nextSequence(snapshot.id),
+        role: resume.role,
+        kind: 'invocation',
+        type: 'resume',
+        employeeUsername: resume.username,
+        sessionId: resume.sessionId,
+        title: `${resume.role} resume after approval`,
+        inputHash: inputHash(decisions),
+        status: 'running',
+        startedAt: new Date(),
+        createdAt: new Date(),
+      },
+    });
+
+    const outcome = await this.runtime.resume({
+      username: resume.username,
+      sessionId: resume.sessionId,
+      messageId: resume.messageId,
+      userId: snapshot.userId,
+      systemMessage: resume.role === 'leader' ? LEADER_SYSTEM_MESSAGE : MAKER_SYSTEM_MESSAGE,
+      harness,
+      decisions,
+      signal,
+    });
+
+    await this.database.getRepository('agentLoopSteps').update({
+      filterByTk: read(step, 'id'),
+      values: {
+        status: outcome.interrupted.length ? 'waiting_user' : 'succeeded',
+        output: { content: outcome.content },
+        endedAt: new Date(),
+      },
+    });
+    await this.database.getRepository('agentLoopRuns').update({
+      filterByTk: snapshot.id,
+      values: { sessionId: outcome.sessionId, messageId: outcome.messageId },
+    });
+    return outcome;
+  }
+
+  // Run-level scan over every tool call issued so far, evaluated at each pass boundary. A warning
+  // is injected into the prompts composed later in the run; block and escalate halt it at once.
+  private async enforceToolLoopGuard(
+    snapshot: RunSnapshot,
+    leaseToken: string,
+    pass: { role: 'leader' | 'maker'; username: string },
+    loopNotices: string[],
+  ): Promise<'continue' | 'halt'> {
+    const finding = await this.loopGuard.scanRun(snapshot.id, snapshot.policy);
+    if (!finding) return 'continue';
+
+    await this.loopGuard.recordFinding(
+      {
+        runId: snapshot.id,
+        role: pass.role,
+        username: pass.username,
+        runStatus: 'running',
+        actorType: 'worker',
+        actorIdentity: this.workerId,
+      },
+      finding,
+    );
+
+    if (finding.level === 'warn') {
+      const notice = toolLoopNotice(finding.toolName, finding.count);
+      if (!loopNotices.includes(notice)) loopNotices.push(notice);
+      return 'continue';
+    }
+
+    const reason = toolLoopReason(finding);
+    await this.stateMachine.transition({
+      runId: snapshot.id,
+      to: finding.level === 'block' ? 'blocked' : 'waiting_human',
+      actorType: 'worker',
+      actorIdentity: this.workerId,
+      leaseToken,
+      eventType: finding.level === 'block' ? 'run_blocked' : 'run_escalated',
+      title: finding.level === 'block' ? 'Run blocked by tool loop detection' : 'Run escalated by tool loop detection',
+      content: reason,
+      correlationKey: `tool-loop-${finding.level}:${snapshot.id}:${finding.signature}`,
+      values: finding.level === 'block' ? { blockedReason: reason } : { escalationReason: reason },
+    });
+    return 'halt';
+  }
+
+  // Decisions are consumed exactly once: rows are marked consumed so a retry or a second resume
+  // can never replay a human decision against a fresh conversation.
+  private async consumeDecisions(runId: number) {
+    const repository = this.database.getRepository('agentLoopActionApprovals');
+    const approvals = await repository.find({ filter: { runId } });
+    const decisions: Array<{ toolCallId: string; decision: ToolCallDecision }> = [];
+    const now = new Date();
+    for (const approval of approvals) {
+      const status = String(read(approval, 'status'));
+      if (status !== 'approved' && status !== 'rejected') continue;
+      if (read(approval, 'consumedAt')) continue;
+      const editedInput = read(approval, 'editedInput');
+      const decision: ToolCallDecision =
+        status === 'approved'
+          ? editedInput
+            ? { type: 'edit', editedAction: { name: String(read(approval, 'toolName')), args: editedInput } }
+            : { type: 'approve' }
+          : { type: 'reject', message: String(read(approval, 'decisionNote') || '') || undefined };
+      decisions.push({ toolCallId: String(read(approval, 'toolCallId')), decision });
+      await repository.update({ filterByTk: Number(read(approval, 'id')), values: { consumedAt: now } });
+    }
+    if (!decisions.length) throw new Error('The resumed run has no recorded approval decisions.');
+    return decisions;
+  }
+
+  private async parkForApproval(
+    snapshot: RunSnapshot,
+    outcome: InvocationOutcome,
+    leaseToken: string,
+    context: { role: 'leader' | 'maker'; username: string; makerReports: string[]; makerQueue: string[] },
+  ) {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + snapshot.policy.actions.approvalTimeoutMs);
     const assignedToId = snapshot.policy.actions.approvalAssigneeIds[0] || snapshot.userId || null;
+    const harness =
+      context.role === 'leader' ? snapshot.leaderHarness : snapshot.makerHarnesses[context.username]?.effective;
+    const escalatable = new Set(harness?.tools.escalate ?? []);
     for (const call of outcome.interrupted) {
+      // An escalation is a request for authority the harness never granted, widened for exactly
+      // one call; a plain tool_call approval gates a tool the harness allows but asks about.
+      const escalation = escalatable.has(call.toolName);
       await this.database.getRepository('agentLoopActionApprovals').create({
         values: {
           runId: snapshot.id,
           toolCallId: call.toolCallId,
           toolName: call.toolName,
+          actionType: escalation ? 'escalation' : 'tool_call',
           proposedInput: call.args,
           inputHash: inputHash(call.args),
           paths: snapshot.actingOn,
           policyDecision: { decision: 'ask', interruptId: call.interruptId },
-          reason: `Tool "${call.toolName}" requires human approval under this pattern's policy.`,
+          reason: escalation
+            ? `Tool "${call.toolName}" is not granted by this run's harness. Approving widens authority for this single call only.`
+            : `Tool "${call.toolName}" requires human approval under this pattern's policy.`,
           status: 'pending',
           assignedToId,
           requestedById: snapshot.userId || null,
@@ -444,6 +722,22 @@ export class LoopWorkerService {
         },
       });
     }
+    await this.database.getRepository('agentLoopRuns').update({
+      filterByTk: snapshot.id,
+      values: {
+        // The resume point is durable: which role stopped, in which conversation, with which
+        // reports already collected and which makers still queued. Without it a resumed run
+        // would restart from the leader and redo every completed invocation.
+        resumeContext: {
+          role: context.role,
+          username: context.username,
+          sessionId: outcome.sessionId,
+          messageId: outcome.messageId,
+          makerReports: context.makerReports,
+          makerQueue: context.makerQueue,
+        },
+      },
+    });
     await this.stateMachine.transition({
       runId: snapshot.id,
       to: 'waiting_approval',
@@ -502,6 +796,7 @@ export class LoopWorkerService {
     }
     const roleBindings = asObject(run.roleBindingsSnapshot);
     const makerSnapshots = asObject(run.makerHarnessSnapshot);
+    const approvalStatus = String(run.approvalStatus || 'none');
     return {
       id: Number(run.id),
       patternId,
@@ -517,6 +812,11 @@ export class LoopWorkerService {
       repositoryKey: String(run.repositoryKey || ''),
       actingOn: asStringArray(run.actingOn),
       userId: Number(run.userId) || undefined,
+      approvalStatus,
+      // Only a live approval state may resume. Stale context left over from an expired window or a
+      // cleared retry would otherwise replay an old conversation against fresh approvals.
+      resumeContext:
+        approvalStatus === 'decided' || approvalStatus === 'pending' ? resumeContextFrom(run.resumeContext) : null,
     };
   }
 }

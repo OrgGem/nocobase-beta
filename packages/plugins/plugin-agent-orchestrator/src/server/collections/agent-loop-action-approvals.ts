@@ -18,6 +18,7 @@ export default defineCollection({
     { name: 'paths', type: 'json', defaultValue: [] },
     { name: 'policyDecision', type: 'json', defaultValue: {} },
     { name: 'reason', type: 'text' },
+    { name: 'decisionNote', type: 'text' },
     { name: 'status', type: 'string', length: 20, defaultValue: 'pending' },
     { name: 'requestedBy', type: 'belongsTo', target: 'users', foreignKey: 'requestedById' },
     { name: 'assignedToId', type: 'bigInt' },

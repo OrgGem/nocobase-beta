@@ -19,7 +19,8 @@
 #     2. app-main runs the only startup install/upgrade gate
 #     3. app-main becomes healthy (HTTP 200 + valid API version)
 #     4. app-backup-1 and app-backup-2 pass their own app-main readiness wait
-#     5. nginx starts with app-main as primary and backups as failover nodes
+#     nginx has no depends_on: it starts independently and resolves app nodes
+#     lazily via Docker DNS, so any subset of app services may be running.
 #
 #   Workers:
 #     Workers are now managed dynamically by plugin-cluster-manager.
@@ -144,7 +145,9 @@ volumes:
 services:
   # ============================================================================
   # NGINX — inline config (Portainer compatible, no file mounts)
-  # Proxies directly to the app-main/app-backup upstream (bypasses internal NocoBase nginx)
+  # Proxies directly to the app-main/app-backup nodes (bypasses internal NocoBase nginx)
+  # Upstreams are resolved lazily per request via Docker DNS (resolver 127.0.0.11),
+  # so nginx starts and stays up no matter which app nodes are running.
   # Static asset cache via proxy_cache (volume: nginx-cache)
   # All nginx $variables use $$ to escape Docker Compose interpolation
   # ============================================================================
@@ -157,13 +160,6 @@ services:
       - nginx-cache:/var/cache/nginx/static
     networks:
       - nocobase
-    depends_on:
-      app-main:
-        condition: service_healthy
-      app-backup-1:
-        condition: service_started
-      app-backup-2:
-        condition: service_started
     entrypoint: ['/bin/sh', '-c']
     command:
       - |
@@ -209,11 +205,14 @@ services:
                 inactive=5m
                 use_temp_path=off;
 
-            upstream nocobase {
-                server app-main:13000 max_fails=2 fail_timeout=10s;
-                server app-backup-1:13000 backup max_fails=2 fail_timeout=10s;
-                server app-backup-2:13000 backup max_fails=2 fail_timeout=10s;
-                keepalive 32;
+            # Docker built-in DNS: app nodes are resolved lazily per request,
+            # so nginx starts and stays up no matter which containers run.
+            resolver 127.0.0.11 valid=10s ipv6=off;
+            resolver_timeout 3s;
+
+            map $$http_upgrade $$connection_upgrade {
+                default upgrade;
+                ''      close;
             }
 
             limit_req_zone $$binary_remote_addr zone=api_limit:10m rate=30r/s;
@@ -231,9 +230,49 @@ services:
                     return 200 "ok\n";
                 }
 
+                # Failover chain, reached via error_page only when the previous
+                # node is unreachable. WebSocket-safe via the map above.
+                location @app_backup_1 {
+                    set $$app_backend http://app-backup-1:13000;
+                    proxy_pass $$app_backend;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection $$connection_upgrade;
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_connect_timeout 600;
+                    proxy_send_timeout 86400;
+                    proxy_read_timeout 86400;
+                    proxy_request_buffering off;
+                    proxy_buffering off;
+                    proxy_cache off;
+                    error_page 502 503 504 = @app_backup_2;
+                }
+
+                location @app_backup_2 {
+                    set $$app_backend http://app-backup-2:13000;
+                    proxy_pass $$app_backend;
+                    proxy_http_version 1.1;
+                    proxy_set_header Upgrade $$http_upgrade;
+                    proxy_set_header Connection $$connection_upgrade;
+                    proxy_set_header Host $$host;
+                    proxy_set_header X-Real-IP $$remote_addr;
+                    proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    proxy_connect_timeout 600;
+                    proxy_send_timeout 86400;
+                    proxy_read_timeout 86400;
+                    proxy_request_buffering off;
+                    proxy_buffering off;
+                    proxy_cache off;
+                }
+
                 location ~ ^/api/dockerRegistry:(uploadImage|downloadImage)$ {
                     limit_req zone=api_limit burst=50 nodelay;
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host $$host;
@@ -246,11 +285,13 @@ services:
                     proxy_request_buffering off;
                     proxy_buffering off;
                     proxy_cache off;
+                    error_page 502 503 504 = @app_backup_1;
                 }
 
                 location /api/ {
                     limit_req zone=api_limit burst=50 nodelay;
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host $$host;
@@ -261,10 +302,12 @@ services:
                     proxy_send_timeout 600;
                     proxy_read_timeout 600;
                     proxy_cache off;
+                    error_page 502 503 504 = @app_backup_1;
                 }
 
                 location /ws {
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Upgrade $$http_upgrade;
                     proxy_set_header Connection "Upgrade";
@@ -276,10 +319,13 @@ services:
                     proxy_send_timeout 86400;
                     proxy_buffering off;
                     proxy_cache off;
+                    error_page 502 503 504 = @app_backup_1;
                 }
 
                 location /ai-browser-live/ {
-                    proxy_pass http://browserless:3000/;
+                    set $$browser_backend http://browserless:3000;
+                    rewrite ^/ai-browser-live/(.*)$$ /$$1 break;
+                    proxy_pass $$browser_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Upgrade $$http_upgrade;
                     proxy_set_header Connection "Upgrade";
@@ -294,7 +340,8 @@ services:
                 }
 
                 location /devtools/ {
-                    proxy_pass http://browserless:3000/devtools/;
+                    set $$browser_backend http://browserless:3000;
+                    proxy_pass $$browser_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Upgrade $$http_upgrade;
                     proxy_set_header Connection "Upgrade";
@@ -309,7 +356,8 @@ services:
                 }
 
                 location /sessions {
-                    proxy_pass http://browserless:3000/sessions;
+                    set $$browser_backend http://browserless:3000;
+                    proxy_pass $$browser_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Upgrade $$http_upgrade;
                     proxy_set_header Connection "Upgrade";
@@ -324,7 +372,8 @@ services:
                 }
 
                 location ^~ /static/plugins/plugin-ai-chat-file-preview/ {
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host $$host;
@@ -333,10 +382,12 @@ services:
                     proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
                     proxy_cache off;
                     add_header Cache-Control "no-cache, no-store, must-revalidate";
+                    error_page 502 503 504 = @app_backup_1;
                 }
 
                 location ~* ^/static/.+\.(js|css|woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host $$host;
@@ -351,10 +402,12 @@ services:
                     proxy_ignore_headers Cache-Control Expires Set-Cookie;
                     add_header X-Cache-Status $$upstream_cache_status;
                     add_header Cache-Control "public, max-age=300";
+                    error_page 502 503 504 = @app_backup_1;
                 }
 
                 location ~* \.(woff2?|ttf|eot|svg|png|jpg|jpeg|gif|ico|webp)$ {
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host $$host;
@@ -367,17 +420,20 @@ services:
                     proxy_cache_lock on;
                     add_header X-Cache-Status $$upstream_cache_status;
                     add_header Cache-Control "public, max-age=300";
+                    error_page 502 503 504 = @app_backup_1;
                 }
 
                 location / {
                     limit_req zone=general_limit burst=200 nodelay;
-                    proxy_pass http://nocobase;
+                    set $$app_backend http://app-main:13000;
+                    proxy_pass $$app_backend;
                     proxy_http_version 1.1;
                     proxy_set_header Connection "";
                     proxy_set_header Host $$host;
                     proxy_set_header X-Real-IP $$remote_addr;
                     proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
                     proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
+                    error_page 502 503 504 = @app_backup_1;
                 }
             }
         }
@@ -386,8 +442,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - >-
-          wget -q -O - http://127.0.0.1/api/app:getInfo | grep -q '"version"' && wget -q --spider http://127.0.0.1/nginx-health
+        - wget -q --spider http://127.0.0.1/nginx-health
       interval: 10s
       timeout: 5s
       retries: 3

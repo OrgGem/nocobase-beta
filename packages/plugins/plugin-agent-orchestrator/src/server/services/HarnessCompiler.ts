@@ -54,6 +54,30 @@ function strictestNetwork(values: HarnessSettings['isolation']['networkAccess'][
   );
 }
 
+const sharingRank: Record<HarnessSettings['observability']['sharing'], number> = {
+  full: 0,
+  'feedback-only': 1,
+  disabled: 2,
+};
+
+function strictestSharing(values: HarnessSettings['observability']['sharing'][]) {
+  return values.reduce<HarnessSettings['observability']['sharing']>(
+    (strictest, value) => (sharingRank[value] > sharingRank[strictest] ? value : strictest),
+    'full',
+  );
+}
+
+// Per-tool caps compile like every other limit: the smallest value across layers wins.
+function mergeTimeouts(settings: HarnessSettings[]) {
+  const timeouts: Record<string, number> = {};
+  for (const layer of settings) {
+    for (const [name, timeoutMs] of Object.entries(layer.tools.timeouts)) {
+      timeouts[name] = timeouts[name] === undefined ? timeoutMs : Math.min(timeouts[name], timeoutMs);
+    }
+  }
+  return timeouts;
+}
+
 export function compileHarness(layers: HarnessLayer[]): CompiledHarness {
   if (!layers.length) {
     throw new Error('At least one harness layer is required.');
@@ -78,8 +102,12 @@ export function compileHarness(layers: HarnessLayer[]): CompiledHarness {
       allow: intersectRestrictions(settings.map((layer) => layer.tools.allow)),
       ask: union(settings.map((layer) => layer.tools.ask)),
       deny: union(settings.map((layer) => layer.tools.deny)),
+      // Escalatable tools widen authority per approved call, so a child may only inherit the
+      // escalation surface every layer agrees on — same semantics as `allow`.
+      escalate: intersectRestrictions(settings.map((layer) => layer.tools.escalate)),
       effects,
       trustedPreHandlerTools: intersectRestrictions(settings.map((layer) => layer.tools.trustedPreHandlerTools)),
+      timeouts: mergeTimeouts(settings),
     },
     memory: {
       enabled: settings.every((layer) => layer.memory.enabled),
@@ -103,6 +131,11 @@ export function compileHarness(layers: HarnessLayer[]): CompiledHarness {
       maxTotalTokens: minimumNullable(settings.map((layer) => layer.limits.maxTotalTokens)),
       maxCost: minimumNullable(settings.map((layer) => layer.limits.maxCost)),
     },
+    context: {
+      spill: {
+        maxInlineBytes: minimumNullable(settings.map((layer) => layer.context.spill.maxInlineBytes)),
+      },
+    },
     isolation: {
       mode: settings.some((layer) => layer.isolation.mode === 'worktree') ? 'worktree' : 'none',
       requireWorktree: settings.some((layer) => layer.isolation.requireWorktree),
@@ -114,6 +147,10 @@ export function compileHarness(layers: HarnessLayer[]): CompiledHarness {
       tracingRetentionDays: Math.min(...settings.map((layer) => layer.observability.tracingRetentionDays)),
       captureInputs: settings.every((layer) => layer.observability.captureInputs),
       captureOutputs: settings.every((layer) => layer.observability.captureOutputs),
+      // Any layer demanding redaction wins; any layer restricting sharing wins. Telemetry safety
+      // is union-of-concerns, not intersection.
+      redactSecrets: settings.some((layer) => layer.observability.redactSecrets),
+      sharing: strictestSharing(settings.map((layer) => layer.observability.sharing)),
     },
   };
 }

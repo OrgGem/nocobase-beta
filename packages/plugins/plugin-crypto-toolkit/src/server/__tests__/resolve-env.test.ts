@@ -53,6 +53,30 @@ describe('createEnvGetter', () => {
     expect(getter('FROM_APP')).toBe('app-value');
   });
 
+  it('reads from getVariables() map (real NocoBase Environment shape)', () => {
+    // The real Environment class exposes getVariables() returning a name->value map,
+    // not getVariable(name). DB-stored secret env vars must resolve through this path.
+    const app = {
+      environment: {
+        getVariables: () => ({ CRYPTO_TOOLKIT_KEY_PRIVATE: '-----BEGIN PGP PRIVATE KEY BLOCK-----' }),
+      },
+    };
+    const getter = createEnvGetter(app);
+    expect(getter('CRYPTO_TOOLKIT_KEY_PRIVATE')).toBe('-----BEGIN PGP PRIVATE KEY BLOCK-----');
+    expect(getter('MISSING_VAR')).toBeUndefined();
+  });
+
+  it('prefers getVariable() over getVariables() when both exist', () => {
+    const app = {
+      environment: {
+        getVariable: (n: string) => (n === 'X' ? 'from-getVariable' : undefined),
+        getVariables: () => ({ X: 'from-getVariables' }),
+      },
+    };
+    const getter = createEnvGetter(app);
+    expect(getter('X')).toBe('from-getVariable');
+  });
+
   it('falls back to process.env', () => {
     process.env.CRYPTO_TOOLKIT_TEST_FALLBACK = 'process-value';
     const getter = createEnvGetter({});

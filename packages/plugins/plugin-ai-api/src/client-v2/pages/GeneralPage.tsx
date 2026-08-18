@@ -9,7 +9,6 @@ interface GeneralSettings {
   defaultAiEmployee?: string;
   defaultLlmService?: string;
   enabledLlmServices: string[];
-  rateLimitPerMinute: number;
   maxRequestBodyMb: number;
   quotaEnabled: boolean;
   defaultReservationOutputTokens: number;
@@ -28,7 +27,6 @@ interface AiEmployee {
 const defaults: GeneralSettings = {
   mode: 'llm',
   enabledLlmServices: [],
-  rateLimitPerMinute: 60,
   maxRequestBodyMb: 10,
   quotaEnabled: false,
   defaultReservationOutputTokens: 4096,
@@ -123,9 +121,6 @@ export default function GeneralPage() {
             />
           </Form.Item>
         ) : null}
-        <Form.Item name="rateLimitPerMinute" label={t('Rate Limit')} rules={[{ required: true }]}>
-          <InputNumber min={1} style={{ width: '100%' }} />
-        </Form.Item>
         <Form.Item
           name="maxRequestBodyMb"
           label={t('Max request body size (MB)')}

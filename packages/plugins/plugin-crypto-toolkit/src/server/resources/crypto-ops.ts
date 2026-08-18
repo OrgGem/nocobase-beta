@@ -188,7 +188,7 @@ export function registerCryptoOpsResource(app: Application): void {
 
       let output: Awaited<ReturnType<typeof writeOutput>>;
       let inputBytes = 0;
-      let keyId: number | null = null;
+      const keyId: number | null = null;
       let partnerKeyId: number | null = null;
 
       try {
@@ -228,7 +228,6 @@ export function registerCryptoOpsResource(app: Application): void {
             baseFilename: 'encrypted',
             extension: '.pgp',
           });
-          keyId = body.signerEnvVar ? null : null;
           partnerKeyId = recipientKeyIds[0] ?? null;
         } else {
           badRequest(ctx, 'algorithm must be pgp or aes-256-gcm');

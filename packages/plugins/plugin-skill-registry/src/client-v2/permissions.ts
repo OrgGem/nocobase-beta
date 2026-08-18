@@ -14,6 +14,7 @@ export const SKILL_REGISTRY_SNIPPETS = {
   sync: 'pm.skill-registry.sync',
   publish: 'pm.skill-registry.publish',
   install: 'pm.skill-registry.install',
+  markdown: 'pm.skill-registry.markdown',
   manage: 'pm.skill-registry.manage',
 } as const;
 
@@ -26,6 +27,7 @@ export interface SkillRegistryPermissions {
   canSync: boolean;
   canPublish: boolean;
   canInstall: boolean;
+  canMarkdown: boolean;
   canManage: boolean;
 }
 
@@ -52,6 +54,7 @@ export function resolveSkillRegistryPermissions(allow: AclSnippetAllow): SkillRe
     canSync: canUseSkillRegistryCapability(allow, 'sync'),
     canPublish: canUseSkillRegistryCapability(allow, 'publish'),
     canInstall: canUseSkillRegistryCapability(allow, 'install'),
+    canMarkdown: canUseSkillRegistryCapability(allow, 'markdown'),
     canManage: canUseSkillRegistryCapability(allow, 'manage'),
   };
 }

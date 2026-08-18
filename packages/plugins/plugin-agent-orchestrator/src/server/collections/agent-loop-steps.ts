@@ -68,6 +68,13 @@ export default defineCollection({
       length: 200,
     },
     {
+      // The AI conversation an invocation step drove; lets run-level guards (tool loop
+      // detection) enumerate every session belonging to the run.
+      name: 'sessionId',
+      type: 'uuid',
+      allowNull: true,
+    },
+    {
       name: 'inputHash',
       type: 'string',
       length: 128,

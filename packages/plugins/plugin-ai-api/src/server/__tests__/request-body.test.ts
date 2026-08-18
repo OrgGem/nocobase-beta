@@ -176,11 +176,54 @@ describe('AI API multimodal content block validation', () => {
   it('rejects an unsupported block type and names it', () => {
     const problem = findContentBlockProblem([
       { role: 'system', content: 'You are helpful.' },
-      { role: 'user', content: [{ type: 'file', file: { file_data: 'data:application/pdf;base64,JVBERi0=' } }] },
+      { role: 'user', content: [{ type: 'audio', audio: { url: 'https://example.com/x.mp3' } }] },
     ]);
 
     expect(problem?.index).toBe(1);
-    expect(problem?.reason).toContain("'file' is not supported");
+    expect(problem?.reason).toContain("'audio' is not supported");
+  });
+
+  it('accepts well-formed file and file_url blocks', () => {
+    expect(
+      findContentBlockProblem(wrap([{ type: 'file', file: { file_data: 'data:application/pdf;base64,JVBERi0=' } }])),
+    ).toBeUndefined();
+    expect(
+      findContentBlockProblem(wrap([{ type: 'file_url', file_url: { url: 'https://example.com/doc.pdf' } }])),
+    ).toBeUndefined();
+    // Complex MIME types with hyphens, dots, or '+' used to be rejected by the
+    // image_url grammar even though they are valid file attachments.
+    expect(
+      findContentBlockProblem(
+        wrap([
+          {
+            type: 'file',
+            file: {
+              file_data: 'data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,JVBERi0=',
+            },
+          },
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(
+      findContentBlockProblem(wrap([{ type: 'file', file: { file_data: 'data:image/svg+xml;base64,JVBERi0=' } }])),
+    ).toBeUndefined();
+  });
+
+  it('rejects a file block with missing or malformed file_data', () => {
+    expect(findContentBlockProblem(wrap([{ type: 'file' }]))?.reason).toContain("object 'file' field");
+    expect(findContentBlockProblem(wrap([{ type: 'file', file: { file_data: 'not-a-data-url' } }]))?.reason).toContain(
+      "'data:'",
+    );
+    expect(
+      findContentBlockProblem(wrap([{ type: 'file', file: { file_data: 'data:application/pdf;base64,!!!' } }]))?.reason,
+    ).toContain('malformed base64');
+  });
+
+  it('rejects a file_url block with missing or unsupported URL', () => {
+    expect(findContentBlockProblem(wrap([{ type: 'file_url' }]))?.reason).toContain("object 'file_url' field");
+    expect(
+      findContentBlockProblem(wrap([{ type: 'file_url', file_url: { url: 'ftp://example.com/doc.pdf' } }]))?.reason,
+    ).toContain("protocol 'ftp:'");
   });
 
   it('rejects a text block with no text payload', () => {

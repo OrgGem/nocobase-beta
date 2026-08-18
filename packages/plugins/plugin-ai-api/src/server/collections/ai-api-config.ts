@@ -22,7 +22,7 @@ export default defineCollection({
     {
       name: 'defaultAiEmployee',
       type: 'string',
-      comment: 'Username of the default AI Employee for system prompt injection',
+      comment: 'Username of the default AI Employee used by agent mode. Direct LLM mode ignores it.',
     },
     {
       name: 'defaultLlmService',
@@ -36,16 +36,18 @@ export default defineCollection({
       comment: 'Array of llmService names to expose. Empty = expose all enabled services',
     },
     {
-      name: 'rateLimitPerMinute',
-      type: 'integer',
-      defaultValue: 60,
-      comment: 'Max requests per user per minute',
-    },
-    {
       name: 'maxRequestBodyMb',
       type: 'integer',
       defaultValue: 10,
       comment: 'Max request body size in MB. Raise this to accept inline base64 images in vision requests.',
+    },
+    {
+      name: 'pdfRenderPagesAsImages',
+      type: 'boolean',
+      defaultValue: false,
+      comment:
+        'When true, PDF file/file_url blocks are rendered to per-page PNG images and sent as image_url blocks. ' +
+        'Requires a registered PdfToImageRenderer. When false or no renderer is available, PDFs are forwarded as file blocks.',
     },
     {
       name: 'quotaEnabled',

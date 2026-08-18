@@ -13,7 +13,7 @@ export default function VersionsPage() {
         type="info"
         showIcon
         message={t(
-          'Version audit is an administrative view. Use Manage versions in Catalog for skill-focused install and yank decisions.',
+          'Version audit is an administrative view. Use Manage in Catalog for skill-focused install and yank decisions.',
         )}
       />
       <Card title={t('Version audit')}>

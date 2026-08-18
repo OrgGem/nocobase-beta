@@ -19,6 +19,7 @@ import {
 import { resolveModelString } from '../utils/resolve-service';
 import { checkEmployeeAccess } from '../middleware/role-permission';
 import { enforceModelAccess } from '../utils/user-permissions';
+import { getAiApiConfig } from '../utils/request-cache';
 import { isStreamingRequested } from '../utils/streaming';
 import {
   AgentRuntimeContext,
@@ -89,7 +90,7 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
   }
 
   // ─── Load config and validate AI Employee ─────────────────────────────────
-  const config = await ctx.db.getRepository('aiApiConfig').findOne();
+  const config = await getAiApiConfig(ctx);
   const defaultAiEmployee = config ? config.get('defaultAiEmployee') || config.defaultAiEmployee : null;
   if (!defaultAiEmployee) {
     ctx.status = 400;

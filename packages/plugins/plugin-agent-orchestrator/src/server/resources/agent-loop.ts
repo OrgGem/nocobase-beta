@@ -194,7 +194,9 @@ export function registerAgentLoopResource(plugin: LoopResourcePlugin) {
         try {
           ctx.body = {
             data: await transitionOwnedRun(plugin, stateMachine, repository, ctx, 'queued', {
-              values: { blockedReason: null, escalationReason: null },
+              // Retry is a fresh attempt from the leader: any interrupted-session resume point
+              // and prior approval outcome must not leak into the new attempt.
+              values: { blockedReason: null, escalationReason: null, resumeContext: null, approvalStatus: null },
               eventType: 'run_retried',
             }),
           };

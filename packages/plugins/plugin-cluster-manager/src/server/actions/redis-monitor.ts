@@ -1,5 +1,6 @@
 import { Context } from '@nocobase/actions';
 import { getRedisOrThrow } from '../utils/redis';
+import { redactText } from './doctor';
 
 function parseRedisInfo(raw: string): Record<string, Record<string, string>> {
   const sections: Record<string, Record<string, string>> = {};
@@ -115,7 +116,7 @@ export const redisActions = {
 
     const channels = (await redis.sendCommand(['PUBSUB', 'CHANNELS'])) as string[];
 
-    let channelStats: Record<string, number> = {};
+    const channelStats: Record<string, number> = {};
     if (channels.length > 0) {
       const result = (await redis.sendCommand(['PUBSUB', 'NUMSUB', ...channels])) as string[];
       for (let i = 0; i < result.length; i += 2) {
@@ -140,7 +141,9 @@ export const redisActions = {
       id: entry[0],
       timestamp: entry[1],
       duration_us: entry[2],
-      command: Array.isArray(entry[3]) ? entry[3].join(' ') : String(entry[3]),
+      // Slowlog arguments can carry secrets (e.g. SET token ...); apply the
+      // same redaction policy as the doctor report.
+      command: redactText(Array.isArray(entry[3]) ? entry[3].join(' ') : String(entry[3])),
     }));
 
     ctx.body = { data: logs };

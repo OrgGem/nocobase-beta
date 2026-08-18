@@ -16,6 +16,7 @@ import {
   type RollingRestartMode,
   type RollingRestartNode,
 } from '../services/rolling-restart';
+import { redactText } from './doctor';
 
 const LOG_RESPONSE_KEY_PREFIX = 'cluster-manager:log-response:';
 const LEGACY_MULTI_APP_PLUGINS = ['multi-app-manager', 'multi-app-share-collection'];
@@ -535,7 +536,9 @@ export async function readLocalLogs(app: any, maxLines: number) {
 
     const content = buffer.toString('utf8');
     const allLines = content.split('\n').filter((l) => l.trim());
-    result.push(...allLines.slice(-maxLines));
+    // Redact secrets (tokens, passwords, bearer headers, URL credentials) so
+    // raw log material matches the doctor report policy.
+    result.push(...allLines.slice(-maxLines).map((line) => redactText(line)));
   } catch {
     // File read error
   }

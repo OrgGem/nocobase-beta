@@ -10,6 +10,7 @@ import {
   Space,
   Table,
   type TableColumnsType,
+  Tabs,
   Tag,
   Typography,
 } from 'antd';
@@ -19,6 +20,7 @@ import { useFlowContext } from '@nocobase/flow-engine';
 import { useT } from '../locale';
 import { useSkillRegistryPermissions } from '../permissions';
 import { unwrapListMeta, unwrapRecords } from './api';
+import { CatalogSkillDetail } from './CatalogSkillDetail';
 import { VersionManagement, type RegistryPackageContext } from './VersionManagement';
 
 type RegistryPackage = RegistryPackageContext & {
@@ -130,7 +132,7 @@ export default function CatalogPage() {
     render: (_, record) => (
       <Space wrap>
         {record.package ? (
-          <Button onClick={() => setVersionsPackage(record.package || null)}>{t('Manage versions')}</Button>
+          <Button onClick={() => setVersionsPackage(record.package || null)}>{t('Manage')}</Button>
         ) : null}
         {canPublish ? (
           record.state === 'conflict' ? (
@@ -435,13 +437,29 @@ export default function CatalogPage() {
         </>
       ) : null}
       <Drawer
-        title={t('Manage versions')}
+        title={t('Manage')}
         width="min(1200px, 95vw)"
         open={Boolean(versionsPackage)}
         onClose={() => setVersionsPackage(null)}
         destroyOnClose
       >
-        {versionsPackage ? <VersionManagement packageRecord={versionsPackage} /> : null}
+        {versionsPackage ? (
+          <Tabs
+            defaultActiveKey="info"
+            items={[
+              {
+                key: 'info',
+                label: t('Skill information'),
+                children: <CatalogSkillDetail packageId={versionsPackage.id} />,
+              },
+              {
+                key: 'versions',
+                label: t('Versions'),
+                children: <VersionManagement packageRecord={versionsPackage} />,
+              },
+            ]}
+          />
+        ) : null}
       </Drawer>
     </Space>
   );

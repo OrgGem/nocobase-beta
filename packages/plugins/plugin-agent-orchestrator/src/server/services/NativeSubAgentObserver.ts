@@ -1,8 +1,13 @@
 import { createHash } from 'crypto';
+import { mkdirSync, writeFileSync } from 'fs';
+import { resolve } from 'path';
 import { ExecutionSpanService } from './ExecutionSpanService';
 import { AgentMemoryContextService } from './AgentMemoryContextService';
 import { TokenTracker } from './TokenTracker';
-import { runWithAgentExecutionContext } from './AgentExecutionContext';
+import { getAgentExecutionContext, runWithAgentExecutionContext } from './AgentExecutionContext';
+import { compileHarness } from './HarnessCompiler';
+import type { CompiledHarness, HarnessLayer } from './HarnessCompiler';
+import { redactSecretsIn, resolveRunRoleHarness, spilledText } from './harness-runtime-policy';
 import { asObject, currentUserId, toPlain, trimText } from '../utils/ctx-utils';
 
 const WRAP_STATE_KEY = Symbol.for('plugin-agent-orchestrator.nativeSubAgentObserver');
@@ -57,6 +62,7 @@ type RunState = {
   leaderUsername?: string;
   employeeUsername?: string;
   userId?: string | number;
+  policy: CompiledHarness;
   toolSpans: Map<string, ToolSpanState>;
   pending: Set<Promise<void>>;
 };
@@ -184,13 +190,28 @@ export class NativeSubAgentObserver {
     }
 
     const parentSessionId = this.resolveParentSessionId(task) || undefined;
+    const parentConversation = await this.safeFindParentConversation(task.ctx, parentSessionId);
+    const parentRunId = this.controlPlaneRunIdOf(parentConversation);
+    // A sub-agent dispatched from a loop session inherits the role's frozen harness as an extra
+    // compile layer, so delegation caps, sharing and memory restrictions do not reset at the hop.
+    const parentRunHarness = parentRunId
+      ? await this.safeResolveParentRunHarness(
+          parentRunId,
+          normalizeString(readValue(parentConversation, 'aiEmployeeUsername')),
+        )
+      : null;
+    const policy = this.compilePolicy(settings, parentRunHarness);
+    const spansEnabled = policy.observability.sharing !== 'disabled';
+
     const subSessionId = normalizeString(task.sessionId) || undefined;
     const employeeUsername = modelUsername(task.employee);
     const userId = currentUserId(task.ctx) || task.ctx?.auth?.user?.id;
     const dispatchToolMessage = await this.resolveDispatchToolMessage(task.ctx, parentSessionId, subSessionId);
     const toolCallId = dispatchToolMessage?.toolCallId;
-    const leaderUsername = await this.resolveLeaderUsername(task.ctx, parentSessionId);
+    const leaderUsername = this.leaderUsernameFor(task.ctx, parentConversation);
     const rootRunId = makeNativeRunId([parentSessionId, subSessionId, toolCallId, employeeUsername]);
+    const delegation = await this.resolveDelegationContext(parentSessionId);
+    const childDepth = delegation.depth + 1;
     const memory = await this.safeBuildMemoryContext({
       userId,
       aiEmployeeUsername: employeeUsername,
@@ -219,6 +240,7 @@ export class NativeSubAgentObserver {
         memoryScopes: memory.appliedScopes,
         memoryContextChars: memory.chars,
         harnessTag: settings.harnessTag || 'default',
+        ...(parentRunId ? { agentLoopRunId: parentRunId } : {}),
       },
       parentSessionId,
       subSessionId,
@@ -226,11 +248,34 @@ export class NativeSubAgentObserver {
       leaderUsername,
       employeeUsername,
       userId,
+      policy,
       toolSpans: new Map(),
       pending: new Set(),
     };
 
-    await this.safeCreateRootSpan(state, task.question);
+    if (spansEnabled) {
+      await this.safeCreateRootSpan(state, task.question, {
+        depth: childDepth,
+        parentSpanId: delegation.parentSpanId,
+        agentLoopRunId: parentRunId,
+      });
+    }
+
+    // Depth is persisted on the span, not carried in-process, so a resumed child arrives with its
+    // true depth. The cap comes from the compiled policy, which includes the inherited parent
+    // layer; exceeding it fails the dispatch instead of silently deepening the recursion.
+    const maxDepth = policy.delegation.maxDepth;
+    if (maxDepth !== null && childDepth > maxDepth) {
+      const message = `Sub-agent delegation depth ${childDepth} exceeds the harness limit of ${maxDepth}.`;
+      await this.spanService.finish(state.rootSpanId, 'error', state.rootStartedAt, {
+        error: message,
+        metadata: {
+          ...state.rootMetadata,
+          failedAt: new Date().toISOString(),
+        },
+      });
+      throw new Error(message);
+    }
 
     const originalWriter = task.writer;
     observedTask.writer = (chunk: Record<string, unknown>) => {
@@ -242,7 +287,7 @@ export class NativeSubAgentObserver {
     };
 
     try {
-      const result = await runWithAgentExecutionContext(
+      const rawResult = await runWithAgentExecutionContext(
         {
           rootRunId,
           spanId: state.rootSpanId ? String(state.rootSpanId) : undefined,
@@ -253,9 +298,11 @@ export class NativeSubAgentObserver {
         },
         () => this.runWithKnowledgeBaseAgentContext(employeeUsername, () => originalRun(observedTask)),
       );
+      const result = this.spillLargeResult(state, rawResult);
       await this.flushPending(state);
+      const capturedOutput = this.spanOutput(state, trimText(result, 20000));
       await this.spanService.finish(state.rootSpanId, 'success', state.rootStartedAt, {
-        output: trimText(result, 20000),
+        ...(capturedOutput !== undefined ? { output: capturedOutput } : {}),
         metadata: {
           ...state.rootMetadata,
           completedAt: new Date().toISOString(),
@@ -270,8 +317,9 @@ export class NativeSubAgentObserver {
       return result;
     } catch (error) {
       await this.flushPending(state);
+      const capturedError = this.spanOutput(state, trimText(errorMessage(error), 10000));
       await this.spanService.finish(state.rootSpanId, 'error', state.rootStartedAt, {
-        error: trimText(errorMessage(error), 10000),
+        ...(capturedError !== undefined ? { error: capturedError } : {}),
         metadata: {
           ...state.rootMetadata,
           failedAt: new Date().toISOString(),
@@ -296,6 +344,65 @@ export class NativeSubAgentObserver {
     }
   }
 
+  // Span payload gates: inputs are captured only under 'full' sharing, outputs under 'full' or
+  // 'feedback-only'. Redaction scrubs secret-looking keys on whatever is captured; free text is
+  // deliberately left alone.
+  private spanInput(state: RunState, input: Record<string, unknown>): Record<string, unknown> | undefined {
+    const observability = state.policy.observability;
+    if (observability.sharing !== 'full' || !observability.captureInputs) return undefined;
+    return observability.redactSecrets ? redactSecretsIn(input) : input;
+  }
+
+  private spanOutput(state: RunState, output: unknown): unknown | undefined {
+    const observability = state.policy.observability;
+    if (observability.sharing === 'disabled' || !observability.captureOutputs) return undefined;
+    return observability.redactSecrets ? redactSecretsIn(output) : output;
+  }
+
+  // Resolved settings are a raw profile record plus the harnessTag marker; the marker is not a
+  // schema field. On any compile trouble fall back to an empty (all-default) harness so the
+  // safety defaults — redaction on, sharing full — still govern the spans.
+  private compilePolicy(settings: Record<string, unknown>, parentRunHarness: CompiledHarness | null): CompiledHarness {
+    const tag =
+      typeof settings.harnessTag === 'string' && settings.harnessTag.trim() ? settings.harnessTag.trim() : 'default';
+    const { harnessTag: _harnessTag, ...rest } = settings;
+    try {
+      const layers: HarnessLayer[] = [];
+      if (parentRunHarness) {
+        // `sources` is a compiler artifact the strict schema rejects, so it is stripped before the
+        // compiled parent harness is re-used as a layer. Most-restrictive-wins then carries the
+        // parent's delegation caps, sharing mode and memory limits into the child.
+        const { sources, ...inherited } = parentRunHarness;
+        layers.push({ source: `run-role:${sources.join('+') || 'snapshot'}`, settings: inherited });
+      }
+      layers.push({ source: `profile:${tag}`, settings: rest });
+      return compileHarness(layers);
+    } catch (error) {
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to compile observer harness policy', error);
+      return compileHarness([{ source: 'default', settings: {} }]);
+    }
+  }
+
+  // Oversized sub-agent results are stored on disk and replaced by a head/tail preview plus the
+  // file path, so the parent conversation can read the full text back with its file tools.
+  // Best effort: a spill failure keeps the original result inline.
+  private spillLargeResult(state: RunState, result: string): string {
+    const maxInlineBytes = state.policy.context.spill.maxInlineBytes;
+    if (!maxInlineBytes || typeof result !== 'string') return result;
+    try {
+      const spillDir = resolve(process.cwd(), 'storage', 'plugin-agent-orchestrator', 'spills');
+      mkdirSync(spillDir, { recursive: true });
+      const spillPath = resolve(spillDir, `${state.rootRunId}-${Date.now()}.txt`);
+      const replaced = spilledText(result, maxInlineBytes, spillPath);
+      if (!replaced) return result;
+      writeFileSync(spillPath, result, 'utf8');
+      return replaced;
+    } catch (error) {
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Sub-agent result spill failed', error);
+      return result;
+    }
+  }
+
   private async safeBuildMemoryContext(options: {
     userId?: string | number;
     aiEmployeeUsername?: string;
@@ -309,10 +416,16 @@ export class NativeSubAgentObserver {
     }
   }
 
-  private async safeCreateRootSpan(state: RunState, question: string) {
+  private async safeCreateRootSpan(
+    state: RunState,
+    question: string,
+    delegationInfo: { depth: number; parentSpanId?: string; agentLoopRunId?: number },
+  ) {
     const span = (await this.spanService.create({
       rootRunId: state.rootRunId,
-      parentSpanId: undefined,
+      parentSpanId: delegationInfo.parentSpanId,
+      depth: delegationInfo.depth,
+      agentLoopRunId: delegationInfo.agentLoopRunId,
       source: NATIVE_SOURCE,
       parentSessionId: state.parentSessionId,
       subSessionId: state.subSessionId,
@@ -323,11 +436,11 @@ export class NativeSubAgentObserver {
       employeeUsername: state.employeeUsername,
       toolName: 'dispatch-sub-agent-task',
       title: `${state.leaderUsername || 'main'} -> ${state.employeeUsername || 'sub-agent'}`,
-      input: {
+      input: this.spanInput(state, {
         question,
         parentSessionId: state.parentSessionId,
         subSessionId: state.subSessionId,
-      },
+      }),
       metadata: state.rootMetadata,
       userId: state.userId,
     })) as SpanRecord | null;
@@ -369,6 +482,7 @@ export class NativeSubAgentObserver {
   }
 
   private async handleBeforeToolCall(state: RunState, chunk: Record<string, unknown>) {
+    if (state.policy.observability.sharing === 'disabled') return;
     const body = chunkBody(chunk);
     const toolCall = asObject(body.toolCall);
     const toolCallId = normalizeString(toolCall.id);
@@ -402,7 +516,7 @@ export class NativeSubAgentObserver {
         employeeUsername: normalizeString(conversation.username) || state.employeeUsername,
         toolName,
         title: toolName || 'tool call',
-        input: asObject(toolCall.args),
+        input: this.spanInput(state, asObject(toolCall.args)),
         metadata: {
           source: NATIVE_SOURCE,
           currentConversation: conversation,
@@ -443,8 +557,8 @@ export class NativeSubAgentObserver {
       status,
       endedAt: new Date(),
       durationMs,
-      output: forceError ? undefined : trimText(output, 20000),
-      error: forceError ? trimText(errorMessage(error), 10000) : undefined,
+      output: forceError ? undefined : this.spanOutput(state, trimText(output, 20000)),
+      error: forceError ? this.spanOutput(state, trimText(errorMessage(error), 10000)) : undefined,
       skillExecutionId,
       metadata: {
         source: NATIVE_SOURCE,
@@ -483,24 +597,75 @@ export class NativeSubAgentObserver {
     return normalizeString(values.sessionId) || undefined;
   }
 
-  private async resolveLeaderUsername(ctx: NativeSubAgentTask['ctx'], parentSessionId?: string) {
+  private leaderUsernameFor(ctx: NativeSubAgentTask['ctx'], parentConversation: unknown) {
     const values = ctx?.action?.params?.values || {};
     const direct =
       normalizeString(values.aiEmployeeUsername) ||
       normalizeString((asObject(values.aiEmployee) as Record<string, unknown>).username);
-    if (direct) return direct;
-    if (!parentSessionId) return undefined;
+    return direct || normalizeString(readValue(parentConversation, 'aiEmployeeUsername')) || undefined;
+  }
 
+  private async safeFindParentConversation(ctx: NativeSubAgentTask['ctx'], parentSessionId?: string) {
+    if (!parentSessionId) return null;
     try {
       const repo = ctx.db?.getRepository?.('aiConversations') as
         | { findOne?: (options: Record<string, unknown>) => Promise<unknown> }
         | undefined;
-      const conversation = await repo?.findOne?.({
-        filter: { sessionId: parentSessionId },
-      });
-      return normalizeString(readValue(conversation, 'aiEmployeeUsername')) || undefined;
+      const conversation = await repo?.findOne?.({ filter: { sessionId: parentSessionId } });
+      return conversation || null;
     } catch {
-      return undefined;
+      return null;
+    }
+  }
+
+  private controlPlaneRunIdOf(conversation: unknown): number | undefined {
+    const runId = Number(asObject(readValue(conversation, 'options')).controlPlaneRunId);
+    return Number.isSafeInteger(runId) && runId > 0 ? runId : undefined;
+  }
+
+  private async safeResolveParentRunHarness(runId: number, parentUsername: string): Promise<CompiledHarness | null> {
+    if (!parentUsername) return null;
+    try {
+      return await resolveRunRoleHarness(this.plugin.db, runId, parentUsername);
+    } catch (error) {
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to resolve parent run harness for delegation', error);
+      return null;
+    }
+  }
+
+  // The parent's persisted span is the authoritative depth source: it was recorded when the
+  // parent itself was dispatched, so a resumed child arrives with its true depth even though its
+  // in-process context is fresh. The runtime context can only confirm or deepen the count, never
+  // lower it.
+  private async resolveDelegationContext(parentSessionId?: string): Promise<{ parentSpanId?: string; depth: number }> {
+    const candidates: Array<{ id?: string | number; depth?: unknown }> = [];
+    const context = getAgentExecutionContext();
+    if (context?.spanId) {
+      const span = await this.safeFindSpan({ filterByTk: context.spanId });
+      if (span) candidates.push(span);
+    }
+    if (parentSessionId) {
+      const span = await this.safeFindSpan({
+        filter: { subSessionId: parentSessionId, type: 'sub_agent' },
+        sort: ['-id'],
+      });
+      if (span) candidates.push(span);
+    }
+    const depth = candidates.reduce((deepest, span) => Math.max(deepest, Number(span.depth) || 0), 0);
+    const parentSpanId = candidates.find((span) => span.id !== undefined)?.id;
+    return { parentSpanId: parentSpanId === undefined ? undefined : String(parentSpanId), depth };
+  }
+
+  private async safeFindSpan(
+    options: Record<string, unknown>,
+  ): Promise<{ id?: string | number; depth?: unknown } | null> {
+    try {
+      const repo = this.plugin.db.getRepository('agentExecutionSpans');
+      if (!repo || typeof repo.findOne !== 'function') return null;
+      return ((await repo.findOne(options)) as { id?: string | number; depth?: unknown } | null) || null;
+    } catch (error) {
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to resolve delegation parent span', error);
+      return null;
     }
   }
 

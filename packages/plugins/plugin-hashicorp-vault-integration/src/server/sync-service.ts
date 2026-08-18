@@ -131,7 +131,8 @@ export class SyncService {
       if (envValue === undefined) {
         throw new Error(`Environment variable "${envVariable}" is not set`);
       }
-      const currentVaultValue = await client.readSecret(secretPath, secretKey);
+      // read-or-null so a not-yet-existing path/key is created by setSecretKey below
+      const currentVaultValue = await client.readSecretOrNull(secretPath, secretKey);
       if (currentVaultValue === envValue) {
         // values already match — keep cache in sync with vault (in case env was set later)
         this.cache.set(variableKey, envValue);

@@ -1,4 +1,3 @@
-import type { Logger } from '@nocobase/logger';
 import { randomUUID } from 'crypto';
 import os from 'os';
 import { createClient } from 'redis';
@@ -11,6 +10,14 @@ const RENEW_SCRIPT =
   'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end';
 const RELEASE_SCRIPT =
   'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
+
+// Structural logger so both SystemLogger (app.logger) and plain Logger instances
+// from @nocobase/logger are accepted.
+export interface WorkerIdAllocatorLogger {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+}
 
 export type RedisWorkerIdAllocatorStatus = {
   workerId: number | null;
@@ -33,7 +40,7 @@ export class RedisWorkerIdAllocator {
   constructor(
     redisUrl: string,
     appName: string,
-    private readonly logger: Logger,
+    private readonly logger: WorkerIdAllocatorLogger,
     private readonly leaseMs = DEFAULT_LEASE_MS,
     private readonly renewIntervalMs = DEFAULT_RENEW_INTERVAL_MS,
   ) {
@@ -61,7 +68,7 @@ export class RedisWorkerIdAllocator {
         'PX',
         String(this.leaseMs),
       ]);
-      if (result === 'OK') {
+      if (String(result) === 'OK') {
         this.workerId = candidate;
         this.healthy = true;
         this.lastRenewedAt = Date.now();

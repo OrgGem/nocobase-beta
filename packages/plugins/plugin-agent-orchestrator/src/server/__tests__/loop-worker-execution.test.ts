@@ -51,7 +51,14 @@ class MemoryRepository {
 
   async find(options: Row = {}) {
     const filter = (options.filter as Row | undefined) || {};
-    return this.rows.filter((row) => Object.entries(filter).every(([key, value]) => row[key] === value));
+    return this.rows.filter((row) =>
+      Object.entries(filter).every(([key, value]) => {
+        if (value && typeof value === 'object' && Array.isArray((value as Row).$in)) {
+          return ((value as Row).$in as unknown[]).includes(row[key]);
+        }
+        return row[key] === value;
+      }),
+    );
   }
 
   async findOne(options: Row) {
@@ -88,6 +95,7 @@ function createWorker(run: Row) {
     ['agentLoopRuns', new MemoryRepository([{ ...run }])],
     ['agentLoopEvents', new MemoryRepository()],
     ['agentLoopSteps', new MemoryRepository()],
+    ['aiMessages', new MemoryRepository()],
     ['agentLoopUsageBuckets', new MemoryRepository()],
     ['agentLoopCircuitStates', new MemoryRepository()],
     ['agentLoopPathLocks', new MemoryRepository()],
@@ -232,5 +240,78 @@ describe('LoopWorkerService path lock lifecycle', () => {
     await worker.execute(claimedRun(run));
 
     expect(repositories.get('agentLoopPathLocks')?.rows[0]).toMatchObject({ status: 'held', owner: 'worker-b:lease' });
+  });
+});
+
+describe('LoopWorkerService tool loop guard', () => {
+  function seedIdenticalCalls(repositories: Map<string, MemoryRepository>, count: number) {
+    const messages = repositories.get('aiMessages');
+    if (!messages) throw new Error('aiMessages repository missing');
+    onInvoke = async (call) => {
+      if (call.username !== 'lead') return;
+      for (let index = 0; index < count; index += 1) {
+        await messages.create({
+          values: {
+            sessionId: 'session-1',
+            role: 'assistant',
+            toolCalls: [{ id: `call-${index}`, name: 'searchDocs', args: { query: 'loop' } }],
+          },
+        });
+      }
+      onInvoke = null;
+    };
+  }
+
+  it('warns later prompts and records one guard step at the warn threshold', async () => {
+    const run = baseRun();
+    const { repositories, worker } = createWorker(run);
+    seedIdenticalCalls(repositories, 3);
+
+    await worker.execute(claimedRun(run));
+
+    const makerPrompt = invokeCalls[1]?.prompt || '';
+    expect(makerPrompt).toContain('<tool_loop_warning>');
+    expect(makerPrompt).toContain('searchDocs');
+
+    const guardSteps = (repositories.get('agentLoopSteps')?.rows || []).filter((step) => step.kind === 'guard');
+    // Recorded once on first observation; later passes see the same signature and skip it.
+    expect(guardSteps).toHaveLength(1);
+    expect(guardSteps[0]).toMatchObject({ type: 'tool_loop', toolName: 'searchDocs', role: 'leader' });
+
+    const loopEvents = (repositories.get('agentLoopEvents')?.rows || []).filter(
+      (event) => event.type === 'tool_loop_detected',
+    );
+    expect(loopEvents).toHaveLength(1);
+
+    // A warning alone must not stop the run.
+    expect(invokeCalls.map((call) => call.username)).toEqual(['lead', 'maker-one', 'maker-two']);
+    expect(verifyCalls).toHaveLength(1);
+    expect(repositories.get('agentLoopRuns')?.rows[0].status).toBe('verifying');
+  });
+
+  it('blocks the run at the block threshold before any further pass', async () => {
+    const run = baseRun();
+    const { repositories, worker } = createWorker(run);
+    seedIdenticalCalls(repositories, 5);
+
+    await worker.execute(claimedRun(run));
+
+    expect(invokeCalls.map((call) => call.username)).toEqual(['lead']);
+    expect(verifyCalls).toHaveLength(0);
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ status: 'blocked' });
+    expect(String(repositories.get('agentLoopRuns')?.rows[0].blockedReason)).toContain('searchDocs');
+  });
+
+  it('escalates the run to a human at the escalate threshold', async () => {
+    const run = baseRun();
+    const { repositories, worker } = createWorker(run);
+    seedIdenticalCalls(repositories, 8);
+
+    await worker.execute(claimedRun(run));
+
+    expect(invokeCalls.map((call) => call.username)).toEqual(['lead']);
+    expect(verifyCalls).toHaveLength(0);
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ status: 'waiting_human' });
+    expect(String(repositories.get('agentLoopRuns')?.rows[0].escalationReason)).toContain('searchDocs');
   });
 });

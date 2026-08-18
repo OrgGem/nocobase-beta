@@ -1,6 +1,6 @@
 import React from 'react';
 import { Plugin, Application } from '@nocobase/client-v2';
-import { AI_API_ACL_SNIPPET, AI_API_USER_PERMISSIONS_SNIPPET } from '../constants';
+import { AI_API_ACL_SNIPPET } from '../constants';
 
 interface PermissionTabOptions {
   key: string;
@@ -53,20 +53,11 @@ export class PluginAiApiClient extends Plugin<Record<string, never>, Application
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-api',
-      key: 'user-permissions',
-      title: this.t('User LLM permissions'),
-      aclSnippet: AI_API_USER_PERMISSIONS_SNIPPET,
-      sort: 4,
-      componentLoader: () => import('./pages/UserPermissionsPage'),
-    });
-
-    this.pluginSettingsManager.addPageTabItem({
-      menuKey: 'ai-api',
-      key: 'user-quotas',
-      title: this.t('User quotas'),
+      key: 'usage-groups',
+      title: this.t('Usage groups'),
       aclSnippet: AI_API_ACL_SNIPPET,
       sort: 5,
-      componentLoader: () => import('./pages/UserQuotasPage'),
+      componentLoader: () => import('./pages/UsageGroupsPage'),
     });
 
     this.pluginSettingsManager.addPageTabItem({

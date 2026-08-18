@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Table, Tag, Button, Progress, Space, Popconfirm, message, Select, Dropdown } from 'antd';
 import { ReloadOutlined, StopOutlined, RedoOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
+import { useT } from './utils';
 import dayjs from 'dayjs';
 
 const STATUS_MAP: Record<number | string, { label: string; color: string }> = {
@@ -14,18 +15,30 @@ const STATUS_MAP: Record<number | string, { label: string; color: string }> = {
 
 export function TaskManager() {
   const api = useApp().apiClient;
+  const t = useT();
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [pagination, setPagination] = useState({ current: 1, pageSize: 20, total: 0 });
   const [statusFilter, setStatusFilter] = useState<string | undefined>(undefined);
+  const paginationRef = useRef(pagination);
+
+  useEffect(() => {
+    paginationRef.current = pagination;
+  }, [pagination]);
 
   const fetchData = useCallback(
-    async (page = pagination.current, pageSize = pagination.pageSize) => {
+    async (page?: number, pageSize?: number) => {
+      const currentPage = page ?? paginationRef.current.current;
+      const currentPageSize = pageSize ?? paginationRef.current.pageSize;
       setLoading(true);
       try {
         const res = await api.request({
           url: 'clusterManager:list',
-          params: { page, pageSize, statusFilter: statusFilter === undefined ? '' : statusFilter },
+          params: {
+            page: currentPage,
+            pageSize: currentPageSize,
+            statusFilter: statusFilter === undefined ? '' : statusFilter,
+          },
         });
         const body = res.data;
         const rows = Array.isArray(body?.data?.data)
@@ -38,73 +51,81 @@ export function TaskManager() {
         setData(rows);
         setPagination((prev) => ({
           ...prev,
-          current: body.meta?.page || page,
+          current: body.meta?.page || currentPage,
           total: body.meta?.count || 0,
         }));
       } catch (err) {
-        message.error('Failed to load tasks');
+        message.error(t('Failed to load tasks'));
       } finally {
         setLoading(false);
       }
     },
-    [api, pagination.current, pagination.pageSize, statusFilter],
+    [api, statusFilter, t],
   );
 
   useEffect(() => {
     fetchData();
-  }, [statusFilter]);
+  }, [fetchData]);
 
   const handleCancel = async (id: string) => {
-    await api.request({ url: `clusterManager:cancel`, params: { filterByTk: id } });
-    message.success('Task canceled');
-    fetchData();
+    try {
+      await api.request({ url: `clusterManager:cancel`, params: { filterByTk: id } });
+      message.success(t('Task canceled'));
+      fetchData();
+    } catch {
+      message.error(t('Failed to cancel task'));
+    }
   };
 
   const handleRetry = async (id: string) => {
-    await api.request({ url: `clusterManager:retry`, params: { filterByTk: id } });
-    message.success('Task re-queued');
-    fetchData();
+    try {
+      await api.request({ url: `clusterManager:retry`, params: { filterByTk: id } });
+      message.success(t('Task re-queued'));
+      fetchData();
+    } catch {
+      message.error(t('Failed to retry task'));
+    }
   };
 
   const handlePurge = async (days: number) => {
     try {
       const res = await api.request({ url: `clusterManager:purge`, method: 'post', data: { days } });
-      message.success(`Purged ${res?.data?.deletedCount || 0} tasks`);
+      message.success(t('Purged {count} tasks').replace('{count}', String(res?.data?.deletedCount || 0)));
       fetchData();
     } catch {
-      message.error('Failed to purge tasks');
+      message.error(t('Failed to purge tasks'));
     }
   };
 
   const purgeItems = [
-    { key: '7', label: 'Older than 7 days', onClick: () => handlePurge(7) },
-    { key: '30', label: 'Older than 30 days', onClick: () => handlePurge(30) },
-    { key: '0', label: 'All completed/failed', danger: true, onClick: () => handlePurge(0) },
+    { key: '7', label: t('Older than 7 days'), onClick: () => handlePurge(7) },
+    { key: '30', label: t('Older than 30 days'), onClick: () => handlePurge(30) },
+    { key: '0', label: t('All completed/failed'), danger: true, onClick: () => handlePurge(0) },
   ];
 
   const columns = [
     {
-      title: 'Title',
+      title: t('Title'),
       dataIndex: 'title',
       width: 200,
       ellipsis: true,
     },
     {
-      title: 'Type',
+      title: t('Type'),
       dataIndex: 'type',
       width: 120,
     },
     {
-      title: 'Status',
+      title: t('Status'),
       dataIndex: 'status',
       width: 100,
       render: (val: number | null) => {
         const s = STATUS_MAP[String(val)] || { label: String(val), color: 'default' };
-        return <Tag color={s.color}>{s.label}</Tag>;
+        return <Tag color={s.color}>{t(s.label)}</Tag>;
       },
     },
     {
-      title: 'Progress',
+      title: t('Progress'),
       key: 'progress',
       width: 150,
       render: (_: any, record: any) => {
@@ -114,19 +135,19 @@ export function TaskManager() {
       },
     },
     {
-      title: 'User',
+      title: t('User'),
       key: 'user',
       width: 120,
       render: (_: any, record: any) => record.createdBy?.nickname || '-',
     },
     {
-      title: 'Created',
+      title: t('Created'),
       dataIndex: 'createdAt',
       width: 160,
       render: (val: string) => (val ? dayjs(val).format('YYYY-MM-DD HH:mm:ss') : '-'),
     },
     {
-      title: 'Duration',
+      title: t('Duration'),
       key: 'duration',
       width: 100,
       render: (_: any, record: any) => {
@@ -137,18 +158,18 @@ export function TaskManager() {
       },
     },
     {
-      title: 'Actions',
+      title: t('Actions'),
       key: 'actions',
       width: 120,
       render: (_: any, record: any) => (
         <Space>
           {(record.status === 0 || record.status === null) && (
-            <Popconfirm title="Cancel this task?" onConfirm={() => handleCancel(record.id)}>
+            <Popconfirm title={t('Cancel this task?')} onConfirm={() => handleCancel(record.id)}>
               <Button type="link" size="small" icon={<StopOutlined />} danger />
             </Popconfirm>
           )}
           {(record.status === -1 || record.status === -2) && (
-            <Popconfirm title="Retry this task?" onConfirm={() => handleRetry(record.id)}>
+            <Popconfirm title={t('Retry this task?')} onConfirm={() => handleRetry(record.id)}>
               <Button type="link" size="small" icon={<RedoOutlined />} />
             </Popconfirm>
           )}
@@ -161,18 +182,18 @@ export function TaskManager() {
     <div>
       <Space style={{ marginBottom: 16 }}>
         <Select
-          placeholder="Filter by status"
+          placeholder={t('Filter by status')}
           allowClear
           style={{ width: 160 }}
           value={statusFilter}
           onChange={setStatusFilter}
-          options={Object.entries(STATUS_MAP).map(([k, v]) => ({ value: k, label: v.label }))}
+          options={Object.entries(STATUS_MAP).map(([k, v]) => ({ value: k, label: t(v.label) }))}
         />
         <Button icon={<ReloadOutlined />} onClick={() => fetchData()}>
-          Refresh
+          {t('Refresh')}
         </Button>
         <Dropdown menu={{ items: purgeItems }} trigger={['click']}>
-          <Button danger>Purge Tasks</Button>
+          <Button danger>{t('Purge Tasks')}</Button>
         </Dropdown>
       </Space>
       <Table
@@ -185,7 +206,7 @@ export function TaskManager() {
         pagination={{
           ...pagination,
           showSizeChanger: true,
-          showTotal: (total) => `Total ${total}`,
+          showTotal: (total) => t('Total {total}').replace('{total}', String(total)),
           onChange: (page, pageSize) => fetchData(page, pageSize),
         }}
       />

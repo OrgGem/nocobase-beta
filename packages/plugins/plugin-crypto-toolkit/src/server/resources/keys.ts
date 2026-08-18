@@ -6,7 +6,7 @@ import { generateRawKeyPair, sha256Hex } from '../services/crypto-core';
 import { generateSshKey, pemToOpenSshPublic } from '../services/ssh-key-service';
 import { generatePgpKey } from '../services/pgp-service';
 import type { KeyMaterialInput } from '../services/load-key-material';
-import { loadKeyMaterial } from '../services/load-key-material';
+import { loadRawMaterial } from '../services/load-key-material';
 
 type Kind = 'pgp-rsa4096' | 'pgp-curve25519' | 'rsa-4096' | 'ed25519' | 'ssh-ed25519' | 'ssh-rsa';
 
@@ -24,18 +24,28 @@ const VALID_SSH_KINDS: Kind[] = ['ssh-ed25519', 'ssh-rsa'];
 
 type CryptoKeysRepo = Repository;
 
-function badRequest(ctx: ResourcerContext, message: string): never {
-  ctx.status = 400;
-  ctx.body = {
-    errors: [{ code: 'CRYPTOTOOLKIT_BAD_REQUEST', message }],
-  };
-  throw new Error(message);
+class CryptoToolkitHttpError extends Error {
+  statusCode: number;
+  code: string;
+
+  constructor(statusCode: number, code: string, message: string) {
+    super(message);
+    this.name = 'CryptoToolkitHttpError';
+    this.statusCode = statusCode;
+    this.code = code;
+  }
 }
 
-function notFound(ctx: ResourcerContext, message: string): never {
-  ctx.status = 404;
-  ctx.body = { errors: [{ code: 'CRYPTOTOOLKIT_NOT_FOUND', message }] };
-  throw new Error(message);
+// The error-handler middleware renders status from `err.statusCode` and the body
+// from `err.message`/`err.code`; setting `ctx.status` and then throwing a plain
+// Error would be overwritten to 500, so validation failures must be thrown as
+// typed errors carrying the intended status.
+function badRequest(message: string): never {
+  throw new CryptoToolkitHttpError(400, 'CRYPTOTOOLKIT_BAD_REQUEST', message);
+}
+
+function notFound(message: string): never {
+  throw new CryptoToolkitHttpError(404, 'CRYPTOTOOLKIT_NOT_FOUND', message);
 }
 
 function readBody(ctx: ResourcerContext): Record<string, unknown> {
@@ -109,7 +119,7 @@ async function generateForKind(
   }
   if (VALID_RAW_KINDS.includes(kind)) {
     const { publicKey, publicPem, privatePem } = generateRawKeyPair(kind === 'rsa-4096' ? 'rsa-4096' : 'ed25519');
-    const der = publicKey.export({ type: 'der', format: 'der' });
+    const der = publicKey.export({ type: 'spki', format: 'der' });
     const fp = sha256Hex(Buffer.isBuffer(der) ? der : Buffer.from(der));
     return {
       publicMaterial: publicPem,
@@ -139,7 +149,7 @@ async function fingerprintPgp(armoredPublic: string): Promise<string> {
 async function fingerprintPem(pem: string): Promise<string> {
   try {
     const pk = createPublicKey(pem);
-    const der = pk.export({ type: 'der', format: 'der' });
+    const der = pk.export({ type: 'spki', format: 'der' });
     const buf = Buffer.isBuffer(der) ? der : Buffer.from(der as ArrayBuffer);
     return 'SHA256:' + sha256Hex(buf);
   } catch {
@@ -159,7 +169,9 @@ function canonicalPublicPem(pem: string): string {
 
 function checkNotPrivate(value: string, field: string) {
   if (PRIVATE_MATERIAL_RE.test(value)) {
-    throw new Error(
+    throw new CryptoToolkitHttpError(
+      400,
+      'CRYPTOTOOLKIT_BAD_REQUEST',
       `${field} contains private key material. Partners get public material only; import does not accept private keys for direction='partner'.`,
     );
   }
@@ -183,23 +195,20 @@ export function registerCryptoKeysResource(app: Application): void {
       const envVarName = typeof body.envVarName === 'string' ? body.envVarName.trim() : '';
       const displayName = typeof body.displayName === 'string' ? body.displayName : '';
 
-      if (!name) return badRequest(ctx, 'name is required');
-      if (!kind) return badRequest(ctx, 'kind is required');
-      if (direction === 'partner') return badRequest(ctx, 'Cannot generate a partner key; use import instead');
-      if (saveToEnv && !envVarName) return badRequest(ctx, 'saveToEnv=true requires envVarName');
+      if (!name) return badRequest('name is required');
+      if (!kind) return badRequest('kind is required');
+      if (direction === 'partner') return badRequest('Cannot generate a partner key; use import instead');
+      if (saveToEnv && !envVarName) return badRequest('saveToEnv=true requires envVarName');
       if (saveToEnv && !ENV_BASENAME_RE.test(envVarName)) {
-        return badRequest(
-          ctx,
-          'envVarName must use uppercase letters, digits, and underscores, and start with a letter',
-        );
+        return badRequest('envVarName must use uppercase letters, digits, and underscores, and start with a letter');
       }
 
       const repo: CryptoKeysRepo = app.db.getRepository('cryptoKeys');
       const existing = await repo.findOne({ filter: { name } });
-      if (existing) return badRequest(ctx, `cryptoKey '${name}' already exists`);
+      if (existing) return badRequest(`cryptoKey '${name}' already exists`);
 
       const userId = getCurrentUserId(ctx);
-      if (userId === null) return badRequest(ctx, 'an authenticated user is required');
+      if (userId === null) return badRequest('an authenticated user is required');
       const envNames = saveToEnv ? generatedEnvNames(envVarName) : undefined;
 
       const envVarComment = envNames?.privateName ?? `${name}@nocobase-crypto-toolkit`;
@@ -251,13 +260,15 @@ export function registerCryptoKeysResource(app: Application): void {
       const kindHint = body.kind as Kind | undefined;
       const key = body.key as KeyMaterialInput | undefined;
 
-      if (!name) return badRequest(ctx, 'name is required');
-      if (direction !== 'partner') return badRequest(ctx, "import only accepts direction='partner'");
-      if (!key) return badRequest(ctx, 'key is required');
+      if (!name) return badRequest('name is required');
+      if (direction !== 'partner') return badRequest("import only accepts direction='partner'");
+      if (!key) return badRequest('key is required');
 
       const userId = getCurrentUserId(ctx);
-      if (userId === null) return badRequest(ctx, 'an authenticated user is required');
-      const loaded = await loadKeyMaterial(app, key, { attachmentOwnerId: userId });
+      if (userId === null) return badRequest('an authenticated user is required');
+      // Load raw bytes without key detection: detection would try to parse a
+      // private key and throw a decoder error before we can reject it cleanly.
+      const loaded = await loadRawMaterial(app, key, { attachmentOwnerId: userId });
       const materialText = loaded.buffer.toString('utf8');
       checkNotPrivate(materialText, 'key');
 
@@ -281,12 +292,12 @@ export function registerCryptoKeysResource(app: Application): void {
         publicMaterial = k.toString('ssh', { comment: k.comment || `${name}@nocobase` });
         fingerprint = k.fingerprint('sha256').toString();
       } else {
-        return badRequest(ctx, 'Unrecognized key material — expected PEM, OpenPGP armored, or OpenSSH public line');
+        return badRequest('Unrecognized key material — expected PEM, OpenPGP armored, or OpenSSH public line');
       }
 
       const repo: CryptoKeysRepo = app.db.getRepository('cryptoKeys');
       const existing = await repo.findOne({ filter: { name } });
-      if (existing) return badRequest(ctx, `cryptoKey '${name}' already exists`);
+      if (existing) return badRequest(`cryptoKey '${name}' already exists`);
 
       const row = (await repo.create({
         values: {
@@ -318,11 +329,11 @@ export function registerCryptoKeysResource(app: Application): void {
     async exportKey(ctx, next) {
       const filterByTk = String(ctx.request?.query?.filterByTk ?? '');
       const format = String(ctx.request?.query?.format ?? 'pem') as 'pem' | 'openssh' | 'armored';
-      if (!filterByTk) return badRequest(ctx, 'filterByTk is required');
+      if (!filterByTk) return badRequest('filterByTk is required');
 
       const repo = app.db.getRepository('cryptoKeys');
       const row = (await repo.findOne({ filter: { id: filterByTk } })) as Model | null;
-      if (!row) return notFound(ctx, `cryptoKey ${filterByTk} not found`);
+      if (!row) return notFound(`cryptoKey ${filterByTk} not found`);
 
       const publicMaterial = String(row.get('publicMaterial') ?? '');
       const publicFormat = String(row.get('publicFormat') ?? 'pem');
@@ -371,7 +382,7 @@ export function registerCryptoKeysResource(app: Application): void {
 
     async destroy(ctx, next) {
       const filterByTk = String(ctx.request?.query?.filterByTk ?? '');
-      if (!filterByTk) return badRequest(ctx, 'filterByTk is required');
+      if (!filterByTk) return badRequest('filterByTk is required');
       const repo = app.db.getRepository('cryptoKeys');
       const row = (await repo.findOne({ filter: { id: filterByTk } })) as Model | null;
       if (row) {

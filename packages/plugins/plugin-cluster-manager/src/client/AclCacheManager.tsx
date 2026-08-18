@@ -57,15 +57,15 @@ export function AclCacheManager() {
             : [];
       setKeys(keysArray);
     } catch {
-      message.error('Failed to load ACL cache data');
+      message.error(t('Failed to load ACL cache data'));
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, t]);
 
   useEffect(() => {
     fetchAll();
-  }, []);
+  }, [fetchAll]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -76,20 +76,20 @@ export function AclCacheManager() {
   const handleClearAll = async () => {
     try {
       const res = await api.request({ url: 'clusterManagerAclCache:clear', method: 'post' });
-      message.success(`Cleared ${res.data?.deletedCount || 0} cache entries`);
+      message.success(t('Cleared {count} cache entries').replace('{count}', String(res.data?.deletedCount || 0)));
       fetchAll();
     } catch {
-      message.error('Failed to clear cache');
+      message.error(t('Failed to clear cache'));
     }
   };
 
   const handleResetStats = async () => {
     try {
       await api.request({ url: 'clusterManagerAclCache:resetStats', method: 'post' });
-      message.success('Stats reset');
+      message.success(t('Stats reset'));
       fetchAll();
     } catch {
-      message.error('Failed to reset stats');
+      message.error(t('Failed to reset stats'));
     }
   };
 
@@ -100,10 +100,14 @@ export function AclCacheManager() {
         method: 'post',
         data: { roleName },
       });
-      message.success(`Cleared ${res.data?.deletedCount || 0} entries for role "${roleName}"`);
+      message.success(
+        t('Cleared {count} entries for role "{role}"')
+          .replace('{count}', String(res.data?.deletedCount || 0))
+          .replace('{role}', roleName),
+      );
       fetchAll();
     } catch {
-      message.error('Failed to clear role cache');
+      message.error(t('Failed to clear role cache'));
     }
   };
 
@@ -181,7 +185,7 @@ export function AclCacheManager() {
           {t('Refresh')}
         </Button>
         <Select
-          placeholder={t('Auto refresh')}
+          placeholder={t('Auto Refresh')}
           allowClear
           style={{ width: 160 }}
           value={autoRefresh}

@@ -26,7 +26,7 @@ export class RateLimiter {
    * Check and record a request for a user.
    *
    * @param userId  The user ID (string or numeric)
-   * @param limit   Max allowed requests per window (from aiApiConfig.rateLimitPerMinute)
+   * @param limit   Max allowed requests per window (from the user's usage group)
    * @returns { allowed: true } or { allowed: false, retryAfterMs: number }
    */
   check(userId: string | number, limit: number): { allowed: true } | { allowed: false; retryAfterMs: number } {

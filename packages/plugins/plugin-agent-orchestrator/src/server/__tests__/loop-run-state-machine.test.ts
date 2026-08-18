@@ -87,4 +87,15 @@ describe('LoopRunStateMachine transition guard', () => {
       }),
     ).not.toThrow();
   });
+
+  it('allows a behavioral guard to escalate straight from the active statuses', () => {
+    // Tool loop detection escalates an in-flight run to a human; routing it through `blocked`
+    // first would mislabel the run as mechanically retryable.
+    for (const from of ['running', 'verifying'] as const) {
+      expect(() =>
+        assertRunTransition({ from, to: 'waiting_human', runtimeVersion: 'control-plane-v2' }),
+      ).not.toThrow();
+      expect(() => assertRunTransition({ from, to: 'blocked', runtimeVersion: 'control-plane-v2' })).not.toThrow();
+    }
+  });
 });

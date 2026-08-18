@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { generateKeyPairSync, X509Certificate } from 'crypto';
-import * as x509 from '@peculiar/x509';
 import { createCsr, createSelfSigned, inspectCert, type CertSan } from '../services/cert-service';
 
 function ed25519PrivatePem(): string {
@@ -40,6 +39,28 @@ async function externalCertViaSshpk(): Promise<string> {
   return cert.toString('pem') as string;
 }
 
+function pemToDer(pemText: string): Buffer {
+  const base64 = pemText
+    .replace(/-----BEGIN [^-]+-----/, '')
+    .replace(/-----END [^-]+-----/, '')
+    .replace(/\s+/g, '');
+  return Buffer.from(base64, 'base64');
+}
+
+// Exact DER of the CN relative distinguished name the encoder emits:
+// SET { SEQUENCE { OID 2.5.4.3, UTF8String } } (test CNs are < 128 bytes).
+function cnAttributeDer(commonName: string): Buffer {
+  const oid = Buffer.from([0x06, 0x03, 0x55, 0x04, 0x03]);
+  const value = Buffer.concat([Buffer.from([0x0c, commonName.length]), Buffer.from(commonName, 'utf8')]);
+  const seq = Buffer.concat([Buffer.from([0x30, oid.length + value.length]), oid, value]);
+  return Buffer.concat([Buffer.from([0x31, seq.length]), seq]);
+}
+
+// Context-tagged GeneralName TLV: dNSName=0x82, rfc822Name=0x81, iPAddress=0x87.
+function generalName(tag: number, content: Buffer): Buffer {
+  return Buffer.concat([Buffer.from([tag, content.length]), content]);
+}
+
 describe('cert-service', () => {
   it('createCsr: PEM looks well-formed and contains BEGIN CERTIFICATE REQUEST', async () => {
     const { csrPem, publicKeyPem } = await createCsr({
@@ -51,13 +72,14 @@ describe('cert-service', () => {
   });
 
   it('createCsr: embeds the Common Name from the subject', async () => {
+    const commonName = 'round-trip.test';
     const { csrPem } = await createCsr({
-      subject: { commonName: 'round-trip.test' },
+      subject: { commonName },
       privateKeyPem: ed25519PrivatePem(),
     });
-    // Subject name is ASN.1-encoded; round-trip through @peculiar/x509 to read it back.
-    const parsed = new x509.Pkcs10CertificateRequest(csrPem);
-    expect(parsed.subjectName.toString()).toContain('round-trip.test');
+    // The subject is ASN.1-encoded inside the CSR; assert the exact CN RDN bytes.
+    const der = pemToDer(csrPem);
+    expect(der.includes(cnAttributeDer(commonName))).toBe(true);
   });
 
   it('createCsr: accepts an encrypted PEM when given its passphrase', async () => {
@@ -69,7 +91,7 @@ describe('cert-service', () => {
     expect(csrPem).toMatch(/-----BEGIN CERTIFICATE REQUEST-----/);
   });
 
-  it('createCsr: with SAN entries exposes DNS / IP / email when parsed', async () => {
+  it('createCsr: with SAN entries embeds DNS / IP / email GeneralNames', async () => {
     const san: CertSan = {
       dns: ['a.example.test', 'b.example.test'],
       ip: ['192.0.2.10'],
@@ -80,18 +102,16 @@ describe('cert-service', () => {
       san,
       privateKeyPem: rsaPrivatePem(),
     });
-    // SAN is ASN.1-encoded inside the PEM, so we round-trip through @peculiar/x509
-    // and read the SubjectAlternativeNameExtension items back.
-    const parsed = new x509.Pkcs10CertificateRequest(csrPem);
-    const sanExt = parsed.extensions.find((e) => e instanceof x509.SubjectAlternativeNameExtension);
-    expect(sanExt).toBeDefined();
-    const items = (sanExt as x509.SubjectAlternativeNameExtension).names.items;
-    const dnsValues = items.filter((g) => g.type === 'dns').map((g) => g.value);
-    const ipValues = items.filter((g) => g.type === 'ip').map((g) => g.value);
-    const emailValues = items.filter((g) => g.type === 'email').map((g) => g.value);
-    expect(dnsValues).toEqual(expect.arrayContaining(['a.example.test', 'b.example.test']));
-    expect(ipValues).toEqual(['192.0.2.10']);
-    expect(emailValues).toEqual(['admin@example.test']);
+    const der = pemToDer(csrPem);
+    // SubjectAlternativeName extension OID 2.5.29.17 must be present.
+    expect(der.includes(Buffer.from([0x06, 0x03, 0x55, 0x1d, 0x11]))).toBe(true);
+    for (const dns of san.dns ?? []) {
+      expect(der.includes(generalName(0x82, Buffer.from(dns, 'ascii')))).toBe(true);
+    }
+    expect(der.includes(generalName(0x87, Buffer.from([192, 0, 2, 10])))).toBe(true);
+    for (const email of san.email ?? []) {
+      expect(der.includes(generalName(0x81, Buffer.from(email, 'ascii')))).toBe(true);
+    }
   });
 
   it('createSelfSigned: emits a parsable X.509 certificate', async () => {

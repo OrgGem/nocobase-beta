@@ -8,6 +8,7 @@
  */
 
 import { Context } from '@nocobase/actions';
+import { getAiApiConfig } from './request-cache';
 
 /**
  * Resolve an LLM service by name or title.
@@ -64,7 +65,7 @@ export async function resolveModelString(
   }
 
   // ─── Strategy 2: Use default LLM service from config ───
-  const config = await ctx.db.getRepository('aiApiConfig').findOne();
+  const config = await getAiApiConfig(ctx);
   if (config?.defaultLlmService) {
     const service = await repo.findOne({ filter: { name: config.defaultLlmService } });
     if (service) {

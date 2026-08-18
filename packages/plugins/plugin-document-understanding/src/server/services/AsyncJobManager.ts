@@ -1,10 +1,23 @@
 import { Database } from '@nocobase/database';
 import { ExternalApiClient } from './ExternalApiClient';
-import { EndpointDef, JobState } from '../types';
+import { EndpointDef } from '../types';
 
 interface LoggerLike {
   warn: (...args: unknown[]) => void;
 }
+
+// Lease for inline (pending/running) execution. Refreshed at the start of every
+// pipeline step; must outlive the slowest step (endpoint timeout x retries).
+export const JOB_RUN_LEASE_MS = 10 * 60 * 1000;
+// Lease for polling jobs. Refreshed on every poll tick, so it only needs to
+// outlive a few missed ticks before another node may adopt the job.
+const JOB_POLL_LEASE_MIN_MS = 60 * 1000;
+
+export function pollLeaseMs(pollInterval?: number): number {
+  return Math.max((pollInterval || 5000) * 3, JOB_POLL_LEASE_MIN_MS);
+}
+
+const JOBS_COLLECTION = 'doc_understanding_jobs';
 
 export class AsyncJobManager {
   private db: Database;
@@ -13,6 +26,7 @@ export class AsyncJobManager {
   private onJobComplete: (jobId: number, result: any) => Promise<void>;
   private onJobError: (jobId: number, error: string) => Promise<void>;
   private logger: LoggerLike;
+  private nodeId: string;
 
   constructor(
     db: Database,
@@ -22,12 +36,14 @@ export class AsyncJobManager {
       onJobError: (jobId: number, error: string) => Promise<void>;
     },
     logger: LoggerLike,
+    nodeId: string,
   ) {
     this.db = db;
     this.apiClient = apiClient;
     this.onJobComplete = callbacks.onJobComplete;
     this.onJobError = callbacks.onJobError;
     this.logger = logger;
+    this.nodeId = nodeId;
   }
 
   async startPolling(
@@ -52,8 +68,16 @@ export class AsyncJobManager {
           return;
         }
 
+        // Renew our lease; if the row no longer matches (job finished, or another
+        // node adopted it after our lease expired) stop polling immediately.
+        if (!(await this.refreshLease(jobId, endpoint))) {
+          this.stopPolling(jobId);
+          return;
+        }
+
         const pollResultSubpath = endpoint.pollResultSubpath;
         if (!pollResultSubpath) {
+          this.stopPolling(jobId);
           await this.onJobError(jobId, 'Polling result subpath is not configured');
           return;
         }
@@ -95,59 +119,101 @@ export class AsyncJobManager {
     this.intervals.set(jobId, timer);
   }
 
-  /**
-   * Transition pending and running jobs to failed state during startup.
-   */
-  async cleanupStuckJobs(): Promise<void> {
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
-    const stuckJobs = await jobsRepo.find({
-      filter: {
-        status: ['pending', 'running'],
-      },
+  private async refreshLease(jobId: number, endpoint: EndpointDef): Promise<boolean> {
+    const jobsRepo = this.db.getRepository<any>(JOBS_COLLECTION);
+    const updated = await jobsRepo.update({
+      filter: { id: jobId, status: 'polling', ownedBy: this.nodeId },
+      values: { leaseExpiresAt: new Date(Date.now() + pollLeaseMs(endpoint.pollInterval)) },
     });
-
-    for (const job of stuckJobs) {
-      await jobsRepo.update({
-        filterByTk: job.id,
-        values: {
-          status: 'failed',
-          error: 'Server restarted during execution',
-          completedAt: new Date(),
-        },
-      });
-    }
+    return Array.isArray(updated) ? updated.length > 0 : Boolean(updated);
   }
 
   /**
-   * Recover polling jobs that were in-flight when server restarted.
-   * Call this during service initialization.
+   * Fail pending/running jobs that can no longer be executing. First the jobs
+   * this node owned (in-memory execution state is lost across a restart), then
+   * any remaining job whose owner lease expired. Rows without a lease predate
+   * ownership tracking and are treated as orphaned too.
    */
-  async recoverPollingJobs(): Promise<void> {
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
-    const stuckJobs = await jobsRepo.find({ filter: { status: 'polling' } });
+  async failOrphanedActiveJobs(): Promise<void> {
+    const jobsRepo = this.db.getRepository<any>(JOBS_COLLECTION);
+    const now = new Date();
 
-    for (const job of stuckJobs) {
-      if (!job.externalTaskIds) continue;
+    await jobsRepo.update({
+      filter: { status: { $in: ['pending', 'running'] }, ownedBy: this.nodeId },
+      values: { status: 'failed', error: 'Server restarted during execution', completedAt: now },
+    });
 
-      // Find the current step's endpoint and taskId
-      const stepKey = job.currentStep.toString();
-      const taskId = job.externalTaskIds[stepKey];
+    await jobsRepo.update({
+      filter: {
+        status: { $in: ['pending', 'running'] },
+        $or: [{ leaseExpiresAt: { $lt: now } }, { leaseExpiresAt: null }],
+      },
+      values: { status: 'failed', error: 'Job lease expired before completion', completedAt: now },
+    });
+  }
+
+  /**
+   * Re-adopt 'polling' jobs whose owner can no longer be polling them: jobs this
+   * node owned before a restart, jobs whose lease expired, and legacy rows without
+   * ownership. Webhook-mode jobs are skipped — nothing polls them, and any node
+   * can process the webhook when it arrives.
+   */
+  async adoptOrphanedPollingJobs(): Promise<void> {
+    const jobsRepo = this.db.getRepository<any>(JOBS_COLLECTION);
+    const now = new Date();
+    const candidates = await jobsRepo.find({
+      filter: {
+        status: 'polling',
+        $or: [{ ownedBy: this.nodeId }, { leaseExpiresAt: { $lt: now } }, { ownedBy: null }],
+      },
+    });
+
+    for (const job of candidates) {
+      const externalTaskIds = (job.externalTaskIds || {}) as Record<string, string>;
+      const stepKey = String(job.currentStep);
+      const taskId = externalTaskIds[stepKey];
       if (!taskId) continue;
 
-      // We need the endpoint definition for this step
       const pipelineRepo = this.db.getRepository('doc_understanding_pipelines');
       const pipeline = await pipelineRepo.findOne({
         filter: { id: job.pipelineId },
         appends: ['steps', 'steps.endpoint'],
       });
-
       if (!pipeline) continue;
 
-      const step = (pipeline as any).steps?.find((s: any) => s.stepOrder === job.currentStep);
+      const steps = ((pipeline as any).steps || []) as Array<{ stepOrder: number; endpoint?: EndpointDef }>;
+      const step = steps.find((s) => s.stepOrder === job.currentStep);
       if (!step?.endpoint || step.endpoint.executionMode !== 'polling') continue;
 
-      await this.startPolling(job.id, step.endpoint, taskId);
+      if (await this.claimJobForPolling(job.id, step.endpoint)) {
+        await this.startPolling(job.id, step.endpoint, taskId);
+      }
     }
+  }
+
+  private async claimJobForPolling(jobId: number, endpoint: EndpointDef): Promise<boolean> {
+    return this.db.sequelize.transaction(async (transaction: { LOCK: { UPDATE: string } }): Promise<boolean> => {
+      const jobsRepo = this.db.getRepository<any>(JOBS_COLLECTION);
+      const row = await jobsRepo.findOne({ filterByTk: jobId, transaction, lock: transaction.LOCK.UPDATE });
+      if (!row) return false;
+      if (String(row.get('status')) !== 'polling') return false;
+
+      const owner = row.get('ownedBy') as string | null;
+      const lease = row.get('leaseExpiresAt') as Date | string | null;
+      const leaseValid = lease != null && new Date(lease).getTime() > Date.now();
+      // A different node still owns the job with a valid lease: leave it alone.
+      if (owner !== this.nodeId && leaseValid) return false;
+
+      await jobsRepo.update({
+        filterByTk: jobId,
+        values: {
+          ownedBy: this.nodeId,
+          leaseExpiresAt: new Date(Date.now() + pollLeaseMs(endpoint.pollInterval)),
+        },
+        transaction,
+      });
+      return true;
+    });
   }
 
   stopPolling(jobId: number) {

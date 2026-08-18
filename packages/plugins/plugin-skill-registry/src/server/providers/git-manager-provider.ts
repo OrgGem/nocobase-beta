@@ -11,6 +11,7 @@ import { RegistryError } from '../contracts/errors';
 import { ARTIFACT_LIMITS } from '../services/artifact-builder';
 import { SOURCE_INGESTION_LIMITS, validateDiscoveredExternalKeys } from '../services/candidate-validator';
 import { candidateDigest } from '../services/canonical-json';
+import { parseSkillMarkdownFrontmatter } from '../services/skill-markdown-meta';
 import { normalizeIdentity, normalizeRelativePath } from '../services/validation';
 
 interface GitTreeEntry {
@@ -179,31 +180,6 @@ function joinPath(...parts: string[]): string {
 
 function normalizeRootPath(rootPath: string): string {
   return rootPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-}
-
-function parseFrontmatter(markdown: string): Record<string, unknown> {
-  const match = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
-  if (!match) {
-    return {};
-  }
-  const result: Record<string, unknown> = {};
-  for (const line of match[1].split(/\r?\n/)) {
-    const parsed = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
-    if (!parsed) {
-      continue;
-    }
-    const raw = parsed[2].trim().replace(/^['"]|['"]$/g, '');
-    if (raw === 'true' || raw === 'false') {
-      result[parsed[1]] = raw === 'true';
-    } else {
-      try {
-        result[parsed[1]] = JSON.parse(raw);
-      } catch {
-        result[parsed[1]] = raw;
-      }
-    }
-  }
-  return result;
 }
 
 function entryKey(entry: Record<string, unknown>): string | null {
@@ -489,7 +465,7 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
         access,
       ),
     );
-    const frontmatter = parseFrontmatter(frontmatterMarkdown.toString('utf8'));
+    const frontmatter = parseSkillMarkdownFrontmatter(frontmatterMarkdown.toString('utf8'));
     const codeFile = declaredCodeFile || (typeof frontmatter.codeFile === 'string' ? frontmatter.codeFile : undefined);
     const entries = codeFile
       ? await requireGitExport(

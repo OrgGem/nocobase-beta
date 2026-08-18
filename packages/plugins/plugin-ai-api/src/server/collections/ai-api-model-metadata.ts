@@ -56,6 +56,13 @@ export default defineCollection({
       comment: 'Human-readable description returned as description in the model object.',
     },
     {
+      name: 'systemPrompt',
+      type: 'text',
+      allowNull: true,
+      comment:
+        'Initial system prompt prepended as the first system message of every request for this model. Never replaces the client system prompt.',
+    },
+    {
       name: 'enabled',
       type: 'boolean',
       defaultValue: true,
