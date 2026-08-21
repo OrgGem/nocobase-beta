@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.1.44](https://github.com/nocobase/nocobase/compare/v2.1.43...v2.1.44) - 2026-08-20
+
+### 🎉 New Features
+
+- **[Multi-space]** Added search to space switchers and space management in both v1 and v2 by @jiannx
+
+### 🐛 Bug Fixes
+
+- **[DingTalk]** Fixed DingTalk internal auto-login retaining the previous user's session after switching accounts. by @chenzhizdt
+
+## [v2.1.43](https://github.com/nocobase/nocobase/compare/v2.1.42...v2.1.43) - 2026-08-19
+
+### 🐛 Bug Fixes
+
+- **[app]** Added runtime polyfills for modern JavaScript APIs in supported older browsers ([#10385](https://github.com/nocobase/nocobase/pull/10385)) by @mytharcher
+
+- **[undefined]** Fixed customized external database field display names being reset when selected tables are reloaded by @cgyrock
+
+- **[Data source manager]** Fixed customized external database field display names being reset when a data source is submitted or its selected tables are changed ([#10387](https://github.com/nocobase/nocobase/pull/10387)) by @cgyrock
+
+- **[Workflow: Approval]** Fixed approval workflows configured to return to any previous approval node only allowing the nearest upstream node by @mytharcher
+
+## [v2.1.42](https://github.com/nocobase/nocobase/compare/v2.1.41...v2.1.42) - 2026-08-18
+
+### 🚀 Improvements
+
+- **[undefined]**
+  - Added LDAP and DingTalk user data synchronization guides, including permissions, event modes, synchronized fields, department owners, and troubleshooting. ([#10377](https://github.com/nocobase/nocobase/pull/10377)) by @chenzhizdt
+Reference: [DingTalk synchronization](https://github.com/chenzhizdt/nocobase/blob/docs/ldap-dingtalk/docs/docs/en/users-permissions/sync/sources/dingtalk.md), [LDAP synchronization](https://github.com/chenzhizdt/nocobase/blob/docs/ldap-dingtalk/docs/docs/en/users-permissions/sync/sources/ldap.md)
+  - Improve LDAP and DingTalk user synchronization documentation and add all supported translations. ([#10382](https://github.com/nocobase/nocobase/pull/10382)) by @chenzhizdt
+Reference: [DingTalk](docs/docs/en/users-permissions/sync/sources/dingtalk.md) / [LDAP](docs/docs/en/users-permissions/sync/sources/ldap.md)
+### 🐛 Bug Fixes
+
+- **[Workflow: JavaScript]** Fixed JavaScript workflow task recovery repeatedly enqueueing jobs whose executions have ended or expired. ([#10366](https://github.com/nocobase/nocobase/pull/10366)) by @mytharcher
+
+- **[Action: Export records Pro]** Fix export errors when using complex filters with the Export Pro plugin by @zhangzhonghe
+
+- **[Action: Import records Pro]** Fixed asynchronous imports not respecting field-level import permissions by @mytharcher
+
+- **[App supervisor]** Fixed Kingbase connections when creating supervised applications by @2013xile
+
+## [v2.1.41](https://github.com/nocobase/nocobase/compare/v2.1.40...v2.1.41) - 2026-08-16
+
+### 🚀 Improvements
+
+- **[lock-manager]** Added renewable local lock leases and ensured try-acquired locks are released safely across reuse and errors ([#10368](https://github.com/nocobase/nocobase/pull/10368)) by @jiannx
+
+- **[Redis lock adapter]** Added renewable Redis lock leases and made reusable lock handles release safely during contention and errors by @jiannx
+
+### 🐛 Bug Fixes
+
+- **[File manager]** Fix the extra submit step when selecting an existing file in a single-value field ([#10372](https://github.com/nocobase/nocobase/pull/10372)) by @zhangzhonghe
+
+- **[Collection field: Markdown(Vditor)]** Fix Markdown HTML previews in v2 details blocks under dark themes. ([#10370](https://github.com/nocobase/nocobase/pull/10370)) by @katherinehhh
+
+- **[Collection field: Encryption]** Fixed bulk import failing with `model.changed is not a function` when the collection contains an encryption field by @cgyrock
+
+- **[Workflow: Webhook]** Fixed a 400 error when manually executing a webhook workflow without request headers by @mytharcher
+
+## [v2.1.40](https://github.com/nocobase/nocobase/compare/v2.1.39...v2.1.40) - 2026-08-14
+
+### 🚀 Improvements
+
+- **[Block: Tree]** Tree filter blocks now support configurable default sorting. ([#10339](https://github.com/nocobase/nocobase/pull/10339)) by @jiannx
+
+### 🐛 Bug Fixes
+
+- **[client-v2]**
+  - Fix filter forms refreshing automatically in UI edit mode ([#10356](https://github.com/nocobase/nocobase/pull/10356)) by @zhangzhonghe
+
+  - Use Cascader by default for tree-structured relation fields in v2 filter forms ([#10357](https://github.com/nocobase/nocobase/pull/10357)) by @zhangzhonghe
+
+  - Fix mobile single-select relation fields not clearing when the selected record is tapped again ([#10346](https://github.com/nocobase/nocobase/pull/10346)) by @zhangzhonghe
+
+  - Fix the issue where China region fields cannot be added directly to filter forms ([#10333](https://github.com/nocobase/nocobase/pull/10333)) by @zhangzhonghe
+
+  - Fix JS items incorrectly appearing in form field linkage rule actions ([#10363](https://github.com/nocobase/nocobase/pull/10363)) by @gchust
+
+- **[Workflow: JSON calculation]** Fixed JSON Query jobs losing structured parser errors and displaying `[object Object]` ([#10344](https://github.com/nocobase/nocobase/pull/10344)) by @mytharcher
+
+- **[Action: Export records]**
+  - Fixed a page crash when sorting an edited relation field in Export V2. ([#10335](https://github.com/nocobase/nocobase/pull/10335)) by @katherinehhh
+
+  - Fix table export errors after filtering by multiple relation fields ([#10342](https://github.com/nocobase/nocobase/pull/10342)) by @zhangzhonghe
+
+- **[Block: Kanban]** Fixed configured content disappearing after reopening a kanban card's detail drawer ([#10334](https://github.com/nocobase/nocobase/pull/10334)) by @jiannx
+
+- **[File manager]** Fixed video previews not updating when switching between files ([#10345](https://github.com/nocobase/nocobase/pull/10345)) by @mytharcher
+
+- **[Action: Import records Pro]**
+  - Fixed asynchronously imported records not being associated with the current space by @jiannx
+
+  - Clarified import results by showing the number of newly created records separately from updated records by @mytharcher
+
+- **[Workflow: Approval]**
+  - Fix inconsistent subtable column widths in approval details by @zhangzhonghe
+
+  - Add data scope filtering to Client V2 related approval blocks by @zhangzhonghe
+
 ## [v2.1.39](https://github.com/nocobase/nocobase/compare/v2.1.38...v2.1.39) - 2026-08-11
 
 ### 🐛 Bug Fixes
