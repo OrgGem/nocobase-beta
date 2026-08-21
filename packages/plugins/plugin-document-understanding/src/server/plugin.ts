@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import { DocumentUnderstandingService } from './services/DocumentUnderstandingService';
 import { defineActions } from './actions';
 import { createDynamicPipelineToolsProvider } from './tools/document-understanding-tool';
+import { seedDugateEndpoints } from './dugate-seed';
 
 type DynamicToolsProvider = ReturnType<typeof createDynamicPipelineToolsProvider>;
 
@@ -112,7 +113,15 @@ export class PluginDocumentUnderstandingServer extends Plugin {
     }
   }
 
-  async install() {}
+  async install() {
+    // Seed the DUGate-compatible endpoint/pipeline catalog on first install.
+    // Subpaths stay relative so they follow the base URL in Service Config.
+    try {
+      await seedDugateEndpoints(this.db);
+    } catch (err) {
+      this.app.logger.warn('Document Understanding: DUGate seed data could not be installed.', err);
+    }
+  }
 
   async afterEnable() {}
 

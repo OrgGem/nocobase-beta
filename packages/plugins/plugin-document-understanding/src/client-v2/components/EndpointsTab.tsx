@@ -407,6 +407,57 @@ export const EndpointsTab = () => {
                 ),
               },
               {
+                key: 'gateway',
+                label: t('Gateway / Discriminator'),
+                children: (
+                  <>
+                    <Form.Item
+                      name="discriminatorField"
+                      label={t('Discriminator Field')}
+                      help={t(
+                        'Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.',
+                      )}
+                    >
+                      <Input placeholder="mode" style={{ width: 200 }} />
+                    </Form.Item>
+                    <Form.Item
+                      name="discriminatorValue"
+                      label={t('Discriminator Value')}
+                      help={t('Value sent in the discriminator field (e.g. parse, invoice, disbursement).')}
+                    >
+                      <Input placeholder="parse" style={{ width: 200 }} />
+                    </Form.Item>
+                    <Form.Item
+                      name="syncQueryParam"
+                      label={t('Sync Query Param')}
+                      help={t(
+                        'When set, the request appends ?<param>=true to ask for a synchronous response (e.g. sync).',
+                      )}
+                    >
+                      <Input placeholder="sync" style={{ width: 200 }} />
+                    </Form.Item>
+                    <Form.Item
+                      name="taskIdExtractPath"
+                      label={t('Task ID Extract Path')}
+                      help={t(
+                        'JSON path of the async task id in the 202 response (e.g. name). Used when the response is 202 even in sync mode.',
+                      )}
+                    >
+                      <Input placeholder="name" style={{ width: 200 }} />
+                    </Form.Item>
+                    <Form.Item
+                      name="taskIdExtractRegex"
+                      label={t('Task ID Extract Regex')}
+                      help={t(
+                        'Regex with one capture group to pull the task id from the extracted path value (e.g. operations/([^/]+)).',
+                      )}
+                    >
+                      <Input placeholder="operations/([^/]+)" style={{ width: 240 }} />
+                    </Form.Item>
+                  </>
+                ),
+              },
+              {
                 key: 'async',
                 label: t('Async Config'),
                 children: (

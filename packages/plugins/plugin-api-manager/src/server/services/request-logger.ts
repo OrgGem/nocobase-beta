@@ -28,6 +28,14 @@ export interface RequestLogEntry {
   durationMs: number;
 }
 
+export const MAX_LOG_PAYLOAD_BYTES = 1024 * 1024;
+
+export function capPayload(buffer: Buffer): string | null {
+  if (buffer.length === 0) return null;
+  if (buffer.length > MAX_LOG_PAYLOAD_BYTES) return null;
+  return buffer.toString('base64');
+}
+
 export async function writeRequestLog(db: Database, entry: RequestLogEntry): Promise<void> {
   const repo = db.getRepository('apiRequestLogs');
   await repo.create({ values: entry });

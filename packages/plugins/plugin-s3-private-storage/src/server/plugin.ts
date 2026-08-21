@@ -22,10 +22,21 @@ import {
 import { Upload } from '@aws-sdk/lib-storage';
 import { STORAGE_TYPE_S3_PRIVATE } from '../constants';
 import S3PrivateStorage from './storages/s3-private';
+import { resolveCredentialsProvider } from './aws-credentials';
+import { assertStreamAuthenticated } from './stream-auth';
+import { buildContentDisposition } from './content-disposition';
+import { SlidingWindowRateLimiter, getStreamRateLimitConfigFromEnv, type StreamRateLimitConfig } from './rate-limit';
 
 export class PluginS3PrivateStorageServer extends Plugin {
+  private rateLimiter: SlidingWindowRateLimiter | null = null;
+
   async afterAdd() {
-    this.app.pm.get('file-manager') || this.app.pm.get('@nocobase/plugin-file-manager');
+    const fileManagerPlugin = this.app.pm.get('file-manager') || this.app.pm.get('@nocobase/plugin-file-manager');
+    if (!fileManagerPlugin) {
+      throw new Error(
+        '[s3-private-storage] @nocobase/plugin-file-manager is required. Please enable it before this plugin.',
+      );
+    }
   }
 
   async load() {
@@ -35,6 +46,38 @@ export class PluginS3PrivateStorageServer extends Plugin {
 
     this.app.resourceManager.registerActionHandler('attachments:stream', this.streamAction.bind(this));
     this.app.acl.allow('attachments', 'stream', 'loggedIn');
+
+    // In-memory sliding-window rate limiter for the stream endpoint.
+    // Configurable via S3_PRIVATE_STREAM_RATE_LIMIT_* environment variables.
+    // Single-instance only; swap for a shared store (e.g. Redis) in multi-instance deployments.
+    const rateLimitConfig: StreamRateLimitConfig = getStreamRateLimitConfigFromEnv();
+    this.log.info(
+      `[s3-private-storage] Stream rate limiting ${rateLimitConfig.enabled ? 'enabled' : 'disabled'} (max=${
+        rateLimitConfig.max
+      } per ${rateLimitConfig.windowMs}ms)`,
+    );
+    // Only create the limiter when enabled. When disabled via
+    // S3_PRIVATE_STREAM_RATE_LIMIT_ENABLED=false the streamAction guard
+    // `this.rateLimiter` stays null and no limiting is applied.
+    this.rateLimiter = rateLimitConfig.enabled
+      ? new SlidingWindowRateLimiter({
+          max: rateLimitConfig.max,
+          windowMs: rateLimitConfig.windowMs,
+        })
+      : null;
+
+    // Register the 'stream' action on the attachments resource. The Resource
+    // constructor copies global actionHandlers only at define() time, and the
+    // file-manager may define 'attachments' after this plugin's load() runs,
+    // so register during afterLoad — after every plugin has loaded.
+    this.app.on('afterLoad', () => {
+      try {
+        const attResource = this.app.resourceManager.getResource('attachments');
+        attResource.addAction('attachments:stream', this.streamAction.bind(this));
+      } catch {
+        // resource or action already exists — the global handler still covers it
+      }
+    });
 
     // Register Browser Adapter into External Storage Manager Hub if available
     this.app.on('afterLoad', () => {
@@ -192,9 +235,45 @@ export class PluginS3PrivateStorageServer extends Plugin {
       return;
     }
 
-    // Root role bypasses all permission checks
+    // Explicit authentication check. The acl.allow('attachments', 'stream',
+    // 'loggedIn') gate should already have populated currentUser, but this
+    // guards against misconfiguration (e.g. the ACL rule missing) and fails
+    // closed instead of relying solely on the ACL layer.
+    if (!assertStreamAuthenticated(ctx)) {
+      return;
+    }
+
+    // Rate limiting: applied per user (or per anonymous IP) before any
+    // expensive S3/DB work. Root role is exempt.
     const currentRoles: string[] = ctx.state.currentRoles || [];
     const isRoot = currentRoles.includes('root');
+    if (!isRoot && this.rateLimiter) {
+      const key = ctx.state.currentUser?.id
+        ? 'user:' + ctx.state.currentUser.id
+        : 'ip:' + (ctx.request.ip || 'unknown');
+      const decision = this.rateLimiter.check(key);
+      if (!decision.allowed) {
+        ctx.set('Retry-After', String(decision.retryAfterSec));
+        ctx.throw(429, 'Too many requests. Please try again later.');
+        return;
+      }
+    }
+
+    // Root role bypasses all permission checks
+
+    // Validate the collection param against known file collections. This
+    // prevents callers from probing arbitrary tables via the stream endpoint
+    // and reduces the enumeration surface (the fallback scan below only runs
+    // for the legacy 'attachments' collection).
+    const targetCollection = ctx.db.getCollection?.(collection);
+    const isFileCollection =
+      collection === 'attachments' ||
+      collection === 'aiFiles' ||
+      Boolean(targetCollection?.options?.template === 'file');
+    if (!isFileCollection) {
+      ctx.throw(400, `Invalid collection: ${collection}`);
+      return;
+    }
 
     const repository = ctx.db.getRepository(collection);
     if (!repository) {
@@ -305,13 +384,8 @@ export class PluginS3PrivateStorageServer extends Plugin {
     try {
       const { stream, contentType } = await fileManagerPlugin.getFileStream(recordObj);
       ctx.set('Content-Type', contentType || 'application/octet-stream');
-
-      const filename = encodeURIComponent(recordObj.filename || record.get('filename') || 'file');
-      if (mode === 'attachment') {
-        ctx.set('Content-Disposition', `attachment; filename="${filename}"`);
-      } else {
-        ctx.set('Content-Disposition', `inline; filename="${filename}"`);
-      }
+      const filename = recordObj.filename || record.get('filename') || 'file';
+      ctx.set('Content-Disposition', buildContentDisposition(filename, mode));
 
       ctx.set('Cache-Control', 'private, max-age=3600');
       ctx.body = stream;
@@ -575,11 +649,28 @@ export class PluginS3PrivateStorageServer extends Plugin {
     const options = parsed.options || {};
     const clientConfig: any = {
       region: options.region,
-      credentials: {
-        accessKeyId: options.accessKeyId,
-        secretAccessKey: options.secretAccessKey,
-      },
     };
+
+    // Credentials are optional. When omitted, the AWS SDK resolves them via
+    // the default credential chain (IAM role, IMDS, environment variables, or
+    // shared config files). This supports:
+    //   1. EC2 instances with an IAM role that has S3 permissions (same-account)
+    //   2. Assume-role workflows where the role is already attached to the instance
+    //   3. Explicit static credentials (accessKeyId + secretAccessKey)
+    //
+    // When roleArn is configured, STS AssumeRole is used (optionally chained).
+    const credentials = resolveCredentialsProvider({
+      region: options.region,
+      endpoint: options.endpoint,
+      accessKeyId: options.accessKeyId,
+      secretAccessKey: options.secretAccessKey,
+      roleArn: options.roleArn,
+      roleSessionName: options.roleSessionName,
+      externalId: options.externalId,
+    });
+    if (credentials) {
+      clientConfig.credentials = credentials;
+    }
     if (options.endpoint) {
       clientConfig.endpoint = options.endpoint;
       clientConfig.forcePathStyle = true;

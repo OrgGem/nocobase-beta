@@ -3,7 +3,7 @@
   "displayName": "Document Understanding",
   "displayName.zh-CN": "文档理解",
   "description": "Configure external document processing endpoints, chain them into pipelines, and expose enabled pipelines as AI tools.",
-  "version": "1.1.12",
+  "version": "1.1.13",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [

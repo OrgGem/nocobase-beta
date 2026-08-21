@@ -1,13 +1,24 @@
-import type { Model } from '@nocobase/database';
 import type { Application } from '@nocobase/server';
+import type { Model } from '@nocobase/database';
 import { ERROR_CODES, type EncryptionMode, type WireFormat } from '../../constants';
-import { aesGcmDecrypt, aesGcmEncrypt, createEnvGetter, type AesSecret } from './crypto-primitives';
 import { ApimError } from './errors';
-import { decryptAndVerify, encryptAndSign } from './pgp';
+import { getEnv } from './env';
+import { sha256Hex } from './hash';
 
 export interface EncryptedPayload {
   body: Buffer;
   contentType?: string;
+}
+
+export interface DecryptedPayload {
+  body: Buffer;
+  /** Plaintext content type carried by the JSON wire envelope, when present. */
+  contentType?: string;
+}
+
+export interface AesSecret {
+  key?: Buffer;
+  passphrase?: string;
 }
 
 interface RouteLike {
@@ -19,123 +30,77 @@ function routeField(route: RouteLike, name: string): string | undefined {
   return value == null || value === '' ? undefined : String(value);
 }
 
-function tryBase64To32Bytes(raw: string): Buffer | null {
-  const trimmed = raw.trim();
-  if (!/^[A-Za-z0-9+/=_-]+$/.test(trimmed)) return null;
-  try {
-    const buffer = Buffer.from(trimmed, 'base64');
-    return buffer.length === 32 ? buffer : null;
-  } catch {
-    return null;
-  }
-}
-
-async function resolveAesSecret(app: Application, route: RouteLike): Promise<AesSecret> {
-  const getEnv = createEnvGetter(app);
-  const envVar = routeField(route, 'aesSecretEnvVar');
-  let rawSecret: string | undefined;
-  if (envVar) {
-    rawSecret = getEnv(envVar);
-    if (!rawSecret) {
-      throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `AES secret env variable "${envVar}" is not set`, 500);
-    }
-  } else {
-    const encrypted = routeField(route, 'aesSecret');
-    if (!encrypted) {
-      throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, 'Route has no AES secret configured', 500);
-    }
-    rawSecret = await app.aesEncryptor.decrypt(encrypted);
-  }
-  const asKey = tryBase64To32Bytes(rawSecret);
-  return asKey ? { key: asKey } : { passphrase: rawSecret };
-}
-
-async function findCryptoKey(app: Application, name: string | undefined, label: string): Promise<Model> {
-  if (!name) {
-    throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `Route is missing ${label}`, 500);
-  }
-  const key = await app.db.getRepository('cryptoKeys').findOne({ filter: { name, enabled: true } });
-  if (!key) {
-    throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `Crypto Toolkit key "${name}" not found or disabled`, 500);
-  }
-  return key;
-}
-
-async function resolveOwnPrivateKey(
-  app: Application,
-  keyRecord: Model,
-): Promise<{ armored: string; passphrase?: string }> {
-  const envVar = keyRecord.get('privateEnvVar');
-  const name = String(keyRecord.get('name') ?? '');
-  if (!envVar) {
-    throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `Crypto Toolkit key "${name}" has no privateEnvVar`, 500);
-  }
-  const getEnv = createEnvGetter(app);
-  const armored = getEnv(String(envVar));
-  if (!armored) {
-    throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `Private key env variable "${envVar}" is not set`, 500);
-  }
-  const passphrase = getEnv(`${envVar}_PASSPHRASE`);
-  return passphrase ? { armored, passphrase } : { armored };
-}
-
-function wrapWire(container: Buffer, wireFormat: WireFormat): EncryptedPayload {
-  if (wireFormat === 'json') {
-    const envelope = JSON.stringify({ encoding: 'base64', ciphertext: container.toString('base64') });
-    return { body: Buffer.from(envelope, 'utf8'), contentType: 'application/json' };
-  }
-  return { body: container, contentType: 'application/octet-stream' };
-}
-
-function unwrapWire(raw: Buffer, contentType?: string): Buffer {
-  const ct = (contentType ?? '').toLowerCase();
-  if (ct.includes('application/json')) {
-    try {
-      const parsed = JSON.parse(raw.toString('utf8')) as { ciphertext?: unknown };
-      if (parsed && typeof parsed.ciphertext === 'string') {
-        return Buffer.from(parsed.ciphertext, 'base64');
+/**
+ * The Crypto Toolkit plugin is the encryption backend for the gateway. All
+ * payload crypto (AES-256-GCM NCB1, OpenPGP, RSA-OAEP NCR1) and key-material
+ * resolution happens there; this adapter maps route records onto the toolkit's
+ * public service API and translates errors into gateway error codes.
+ */
+function getCryptoToolkit(app: Application): {
+  encryptPayload: (options: {
+    mode: EncryptionMode;
+    wireFormat: WireFormat;
+    plaintext: Buffer;
+    plaintextContentType?: string;
+    aesSecretEnvVar?: string;
+    aesSecretEncrypted?: string;
+    pgpEncryptKeyName?: string;
+    pgpSignKeyName?: string;
+    rsaEncryptKeyName?: string;
+  }) => Promise<EncryptedPayload>;
+  decryptPayload: (options: {
+    mode: EncryptionMode;
+    data: Buffer;
+    contentType?: string;
+    aesSecretEnvVar?: string;
+    aesSecretEncrypted?: string;
+    pgpDecryptKeyName?: string;
+    pgpVerifyKeyName?: string;
+    rsaDecryptKeyName?: string;
+  }) => Promise<DecryptedPayload>;
+  resolveAesSecret: (route: RouteLike) => Promise<AesSecret>;
+  resolveOwnPrivateKeyMaterial: (keyRecord: Model) => Promise<{ material: string; passphrase?: string }>;
+} {
+  const toolkit = (app.pm?.get?.('crypto-toolkit') ?? app.pm?.get?.('plugin-crypto-toolkit')) as
+    | {
+        encryptPayload?: (options: never) => Promise<EncryptedPayload>;
+        decryptPayload?: (options: never) => Promise<DecryptedPayload>;
+        resolveAesSecret?: (route: RouteLike) => Promise<AesSecret>;
+        resolveOwnPrivateKeyMaterial?: (keyRecord: Model) => Promise<{ material: string; passphrase?: string }>;
       }
-    } catch {
-      // Not a JSON envelope — fall through and treat the raw bytes as the container.
-    }
+    | undefined;
+  if (!toolkit?.encryptPayload || !toolkit?.decryptPayload) {
+    throw new ApimError(
+      ERROR_CODES.CRYPTO_CONFIG,
+      'plugin-crypto-toolkit is required for encrypted API routes; enable it and restart',
+      500,
+    );
   }
-  return raw;
+  return toolkit as never;
 }
 
-export async function encryptPayload(app: Application, route: RouteLike, plaintext: Buffer): Promise<EncryptedPayload> {
-  const mode = (routeField(route, 'encryptionMode') ?? 'none') as EncryptionMode;
-  const wireFormat = (routeField(route, 'wireFormat') ?? 'binary') as WireFormat;
-
-  if (mode === 'none') {
-    return { body: plaintext };
-  }
-
-  if (mode === 'aes-256-gcm') {
-    const secret = await resolveAesSecret(app, route);
-    return wrapWire(aesGcmEncrypt(plaintext, secret), wireFormat);
-  }
-
-  if (mode === 'pgp') {
-    const recipientKey = await findCryptoKey(app, routeField(route, 'pgpEncryptKeyName'), 'a PGP encrypt key');
-    const recipientPublic = String(recipientKey.get('publicMaterial') ?? '');
-    if (!recipientPublic) {
-      throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, 'PGP encrypt key has no public material', 500);
-    }
-    let signerKey: { armored: string; passphrase?: string } | undefined;
-    const signKeyName = routeField(route, 'pgpSignKeyName');
-    if (signKeyName) {
-      const signKeyRecord = await findCryptoKey(app, signKeyName, 'a PGP sign key');
-      signerKey = await resolveOwnPrivateKey(app, signKeyRecord);
-    }
-    const ciphertext = await encryptAndSign({
-      data: plaintext,
-      recipientKeys: [{ armored: recipientPublic }],
-      signerKey,
+export async function encryptPayload(
+  app: Application,
+  route: RouteLike,
+  plaintext: Buffer,
+  plaintextContentType?: string,
+): Promise<EncryptedPayload> {
+  const toolkit = getCryptoToolkit(app);
+  try {
+    return await toolkit.encryptPayload({
+      mode: (routeField(route, 'encryptionMode') ?? 'none') as EncryptionMode,
+      wireFormat: (routeField(route, 'wireFormat') ?? 'binary') as WireFormat,
+      plaintext,
+      plaintextContentType,
+      aesSecretEnvVar: routeField(route, 'aesSecretEnvVar'),
+      aesSecretEncrypted: routeField(route, 'aesSecret'),
+      pgpEncryptKeyName: routeField(route, 'pgpEncryptKeyName'),
+      pgpSignKeyName: routeField(route, 'pgpSignKeyName'),
+      rsaEncryptKeyName: routeField(route, 'rsaEncryptKeyName'),
     });
-    return wrapWire(Buffer.from(ciphertext), wireFormat);
+  } catch (error) {
+    throw toApimError(error);
   }
-
-  throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `Unknown encryption mode "${mode}"`, 500);
 }
 
 export async function decryptPayload(
@@ -143,43 +108,64 @@ export async function decryptPayload(
   route: RouteLike,
   raw: Buffer,
   contentType?: string,
-): Promise<Buffer> {
-  const mode = (routeField(route, 'encryptionMode') ?? 'none') as EncryptionMode;
-  if (mode === 'none') {
-    return raw;
+): Promise<DecryptedPayload> {
+  const toolkit = getCryptoToolkit(app);
+  try {
+    return await toolkit.decryptPayload({
+      mode: (routeField(route, 'encryptionMode') ?? 'none') as EncryptionMode,
+      data: raw,
+      contentType,
+      aesSecretEnvVar: routeField(route, 'aesSecretEnvVar'),
+      aesSecretEncrypted: routeField(route, 'aesSecret'),
+      pgpDecryptKeyName: routeField(route, 'pgpDecryptKeyName'),
+      pgpVerifyKeyName: routeField(route, 'pgpVerifyKeyName'),
+      rsaDecryptKeyName: routeField(route, 'rsaDecryptKeyName'),
+    });
+  } catch (error) {
+    throw toApimError(error);
   }
-
-  const container = unwrapWire(raw, contentType);
-
-  if (mode === 'aes-256-gcm') {
-    const secret = await resolveAesSecret(app, route);
-    try {
-      return aesGcmDecrypt(container, secret);
-    } catch (error) {
-      throw new ApimError(ERROR_CODES.DECRYPT_FAILED, `AES decryption failed: ${(error as Error).message}`, 400);
-    }
-  }
-
-  if (mode === 'pgp') {
-    const decryptKeyRecord = await findCryptoKey(app, routeField(route, 'pgpDecryptKeyName'), 'a PGP decrypt key');
-    const privateKey = await resolveOwnPrivateKey(app, decryptKeyRecord);
-    const verifyKeyName = routeField(route, 'pgpVerifyKeyName');
-    let verificationKeys: Array<{ armored: string }> | undefined;
-    if (verifyKeyName) {
-      const verifyKeyRecord = await findCryptoKey(app, verifyKeyName, 'a PGP verify key');
-      verificationKeys = [{ armored: String(verifyKeyRecord.get('publicMaterial') ?? '') }];
-    }
-    let result: Awaited<ReturnType<typeof decryptAndVerify>>;
-    try {
-      result = await decryptAndVerify({ data: container, privateKey, verificationKeys });
-    } catch (error) {
-      throw new ApimError(ERROR_CODES.DECRYPT_FAILED, `PGP decryption failed: ${(error as Error).message}`, 400);
-    }
-    if (verificationKeys && result.signatureValid === false) {
-      throw new ApimError(ERROR_CODES.SIGNATURE_INVALID, 'PGP signature verification failed', 400);
-    }
-    return Buffer.from(result.data);
-  }
-
-  throw new ApimError(ERROR_CODES.CRYPTO_CONFIG, `Unknown encryption mode "${mode}"`, 500);
 }
+
+/**
+ * Resolve the AES secret referenced by a route record through the toolkit.
+ * Kept for callers that need the raw secret (tests, diagnostics).
+ */
+export async function resolveAesSecret(app: Application, route: RouteLike): Promise<AesSecret> {
+  const toolkit = getCryptoToolkit(app);
+  try {
+    return await toolkit.resolveAesSecret(route);
+  } catch (error) {
+    throw toApimError(error);
+  }
+}
+
+/**
+ * Resolve the own private key material (PGP armor / PEM + optional
+ * passphrase) from a cryptoKeys row via the toolkit. Handles legacy
+ * privateEnvVar names (missing `_PRIVATE`) and the `<envVar>_PASSPHRASE`
+ * companion variable.
+ */
+export async function resolveOwnPrivateKeyMaterial(
+  app: Application,
+  keyRecord: Model,
+): Promise<{ material: string; passphrase?: string }> {
+  const toolkit = getCryptoToolkit(app);
+  try {
+    return await toolkit.resolveOwnPrivateKeyMaterial(keyRecord);
+  } catch (error) {
+    throw toApimError(error);
+  }
+}
+
+/** Translate toolkit GatewayCryptoError codes into gateway ApimError codes. */
+function toApimError(error: unknown): ApimError {
+  if (error instanceof ApimError) return error;
+  const candidate = error as { code?: string; message?: string; httpStatus?: number };
+  if (typeof candidate.code === 'string' && candidate.code.startsWith('APIM_')) {
+    return new ApimError(candidate.code, candidate.message ?? 'Crypto processing failed', candidate.httpStatus ?? 500);
+  }
+  return new ApimError(ERROR_CODES.CRYPTO_CONFIG, candidate.message ?? 'Crypto processing failed', 500);
+}
+
+// Re-exported helpers used elsewhere in the plugin.
+export { getEnv, sha256Hex };

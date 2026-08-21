@@ -1,4 +1,3 @@
-import type { Application } from '@nocobase/server';
 import type { Repository } from '@nocobase/database';
 
 export interface OperationLogInput {
@@ -71,13 +70,4 @@ export async function logOperation(
       }`,
     );
   }
-}
-
-/**
- * Convenience wrapper to resolve the current user id and then delegate to logOperation.
- */
-export async function logOperationForApp(app: Application, input: OperationLogInput): Promise<void> {
-  const ctx = (app as unknown as { context?: { state?: { currentUser?: { id?: number } } } }).context;
-  const userId = ctx?.state?.currentUser?.id ?? null;
-  await logOperation(app, { ...input, userId: userId ?? null });
 }

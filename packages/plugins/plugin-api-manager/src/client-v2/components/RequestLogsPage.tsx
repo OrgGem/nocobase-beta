@@ -50,6 +50,7 @@ export const RequestLogsPage: React.FC = () => {
   const [rows, setRows] = useState<LogRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [routeFilter, setRouteFilter] = useState<string | undefined>();
+  const [debouncedRouteFilter, setDebouncedRouteFilter] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
   const [range, setRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [detail, setDetail] = useState<LogRow | null>(null);
@@ -57,11 +58,21 @@ export const RequestLogsPage: React.FC = () => {
   const [total, setTotal] = useState(0);
   const pageSize = 20;
 
+  // Debounce the free-text route filter so typing does not fire one list
+  // request per keystroke.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedRouteFilter(routeFilter);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [routeFilter]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const filter: Record<string, unknown> = {};
-      if (routeFilter) filter.routeName = routeFilter;
+      if (debouncedRouteFilter) filter.routeName = debouncedRouteFilter;
       if (statusFilter) filter.status = statusFilter;
       if (range && range[0] && range[1]) {
         filter.createdAt = { $gte: range[0].toISOString(), $lte: range[1].toISOString() };
@@ -78,7 +89,7 @@ export const RequestLogsPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [api, t, routeFilter, statusFilter, range, page]);
+  }, [api, t, debouncedRouteFilter, statusFilter, range, page]);
 
   useEffect(() => {
     load();
@@ -128,16 +139,15 @@ export const RequestLogsPage: React.FC = () => {
       <Space style={{ marginBottom: 16 }} wrap>
         <Input
           allowClear
+          aria-label={t('Filter by route name') as string}
           placeholder={t('Filter by route name') as string}
           value={routeFilter}
-          onChange={(e) => {
-            setPage(1);
-            setRouteFilter(e.target.value || undefined);
-          }}
+          onChange={(e) => setRouteFilter(e.target.value || undefined)}
           style={{ width: 200 }}
         />
         <Select
           allowClear
+          aria-label={t('Status') as string}
           placeholder={t('Status') as string}
           value={statusFilter}
           onChange={(v) => {
@@ -149,6 +159,7 @@ export const RequestLogsPage: React.FC = () => {
         />
         <DatePicker.RangePicker
           showTime
+          aria-label={t('Time range') as string}
           value={range as [Dayjs, Dayjs] | undefined}
           onChange={(v) => {
             setPage(1);

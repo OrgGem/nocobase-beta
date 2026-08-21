@@ -2,6 +2,7 @@
 // is importable from test contexts that don't need PGP (and don't break under
 // vite-node's VM-context transformation in this Windows toolchain).
 import type * as openpgp from 'openpgp';
+import { loadOpenpgp } from './lazy-loaders';
 
 export interface PgpKeyPair {
   privateKey: string; // ASCII-armored private key (with passphrase if provided)
@@ -26,13 +27,6 @@ export interface PgpDecryptVerifyResult {
   data: Uint8Array;
   signatureValid: boolean | null; // null = no signature attached
   signerFingerprints: string[];
-}
-
-async function loadOpenpgp(): Promise<typeof import('openpgp')> {
-  // Use require so that CJS resolution paths are honoured when called from a built
-  // server bundle. Returns a fully-resolved namespace via default unwrap.
-  const mod = await import('openpgp');
-  return (mod.default ?? mod) as typeof import('openpgp');
 }
 
 function toUint8Array(data: Uint8Array | string): Uint8Array {

@@ -6,7 +6,7 @@ const description = `Display a NEW draw.io diagram from compact structured data.
 Use this tool instead of display_diagram for normal flowcharts, architecture sketches, process maps, and simple diagrams. It keeps tool-call arguments small by sending nodes and edges as JSON; the browser converts them to draw.io XML.
 
 Guidelines:
-- You can call this even when no draw.io block is currently open; the client will create and open a new diagram automatically.
+- The plugin keeps ONE shared draw.io canvas for the whole chat. The first display shows an "Open Diagram" button; once open, later calls update the SAME canvas in place. If the canvas is closed, the button appears again.
 - Include title and description when creating a new diagram from a user request.
 - Use stable unique ids, e.g. "frontend", "api", "db", "edge-api-db".
 - Keep x/y/width/height within x=0-800 and y=0-600.
@@ -61,7 +61,7 @@ const displayModelDiagramTool: DrawioToolDefinition = {
     }),
     invoke: async () => ({
       status: 'success',
-      content: 'Diagram displayed on the active draw.io canvas.',
+      content: 'Diagram displayed on the draw.io canvas.',
     }),
   },
 };

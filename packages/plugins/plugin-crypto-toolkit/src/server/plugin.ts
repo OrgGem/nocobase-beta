@@ -2,6 +2,16 @@ import path from 'path';
 import type { Model, Repository } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 import { createEnvGetter, resolveEnvValue } from './services/resolve-env';
+import {
+  decryptGatewayPayload,
+  encryptGatewayPayload,
+  resolveAesSecret as resolveAesSecretForGateway,
+  resolveOwnPrivateKeyMaterial,
+  type GatewayDecryptOptions,
+  type GatewayDecryptedPayload,
+  type GatewayEncryptOptions,
+  type GatewayEncryptedPayload,
+} from './services/gateway-crypto';
 import { registerCryptoKeysResource } from './resources/keys';
 import { registerCryptoOpsResource } from './resources/crypto-ops';
 
@@ -65,6 +75,26 @@ export class PluginCryptoToolkitServer extends Plugin {
 
   public getEnvVal(name: string): string | undefined {
     return createEnvGetter(this.app)(name);
+  }
+
+  /** Gateway integration: encrypt a payload for the API-manager wire. */
+  public async encryptPayload(options: GatewayEncryptOptions): Promise<GatewayEncryptedPayload> {
+    return encryptGatewayPayload(this.app, options);
+  }
+
+  /** Gateway integration: decrypt a payload from the API-manager wire. */
+  public async decryptPayload(options: GatewayDecryptOptions): Promise<GatewayDecryptedPayload> {
+    return decryptGatewayPayload(this.app, options);
+  }
+
+  /** Gateway integration: resolve the AES secret referenced by a route record. */
+  public async resolveAesSecret(route: { get(name: string): unknown }) {
+    return resolveAesSecretForGateway(this.app, route);
+  }
+
+  /** Gateway integration: resolve own private key material from a cryptoKeys row. */
+  public async resolveOwnPrivateKeyMaterial(keyRecord: { get(name: string): unknown }) {
+    return resolveOwnPrivateKeyMaterial(this.app, keyRecord);
   }
 
   private async pruneExpiredOperations() {

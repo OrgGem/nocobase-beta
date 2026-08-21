@@ -1,39 +1,33 @@
 import type { ToolsOptions } from '@nocobase/client-v2';
-import { getActiveHandle, getAllHandles, getHandleByDiagramId } from '../lib/activeRegistry';
+import { getDiagram } from '../diagramStore';
 import type { ToolResult } from './types';
 
 type InspectDiagramParams = {
   diagramId?: string;
 };
 
-function getMountedHandle(diagramId?: string) {
-  if (diagramId) {
-    return getHandleByDiagramId(diagramId);
-  }
-  return getActiveHandle() || getAllHandles()[0] || null;
-}
-
 async function invoke(
-  _app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
+  app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
   rawParams: unknown,
 ): Promise<ToolResult> {
   const params = rawParams as InspectDiagramParams;
-  const handle = getMountedHandle(params.diagramId);
-  if (!handle) {
+  const diagram = getDiagram();
+
+  if (!diagram) {
     return {
       status: 'error',
-      content: 'No matching draw.io block is open. Open a diagram block, then ask me to inspect or edit it.',
+      content: 'No draw.io diagram has been created yet. Use display_diagram or display_model_diagram first.',
     };
   }
 
-  const title = handle.diagramTitle ? `Title: ${handle.diagramTitle}\n` : '';
+  const titleLine = diagram.title ? `Title: ${diagram.title}\n` : '';
   return {
     status: 'success',
     content:
-      `${title}diagramId: ${handle.diagramId}\n` +
+      `${titleLine}diagramId: ${diagram.id}\n` +
       'Use this diagramId in edit_diagram or display_diagram when changing this canvas.\n\n' +
       'Current diagram XML (authoritative):\n```xml\n' +
-      (handle.getXml() || '<empty diagram>') +
+      (diagram.xml || '<empty diagram>') +
       '\n```',
   };
 }

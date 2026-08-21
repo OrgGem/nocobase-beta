@@ -15,6 +15,9 @@ interface TestResult {
   upstreamStatus?: number;
   durationMs?: number;
   attempt?: number;
+  requestEncrypted?: boolean;
+  responseEncrypted?: boolean;
+  errorCode?: string;
   responsePreview?: string;
   error?: string;
 }
@@ -75,12 +78,14 @@ export const TestRouteModal: React.FC<TestRouteModalProps> = ({ route, onClose }
         <Descriptions.Item label={t('Method') as string}>{route?.method}</Descriptions.Item>
         <Descriptions.Item label={t('Target URL') as string}>{route?.targetUrl}</Descriptions.Item>
       </Descriptions>
-      <Input.TextArea
-        rows={5}
-        value={payload}
-        onChange={(e) => setPayload(e.target.value)}
-        placeholder={t('Optional request body sent to the target URL') as string}
-      />
+      {route?.method !== 'GET' && (
+        <Input.TextArea
+          rows={5}
+          value={payload}
+          onChange={(e) => setPayload(e.target.value)}
+          placeholder={t('Optional request body sent to the target URL') as string}
+        />
+      )}
       <div style={{ marginTop: 12, minHeight: 80 }}>
         {running && <Spin />}
         {error && <Alert type="error" message={error} />}
@@ -100,6 +105,14 @@ export const TestRouteModal: React.FC<TestRouteModalProps> = ({ route, onClose }
               </Descriptions.Item>
               <Descriptions.Item label={t('Duration (ms)') as string}>{result.durationMs ?? '-'}</Descriptions.Item>
               <Descriptions.Item label={t('Attempt') as string}>{result.attempt ?? '-'}</Descriptions.Item>
+              {(result.requestEncrypted || result.responseEncrypted) && (
+                <Descriptions.Item label={t('Encryption') as string} span={2}>
+                  <Space size={4}>
+                    {result.requestEncrypted && <Tag color="blue">{t('Request encrypted') as string}</Tag>}
+                    {result.responseEncrypted && <Tag color="blue">{t('Response encrypted') as string}</Tag>}
+                  </Space>
+                </Descriptions.Item>
+              )}
             </Descriptions>
             {result.error && <Alert type="warning" message={result.error} style={{ marginTop: 8 }} />}
             {result.responsePreview && (

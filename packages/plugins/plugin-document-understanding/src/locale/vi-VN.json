@@ -167,5 +167,16 @@
   "Delete this pipeline?": "Xóa pipeline này?",
   "skip on error": "bỏ qua khi lỗi",
   "conditional": "có điều kiện",
-  "Invalid JSON": "JSON không hợp lệ"
+  "Invalid JSON": "JSON không hợp lệ",
+  "Task ID Extract Path": "Đường dẫn Task ID",
+  "Gateway / Discriminator": "Gateway / Discriminator",
+  "JSON path of the async task id in the 202 response (e.g. name). Used when the response is 202 even in sync mode.": "Đường dẫn JSON của task ID trong response 202 (vd: name). Dùng khi response là 202 dù đang ở chế độ đồng bộ.",
+  "Task ID Extract Regex": "Regex trích Task ID",
+  "When set, the request appends ?<param>=true to ask for a synchronous response (e.g. sync).": "Khi thiết lập, request sẽ thêm ?<param>=true để yêu cầu phản hồi đồng bộ (vd: sync).",
+  "Discriminator Field": "Trường phân biệt",
+  "Discriminator Value": "Giá trị phân biệt",
+  "Sync Query Param": "Tham số đồng bộ",
+  "Value sent in the discriminator field (e.g. parse, invoice, disbursement).": "Giá trị gửi trong trường phân biệt (vd: parse, invoice, disbursement).",
+  "Regex with one capture group to pull the task id from the extracted path value (e.g. operations/([^/]+)).": "Regex với một nhóm bắt để lấy task ID từ giá trị đường dẫn đã trích (vd: operations/([^/]+)).",
+  "Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.": "Trường trong form chọn loại API con (vd: mode/type/task/action/process). Được gửi tự động."
 }

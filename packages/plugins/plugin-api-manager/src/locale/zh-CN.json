@@ -27,6 +27,8 @@
   "Retry Delay (ms)": "重试延迟（毫秒）",
   "Log Payloads": "记录负载",
   "Forward Headers": "转发请求头",
+  "Comma-separated upstream response header names to pass through (e.g. content-disposition, etag, content-length, accept-ranges)": "要透传的上游响应头名称，用逗号分隔（例如 content-disposition、etag、content-length、accept-ranges）",
+  "Forward Response Headers": "转发响应头",
   "Static Headers": "静态请求头",
   "Max Body (MB)": "最大请求体（MB）",
   "Enabled": "启用",

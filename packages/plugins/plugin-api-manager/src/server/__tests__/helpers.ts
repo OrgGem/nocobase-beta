@@ -1,8 +1,9 @@
 import http from 'http';
 import type { AddressInfo } from 'net';
+import { generateKeyPairSync } from 'crypto';
 import { createMockServer, type MockServer } from '@nocobase/test';
 import { generateApiKey } from '../services/key-manager';
-import { generatePgpKey, type PgpKeyPair } from '../services/pgp';
+import { generatePgpKey, type PgpKeyPair } from '../../../../plugin-crypto-toolkit/src/server/services/pgp-service';
 
 export interface UpstreamRequest {
   method: string;
@@ -40,6 +41,17 @@ export class MockUpstream {
             const status = Number(statusMatch[1]);
             res.writeHead(status, { 'content-type': 'text/plain' });
             res.end(`status ${status}`);
+            return;
+          }
+
+          // /headers/<name>/<value> — replies 200 with a custom response header.
+          const headersMatch = /^\/headers\/([^/]+)\/([^/]+)/.exec(path);
+          if (headersMatch) {
+            res.writeHead(200, {
+              'content-type': 'text/plain',
+              [decodeURIComponent(headersMatch[1])]: decodeURIComponent(headersMatch[2]),
+            });
+            res.end('header-echo');
             return;
           }
 
@@ -104,6 +116,9 @@ export async function createTestApp(): Promise<MockServer> {
   process.env.INIT_ROOT_PASSWORD = '123456';
   process.env.INIT_ROOT_NICKNAME = 'APIM Test';
   return createMockServer({
+    // acl defaults to false in mockServer(); enable it so permission checks
+    // (e.g. apiRoutes:test requiring the plugin snippet) are enforced.
+    acl: true,
     plugins: ['nocobase', 'plugin-crypto-toolkit', 'plugin-api-manager'],
   });
 }
@@ -197,6 +212,41 @@ export async function createPgpKeyFixture(
     },
   });
   return { pair, keyName: opts.name, envVar };
+}
+
+export interface RsaFixture {
+  publicPem: string;
+  privatePem: string;
+  keyName: string;
+  envVar: string;
+}
+
+/**
+ * RSA analogue of createPgpKeyFixture. Uses a 2048-bit pair for speed; the
+ * gateway only checks the key type, not the size.
+ */
+export async function createRsaKeyFixture(
+  app: MockServer,
+  opts: { name: string; direction: 'own' | 'partner'; envVar?: string },
+): Promise<RsaFixture> {
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const publicPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const envVar = opts.envVar ?? `CRYPTO_TOOLKIT_APIM_${opts.name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PRIVATE`;
+  process.env[envVar] = privatePem;
+  await app.db.getRepository('cryptoKeys').create({
+    values: {
+      name: opts.name,
+      kind: 'rsa-4096',
+      direction: opts.direction,
+      purpose: 'encrypt',
+      publicMaterial: publicPem,
+      publicFormat: 'pem',
+      privateEnvVar: opts.direction === 'own' ? envVar : null,
+      enabled: true,
+    },
+  });
+  return { publicPem, privatePem, keyName: opts.name, envVar };
 }
 
 /** supertest binary response parser: makes res.body a Buffer. */

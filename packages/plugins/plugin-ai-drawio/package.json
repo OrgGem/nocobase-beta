@@ -3,9 +3,9 @@
   "displayName": "AI Drawio",
   "displayName.vi-VN": "AI Drawio",
   "displayName.zh-CN": "AI Drawio",
-  "description": "Embed self-hosted drawio editor as a NocoBase block, with AI Employee tools to create / edit / append diagrams via chat.",
-  "description.vi-VN": "Nhúng drawio editor (self-host) vào NocoBase qua block, kèm AI Employee tools để tạo/sửa/append diagram qua chat.",
-  "version": "1.0.14",
+  "description": "Embed self-hosted drawio editor with AI Employee tools via a single shared chat canvas (no server sessions).",
+  "description.vi-VN": "Nhúng drawio editor (self-host) với AI Employee tools qua một canvas dùng chung trong chat (không cần session server).",
+  "version": "1.1.5",
   "license": "Apache-2.0",
   "keywords": [
     "ai",

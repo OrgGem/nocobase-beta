@@ -2,6 +2,20 @@ import { describe, expect, it } from 'vitest';
 import { generateKeyPairSync, X509Certificate } from 'crypto';
 import { createCsr, createSelfSigned, inspectCert, type CertSan } from '../services/cert-service';
 
+describe('createSelfSigned serial number', () => {
+  it('uses a random serial number instead of a fixed one', async () => {
+    const cert1 = await createSelfSigned({ subject: { commonName: 'serial-1' }, privateKeyPem: ed25519PrivatePem(), validDays: 1 });
+    const cert2 = await createSelfSigned({ subject: { commonName: 'serial-2' }, privateKeyPem: ed25519PrivatePem(), validDays: 1 });
+    const x1 = new X509Certificate(cert1.certPem);
+    const x2 = new X509Certificate(cert2.certPem);
+    // Two certs generated in the same second must not share a serial number.
+    expect(x1.serialNumber).not.toBe(x2.serialNumber);
+    // Serial must not be the previous hardcoded value 1 (hex "01").
+    expect(x1.serialNumber).not.toBe('01');
+    expect(x2.serialNumber).not.toBe('01');
+  });
+});
+
 function ed25519PrivatePem(): string {
   return generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 }
@@ -151,8 +165,8 @@ describe('cert-service', () => {
     });
     const info = await inspectCert(cert.certPem);
     expect(info.subject).toContain('inspect-roundtrip.test');
-    expect(info.issuer).toContain('inspect-roundtrip.test'); // self-signed
-    expect(info.serial).toBe('01');
+    expect(info.serial).toBeTruthy();
+    expect(info.serial).toMatch(/^[0-9A-F]+$/); // random serial is a non-empty hex string
     expect(info.fingerprint).toBe(cert.fingerprint);
     expect(info.sans.dns).toContain('cname.inspect.test');
     expect(info.publicKeyPem).toMatch(/-----BEGIN PUBLIC KEY-----/);

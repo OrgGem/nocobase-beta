@@ -9,6 +9,13 @@ export class PluginApiManagerClient extends Plugin {
       aclSnippet: APIM_ACL,
     });
 
+    this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.guide`, {
+      title: this.t('Guide'),
+      aclSnippet: APIM_ACL,
+      sort: 0,
+      componentLoader: () => import('../client-v2/components/GuidePage'),
+    });
+
     this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.routes`, {
       title: this.t('Routes'),
       aclSnippet: APIM_ACL,

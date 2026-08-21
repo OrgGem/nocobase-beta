@@ -7,6 +7,8 @@ import {
   createPublicKey,
   generateKeyPairSync,
   KeyObject,
+  privateDecrypt,
+  publicEncrypt,
   randomBytes,
   scryptSync,
   sign as cryptoSign,
@@ -128,6 +130,82 @@ export function aesGcmDecrypt(payload: Buffer, secret: AesSecret): Buffer {
   const decipher = createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+export function isAesContainer(payload: Buffer): boolean {
+  return payload.length >= AES_MAGIC.length && payload.subarray(0, AES_MAGIC.length).equals(AES_MAGIC);
+}
+
+// RSA-OAEP hybrid container: RSA can only wrap small payloads, so a random
+// AES-256 session key is wrapped with RSA-OAEP-SHA256 and the body is
+// encrypted with AES-256-GCM:
+// magic "NCR1" | wrappedKeyLen(2, BE) | wrappedKey | iv(12) | tag(16) | ciphertext
+const RSA_MAGIC = Buffer.from('NCR1', 'ascii');
+const RSA_OAEP_HASH = 'sha256';
+
+export function rsaOaepWrapSessionKey(publicKeyPem: string, sessionKey: Buffer): Buffer {
+  const publicKey = createPublicKey(publicKeyPem);
+  if (publicKey.asymmetricKeyType !== 'rsa') {
+    throw new Error("RSA-OAEP encryption requires an RSA public key; got " + publicKey.asymmetricKeyType);
+  }
+  return publicEncrypt(
+    { key: publicKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: RSA_OAEP_HASH },
+    sessionKey,
+  );
+}
+
+export function rsaOaepUnwrapSessionKey(privateKeyPem: string, wrappedKey: Buffer, passphrase?: string): Buffer {
+  const privateKey = createPrivateKey(passphrase ? { key: privateKeyPem, passphrase } : privateKeyPem);
+  if (privateKey.asymmetricKeyType !== 'rsa') {
+    throw new Error("RSA-OAEP decryption requires an RSA private key; got " + privateKey.asymmetricKeyType);
+  }
+  return privateDecrypt(
+    { key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: RSA_OAEP_HASH },
+    wrappedKey,
+  );
+}
+
+export function rsaHybridEncrypt(plaintext: Buffer, publicKeyPem: string): Buffer {
+  const sessionKey = randomBytes(AES_KEY_LENGTH);
+  const wrappedKey = rsaOaepWrapSessionKey(publicKeyPem, sessionKey);
+  const lengthPrefix = Buffer.alloc(2);
+  lengthPrefix.writeUInt16BE(wrappedKey.length, 0);
+  const iv = randomBytes(AES_IV_LENGTH);
+  const cipher = createCipheriv('aes-256-gcm', sessionKey, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([RSA_MAGIC, lengthPrefix, wrappedKey, iv, tag, ciphertext]);
+}
+
+export function rsaHybridDecrypt(payload: Buffer, privateKeyPem: string, passphrase?: string): Buffer {
+  const minLength = RSA_MAGIC.length + 2 + AES_IV_LENGTH + AES_TAG_LENGTH;
+  if (payload.length < minLength) {
+    throw new Error('Payload is too short to be a valid RSA hybrid container');
+  }
+  const magic = payload.subarray(0, RSA_MAGIC.length);
+  if (magic.length !== RSA_MAGIC.length || !timingSafeEqual(magic, RSA_MAGIC)) {
+    throw new Error('Payload is not an RSA hybrid container (missing NCR1 header)');
+  }
+  let offset = RSA_MAGIC.length;
+  const wrappedKeyLength = payload.readUInt16BE(offset);
+  offset += 2;
+  if (payload.length < offset + wrappedKeyLength + AES_IV_LENGTH + AES_TAG_LENGTH) {
+    throw new Error('RSA hybrid container is truncated');
+  }
+  const wrappedKey = payload.subarray(offset, offset + wrappedKeyLength);
+  offset += wrappedKeyLength;
+  const iv = payload.subarray(offset, offset + AES_IV_LENGTH);
+  offset += AES_IV_LENGTH;
+  const tag = payload.subarray(offset, offset + AES_TAG_LENGTH);
+  offset += AES_TAG_LENGTH;
+  const ciphertext = payload.subarray(offset);
+  const sessionKey = rsaOaepUnwrapSessionKey(privateKeyPem, wrappedKey, passphrase);
+  const decipher = createDecipheriv('aes-256-gcm', sessionKey, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
+export function isRsaHybridContainer(payload: Buffer): boolean {
+  return payload.length >= RSA_MAGIC.length && payload.subarray(0, RSA_MAGIC.length).equals(RSA_MAGIC);
 }
 
 export function signDetached(data: Buffer, algorithm: SignAlgorithm, privateKey: KeyObject): Buffer {

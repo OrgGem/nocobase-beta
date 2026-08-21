@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { createMockServer } from '@nocobase/test';
 import { readAttachmentBuffer } from '../services/attachment-helper';
+import { generateRawKeyPair } from '../services/crypto-core';
+import { createSelfSigned } from '../services/cert-service';
 
 // Responses from custom resource actions are wrapped by the data-wrapping
 // middleware into `{ data: ... }`; tolerate both shapes to stay robust.
@@ -92,6 +94,23 @@ describe('plugin-crypto-toolkit', () => {
     const row = await app.db.getRepository('cryptoKeys').findOne({ filter: { name: 'gen-ed-test' } });
     expect(row).toBeTruthy();
     expect(String(row?.get('privateEnvVar'))).toBe(body.envVarName);
+  });
+
+  it('cryptoKeys:generate creates a PGP key (regression: dynamic openpgp import interop)', async () => {
+    const generated = await agent.resource('cryptoKeys').generate({
+      values: {
+        name: 'gen-pgp-test',
+        kind: 'pgp-curve25519',
+        direction: 'own',
+        purpose: 'both',
+      },
+    });
+    expect(generated.status).toBe(200);
+    const body = unwrap(generated);
+    expect(body.ok).toBe(true);
+    expect(body.key.fingerprint).toMatch(/^[0-9A-F]{40}$/);
+    expect(body.privateMaterial).toContain('-----BEGIN PGP PRIVATE KEY BLOCK-----');
+    expect(body.publicMaterial).toContain('-----BEGIN PGP PUBLIC KEY BLOCK-----');
   });
 
   it('cryptoKeys:importKey refuses to store private material', async () => {
@@ -186,7 +205,7 @@ g6Be3SP+TCEhAy+Rw7mKAfCvbSUBAfpx6u6tFk5QYRo=
           secret: { passphrase: 'wrong-pass' },
         },
       });
-      expect(decryptRes.status).not.toBe(200);
+      expect(decryptRes.status).toBe(400);
     });
   });
 
@@ -236,6 +255,244 @@ g6Be3SP+TCEhAy+Rw7mKAfCvbSUBAfpx6u6tFk5QYRo=
 
       const { buffer } = await readAttachmentBuffer(app, dec.attachmentId, { ownerId: userId });
       expect(buffer.toString('utf8')).toBe(plaintext);
+    }, 120000);
+  });
+
+  it('crypto:checksum computes sha-256 over a text payload', async () => {
+    const res = await agent.resource('crypto').checksum({
+      values: { algorithm: 'sha-256', payload: { mode: 'text', text: 'checksum me' } },
+    });
+    expect(res.status).toBe(200);
+    const body = unwrap(res);
+    expect(body.ok).toBe(true);
+    expect(body.value).toBe(createHash('sha256').update('checksum me', 'utf8').digest('hex'));
+    expect(body.size).toBe(Buffer.byteLength('checksum me'));
+  });
+
+  // These guards must fire with clean 400s regardless of file-manager availability.
+  describe('format guards (no file-manager needed)', () => {
+    it('crypto:verify rejects an OpenPGP key row for non-PGP algorithms with 400', async () => {
+      const generated = await agent.resource('cryptoKeys').generate({
+        values: { name: 'guard-pgp-key', kind: 'pgp-curve25519', direction: 'own', purpose: 'both' },
+      });
+      expect(generated.status).toBe(200);
+      const keyId = unwrap(generated).key.id;
+
+      const res = await agent.resource('crypto').verify({
+        values: {
+          algorithm: 'ed25519',
+          payload: { mode: 'text', text: 'payload' },
+          signature: { mode: 'text', text: 'not-a-real-signature' },
+          verifyKeyId: keyId,
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('crypto:encrypt rejects a non-OpenPGP recipient with 400', async () => {
+      const generated = await agent.resource('cryptoKeys').generate({
+        values: { name: 'guard-pem-key', kind: 'ed25519', direction: 'own', purpose: 'both' },
+      });
+      expect(generated.status).toBe(200);
+      const keyId = unwrap(generated).key.id;
+
+      const res = await agent.resource('crypto').encrypt({
+        values: {
+          algorithm: 'pgp',
+          payload: { mode: 'text', text: 'payload' },
+          recipientKeyIds: [keyId],
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('crypto:createCsr rejects a PGP private key with 400', async () => {
+      const generated = await agent.resource('cryptoKeys').generate({
+        values: {
+          name: 'guard-csr-pgp',
+          kind: 'pgp-curve25519',
+          direction: 'own',
+          purpose: 'both',
+          saveToEnv: true,
+          envVarName: 'GUARD_CSR_PGP',
+        },
+      });
+      expect(generated.status).toBe(200);
+      const envVarName = unwrap(generated).envVarName;
+
+      const res = await agent.resource('crypto').createCsr({
+        values: { privateEnvVar: envVarName, subject: { commonName: 'guard-test' } },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('cryptoKeys:importKey rejects an X.509 certificate with 400', async () => {
+      const { privatePem } = generateRawKeyPair('ed25519');
+      const cert = await createSelfSigned({
+        subject: { commonName: 'guard-cert' },
+        privateKeyPem: privatePem,
+        validDays: 1,
+      });
+      const res = await agent.resource('cryptoKeys').importKey({
+        values: {
+          name: 'guard-cert-import',
+          direction: 'partner',
+          purpose: 'both',
+          key: { mode: 'text', text: cert.certPem },
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('cryptoKeys:importKey rejects garbage PGP armor with 400', async () => {
+      const res = await agent.resource('cryptoKeys').importKey({
+        values: {
+          name: 'guard-garbage-pgp',
+          direction: 'partner',
+          purpose: 'both',
+          key: {
+            mode: 'text',
+            text: '-----BEGIN PGP PUBLIC KEY BLOCK-----\n\ngarbage\n-----END PGP PUBLIC KEY BLOCK-----',
+          },
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('validation error status codes (P0/P1 fixes)', () => {
+    it('crypto:sign missing privateEnvVar returns 400 (not 500)', async () => {
+      const res = await agent.resource('crypto').sign({
+        values: {
+          algorithm: 'ed25519',
+          payload: { mode: 'text', text: 'x' },
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('crypto:sign rejects an unknown algorithm with 400', async () => {
+      const res = await agent.resource('crypto').sign({
+        values: {
+          algorithm: 'bogus-alg',
+          payload: { mode: 'text', text: 'x' },
+          privateEnvVar: 'CRYPTO_TOOLKIT_NOPE_PRIVATE',
+        },
+      });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toMatch(/Unsupported algorithm/);
+    });
+
+    it('crypto:verify rejects an unknown algorithm with 400', async () => {
+      const res = await agent.resource('crypto').verify({
+        values: {
+          algorithm: 'bogus-alg',
+          verifyKeyId: 1,
+          payload: { mode: 'text', text: 'x' },
+          signature: { mode: 'text', text: 'y' },
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it('crypto:encrypt rejects an unknown algorithm with 400', async () => {
+      const res = await agent.resource('crypto').encrypt({
+        values: {
+          algorithm: 'bogus-alg',
+          payload: { mode: 'text', text: 'x' },
+        },
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('crypto:sign + crypto:verify round-trips', () => {
+    it('round-trips an ed25519 signature with an SSH-generated key (OpenSSH conversion)', async (ctx) => {
+      requireFileManager(ctx);
+      const generated = await agent.resource('cryptoKeys').generate({
+        values: {
+          name: 'ssh-sign-key',
+          kind: 'ssh-ed25519',
+          direction: 'own',
+          purpose: 'both',
+          saveToEnv: true,
+          envVarName: 'SSH_SIGN',
+        },
+      });
+      expect(generated.status).toBe(200);
+      const gen = unwrap(generated);
+      expect(gen.envVarName).toMatch(/_PRIVATE$/);
+
+      const plaintext = 'ssh key signing payload';
+      const signRes = await agent.resource('crypto').sign({
+        values: {
+          algorithm: 'ed25519',
+          payload: { mode: 'text', text: plaintext },
+          privateEnvVar: gen.envVarName,
+        },
+      });
+      expect(signRes.status).toBe(200);
+      const signed = unwrap(signRes);
+
+      const verifyRes = await agent.resource('crypto').verify({
+        values: {
+          algorithm: 'ed25519',
+          payload: { mode: 'text', text: plaintext },
+          signature: { mode: 'attachment', attachmentId: signed.attachmentId },
+          verifyKeyId: gen.key.id,
+        },
+      });
+      expect(verifyRes.status).toBe(200);
+      expect(unwrap(verifyRes).valid).toBe(true);
+    }, 120000);
+
+    it('round-trips a pgp-detached signature and detects tampering', async (ctx) => {
+      requireFileManager(ctx);
+      const generated = await agent.resource('cryptoKeys').generate({
+        values: {
+          name: 'pgp-sign-key',
+          kind: 'pgp-curve25519',
+          direction: 'own',
+          purpose: 'both',
+          saveToEnv: true,
+          envVarName: 'PGP_SIGN',
+        },
+      });
+      expect(generated.status).toBe(200);
+      const gen = unwrap(generated);
+
+      const plaintext = 'pgp detached signing payload';
+      const signRes = await agent.resource('crypto').sign({
+        values: {
+          algorithm: 'pgp-detached',
+          payload: { mode: 'text', text: plaintext },
+          privateEnvVar: gen.envVarName,
+        },
+      });
+      expect(signRes.status).toBe(200);
+      const signed = unwrap(signRes);
+
+      const verifyRes = await agent.resource('crypto').verify({
+        values: {
+          algorithm: 'pgp-detached',
+          payload: { mode: 'text', text: plaintext },
+          signature: { mode: 'attachment', attachmentId: signed.attachmentId },
+          verifyKeyId: gen.key.id,
+        },
+      });
+      expect(verifyRes.status).toBe(200);
+      expect(unwrap(verifyRes).valid).toBe(true);
+
+      const tampered = await agent.resource('crypto').verify({
+        values: {
+          algorithm: 'pgp-detached',
+          payload: { mode: 'text', text: 'tampered payload' },
+          signature: { mode: 'attachment', attachmentId: signed.attachmentId },
+          verifyKeyId: gen.key.id,
+        },
+      });
+      expect(tampered.status).toBe(200);
+      expect(unwrap(tampered).valid).toBe(false);
     }, 120000);
   });
 });

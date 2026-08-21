@@ -50,6 +50,20 @@ export function pemToOpenSshPrivate(pem: string, passphrase?: string): string {
   return key.toString('openssh');
 }
 
+/**
+ * Convert an OpenSSH private-key block to PKCS8 PEM. node:crypto cannot parse
+ * `-----BEGIN OPENSSH PRIVATE KEY-----` directly, so SSH-generated keys must
+ * go through sshpk before signing / CSR operations.
+ */
+export function openSshPrivateToPem(openSshPrivate: string): string {
+  return sshpk.parsePrivateKey(openSshPrivate, 'openssh').toString('pkcs8');
+}
+
+/** Convert an OpenSSH public-key line to SPKI PEM. */
+export function openSshPublicToPem(sshLine: string): string {
+  return sshpk.parseKey(sshLine, 'ssh').toString('pem');
+}
+
 /** SHA-256 fingerprint of an OpenSSH line or PEM public key. */
 export function sshFingerprint(material: string): string {
   const key = material.includes('-----BEGIN') ? sshpk.parseKey(material, 'pem') : sshpk.parseKey(material, 'ssh');

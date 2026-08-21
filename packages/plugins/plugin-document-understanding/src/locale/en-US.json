@@ -167,5 +167,16 @@
   "Delete this pipeline?": "Delete this pipeline?",
   "skip on error": "skip on error",
   "conditional": "conditional",
-  "Invalid JSON": "Invalid JSON"
+  "Invalid JSON": "Invalid JSON",
+  "Regex with one capture group to pull the task id from the extracted path value (e.g. operations/([^/]+)).": "Regex with one capture group to pull the task id from the extracted path value (e.g. operations/([^/]+)).",
+  "When set, the request appends ?<param>=true to ask for a synchronous response (e.g. sync).": "When set, the request appends ?<param>=true to ask for a synchronous response (e.g. sync).",
+  "Task ID Extract Regex": "Task ID Extract Regex",
+  "Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.": "Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.",
+  "Discriminator Value": "Discriminator Value",
+  "JSON path of the async task id in the 202 response (e.g. name). Used when the response is 202 even in sync mode.": "JSON path of the async task id in the 202 response (e.g. name). Used when the response is 202 even in sync mode.",
+  "Value sent in the discriminator field (e.g. parse, invoice, disbursement).": "Value sent in the discriminator field (e.g. parse, invoice, disbursement).",
+  "Task ID Extract Path": "Task ID Extract Path",
+  "Sync Query Param": "Sync Query Param",
+  "Discriminator Field": "Discriminator Field",
+  "Gateway / Discriminator": "Gateway / Discriminator"
 }

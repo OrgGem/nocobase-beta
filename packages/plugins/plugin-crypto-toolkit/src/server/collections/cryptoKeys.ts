@@ -120,6 +120,7 @@ export default defineCollection({
     {
       type: 'string',
       name: 'privateEnvVar',
+      index: true,
       interface: 'input',
       uiSchema: {
         title: 'Private Key Env Variable',

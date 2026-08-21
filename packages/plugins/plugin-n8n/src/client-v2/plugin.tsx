@@ -1,5 +1,4 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
 
 export class PluginN8nClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -14,10 +13,10 @@ export class PluginN8nClient extends Plugin<Record<string, never>, Application> 
       menuKey: 'n8n',
       key: 'index',
       title: this.t('n8n Integration'),
-      
-      componentLoader: () => import('../client/components/N8nSettingsPage').then(m => ({ default: m.N8nSettingsPage })),
+      aclSnippet: 'pm.plugin-n8n',
+      componentLoader: () =>
+        import('../client/components/N8nSettingsPage').then((m) => ({ default: m.N8nSettingsPage })),
     });
-
   }
 }
 

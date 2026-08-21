@@ -27,6 +27,8 @@
   "Retry Delay (ms)": "Retry Delay (ms)",
   "Log Payloads": "Log Payloads",
   "Forward Headers": "Forward Headers",
+  "Comma-separated upstream response header names to pass through (e.g. content-disposition, etag, content-length, accept-ranges)": "Comma-separated upstream response header names to pass through (e.g. content-disposition, etag, content-length, accept-ranges)",
+  "Forward Response Headers": "Forward Response Headers",
   "Static Headers": "Static Headers",
   "Max Body (MB)": "Max Body (MB)",
   "Enabled": "Enabled",

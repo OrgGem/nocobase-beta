@@ -1,6 +1,6 @@
 {
   "name": "plugin-s3-private-storage",
-  "version": "1.0.32",
+  "version": "1.0.33",
   "displayName": "S3 Private Storage",
   "displayName.zh-CN": "S3 私有存储",
   "description": "Extends file-manager to stream files from private S3 buckets via server proxy with ACL support.",
@@ -30,7 +30,8 @@
     "@formily/antd-v5": "1.x",
     "@formily/react": "2.x",
     "antd": "5.x",
-    "react": "^18.2.0"
+    "react": "^18.2.0",
+    "@aws-sdk/nested-clients": "3.750.0"
   },
   "peerDependencies": {
     "@nocobase/client": "2.x",

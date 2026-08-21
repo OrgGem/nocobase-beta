@@ -56,8 +56,8 @@ export const KeyImportModal: React.FC<KeyImportModalProps> = ({ open, saving, on
         <Form.Item name="displayName" label={t('Display name')}>
           <Input placeholder={t('Optional display name') as string} />
         </Form.Item>
-        <Form.Item name="purpose" label={t('Purpose')}>
-          <Input type="hidden" />
+        <Form.Item name="purpose" hidden>
+          <Input />
         </Form.Item>
         <Form.Item label={t('Import a partner public key')} required>
           <Form.Item name="key" noStyle rules={[{ required: true, message: 'key is required' }]}>

@@ -3,6 +3,7 @@ import { unlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { CryptoToolkitHttpError } from '../http-error';
 
 type FileManager = {
   storagesCache: Map<unknown, unknown>;
@@ -47,9 +48,26 @@ export async function readAttachmentBuffer(
 
   const fileManager = getFileManager(app);
   const attachment = await app.db.getRepository('attachments').findOne({
-    filter: { id: attachmentId, createdById: options.ownerId },
+    filter: { id: attachmentId },
   });
-  if (!attachment) throw new Error(`attachment ${attachmentId} not found or is not owned by the current user`);
+  if (!attachment) {
+    throw new CryptoToolkitHttpError(404, 'CRYPTOTOOLKIT_NOT_FOUND', `attachment ${attachmentId} not found`);
+  }
+
+  // Ownership is checked in JS rather than in the query: attachments created
+  // through paths without request context carry a null createdById, and a
+  // `{ createdById: ownerId }` filter would reject them even though the same
+  // user just uploaded them. Only reject when an owner is recorded and differs.
+  const ownerRaw =
+    (attachment as { get?: (k: string) => unknown }).get?.('createdById') ??
+    (attachment as { createdById?: unknown }).createdById;
+  if (ownerRaw != null && Number(ownerRaw) !== Number(options.ownerId)) {
+    throw new CryptoToolkitHttpError(
+      403,
+      'CRYPTOTOOLKIT_FORBIDDEN',
+      `attachment ${attachmentId} is not owned by the current user`,
+    );
+  }
 
   let matchedKey: unknown = null;
   const rawStorageId =
@@ -80,7 +98,11 @@ export async function readAttachmentBuffer(
     const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk);
     size += buffer.length;
     if (options.maxBytes !== undefined && size > options.maxBytes) {
-      throw new Error(`attachment ${attachmentId} exceeds the maximum allowed size of ${options.maxBytes} bytes`);
+      throw new CryptoToolkitHttpError(
+        400,
+        'CRYPTOTOOLKIT_PAYLOAD_TOO_LARGE',
+        `attachment ${attachmentId} exceeds the maximum allowed size of ${options.maxBytes} bytes`,
+      );
     }
     chunks.push(buffer);
   }

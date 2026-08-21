@@ -67,6 +67,36 @@ export class ExternalApiClient {
     return normalized;
   }
 
+  /**
+   * Appends the endpoint discriminator (if configured) to the request body so
+   * DUGate-style gateways can route to the correct sub-case/profile.
+   */
+  private withDiscriminator(endpoint: EndpointDef, body?: Record<string, any>): Record<string, any> | undefined {
+    const field = endpoint.discriminatorField?.trim();
+    if (!field || !endpoint.discriminatorValue) {
+      return body;
+    }
+    const merged: Record<string, any> = { ...(body || {}) };
+    if (merged[field] !== undefined && merged[field] !== endpoint.discriminatorValue) {
+      throw new Error(
+        `Discriminator field '${field}' is locked by endpoint configuration (expected '${endpoint.discriminatorValue}', got '${merged[field]}').`,
+      );
+    }
+    merged[field] = endpoint.discriminatorValue;
+    return merged;
+  }
+
+  /**
+   * Appends the DUGate sync flag (?sync=true) for endpoints configured with
+   * `syncQueryParam`. Kept separate from other query parameters so GET/DELETE
+   * params in `body` are not polluted by the discriminator logic.
+   */
+  private syncQueryParams(endpoint: EndpointDef): Record<string, string> {
+    const param = endpoint.syncQueryParam?.trim();
+    if (!param) return {};
+    return { [param]: 'true' };
+  }
+
   async call(options: ApiCallOptions): Promise<{ status: number; data: any; headers: any }> {
     const { endpoint, body, files, overrideHeaders } = options;
 
@@ -82,8 +112,9 @@ export class ExternalApiClient {
 
     if (endpoint.fileInputMode === 'multipart' && files && files.length > 0) {
       const formData = new FormData();
-      if (body) {
-        for (const [key, value] of Object.entries(body)) {
+      const bodyWithDiscriminator = this.withDiscriminator(endpoint, body);
+      if (bodyWithDiscriminator) {
+        for (const [key, value] of Object.entries(bodyWithDiscriminator)) {
           formData.append(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
         }
       }
@@ -107,18 +138,22 @@ export class ExternalApiClient {
           mimeType: f.mimeType,
         };
       }
-      requestData = { ...body, _files: base64Files };
+      requestData = { ...this.withDiscriminator(endpoint, body), _files: base64Files };
       headers['Content-Type'] = 'application/json';
     } else {
+      requestData = this.withDiscriminator(endpoint, body);
       headers['Content-Type'] = 'application/json';
     }
 
     try {
+      const isBodyless = ['get', 'delete'].includes(method);
       const response: AxiosResponse = await this.client.request({
         url,
         method,
-        data: ['post', 'put', 'patch'].includes(method) ? requestData : undefined,
-        params: ['get', 'delete'].includes(method) ? requestData : undefined,
+        data: isBodyless ? undefined : requestData,
+        params: isBodyless
+          ? { ...(requestData || {}), ...this.syncQueryParams(endpoint) }
+          : this.syncQueryParams(endpoint),
         headers,
       });
 

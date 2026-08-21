@@ -14,9 +14,12 @@ type AppMock = {
 function buildAppMock(opts: {
   envVars?: Record<string, string | undefined>;
   attachment?: { id: number | string; buffer: Buffer };
+  /** The createdById recorded on the attachment row; defaults to 1. Use null to simulate rows created without request context. */
+  attachmentOwnerId?: number | null;
 }): AppMock {
   const envVars = opts.envVars ?? {};
   const attachment = opts.attachment;
+  const recordedOwnerId = opts.attachmentOwnerId === undefined ? 1 : opts.attachmentOwnerId;
   return {
     environment: {
       getVariable: (name: string) => (name in envVars ? envVars[name] : undefined),
@@ -39,10 +42,8 @@ function buildAppMock(opts: {
       getRepository: (name: string) => {
         if (name !== 'attachments') return undefined;
         return {
-          findOne: async ({ filter }: { filter: { id: number | string; createdById: number } }) =>
-            attachment && filter.id === attachment.id && filter.createdById === 1
-              ? { storageId: null, createdById: 1, ...attachment }
-              : null,
+          findOne: async ({ filter }: { filter: { id: number | string } }) =>
+            attachment && filter.id === attachment.id ? { storageId: null, createdById: recordedOwnerId } : null,
         };
       },
     },
@@ -108,8 +109,8 @@ describe('loadKeyMaterial — attachment input', () => {
 describe('loadKeyMaterial — env input', () => {
   it('resolves an env variable and runs detection', async () => {
     const pem = generateRawKeyPair('ed25519').publicPem;
-    const app = buildAppMock({ envVars: { CRYPTO_TEST_KEY: pem } }) as never;
-    const loaded = await loadKeyMaterial(app, { mode: 'env', envVar: 'CRYPTO_TEST_KEY' }, LOAD_OPTIONS);
+    const app = buildAppMock({ envVars: { CRYPTO_TOOLKIT_TEST_KEY: pem } }) as never;
+    const loaded = await loadKeyMaterial(app, { mode: 'env', envVar: 'CRYPTO_TOOLKIT_TEST_KEY' }, LOAD_OPTIONS);
     expect(loaded.source).toBe('env');
     expect(loaded.buffer.equals(Buffer.from(pem, 'utf8'))).toBe(true);
     expect(loaded.detected.format).toBe('pem');
@@ -117,7 +118,24 @@ describe('loadKeyMaterial — env input', () => {
 
   it('rejects an unknown env variable name', async () => {
     const app = buildAppMock({ envVars: {} }) as never;
-    await expect(loadKeyMaterial(app, { mode: 'env', envVar: 'NOPE' }, LOAD_OPTIONS)).rejects.toThrow(/not set/);
+    await expect(loadKeyMaterial(app, { mode: 'env', envVar: 'CRYPTO_TOOLKIT_MISSING' }, LOAD_OPTIONS)).rejects.toThrow(
+      /not set/,
+    );
+  });
+
+  it('rejects an env variable outside the CRYPTO_TOOLKIT_ namespace', async () => {
+    const app = buildAppMock({ envVars: { DB_PASSWORD: 'super-secret' } }) as never;
+    await expect(loadKeyMaterial(app, { mode: 'env', envVar: 'DB_PASSWORD' }, LOAD_OPTIONS)).rejects.toThrow(
+      /not a Crypto Toolkit variable/,
+    );
+  });
+
+  it('rejects an env variable with a CRYPTO_TOOLKIT_-like but non-private suffix', async () => {
+    // The prefix guard is the security boundary; any other secret name is refused.
+    const app = buildAppMock({ envVars: { APP_SECRET: 'x' } }) as never;
+    await expect(loadKeyMaterial(app, { mode: 'env', envVar: 'APP_SECRET' }, LOAD_OPTIONS)).rejects.toThrow(
+      /not a Crypto Toolkit variable/,
+    );
   });
 });
 
@@ -164,7 +182,16 @@ describe('loadRawMaterial', () => {
     const app = buildAppMock({ attachment: { id: 42, buffer: Buffer.from('owned content') } }) as never;
     await expect(
       loadRawMaterial(app, { mode: 'attachment', attachmentId: 42 }, { attachmentOwnerId: 2 }),
-    ).rejects.toThrow(/not found or is not owned/);
+    ).rejects.toThrow(/is not owned by the current user/);
+  });
+
+  it('allows reading an attachment whose recorded owner is null', async () => {
+    const app = buildAppMock({
+      attachment: { id: 42, buffer: Buffer.from('context-less upload') },
+      attachmentOwnerId: null,
+    }) as never;
+    const loaded = await loadRawMaterial(app, { mode: 'attachment', attachmentId: 42 }, { attachmentOwnerId: 1 });
+    expect(loaded.buffer.toString('utf8')).toBe('context-less upload');
   });
 
   it('stops reading an attachment when it exceeds the configured maximum size', async () => {

@@ -5,8 +5,10 @@ import type { Handlers, ResourcerContext } from '@nocobase/resourcer';
 import { generateRawKeyPair, sha256Hex } from '../services/crypto-core';
 import { generateSshKey, pemToOpenSshPublic } from '../services/ssh-key-service';
 import { generatePgpKey } from '../services/pgp-service';
+import { loadOpenpgp, loadSshpk } from '../services/lazy-loaders';
 import type { KeyMaterialInput } from '../services/load-key-material';
 import { loadRawMaterial } from '../services/load-key-material';
+import { CryptoToolkitHttpError } from '../http-error';
 
 type Kind = 'pgp-rsa4096' | 'pgp-curve25519' | 'rsa-4096' | 'ed25519' | 'ssh-ed25519' | 'ssh-rsa';
 
@@ -21,20 +23,9 @@ const ENV_BASENAME_RE = /^[A-Z][A-Z0-9_]{0,47}$/;
 const VALID_PGP_KINDS: Kind[] = ['pgp-rsa4096', 'pgp-curve25519'];
 const VALID_RAW_KINDS: Kind[] = ['rsa-4096', 'ed25519'];
 const VALID_SSH_KINDS: Kind[] = ['ssh-ed25519', 'ssh-rsa'];
+const ALL_KINDS: Kind[] = [...VALID_PGP_KINDS, ...VALID_RAW_KINDS, ...VALID_SSH_KINDS];
 
 type CryptoKeysRepo = Repository;
-
-class CryptoToolkitHttpError extends Error {
-  statusCode: number;
-  code: string;
-
-  constructor(statusCode: number, code: string, message: string) {
-    super(message);
-    this.name = 'CryptoToolkitHttpError';
-    this.statusCode = statusCode;
-    this.code = code;
-  }
-}
 
 // The error-handler middleware renders status from `err.statusCode` and the body
 // from `err.message`/`err.code`; setting `ctx.status` and then throwing a plain
@@ -70,7 +61,7 @@ async function ensureSecretEnv(app: Application, name: string, value: string, tr
   const repo = app.db.getRepository('environmentVariables');
   const existing = await repo.findOne({ filter: { name }, transaction } as never);
   if (existing) {
-    throw new Error(`environment variable '${name}' already exists`);
+    badRequest(`environment variable '${name}' already exists`);
   }
   await repo.create({ values: { name, type: 'secret', value }, transaction } as never);
 }
@@ -141,7 +132,7 @@ async function generateForKind(
 }
 
 async function fingerprintPgp(armoredPublic: string): Promise<string> {
-  const openpgp = await import('openpgp');
+  const openpgp = await loadOpenpgp();
   const pk = await openpgp.readKey({ armoredKey: armoredPublic });
   return pk.getFingerprint().toUpperCase();
 }
@@ -157,16 +148,6 @@ async function fingerprintPem(pem: string): Promise<string> {
   }
 }
 
-function canonicalPublicPem(pem: string): string {
-  if (!/-----BEGIN/.test(pem)) return pem;
-  try {
-    const pk = createPublicKey(pem);
-    return pk.export({ type: 'spki', format: 'pem' }) as string;
-  } catch {
-    return pem;
-  }
-}
-
 function checkNotPrivate(value: string, field: string) {
   if (PRIVATE_MATERIAL_RE.test(value)) {
     throw new CryptoToolkitHttpError(
@@ -178,8 +159,12 @@ function checkNotPrivate(value: string, field: string) {
 }
 
 function getCurrentUserId(ctx: ResourcerContext): number | null {
+  // Prefer ctx.state.currentUser: it is the same source file-manager's context
+  // field uses for createdById, so ownership checks stay consistent.
+  const stateUser = ctx.state?.currentUser as { id?: number } | undefined;
+  if (stateUser?.id != null) return Number(stateUser.id);
   const user = ctx.auth?.user as { id?: number } | undefined;
-  return user?.id ?? null;
+  return user?.id != null ? Number(user.id) : null;
 }
 
 export function registerCryptoKeysResource(app: Application): void {
@@ -197,6 +182,7 @@ export function registerCryptoKeysResource(app: Application): void {
 
       if (!name) return badRequest('name is required');
       if (!kind) return badRequest('kind is required');
+      if (!ALL_KINDS.includes(kind)) return badRequest(`kind must be one of: ${ALL_KINDS.join(', ')}`);
       if (direction === 'partner') return badRequest('Cannot generate a partner key; use import instead');
       if (saveToEnv && !envVarName) return badRequest('saveToEnv=true requires envVarName');
       if (saveToEnv && !ENV_BASENAME_RE.test(envVarName)) {
@@ -233,6 +219,9 @@ export function registerCryptoKeysResource(app: Application): void {
           ? await app.db.sequelize.transaction(async (transaction) => {
               await ensureSecretEnv(app, envNames.privateName, generated.privateMaterial, transaction);
               await ensureSecretEnv(app, envNames.publicName, generated.publicMaterial, transaction);
+              if (passphrase) {
+                await ensureSecretEnv(app, envNames.privateName + '_PASSPHRASE', passphrase, transaction);
+              }
               return repo.create({ values, transaction } as never);
             })
           : await repo.create({ values } as never)
@@ -277,20 +266,36 @@ export function registerCryptoKeysResource(app: Application): void {
       let fingerprint = '';
 
       const low = materialText.trim();
+      if (/-----BEGIN CERTIFICATE-----/.test(low)) {
+        return badRequest('X.509 certificates are not supported — import a public key (PEM, OpenPGP, or OpenSSH)');
+      }
       if (/-----BEGIN PGP PUBLIC KEY BLOCK-----/.test(low)) {
         publicFormat = 'openpgp';
-        fingerprint = await fingerprintPgp(low);
+        try {
+          fingerprint = await fingerprintPgp(low);
+        } catch (error) {
+          return badRequest(`could not parse PGP public key: ${(error as Error).message}`);
+        }
       } else if (/-----BEGIN/.test(low)) {
+        let canonical: string;
+        try {
+          canonical = createPublicKey(low).export({ type: 'spki', format: 'pem' }) as string;
+        } catch (error) {
+          return badRequest(`could not parse PEM public key: ${(error as Error).message}`);
+        }
         publicFormat = 'pem';
-        const canonical = canonicalPublicPem(low);
         publicMaterial = canonical;
         fingerprint = await fingerprintPem(canonical);
       } else if (low.startsWith('ssh-')) {
         publicFormat = 'openssh';
-        const sshpk = await import('sshpk');
-        const k = sshpk.parseKey(low, 'ssh');
-        publicMaterial = k.toString('ssh', { comment: k.comment || `${name}@nocobase` });
-        fingerprint = k.fingerprint('sha256').toString();
+        try {
+          const sshpk = await loadSshpk();
+          const k = sshpk.parseKey(low, 'ssh');
+          publicMaterial = k.toString('ssh', { comment: k.comment || `${name}@nocobase` });
+          fingerprint = k.fingerprint('sha256').toString();
+        } catch (error) {
+          return badRequest(`could not parse OpenSSH public key: ${(error as Error).message}`);
+        }
       } else {
         return badRequest('Unrecognized key material — expected PEM, OpenPGP armored, or OpenSSH public line');
       }
@@ -362,7 +367,7 @@ export function registerCryptoKeysResource(app: Application): void {
         filename += '.pub';
         contentType = 'text/plain';
         if (format === 'pem') {
-          const sshpk = await import('sshpk');
+          const sshpk = await loadSshpk();
           const key = sshpk.parseKey(publicMaterial, 'ssh');
           content = key.toString('pem');
           filename += '.pem';

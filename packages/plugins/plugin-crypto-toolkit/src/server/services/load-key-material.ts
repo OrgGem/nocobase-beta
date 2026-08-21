@@ -2,6 +2,11 @@ import { Application } from '@nocobase/server';
 import { detectKeyMaterial, DetectedKeyMaterial } from './key-format-detect';
 import { createEnvGetter } from './resolve-env';
 import { readAttachmentBuffer } from './attachment-helper';
+import { CryptoToolkitHttpError } from '../http-error';
+
+function badRequest(message: string): never {
+  throw new CryptoToolkitHttpError(400, 'CRYPTOTOOLKIT_BAD_REQUEST', message);
+}
 
 /**
  * One of three input shapes. Exactly one of `text`, `attachmentId`, `envVar` is set.
@@ -35,21 +40,26 @@ function assertSingleMode(input: KeyMaterialInput): void {
     (k) => (input as Record<string, unknown>)[k] !== undefined && (input as Record<string, unknown>)[k] !== '',
   );
   if (provided.length !== 1) {
-    throw new Error(
-      `Exactly one of {text, attachmentId, envVar} must be provided (got: ${provided.join(', ') || 'none'})`,
-    );
+    badRequest(`Exactly one of {text, attachmentId, envVar} must be provided (got: ${provided.join(', ') || 'none'})`);
   }
 }
 
+const ALLOWED_ENV_PREFIX = 'CRYPTO_TOOLKIT_';
+
 async function loadFromEnv(app: Application, envVar: string): Promise<Buffer> {
+  // Only Crypto Toolkit-managed variables may be read as key material; arbitrary
+  // environment variables (DB_PASSWORD, APP_SECRET, ...) must not be exposed
+  // through the crypto operations API.
+  if (!envVar.startsWith(ALLOWED_ENV_PREFIX)) {
+    badRequest(`Environment variable "${envVar}" is not a Crypto Toolkit variable`);
+  }
   const getter = createEnvGetter(app);
   const value = getter(envVar);
   if (value === undefined || value === null) {
-    throw new Error(`Environment variable "${envVar}" is not set`);
+    badRequest(`Environment variable "${envVar}" is not set`);
   }
   return Buffer.from(value, 'utf8');
 }
-
 async function loadFromAttachment(
   app: Application,
   attachmentId: number | string,
@@ -76,7 +86,7 @@ export async function loadRawMaterial(
 
   if (input.mode === 'text') {
     if (typeof input.text !== 'string' || input.text.length === 0) {
-      throw new Error('text input is empty');
+      badRequest('text input is empty');
     }
     return { buffer: Buffer.from(input.text, 'utf8'), source: 'text' };
   }
@@ -92,7 +102,7 @@ export async function loadRawMaterial(
     return { buffer: await loadFromEnv(app, input.envVar), source: 'env' };
   }
 
-  throw new Error('input mode must be text, attachment, or env');
+  badRequest('input mode must be text, attachment, or env');
 }
 
 /**

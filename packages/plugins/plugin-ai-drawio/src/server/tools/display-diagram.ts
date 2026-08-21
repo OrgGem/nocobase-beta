@@ -1,9 +1,11 @@
 import { z } from 'zod';
 import type { DrawioToolDefinition } from './types';
 
-const description = `Display a diagram on the active draw.io block. Pass ONLY the mxCell elements - wrapper tags and root cells are added automatically.
+const description = `Display a diagram in the draw.io canvas. Pass ONLY the mxCell elements - wrapper tags and root cells are added automatically.
 
-You can call this even when no draw.io block is currently open; the client will create and open a new diagram automatically. Include title and description when creating a new diagram from a user request.
+The plugin keeps ONE shared draw.io canvas for the whole chat. The first time you display a diagram the user gets an "Open Diagram" button; once they open it, every later display/edit call updates the SAME canvas in place - no new screen is created. If the user closes the canvas, the next display call shows the button again.
+
+Include title and description when creating a new diagram from a user request.
 
 VALIDATION RULES (XML will be rejected if violated):
 1. Generate ONLY mxCell elements - NO wrapper tags (<mxfile>, <mxGraphModel>, <root>)
@@ -47,7 +49,7 @@ const displayDiagramTool: DrawioToolDefinition = {
     }),
     invoke: async () => ({
       status: 'success',
-      content: 'Diagram displayed on the active draw.io canvas.',
+      content: 'Diagram displayed on the draw.io canvas.',
     }),
   },
 };

@@ -100,17 +100,6 @@ export class CatalogService {
     return shares.map((share) => getString(share, 'packageId'));
   }
 
-  private baseFilter(userId?: string): Record<string, unknown> {
-    if (!userId) {
-      return { visibility: 'public', status: 'published' };
-    }
-    const sharedIds = this.sharedPackageIds(userId);
-    return {
-      status: 'published',
-      $or: [{ visibility: 'public' }, { ownerId: userId }, { visibility: 'shared', id: { $in: sharedIds } }],
-    };
-  }
-
   async list(input: {
     q?: string;
     tag?: string;
@@ -142,8 +131,13 @@ export class CatalogService {
       if (namespacePart && slugPart) {
         clauses.push({ $and: [{ namespace: { $includes: namespacePart } }, { slug: { $includes: slugPart } }] });
       }
-      const accessOr = baseFilter.$or as Record<string, unknown>[];
-      baseFilter.$and = [{ status: baseFilter.status }, { $or: accessOr }, { $or: clauses }];
+      const andClauses: Record<string, unknown>[] = [{ status: baseFilter.status }, { $or: clauses }];
+      // Anonymous callers have no access OR-clause; emitting `{ $or: undefined }`
+      // would produce an invalid Sequelize filter and fail the whole query.
+      if (Array.isArray(baseFilter.$or)) {
+        andClauses.push({ $or: baseFilter.$or });
+      }
+      baseFilter.$and = andClauses;
       delete baseFilter.$or;
       delete baseFilter.status;
     }

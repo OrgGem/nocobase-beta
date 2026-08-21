@@ -16,6 +16,7 @@ import { writeBufferAsAttachment } from '../services/attachment-helper';
 import { createEnvGetter } from '../services/resolve-env';
 import { logOperation } from '../services/operation-logger';
 import type { KeyMaterialInput } from '../services/load-key-material';
+import { CryptoToolkitHttpError } from '../http-error';
 import { loadRawMaterial } from '../services/load-key-material';
 
 const MAX_PAYLOAD_BYTES = 200 * 1024 * 1024; // 200 MB
@@ -32,23 +33,42 @@ async function loadOwnPrivateKey(
   envVar: string | undefined,
   passphrase: string | undefined,
 ): Promise<string> {
-  if (!envVar) throw new Error('envVar is required');
+  if (!envVar) throw new CryptoToolkitHttpError(400, 'CRYPTOTOOLKIT_BAD_REQUEST', 'envVar is required');
   const repo: Repository = app.db.getRepository('cryptoKeys');
   const legacyBaseName = envVar.endsWith('_PRIVATE') ? envVar.slice(0, -'_PRIVATE'.length) : envVar;
   const row =
     (await repo.findOne({ filter: { privateEnvVar: envVar } })) ??
     (await repo.findOne({ filter: { privateEnvVar: legacyBaseName } }));
   if (!row || row.get('direction') !== 'own' || row.get('enabled') === false) {
-    throw new Error(`private environment variable "${envVar}" is not an enabled Crypto Toolkit key`);
+    throw new CryptoToolkitHttpError(
+      400,
+      'CRYPTOTOOLKIT_BAD_REQUEST',
+      `private environment variable "${envVar}" is not an enabled Crypto Toolkit key`,
+    );
   }
 
   const storedEnvVar = String(row.get('privateEnvVar') ?? '');
   const resolvedEnvVar = storedEnvVar.endsWith('_PRIVATE') ? storedEnvVar : `${storedEnvVar}_PRIVATE`;
   const raw = createEnvGetter(app)(resolvedEnvVar);
-  if (!raw) throw new Error(`environment variable "${envVar}" is not set`);
+  if (!raw)
+    throw new CryptoToolkitHttpError(400, 'CRYPTOTOOLKIT_BAD_REQUEST', `environment variable "${envVar}" is not set`);
   if (passphrase && /-----BEGIN PGP PRIVATE KEY BLOCK-----/.test(raw)) {
     // passphrase + PGP: the PGP service decrypts internally on read
     return raw;
+  }
+  if (/-----BEGIN OPENSSH PRIVATE KEY-----/.test(raw)) {
+    // SSH-generated keys are stored in OpenSSH format, which node:crypto cannot
+    // parse — convert to PKCS8 PEM so sign/CSR/cert operations work with them.
+    try {
+      const { openSshPrivateToPem } = await import('../services/ssh-key-service');
+      return openSshPrivateToPem(raw);
+    } catch (error) {
+      throw new CryptoToolkitHttpError(
+        400,
+        'CRYPTOTOOLKIT_BAD_REQUEST',
+        `could not parse OpenSSH private key in "${envVar}": ${(error as Error).message}`,
+      );
+    }
   }
   // raw is the PEM string verbatim; node's createPrivateKey handles passphrased PEM too,
   // but we let the caller's algorithm-specific code resolve the key object so passphrase
@@ -56,10 +76,10 @@ async function loadOwnPrivateKey(
   return raw;
 }
 
-function badRequest(ctx: ResourcerContext, message: string): never {
-  ctx.status = 400;
-  ctx.body = { errors: [{ code: 'CRYPTOTOOLKIT_BAD_REQUEST', message }] };
-  throw new Error(message);
+// Typed error so the error-handler middleware renders 400 (a plain Error would
+// be overwritten to 500 by NocoBase's error handler).
+function badRequest(message: string): never {
+  throw new CryptoToolkitHttpError(400, 'CRYPTOTOOLKIT_BAD_REQUEST', message);
 }
 
 function userId(ctx: ResourcerContext): number | null {
@@ -69,7 +89,7 @@ function userId(ctx: ResourcerContext): number | null {
 
 function requireUserId(ctx: ResourcerContext): number {
   const id = userId(ctx);
-  if (id === null) badRequest(ctx, 'an authenticated user is required');
+  if (id === null) badRequest('an authenticated user is required');
   return id;
 }
 
@@ -83,7 +103,7 @@ async function logForCtx(
 
 function ensurePayloadSize(buffer: Buffer, ctx: ResourcerContext, action: string) {
   if (buffer.length > MAX_PAYLOAD_BYTES) {
-    badRequest(ctx, `payload too large for ${action} (max ${MAX_PAYLOAD_BYTES} bytes; got ${buffer.length})`);
+    badRequest(`payload too large for ${action} (max ${MAX_PAYLOAD_BYTES} bytes; got ${buffer.length})`);
   }
 }
 
@@ -106,12 +126,42 @@ async function writeOutput(
   })) as {
     id?: number;
     url?: unknown;
+    get?: (field: string) => unknown;
     toJSON?: () => Record<string, unknown>;
   };
-  const attachment = typeof record.toJSON === 'function' ? record.toJSON() : record;
-  const attachmentId = Number(attachment.id);
-  if (!Number.isInteger(attachmentId)) throw new Error('file manager did not return an attachment id');
-  const url = typeof attachment.url === 'string' ? attachment.url : undefined;
+  const attachmentId = Number(
+    record.get ? record.get('id') : typeof record.toJSON === 'function' ? record.toJSON().id : record.id,
+  );
+  if (!Number.isInteger(attachmentId))
+    throw new CryptoToolkitHttpError(500, 'CRYPTOTOOLKIT_INTERNAL', 'file manager did not return an attachment id');
+  // url/preview are computed by file-manager's afterFind hook — re-query the
+  // freshly created record so the client receives a working Download link.
+  let url: string | undefined;
+  let storageType = '';
+  try {
+    const fresh = await app.db.getRepository('attachments').findOne({ filterByTk: attachmentId, appends: ['storage'] });
+    if (fresh) {
+      const u = fresh.get('url');
+      if (typeof u === 'string' && u) url = u;
+      const storage = fresh.get('storage') as { type?: string } | undefined;
+      storageType = typeof storage?.type === 'string' ? storage.type : '';
+    }
+  } catch {
+    url = undefined; // fall back to attachmentId-only result
+  }
+  // Local storage serves files directly from its public base URL; the
+  // attachments:stream action used by private storages may not be
+  // registered in every NocoBase version, so expose a direct URL when possible.
+  if (url && url.startsWith('/api/attachments:stream') && storageType === 'local') {
+    const base = await app.db.getRepository('storages').findOne({ filterByTk: opts.storageId });
+    const baseUrl = base?.get('baseUrl') as string | undefined;
+    const recordFilename = String(
+      record.get ? record.get('filename') : (typeof record.toJSON === 'function' ? record.toJSON().filename : '') || '',
+    );
+    if (baseUrl && recordFilename) {
+      url = `${baseUrl}/${encodeURIComponent(recordFilename)}`;
+    }
+  }
   return {
     attachmentId,
     url,
@@ -159,14 +209,14 @@ async function loadAesSecret(ctx: ResourcerContext, input: unknown): Promise<{ k
   if (buffer.length === 32) return { key: buffer };
 
   const text = buffer.toString('utf8').trim();
-  if (!text) badRequest(ctx, 'AES secret is empty');
+  if (!text) badRequest('AES secret is empty');
   return { key: decodeBase64Key(text), passphrase: decodeBase64Key(text) ? undefined : text };
 }
 
 async function loadPublicKeyById(app: Application, id: number | string, ctx: ResourcerContext): Promise<string> {
   const repo: Repository = app.db.getRepository('cryptoKeys');
-  const row = await repo.findOne({ filter: { id } });
-  if (!row) badRequest(ctx, `cryptoKey ${id} not found`);
+  const row = await repo.findOne({ filter: { id, enabled: true } });
+  if (!row) badRequest(`cryptoKey ${id} not found`);
   return String((row as { get: (k: string) => unknown }).get('publicMaterial') ?? '');
 }
 
@@ -188,13 +238,14 @@ export function registerCryptoOpsResource(app: Application): void {
 
       let output: Awaited<ReturnType<typeof writeOutput>>;
       let inputBytes = 0;
+      // No own cryptoKeys row is used by encrypt (AES has no key row; PGP uses signerEnvVar + recipient ids).
       const keyId: number | null = null;
       let partnerKeyId: number | null = null;
 
       try {
         if (algorithm === 'aes-256-gcm') {
           const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
-          if (!body.secret) badRequest(ctx, 'secret is required for AES');
+          if (!body.secret) badRequest('secret is required for AES');
           const buf = aesGcmEncrypt(payload, await loadAesSecret(ctx, body.secret));
           inputBytes = payload.length;
           output = await writeOutput(app, ctx, buf, {
@@ -208,7 +259,7 @@ export function registerCryptoOpsResource(app: Application): void {
           const recipientKeyIds = Array.isArray(body.recipientKeyIds)
             ? (body.recipientKeyIds as Array<number | string>).map((v) => Number(v))
             : [];
-          if (recipientKeyIds.length === 0) badRequest(ctx, 'recipientKeyIds is required for PGP');
+          if (recipientKeyIds.length === 0) badRequest('recipientKeyIds is required for PGP');
 
           const recipients: Array<{ armored: string }> = [];
           for (const rid of recipientKeyIds) {
@@ -220,8 +271,12 @@ export function registerCryptoOpsResource(app: Application): void {
             const armored = await loadOwnPrivateKey(app, ctx, body.signerEnvVar, body.passphrase as string | undefined);
             signerKey = { armored, passphrase: body.passphrase as string | undefined };
           }
-          const ciphertext = await encryptAndSign({ data: payload, recipientKeys: recipients, signerKey });
-          inputBytes = payload.length;
+          let ciphertext: Uint8Array;
+          try {
+            ciphertext = await encryptAndSign({ data: payload, recipientKeys: recipients, signerKey });
+          } catch (error) {
+            badRequest(`PGP encryption failed: ${(error as Error).message}`);
+          }
           output = await writeOutput(app, ctx, Buffer.from(ciphertext), {
             outputFilename,
             storageId,
@@ -230,7 +285,7 @@ export function registerCryptoOpsResource(app: Application): void {
           });
           partnerKeyId = recipientKeyIds[0] ?? null;
         } else {
-          badRequest(ctx, 'algorithm must be pgp or aes-256-gcm');
+          badRequest('algorithm must be pgp or aes-256-gcm');
         }
       } catch (error) {
         await logForCtx(app, ctx, {
@@ -276,8 +331,13 @@ export function registerCryptoOpsResource(app: Application): void {
       try {
         if (algorithm === 'aes-256-gcm') {
           const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
-          if (!body.secret) badRequest(ctx, 'secret is required for AES');
-          const plain = aesGcmDecrypt(payload, await loadAesSecret(ctx, body.secret));
+          if (!body.secret) badRequest('secret is required for AES');
+          let plain: Buffer;
+          try {
+            plain = aesGcmDecrypt(payload, await loadAesSecret(ctx, body.secret));
+          } catch (error) {
+            badRequest(`AES decryption failed: ${(error as Error).message}`);
+          }
           inputBytes = payload.length;
           output = await writeOutput(app, ctx, plain, {
             outputFilename,
@@ -289,7 +349,7 @@ export function registerCryptoOpsResource(app: Application): void {
           const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
           const envVar = String(body.privateEnvVar ?? '');
           const passphrase = typeof body.passphrase === 'string' ? body.passphrase : undefined;
-          if (!envVar) badRequest(ctx, 'privateEnvVar is required for PGP');
+          if (!envVar) badRequest('privateEnvVar is required for PGP');
           const armored = await loadOwnPrivateKey(app, ctx, envVar, passphrase);
 
           let verificationKeys: Array<{ armored: string }> | undefined;
@@ -303,11 +363,16 @@ export function registerCryptoOpsResource(app: Application): void {
             partnerKeyId = ids[0] ?? null;
           }
 
-          const r = await decryptAndVerify({
-            data: payload,
-            privateKey: { armored, passphrase },
-            verificationKeys,
-          });
+          let r: Awaited<ReturnType<typeof decryptAndVerify>>;
+          try {
+            r = await decryptAndVerify({
+              data: payload,
+              privateKey: { armored, passphrase },
+              verificationKeys,
+            });
+          } catch (error) {
+            badRequest(`PGP decryption failed: ${(error as Error).message}`);
+          }
           signatureValid = r.signatureValid;
           signerFingerprints = r.signerFingerprints;
           inputBytes = payload.length;
@@ -319,7 +384,7 @@ export function registerCryptoOpsResource(app: Application): void {
           });
           keyId = null; // No internal cryptoKeys row references PGP private material; envVar is the link.
         } else {
-          badRequest(ctx, 'algorithm must be pgp or aes-256-gcm');
+          badRequest('algorithm must be pgp or aes-256-gcm');
         }
       } catch (error) {
         await logForCtx(app, ctx, {
@@ -358,11 +423,14 @@ export function registerCryptoOpsResource(app: Application): void {
       const started = Date.now();
       const body = readBody(ctx);
       const algorithm = String(body.algorithm ?? '') as 'rsa-pss-sha256' | 'ed25519' | 'pgp-detached';
+      if (!['rsa-pss-sha256', 'ed25519', 'pgp-detached'].includes(algorithm)) {
+        badRequest(`Unsupported algorithm "${algorithm}"`);
+      }
       const outputFilename = typeof body.outputFilename === 'string' ? body.outputFilename : undefined;
       const storageId = getStorage(ctx, body, 'storageId');
       const envVar = String(body.privateEnvVar ?? '');
       const passphrase = typeof body.passphrase === 'string' ? body.passphrase : undefined;
-      if (!envVar) badRequest(ctx, 'privateEnvVar is required');
+      if (!envVar) badRequest('privateEnvVar is required');
 
       const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
       const inputBytes = payload.length;
@@ -418,8 +486,11 @@ export function registerCryptoOpsResource(app: Application): void {
       const started = Date.now();
       const body = readBody(ctx);
       const algorithm = String(body.algorithm ?? '') as 'rsa-pss-sha256' | 'ed25519' | 'pgp-detached';
+      if (!['rsa-pss-sha256', 'ed25519', 'pgp-detached'].includes(algorithm)) {
+        badRequest(`Unsupported algorithm "${algorithm}"`);
+      }
       const verifyKeyId = Number(body.verifyKeyId ?? 0);
-      if (!verifyKeyId) badRequest(ctx, 'verifyKeyId is required');
+      if (!verifyKeyId) badRequest('verifyKeyId is required');
       const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
       const signature = await loadBuffer(ctx, body.signature as KeyMaterialInput);
       const inputBytes = payload.length;
@@ -434,15 +505,28 @@ export function registerCryptoOpsResource(app: Application): void {
           fingerprint = r.fingerprint;
         } else {
           const armored = await loadPublicKeyById(app, verifyKeyId, ctx);
-          const nodeKey = publicKeyFromPem(armored);
+          let publicPem = armored;
+          if (/^ssh-/.test(armored.trim())) {
+            try {
+              const { openSshPublicToPem } = await import('../services/ssh-key-service');
+              publicPem = openSshPublicToPem(armored);
+            } catch (error) {
+              badRequest(`verify key is not a valid OpenSSH public key: ${(error as Error).message}`);
+            }
+          }
+          let nodeKey: ReturnType<typeof publicKeyFromPem>;
+          try {
+            nodeKey = publicKeyFromPem(publicPem);
+          } catch (error) {
+            badRequest(`verify key is not a PEM public key: ${(error as Error).message}`);
+          }
           valid = verifyDetached(
             payload,
             signature,
             algorithm === 'rsa-pss-sha256' ? 'rsa-pss-sha256' : 'ed25519',
             nodeKey,
           );
-          // PGP rows do not expose an SPKI fingerprint; for PEM/SPKI rows, derive one from the SHA-256 of DER.
-          fingerprint = 'SHA256:' + sha256Hex(nodeKey.export({ type: 'der', format: 'der' }) as Buffer);
+          fingerprint = 'SHA256:' + sha256Hex(nodeKey.export({ type: 'spki', format: 'der' }) as Buffer);
         }
       } catch (error) {
         await logForCtx(app, ctx, {
@@ -473,7 +557,7 @@ export function registerCryptoOpsResource(app: Application): void {
       const started = Date.now();
       const body = readBody(ctx);
       const algorithm = String(body.algorithm ?? 'sha-256');
-      if (algorithm !== 'sha-256') badRequest(ctx, 'Only sha-256 is supported');
+      if (algorithm !== 'sha-256') badRequest('Only sha-256 is supported');
       const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
       const value = sha256Hex(payload);
       await logForCtx(app, ctx, {
@@ -495,16 +579,21 @@ export function registerCryptoOpsResource(app: Application): void {
       const san = (body.san ?? undefined) as { dns?: string[]; ip?: string[]; email?: string[] } | undefined;
       const outputFilename = typeof body.outputFilename === 'string' ? body.outputFilename : undefined;
       const storageId = getStorage(ctx, body, 'storageId');
-      if (!envVar) badRequest(ctx, 'privateEnvVar is required');
+      if (!envVar) badRequest('privateEnvVar is required');
 
       const passphrase = typeof body.passphrase === 'string' ? body.passphrase : undefined;
       const pem = await loadOwnPrivateKey(app, ctx, envVar, passphrase);
-      const csr = await createCsr({
-        subject: { ...subject, commonName: subject.commonName ?? 'nocobase-crypto-toolkit' },
-        san,
-        privateKeyPem: pem,
-        passphrase,
-      });
+      let csr: Awaited<ReturnType<typeof createCsr>>;
+      try {
+        csr = await createCsr({
+          subject: { ...subject, commonName: subject.commonName ?? 'nocobase-crypto-toolkit' },
+          san,
+          privateKeyPem: pem,
+          passphrase,
+        });
+      } catch (error) {
+        badRequest(`CSR creation failed: ${(error as Error).message}`);
+      }
       const buf = Buffer.from(csr.csrPem, 'utf8');
       const output = await writeOutput(app, ctx, buf, {
         outputFilename,
@@ -537,7 +626,7 @@ export function registerCryptoOpsResource(app: Application): void {
       const validDays = Number(body.validDays ?? 365);
       const outputFilename = typeof body.outputFilename === 'string' ? body.outputFilename : undefined;
       const storageId = getStorage(ctx, body, 'storageId');
-      if (!envVar) badRequest(ctx, 'privateEnvVar is required');
+      if (!envVar) badRequest('privateEnvVar is required');
 
       const passphrase = typeof body.passphrase === 'string' ? body.passphrase : undefined;
       const pem = await loadOwnPrivateKey(app, ctx, envVar, passphrase);
@@ -574,13 +663,13 @@ export function registerCryptoOpsResource(app: Application): void {
       const started = Date.now();
       const body = readBody(ctx);
       const certInput = body.cert as KeyMaterialInput | undefined;
-      if (!certInput) badRequest(ctx, 'cert is required');
+      if (!certInput) badRequest('cert is required');
       try {
         const material = await loadBuffer(ctx, certInput);
-        // Determine if it's binary DER (first byte 0x30) or PEM text.
+        // Prefer PEM detection: a PEM string always starts with '-----BEGIN'.
+        // Only treat the input as binary DER when it is not PEM text.
         let source: string | Buffer = material.toString('utf8');
-        if (material.length > 0 && material[0] === 0x30) source = material;
-        const info = await inspectCert(source);
+        if (!/-----BEGIN/.test(source) && material.length > 0 && material[0] === 0x30) source = material;
         await logForCtx(app, ctx, {
           action: 'inspect',
           algorithm: 'x509',

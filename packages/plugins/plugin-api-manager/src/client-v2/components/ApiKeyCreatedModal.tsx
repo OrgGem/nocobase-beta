@@ -25,6 +25,10 @@ export const ApiKeyCreatedModal: React.FC<ApiKeyCreatedModalProps> = ({ value, o
     <Modal
       title={t('API Key Created') as string}
       open={Boolean(value)}
+      // The key is shown exactly once; closing it accidentally (backdrop click
+      // or Escape) would make it unrecoverable, so require an explicit button.
+      maskClosable={false}
+      keyboard={false}
       onCancel={onClose}
       footer={
         <Space>

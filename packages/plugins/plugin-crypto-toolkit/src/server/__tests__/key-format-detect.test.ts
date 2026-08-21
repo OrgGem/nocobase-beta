@@ -175,7 +175,7 @@ describe('detectKeyMaterial — invariants', () => {
     const pair = generateRawKeyPair('rsa-4096');
     const detected = await detectKeyMaterial(pair.privatePem);
     expect(detected.canonicalPublic).toBeDefined();
-    const reImported = createPublicKey(detected.canonicalPublic!);
+    const reImported = createPublicKey(String(detected.canonicalPublic));
     const der = (reImported as ReturnType<typeof createPublicKey>).export({
       type: 'spki',
       format: 'der',

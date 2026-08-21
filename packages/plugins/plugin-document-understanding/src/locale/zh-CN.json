@@ -167,5 +167,16 @@
   "Delete this pipeline?": "删除该流水线？",
   "skip on error": "出错时跳过",
   "conditional": "带条件",
-  "Invalid JSON": "JSON 无效"
+  "Invalid JSON": "JSON 无效",
+  "JSON path of the async task id in the 202 response (e.g. name). Used when the response is 202 even in sync mode.": "202 响应中异步任务ID的 JSON 路径（如 name）。同步模式下返回 202 时使用。",
+  "Regex with one capture group to pull the task id from the extracted path value (e.g. operations/([^/]+)).": "带一个捕获组的正则，用于从提取的路径值中获取任务ID（如 operations/([^/]+)）。",
+  "Task ID Extract Path": "任务ID提取路径",
+  "Discriminator Value": "判别值",
+  "Value sent in the discriminator field (e.g. parse, invoice, disbursement).": "发送到判别字段的值（如 parse、invoice、disbursement）。",
+  "Task ID Extract Regex": "任务ID提取正则",
+  "Sync Query Param": "同步查询参数",
+  "Discriminator Field": "判别字段",
+  "Gateway / Discriminator": "网关 / 判别字段",
+  "When set, the request appends ?<param>=true to ask for a synchronous response (e.g. sync).": "设置后请求会附加 ?<param>=true 以请求同步响应（如 sync）。",
+  "Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.": "选择 API 子类型的表单字段（如 mode/type/task/action/process）。自动发送。"
 }

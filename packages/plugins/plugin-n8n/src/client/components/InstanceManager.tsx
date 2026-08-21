@@ -14,7 +14,8 @@ export const InstanceManager: React.FC = () => {
 
   const { data, loading, refresh } = useRequest<any>(() => api.resource('n8nInstances').list({ pageSize: 100 }));
 
-  const instances = data?.data || [];
+  const body = data?.data;
+  const instances = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
 
   const handleSave = async () => {
     try {

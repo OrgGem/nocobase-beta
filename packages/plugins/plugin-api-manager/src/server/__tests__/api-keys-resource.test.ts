@@ -21,6 +21,13 @@ function extractRows(res: { body: unknown }): Record<string, unknown>[] {
   return [];
 }
 
+function errorMessage(res: { body: unknown; text?: string }): string {
+  const body = res.body as { errors?: Array<{ message?: string }> } | undefined;
+  const first = body?.errors?.[0]?.message;
+  if (typeof first === 'string') return first;
+  return res.text ?? '';
+}
+
 describe('apiManagerApiKeys resource', () => {
   let app: MockServer;
   let agent: Awaited<ReturnType<typeof loginAgent>>;
@@ -55,6 +62,40 @@ describe('apiManagerApiKeys resource', () => {
   it('create requires a name', async () => {
     const res = await agent.resource('apiManagerApiKeys').create({ values: { scopes: ['inbound'] } });
     expect(res.status).toBe(400);
+  });
+
+  it('create rejects an unknown partnerId', async () => {
+    const res = await agent.resource('apiManagerApiKeys').create({
+      values: { name: 'bad-partner-key', scopes: ['inbound'], partnerId: 999999 },
+    });
+    expect(res.status).toBe(400);
+    expect(errorMessage(res)).toMatch(/does not reference an existing partner/);
+  });
+
+  it('create accepts an existing partnerId', async () => {
+    const partner = await app.db.getRepository('apiPartners').create({ values: { name: 'key-test-partner' } });
+    const res = await agent.resource('apiManagerApiKeys').create({
+      values: { name: 'good-partner-key', scopes: ['inbound'], partnerId: partner.get('id') },
+    });
+    expect(res.status).toBe(200);
+    expect(unwrap(res).partnerId).toBe(Number(partner.get('id')));
+  });
+
+  it('create rejects malformed scopes', async () => {
+    for (const scopes of [['admin'], ['inbound:'], ['inbound:bad name'], ['outbound:*'], []]) {
+      const res = await agent.resource('apiManagerApiKeys').create({
+        values: { name: `bad-scope-${JSON.stringify(scopes)}`, scopes },
+      });
+      expect(res.status).toBe(400);
+    }
+  });
+
+  it('create accepts route-scoped scopes', async () => {
+    const res = await agent.resource('apiManagerApiKeys').create({
+      values: { name: 'scoped-key', scopes: ['inbound:partner-a', 'outbound:sync_orders.v2'] },
+    });
+    expect(res.status).toBe(200);
+    expect(unwrap(res).scopes).toEqual(['inbound:partner-a', 'outbound:sync_orders.v2']);
   });
 
   it('list never exposes keyHash', async () => {

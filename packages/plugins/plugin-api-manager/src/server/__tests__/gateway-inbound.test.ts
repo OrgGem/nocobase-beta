@@ -3,20 +3,31 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
 import supertest from 'supertest';
 import { INBOUND_PREFIX } from '../../constants';
-import { aesGcmDecrypt, aesGcmEncrypt, isAesContainer, sha256Hex } from '../services/crypto-primitives';
+import {
+  aesGcmDecrypt,
+  aesGcmEncrypt,
+  isAesContainer,
+  isRsaHybridContainer,
+  rsaHybridDecrypt,
+  rsaHybridEncrypt,
+  sha256Hex,
+} from '../../../../plugin-crypto-toolkit/src/server/services/crypto-core';
 import {
   MockUpstream,
   binaryParser,
   createPgpKeyFixture,
+  createRsaKeyFixture,
   createTestApiKey,
   createTestApp,
   createTestRoute,
 } from './helpers';
-import { decryptAndVerify, encryptAndSign } from '../services/pgp';
+import { decryptAndVerify, encryptAndSign } from '../../../../plugin-crypto-toolkit/src/server/services/pgp-service';
 
 describe('gateway inbound', () => {
   let app: MockServer;
   let request: ReturnType<typeof supertest>;
+  let rsaOwnPublicPem: string;
+  let rsaPartnerPrivatePem: string;
   const upstream = new MockUpstream();
   const aesKeyB64 = randomBytes(32).toString('base64');
   const aesKey = Buffer.from(aesKeyB64, 'base64');
@@ -35,12 +46,45 @@ describe('gateway inbound', () => {
       targetUrl: `${upstream.baseUrl}/echo`,
       encryptionMode: 'none',
     });
+    // GET inbound route: query-only requests, no body.
+    await createTestRoute(app, {
+      name: 'in-get',
+      direction: 'inbound',
+      inboundPath: 'get',
+      method: 'GET',
+      targetUrl: `${upstream.baseUrl}/echo`,
+      encryptionMode: 'none',
+    });
+    // AES inbound route.
+    // Inbound raw-binary file route: partner sends encrypted JSON envelope + metadata headers.
+    await createTestRoute(app, {
+      name: 'in-file-json',
+      direction: 'inbound',
+      inboundPath: 'file-json',
+      method: 'POST',
+      targetUrl: `${upstream.baseUrl}/echo`,
+      encryptionMode: 'aes-256-gcm',
+      wireFormat: 'json',
+      aesSecret: aesKeyB64,
+      forwardHeaders: ['x-file-name', 'x-file-content-type', 'x-file-sha256'],
+    });
+    // Inbound binary-wire file route: partner sends raw NCB1 container (no envelope).
+    await createTestRoute(app, {
+      name: 'in-file-binary',
+      direction: 'inbound',
+      inboundPath: 'file-binary',
+      method: 'POST',
+      targetUrl: `${upstream.baseUrl}/echo`,
+      encryptionMode: 'aes-256-gcm',
+      wireFormat: 'binary',
+      aesSecret: aesKeyB64,
+      forwardHeaders: ['x-file-name', 'x-file-sha256'],
+    });
     // AES inbound route.
     await createTestRoute(app, {
       name: 'in-aes',
       direction: 'inbound',
       inboundPath: 'aes',
-      method: 'POST',
       targetUrl: `${upstream.baseUrl}/echo`,
       encryptionMode: 'aes-256-gcm',
       wireFormat: 'binary',
@@ -75,6 +119,35 @@ describe('gateway inbound', () => {
       method: 'POST',
       targetUrl: `${upstream.baseUrl}/echo`,
       maxBodyMb: 1,
+    });
+
+    // RSA hybrid inbound routes: the own key decrypts requests, the partner
+    // key encrypts responses (unless responseEncrypted is false).
+    const rsaOwn = await createRsaKeyFixture(app, { name: 'rsa-in-own', direction: 'own' });
+    const rsaPartner = await createRsaKeyFixture(app, { name: 'rsa-in-partner', direction: 'partner' });
+    rsaOwnPublicPem = rsaOwn.publicPem;
+    rsaPartnerPrivatePem = rsaPartner.privatePem;
+    await createTestRoute(app, {
+      name: 'in-rsa',
+      direction: 'inbound',
+      inboundPath: 'rsa',
+      method: 'POST',
+      targetUrl: `${upstream.baseUrl}/echo`,
+      encryptionMode: 'rsa-oaep',
+      wireFormat: 'binary',
+      rsaDecryptKeyName: rsaOwn.keyName,
+      rsaEncryptKeyName: rsaPartner.keyName,
+    });
+    await createTestRoute(app, {
+      name: 'in-rsa-plain-resp',
+      direction: 'inbound',
+      inboundPath: 'rsa-plain-resp',
+      method: 'POST',
+      targetUrl: `${upstream.baseUrl}/echo`,
+      encryptionMode: 'rsa-oaep',
+      wireFormat: 'binary',
+      rsaDecryptKeyName: rsaOwn.keyName,
+      responseEncrypted: false,
     });
   }, 300000);
 
@@ -113,6 +186,75 @@ describe('gateway inbound', () => {
     const key = await createTestApiKey(app, { scopes: ['inbound'] });
     const res = await request.get(`${INBOUND_PREFIX}plain`).set('X-API-Key', key);
     expect(res.status).toBe(405);
+  });
+
+  it('forwards the caller query string to the target', async () => {
+    const key = await createTestApiKey(app, { scopes: ['inbound'] });
+    const res = await request
+      .post(`${INBOUND_PREFIX}plain?batch=5&urgent=1`)
+      .set('X-API-Key', key)
+      .set('Content-Type', 'application/json')
+      .send('{"q":true}');
+    expect(res.status).toBe(200);
+    expect(upstream.lastRequest?.path).toBe('/echo?batch=5&urgent=1');
+  });
+  it('forwards a GET request with query-only params (inbound)', async () => {
+    const key = await createTestApiKey(app, { scopes: ['inbound'] });
+    const before = upstream.requests.length;
+    const res = await request.get(`${INBOUND_PREFIX}get?batch=5&urgent=1`).set('X-API-Key', key);
+    expect(res.status).toBe(200);
+    const forwarded = upstream.requests[before];
+    expect(forwarded.method).toBe('GET');
+    expect(forwarded.path).toBe('/echo?batch=5&urgent=1');
+    expect(forwarded.body.length).toBe(0);
+  });
+  it('decrypts an inbound encrypted file envelope and forwards the file with metadata headers', async () => {
+    const key = await createTestApiKey(app, { scopes: ['inbound'] });
+    const fileBytes = Buffer.from('%PDF-1.7 partner-sent invoice data');
+    // Partner encrypts the file into a JSON envelope using the shared secret.
+    const container = aesGcmEncrypt(fileBytes, { key: aesKey });
+    const envelope = JSON.stringify({
+      container: 'NCB1',
+      encoding: 'base64',
+      ciphertext: container.toString('base64'),
+      contentType: 'application/pdf',
+    });
+    const before = upstream.requests.length;
+    const res = await request
+      .post(`${INBOUND_PREFIX}file-json`)
+      .set('X-API-Key', key)
+      .set('Content-Type', 'application/json')
+      .set('X-File-Name', 'partner-invoice.pdf')
+      .set('X-File-Content-Type', 'application/pdf')
+      .set('X-File-Sha256', 'abc123')
+      .send(envelope);
+    expect(res.status).toBe(200);
+    const forwarded = upstream.requests[before];
+    expect(forwarded.body.equals(fileBytes)).toBe(true);
+    expect(String(forwarded.headers['content-type'])).toContain('application/pdf');
+    expect(String(forwarded.headers['x-file-name'])).toBe('partner-invoice.pdf');
+    expect(String(forwarded.headers['x-file-content-type'])).toBe('application/pdf');
+    expect(String(forwarded.headers['x-file-sha256'])).toBe('abc123');
+  });
+
+  it('decrypts an inbound binary-wire file and forwards plaintext + sniffed content-type + headers', async () => {
+    const key = await createTestApiKey(app, { scopes: ['inbound'] });
+    const fileBytes = Buffer.from('%PDF-1.7 binary wire file content');
+    const container = aesGcmEncrypt(fileBytes, { key: aesKey });
+    const before = upstream.requests.length;
+    const res = await request
+      .post(`${INBOUND_PREFIX}file-binary`)
+      .set('X-API-Key', key)
+      .set('Content-Type', 'application/octet-stream')
+      .set('X-File-Name', 'file-binary.pdf')
+      .set('X-File-Sha256', 'binary-file-sha')
+      .send(container);
+    expect(res.status).toBe(200);
+    const forwarded = upstream.requests[before];
+    expect(forwarded.body.equals(fileBytes)).toBe(true);
+    expect(String(forwarded.headers['content-type'])).toContain('application/octet-stream');
+    expect(String(forwarded.headers['x-file-name'])).toBe('file-binary.pdf');
+    expect(String(forwarded.headers['x-file-sha256'])).toBe('binary-file-sha');
   });
 
   describe('API key auth', () => {
@@ -196,6 +338,24 @@ describe('gateway inbound', () => {
         .send(garbage);
       expect(res.status).toBe(400);
       expect(res.body?.error?.code).toBe('APIM_DECRYPT_FAILED');
+    });
+
+    it('sniffs the forwarded content type when the envelope carries none (XML)', async () => {
+      const key = await createTestApiKey(app, { scopes: ['inbound'] });
+      const xml = Buffer.from('<ping id="7"/>', 'utf8');
+      const container = aesGcmEncrypt(xml, { key: aesKey });
+      const res = await request
+        .post(`${INBOUND_PREFIX}aes`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/octet-stream')
+        .buffer(true)
+        .parse(binaryParser)
+        .send(container);
+      expect(res.status).toBe(200);
+      expect(upstream.lastRequest?.body.equals(xml)).toBe(true);
+      // The binary wire format carries no plaintext content type, so the proxy
+      // must sniff the decrypted bytes (leading "<" -> XML) before forwarding.
+      expect(String(upstream.lastRequest?.headers['content-type'])).toContain('application/xml');
     });
   });
 
@@ -324,5 +484,53 @@ describe('gateway inbound', () => {
       expect(Buffer.from(decrypted.data).equals(plaintext)).toBe(true);
       expect(decrypted.signatureValid).toBe(true);
     }, 120000);
+  });
+
+  describe('RSA-OAEP hybrid encryption', () => {
+    it('decrypts the inbound request and encrypts the response', async () => {
+      const key = await createTestApiKey(app, { scopes: ['inbound'] });
+      const plaintext = Buffer.from(JSON.stringify({ rsa: 'inbound' }), 'utf8');
+      // The partner encrypts to the proxy's own public key.
+      const container = rsaHybridEncrypt(plaintext, rsaOwnPublicPem);
+      expect(isRsaHybridContainer(container)).toBe(true);
+
+      const res = await request
+        .post(`${INBOUND_PREFIX}rsa`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/octet-stream')
+        .buffer(true)
+        .parse(binaryParser)
+        .send(container);
+
+      expect(res.status).toBe(200);
+      // The proxy must have decrypted before forwarding: upstream sees plaintext.
+      expect(upstream.lastRequest?.body.equals(plaintext)).toBe(true);
+      // The response is an NCR1 container that the partner decrypts with its private key.
+      const responseBody = res.body as Buffer;
+      expect(isRsaHybridContainer(responseBody)).toBe(true);
+      expect(rsaHybridDecrypt(responseBody, rsaPartnerPrivatePem).equals(plaintext)).toBe(true);
+    });
+
+    it('returns a plaintext response when responseEncrypted is false', async () => {
+      const key = await createTestApiKey(app, { scopes: ['inbound'] });
+      const plaintext = Buffer.from(JSON.stringify({ rsa: 'plain-resp' }), 'utf8');
+      const container = rsaHybridEncrypt(plaintext, rsaOwnPublicPem);
+
+      const res = await request
+        .post(`${INBOUND_PREFIX}rsa-plain-resp`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/octet-stream')
+        .buffer(true)
+        .parse(binaryParser)
+        .send(container);
+
+      expect(res.status).toBe(200);
+      // The request was still decrypted before forwarding.
+      expect(upstream.lastRequest?.body.equals(plaintext)).toBe(true);
+      // The response comes back as plaintext, not an NCR1 container.
+      const responseBody = res.body as Buffer;
+      expect(isRsaHybridContainer(responseBody)).toBe(false);
+      expect(responseBody.equals(plaintext)).toBe(true);
+    });
   });
 });

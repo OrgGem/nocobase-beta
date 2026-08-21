@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
-import { findRoute } from '../services/route-resolver';
+import { resolveGatewayRoute } from '../services/route-resolver';
+import { ApimError } from '../services/errors';
 import { createTestApp, createTestRoute } from './helpers';
 
-describe('route-resolver findRoute', () => {
+describe('route-resolver resolveGatewayRoute', () => {
   let app: MockServer;
 
   beforeAll(async () => {
@@ -24,39 +25,42 @@ describe('route-resolver findRoute', () => {
   });
 
   it('matches an inbound route by path and method', async () => {
-    const route = await findRoute(app.db, 'inbound', 'orders', 'POST');
-    expect(route).toBeTruthy();
-    expect(route?.get('name')).toBe('in-orders');
+    const route = await resolveGatewayRoute(app.db, 'inbound', 'orders', 'POST');
+    expect(route.get('name')).toBe('in-orders');
   });
 
   it('is case-insensitive on method', async () => {
-    const route = await findRoute(app.db, 'inbound', 'orders', 'post');
-    expect(route).toBeTruthy();
+    const route = await resolveGatewayRoute(app.db, 'inbound', 'orders', 'post');
+    expect(route.get('name')).toBe('in-orders');
   });
 
-  it('returns null on method mismatch', async () => {
-    const route = await findRoute(app.db, 'inbound', 'orders', 'GET');
-    expect(route).toBeNull();
+  it('throws a 405 ApimError on method mismatch', async () => {
+    await expect(resolveGatewayRoute(app.db, 'inbound', 'orders', 'GET')).rejects.toMatchObject({
+      name: 'ApimError',
+      httpStatus: 405,
+    });
   });
 
-  it('returns null for unknown paths', async () => {
-    const route = await findRoute(app.db, 'inbound', 'nope', 'POST');
-    expect(route).toBeNull();
+  it('throws a 404 ApimError for unknown paths', async () => {
+    await expect(resolveGatewayRoute(app.db, 'inbound', 'nope', 'POST')).rejects.toMatchObject({
+      name: 'ApimError',
+      httpStatus: 404,
+    });
   });
 
-  it('returns null for disabled routes', async () => {
-    const route = await findRoute(app.db, 'inbound', 'disabled-path', 'POST');
-    expect(route).toBeNull();
+  it('throws a 404 ApimError for disabled routes', async () => {
+    await expect(resolveGatewayRoute(app.db, 'inbound', 'disabled-path', 'POST')).rejects.toMatchObject({
+      name: 'ApimError',
+      httpStatus: 404,
+    });
   });
 
   it('matches an outbound route by name', async () => {
-    const route = await findRoute(app.db, 'outbound', 'out-partner', 'PUT');
-    expect(route).toBeTruthy();
-    expect(route?.get('inboundPath')).toBeFalsy();
+    const route = await resolveGatewayRoute(app.db, 'outbound', 'out-partner', 'PUT');
+    expect(route.get('inboundPath')).toBeFalsy();
   });
 
   it('does not match outbound names for inbound lookups', async () => {
-    const route = await findRoute(app.db, 'inbound', 'out-partner', 'PUT');
-    expect(route).toBeNull();
+    await expect(resolveGatewayRoute(app.db, 'inbound', 'out-partner', 'PUT')).rejects.toBeInstanceOf(ApimError);
   });
 });

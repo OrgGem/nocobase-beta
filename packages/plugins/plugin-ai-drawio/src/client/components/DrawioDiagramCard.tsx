@@ -1,118 +1,137 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Drawer, Space, Typography, Card, Tag, message as antMessage } from 'antd';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Space, Typography, Card, Tag, message as antMessage } from 'antd';
 import { ApartmentOutlined, FullscreenOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import type { ToolsUIProperties } from '@nocobase/client-v2';
-import { DrawioBlock } from '../DrawioBlock';
-import { getDiagramResultByTitle, subscribeDiagramResult } from './diagramResultStore';
+import { getDiagram, restoreCurrentDiagram, setDrawerOpen, subscribeDiagramState } from '../diagramStore';
+import { useDrawioHost, DrawioHostPortal } from '../drawioHost';
 import { useT } from '../locale';
 
 const { Text } = Typography;
 
 type DiagramToolArgs = {
   title?: string;
+  diagramId?: string;
 };
 
 function getDiagramToolArgs(value: unknown): DiagramToolArgs {
-  if (typeof value !== 'object' || value === null || !('title' in value)) {
+  if (typeof value !== 'object' || value === null) {
     return {};
   }
-  const title = value.title;
-  return typeof title === 'string' ? { title } : {};
+  const v = value as Record<string, unknown>;
+  const title = typeof v.title === 'string' ? v.title : undefined;
+  const diagramId = typeof v.diagramId === 'string' ? v.diagramId : undefined;
+  return { title, diagramId };
 }
 
 /**
- * Shared UI card rendered inside the AI Employee chat bubble when a drawio
- * diagram tool (display_diagram / display_model_diagram) was invoked.
+ * Tool card rendered inside the AI chat bubble when a drawio diagram tool
+ * (display_diagram / display_model_diagram) was invoked.
  *
- * It shows a "Open Diagram" button that opens a fullscreen Drawer
- * containing the DrawioBlock — identical to the "Open in fullscreen" action
- * in the Diagrams tab of DrawioManager.
- *
- * When the drawio block was already open on the page at invoke time, the
- * tool applies changes directly and the card is just informational.
- * When no block was open, the card is the primary way for the user to
- * open and view the newly created diagram.
+ * Single global diagram - no session scoping. The first tool call shows
+ * "Open Diagram" button; once opened, subsequent calls update the same canvas.
+ * If user closes the canvas, the button appears again.
  */
-export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => {
+export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions }) => {
   const t = useT();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [openDiagramId, setOpenDiagramId] = useState<string>();
-  const [openDiagramTitle, setOpenDiagramTitle] = useState<string>();
   const args = getDiagramToolArgs(toolCall.args);
-  const diagramTitle = args.title || t('Drawio Diagram');
-  const [result, setResult] = useState(() => getDiagramResultByTitle(diagramTitle));
+  const [opening, setOpening] = useState(false);
+  const [tick, setTick] = useState(0);
+  const isLeader = useDrawioHost();
 
-  const getDiagramId = useCallback((): string | undefined => {
-    return result?.diagramId || getDiagramResultByTitle(diagramTitle)?.diagramId;
-  }, [diagramTitle, result?.diagramId]);
+  // Re-render on store changes so the card reflects the latest diagram state.
+  useEffect(() => {
+    return subscribeDiagramState(() => {
+      setTick((x) => x + 1);
+    });
+  }, []);
+  void tick;
 
-  const isAppliedDirectly = useCallback((): boolean => {
-    return result?.appliedDirectly ?? getDiagramResultByTitle(diagramTitle)?.appliedDirectly ?? false;
-  }, [diagramTitle, result?.appliedDirectly]);
+  const done = toolCall.invokeStatus === 'done' || toolCall.invokeStatus === 'confirmed';
+  const needsApproval = !done && (toolCall.invokeStatus === 'init' || toolCall.invokeStatus === 'interrupted');
 
-  const openDrawer = useCallback(() => {
-    const diagramId = getDiagramId();
-    if (!diagramId) {
-      antMessage.warning(t('Diagram is still being created. Please try again in a moment.'));
-      return;
+  const current = getDiagram();
+  const diagramTitle = args.title || current?.title || t('Drawio Diagram');
+
+  // After a page reload, recover the persisted diagram.
+  useEffect(() => {
+    if (done) {
+      const sessionCurrent = current ?? restoreCurrentDiagram();
+      if (sessionCurrent) {
+        setTick((x) => x + 1);
+      }
     }
-    const stored = result || getDiagramResultByTitle(diagramTitle);
-    setOpenDiagramId(diagramId);
-    setOpenDiagramTitle(stored?.title || diagramTitle);
-    setDrawerOpen(true);
-  }, [diagramTitle, getDiagramId, result, t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done]);
 
-  const closeDrawer = useCallback(() => {
-    setDrawerOpen(false);
+  const waitForDiagram = useCallback((timeoutMs = 20000): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    return new Promise((resolve) => {
+      const tickFn = () => {
+        if (getDiagram()?.xml) {
+          resolve(true);
+          return;
+        }
+        if (Date.now() >= deadline) {
+          resolve(false);
+          return;
+        }
+        window.setTimeout(tickFn, 200);
+      };
+      tickFn();
+    });
   }, []);
 
-  useEffect(() => {
-    return subscribeDiagramResult((result) => {
-      if (result.title !== diagramTitle) {
+  const openDrawer = useCallback(async () => {
+    if (opening) {
+      return;
+    }
+    setOpening(true);
+    try {
+      if (needsApproval && decisions?.approve) {
+        await decisions.approve();
+        const ready = await waitForDiagram();
+        if (ready) {
+          setDrawerOpen(true);
+        } else {
+          antMessage.warning(t('Diagram is still being created. Please try again in a moment.'));
+        }
         return;
       }
-      setResult(result);
-      if (drawerOpen) {
-        setOpenDiagramId(result.diagramId);
-        setOpenDiagramTitle(result.title || diagramTitle);
+
+      if (getDiagram()?.xml) {
+        setDrawerOpen(true);
+      } else {
+        antMessage.warning(t('Diagram is still being created. Please try again in a moment.'));
       }
-    });
-  }, [diagramTitle, drawerOpen]);
+    } catch (err: unknown) {
+      const isNotInterrupted = err instanceof Error && err.message?.toLowerCase().includes('not interrupted');
+      if (isNotInterrupted) {
+        const ready = await waitForDiagram();
+        if (ready) {
+          setDrawerOpen(true);
+        } else {
+          antMessage.warning(t('Diagram is still being created. Please try again in a moment.'));
+        }
+      } else {
+        antMessage.error(err instanceof Error ? err.message : t('Save failed'));
+      }
+    } finally {
+      setOpening(false);
+    }
+  }, [opening, needsApproval, decisions, t, waitForDiagram]);
 
-  // For "done" status tools that were applied directly, show minimal card
-  if (toolCall.invokeStatus === 'done' && isAppliedDirectly()) {
-    return (
-      <Card
-        size="small"
-        style={{
-          marginTop: 8,
-          borderRadius: 8,
-          border: '1px solid #d9d9d9',
-          background: 'linear-gradient(135deg, #f0f9eb 0%, #e8f5e9 100%)',
-        }}
-        styles={{ body: { padding: '10px 16px' } }}
-      >
-        <Space>
-          <ApartmentOutlined style={{ color: '#52c41a', fontSize: 16 }} />
-          <Text style={{ fontSize: 13 }}>{diagramTitle}</Text>
-          <Tag color="green" icon={<CheckCircleOutlined />}>
-            {t('Applied')}
-          </Tag>
-        </Space>
-      </Card>
-    );
-  }
-
-  // No drawio block was open — show the "Open Diagram" button
   return (
     <>
+      {isLeader && <DrawioHostPortal />}
       <Card
         size="small"
         style={{
           marginTop: 8,
           borderRadius: 8,
           border: '1px solid #d9d9d9',
-          background: 'linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%)',
+          background: current?.xml
+            ? 'linear-gradient(135deg, #f0f9eb 0%, #e8f5e9 100%)'
+            : 'linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%)',
         }}
         styles={{ body: { padding: '12px 16px' } }}
       >
@@ -122,36 +141,22 @@ export const DrawioDiagramCard: React.FC<ToolsUIProperties> = ({ toolCall }) => 
             <Text strong style={{ fontSize: 14 }}>
               {diagramTitle}
             </Text>
-            <Tag color="blue" icon={<CheckCircleOutlined />} style={{ marginLeft: 4 }}>
-              {t('Ready')}
+            <Tag color={done ? 'blue' : 'processing'} icon={done ? <CheckCircleOutlined /> : undefined}>
+              {done ? t('Ready') : t('Pending approval')}
             </Tag>
           </Space>
           <Button
             type="primary"
             icon={<FullscreenOutlined />}
             onClick={openDrawer}
+            loading={opening}
             block
-            style={{
-              borderRadius: 6,
-              height: 36,
-              fontWeight: 500,
-            }}
+            style={{ borderRadius: 6, height: 36, fontWeight: 500 }}
           >
-            {t('Open Diagram')}
+            {done ? t('Open Diagram') : t('Approve & Open Diagram')}
           </Button>
         </Space>
       </Card>
-
-      <Drawer
-        open={drawerOpen}
-        onClose={closeDrawer}
-        width="100%"
-        title={openDiagramTitle || diagramTitle}
-        destroyOnClose
-        styles={{ body: { padding: 0 } }}
-      >
-        {drawerOpen && openDiagramId && <DrawioBlock diagramId={openDiagramId} height="calc(100vh - 56px)" />}
-      </Drawer>
     </>
   );
 };

@@ -47,7 +47,9 @@ export const KeyExportModal: React.FC<KeyExportModalProps> = ({ open, record, on
     setLoading(true);
     try {
       const res = await api.request({
-        url: 'cryptoKeys:export',
+        // Must target the plugin's own `exportKey` action: `cryptoKeys:export`
+        // is intercepted by plugin-action-export's global XLSX handler (500).
+        url: 'cryptoKeys:exportKey',
         params: { filterByTk: record.id, format },
       });
       setResult((res?.data?.data ?? res?.data) as ExportResult);

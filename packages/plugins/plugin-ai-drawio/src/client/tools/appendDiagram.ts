@@ -1,5 +1,5 @@
 import type { ToolsOptions } from '@nocobase/client-v2';
-import { getActiveHandle, getAllHandles } from '../lib/activeRegistry';
+import { getDiagram, getDiagramState, setDiagram } from '../diagramStore';
 import { isMxCellXmlComplete, wrapWithMxFile } from '../lib/xml-utils';
 import { appendPartialXml, getPartialXml, resetPartialXml } from './sharedState';
 import type { ToolResult } from './types';
@@ -8,16 +8,12 @@ type AppendDiagramParams = {
   xml?: string;
 };
 
-function getMountedHandle() {
-  return getActiveHandle() || getAllHandles()[0] || null;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 async function invoke(
-  _app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
+  app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
   rawParams: unknown,
 ): Promise<ToolResult> {
   const params = rawParams as AppendDiagramParams;
@@ -56,18 +52,16 @@ async function invoke(
     };
   }
 
-  const handle = getMountedHandle();
-  if (!handle) {
+  const current = getDiagram();
+  if (!current) {
     resetPartialXml();
-    return { status: 'error', content: 'No active draw.io block found. Cannot finalize the assembled diagram.' };
+    return { status: 'error', content: 'No draw.io diagram exists. Call display_diagram first.' };
   }
 
   resetPartialXml();
   const fullXml = wrapWithMxFile(accumulated);
   try {
-    handle.setXml(fullXml);
-    await handle.persist(fullXml);
-    handle.load(fullXml);
+    setDiagram(current.id, current.title, fullXml);
     return { status: 'success', content: 'Diagram assembly complete and displayed successfully.' };
   } catch (error: unknown) {
     return { status: 'error', content: `Failed to render assembled diagram: ${errorMessage(error)}` };

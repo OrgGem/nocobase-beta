@@ -1,9 +1,11 @@
-import { Alert, Button, Form, Input, InputNumber, Select, Space, message } from 'antd';
+import { Button, Form, Input, Select, Space, message } from 'antd';
 import React, { useEffect, useState } from 'react';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
+import { EnvVarSelect } from './EnvVarSelect';
 import { KeyInput, type KeyInputValue } from './KeyInput';
+import { StorageSelect } from './StorageSelect';
 import { OperationResult, type OperationResultProps } from './OperationResult';
 import { RecentOperations } from './RecentOperations';
 
@@ -131,12 +133,15 @@ const EncryptForm: React.FC<{ onResult: (r: OperationResultProps | null) => void
               mode="multiple"
               placeholder={t('Select recipient key(s)') as string}
               options={keys
-                .filter((k) => k.direction === 'partner' && k.publicFormat === 'openpgp')
-                .map((k) => ({ value: k.id, label: k.name }))}
+                .filter((k) => k.publicFormat === 'openpgp')
+                .map((k) => ({
+                  value: k.id,
+                  label: `${k.name} (${k.direction === 'own' ? t('Own') : t('Partner')})`,
+                }))}
             />
           </Form.Item>
           <Form.Item name="signerEnvVar" label={t('Signer env var (own private key)')}>
-            <Input placeholder="CRYPTO_TOOLKIT_MY_PGP_KEY_PRIVATE" />
+            <EnvVarSelect />
           </Form.Item>
           <Form.Item name="passphrase" label={t('Passphrase for the private key env var')}>
             <Input.Password autoComplete="new-password" />
@@ -154,6 +159,9 @@ const EncryptForm: React.FC<{ onResult: (r: OperationResultProps | null) => void
       )}
       <Form.Item name="outputFilename" label={t('Output filename')}>
         <Input placeholder="encrypted.bin" />
+      </Form.Item>
+      <Form.Item name="storageId" label={t('Storage') as string}>
+        <StorageSelect />
       </Form.Item>
       <Space>
         <Button type="primary" htmlType="submit" loading={saving}>
@@ -232,7 +240,7 @@ const DecryptForm: React.FC<{ onResult: (r: OperationResultProps | null) => void
           label={t('Private key env var (own)')}
           rules={[{ required: true, message: 'privateEnvVar is required' }]}
         >
-          <Input placeholder="CRYPTO_TOOLKIT_MY_PGP_KEY_PRIVATE" />
+          <EnvVarSelect />
         </Form.Item>
       )}
       {algorithm === 'pgp' && (
@@ -246,7 +254,12 @@ const DecryptForm: React.FC<{ onResult: (r: OperationResultProps | null) => void
             mode="multiple"
             allowClear
             placeholder={t('Select recipient key(s)') as string}
-            options={keys.filter((k) => k.publicFormat === 'openpgp').map((k) => ({ value: k.id, label: k.name }))}
+            options={keys
+              .filter((k) => k.publicFormat === 'openpgp')
+              .map((k) => ({
+                value: k.id,
+                label: `${k.name} (${k.direction === 'own' ? t('Own') : t('Partner')})`,
+              }))}
           />
         </Form.Item>
       )}
@@ -261,6 +274,9 @@ const DecryptForm: React.FC<{ onResult: (r: OperationResultProps | null) => void
       )}
       <Form.Item name="outputFilename" label={t('Output filename')}>
         <Input placeholder="decrypted.bin" />
+      </Form.Item>
+      <Form.Item name="storageId" label={t('Storage') as string}>
+        <StorageSelect />
       </Form.Item>
       <Space>
         <Button type="primary" htmlType="submit" loading={saving}>
@@ -328,13 +344,16 @@ const SignForm: React.FC<{ onResult: (r: OperationResultProps | null) => void; r
         label={t('Private key env var (own)')}
         rules={[{ required: true, message: 'privateEnvVar is required' }]}
       >
-        <Input placeholder="CRYPTO_TOOLKIT_MY_KEY_PRIVATE" />
+        <EnvVarSelect />
       </Form.Item>
       <Form.Item name="passphrase" label={t('Passphrase')}>
         <Input.Password autoComplete="new-password" />
       </Form.Item>
       <Form.Item name="outputFilename" label={t('Output filename')}>
         <Input placeholder="file.sig" />
+      </Form.Item>
+      <Form.Item name="storageId" label={t('Storage') as string}>
+        <StorageSelect />
       </Form.Item>
       <Space>
         <Button type="primary" htmlType="submit" loading={saving}>
@@ -494,8 +513,6 @@ const ChecksumForm: React.FC<{ onResult: (r: OperationResultProps | null) => voi
 // ── Main page ────────────────────────────────────────────────────
 export const OperationsPage: React.FC = () => {
   const t = useT();
-  void InputNumber;
-  void Alert;
   const [tab, setTab] = useState<string>('encrypt');
   const [result, setResult] = useState<OperationResultProps | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);

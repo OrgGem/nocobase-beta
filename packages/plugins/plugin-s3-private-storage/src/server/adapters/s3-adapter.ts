@@ -1,4 +1,4 @@
-/**
+﻿/**
  * This file is part of the NocoBase (R) project.
  * Copyright (c) 2020-2024 NocoBase Co., Ltd.
  * Authors: NocoBase Team.
@@ -13,6 +13,27 @@ import type { ListObjectsV2CommandOutput } from '@aws-sdk/client-s3';
 import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult } from './types';
 
 /**
+ * Minimal structural types for the injected S3 client and SDK classes.
+ * We deliberately avoid depending on the full AWS SDK types here so the
+ * adapter can be constructed with any S3-compatible client (AWS, MinIO, R2)
+ * without pulling the ~8MB SDK into this bundle.
+ */
+export interface S3ClientLike {
+  send<T = any>(command: unknown): Promise<T>;
+}
+
+export interface S3SDKLike {
+  ListObjectsV2Command: new (input: any) => any;
+  HeadObjectCommand: new (input: any) => any;
+  GetObjectCommand: new (input: any) => any;
+  PutObjectCommand: new (input: any) => any;
+  DeleteObjectCommand: new (input: any) => any;
+  DeleteObjectsCommand: new (input: any) => any;
+  CopyObjectCommand: new (input: any) => any;
+  Upload: new (options: any) => { done(): Promise<any> };
+}
+
+/**
  * S3 storage adapter implementing IStorageAdapter.
  * Uses SDK classes provided by plugin-s3-private-storage at runtime
  * to avoid bundling a separate copy of the ~8MB AWS SDK.
@@ -20,11 +41,11 @@ import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult }
  * All S3 SDK types/classes are injected via the constructor.
  */
 export class S3Adapter implements IStorageAdapter {
-  private client: any; // S3Client
+  private client: S3ClientLike;
   private bucket: string;
-  private sdk: any; // SDK classes from s3 plugin
+  private sdk: S3SDKLike;
 
-  constructor(params: { client: any; bucket: string; sdk: any }) {
+  constructor(params: { client: S3ClientLike; bucket: string; sdk: S3SDKLike }) {
     this.client = params.client;
     this.bucket = params.bucket;
     this.sdk = params.sdk;
@@ -177,8 +198,11 @@ export class S3Adapter implements IStorageAdapter {
     let remainingOffset = options?.offset || 0;
     let continuationToken = options?.continuationToken;
 
-    // S3 accepts cursors rather than offsets. Consume only the exact number of
-    // visible entries requested so the final response can expose a valid cursor.
+    // S3 accepts cursors rather than offsets. Consume pages until the number
+    // of entries the S3 cursor has walked past reaches the requested offset.
+    // We count raw Contents + CommonPrefixes (not just visible entries) so
+    // directory placeholder objects (Key === prefix, which toFileEntries
+    // filters out) cannot cause the cursor to drift past extra entries.
     while (remainingOffset > 0) {
       const response = await this.client.send(
         new ListObjectsV2Command({
@@ -189,11 +213,18 @@ export class S3Adapter implements IStorageAdapter {
           ContinuationToken: continuationToken,
         }),
       );
-      remainingOffset -= this.toFileEntries(response, prefix).length;
+      const rawCount = (response.Contents?.length || 0) + (response.CommonPrefixes?.length || 0);
+      remainingOffset -= rawCount;
       continuationToken = response.NextContinuationToken;
 
       if (!continuationToken) {
         return { entries: [], hasMore: false };
+      }
+
+      // Safety guard: if S3 keeps returning empty pages, stop to avoid an
+      // infinite loop instead of burning requests forever.
+      if (rawCount === 0) {
+        break;
       }
     }
 
@@ -244,8 +275,9 @@ export class S3Adapter implements IStorageAdapter {
         modifiedAt: response.LastModified ? response.LastModified.getTime() : 0,
         mimetype: response.ContentType || this.guessMime(key),
       };
-    } catch (error: any) {
-      if (error.name === 'NotFound' || error.$metadata?.httpStatusCode === 404) {
+    } catch (error: unknown) {
+      const err = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (err.name === 'NotFound' || err.$metadata?.httpStatusCode === 404) {
         const prefix = key.endsWith('/') ? key : key + '/';
         const listResponse = await this.client.send(
           new ListObjectsV2Command({

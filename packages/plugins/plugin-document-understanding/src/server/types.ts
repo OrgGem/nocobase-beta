@@ -28,6 +28,16 @@ export interface EndpointDef {
   fileFieldName?: string;
   maxFiles: number;
   executionMode: 'sync' | 'polling' | 'webhook';
+  /** Discriminator field name sent in the request body/query (e.g. DUGate 'mode'/'type'/'task'/'action'/'process'). */
+  discriminatorField?: string;
+  /** Discriminator value for this endpoint (e.g. DUGate 'parse', 'invoice', 'disbursement'). */
+  discriminatorValue?: string;
+  /** When set, the request also appends '?sync=true' (DUGate synchronous mode). */
+  syncQueryParam?: string;
+  /** For 'sync' mode: DUGate returns 202 with a task ID. Extract the task ID with this path (e.g. 'name') or regex. */
+  taskIdExtractPath?: string;
+  /** For 'sync' mode: regex used to extract the task ID from a string field (e.g. 'operations/([^/]+)'). */
+  taskIdExtractRegex?: string;
   pollResultSubpath?: string;
   pollTaskIdField?: string;
   pollResultField?: string;

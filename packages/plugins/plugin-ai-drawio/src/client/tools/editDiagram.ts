@@ -1,5 +1,5 @@
 import type { ToolsOptions } from '@nocobase/client-v2';
-import { getActiveHandle, getAllHandles, getHandleByDiagramId } from '../lib/activeRegistry';
+import { getDiagram, setDiagram } from '../diagramStore';
 import { applyDiagramOperations, type DiagramOperation, wrapWithMxFile } from '../lib/xml-utils';
 import type { ToolResult } from './types';
 
@@ -8,19 +8,12 @@ type EditDiagramParams = {
   operations?: DiagramOperation[];
 };
 
-function getMountedHandle(diagramId?: string) {
-  if (diagramId) {
-    return getHandleByDiagramId(diagramId);
-  }
-  return getActiveHandle() || getAllHandles()[0] || null;
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 async function invoke(
-  _app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
+  app: Parameters<NonNullable<ToolsOptions['invoke']>>[0],
   rawParams: unknown,
 ): Promise<ToolResult> {
   const params = rawParams as EditDiagramParams;
@@ -29,15 +22,16 @@ async function invoke(
     return { status: 'error', content: 'edit_diagram called without operations.' };
   }
 
-  const handle = getMountedHandle(params.diagramId);
-  if (!handle) {
+  const current = getDiagram();
+
+  if (!current) {
     return {
       status: 'error',
-      content: 'No matching draw.io block is open. Call inspect_active_diagram before editing.',
+      content: 'No draw.io diagram exists. Use display_diagram to set the initial state first.',
     };
   }
 
-  const currentXml = handle.getXml();
+  const currentXml = current.xml;
   if (!currentXml) {
     return {
       status: 'error',
@@ -73,9 +67,7 @@ async function invoke(
 
   const fullXml = wrapWithMxFile(editedXml);
   try {
-    handle.setXml(fullXml);
-    await handle.persist(fullXml);
-    handle.load(fullXml);
+    setDiagram(current.id, current.title, fullXml);
   } catch (error: unknown) {
     return { status: 'error', content: `Failed to apply edits to canvas: ${errorMessage(error)}` };
   }

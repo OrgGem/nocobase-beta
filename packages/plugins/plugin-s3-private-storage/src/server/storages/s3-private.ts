@@ -1,4 +1,4 @@
-/**
+﻿/**
  * This file is part of the NocoBase (R) project.
  * Copyright (c) 2020-2024 NocoBase Co., Ltd.
  * Authors: NocoBase Team.
@@ -10,9 +10,16 @@
 import path from 'path';
 import { Readable, Transform, TransformCallback } from 'stream';
 import { StorageType, cloudFilenameGetter, type StorageModel } from '@nocobase/plugin-file-manager';
-import type { S3Client as AwsS3Client } from '@aws-sdk/client-s3';
+import {
+  S3Client as AwsS3Client,
+  DeleteObjectCommand,
+  DeleteObjectsCommand,
+  GetObjectCommand,
+} from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { STORAGE_TYPE_S3_PRIVATE } from '../../constants';
 import { getPrivateS3StreamUrl } from './get-file-url';
+import { resolveCredentialsProvider } from '../aws-credentials';
 
 /**
  * Transform stream that counts bytes passing through.
@@ -45,8 +52,6 @@ export default class S3PrivateStorage extends StorageType {
       baseUrl: '', // Not used for private storage since we use proxy
       options: {
         region: process.env.AWS_S3_REGION,
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
         bucket: process.env.AWS_S3_BUCKET,
       },
     };
@@ -57,13 +62,6 @@ export default class S3PrivateStorage extends StorageType {
   }
 
   private createS3Client() {
-    let S3ClientClass: typeof import('@aws-sdk/client-s3').S3Client;
-    try {
-      S3ClientClass = require('@aws-sdk/client-s3').S3Client;
-    } catch (e) {
-      throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
-    }
-
     const storageOptions = { ...this.storage.options };
     const { accessKeyId, secretAccessKey, region, endpoint } = storageOptions;
     delete storageOptions.accessKeyId;
@@ -78,11 +76,23 @@ export default class S3PrivateStorage extends StorageType {
       requestChecksumCalculation: 'WHEN_REQUIRED',
     };
 
-    if (accessKeyId && secretAccessKey) {
-      clientConfig.credentials = {
-        accessKeyId,
-        secretAccessKey,
-      };
+    // Credentials are optional. When neither accessKeyId nor secretAccessKey
+    // is configured, the AWS SDK falls back to the default credential chain
+    // (IAM role, IMDS, ECS container credentials, environment, shared config).
+    // This supports instances that already have S3 permissions via IAM role
+    // (e.g. EC2 in the same account as the bucket).
+    // When roleArn is configured, STS AssumeRole is used.
+    const credentials = resolveCredentialsProvider({
+      region,
+      endpoint,
+      accessKeyId,
+      secretAccessKey,
+      roleArn: this.storage.options.roleArn,
+      roleSessionName: this.storage.options.roleSessionName,
+      externalId: this.storage.options.externalId,
+    });
+    if (credentials) {
+      clientConfig.credentials = credentials;
     }
 
     if (endpoint) {
@@ -90,7 +100,7 @@ export default class S3PrivateStorage extends StorageType {
       clientConfig.forcePathStyle = true;
     }
 
-    const client = new S3ClientClass(clientConfig);
+    const client = new AwsS3Client(clientConfig);
     client.middlewareStack.remove('flexibleChecksumsMiddleware');
     client.middlewareStack.remove('flexibleChecksumsInputMiddleware');
     return client;
@@ -139,16 +149,7 @@ export default class S3PrivateStorage extends StorageType {
           const counter = new CountingStream();
           const uploadStream = file.stream.pipe(counter);
 
-          let UploadClass;
-          try {
-            UploadClass = require('@aws-sdk/lib-storage').Upload;
-          } catch (e) {
-            throw new Error(
-              '@aws-sdk/lib-storage module is not installed. Please run `npm install @aws-sdk/lib-storage` first.',
-            );
-          }
-
-          const upload = new UploadClass({
+          const upload = new Upload({
             client: s3,
             params: {
               Bucket: bucket,
@@ -183,18 +184,12 @@ export default class S3PrivateStorage extends StorageType {
       },
 
       _removeFile: (req: any, file: any, cb: Function) => {
-        (async () => {
+        // Named async function instead of an async IIFE so errors are handled
+        // in one place and the callback contract is preserved.
+        const removeFile = async () => {
           try {
-            let DeleteObjectCommandClass;
-            try {
-              DeleteObjectCommandClass = require('@aws-sdk/client-s3').DeleteObjectCommand;
-            } catch (e) {
-              throw new Error(
-                '@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.',
-              );
-            }
             await s3.send(
-              new DeleteObjectCommandClass({
+              new DeleteObjectCommand({
                 Bucket: bucket,
                 Key: file.key,
               }),
@@ -203,35 +198,43 @@ export default class S3PrivateStorage extends StorageType {
           } catch (err) {
             cb(err);
           }
-        })();
+        };
+        removeFile();
       },
     };
   }
 
   /**
-   * Delete files from S3
+   * Delete files from S3. Uses batched DeleteObjectsCommand (up to 1000 keys
+   * per request) instead of one DeleteObjectCommand per record.
    */
   async delete(records) {
     const s3 = this.client;
     const bucket = this.storage.options.bucket;
 
-    let DeleteObjectCommandClass;
-    try {
-      DeleteObjectCommandClass = require('@aws-sdk/client-s3').DeleteObjectCommand;
-    } catch (e) {
-      throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
-    }
-
-    const deleted = [];
-    for (const record of records) {
+    const keys = records.map((record) => {
       // @ts-ignore
-      const key = this.getFileKey(record);
-      const deleteCommand = new DeleteObjectCommandClass({
+      return this.getFileKey(record);
+    });
+
+    // DeleteObjectsCommand accepts up to 1000 keys per request.
+    const deleted: Array<{ Key: string }> = [];
+    for (let i = 0; i < keys.length; i += 1000) {
+      const batch = keys.slice(i, i + 1000).map((Key) => ({ Key }));
+      const command = new DeleteObjectsCommand({
         Bucket: bucket,
-        Key: key,
+        Delete: { Objects: batch, Quiet: true },
       });
-      await s3.send(deleteCommand);
-      deleted.push({ Key: key });
+      const result = await s3.send(command);
+      // With Quiet: true S3 only returns errors; treat non-error as deleted.
+      if (result?.Deleted) {
+        deleted.push(...result.Deleted);
+      } else {
+        deleted.push(...batch);
+      }
+      if (result?.Errors?.length) {
+        throw new Error(`[s3-private-storage] Failed to delete ${result.Errors.length} object(s) from bucket`);
+      }
     }
 
     return [
@@ -249,14 +252,7 @@ export default class S3PrivateStorage extends StorageType {
     const s3 = this.client;
     const key = this.getFileKey(file);
 
-    let GetObjectCommandClass;
-    try {
-      GetObjectCommandClass = require('@aws-sdk/client-s3').GetObjectCommand;
-    } catch (e) {
-      throw new Error('@aws-sdk/client-s3 module is not installed. Please run `npm install @aws-sdk/client-s3` first.');
-    }
-
-    const command = new GetObjectCommandClass({
+    const command = new GetObjectCommand({
       Bucket: this.storage.options.bucket,
       Key: key,
     });

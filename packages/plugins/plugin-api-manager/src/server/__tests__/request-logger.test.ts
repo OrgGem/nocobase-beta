@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
-import { pruneExpiredLogs, writeRequestLog } from '../services/request-logger';
+import { capPayload, MAX_LOG_PAYLOAD_BYTES, pruneExpiredLogs, writeRequestLog } from '../services/request-logger';
 import { createTestApp } from './helpers';
 
 async function insertLog(app: MockServer, requestId: string, createdAt: Date) {
@@ -69,5 +69,26 @@ describe('request-logger', () => {
     const repo = app.db.getRepository('apiRequestLogs');
     expect(await repo.findOne({ filter: { requestId: 'req-old' } })).toBeNull();
     expect(await repo.findOne({ filter: { requestId: 'req-new' } })).toBeTruthy();
+  });
+});
+
+describe('capPayload', () => {
+  it('returns null for an empty buffer', () => {
+    expect(capPayload(Buffer.alloc(0))).toBeNull();
+  });
+
+  it('returns base64 for a buffer within the limit', () => {
+    const buf = Buffer.from('hello world');
+    expect(capPayload(buf)).toBe(buf.toString('base64'));
+  });
+
+  it('returns null when the buffer exceeds MAX_LOG_PAYLOAD_BYTES', () => {
+    const buf = Buffer.alloc(MAX_LOG_PAYLOAD_BYTES + 1);
+    expect(capPayload(buf)).toBeNull();
+  });
+
+  it('returns base64 when the buffer is exactly at the limit', () => {
+    const buf = Buffer.alloc(MAX_LOG_PAYLOAD_BYTES, 0x41);
+    expect(capPayload(buf)).toBe(buf.toString('base64'));
   });
 });

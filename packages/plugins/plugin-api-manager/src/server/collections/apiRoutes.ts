@@ -119,6 +119,7 @@ export default defineCollection({
           { value: 'none', label: 'None' },
           { value: 'aes-256-gcm', label: 'AES-256-GCM' },
           { value: 'pgp', label: 'PGP' },
+          { value: 'rsa-oaep', label: 'RSA-OAEP (hybrid)' },
         ],
       },
     },
@@ -193,6 +194,37 @@ export default defineCollection({
       },
     },
     {
+      type: 'string',
+      name: 'rsaEncryptKeyName',
+      interface: 'input',
+      uiSchema: {
+        title: 'RSA Encrypt Key',
+        type: 'string',
+        'x-component': 'Input',
+      },
+    },
+    {
+      type: 'string',
+      name: 'rsaDecryptKeyName',
+      interface: 'input',
+      uiSchema: {
+        title: 'RSA Decrypt Key',
+        type: 'string',
+        'x-component': 'Input',
+      },
+    },
+    {
+      type: 'boolean',
+      name: 'responseEncrypted',
+      defaultValue: true,
+      interface: 'checkbox',
+      uiSchema: {
+        title: 'Response Encrypted',
+        type: 'boolean',
+        'x-component': 'Checkbox',
+      },
+    },
+    {
       type: 'integer',
       name: 'timeoutMs',
       defaultValue: 30000,
@@ -223,9 +255,122 @@ export default defineCollection({
       defaultValue: [],
     },
     {
+      type: 'json',
+      name: 'forwardResponseHeaders',
+      defaultValue: [],
+      uiSchema: {
+        title: 'Forward Response Headers',
+        type: 'array',
+        'x-component': 'Select',
+        'x-component-props': { mode: 'tags' },
+        'x-decorator': 'FormItem',
+        enum: [
+          { value: 'content-disposition', label: 'Content-Disposition' },
+          { value: 'content-length', label: 'Content-Length' },
+          { value: 'etag', label: 'ETag' },
+          { value: 'accept-ranges', label: 'Accept-Ranges' },
+          { value: 'last-modified', label: 'Last-Modified' },
+          { value: 'content-encoding', label: 'Content-Encoding' },
+          { value: 'cache-control', label: 'Cache-Control' },
+          { value: 'expires', label: 'Expires' },
+        ],
+      },
+    },
+    {
       type: 'integer',
       name: 'maxBodyMb',
       defaultValue: 10,
+    },
+    // --- HMAC request signing ---
+    {
+      type: 'boolean',
+      name: 'hmacSignEnabled',
+      defaultValue: false,
+    },
+    {
+      type: 'boolean',
+      name: 'hmacVerifyEnabled',
+      defaultValue: false,
+    },
+    {
+      type: 'text',
+      name: 'hmacSecret',
+    },
+    {
+      type: 'string',
+      name: 'hmacSecretEnvVar',
+    },
+    {
+      type: 'integer',
+      name: 'hmacToleranceSec',
+      defaultValue: 300,
+    },
+    // --- JWT auth ---
+    {
+      type: 'boolean',
+      name: 'jwtSignEnabled',
+      defaultValue: false,
+    },
+    {
+      type: 'string',
+      name: 'jwtSignAlgorithm',
+      defaultValue: 'RS256',
+    },
+    {
+      type: 'string',
+      name: 'jwtSignKeyName',
+    },
+    {
+      type: 'boolean',
+      name: 'jwtVerifyEnabled',
+      defaultValue: false,
+    },
+    {
+      type: 'string',
+      name: 'jwtVerifyKeyName',
+    },
+    {
+      type: 'text',
+      name: 'jwtSecret',
+    },
+    {
+      type: 'string',
+      name: 'jwtSecretEnvVar',
+    },
+    {
+      type: 'string',
+      name: 'jwtIssuer',
+    },
+    {
+      type: 'string',
+      name: 'jwtAudience',
+    },
+    {
+      type: 'integer',
+      name: 'jwtExpiresInSec',
+      defaultValue: 300,
+    },
+    // --- Rate limiting ---
+    {
+      type: 'boolean',
+      name: 'rateLimitEnabled',
+      defaultValue: false,
+    },
+    {
+      type: 'integer',
+      name: 'rateLimitMax',
+      defaultValue: 60,
+    },
+    {
+      type: 'integer',
+      name: 'rateLimitWindowSec',
+      defaultValue: 60,
+    },
+    // --- IP allowlist ---
+    {
+      type: 'json',
+      name: 'ipAllowlist',
+      defaultValue: [],
     },
   ],
 });

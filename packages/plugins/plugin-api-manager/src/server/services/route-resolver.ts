@@ -1,30 +1,29 @@
 import type { Database, Model } from '@nocobase/database';
-import type { RouteDirection } from '../../constants';
+import { ERROR_CODES, type RouteDirection } from '../../constants';
+import { ApimError } from './errors';
 
-export async function findRoute(
+/**
+ * Resolves the gateway route for an incoming request. Throws:
+ * - 404 APIM_ROUTE_NOT_FOUND when no matching route exists or it is disabled
+ * - 405 APIM_ROUTE_NOT_FOUND when the route exists but the method differs
+ */
+export async function resolveGatewayRoute(
   db: Database,
   direction: RouteDirection,
   pathOrName: string,
   method: string,
-): Promise<Model | null> {
+): Promise<Model> {
   const repo = db.getRepository('apiRoutes');
-  const normalizedMethod = method.toUpperCase();
-  if (direction === 'inbound') {
-    return repo.findOne({
-      filter: {
-        direction: 'inbound',
-        inboundPath: pathOrName,
-        method: normalizedMethod,
-        enabled: true,
-      },
-    });
+  const filter =
+    direction === 'inbound'
+      ? { direction: 'inbound', inboundPath: pathOrName }
+      : { direction: 'outbound', name: pathOrName };
+  const route = await repo.findOne({ filter });
+  if (!route || !route.get('enabled')) {
+    throw new ApimError(ERROR_CODES.ROUTE_NOT_FOUND, 'Route not found', 404);
   }
-  return repo.findOne({
-    filter: {
-      direction: 'outbound',
-      name: pathOrName,
-      method: normalizedMethod,
-      enabled: true,
-    },
-  });
+  if (String(route.get('method') ?? '').toUpperCase() !== method.toUpperCase()) {
+    throw new ApimError(ERROR_CODES.ROUTE_NOT_FOUND, 'Method not allowed for this route', 405);
+  }
+  return route;
 }

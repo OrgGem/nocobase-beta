@@ -4,6 +4,7 @@ import {
   createPrivateKey,
   createPublicKey,
   createSign,
+  randomBytes,
   sign as signOneShot,
   type KeyObject,
 } from 'crypto';
@@ -318,7 +319,7 @@ export async function createSelfSigned(input: CreateSelfSignedInput): Promise<Cr
   const extensions = extension ? der(0xa3, sequence(extension)) : Buffer.alloc(0);
   const tbsCertificate = sequence(
     der(0xa0, integer(2)),
-    integer(Buffer.from([1])),
+    integer(Buffer.concat([Buffer.from([0x01]), randomBytes(7)])), // random positive 8-byte serial
     signatureAlgorithm(type, hash),
     name,
     sequence(utcTime(notBefore), utcTime(notAfter)),

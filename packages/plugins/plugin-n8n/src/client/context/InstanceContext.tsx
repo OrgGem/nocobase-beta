@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
 
@@ -26,7 +26,11 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     api.resource('n8nInstances').list({ pageSize: 100, filter: { enabled: true } }),
   );
 
-  const instances = data?.data || [];
+  // apiClient resolves to the full Axios response: data.data is the body {data, meta}
+  const instances = useMemo(() => {
+    const body = data?.data;
+    return Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
+  }, [data]);
 
   useEffect(() => {
     if (instances.length > 0 && instanceId === null) {

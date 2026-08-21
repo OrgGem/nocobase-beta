@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
 import { APIM_ACL } from '../../constants';
-import { createTestApp, createTestRoute, loginAgent } from './helpers';
+import { createTestApp, createTestRoute, createRsaKeyFixture, loginAgent } from './helpers';
 
 function unwrap(res: { body: unknown }): Record<string, unknown> {
   const body = res.body as Record<string, unknown> | undefined;
@@ -49,6 +49,30 @@ describe('plugin-api-manager (smoke)', () => {
     const snippet = snippets?.get(APIM_ACL);
     expect(snippet).toBeDefined();
     expect(snippet?.actions).toEqual(expect.arrayContaining(['apiRoutes:*', 'apiPartners:*']));
+  });
+
+  it('grants apiRoutes:test via the plugin snippet, not to every logged-in user', () => {
+    const acl = app.acl;
+    const withSnippet = acl.define({ role: 'apim-with-snippet' });
+    withSnippet.snippets.add(APIM_ACL);
+    expect(acl.can({ role: 'apim-with-snippet', resource: 'apiRoutes', action: 'test' })).toBeTruthy();
+
+    const withoutSnippet = acl.define({ role: 'apim-without-snippet' });
+    expect(acl.can({ role: 'apim-without-snippet', resource: 'apiRoutes', action: 'test' })).toBeNull();
+  });
+
+  it('denies apiRoutes:test over HTTP for logged-in users without the snippet', async () => {
+    const user = await app.db.getRepository('users').create({
+      values: { email: 'no-snippet@apim.test', nickname: 'No Snippet' },
+    });
+    const plainAgent = await app.agent().login(user);
+    const route = await createTestRoute(app, {
+      name: 'smoke-acl-denied',
+      direction: 'outbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+    });
+    const res = await plainAgent.resource('apiRoutes').test({ filterByTk: route.get('id') });
+    expect(res.status).toBe(403);
   });
 
   it('encrypts aesSecret at rest (DB value differs from plaintext)', async () => {
@@ -120,5 +144,220 @@ describe('plugin-api-manager (smoke)', () => {
     const stored = await app.db.getRepository('apiRoutes').findOne({ filterByTk: route.get('id') });
     expect(Number(stored?.get('retryCount'))).toBeLessThanOrEqual(5);
     expect(Number(stored?.get('maxBodyMb'))).toBeLessThanOrEqual(100);
+  });
+
+  it('clamps timeoutMs and retryDelayMs to allowed ranges', async () => {
+    const route = await createTestRoute(app, {
+      name: 'smoke-clamp-time',
+      direction: 'outbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      timeoutMs: 1,
+      retryDelayMs: 999999,
+    });
+    const stored = await app.db.getRepository('apiRoutes').findOne({ filterByTk: route.get('id') });
+    expect(Number(stored?.get('timeoutMs'))).toBe(100);
+    expect(Number(stored?.get('retryDelayMs'))).toBe(60000);
+  });
+
+  it('rejects route names with characters outside [A-Za-z0-9._-]', async () => {
+    const badNames = ['has space', 'with/slash', 'qu?ery', 'hash#tag', 'semi;colon', 'unicode-ä'];
+    let index = 0;
+    for (const bad of badNames) {
+      index += 1;
+      await expect(
+        createTestRoute(app, {
+          name: bad,
+          direction: 'outbound',
+          targetUrl: 'http://127.0.0.1:9/echo',
+          description: `bad-name-${index}`,
+        }),
+      ).rejects.toThrow(/Route name/);
+    }
+  });
+
+  it('rejects inboundPaths with unsafe segments or characters', async () => {
+    const badPaths = ['/leading', 'has space', 'with?query', 'with#frag', 'a/../b', '..', 'a//b', 'a/./b'];
+    let index = 0;
+    for (const bad of badPaths) {
+      index += 1;
+      await expect(
+        createTestRoute(app, {
+          name: `smoke-in-bad-${index}`,
+          direction: 'inbound',
+          targetUrl: 'http://127.0.0.1:9/echo',
+          inboundPath: bad,
+        }),
+      ).rejects.toThrow(/inboundPath/);
+    }
+  });
+
+  it('allows nested inboundPaths', async () => {
+    const route = await createTestRoute(app, {
+      name: 'smoke-in-nested',
+      direction: 'inbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      inboundPath: 'partner/v1/webhook',
+    });
+    expect(route.get('inboundPath')).toBe('partner/v1/webhook');
+  });
+
+  it('rejects an inbound route without inboundPath', async () => {
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-in-no-path',
+        direction: 'inbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        inboundPath: '',
+      }),
+    ).rejects.toThrow(/inboundPath is required/);
+  });
+
+  it('rejects a duplicate inboundPath among inbound routes', async () => {
+    await createTestRoute(app, {
+      name: 'smoke-in-first',
+      direction: 'inbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      inboundPath: 'dup-path',
+    });
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-in-second',
+        direction: 'inbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        inboundPath: 'dup-path',
+      }),
+    ).rejects.toThrow(/already used by inbound route/);
+  });
+
+  it('allows updating an inbound route without changing its inboundPath', async () => {
+    const route = await createTestRoute(app, {
+      name: 'smoke-in-update',
+      direction: 'inbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      inboundPath: 'update-path',
+    });
+    await app.db.getRepository('apiRoutes').update({
+      filterByTk: route.get('id'),
+      values: { description: 'updated' },
+    });
+    const stored = await app.db.getRepository('apiRoutes').findOne({ filterByTk: route.get('id') });
+    expect(stored?.get('description')).toBe('updated');
+    expect(stored?.get('inboundPath')).toBe('update-path');
+  });
+
+  it('rejects an AES route without a secret or env variable', async () => {
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-aes-nosecret',
+        direction: 'outbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        encryptionMode: 'aes-256-gcm',
+      }),
+    ).rejects.toThrow(/aesSecret or aesSecretEnvVar/);
+  });
+
+  it('rejects a PGP route without encrypt and decrypt keys', async () => {
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-pgp-nokeys',
+        direction: 'outbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        encryptionMode: 'pgp',
+      }),
+    ).rejects.toThrow(/pgpEncryptKeyName/);
+  });
+
+  it('defaults responseEncrypted to true', async () => {
+    const route = await createTestRoute(app, {
+      name: 'smoke-resp-default',
+      direction: 'outbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+    });
+    expect(route.get('responseEncrypted')).toBe(true);
+  });
+
+  it('rejects an outbound RSA route without an encrypt key', async () => {
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-rsa-nokeys',
+        direction: 'outbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        encryptionMode: 'rsa-oaep',
+      }),
+    ).rejects.toThrow(/rsaEncryptKeyName/);
+  });
+
+  it('rejects an outbound RSA route with encrypted responses but no decrypt key', async () => {
+    const partner = await createRsaKeyFixture(app, { name: 'rsa-val-partner', direction: 'partner' });
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-rsa-nodecrypt',
+        direction: 'outbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        encryptionMode: 'rsa-oaep',
+        rsaEncryptKeyName: partner.keyName,
+        responseEncrypted: true,
+      }),
+    ).rejects.toThrow(/rsaDecryptKeyName/);
+  });
+
+  it('allows an outbound RSA route without a decrypt key when responses are plaintext', async () => {
+    const partner = await createRsaKeyFixture(app, { name: 'rsa-val-plain', direction: 'partner' });
+    const route = await createTestRoute(app, {
+      name: 'smoke-rsa-plain-resp',
+      direction: 'outbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      encryptionMode: 'rsa-oaep',
+      rsaEncryptKeyName: partner.keyName,
+      responseEncrypted: false,
+    });
+    const stored = await app.db.getRepository('apiRoutes').findOne({ filterByTk: route.get('id') });
+    expect(stored?.get('rsaDecryptKeyName')).toBeNull();
+  });
+
+  it('rejects an inbound RSA route without a decrypt key', async () => {
+    await expect(
+      createTestRoute(app, {
+        name: 'smoke-rsa-in-nodecrypt',
+        direction: 'inbound',
+        targetUrl: 'http://127.0.0.1:9/echo',
+        inboundPath: 'rsa-in-nokey',
+        encryptionMode: 'rsa-oaep',
+      }),
+    ).rejects.toThrow(/rsaDecryptKeyName/);
+  });
+
+  it('clears stale RSA key names when encryptionMode switches away from rsa-oaep', async () => {
+    const partner = await createRsaKeyFixture(app, { name: 'rsa-val-stale', direction: 'partner' });
+    const route = await createTestRoute(app, {
+      name: 'smoke-rsa-stale',
+      direction: 'outbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      encryptionMode: 'rsa-oaep',
+      rsaEncryptKeyName: partner.keyName,
+      responseEncrypted: false,
+    });
+    await app.db.getRepository('apiRoutes').update({
+      filterByTk: route.get('id'),
+      values: { encryptionMode: 'none' },
+    });
+    const stored = await app.db.getRepository('apiRoutes').findOne({ filterByTk: route.get('id') });
+    expect(stored?.get('rsaEncryptKeyName')).toBeNull();
+  });
+
+  it('clears stale aesSecret when encryptionMode switches away from aes-256-gcm', async () => {
+    const route = await createTestRoute(app, {
+      name: 'smoke-stale-secret',
+      direction: 'outbound',
+      targetUrl: 'http://127.0.0.1:9/echo',
+      encryptionMode: 'aes-256-gcm',
+      aesSecret: `stale-${randomBytes(8).toString('hex')}`,
+    });
+    await app.db.getRepository('apiRoutes').update({
+      filterByTk: route.get('id'),
+      values: { encryptionMode: 'none' },
+    });
+    const stored = await app.db.getRepository('apiRoutes').findOne({ filterByTk: route.get('id') });
+    expect(stored?.get('aesSecret')).toBeNull();
   });
 });

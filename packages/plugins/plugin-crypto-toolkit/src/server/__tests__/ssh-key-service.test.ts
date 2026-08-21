@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { generateKeyPairSync } from 'crypto';
+import { createPrivateKey, createPublicKey, generateKeyPairSync } from 'crypto';
 import {
   generateSshKey,
+  openSshPrivateToPem,
+  openSshPublicToPem,
   pemToOpenSshPublic,
   pemToOpenSshPrivate,
   sshFingerprint,
@@ -65,5 +67,30 @@ describe('ssh-key-service', () => {
     // sshpk reformats with trailing newline — fingerprint of public half is unchanged.
     const fingerprintFromPub = sshFingerprint(pair.publicPem);
     expect(fingerprintFromPub).toBe(pair.fingerprint);
+  });
+
+  it('openSshPrivateToPem converts a stored OpenSSH private key into a PKCS8 PEM node:crypto accepts', () => {
+    const pair = generateSshKey('ed25519');
+    const pem = openSshPrivateToPem(pair.privateOpenSsh);
+    expect(pem).toMatch(/-----BEGIN PRIVATE KEY-----/);
+    const key = createPrivateKey(pem);
+    expect(key.asymmetricKeyType).toBe('ed25519');
+    const derivedPublic = createPublicKey(key).export({ type: 'spki', format: 'pem' }).toString();
+    expect(derivedPublic.trim()).toBe(pair.publicPem.trim());
+  });
+
+  it('openSshPrivateToPem works for RSA keys', () => {
+    const pair = generateSshKey('rsa-4096');
+    const pem = openSshPrivateToPem(pair.privateOpenSsh);
+    const key = createPrivateKey(pem);
+    expect(key.asymmetricKeyType).toBe('rsa');
+  });
+
+  it('openSshPublicToPem converts an OpenSSH line to the same SPKI PEM as the original pair', () => {
+    const pair = generateSshKey('ed25519');
+    const pem = openSshPublicToPem(pair.publicOpenSsh);
+    expect(pem).toMatch(/-----BEGIN PUBLIC KEY-----/);
+    const canonical = createPublicKey(pem).export({ type: 'spki', format: 'pem' }).toString();
+    expect(canonical.trim()).toBe(pair.publicPem.trim());
   });
 });

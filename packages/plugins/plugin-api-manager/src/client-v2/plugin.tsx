@@ -12,6 +12,15 @@ export class PluginApiManagerClient extends Plugin<Record<string, never>, Applic
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: SETTINGS_KEY,
+      key: 'guide',
+      title: this.t('Guide'),
+      aclSnippet: APIM_ACL,
+      sort: 0,
+      componentLoader: () => import('./components/GuidePage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: SETTINGS_KEY,
       key: 'routes',
       title: this.t('Routes'),
       aclSnippet: APIM_ACL,

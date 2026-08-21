@@ -5,6 +5,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
 import { RouteFormModal, RouteFormValues, RouteOption, CryptoKeyOption } from './RouteFormModal';
+import { RouteUsageModal } from './RouteUsageModal';
 import { TestRouteModal } from './TestRouteModal';
 
 interface RouteRow {
@@ -17,7 +18,7 @@ interface RouteRow {
   partnerId?: number | null;
   description?: string;
   enabled: boolean;
-  encryptionMode: 'none' | 'aes-256-gcm' | 'pgp';
+  encryptionMode: 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
   wireFormat: 'binary' | 'json';
   aesSecret?: string;
   aesSecretEnvVar?: string;
@@ -25,12 +26,35 @@ interface RouteRow {
   pgpDecryptKeyName?: string;
   pgpSignKeyName?: string;
   pgpVerifyKeyName?: string;
+  rsaEncryptKeyName?: string;
+  rsaDecryptKeyName?: string;
+  responseEncrypted?: boolean;
+  hmacSignEnabled?: boolean;
+  hmacVerifyEnabled?: boolean;
+  hmacSecret?: string;
+  hmacSecretEnvVar?: string;
+  hmacToleranceSec?: number;
+  jwtSignEnabled?: boolean;
+  jwtSignAlgorithm?: 'RS256' | 'HS256';
+  jwtSignKeyName?: string;
+  jwtVerifyEnabled?: boolean;
+  jwtVerifyKeyName?: string;
+  jwtSecret?: string;
+  jwtSecretEnvVar?: string;
+  jwtIssuer?: string;
+  jwtAudience?: string;
+  jwtExpiresInSec?: number;
+  rateLimitEnabled?: boolean;
+  rateLimitMax?: number;
+  rateLimitWindowSec?: number;
+  ipAllowlist?: string[];
   timeoutMs: number;
   retryCount: number;
   retryDelayMs: number;
   maxBodyMb: number;
   logPayloads: boolean;
   forwardHeaders?: string[];
+  forwardResponseHeaders?: string[];
   staticHeaders?: { name: string; value: string }[];
 }
 
@@ -38,6 +62,7 @@ const ENCRYPTION_COLORS: Record<string, string> = {
   none: 'default',
   'aes-256-gcm': 'blue',
   pgp: 'purple',
+  'rsa-oaep': 'cyan',
 };
 
 export const RoutesPage: React.FC = () => {
@@ -53,23 +78,26 @@ export const RoutesPage: React.FC = () => {
   const [editing, setEditing] = useState<RouteRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [testRoute, setTestRoute] = useState<RouteRow | null>(null);
+  const [usageRoute, setUsageRoute] = useState<RouteRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try {
-      const [routesRes, partnersRes, keysRes] = await Promise.all([
-        api.request({ url: 'apiRoutes:list', params: { paginate: false, sort: ['-createdAt'] } }),
-        api.request({ url: 'apiPartners:list', params: { paginate: false } }),
-        api.request({ url: 'cryptoKeys:list', params: { paginate: false } }),
-      ]);
-      setRows((routesRes?.data?.data ?? []) as RouteRow[]);
-      setPartners((partnersRes?.data?.data ?? []) as RouteOption[]);
-      setCryptoKeys((keysRes?.data?.data ?? []) as CryptoKeyOption[]);
-    } catch (err) {
-      message.error(getErrorMessage(err, t('Failed to load routes') as string));
-    } finally {
-      setLoading(false);
+    // allSettled: partners/keys feed the form modal only, so their failure
+    // should not blank out the routes table.
+    const [routesRes, partnersRes, keysRes] = await Promise.allSettled([
+      api.request({ url: 'apiRoutes:list', params: { paginate: false, sort: ['-createdAt'] } }),
+      api.request({ url: 'apiPartners:list', params: { paginate: false } }),
+      api.request({ url: 'cryptoKeys:list', params: { paginate: false } }),
+    ]);
+    if (routesRes.status === 'fulfilled') {
+      setRows((routesRes.value?.data?.data ?? []) as RouteRow[]);
+    } else {
+      setRows([]);
+      message.error(getErrorMessage(routesRes.reason, t('Failed to load routes') as string));
     }
+    setPartners(partnersRes.status === 'fulfilled' ? ((partnersRes.value?.data?.data ?? []) as RouteOption[]) : []);
+    setCryptoKeys(keysRes.status === 'fulfilled' ? ((keysRes.value?.data?.data ?? []) as CryptoKeyOption[]) : []);
+    setLoading(false);
   }, [api, t]);
 
   useEffect(() => {
@@ -178,6 +206,9 @@ export const RoutesPage: React.FC = () => {
       key: 'actions',
       render: (_: unknown, record: RouteRow) => (
         <Space>
+          <Button size="small" onClick={() => setUsageRoute(record)}>
+            {t('Usage')}
+          </Button>
           <Button size="small" onClick={() => setTestRoute(record)}>
             {t('Test')}
           </Button>
@@ -215,6 +246,7 @@ export const RoutesPage: React.FC = () => {
         onCancel={() => setModalOpen(false)}
       />
       <TestRouteModal route={testRoute} onClose={() => setTestRoute(null)} />
+      <RouteUsageModal route={usageRoute} onClose={() => setUsageRoute(null)} />
     </div>
   );
 };

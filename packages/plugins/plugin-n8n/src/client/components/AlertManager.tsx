@@ -33,11 +33,10 @@ export const AlertManager: React.FC = () => {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>(() =>
-    api.resource('n8nAlertRules').list({ pageSize: 100 }),
-  );
+  const { data, loading, refresh } = useRequest<any>(() => api.resource('n8nAlertRules').list({ pageSize: 100 }));
 
-  const rules = data?.data || [];
+  const body = data?.data;
+  const rules = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -140,9 +139,7 @@ export const AlertManager: React.FC = () => {
             <Input />
           </Form.Item>
           <Form.Item name="instanceId" label={t('Instance')} rules={[{ required: true }]}>
-            <Select
-              options={instances.map((i: any) => ({ label: i.name, value: i.id }))}
-            />
+            <Select options={instances.map((i: any) => ({ label: i.name, value: i.id }))} />
           </Form.Item>
           <Form.Item name="metric" label={t('Metric')} rules={[{ required: true }]}>
             <Select options={METRICS} />

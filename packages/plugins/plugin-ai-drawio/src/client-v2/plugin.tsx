@@ -3,12 +3,6 @@ import { drawioClientTools } from '../client/tools';
 
 export class PluginAiDrawioClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    this.flowEngine.registerModelLoaders({
-      DrawioBlockModel: {
-        loader: () => import('./models/DrawioBlockModel'),
-      },
-    });
-
     this.pluginSettingsManager.addMenuItem({
       key: 'ai-drawio',
       title: this.t('AI Drawio'),

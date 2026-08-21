@@ -1,1 +1,0 @@
-export { DrawioBlockModel } from './DrawioBlockModel';

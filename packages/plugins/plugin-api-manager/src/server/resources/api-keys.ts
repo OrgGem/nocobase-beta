@@ -1,5 +1,6 @@
 import type { Application } from '@nocobase/server';
 import type { Handlers } from '@nocobase/resourcer';
+import { API_KEY_SCOPE_PATTERN } from '../../constants';
 import { generateApiKey } from '../services/key-manager';
 
 function readBody(ctx: { request?: { body?: unknown } }): Record<string, unknown> {
@@ -22,7 +23,27 @@ export function registerApiKeysResource(app: Application): void {
         ctx.throw(400, 'name is required');
       }
       const partnerId = body.partnerId == null || body.partnerId === '' ? null : Number(body.partnerId);
+      if (partnerId != null) {
+        if (!Number.isFinite(partnerId) || partnerId <= 0) {
+          ctx.throw(400, 'partnerId must be a positive integer');
+        }
+        const partner = await app.db.getRepository('apiPartners').findOne({ filterByTk: partnerId });
+        if (!partner) {
+          ctx.throw(400, `partnerId ${partnerId} does not reference an existing partner`);
+        }
+      }
       const scopes = parseScopes(body.scopes);
+      if (scopes.length === 0) {
+        ctx.throw(400, 'At least one scope is required');
+      }
+      for (const scope of scopes) {
+        if (!API_KEY_SCOPE_PATTERN.test(scope)) {
+          ctx.throw(
+            400,
+            `Invalid scope "${scope}": expected "inbound" or "outbound", optionally suffixed with ":<route-name>"`,
+          );
+        }
+      }
       const expiresAt = body.expiresAt ? new Date(String(body.expiresAt)) : null;
 
       const generated = generateApiKey();

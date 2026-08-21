@@ -1,16 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card, Empty, Spin, App as AntApp } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Card, Empty, Spin } from 'antd';
 import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
-import { useFieldSchema } from '@formily/react';
 import { useT } from './locale';
 import { DrawioBridge, buildDrawioEmbedUrl } from './lib/drawioBridge';
-import { registerActiveHandle, setActiveBlockUid } from './lib/activeRegistry';
-import { notifyDiagramXmlUpdated, subscribeDiagramXmlUpdated } from './diagramEvents';
+import { getDiagram, setDiagram, subscribeDiagramState } from './diagramStore';
 import { getWrappedData } from './apiResponse';
 
 type Props = {
-  diagramId?: string;
   height?: number | string;
   ui?: 'min' | 'kennedy' | 'sketch' | 'atlas';
   baseUrlOverride?: string;
@@ -20,90 +17,33 @@ type DrawioConfig = {
   drawioBaseUrl?: string;
 };
 
-type DiagramMeta = {
-  title?: string;
-  mode?: string;
-};
-
-function getXmlFromResponse(response: unknown): string {
-  const xml = getWrappedData<string>(response);
-  return typeof xml === 'string' ? xml : '';
-}
-
-export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'kennedy', baseUrlOverride }) => {
+export const DrawioBlock: React.FC<Props> = ({ height = 'calc(100vh - 56px)', ui = 'kennedy', baseUrlOverride }) => {
   const t = useT();
   const api = useApp().apiClient;
-  const { message } = AntApp.useApp();
-  const fieldSchema = useFieldSchema();
-  const [fallbackUid] = useState(() => `inline-${Math.random().toString(36).slice(2, 10)}`);
-  const blockUid = String(fieldSchema?.['x-uid'] || fallbackUid);
-
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const bridgeRef = useRef<DrawioBridge | null>(null);
   const xmlRef = useRef<string>('');
   const [iframeReady, setIframeReady] = useState(false);
+  const [diagram, setLocalDiagram] = useState(() => getDiagram());
 
   const { data: settingsData } = useRequest(() => api.resource('aiDrawio').getConfig(), { manual: !!baseUrlOverride });
-
   const settings = getWrappedData<DrawioConfig>(settingsData);
   const baseUrl = baseUrlOverride || settings?.drawioBaseUrl || 'https://embed.diagrams.net';
 
   const embedUrl = useMemo(() => buildDrawioEmbedUrl(baseUrl, { ui }), [baseUrl, ui]);
 
-  const { data: xmlData, loading: loadingXml } = useRequest(
-    () => api.resource('aiDiagrams').loadXml({ filterByTk: diagramId }),
-    { refreshDeps: [diagramId], manual: !diagramId },
-  );
-
-  const { data: metaData } = useRequest(() => api.resource('aiDiagrams').getMeta({ filterByTk: diagramId }), {
-    refreshDeps: [diagramId],
-    manual: !diagramId,
-  });
-
-  const diagramMeta = getWrappedData<DiagramMeta>(metaData);
-  const diagramTitle = diagramMeta?.title;
-  const diagramMode = diagramMeta?.mode || 'editable';
-  const readonly = diagramMode === 'readonly';
-
-  const initialXml = getXmlFromResponse(xmlData);
-
-  const loadIntoEditor = useCallback((xml: string) => {
-    bridgeRef.current?.load(xml);
+  // Keep local state in sync with the store.
+  useEffect(() => {
+    return subscribeDiagramState(() => {
+      setLocalDiagram(getDiagram());
+    });
   }, []);
 
+  // Setup the iframe bridge once.
   useEffect(() => {
-    if (xmlData !== undefined) {
-      xmlRef.current = getXmlFromResponse(xmlData);
-    }
-  }, [xmlData]);
-
-  const persistXml = useCallback(
-    async (xml: string, thumbnailSvg?: string) => {
-      if (!diagramId || readonly) return;
-      try {
-        await api.request({
-          url: `aiDiagrams:saveXml/${encodeURIComponent(diagramId)}`,
-          method: 'post',
-          data: { xml, thumbnailSvg },
-        });
-        xmlRef.current = xml;
-        notifyDiagramXmlUpdated({ diagramId, xml, sourceBlockUid: blockUid });
-      } catch (err: unknown) {
-        message.error(err instanceof Error ? err.message : t('Save failed'));
-      }
-    },
-    [api, blockUid, diagramId, message, readonly, t],
-  );
-
-  useEffect(() => {
-    if (!diagramId) {
-      setIframeReady(false);
-      return;
-    }
     if (!iframeRef.current) {
       return;
     }
-
     const bridge = new DrawioBridge({ baseUrl });
     bridgeRef.current = bridge;
 
@@ -112,34 +52,26 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
       {
         onInit: () => {
           setIframeReady(true);
-          setActiveBlockUid(blockUid);
         },
-        onLoad: (xml) => {
-          xmlRef.current = xml;
+        onLoad: (loadedXml) => {
+          xmlRef.current = loadedXml;
         },
-        onSave: async (xml) => {
-          xmlRef.current = xml;
-          await persistXml(xml);
-          bridge.export('xmlsvg');
+        onSave: (savedXml) => {
+          xmlRef.current = savedXml;
+          const current = getDiagram();
+          if (current) {
+            setDiagram(current.id, current.title, savedXml);
+          }
         },
-        onAutosave: async (xml) => {
-          xmlRef.current = xml;
-          await persistXml(xml);
-        },
-        onExport: async (data, format) => {
-          if (format === 'xmlsvg' || format.includes('svg')) {
-            await persistXml(xmlRef.current, data);
-          } else if (data) {
-            const a = document.createElement('a');
-            a.href = data;
-            a.download = `diagram-${diagramId}.${format === 'png' ? 'png' : format === 'pdf' ? 'pdf' : 'xml'}`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+        onAutosave: (autosavedXml) => {
+          xmlRef.current = autosavedXml;
+          const current = getDiagram();
+          if (current) {
+            setDiagram(current.id, current.title, autosavedXml);
           }
         },
       },
-      initialXml,
+      diagram?.xml || '',
     );
 
     return () => {
@@ -148,57 +80,21 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
       setIframeReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diagramId, baseUrl, persistXml]);
+  }, [baseUrl]);
 
+  // Push store XML into the iframe whenever it changes and the editor is ready.
   useEffect(() => {
-    if (!diagramId || !bridgeRef.current) return;
-
-    const unregisterActive = registerActiveHandle({
-      blockUid,
-      diagramId,
-      diagramTitle,
-      getXml: () => xmlRef.current,
-      setXml: (xml: string) => {
-        xmlRef.current = xml;
-      },
-      persist: persistXml,
-      load: loadIntoEditor,
-    });
-
-    setActiveBlockUid(blockUid);
-
-    return () => {
-      unregisterActive();
-    };
-  }, [diagramId, blockUid, diagramTitle, loadIntoEditor, persistXml]);
-
-  useEffect(() => {
-    if (!diagramId) return;
-
-    return subscribeDiagramXmlUpdated((event) => {
-      if (event.diagramId !== diagramId || event.sourceBlockUid === blockUid) {
-        return;
-      }
-      if (event.xml === xmlRef.current) {
-        return;
-      }
-      xmlRef.current = event.xml;
-      bridgeRef.current?.load(event.xml);
-    });
-  }, [blockUid, diagramId]);
-
-  const handleInteraction = useCallback(() => {
-    setActiveBlockUid(blockUid);
-  }, [blockUid]);
-
-  useEffect(() => {
-    if (iframeReady && bridgeRef.current && xmlData !== undefined) {
-      bridgeRef.current.load(initialXml);
+    if (!iframeReady || !bridgeRef.current || !diagram) {
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialXml, iframeReady, xmlData]);
+    if (diagram.xml === xmlRef.current) {
+      return;
+    }
+    xmlRef.current = diagram.xml;
+    bridgeRef.current.load(diagram.xml);
+  }, [iframeReady, diagram]);
 
-  if (!diagramId) {
+  if (!diagram) {
     return (
       <Card>
         <Empty
@@ -206,7 +102,7 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
             <>
               <div>{t('No diagram selected')}</div>
               <div style={{ color: '#999', fontSize: 12 }}>
-                {t('Open the block toolbar to pick a diagram or create one in plugin settings')}
+                {t('Ask the AI to create a diagram, then open it from the chat.')}
               </div>
             </>
           }
@@ -216,12 +112,8 @@ export const DrawioBlock: React.FC<Props> = ({ diagramId, height = 640, ui = 'ke
   }
 
   return (
-    <Card
-      bodyStyle={{ padding: 0, position: 'relative', overflow: 'hidden' }}
-      onClick={handleInteraction}
-      onMouseEnter={handleInteraction}
-    >
-      {(loadingXml || !iframeReady) && (
+    <Card title={diagram.title} bodyStyle={{ padding: 0, position: 'relative', overflow: 'hidden' }}>
+      {!iframeReady && (
         <div
           style={{
             position: 'absolute',

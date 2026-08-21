@@ -4,6 +4,7 @@ import { createPrivateKey, createPublicKey, KeyObject, X509Certificate } from 'c
 // breaks under vite-node's VM-context transformation on this toolchain).
 import type * as openpgp from 'openpgp';
 import type * as sshpk from 'sshpk';
+import { loadOpenpgp, loadSshpk } from './lazy-loaders';
 
 export type DetectedFormat = 'pem' | 'der' | 'pgp-armored' | 'pgp-binary' | 'openssh';
 
@@ -65,7 +66,7 @@ async function detectFromText(text: string): Promise<DetectedKeyMaterial | undef
   const trimmed = text.trim();
 
   if (/-----BEGIN PGP (PUBLIC|PRIVATE) KEY BLOCK-----/.test(trimmed)) {
-    const openpgp = (await import('openpgp')) as typeof import('openpgp');
+    const openpgp = await loadOpenpgp();
     const pgpKey = await openpgp.readKey({ armoredKey: trimmed });
     const isPrivate = pgpKey.isPrivate();
     const info = pgpKey.getAlgorithmInfo();
@@ -96,7 +97,7 @@ async function detectFromText(text: string): Promise<DetectedKeyMaterial | undef
   }
 
   if (trimmed.includes('-----BEGIN OPENSSH PRIVATE KEY-----')) {
-    const sshpk = (await import('sshpk')) as typeof import('sshpk');
+    const sshpk = await loadSshpk();
     const sshKey = sshpk.parsePrivateKey(trimmed, 'ssh-private');
     return {
       format: 'openssh',
@@ -139,7 +140,7 @@ async function detectFromText(text: string): Promise<DetectedKeyMaterial | undef
   }
 
   if (/^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-[a-z0-9-]+)\s/.test(trimmed)) {
-    const sshpk = (await import('sshpk')) as typeof import('sshpk');
+    const sshpk = await loadSshpk();
     const sshKey = sshpk.parseKey(trimmed, 'ssh');
     return {
       format: 'openssh',
@@ -200,7 +201,7 @@ async function detectFromBinary(buffer: Buffer): Promise<DetectedKeyMaterial | u
   }
 
   try {
-    const openpgp = (await import('openpgp')) as typeof import('openpgp');
+    const openpgp = await loadOpenpgp();
     const pgpKey = await openpgp.readKey({ binaryKey: new Uint8Array(buffer) });
     const info = pgpKey.getAlgorithmInfo();
     return {

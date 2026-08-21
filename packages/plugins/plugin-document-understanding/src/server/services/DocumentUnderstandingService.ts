@@ -295,7 +295,7 @@ export class DocumentUnderstandingService {
       }
     }
 
-    const taskId = payload.task_id;
+    const taskId = payload.task_id ?? payload.operation_id;
     const result = payload.result;
     if (!taskId) throw new Error('Webhook missing task_id');
 

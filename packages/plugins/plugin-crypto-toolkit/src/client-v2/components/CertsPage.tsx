@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
+import { EnvVarSelect } from './EnvVarSelect';
 import { KeyInput, type KeyInputValue } from './KeyInput';
 import { OperationResult, type OperationResultProps } from './OperationResult';
 import { RecentOperations } from './RecentOperations';
@@ -157,7 +158,7 @@ export const CreateCsrModal: React.FC<{
           label={t('Own private key env var')}
           rules={[{ required: true, message: 'privateEnvVar is required' }]}
         >
-          <Input placeholder="CRYPTO_TOOLKIT_MY_TLS_KEY_PRIVATE" />
+          <EnvVarSelect />
         </Form.Item>
         <Form.Item name="passphrase" label={t('Passphrase')}>
           <Input.Password autoComplete="new-password" />
@@ -290,7 +291,7 @@ export const CreateSelfSignedModal: React.FC<{
           label={t('Own private key env var')}
           rules={[{ required: true, message: 'privateEnvVar is required' }]}
         >
-          <Input placeholder="CRYPTO_TOOLKIT_MY_TLS_KEY_PRIVATE" />
+          <EnvVarSelect />
         </Form.Item>
         <Form.Item name="passphrase" label={t('Passphrase')}>
           <Input.Password autoComplete="new-password" />

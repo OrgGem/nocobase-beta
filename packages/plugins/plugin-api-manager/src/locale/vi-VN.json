@@ -27,6 +27,8 @@
   "Retry Delay (ms)": "Độ trễ retry (ms)",
   "Log Payloads": "Lưu payload",
   "Forward Headers": "Header chuyển tiếp",
+  "Comma-separated upstream response header names to pass through (e.g. content-disposition, etag, content-length, accept-ranges)": "Danh sách header phản hồi từ upstream (phân tách bằng dấu phẩy) được chuyển tiếp (vd: content-disposition, etag, content-length, accept-ranges)",
+  "Forward Response Headers": "Chuyển tiếp Header Phản hồi",
   "Static Headers": "Header tĩnh",
   "Max Body (MB)": "Body tối đa (MB)",
   "Enabled": "Bật",

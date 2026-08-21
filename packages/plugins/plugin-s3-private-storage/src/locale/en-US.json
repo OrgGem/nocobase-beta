@@ -1,9 +1,17 @@
-{
+﻿{
   "AWS S3 (Private)": "AWS S3 (Private)",
   "The field value is required": "The field value is required",
   "Region": "Region",
   "AccessKey ID": "AccessKey ID",
   "AccessKey Secret": "AccessKey Secret",
   "Bucket": "Bucket",
-  "Endpoint": "Endpoint"
+  "Endpoint": "Endpoint",
+  "Optional. Leave blank to use IAM role / default credential chain (e.g. EC2 with same-account bucket).": "Optional. Leave blank to use IAM role / default credential chain (e.g. EC2 with same-account bucket).",
+  "Optional. Required when AccessKey ID is provided.": "Optional. Required when AccessKey ID is provided.",
+  "Role ARN": "Role ARN",
+  "Role Session Name": "Role Session Name",
+  "External ID": "External ID",
+  "Optional. IAM role ARN to assume (e.g., for cross-account access).": "Optional. IAM role ARN to assume (e.g., for cross-account access).",
+  "Optional. Role session name for STS AssumeRole.": "Optional. Role session name for STS AssumeRole.",
+  "Optional. External ID for STS AssumeRole.": "Optional. External ID for STS AssumeRole."
 }

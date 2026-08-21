@@ -1,4 +1,4 @@
-import { Select, Space, Table, Tag } from 'antd';
+import { Alert, Select, Space, Table, Tag } from 'antd';
 import React, { useEffect, useState } from 'react';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
@@ -35,15 +35,20 @@ export const RecentOperations: React.FC<RecentOperationsProps> = ({ refreshKey =
   const api = app.apiClient;
   const [rows, setRows] = useState<OperationRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'success' | 'error' | undefined>();
+  // Content-based key so the effect does not refetch when the parent passes a
+  // fresh array with the same contents on every render.
+  const actionFilterKey = actionFilter?.join('|');
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     const filter: Record<string, unknown> = {};
     if (status) filter.status = status;
-    if (actionFilter && actionFilter.length > 0) {
-      filter.action = actionFilter.length === 1 ? actionFilter[0] : { $in: actionFilter };
+    if (actionFilterKey && actionFilterKey.length > 0) {
+      const actions = actionFilterKey.split('|');
+      filter.action = actions.length === 1 ? actions[0] : { $in: actions };
     }
     api
       .request({
@@ -54,11 +59,11 @@ export const RecentOperations: React.FC<RecentOperationsProps> = ({ refreshKey =
         if (cancelled) return;
         const data = (res?.data?.data as OperationRow[] | undefined) ?? [];
         setRows(data);
+        setError(null);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        const msg = getErrorMessage(err, t('Failed to load operations') as string);
-        void msg;
+        setError(getErrorMessage(err, t('Failed to load operations') as string));
         setRows([]);
       })
       .finally(() => {
@@ -71,7 +76,7 @@ export const RecentOperations: React.FC<RecentOperationsProps> = ({ refreshKey =
     return () => {
       cancelled = true;
     };
-  }, [api, t, status, refreshKey, actionFilter?.join('|')]);
+  }, [api, t, status, refreshKey, actionFilterKey]);
 
   return (
     <div>
@@ -88,6 +93,9 @@ export const RecentOperations: React.FC<RecentOperationsProps> = ({ refreshKey =
           ]}
         />
       </Space>
+      {error && (
+        <Alert type='error' message={error} showIcon style={{ marginBottom: 12 }} />
+      )}
       <Table<OperationRow>
         rowKey="id"
         loading={loading}

@@ -1,12 +1,8 @@
 import { InstallOptions, Plugin } from '@nocobase/server';
 import type { ToolsOptions } from '@nocobase/ai';
 import { resolve } from 'path';
-import { loadXml } from './actions/loadXml';
-import { saveXml } from './actions/saveXml';
 import { getConfig, setConfig } from './actions/getConfig';
 import { getSystemPrompt } from './actions/getSystemPrompt';
-import { assertDiagramRead, resolveAccessContext } from './actions/access';
-import aiDiagramsResource from './resources/ai-diagrams';
 import {
   displayModelDiagramTool,
   displayDiagramTool,
@@ -18,7 +14,7 @@ import {
 import type { DrawioToolDefinition } from './tools/types';
 
 export class PluginAIDrawioServer extends Plugin {
-  private readonly schemaCollections = ['aiDiagrams', 'aiDrawioConfig'];
+  private readonly schemaCollections = ['aiDrawioConfig'];
 
   async load() {
     await this.importCollections(resolve(__dirname, 'collections'));
@@ -32,41 +28,15 @@ export class PluginAIDrawioServer extends Plugin {
       },
     });
 
-    // ACL-enforcing CRUD for aiDiagrams (BASIC/SHARED/PUBLIC + agent access).
-    this.app.resourceManager.define(aiDiagramsResource);
-
-    this.app.resourceManager.registerActionHandlers({
-      'aiDiagrams:loadXml': loadXml,
-      'aiDiagrams:saveXml': saveXml,
-      'aiDiagrams:getMeta': async (ctx: any, next: any) => {
-        const { filterByTk } = ctx.action.params;
-        const repository = ctx.db.getRepository('aiDiagrams');
-        const model = await repository.findById(filterByTk);
-        if (!model) ctx.throw(404, 'Diagram not found');
-        const access = await resolveAccessContext(ctx, ctx.db);
-        assertDiagramRead(ctx, access, model.toJSON ? model.toJSON() : model);
-        ctx.body = { id: model.get('id'), title: model.get('title'), mode: model.get('mode') || 'editable' };
-        await next();
-      },
-    });
-
-    // Open the ACL gate for logged-in users; the resource handlers above enforce
-    // the row-level policy (BASIC owner, SHARED roles, PUBLIC, and agent access).
-    this.app.acl.allow('aiDiagrams', 'list', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'get', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'create', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'update', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'destroy', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'loadXml', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'saveXml', 'loggedIn');
-    this.app.acl.allow('aiDiagrams', 'getMeta', 'loggedIn');
+    // All logged-in users can read the config and system prompt (needed to
+    // render the draw.io iframe and for AI Employee prompt setup).
     this.app.acl.allow('aiDrawio', 'getConfig', 'loggedIn');
     this.app.acl.allow('aiDrawio', 'getSystemPrompt', 'loggedIn');
 
-    // Admin snippet: full management bypass + plugin configuration.
+    // Admin snippet for setting the draw.io base URL.
     this.app.acl.registerSnippet({
       name: 'pm.ai-drawio',
-      actions: ['aiDiagrams:*', 'aiDrawio:setConfig'],
+      actions: ['aiDrawio:setConfig'],
     });
 
     this.registerAITools();

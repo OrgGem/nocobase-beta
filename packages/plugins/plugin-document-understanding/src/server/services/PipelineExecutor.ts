@@ -22,6 +22,46 @@ const UPLOAD_ROOTS = [resolve(process.cwd(), 'storage', 'uploads')];
 const isInsidePath = (basePath: string, targetPath: string) =>
   targetPath === basePath || targetPath.startsWith(`${basePath}${sep}`);
 
+/**
+ * Extract a task ID from a DUGate-style 202 Accepted response.
+ * Priority:
+ * 1. `taskIdExtractPath` + optional `taskIdExtractRegex` (e.g. path="name", regex="operations/([^/]+)")
+ * 2. `pollTaskIdField` (default "task_id")
+ * 3. Raw response body as string fallback
+ */
+function extractTaskId(responseData: any, endpoint: EndpointDef): string | null {
+  // 1. taskIdExtractPath: navigate to a field, then optionally apply regex
+  const extractPath = endpoint.taskIdExtractPath?.trim();
+  if (extractPath) {
+    const raw = extractPath
+      .split('.')
+      .reduce((acc: any, k: string) => (acc != null ? acc[k] : undefined), responseData);
+    if (raw != null) {
+      const regex = endpoint.taskIdExtractRegex?.trim();
+      if (regex) {
+        try {
+          const m = String(raw).match(new RegExp(regex));
+          if (m?.[1]) return m[1];
+        } catch {
+          /* invalid regex, fall through */
+        }
+      }
+      return String(raw);
+    }
+  }
+
+  // 2. pollTaskIdField (default "task_id")
+  const idField = endpoint.pollTaskIdField || 'task_id';
+  const fieldVal = idField.split('.').reduce((acc: any, k: string) => (acc != null ? acc[k] : undefined), responseData);
+  if (fieldVal != null) return String(fieldVal);
+
+  // 3. Raw string fallback
+  if (typeof responseData === 'string') return responseData;
+  if (typeof responseData === 'number') return String(responseData);
+
+  return null;
+}
+
 export function resolveUploadFilePath(urlOrPath: string): string | null {
   if (!urlOrPath || urlOrPath.includes('\0')) return null;
 
@@ -273,7 +313,10 @@ export class PipelineExecutor {
           throw new Error(`Endpoint for step ${step.name} is disabled`);
         }
 
-        const mappedBody = this.resolveMapping(step.inputMapping || {}, context);
+        const mappedBody =
+          step.inputMapping && Object.keys(step.inputMapping).length > 0
+            ? this.resolveMapping(step.inputMapping, context)
+            : context.input;
         let retries = step.onError === 'retry' ? step.retryCount || 0 : 0;
         let success = false;
         let lastError = null;
@@ -295,14 +338,40 @@ export class PipelineExecutor {
             });
 
             if (step.endpoint.executionMode === 'sync') {
-              context.stepResults[step.outputAlias || step.stepOrder.toString()] = result.data;
+              const responseData = result.data;
+              // DUGate sync mode (?sync=true) can still return 202 Accepted with a
+              // task id (pipeline/workflow jobs that never run synchronously). In
+              // that case we treat the endpoint as an async poll to completion.
+              const isAsyncAccepted =
+                result.status === 202 ||
+                (responseData && typeof responseData === 'object' && responseData.done === false);
+              if (isAsyncAccepted) {
+                const taskId = extractTaskId(responseData, step.endpoint);
+                if (taskId) {
+                  const externalTaskIds = { ...(job.externalTaskIds || {}) };
+                  externalTaskIds[step.stepOrder.toString()] = taskId;
+
+                  await jobsRepo.update({
+                    filterByTk: job.id,
+                    values: {
+                      status: 'polling',
+                      externalTaskIds,
+                      leaseExpiresAt: new Date(Date.now() + pollLeaseMs(step.endpoint.pollInterval)),
+                    },
+                  });
+
+                  await this.jobManager.startPolling(job.id, step.endpoint, taskId);
+                  return; // Halt execution. Polling callback will resume from next step.
+                }
+                // No task id: fall through and store the raw 202 body as the step result.
+              }
+              context.stepResults[step.outputAlias || step.stepOrder.toString()] = responseData;
               success = true;
             } else if (step.endpoint.executionMode === 'polling') {
-              // Extract taskId from result based on pollTaskIdField
-              const taskIdField = step.endpoint.pollTaskIdField || 'task_id';
-              const taskId = this.getNestedValue(result.data, taskIdField);
+              // Extract taskId from result based on pollTaskIdField / taskIdExtractPath
+              const taskId = extractTaskId(result.data, step.endpoint);
 
-              if (!taskId) throw new Error(`Polling taskId not found in field ${taskIdField}`);
+              if (!taskId) throw new Error('Polling taskId not found in response');
 
               const externalTaskIds = job.externalTaskIds || {};
               externalTaskIds[step.stepOrder.toString()] = taskId;
@@ -323,8 +392,8 @@ export class PipelineExecutor {
               return;
             } else if (step.endpoint.executionMode === 'webhook') {
               // Wait for webhook
-              const taskIdField = step.endpoint.pollTaskIdField || 'task_id';
-              const taskId = this.getNestedValue(result.data, taskIdField);
+              const taskId = extractTaskId(result.data, step.endpoint);
+              if (!taskId) throw new Error('Webhook taskId not found in response');
               const externalTaskIds = job.externalTaskIds || {};
               externalTaskIds[step.stepOrder.toString()] = taskId;
 
