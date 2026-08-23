@@ -26,6 +26,8 @@
   "Request config description": "LLM 请求的额外配置。支持的键：extraHeaders（自定义 HTTP 头）、extraBody（额外请求体字段）、modelKwargs（LangChain 模型参数）。",
   "Response config (JSON)": "响应配置（JSON）",
   "Response config description": "配置响应解析。contentPath：'auto' 或点路径。reasoningKey：推理内容的键。responseMapping：{ content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' }——将非标准 LLM 响应映射为 OpenAI 格式。如果未指定，tool_calls/finish_reason 将自动检测。",
+  "Models config (JSON)": "模型列表配置（JSON）",
+  "Models config description": "配置与 OpenAI GET /models 不同的 LiteLLM/自定义代理的模型列表。支持的键：path（端点）、auth（'bearer' | 'api-key' | 'none'）、headers（额外的 HTTP 头）、dataPath（模型数组的点路径）、idPath（id 字段的点路径）。",
   "Auto Tool-call Retry (invoke only)": "自动工具调用重试（仅 invoke）",
   "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.": "自动重试失败的工具调用。仅在非流式（invoke）模式下有效——启用流式传输时无效。",
   "Auto-truncate History": "自动截断历史记录",

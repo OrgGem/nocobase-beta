@@ -191,5 +191,9 @@
   "Metadata from skill.md": "Metadata from skill.md",
   "No metadata was declared in the skill file.": "No metadata was declared in the skill file.",
   "Published versions": "Published versions",
-  "No versions have been published yet.": "No versions have been published yet."
+  "No versions have been published yet.": "No versions have been published yet.",
+  "Slug": "Slug",
+  "Share skill": "Share skill",
+  "Unshared": "Unshared",
+  "Users": "Users"
 }

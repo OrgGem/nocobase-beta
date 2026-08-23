@@ -1,6 +1,9 @@
 import type { Context, Next } from '@nocobase/actions';
+import { pipeline } from 'node:stream/promises';
+import type { Readable } from 'node:stream';
 import { MANIFEST_ACCEPT } from '../../shared/media-types';
 import type { RegistrySettingsInput } from '../../shared/types';
+import { Throttle } from '../services/rate-limiter';
 import { RegistryClient, RegistryRequestError } from '../services/registry-client';
 import {
   archiveFormat,
@@ -274,7 +277,17 @@ export async function downloadImage(ctx: Context, next: Next) {
     ctx.set('Cache-Control', 'private, no-store');
     ctx.set('X-Content-Type-Options', 'nosniff');
     ctx.withoutDataWrapping = true;
-    ctx.body = archive.stream;
+
+    if (settings.maxDownloadSpeedKbps > 0) {
+      const throttle = new Throttle({ bytesPerSecond: settings.maxDownloadSpeedKbps * 1000 });
+      // pipeline destroys both streams together on errors or downstream abort.
+      pipeline(archive.stream, throttle).catch((error: unknown) => {
+        ctx.app.logger.error('[docker-registry] Image download stream failed', error);
+      });
+      ctx.body = throttle;
+    } else {
+      ctx.body = archive.stream;
+    }
   } catch (error) {
     sendRegistryError(ctx, error);
   }
@@ -292,8 +305,20 @@ export async function uploadImage(ctx: Context, next: Next) {
     if (Number.isFinite(contentLength) && contentLength > maxBytes) {
       ctx.throw(413, 'Upload exceeds the configured transfer size limit', { code: 'TRANSFER_TOO_LARGE' });
     }
+
+    let uploadInput: Readable = ctx.req;
+    if (settings.maxUploadSpeedKbps > 0) {
+      const throttle = new Throttle({
+        bytesPerSecond: settings.maxUploadSpeedKbps * 1000,
+        highWaterMark: 64 * 1024,
+      });
+      throttle.once('error', () => ctx.req.destroy());
+      throttle.once('close', () => ctx.req.destroy());
+      uploadInput = ctx.req.pipe(throttle);
+    }
+
     ctx.body = await uploadImageArchive({
-      input: ctx.req,
+      input: uploadInput,
       client: await client(ctx),
       repository,
       tag,

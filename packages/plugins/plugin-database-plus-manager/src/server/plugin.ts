@@ -26,7 +26,17 @@ export class PluginDatabasePlusManagerServer extends Plugin {
     this.app.resourceManager.define(resource);
     this.app.acl.registerSnippet({
       name: PAGINATION_ACL_SNIPPET,
-      actions: ['databasePlusManager:getSettings', 'databasePlusManager:saveSettings', 'databasePlusManager:cursor'],
+      actions: [
+        'databasePlusManager:getSettings',
+        'databasePlusManager:saveSettings',
+        'databasePlusManager:cursor',
+        'databasePlusManager:statistics',
+        'databasePlusManager:listIndexes',
+        'databasePlusManager:addIndex',
+        'databasePlusManager:removeIndex',
+        'databasePlusManager:runSql',
+        'databasePlusManager:aggregate',
+      ],
     });
     this.app.resourceManager.registerPreActionHandler('list', listPaginationOverride, {
       after: 'acl',

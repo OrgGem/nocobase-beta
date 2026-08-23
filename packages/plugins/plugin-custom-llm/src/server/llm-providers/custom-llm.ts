@@ -76,7 +76,7 @@ function getChatOpenAICompletions() {
  * tool call IDs during streaming. The suffix is excessively long and
  * causes errors when langgraph reads messages back from history.
  */
-function stripGeminiThoughtSuffix(id: string | undefined): string | undefined {
+export function stripGeminiThoughtSuffix(id: string | undefined): string | undefined {
   if (!id || typeof id !== 'string') return id;
   const idx = id.indexOf('__thought__');
   return idx !== -1 ? id.substring(0, idx) : id;
@@ -164,78 +164,8 @@ function createReasoningChatClass() {
         runManager,
       );
 
-      let thinkingOpened = false;
-      let thinkingClosed = false;
-
-      const ChatGenerationChunk = getChatGenerationChunk();
-      const AIMessageChunk = getAIMessageChunk();
-
       for await (const chunk of stream) {
-        const rc = chunk.message?.additional_kwargs?.reasoning_content;
-        const text = chunk.message?.content || '';
-
-        let injectedText = '';
-
-        if (rc) {
-          if (!thinkingOpened) {
-            injectedText +=
-              '<details style="margin-bottom: 12px; background: #fdfdfd; padding: 4px 8px; border-radius: 4px; border: 1px solid #f0f0f0;">\n<summary style="cursor: pointer; color: #888; font-size: 0.9em; user-select: none;">Thinking...</summary>\n\n';
-            thinkingOpened = true;
-          }
-          injectedText += rc;
-        }
-
-        if (
-          !rc &&
-          thinkingOpened &&
-          !thinkingClosed &&
-          ((text && text !== KEEPALIVE_PREFIX) ||
-            chunk.message?.tool_calls?.length > 0 ||
-            chunk.message?.tool_call_chunks?.length > 0)
-        ) {
-          injectedText += '\n\n</details>\n\n';
-          thinkingClosed = true;
-        }
-
-        if (text && text !== KEEPALIVE_PREFIX) {
-          injectedText += text;
-        }
-
-        if (text === KEEPALIVE_PREFIX && !injectedText) {
-          // Pass keepalive directly without wrapping
-          yield chunk;
-          continue;
-        }
-
-        if (
-          injectedText ||
-          chunk.message?.tool_call_chunks?.length > 0 ||
-          chunk.message?.tool_calls?.length > 0 ||
-          text === ''
-        ) {
-          const newMsgOptions: any = { content: injectedText };
-          if (chunk.message.additional_kwargs) newMsgOptions.additional_kwargs = chunk.message.additional_kwargs;
-          if (chunk.message.tool_call_chunks) newMsgOptions.tool_call_chunks = chunk.message.tool_call_chunks;
-          if (chunk.message.tool_calls) newMsgOptions.tool_calls = chunk.message.tool_calls;
-          if (chunk.message.response_metadata) newMsgOptions.response_metadata = chunk.message.response_metadata;
-          if (chunk.message.usage_metadata) newMsgOptions.usage_metadata = chunk.message.usage_metadata;
-
-          yield new ChatGenerationChunk({
-            message: new AIMessageChunk(newMsgOptions),
-            text: injectedText,
-          });
-          continue;
-        }
-
         yield chunk;
-      }
-
-      // Close thinking block if stream abruptly ended
-      if (thinkingOpened && !thinkingClosed) {
-        yield new ChatGenerationChunk({
-          message: new AIMessageChunk({ content: '\n\n</details>\n\n' }),
-          text: '\n\n</details>\n\n',
-        });
       }
     }
 
@@ -267,15 +197,6 @@ function createReasoningChatClass() {
       return super.completionWithRetry(request, requestOptions) as any;
     }
   };
-}
-
-let _ChatGenerationChunk: any = null;
-function getChatGenerationChunk() {
-  if (!_ChatGenerationChunk) {
-    const mod = requireFromApp('@langchain/core/outputs');
-    _ChatGenerationChunk = mod.ChatGenerationChunk;
-  }
-  return _ChatGenerationChunk;
 }
 
 let _AIMessageChunk: any = null;
@@ -564,7 +485,19 @@ function getHeaderValue(headers: HeadersInit | undefined, name: string): string 
   return undefined;
 }
 
-function createMappingFetch(responseMapping: Record<string, string>) {
+function parseRetryAfterSeconds(value: string | null): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  return null;
+}
+
+export function createMappingFetch(
+  responseMapping: Record<string, string>,
+  retry?: { maxRetries?: number; delayMs?: number },
+) {
   const contentPath = responseMapping.content;
   if (!contentPath) return undefined; // No mapping needed
 
@@ -572,11 +505,28 @@ function createMappingFetch(responseMapping: Record<string, string>) {
   const toolCallsPath = responseMapping.tool_calls;
   const finishReasonPath = responseMapping.finish_reason;
 
+  // Bounded non-streaming retry on 429/5xx. Streaming (SSE) responses are
+  // never retried — a live stream cannot be replayed safely.
+  const maxRetries = retry ? normalizePositiveNumber(retry.maxRetries, 2) : 0;
+  const retryDelayMs = normalizePositiveNumber(retry?.delayMs, 1000);
+
   return async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const acceptHeader = getHeaderValue(init?.headers, 'accept') || '';
+    const isStreamingRequest = acceptHeader.includes('text/event-stream');
+
     // Preserve the OpenAI SDK's AbortSignal. The SDK already applies its
     // request timeout before headers; replacing the signal here causes
     // user aborts/timeouts to be ignored and previously imposed a hard 120s cap.
-    const response = await fetch(url, init);
+    let response = await fetch(url, init);
+
+    if (!isStreamingRequest && maxRetries > 0 && (response.status === 429 || response.status >= 500)) {
+      for (let attempt = 0; attempt < maxRetries && (response.status === 429 || response.status >= 500); attempt++) {
+        const retryAfter = parseRetryAfterSeconds(response.headers.get('retry-after'));
+        const waitMs = retryAfter ?? retryDelayMs * (attempt + 1);
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        response = await fetch(url, init);
+      }
+    }
 
     // Only intercept successful JSON responses
     if (!response.ok) return response;
@@ -584,7 +534,6 @@ function createMappingFetch(responseMapping: Record<string, string>) {
     const contentType = response.headers.get('content-type') || '';
 
     // Handle streaming responses (SSE) — transform each chunk
-    const acceptHeader = getHeaderValue(init?.headers, 'accept') || '';
     if (contentType.includes('text/event-stream') || acceptHeader.includes('text/event-stream')) {
       const reader = response.body?.getReader();
       if (!reader) return response;
@@ -595,15 +544,191 @@ function createMappingFetch(responseMapping: Record<string, string>) {
           const encoder = new TextEncoder();
           let buffer = '';
 
+          const enqueueChunked = (baseMapped: any) => {
+            // SSE proxy layer chunk size — intentionally smaller than
+            // DEFAULT_STREAM_CHUNK_SIZE (512) because we're splitting raw
+            // HTTP response body bytes before LangChain parses them.
+            const SSE_MAPPING_CHUNK_SIZE = 128;
+            const delta = baseMapped.choices[0].delta;
+            const content = delta.content;
+            const toolCalls = delta.tool_calls;
+
+            let hasEmitted = false;
+
+            // 1. Process and stream content if it exists
+            if (content !== undefined && content !== null) {
+              const contentStr = String(content);
+              if (contentStr.length > SSE_MAPPING_CHUNK_SIZE) {
+                for (let i = 0; i < contentStr.length; i += SSE_MAPPING_CHUNK_SIZE) {
+                  const chunkMapped = cloneDeep(baseMapped);
+                  const newDelta = { ...delta };
+                  if (i > 0) delete newDelta.role; // Only send role on first chunk
+                  delete newDelta.tool_calls; // Handled separately
+
+                  newDelta.content = contentStr.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
+                  chunkMapped.choices[0].delta = newDelta;
+
+                  // Clear finish_reason for intermediate chunks or if toolCalls will follow
+                  if (i + SSE_MAPPING_CHUNK_SIZE < contentStr.length || toolCalls) {
+                    chunkMapped.choices[0].finish_reason = null;
+                  }
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                  hasEmitted = true;
+                }
+              } else {
+                const chunkMapped = cloneDeep(baseMapped);
+                const newDelta = { ...delta };
+                delete newDelta.tool_calls;
+                newDelta.content = contentStr;
+                chunkMapped.choices[0].delta = newDelta;
+
+                if (toolCalls) chunkMapped.choices[0].finish_reason = null;
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                hasEmitted = true;
+              }
+            }
+
+            // 2. Process and stream tool_calls if they exist
+            if (toolCalls && toolCalls.length > 0) {
+              let needsChunking = false;
+              for (const tc of toolCalls) {
+                if (tc.function?.arguments && tc.function.arguments.length > SSE_MAPPING_CHUNK_SIZE) {
+                  needsChunking = true;
+                  break;
+                }
+              }
+
+              if (needsChunking) {
+                const toolCallsCopy = cloneDeep(toolCalls);
+                let maxLen = 0;
+                for (const tc of toolCallsCopy) {
+                  if (tc.function?.arguments) {
+                    maxLen = Math.max(maxLen, tc.function.arguments.length);
+                  }
+                }
+
+                for (let i = 0; i < maxLen; i += SSE_MAPPING_CHUNK_SIZE) {
+                  const chunkMapped = cloneDeep(baseMapped);
+                  const newDelta = !hasEmitted && i === 0 ? { ...delta } : {};
+                  if (delta.role && i === 0) newDelta.role = delta.role;
+                  if ('content' in newDelta) delete newDelta.content;
+                  newDelta.tool_calls = [];
+                  chunkMapped.choices[0].delta = newDelta;
+
+                  // Only keep finish_reason on the very last chunk
+                  if (i + SSE_MAPPING_CHUNK_SIZE < maxLen) {
+                    chunkMapped.choices[0].finish_reason = null;
+                  }
+
+                  for (const tc of toolCallsCopy) {
+                    const args = tc.function?.arguments || '';
+                    if (i < args.length) {
+                      const chunkTc = cloneDeep(tc);
+                      if (chunkTc.function) {
+                        chunkTc.function.arguments = args.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
+                      }
+                      // Strip metadata on subsequent chunks to conform to OpenAI stream protocol
+                      if (i > 0) {
+                        delete chunkTc.id;
+                        delete chunkTc.type;
+                        if (chunkTc.function) delete chunkTc.function.name;
+                      }
+                      chunkMapped.choices[0].delta.tool_calls.push(chunkTc);
+                    }
+                  }
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                  hasEmitted = true;
+                }
+              } else {
+                const chunkMapped = cloneDeep(baseMapped);
+                const newDelta = !hasEmitted ? { ...delta } : {};
+                if (delta.role) newDelta.role = delta.role;
+                if ('content' in newDelta) delete newDelta.content;
+                newDelta.tool_calls = toolCalls;
+                chunkMapped.choices[0].delta = newDelta;
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
+                hasEmitted = true;
+              }
+            }
+
+            // 3. Fallback if chunk had no content and no tool_calls (e.g., finish_reason only)
+            if (!hasEmitted) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(baseMapped)}\n\n`));
+            }
+          };
+
           try {
+            // Accumulate `data:` lines for one SSE event (SSE allows multiple data
+            // lines per event). Flush on a blank line.
+            let dataLines: string[] = [];
+
+            const flushEvent = () => {
+              if (dataLines.length === 0) return;
+              const rawData = dataLines.join('\n');
+              dataLines = [];
+
+              const trimmedData = rawData.trim();
+              if (trimmedData === '[DONE]') {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                return;
+              }
+
+              let parsed: any;
+              try {
+                parsed = JSON.parse(rawData);
+              } catch {
+                // Non-JSON / foreign-format event — drop rather than re-emitting raw.
+                return;
+              }
+
+              const mappedContent = getByPath(parsed, contentPath);
+
+              // Extract tool_calls from the response (Issue #1)
+              // Try custom path first, then fall back to standard OpenAI chunk paths
+              const mappedToolCalls = toolCallsPath
+                ? getByPath(parsed, toolCallsPath)
+                : getByPath(parsed, 'choices.0.delta.tool_calls') ?? getByPath(parsed, 'delta.tool_calls');
+
+              const mappedFinishReason = finishReasonPath
+                ? getByPath(parsed, finishReasonPath)
+                : getByPath(parsed, 'choices.0.finish_reason') ?? getByPath(parsed, 'finish_reason');
+
+              if (mappedContent === undefined && !mappedToolCalls && mappedFinishReason === undefined) {
+                // No content/tool_calls/finish_reason — drop (e.g. usage-only chunks).
+                return;
+              }
+
+              // Build the delta — include content, tool_calls, and finish_reason
+              const delta: Record<string, any> = { role: 'assistant' };
+              if (mappedContent !== undefined) {
+                delta.content = String(mappedContent);
+              }
+              if (mappedToolCalls) {
+                delta.tool_calls = mappedToolCalls;
+              }
+
+              const mapped = {
+                id: getByPath(parsed, responseMapping.id || 'id') || 'chatcmpl-custom',
+                object: 'chat.completion.chunk',
+                created: Math.floor(Date.now() / 1000),
+                model: 'custom',
+                choices: [
+                  {
+                    index: 0,
+                    delta,
+                    finish_reason: mappedFinishReason ?? null,
+                  },
+                ],
+              };
+
+              enqueueChunked(mapped);
+            };
+
             // eslint-disable-next-line no-constant-condition
             while (true) {
               const { done, value } = await reader.read();
               if (done) {
                 buffer += decoder.decode();
-                if (buffer && !buffer.endsWith('\n')) {
-                  buffer += '\n';
-                }
               } else {
                 buffer += decoder.decode(value, { stream: true });
               }
@@ -611,178 +736,35 @@ function createMappingFetch(responseMapping: Record<string, string>) {
               const lines = buffer.split('\n');
               buffer = lines.pop() || '';
 
-              for (const line of lines) {
-                if (line.startsWith('data:')) {
-                  const data = line.slice(line.indexOf(':') + 1).trim();
-                  if (data === '[DONE]') {
-                    controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-                    continue;
-                  }
-                  try {
-                    const parsed = JSON.parse(data);
-                    const mappedContent = getByPath(parsed, contentPath);
+              for (const rawLine of lines) {
+                const line = rawLine.replace(/\r$/, '');
+                const trimmed = line.trim();
 
-                    // Extract tool_calls from the response (Issue #1)
-                    // Try custom path first, then fall back to standard OpenAI chunk paths
-                    const mappedToolCalls = toolCallsPath
-                      ? getByPath(parsed, toolCallsPath)
-                      : getByPath(parsed, 'choices.0.delta.tool_calls') ?? getByPath(parsed, 'delta.tool_calls');
-
-                    const mappedFinishReason = finishReasonPath
-                      ? getByPath(parsed, finishReasonPath)
-                      : getByPath(parsed, 'choices.0.finish_reason') ?? getByPath(parsed, 'finish_reason');
-
-                    if (mappedContent !== undefined || mappedToolCalls) {
-                      // Build the delta — include both content and tool_calls
-                      const delta: Record<string, any> = { role: 'assistant' };
-                      if (mappedContent !== undefined) {
-                        delta.content = String(mappedContent);
-                      }
-                      if (mappedToolCalls) {
-                        delta.tool_calls = mappedToolCalls;
-                      }
-
-                      const mapped = {
-                        id: getByPath(parsed, responseMapping.id || 'id') || 'chatcmpl-custom',
-                        object: 'chat.completion.chunk',
-                        created: Math.floor(Date.now() / 1000),
-                        model: 'custom',
-                        choices: [
-                          {
-                            index: 0,
-                            delta,
-                            finish_reason: mappedFinishReason ?? null,
-                          },
-                        ],
-                      };
-                      const enqueueChunked = (baseMapped: any) => {
-                        // SSE proxy layer chunk size — intentionally smaller than
-                        // DEFAULT_STREAM_CHUNK_SIZE (512) because we're splitting raw
-                        // HTTP response body bytes before LangChain parses them.
-                        const SSE_MAPPING_CHUNK_SIZE = 128;
-                        const delta = baseMapped.choices[0].delta;
-                        const content = delta.content;
-                        const toolCalls = delta.tool_calls;
-
-                        let hasEmitted = false;
-
-                        // 1. Process and stream content if it exists
-                        if (content !== undefined && content !== null) {
-                          const contentStr = String(content);
-                          if (contentStr.length > SSE_MAPPING_CHUNK_SIZE) {
-                            for (let i = 0; i < contentStr.length; i += SSE_MAPPING_CHUNK_SIZE) {
-                              const chunkMapped = cloneDeep(baseMapped);
-                              const newDelta = { ...delta };
-                              if (i > 0) delete newDelta.role; // Only send role on first chunk
-                              delete newDelta.tool_calls; // Handled separately
-
-                              newDelta.content = contentStr.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
-                              chunkMapped.choices[0].delta = newDelta;
-
-                              // Clear finish_reason for intermediate chunks or if toolCalls will follow
-                              if (i + SSE_MAPPING_CHUNK_SIZE < contentStr.length || toolCalls) {
-                                chunkMapped.choices[0].finish_reason = null;
-                              }
-                              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                              hasEmitted = true;
-                            }
-                          } else {
-                            const chunkMapped = cloneDeep(baseMapped);
-                            const newDelta = { ...delta };
-                            delete newDelta.tool_calls;
-                            newDelta.content = contentStr;
-                            chunkMapped.choices[0].delta = newDelta;
-
-                            if (toolCalls) chunkMapped.choices[0].finish_reason = null;
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                            hasEmitted = true;
-                          }
-                        }
-
-                        // 2. Process and stream tool_calls if they exist
-                        if (toolCalls && toolCalls.length > 0) {
-                          let needsChunking = false;
-                          for (const tc of toolCalls) {
-                            if (tc.function?.arguments && tc.function.arguments.length > SSE_MAPPING_CHUNK_SIZE) {
-                              needsChunking = true;
-                              break;
-                            }
-                          }
-
-                          if (needsChunking) {
-                            const toolCallsCopy = cloneDeep(toolCalls);
-                            let maxLen = 0;
-                            for (const tc of toolCallsCopy) {
-                              if (tc.function?.arguments) {
-                                maxLen = Math.max(maxLen, tc.function.arguments.length);
-                              }
-                            }
-
-                            for (let i = 0; i < maxLen; i += SSE_MAPPING_CHUNK_SIZE) {
-                              const chunkMapped = cloneDeep(baseMapped);
-                              const newDelta = !hasEmitted && i === 0 ? { ...delta } : {};
-                              if (delta.role && i === 0) newDelta.role = delta.role;
-                              if ('content' in newDelta) delete newDelta.content;
-                              newDelta.tool_calls = [];
-                              chunkMapped.choices[0].delta = newDelta;
-
-                              // Only keep finish_reason on the very last chunk
-                              if (i + SSE_MAPPING_CHUNK_SIZE < maxLen) {
-                                chunkMapped.choices[0].finish_reason = null;
-                              }
-
-                              for (const tc of toolCallsCopy) {
-                                const args = tc.function?.arguments || '';
-                                if (i < args.length) {
-                                  const chunkTc = cloneDeep(tc);
-                                  if (chunkTc.function) {
-                                    chunkTc.function.arguments = args.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
-                                  }
-                                  // Strip metadata on subsequent chunks to conform to OpenAI stream protocol
-                                  if (i > 0) {
-                                    delete chunkTc.id;
-                                    delete chunkTc.type;
-                                    if (chunkTc.function) delete chunkTc.function.name;
-                                  }
-                                  chunkMapped.choices[0].delta.tool_calls.push(chunkTc);
-                                }
-                              }
-                              controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                              hasEmitted = true;
-                            }
-                          } else {
-                            const chunkMapped = cloneDeep(baseMapped);
-                            const newDelta = !hasEmitted ? { ...delta } : {};
-                            if (delta.role) newDelta.role = delta.role;
-                            if ('content' in newDelta) delete newDelta.content;
-                            newDelta.tool_calls = toolCalls;
-                            chunkMapped.choices[0].delta = newDelta;
-                            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                            hasEmitted = true;
-                          }
-                        }
-
-                        // 3. Fallback if chunk had no content and no tool_calls (e.g., finish_reason only)
-                        if (!hasEmitted) {
-                          controller.enqueue(encoder.encode(`data: ${JSON.stringify(baseMapped)}\n\n`));
-                        }
-                      };
-
-                      enqueueChunked(mapped);
-                    } else {
-                      // Pass through unmapped — SSE events must be terminated with \n\n
-                      controller.enqueue(encoder.encode(line + '\n\n'));
-                    }
-                  } catch {
-                    // Preserve SSE framing: each event line needs \n\n terminator
-                    controller.enqueue(encoder.encode(line + '\n\n'));
-                  }
-                } else {
-                  controller.enqueue(encoder.encode(line + '\n\n'));
+                if (trimmed === '') {
+                  // Blank line terminates the current event.
+                  flushEvent();
+                  continue;
                 }
+                if (trimmed.startsWith(':')) {
+                  // SSE comment — drop.
+                  continue;
+                }
+
+                const dataMatch = trimmed.match(/^data\s*:\s?(.*)$/);
+                if (dataMatch) {
+                  dataLines.push(dataMatch[1]);
+                }
+                // Other fields (event:, id:, retry:) carry no payload we need.
               }
 
               if (done) {
+                // Flush a trailing event that lacked a terminating blank line.
+                if (buffer) {
+                  const line = buffer.replace(/\r$/, '').trim();
+                  const dataMatch = line.match(/^data\s*:\s?(.*)$/);
+                  if (dataMatch) dataLines.push(dataMatch[1]);
+                }
+                flushEvent();
                 controller.close();
                 break;
               }
@@ -1272,7 +1254,7 @@ export class CustomLLMProvider extends LLMProvider {
 
     // Apply response mapping via custom fetch — pass timeout for fetch-level protection (Issue #7)
     if (resConfig.responseMapping) {
-      config.configuration.fetch = createMappingFetch(resConfig.responseMapping);
+      config.configuration.fetch = createMappingFetch(resConfig.responseMapping, reqConfig.retry);
     }
 
     let model = new ChatClass(config);
@@ -1292,6 +1274,83 @@ export class CustomLLMProvider extends LLMProvider {
     });
 
     return model;
+  }
+
+  /**
+   * Override listModels to support LiteLLM/custom proxies whose model-listing
+   * endpoint, auth scheme, or response shape deviates from OpenAI's GET /models.
+   *
+   * Configured via the `modelsConfig` service option:
+   * {
+   *   "path": "models",        // endpoint appended to baseURL
+   *   "auth": "bearer",        // "bearer" | "api-key" | "none"
+   *   "headers": {},           // extra headers
+   *   "dataPath": "data",      // dot-path to the model array in the response
+   *   "idPath": "id"           // dot-path to the id within each item
+   * }
+   */
+  async listModels(): Promise<{ models?: { id: string }[]; code?: number; errMsg?: string }> {
+    const options = this.serviceOptions || {};
+    const modelsConfig = safeParseJSON(options.modelsConfig, 'modelsConfig');
+    const pathName = typeof modelsConfig.path === 'string' && modelsConfig.path ? modelsConfig.path : 'models';
+    const auth = modelsConfig.auth === 'api-key' || modelsConfig.auth === 'none' ? modelsConfig.auth : 'bearer';
+    const apiKey = options.apiKey;
+
+    let url: string;
+    try {
+      url = this.buildRequestURL(pathName);
+    } catch (e) {
+      return { code: 400, errMsg: e instanceof Error ? e.message : String(e) };
+    }
+
+    if (auth !== 'none' && !apiKey) {
+      return { code: 400, errMsg: 'API Key required' };
+    }
+
+    const headers: Record<string, string> = {
+      ...(modelsConfig.headers && typeof modelsConfig.headers === 'object' ? modelsConfig.headers : {}),
+    };
+    if (auth === 'bearer') {
+      headers.Authorization = `Bearer ${apiKey}`;
+    } else if (auth === 'api-key') {
+      headers['x-api-key'] = String(apiKey);
+    }
+
+    try {
+      const response = await axios.get(url, { headers, timeout: 30_000 });
+      const body = response.data;
+      const rawItems = getByPath(body, modelsConfig.dataPath || 'data');
+
+      if (rawItems == null) {
+        return { models: [] };
+      }
+
+      const items = Array.isArray(rawItems) ? rawItems : [];
+      const models = items.map((item: any) => {
+        if (modelsConfig.idPath) {
+          return { id: String(getByPath(item, modelsConfig.idPath) ?? '') };
+        }
+        if (typeof item === 'string') {
+          return { id: item };
+        }
+        return { id: String(item?.id ?? item?.model ?? '') };
+      });
+
+      return { models };
+    } catch (e) {
+      const err = e as { response?: { status?: number; data?: any; statusText?: string }; message?: string };
+      const status = err.response?.status || 500;
+      const data = err.response?.data;
+      const errorMsg =
+        data?.error?.message ??
+        data?.message ??
+        (typeof data?.error === 'string' ? data.error : undefined) ??
+        (typeof data === 'string' ? data : undefined) ??
+        err.response?.statusText ??
+        err.message ??
+        'Failed to list models';
+      return { code: status, errMsg: errorMsg };
+    }
   }
 
   /**

@@ -58,7 +58,10 @@ export default defineCollection({
       comment: 'Authentication method: password or privateKey',
     },
     {
-      type: 'password',
+      // AES-256-GCM encrypted at rest via secret-box (see plugin.ts hooks).
+      // Do NOT use type:'password' here — that is a one-way scrypt hash and
+      // the SFTP client needs the original secret to authenticate.
+      type: 'text',
       name: 'password',
       comment: 'Encrypted password for password auth',
     },
@@ -68,7 +71,8 @@ export default defineCollection({
       comment: 'PEM format private key for key auth',
     },
     {
-      type: 'password',
+      // AES-256-GCM encrypted at rest via secret-box (see plugin.ts hooks).
+      type: 'text',
       name: 'passphrase',
       comment: 'Passphrase for the private key',
     },

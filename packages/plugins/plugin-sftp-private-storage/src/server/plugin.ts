@@ -12,18 +12,56 @@ import { col } from 'sequelize';
 import { STORAGE_TYPE_SFTP_PRIVATE } from '../constants';
 import { SftpConnectionManager, SftpConfig } from './sftp-connection-manager';
 import SftpPrivateStorage from './storages/sftp-private';
+import { decryptSecretIfNeeded, encryptSecretIfPlain, getSecretKeyInfo } from './secret-box';
+
+const SECRET_FIELDS = ['password', 'passphrase', 'privateKey'];
 
 export class PluginSftpPrivateStorageServer extends Plugin {
   connectionManager: SftpConnectionManager;
 
   async afterAdd() {
-    this.app.pm.get('file-manager') || this.app.pm.get('@nocobase/plugin-file-manager');
+    const fileManagerPlugin = this.app.pm.get('file-manager') || this.app.pm.get('@nocobase/plugin-file-manager');
+    if (!fileManagerPlugin) {
+      throw new Error(
+        '[sftp-private-storage] @nocobase/plugin-file-manager is required. Please enable it before this plugin.',
+      );
+    }
   }
 
   async beforeLoad() {}
 
   async load() {
     this.connectionManager = new SftpConnectionManager(this.log);
+
+    const keyInfo = getSecretKeyInfo();
+    if (keyInfo.ephemeral) {
+      this.log.warn(
+        '[sftp-private-storage] No SFTP_STORAGE_SECRET_KEY / APP_KEY configured — using an ephemeral encryption key. ' +
+          'SFTP passwords saved now will NOT be readable after a restart. Set SFTP_STORAGE_SECRET_KEY to persist them.',
+      );
+    }
+
+    // Encrypt secrets at rest. Values already encrypted are left untouched so
+    // repeated saves never double-encrypt.
+    this.db.on('sftpStorageConfigs.beforeSave', (model: any) => {
+      for (const field of SECRET_FIELDS) {
+        const value = model.get(field);
+        if (typeof value === 'string' && value !== '') {
+          model.set(field, encryptSecretIfPlain(value));
+        }
+      }
+    });
+
+    // Drop pooled connections when a config is disabled or deleted so stale
+    // credentials are never reused after an admin revokes them.
+    this.db.on('sftpStorageConfigs.afterSave', async (model: any) => {
+      if (model.get('enabled') === false) {
+        await this.connectionManager.unregisterConfig(model.get('id'));
+      }
+    });
+    this.db.on('sftpStorageConfigs.afterDestroy', async (model: any) => {
+      await this.connectionManager.unregisterConfig(model.get('id'));
+    });
 
     const fileManagerPlugin = (this.app.pm.get('file-manager') ||
       this.app.pm.get('@nocobase/plugin-file-manager')) as any;
@@ -89,22 +127,29 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     if (config) {
       const parsed = this.app.environment ? this.app.environment.renderJsonTemplate(config.toJSON()) : config.toJSON();
 
-      sftpConfig = {
-        id: config.get('id'),
-        host: parsed.host,
-        port: parsed.port || 22,
-        username: parsed.username,
-        authMethod: parsed.authMethod || 'password',
-        password: parsed.password,
-        privateKey: parsed.privateKey,
-        passphrase: parsed.passphrase,
-        basePath: parsed.basePath || '/',
-        poolMax: parsed.poolMax,
-        poolMin: parsed.poolMin,
-        idleTimeoutMillis: parsed.idleTimeoutMillis,
-        acquireTimeoutMillis: parsed.acquireTimeoutMillis,
-        readyTimeout: parsed.readyTimeout,
-      };
+      try {
+        sftpConfig = {
+          id: config.get('id'),
+          host: parsed.host,
+          port: parsed.port || 22,
+          username: parsed.username,
+          authMethod: parsed.authMethod || 'password',
+          password: decryptSecretIfNeeded(parsed.password) as string | undefined,
+          privateKey: decryptSecretIfNeeded(parsed.privateKey) as string | undefined,
+          passphrase: decryptSecretIfNeeded(parsed.passphrase) as string | undefined,
+          basePath: parsed.basePath || '/',
+          poolMax: parsed.poolMax,
+          poolMin: parsed.poolMin,
+          idleTimeoutMillis: parsed.idleTimeoutMillis,
+          acquireTimeoutMillis: parsed.acquireTimeoutMillis,
+          readyTimeout: parsed.readyTimeout,
+        };
+      } catch (error) {
+        this.log.warn(
+          `[sftp-private-storage] Unable to decrypt credentials for SFTP config ${name}; skipping. Set SFTP_STORAGE_SECRET_KEY and re-save the secret.`,
+        );
+        return null;
+      }
     } else {
       // Backward compatibility for older setups that stored SFTP configs in file-manager storages.
       const storage = await this.db.getRepository('storages').findOne({
@@ -267,6 +312,18 @@ export class PluginSftpPrivateStorageServer extends Plugin {
       return;
     }
 
+    // Only file-type collections may be streamed. Reject anything else so the
+    // collection parameter cannot be used to probe arbitrary tables.
+    const fileCollectionNames = new Set(
+      Array.from(ctx.db.collections.values())
+        .filter((c: any) => c.options?.template === 'file' || c.name === 'attachments' || c.name === 'aiFiles')
+        .map((c: any) => c.name),
+    );
+    if (!fileCollectionNames.has(collection)) {
+      ctx.throw(400, 'Invalid collection parameter');
+      return;
+    }
+
     const currentRoles: string[] = ctx.state.currentRoles || [];
     const isRoot = currentRoles.includes('root');
 
@@ -299,9 +356,7 @@ export class PluginSftpPrivateStorageServer extends Plugin {
     }
 
     if (!record) {
-      ctx.logger.error(
-        `[sftp-private-storage] Attachment not found. filterByTk=${filterByTk}, collection=${collection}`,
-      );
+      ctx.logger.warn('[sftp-private-storage] Attachment not found for stream request');
       ctx.throw(404, 'Attachment not found');
       return;
     }

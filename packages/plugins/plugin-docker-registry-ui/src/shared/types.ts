@@ -25,6 +25,8 @@ export interface RegistrySettingsInput {
   maxTransferSizeMb?: number;
   uploadChunkSizeMb?: number;
   transferTimeoutMs?: number;
+  maxDownloadSpeedKbps?: number;
+  maxUploadSpeedKbps?: number;
   clearPassword?: boolean;
   clearBearerToken?: boolean;
   clearClientPrivateKey?: boolean;
@@ -52,6 +54,8 @@ export interface SafeRegistrySettings {
   maxTransferSizeMb: number;
   uploadChunkSizeMb: number;
   transferTimeoutMs: number;
+  maxDownloadSpeedKbps: number;
+  maxUploadSpeedKbps: number;
   hasPassword: boolean;
   hasBearerToken: boolean;
   hasClientPrivateKey: boolean;

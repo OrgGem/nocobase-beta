@@ -2,6 +2,10 @@ import { ResourceOptions } from '@nocobase/resourcer';
 import { createCursor, parseCursor } from '../utils/cursor';
 import { buildSeekFilter } from '../utils/keyset';
 import { hashFilter, normalizeSort } from '../utils/sort';
+import { aggregate } from '../controllers/aggregate';
+import { addIndex, listIndexes, removeIndex } from '../controllers/indexes';
+import { runSql } from '../controllers/sql-console';
+import { statistics } from '../controllers/statistics';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -100,6 +104,12 @@ const resource: ResourceOptions = {
       await next();
     },
     cursor: cursorPaginationAction,
+    statistics,
+    listIndexes,
+    addIndex,
+    removeIndex,
+    runSql,
+    aggregate,
   },
 };
 

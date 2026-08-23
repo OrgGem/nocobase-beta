@@ -199,8 +199,8 @@
   "Private Registry access": "Truy cập Registry riêng tư",
   "Download a Docker save tar from this page, then load it into the local Docker daemon.": "Tải tệp Docker save tar từ trang này, sau đó nạp vào Docker daemon cục bộ.",
   "Private Docker network": "Mạng Docker riêng tư",
-  "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.": "Chạy NocoBase và Registry trên cùng một mạng Docker riêng tư. Không publish cổng 5000 của Registry ra host."
-  ,"Destination repository (optional)": "Repository đích (không bắt buộc)",
+  "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.": "Chạy NocoBase và Registry trên cùng một mạng Docker riêng tư. Không publish cổng 5000 của Registry ra host.",
+  "Destination repository (optional)": "Repository đích (không bắt buộc)",
   "Destination tag (optional)": "Tag đích (không bắt buộc)",
   "team/image (auto-detected)": "team/image (tự nhận diện)",
   "latest (auto-detected)": "latest (tự nhận diện)",
@@ -211,14 +211,17 @@
   "Detected archive references: {{references}}": "Các tham chiếu nhận diện được: {{references}}",
   "Archive has no unambiguous repository and tag; enter them manually.": "Archive không có repository và tag rõ ràng; hãy nhập thủ công.",
   "Image uploaded successfully to {{repository}}:{{tag}}": "Đã upload image thành công tới {{repository}}:{{tag}}",
-  "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.": "Dùng Upload image trên trang Registry để nhập Docker save tar hoặc OCI image-layout tar. Để trống repository và tag đích để tự nhận diện từ metadata của archive. Giá trị nhập thủ công sẽ ghi đè giá trị nhận diện. Archive có nhiều tham chiếu yêu cầu chọn rõ ràng. Server xác minh đường dẫn, kích thước và SHA-256 trước khi đẩy blob và manifest."
-  ,"Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.": "Mỗi lần upload chấp nhận một image gốc. Image đa nền tảng vẫn được hỗ trợ khi được biểu diễn bởi một OCI index gốc."
-  ,"Archive contains multiple repository references. Choose one manually.": "Archive có nhiều tham chiếu repository. Hãy chọn một giá trị thủ công.",
+  "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.": "Dùng Upload image trên trang Registry để nhập Docker save tar hoặc OCI image-layout tar. Để trống repository và tag đích để tự nhận diện từ metadata của archive. Giá trị nhập thủ công sẽ ghi đè giá trị nhận diện. Archive có nhiều tham chiếu yêu cầu chọn rõ ràng. Server xác minh đường dẫn, kích thước và SHA-256 trước khi đẩy blob và manifest.",
+  "Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.": "Mỗi lần upload chấp nhận một image gốc. Image đa nền tảng vẫn được hỗ trợ khi được biểu diễn bởi một OCI index gốc.",
+  "Archive contains multiple repository references. Choose one manually.": "Archive có nhiều tham chiếu repository. Hãy chọn một giá trị thủ công.",
   "Archive contains multiple tag references. Choose one manually.": "Archive có nhiều tham chiếu tag. Hãy chọn một giá trị thủ công.",
   "Archive does not contain a destination repository. Enter one manually.": "Archive không có repository đích. Hãy nhập thủ công.",
   "Archive does not contain a destination tag. Enter one manually.": "Archive không có tag đích. Hãy nhập thủ công.",
   "Docker archive contains multiple images. Upload one image archive at a time.": "Docker archive có nhiều image. Mỗi lần chỉ upload một archive image.",
   "OCI archive contains multiple root images. Upload one image archive at a time.": "OCI archive có nhiều image gốc. Mỗi lần chỉ upload một archive image.",
   "A valid repository name is required": "Cần nhập repository hợp lệ",
-  "A valid tag is required": "Cần nhập tag hợp lệ"
+  "A valid tag is required": "Cần nhập tag hợp lệ",
+  "Maximum download speed (kbps)": "Tốc độ tải xuống tối đa (kbps)",
+  "Maximum upload speed (kbps)": "Tốc độ tải lên tối đa (kbps)",
+  "0 means unlimited bandwidth.": "0 có nghĩa là không giới hạn băng thông."
 }

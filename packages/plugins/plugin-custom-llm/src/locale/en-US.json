@@ -26,6 +26,8 @@
   "Request config description": "Extra configuration for LLM requests. Supported keys: extraHeaders (custom HTTP headers), extraBody (extra request body fields), modelKwargs (LangChain model kwargs).",
   "Response config (JSON)": "Response config (JSON)",
   "Response config description": "Configure response parsing. contentPath: 'auto' or dot-path. reasoningKey: key for reasoning content. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — maps non-standard LLM response to OpenAI format. tool_calls/finish_reason are auto-detected if not specified.",
+  "Models config (JSON)": "Models config (JSON)",
+  "Models config description": "Configure model listing for LiteLLM/custom proxies deviating from OpenAI GET /models. Supported keys: path (endpoint), auth ('bearer' | 'api-key' | 'none'), headers (extra HTTP headers), dataPath (dot-path to the model array), idPath (dot-path to the id field).",
   "Auto Tool-call Retry (invoke only)": "Auto Tool-call Retry (invoke only)",
   "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.": "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.",
   "Auto-truncate History": "Auto-truncate History",

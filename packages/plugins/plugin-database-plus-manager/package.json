@@ -1,13 +1,25 @@
 {
   "name": "plugin-database-plus-manager",
+  "displayName": "Database Plus Manager",
+  "displayName.zh-CN": "数据库增强管理器",
+  "displayName.vi-VN": "Database Plus Manager",
+  "description": "Advanced database tooling: keyset/cursor pagination, collection statistics, index management, a read-only SQL console, and aggregate queries.",
+  "description.zh-CN": "数据库增强工具：键集/游标分页、数据表统计、索引管理、只读 SQL 控制台与聚合查询。",
+  "description.vi-VN": "Công cụ cơ sở dữ liệu nâng cao: phân trang keyset/cursor, thống kê bảng, quản lý chỉ mục, bảng điều khiển SQL chỉ đọc và truy vấn tổng hợp.",
   "version": "1.0.0",
-  "main": "dist/server/index.js",
   "license": "Apache-2.0",
-  "files": ["dist", "src"],
+  "main": "dist/server/index.js",
+  "keywords": ["nocobase", "plugin", "database", "pagination", "index", "sql", "aggregate"],
+  "publishConfig": { "access": "public" },
+  "files": ["dist", "src", "client.js", "client.d.ts", "server.js", "server.d.ts", "client-v2.js", "client-v2.d.ts"],
   "peerDependencies": {
     "@nocobase/client-v2": "2.x",
     "@nocobase/database": "2.x",
-    "@nocobase/server": "2.x"
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/resourcer": "2.x",
+    "@nocobase/server": "2.x",
+    "ahooks": "*",
+    "sequelize": "6.x"
   },
   "nocobase": { "supportedVersions": ["2.x"], "editionLevel": 0 }
 }

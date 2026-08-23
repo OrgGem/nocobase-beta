@@ -26,6 +26,8 @@
   "Request config description": "Cấu hình bổ sung cho request LLM. Các key hỗ trợ: extraHeaders (HTTP headers tùy chỉnh), extraBody (thêm trường vào request body), modelKwargs (tham số model LangChain).",
   "Response config (JSON)": "Cấu hình response (JSON)",
   "Response config description": "Cấu hình parse response. contentPath: 'auto' hoặc dot-path. reasoningKey: key reasoning. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — mapping response không chuẩn OpenAI. tool_calls/finish_reason tự động phát hiện nếu không chỉ định.",
+  "Models config (JSON)": "Cấu hình danh sách model (JSON)",
+  "Models config description": "Cấu hình danh sách model cho các proxy LiteLLM/tùy chỉnh khác với OpenAI GET /models. Các key hỗ trợ: path (endpoint), auth ('bearer' | 'api-key' | 'none'), headers (HTTP headers bổ sung), dataPath (dot-path tới mảng model), idPath (dot-path tới trường id).",
   "Auto Tool-call Retry (invoke only)": "Tự động thử lại Tool-call (chỉ invoke)",
   "Retries failed tool calls automatically. Only effective in non-streaming (invoke) mode — has no effect when streaming is enabled.": "Tự động thử lại các tool call lỗi. Chỉ có hiệu lực ở chế độ non-streaming (invoke) — không có tác dụng khi streaming được bật.",
   "Auto-truncate History": "Tự động cắt ngắn lịch sử",

@@ -10,12 +10,60 @@
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { IStorageAdapter, FileEntry, ListOptions } from '../adapters/types';
+import { IStorageAdapter, FileEntry, ListOptions, RangeOptions } from '../adapters/types';
 import { koaMulter as multer } from '@nocobase/utils';
 import { STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
+import { buildContentDisposition } from '../content-disposition';
+import { TtlCache } from '../list-cache';
+import {
+  buildSignedDownloadUrl,
+  getDefaultUrlTtlSeconds,
+  verifyDownloadSignature,
+} from '../url-signing';
+
+export interface ExtStorageActionsOptions {
+  /**
+   * Shared TTL cache for expensive full-scan listings (S3 recursive search).
+   * Pass a TtlCache instance to enable; omit to disable caching.
+   */
+  listCache?: TtlCache<FileEntry[]>;
+}
+
+function getListCacheTtlMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.EXT_STORAGE_LIST_CACHE_TTL_MS);
+  if (!Number.isFinite(raw) || raw < 0) {
+    return 30_000;
+  }
+  return Math.floor(raw);
+}
 
 const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 1000;
+
+/**
+ * Upload limits. Configurable via environment variables so deployments can
+ * tune them without code changes:
+ * - EXT_STORAGE_MAX_UPLOAD_MB  (default: 200) — max size per uploaded file
+ * - EXT_STORAGE_MAX_UPLOAD_FILES (default: 50) — max number of files per request
+ */
+export const DEFAULT_MAX_UPLOAD_MB = 200;
+export const DEFAULT_MAX_UPLOAD_FILES = 50;
+
+export function getMaxUploadBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.EXT_STORAGE_MAX_UPLOAD_MB);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_MAX_UPLOAD_MB * 1024 * 1024;
+  }
+  return Math.floor(raw * 1024 * 1024);
+}
+
+export function getMaxUploadFiles(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.EXT_STORAGE_MAX_UPLOAD_FILES);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_MAX_UPLOAD_FILES;
+  }
+  return Math.floor(raw);
+}
 
 function getActionPayload(ctx: any) {
   return {
@@ -52,6 +100,68 @@ function sortEntries(entries: FileEntry[], sort = 'name', order = 'asc') {
 function safeUploadFilename(value: string) {
   const normalized = String(value || 'unnamed').replace(/\\/g, '/');
   return path.posix.basename(normalized) || 'unnamed';
+}
+
+/**
+ * Parse a single-range `Range: bytes=start-end` header (RFC 7233).
+ * Returns null when the header is absent, malformed, a multi-range request
+ * (unsupported — served as 200 full content), or syntactically invalid.
+ * Suffix ranges ("bytes=-500") become { start: size-500 } once the total
+ * size is known; open-ended ranges ("bytes=100-") keep end undefined.
+ */
+export function parseRangeHeader(
+  rangeHeader: string | undefined,
+  totalSize?: number,
+): RangeOptions | null {
+  if (!rangeHeader || typeof rangeHeader !== 'string') {
+    return null;
+  }
+
+  const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader.trim());
+  if (!match) {
+    return null;
+  }
+
+  const [, rawStart, rawEnd] = match;
+  if (rawStart === '' && rawEnd === '') {
+    return null;
+  }
+
+  // Multi-range ("bytes=0-1,5-9") is rejected by the regex above; serve 200.
+
+  let start: number;
+  let end: number | undefined;
+
+  if (rawStart === '') {
+    // Suffix form: last N bytes. Requires knowing the total size.
+    const suffix = Number(rawEnd);
+    if (!Number.isFinite(suffix) || suffix <= 0) {
+      return null;
+    }
+    if (totalSize === undefined) {
+      return null;
+    }
+    start = Math.max(0, totalSize - suffix);
+    end = totalSize - 1;
+  } else {
+    start = Number(rawStart);
+    if (!Number.isFinite(start)) {
+      return null;
+    }
+    if (rawEnd !== '') {
+      end = Number(rawEnd);
+      if (!Number.isFinite(end) || end < start) {
+        return null;
+      }
+    }
+  }
+
+  if (totalSize !== undefined && totalSize > 0 && start >= totalSize) {
+    // Unsatisfiable — caller should respond 416.
+    return { start: -1 };
+  }
+
+  return { start, end };
 }
 
 /**
@@ -122,6 +232,29 @@ function getRecordValue(record: any, key: string) {
 }
 
 /**
+ * Load the directory record by ID without any ACL check.
+ * Callers must enforce authorization themselves.
+ */
+async function loadDirectoryRecord(ctx: any): Promise<any | null> {
+  const filterByTk = ctx.action.params.filterByTk || ctx.action.params.directoryId;
+  if (!filterByTk) {
+    ctx.throw(400, 'Missing directory ID (filterByTk)');
+    return null;
+  }
+
+  const directory = await ctx.db.getRepository('externalStorageDirectories').findOne({
+    filterByTk,
+  });
+
+  if (!directory || !directory.get('enabled')) {
+    ctx.throw(404, 'Directory not found');
+    return null;
+  }
+
+  return directory;
+}
+
+/**
  * Helper: get directory record by ID.
  * NocoBase's core ACL automatically applies data scope filtering based on the Role
  * before reaching this point. If `findOne` returns null, the user either provided
@@ -131,15 +264,6 @@ async function getDirectoryRecord(
   ctx: any,
   requiredAction = 'view',
 ): Promise<{ directory: any; subPath: string } | null> {
-  // Use filterByTk which comes from the URL param automatically (e.g. /externalStorageDirectories:list/<id>)
-  // Or explicitly from params if they sent it
-  const filterByTk = ctx.action.params.filterByTk || ctx.action.params.directoryId;
-
-  if (!filterByTk) {
-    ctx.throw(400, 'Missing directory ID (filterByTk)');
-    return null;
-  }
-
   // Check NocoBase ACL explicitly for Data Scope
   const canAccess = ctx.can({
     resource: 'externalStorageDirectories',
@@ -158,6 +282,12 @@ async function getDirectoryRecord(
       $user: ctx.state.currentUser?.toJSON ? ctx.state.currentUser.toJSON() : ctx.state.currentUser,
       $nRole: ctx.state.currentRole,
     });
+  }
+
+  const filterByTk = ctx.action.params.filterByTk || ctx.action.params.directoryId;
+  if (!filterByTk) {
+    ctx.throw(400, 'Missing directory ID (filterByTk)');
+    return null;
   }
 
   // The collection is externalStorageDirectories
@@ -179,7 +309,18 @@ async function getDirectoryRecord(
 /**
  * Register all external storage action handlers on the plugin.
  */
-export function createExtStorageActions(getAdapter: (directory: any) => Promise<IStorageAdapter>) {
+export function createExtStorageActions(
+  getAdapter: (directory: any) => Promise<IStorageAdapter>,
+  options: ExtStorageActionsOptions = {},
+) {
+  const listCache =
+    options.listCache ?? new TtlCache<FileEntry[]>({ ttlMs: getListCacheTtlMs(), maxEntries: 200 });
+
+  /** Drop cached listings for a directory after any mutation. */
+  const invalidateDirectoryCache = (directory: any) => {
+    listCache?.invalidatePrefix(`${directory.get('id')}|`);
+  };
+
   return {
     /**
      * GET extStorage:directories
@@ -286,6 +427,31 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       };
 
       try {
+        // Full-scan listings (S3 recursive search) are expensive; serve
+        // repeated identical scans from a short-lived cache.
+        const cacheKey = `${directory.get('id')}|${remotePath}|${type || ''}|${search}`;
+        const cachedEntries = listCache?.get(cacheKey);
+        if (cachedEntries) {
+          const sortedCached = sortEntries(cachedEntries, payload.sort || 'name', payload.order || 'asc');
+          const pageDataCached = sortedCached.slice(offset, offset + limit);
+          ctx.body = {
+            data: pageDataCached,
+            meta: {
+              directoryId: directory.get('id'),
+              directoryName: directory.get('name'),
+              currentPath: subPath,
+              rootPath: directory.get('rootPath'),
+              total: sortedCached.length,
+              limit,
+              offset,
+              hasMore: offset + limit < sortedCached.length,
+              nextOffset: offset + limit < sortedCached.length ? offset + limit : null,
+              cached: true,
+            },
+          };
+          return;
+        }
+
         const filesOrResult = await adapter.list(remotePath, options);
         let pageData: FileEntry[];
         const meta: any = {
@@ -305,6 +471,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
           if (search) {
             files = files.filter((entry) => entry.name.toLowerCase().includes(search));
           }
+          listCache?.set(cacheKey, files);
           const sorted = sortEntries(files, payload.sort || 'name', payload.order || 'asc');
           pageData = sorted.slice(offset, offset + limit);
           meta.total = sorted.length;
@@ -372,11 +539,43 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
     /**
      * GET extStorage:download
      * Stream download a file from external storage.
-     * Requires 'download' permission.
      * Sets proper headers for browser download / inline preview.
+     * Supports single-range HTTP Range requests (RFC 7233) so media seeking
+     * and resumable downloads work; multi-range requests are served as 200.
+     *
+     * Authorization accepts either:
+     * - a valid signed URL (directoryId+path+mode+expires HMAC) — the grant was
+     *   issued by the server after an ACL check, so no per-request ACL is needed;
+     * - or the legacy path: a logged-in user whose role passes the directory
+     *   data-scope check (token query param / Authorization header).
      */
     download: async (ctx: any) => {
-      const result = await getDirectoryRecord(ctx, 'view');
+      const signature = ctx.action.params.signature;
+      const expiresParam = ctx.action.params.expires;
+      let result: { directory: any; subPath: string } | null = null;
+
+      if (signature) {
+        const payload = {
+          directoryId: ctx.action.params.directoryId ?? ctx.action.params.filterByTk,
+          path: sanitizePath(ctx.action.params.path || '/'),
+          mode: (ctx.action.params.mode === 'inline' ? 'inline' : 'attachment') as 'inline' | 'attachment',
+          expires: Number(expiresParam),
+        };
+        if (!Number.isFinite(payload.expires) || payload.expires <= Date.now()) {
+          ctx.throw(403, 'Signed URL expired');
+          return;
+        }
+        if (!verifyDownloadSignature(payload as any, String(signature))) {
+          ctx.throw(403, 'Invalid signature');
+          return;
+        }
+        const directory = await loadDirectoryRecord(ctx);
+        if (!directory) return;
+        result = { directory, subPath: payload.path };
+      } else {
+        result = await getDirectoryRecord(ctx, 'view');
+      }
+
       if (!result) return;
 
       const { directory, subPath } = result;
@@ -385,24 +584,56 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       const mode = ctx.action.params.mode || 'attachment';
 
       try {
-        const { stream, contentType, size } = await adapter.getStream(remotePath);
-        const filename = encodeURIComponent(path.basename(subPath));
+        // Resolve the range first: stat() is a cheap metadata call (S3 HEAD /
+        // SFTP stat) and lets suffix ranges ("bytes=-500") be resolved without
+        // opening a throwaway data stream.
+        let range: RangeOptions | null = null;
+        let totalSize: number | undefined;
+        const rangeHeader = ctx.get?.('range') || ctx.request?.headers?.range;
+        if (rangeHeader) {
+          const stat = await adapter.stat(remotePath).catch(() => null);
+          totalSize = stat && stat.type === 'file' ? stat.size : undefined;
+          range = parseRangeHeader(rangeHeader, totalSize);
+          if (range && range.start === -1) {
+            ctx.set('Content-Range', `bytes */${totalSize ?? '*'}`);
+            ctx.throw(416, 'Requested range not satisfiable');
+            return;
+          }
+        }
+
+        const { stream, contentType, size, contentRange } = await adapter.getStream(
+          remotePath,
+          range ?? undefined,
+        );
+
+        const filename = path.basename(subPath);
 
         ctx.set('Content-Type', contentType || 'application/octet-stream');
-        if (size) {
+        ctx.set('Accept-Ranges', 'bytes');
+        if (size !== undefined && size !== null) {
+          // When serving a range this is the partial length, not the total.
           ctx.set('Content-Length', String(size));
         }
-
-        if (mode === 'inline') {
-          ctx.set('Content-Disposition', `inline; filename="${filename}"`);
-        } else {
-          ctx.set('Content-Disposition', `attachment; filename="${filename}"`);
+        if (range) {
+          ctx.status = 206;
+          if (contentRange) {
+            ctx.set('Content-Range', contentRange);
+          } else if (totalSize !== undefined) {
+            ctx.set('Content-Range', `bytes ${range.start}-${range.start + size - 1}/${totalSize}`);
+          }
         }
 
+        ctx.set('Content-Disposition', buildContentDisposition(filename, mode === 'inline' ? 'inline' : 'attachment'));
+
+        // Private: browser/CDN may cache per-user, but permission revocation
+        // takes up to this window to be reflected for already-cached responses.
         ctx.set('Cache-Control', 'private, max-age=300');
         ctx.withoutDataWrapping = true;
         ctx.body = stream;
       } catch (error: any) {
+        if (error?.status === 416) {
+          throw error;
+        }
         ctx.logger?.error?.(`[ext-storage] Download failed for "${remotePath}":`, error);
         ctx.throw(500, `Failed to download file: ${error.message}`);
       }
@@ -413,6 +644,11 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
      * Upload file(s) to a path within a directory.
      * Requires 'upload' permission.
      * Accepts multipart/form-data with 'file' field.
+     *
+     * Size/count limits (env-tunable):
+     * - EXT_STORAGE_MAX_UPLOAD_MB (default 200) per file
+     * - EXT_STORAGE_MAX_UPLOAD_FILES (default 50) per request
+     * Oversized requests are rejected with 413 before any storage I/O.
      */
     upload: async (ctx: any) => {
       const result = await getDirectoryRecord(ctx, 'update');
@@ -421,9 +657,25 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       const { directory, subPath } = result;
       const adapter = await getAdapter(directory);
 
+      const maxBytes = getMaxUploadBytes();
+      const maxFiles = getMaxUploadFiles();
+
+      // Fast-fail on Content-Length before multer buffers anything to tmpdir.
+      const declaredLength = Number(ctx.request?.headers?.['content-length'] || 0);
+      if (declaredLength && declaredLength > maxBytes) {
+        ctx.throw(413, `Upload too large: content-length ${declaredLength} bytes exceeds the ${Math.floor(maxBytes / (1024 * 1024))}MB limit`);
+        return;
+      }
+
       if (!ctx.request?.is?.('multipart/*')) {
         if (!ctx.req || subPath === '/') {
           ctx.throw(400, 'Raw stream upload requires a file path');
+          return;
+        }
+
+        // Raw stream uploads are also bounded by the same size limit.
+        if (declaredLength && declaredLength > maxBytes) {
+          ctx.throw(413, `Upload too large: content-length ${declaredLength} bytes exceeds the ${Math.floor(maxBytes / (1024 * 1024))}MB limit`);
           return;
         }
 
@@ -433,6 +685,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
             size: Number(ctx.request?.headers?.['content-length'] || 0) || undefined,
             mimetype: ctx.request?.headers?.['content-type'],
           });
+          invalidateDirectoryCache(directory);
           ctx.body = { data: { path: subPath, success: true } };
         } catch (error: any) {
           ctx.logger?.error?.(`[ext-storage] Raw upload failed for "${remotePath}":`, error);
@@ -442,9 +695,23 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
       }
 
       try {
-        const uploadMiddleware = multer({ dest: os.tmpdir() }).any();
+        const uploadMiddleware = multer({
+          dest: os.tmpdir(),
+          limits: {
+            fileSize: maxBytes,
+            files: maxFiles,
+          },
+        }).any();
         await uploadMiddleware(ctx, () => {});
       } catch (err: any) {
+        if (err?.code === 'LIMIT_FILE_SIZE') {
+          ctx.throw(413, `Upload too large: file exceeds the ${Math.floor(maxBytes / (1024 * 1024))}MB limit`);
+          return;
+        }
+        if (err?.code === 'LIMIT_FILE_COUNT') {
+          ctx.throw(413, `Too many files: maximum ${maxFiles} files per request`);
+          return;
+        }
         ctx.throw(400, `Upload parsing error: ${err.message}`);
         return;
       }
@@ -499,6 +766,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
             size: file.size,
             mimetype: file.mimetype || file.type,
           });
+          invalidateDirectoryCache(directory);
 
           results.push({
             name: fileName,
@@ -549,6 +817,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
 
       try {
         await adapter.rename(oldRemotePath, newRemotePath);
+        invalidateDirectoryCache(directory);
         ctx.body = { data: { oldPath: oldSubPath, newPath: newSubPath, success: true } };
       } catch (error: any) {
         ctx.logger?.error?.(`[ext-storage] Rename failed from "${oldRemotePath}" to "${newRemotePath}":`, error);
@@ -610,6 +879,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
 
       try {
         await adapter.mkdir(remotePath);
+        invalidateDirectoryCache(directory);
         ctx.body = {
           data: {
             name: folderName,
@@ -644,6 +914,7 @@ export function createExtStorageActions(getAdapter: (directory: any) => Promise<
         } else {
           await adapter.delete(remotePath);
         }
+        invalidateDirectoryCache(directory);
         ctx.body = { data: { success: true, path: subPath } };
       } catch (error: any) {
         ctx.logger?.error?.(`[ext-storage] Delete failed for "${remotePath}":`, error);

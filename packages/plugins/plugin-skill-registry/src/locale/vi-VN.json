@@ -182,5 +182,9 @@
   "Metadata from skill.md": "Metadata t\u1eeb skill.md",
   "No metadata was declared in the skill file.": "File skill kh\u00f4ng khai b\u00e1o metadata.",
   "Published versions": "C\u00e1c phi\u00ean b\u1ea3n \u0111\u00e3 publish",
-  "No versions have been published yet.": "Ch\u01b0a c\u00f3 phi\u00ean b\u1ea3n n\u00e0o \u0111\u01b0\u1ee3c publish."
+  "No versions have been published yet.": "Ch\u01b0a c\u00f3 phi\u00ean b\u1ea3n n\u00e0o \u0111\u01b0\u1ee3c publish.",
+  "Slug": "\u0110\u1ecbnh danh",
+  "Share skill": "Chia s\u1ebb k\u1ef9 n\u0103ng",
+  "Unshared": "\u0110\u00e3 h\u1ee7y chia s\u1ebb",
+  "Users": "Ng\u01b0\u1eddi d\u00f9ng"
 }

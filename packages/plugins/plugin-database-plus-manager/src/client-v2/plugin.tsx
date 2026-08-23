@@ -8,14 +8,15 @@ export class PluginDatabasePlusManagerClient extends Plugin<Record<string, never
     this.pluginSettingsManager.addMenuItem({
       key: 'database-plus-manager',
       icon: 'DatabaseOutlined',
+      title: this.t('Database Plus Manager'),
       aclSnippet: PAGINATION_ACL_SNIPPET,
     });
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'database-plus-manager',
       key: 'index',
-      title: this.t('Pagination'),
+      title: this.t('Database Plus'),
       aclSnippet: PAGINATION_ACL_SNIPPET,
-      componentLoader: () => import('./pages/PaginationSettingsPage'),
+      componentLoader: () => import('./pages/DatabasePlusPage'),
     });
   }
 }

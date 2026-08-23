@@ -8,4 +8,3 @@
  */
 
 export const STORAGE_TYPE_SFTP_PRIVATE = 'sftp-private';
-export const NAMESPACE = 'plugin-sftp-private-storage';

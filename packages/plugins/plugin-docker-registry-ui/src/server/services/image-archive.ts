@@ -3,7 +3,7 @@ import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdtemp, open, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import type { IncomingMessage } from 'node:http';
+import type { Readable } from 'node:stream';
 import { PassThrough, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { extract, pack, type Headers } from 'tar-stream';
@@ -173,7 +173,7 @@ function tarEntry(archive: ReturnType<typeof pack>, header: Headers, body: Buffe
 async function streamTarEntry(
   archive: ReturnType<typeof pack>,
   header: Headers,
-  source: IncomingMessage,
+  source: Readable,
   expectedSize: number,
 ): Promise<void> {
   let transferred = 0;
@@ -284,11 +284,7 @@ export async function createImageArchiveStream(options: {
   };
 }
 
-async function extractImageArchive(
-  input: IncomingMessage,
-  maxBytes: number,
-  timeoutMs: number,
-): Promise<ExtractedArchive> {
+async function extractImageArchive(input: Readable, maxBytes: number, timeoutMs: number): Promise<ExtractedArchive> {
   const directory = await mkdtemp(join(tmpdir(), 'nocobase-registry-upload-'));
   const entries = new Map<string, ExtractedEntry>();
   const parser = extract();
@@ -595,7 +591,7 @@ async function uploadLegacyDockerArchive(options: {
 }
 
 export async function uploadImageArchive(options: {
-  input: IncomingMessage;
+  input: Readable;
   client: ArchiveRegistryClient;
   repository?: string;
   tag?: string;

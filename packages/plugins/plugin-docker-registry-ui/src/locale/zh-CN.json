@@ -199,8 +199,8 @@
   "Private Registry access": "私有 Registry 访问",
   "Download a Docker save tar from this page, then load it into the local Docker daemon.": "从此页面下载 Docker save tar，然后将其加载到本地 Docker 守护进程。",
   "Private Docker network": "私有 Docker 网络",
-  "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.": "在同一个私有 Docker 网络中运行 NocoBase 和 Registry。不要将 Registry 的 5000 端口发布到主机。"
-  ,"Destination repository (optional)": "目标仓库（可选）",
+  "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.": "在同一个私有 Docker 网络中运行 NocoBase 和 Registry。不要将 Registry 的 5000 端口发布到主机。",
+  "Destination repository (optional)": "目标仓库（可选）",
   "Destination tag (optional)": "目标标签（可选）",
   "team/image (auto-detected)": "team/image（自动检测）",
   "latest (auto-detected)": "latest（自动检测）",
@@ -211,14 +211,17 @@
   "Detected archive references: {{references}}": "检测到的归档引用：{{references}}",
   "Archive has no unambiguous repository and tag; enter them manually.": "归档中没有明确的仓库和标签，请手动输入。",
   "Image uploaded successfully to {{repository}}:{{tag}}": "镜像已成功上传到 {{repository}}:{{tag}}",
-  "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.": "在 Registry 页面使用 Upload image 导入 Docker save tar 或 OCI image-layout tar。将目标仓库和标签留空可从归档元数据自动检测。手动输入的值会覆盖检测值。包含多个引用的归档需要明确选择。服务器会在推送 blob 和 manifest 前验证路径、大小和 SHA-256 摘要。"
-  ,"Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.": "每次上传接受一个根镜像。使用单个根 OCI 索引表示时仍支持多平台镜像。"
-  ,"Archive contains multiple repository references. Choose one manually.": "归档包含多个仓库引用，请手动选择一个。",
+  "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.": "在 Registry 页面使用 Upload image 导入 Docker save tar 或 OCI image-layout tar。将目标仓库和标签留空可从归档元数据自动检测。手动输入的值会覆盖检测值。包含多个引用的归档需要明确选择。服务器会在推送 blob 和 manifest 前验证路径、大小和 SHA-256 摘要。",
+  "Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.": "每次上传接受一个根镜像。使用单个根 OCI 索引表示时仍支持多平台镜像。",
+  "Archive contains multiple repository references. Choose one manually.": "归档包含多个仓库引用，请手动选择一个。",
   "Archive contains multiple tag references. Choose one manually.": "归档包含多个标签引用，请手动选择一个。",
   "Archive does not contain a destination repository. Enter one manually.": "归档中没有目标仓库，请手动输入。",
   "Archive does not contain a destination tag. Enter one manually.": "归档中没有目标标签，请手动输入。",
   "Docker archive contains multiple images. Upload one image archive at a time.": "Docker 归档包含多个镜像，每次只能上传一个镜像归档。",
   "OCI archive contains multiple root images. Upload one image archive at a time.": "OCI 归档包含多个根镜像，每次只能上传一个镜像归档。",
   "A valid repository name is required": "请输入有效的仓库名称",
-  "A valid tag is required": "请输入有效的标签"
+  "A valid tag is required": "请输入有效的标签",
+  "Maximum download speed (kbps)": "最大下载速度 (kbps)",
+  "Maximum upload speed (kbps)": "最大上传速度 (kbps)",
+  "0 means unlimited bandwidth.": "0 表示不限带宽。"
 }

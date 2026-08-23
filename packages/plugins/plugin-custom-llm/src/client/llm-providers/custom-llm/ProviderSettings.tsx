@@ -120,6 +120,28 @@ export const ProviderSettingsForm: React.FC = () => {
             },
             description: tval('Response config description', { ns: namespace }),
           },
+          modelsConfig: {
+            title: tval('Models config (JSON)', { ns: namespace }),
+            type: 'string',
+            'x-decorator': 'FormItem',
+            'x-component': 'Input.TextArea',
+            'x-component-props': {
+              placeholder: JSON.stringify(
+                {
+                  path: 'models',
+                  auth: 'bearer',
+                  headers: {},
+                  dataPath: 'data',
+                  idPath: 'id',
+                },
+                null,
+                2,
+              ),
+              rows: 6,
+              style: { fontFamily: 'monospace', fontSize: 12 },
+            },
+            description: tval('Models config description', { ns: namespace }),
+          },
         },
       }}
     />

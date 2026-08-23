@@ -46,6 +46,8 @@ interface RegistrySettingsFormValues {
   maxTransferSizeMb?: RegistrySettingsInput['maxTransferSizeMb'];
   uploadChunkSizeMb?: RegistrySettingsInput['uploadChunkSizeMb'];
   transferTimeoutMs?: RegistrySettingsInput['transferTimeoutMs'];
+  maxDownloadSpeedKbps?: RegistrySettingsInput['maxDownloadSpeedKbps'];
+  maxUploadSpeedKbps?: RegistrySettingsInput['maxUploadSpeedKbps'];
   clearPassword?: RegistrySettingsInput['clearPassword'];
   clearBearerToken?: RegistrySettingsInput['clearBearerToken'];
   clearClientPrivateKey?: RegistrySettingsInput['clearClientPrivateKey'];
@@ -147,6 +149,8 @@ export default function RegistrySettingsPage({ permissions }: DockerRegistryPage
           requestTimeoutMs: 10000,
           catalogPageSize: 100,
           maxConcurrentRequests: 5,
+          maxDownloadSpeedKbps: 0,
+          maxUploadSpeedKbps: 0,
           autoRefreshSeconds: 0,
           deleteEnabled: false,
           rawManifestEnabled: true,
@@ -315,6 +319,20 @@ export default function RegistrySettingsPage({ permissions }: DockerRegistryPage
           </Form.Item>
           <Form.Item label={t('Transfer timeout (ms)')} name="transferTimeoutMs">
             <InputNumber min={10000} max={3600000} />
+          </Form.Item>
+          <Form.Item
+            label={t('Maximum download speed (kbps)')}
+            name="maxDownloadSpeedKbps"
+            extra={t('0 means unlimited bandwidth.')}
+          >
+            <InputNumber min={0} max={1000000} />
+          </Form.Item>
+          <Form.Item
+            label={t('Maximum upload speed (kbps)')}
+            name="maxUploadSpeedKbps"
+            extra={t('0 means unlimited bandwidth.')}
+          >
+            <InputNumber min={0} max={1000000} />
           </Form.Item>
         </Space>
         <Form.Item

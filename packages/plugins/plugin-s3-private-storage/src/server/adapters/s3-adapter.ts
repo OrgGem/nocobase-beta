@@ -10,7 +10,7 @@
 import { Readable } from 'stream';
 import path from 'path';
 import type { ListObjectsV2CommandOutput } from '@aws-sdk/client-s3';
-import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult } from './types';
+import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult, RangeOptions, GetStreamResult } from './types';
 
 /**
  * Minimal structural types for the injected S3 client and SDK classes.
@@ -295,15 +295,20 @@ export class S3Adapter implements IStorageAdapter {
     }
   }
 
-  async getStream(remotePath: string): Promise<{ stream: Readable; contentType?: string; size?: number }> {
+  async getStream(remotePath: string, range?: RangeOptions): Promise<GetStreamResult> {
     const { GetObjectCommand } = this.sdk;
     const key = remotePath.replace(/^\/+/, '');
-    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+    const input: Record<string, unknown> = { Bucket: this.bucket, Key: key };
+    if (range) {
+      input.Range = `bytes=${range.start}-${range.end ?? ''}`;
+    }
+    const response = await this.client.send(new GetObjectCommand(input));
     if (!response.Body) throw new Error(`Failed to get stream for: ${remotePath}`);
     return {
       stream: response.Body as unknown as Readable,
       contentType: response.ContentType || this.guessMime(key),
       size: response.ContentLength,
+      contentRange: response.ContentRange,
     };
   }
 

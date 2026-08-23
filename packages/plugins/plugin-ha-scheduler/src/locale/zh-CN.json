@@ -1,0 +1,6 @@
+{
+  "ha-scheduler": {
+    "pluginName": "高可用调度器",
+    "pluginDescription": "使用分布式锁在 HA 节点之间协调 NocoBase cron 任务。"
+  }
+}

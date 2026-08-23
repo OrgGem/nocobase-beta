@@ -231,7 +231,7 @@ function versionResponse(version: RegistryModel) {
     registrySignature: getString(version, 'registrySignature') || null,
     signatureKeyId: getString(version, 'signatureKeyId') || null,
     changelog: getString(version, 'changelog') || null,
-    publishedAt: version.get('publishedAt'),
+    publishedAt: (() => { const v = version.get('publishedAt'); return v instanceof Date ? v.toISOString() : (typeof v === 'string' || typeof v === 'number' ? new Date(v).toISOString() : null); })(),
   };
 }
 
@@ -245,7 +245,7 @@ function versionSummaryResponse(version: RegistryModel) {
     artifactDigest: getString(version, 'artifactDigest'),
     registrySignature: getString(version, 'registrySignature') || null,
     signatureKeyId: getString(version, 'signatureKeyId') || null,
-    publishedAt: version.get('publishedAt'),
+    publishedAt: (() => { const v = version.get('publishedAt'); return v instanceof Date ? v.toISOString() : (typeof v === 'string' || typeof v === 'number' ? new Date(v).toISOString() : null); })(),
   };
 }
 
@@ -362,7 +362,10 @@ export function createPublicActions(input: {
           latest: latest ? versionSummaryResponse(latest) : null,
         };
         const actionContext = ctx as ActionContext;
-        const entityTag = etag(response);
+        // The `get` body is wrapped by the global dataWrapping middleware into
+        // `{ data: response }`, so hash that final representation or the returned
+        // ETag will not match the bytes actually sent to the client.
+        const entityTag = etag({ data: response });
         actionContext.set('ETag', entityTag);
         actionContext.set('Cache-Control', 'public, max-age=60');
         if (matchesIfNoneMatch(ctx.get('if-none-match'), entityTag)) {
@@ -1172,3 +1175,4 @@ export function createHealthActions(readiness: RegistryReadinessService) {
     },
   };
 }
+

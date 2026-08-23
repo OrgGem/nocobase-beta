@@ -1,0 +1,6 @@
+{
+  "ha-scheduler": {
+    "pluginName": "Bộ lập lịch HA",
+    "pluginDescription": "Điều phối cron job NocoBase giữa các node HA bằng distributed lock."
+  }
+}

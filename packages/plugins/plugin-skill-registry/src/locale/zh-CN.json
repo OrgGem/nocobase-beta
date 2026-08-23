@@ -180,5 +180,9 @@
   "Metadata from skill.md": "\u6765\u81ea skill.md \u7684\u5143\u6570\u636e",
   "No metadata was declared in the skill file.": "\u6280\u80fd\u6587\u4ef6\u672a\u58f0\u660e\u4efb\u4f55\u5143\u6570\u636e\u3002",
   "Published versions": "\u5df2\u53d1\u5e03\u7248\u672c",
-  "No versions have been published yet.": "\u5c1a\u672a\u53d1\u5e03\u4efb\u4f55\u7248\u672c\u3002"
+  "No versions have been published yet.": "\u5c1a\u672a\u53d1\u5e03\u4efb\u4f55\u7248\u672c\u3002",
+  "Slug": "\u6807\u8bc6",
+  "Share skill": "\u5206\u4eab\u6280\u80fd",
+  "Unshared": "\u5df2\u53d6\u6d88\u5206\u4eab",
+  "Users": "\u7528\u6237"
 }

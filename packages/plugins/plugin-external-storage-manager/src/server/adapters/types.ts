@@ -45,6 +45,27 @@ export interface ListOptions {
   type?: 'file' | 'directory';
 }
 
+/**
+ * Byte-range options for partial downloads (HTTP Range support).
+ * Both bounds are inclusive and expressed in bytes, mirroring the
+ * `Range: bytes=start-end` header semantics.
+ */
+export interface RangeOptions {
+  start: number;
+  end?: number;
+}
+
+export interface GetStreamResult {
+  stream: Readable;
+  contentType?: string;
+  size?: number;
+  /**
+   * Present when the request was served partially (HTTP 206).
+   * Format per RFC 7233, e.g. "bytes 0-99/1234" or "bytes 0-99/*".
+   */
+  contentRange?: string;
+}
+
 export interface ListResult {
   /**
    * The requested page. Implementations apply ListOptions.offset and
@@ -79,8 +100,10 @@ export interface IStorageAdapter {
   /**
    * Get a readable stream for downloading a file.
    * The stream should be piped directly to the HTTP response.
+   * When `range` is provided, only the requested byte range is streamed and
+   * `contentRange` is returned so the caller can emit a 206 response.
    */
-  getStream(remotePath: string): Promise<{ stream: Readable; contentType?: string; size?: number }>;
+  getStream(remotePath: string, range?: RangeOptions): Promise<GetStreamResult>;
 
   /**
    * Upload a file from a readable stream.

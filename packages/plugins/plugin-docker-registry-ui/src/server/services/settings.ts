@@ -29,6 +29,8 @@ const DEFAULTS: Omit<
   maxTransferSizeMb: 4096,
   uploadChunkSizeMb: 4,
   transferTimeoutMs: 600000,
+  maxDownloadSpeedKbps: 0,
+  maxUploadSpeedKbps: 0,
 };
 
 type SettingsRow = Record<string, unknown> & { id?: number };
@@ -137,6 +139,8 @@ function safeSettings(row: SettingsRow): SafeRegistrySettings {
     maxTransferSizeMb: numberValue(row.maxTransferSizeMb, DEFAULTS.maxTransferSizeMb, 1, 102400),
     uploadChunkSizeMb: numberValue(row.uploadChunkSizeMb, DEFAULTS.uploadChunkSizeMb, 1, 64),
     transferTimeoutMs: numberValue(row.transferTimeoutMs, DEFAULTS.transferTimeoutMs, 10000, 3600000),
+    maxDownloadSpeedKbps: numberValue(row.maxDownloadSpeedKbps, DEFAULTS.maxDownloadSpeedKbps, 0, 1000000),
+    maxUploadSpeedKbps: numberValue(row.maxUploadSpeedKbps, DEFAULTS.maxUploadSpeedKbps, 0, 1000000),
     hasPassword: Boolean(row.passwordCiphertext),
     hasBearerToken: Boolean(row.bearerTokenCiphertext),
     hasClientPrivateKey: Boolean(row.clientPrivateKeyCiphertext),
@@ -190,6 +194,8 @@ function mergeSettings(previous: SafeRegistrySettings, values: RegistrySettingsI
     maxTransferSizeMb: numberValue(values.maxTransferSizeMb, previous.maxTransferSizeMb, 1, 102400),
     uploadChunkSizeMb: numberValue(values.uploadChunkSizeMb, previous.uploadChunkSizeMb, 1, 64),
     transferTimeoutMs: numberValue(values.transferTimeoutMs, previous.transferTimeoutMs, 10000, 3600000),
+    maxDownloadSpeedKbps: numberValue(values.maxDownloadSpeedKbps, previous.maxDownloadSpeedKbps, 0, 1000000),
+    maxUploadSpeedKbps: numberValue(values.maxUploadSpeedKbps, previous.maxUploadSpeedKbps, 0, 1000000),
   };
 }
 
@@ -253,6 +259,8 @@ export async function updateRegistrySettings(ctx: Context): Promise<SafeRegistry
     maxTransferSizeMb: next.maxTransferSizeMb,
     uploadChunkSizeMb: next.uploadChunkSizeMb,
     transferTimeoutMs: next.transferTimeoutMs,
+    maxDownloadSpeedKbps: next.maxDownloadSpeedKbps,
+    maxUploadSpeedKbps: next.maxUploadSpeedKbps,
   };
   const encryptor = appEncryptor(ctx);
   const secretUpdates: Array<[keyof RegistrySettingsInput, string, keyof RegistrySettingsInput]> = [

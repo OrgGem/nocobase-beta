@@ -47,11 +47,32 @@ export class RegistryRequestError extends Error {
 }
 
 const tokenCache = new Map<string, TokenCacheEntry>();
+const MAX_TOKEN_CACHE_ENTRIES = 500;
 const MAX_REDIRECTS = 5;
 const MAX_SEARCH_PAGES = 1000;
 
 function encodeRepository(repository: string): string {
   return repository.split('/').map(encodeURIComponent).join('/');
+}
+
+function setTokenCacheEntry(key: string, entry: TokenCacheEntry, now: number): void {
+  while (tokenCache.size >= MAX_TOKEN_CACHE_ENTRIES) {
+    let oldestKey = '';
+    let oldestExpiresAt = Number.POSITIVE_INFINITY;
+    for (const [candidateKey, candidate] of tokenCache) {
+      if (candidate.expiresAt < oldestExpiresAt) {
+        oldestKey = candidateKey;
+        oldestExpiresAt = candidate.expiresAt;
+      }
+    }
+    if (!oldestKey) {
+      tokenCache.clear();
+      break;
+    }
+    tokenCache.delete(oldestKey);
+  }
+  if (entry.expiresAt <= now) return;
+  tokenCache.set(key, entry);
 }
 
 function toHeaders(headers: http.IncomingHttpHeaders): Record<string, string> {
@@ -282,7 +303,10 @@ export class RegistryClient {
 
   private async bearerToken(challenge: Record<string, string>): Promise<string | undefined> {
     const scope = challenge.scope ?? '';
-    const cacheKey = `${challenge.realm}|${challenge.service ?? ''}|${scope}|${this.settings.username}`;
+    const registryOrigin = this.settings.registryUrl ? new URL(this.settings.registryUrl).origin : '';
+    const cacheKey = `${registryOrigin}|${challenge.realm}|${challenge.service ?? ''}|${scope}|${
+      this.settings.username
+    }`;
     const cached = tokenCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now() + 15000) return cached.token;
     const endpoint = new URL(challenge.realm);
@@ -303,7 +327,8 @@ export class RegistryClient {
       (payload as { token?: unknown; access_token?: unknown }).access_token;
     if (typeof token !== 'string' || !token) return undefined;
     const expiresIn = Number((payload as { expires_in?: unknown }).expires_in ?? 60);
-    tokenCache.set(cacheKey, { token, expiresAt: Date.now() + Math.max(60, expiresIn) * 1000 });
+    const now = Date.now();
+    setTokenCacheEntry(cacheKey, { token, expiresAt: now + Math.max(60, expiresIn) * 1000 }, now);
     return token;
   }
 

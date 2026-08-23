@@ -27,5 +27,7 @@ export default defineCollection({
     { name: 'maxTransferSizeMb', type: 'integer', defaultValue: 4096 },
     { name: 'uploadChunkSizeMb', type: 'integer', defaultValue: 4 },
     { name: 'transferTimeoutMs', type: 'integer', defaultValue: 600000 },
+    { name: 'maxDownloadSpeedKbps', type: 'integer', defaultValue: 0 },
+    { name: 'maxUploadSpeedKbps', type: 'integer', defaultValue: 0 },
   ],
 });

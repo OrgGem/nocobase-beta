@@ -10,6 +10,7 @@
 import type SftpClient from 'ssh2-sftp-client';
 import { Readable } from 'stream';
 import { sftpPoolManager } from './sftp-pool-manager';
+import type { RangeOptions } from './adapters/types';
 
 export interface SftpConfig {
   id: number | string;
@@ -77,16 +78,16 @@ export class SftpConnectionManager {
   }
 
   async unregisterConfig(configId: string | number) {
-    const config = this.configs.get(configId);
-    this.configs.delete(configId);
+    const config = this.findConfig(configId);
     if (config) {
+      this.configs.delete(config.id);
       await sftpPoolManager.closePool(config);
     }
   }
 
-  private getConfigOptions(configId: string | number) {
+  private findConfig(configId: string | number): SftpConfig | undefined {
     if (configId === undefined || configId === null) {
-      throw new Error(`[sftp-private] Invalid config ID: ${configId}`);
+      return undefined;
     }
     let config = this.configs.get(configId);
     if (!config) {
@@ -107,6 +108,11 @@ export class SftpConnectionManager {
         }
       }
     }
+    return config;
+  }
+
+  private getConfigOptions(configId: string | number) {
+    const config = this.findConfig(configId);
     if (!config) {
       throw new Error(`[sftp-private] No config found for ID: ${configId}`);
     }
@@ -144,7 +150,7 @@ export class SftpConnectionManager {
         .map((item) => ({
           name: item.name,
           path: remotePath.replace(/\/$/, '') + '/' + item.name,
-          type: item.type === 'd' ? 'directory' as const : item.type === 'l' ? 'link' as const : 'file' as const,
+          type: item.type === 'd' ? ('directory' as const) : item.type === 'l' ? ('link' as const) : ('file' as const),
           size: item.size,
           modifyTime: item.modifyTime,
           accessTime: item.accessTime,
@@ -180,9 +186,11 @@ export class SftpConnectionManager {
   }
 
   /**
-   * Get a readable stream for a remote file
+   * Get a readable stream for a remote file.
+   * When `range` is provided only the requested byte window is streamed
+   * (inclusive bounds), enabling HTTP Range / media seeking support.
    */
-  async getFileStream(configId: string | number, remotePath: string): Promise<Readable> {
+  async getFileStream(configId: string | number, remotePath: string, range?: RangeOptions): Promise<Readable> {
     const { client, release, destroy } = await sftpPoolManager.acquire(this.getConfigOptions(configId));
     const sftp = (client as any).sftp;
     if (!sftp) {
@@ -192,7 +200,14 @@ export class SftpConnectionManager {
 
     return new Promise<Readable>((resolve, reject) => {
       try {
-        const readStream = sftp.createReadStream(remotePath);
+        const readOptions: Record<string, unknown> = {};
+        if (range) {
+          readOptions.start = range.start;
+          if (range.end !== undefined) {
+            readOptions.end = range.end;
+          }
+        }
+        const readStream = sftp.createReadStream(remotePath, readOptions);
         let released = false;
         const cleanup = () => {
           if (!released) {

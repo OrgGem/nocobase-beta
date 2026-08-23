@@ -15,6 +15,7 @@ export interface RegistryRepository {
     filterByTk?: string | number;
     transaction?: unknown;
   }): Promise<unknown>;
+  count(options?: { filter?: Record<string, unknown> }): Promise<number>;
 }
 
 export interface RegistryModelStatic {

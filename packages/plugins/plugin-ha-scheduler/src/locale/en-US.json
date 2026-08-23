@@ -1,0 +1,6 @@
+{
+  "ha-scheduler": {
+    "pluginName": "HA Scheduler",
+    "pluginDescription": "Coordinates NocoBase cron jobs across HA nodes with distributed locks."
+  }
+}

@@ -199,8 +199,8 @@
   "Private Registry access": "Private Registry access",
   "Download a Docker save tar from this page, then load it into the local Docker daemon.": "Download a Docker save tar from this page, then load it into the local Docker daemon.",
   "Private Docker network": "Private Docker network",
-  "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.": "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host."
-  ,"Destination repository (optional)": "Destination repository (optional)",
+  "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.": "Run NocoBase and the Registry on the same private Docker network. Do not publish Registry port 5000 to the host.",
+  "Destination repository (optional)": "Destination repository (optional)",
   "Destination tag (optional)": "Destination tag (optional)",
   "team/image (auto-detected)": "team/image (auto-detected)",
   "latest (auto-detected)": "latest (auto-detected)",
@@ -211,14 +211,17 @@
   "Detected archive references: {{references}}": "Detected archive references: {{references}}",
   "Archive has no unambiguous repository and tag; enter them manually.": "Archive has no unambiguous repository and tag; enter them manually.",
   "Image uploaded successfully to {{repository}}:{{tag}}": "Image uploaded successfully to {{repository}}:{{tag}}",
-  "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.": "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests."
-  ,"Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.": "Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index."
-  ,"Archive contains multiple repository references. Choose one manually.": "Archive contains multiple repository references. Choose one manually.",
+  "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.": "Use Upload image on the Registry page to import either a Docker save tar or an OCI image-layout tar. Leave destination repository and tag blank to detect them from archive metadata. Manual values override detected values. Archives with multiple references require an explicit choice. The server verifies paths, sizes and SHA-256 digests before pushing blobs and manifests.",
+  "Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.": "Each upload accepts one root image. Multi-platform images remain supported when represented by one root OCI index.",
+  "Archive contains multiple repository references. Choose one manually.": "Archive contains multiple repository references. Choose one manually.",
   "Archive contains multiple tag references. Choose one manually.": "Archive contains multiple tag references. Choose one manually.",
   "Archive does not contain a destination repository. Enter one manually.": "Archive does not contain a destination repository. Enter one manually.",
   "Archive does not contain a destination tag. Enter one manually.": "Archive does not contain a destination tag. Enter one manually.",
   "Docker archive contains multiple images. Upload one image archive at a time.": "Docker archive contains multiple images. Upload one image archive at a time.",
   "OCI archive contains multiple root images. Upload one image archive at a time.": "OCI archive contains multiple root images. Upload one image archive at a time.",
   "A valid repository name is required": "A valid repository name is required",
-  "A valid tag is required": "A valid tag is required"
+  "A valid tag is required": "A valid tag is required",
+  "Maximum download speed (kbps)": "Maximum download speed (kbps)",
+  "Maximum upload speed (kbps)": "Maximum upload speed (kbps)",
+  "0 means unlimited bandwidth.": "0 means unlimited bandwidth."
 }
