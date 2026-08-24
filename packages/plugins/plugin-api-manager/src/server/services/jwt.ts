@@ -16,6 +16,10 @@ export interface JwtSignInput {
   issuer?: string;
   audience?: string;
   expiresInSec: number;
+  /** Optional key id written into the JOSE header for key rotation. */
+  keyId?: string;
+  /** Optional "not before" claim, relative seconds from now. */
+  notBeforeSec?: number;
 }
 
 export interface JwtVerifyInput {
@@ -27,6 +31,8 @@ export interface JwtVerifyInput {
   publicKeyPem?: string;
   issuer?: string;
   audience?: string;
+  /** When set, the token's kid header must match exactly. */
+  expectedKeyId?: string;
 }
 
 function base64UrlEncode(data: Buffer): string {
@@ -56,12 +62,14 @@ function signData(algorithm: JwtAlgorithm, signingInput: string, secret?: string
  */
 export function signJwt(input: JwtSignInput): string {
   const nowSec = Math.floor(Date.now() / 1000);
-  const header = { alg: input.algorithm, typ: 'JWT' };
+  const header: Record<string, unknown> = { alg: input.algorithm, typ: 'JWT' };
+  if (input.keyId) header.kid = input.keyId;
   const payload: JwtClaims = {
     ...(input.claims ?? {}),
     iat: nowSec,
     exp: nowSec + input.expiresInSec,
   };
+  if (input.notBeforeSec != null && input.notBeforeSec > 0) payload.nbf = nowSec + input.notBeforeSec;
   if (input.issuer) payload.iss = input.issuer;
   if (input.audience) payload.aud = input.audience;
 
@@ -82,10 +90,10 @@ export function verifyJwt(input: JwtVerifyInput): JwtClaims {
   }
   const [encodedHeader, encodedPayload, signature] = parts;
 
-  let header: { alg?: unknown };
+  let header: { alg?: unknown; kid?: unknown };
   let payload: JwtClaims;
   try {
-    header = JSON.parse(base64UrlDecode(encodedHeader).toString('utf8')) as { alg?: unknown };
+    header = JSON.parse(base64UrlDecode(encodedHeader).toString('utf8')) as { alg?: unknown; kid?: unknown };
     payload = JSON.parse(base64UrlDecode(encodedPayload).toString('utf8')) as JwtClaims;
   } catch {
     throw new Error('Malformed JWT');
@@ -94,6 +102,10 @@ export function verifyJwt(input: JwtVerifyInput): JwtClaims {
   const alg = header.alg;
   if (typeof alg !== 'string' || !input.algorithms.includes(alg as JwtAlgorithm)) {
     throw new Error(`JWT algorithm "${String(alg)}" is not allowed`);
+  }
+
+  if (input.expectedKeyId != null && header.kid !== input.expectedKeyId) {
+    throw new Error('JWT key id mismatch');
   }
 
   const signingInput = `${encodedHeader}.${encodedPayload}`;
@@ -127,6 +139,13 @@ export function verifyJwt(input: JwtVerifyInput): JwtClaims {
   }
   if (exp < nowSec) {
     throw new Error('JWT has expired');
+  }
+  const nbf = payload.nbf;
+  if (nbf != null && (typeof nbf !== 'number' || !Number.isFinite(nbf))) {
+    throw new Error('JWT has an invalid nbf claim');
+  }
+  if (typeof nbf === 'number' && nbf > nowSec) {
+    throw new Error('JWT is not yet valid');
   }
   if (input.issuer && payload.iss !== input.issuer) {
     throw new Error('JWT issuer mismatch');

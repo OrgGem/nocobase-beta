@@ -46,6 +46,27 @@ describe('isIpAllowed', () => {
     expect(isIpAllowed('10.0.0.2', ['  ', ''])).toBe(true);
   });
 
+  it('rejects IPv4 octets with leading zeros (invalid addresses)', () => {
+    // 010.0.0.1 is not a valid IPv4 address and must never alias 10.0.0.1.
+    expect(isIpAllowed('010.0.0.1', ['010.0.0.1'])).toBe(false);
+    expect(isIpAllowed('10.0.0.1', ['010.0.0.1'])).toBe(false);
+    expect(isIpAllowed('10.0.0.1', ['10.0.0.1'])).toBe(true);
+    expect(isIpAllowed('00.0.0.1', ['0.0.0.1'])).toBe(false);
+  });
+
+  it('rejects malformed CIDR entries safely (deny)', () => {
+    expect(isIpAllowed('1.2.3.4', ['1.2.3.4/24/evil'])).toBe(false);
+    expect(isIpAllowed('1.2.3.4', ['1.2.3.4/33'])).toBe(false);
+    expect(isIpAllowed('1.2.3.4', ['1.2.3.4/-1'])).toBe(false);
+    expect(isIpAllowed('1.2.3.4', ['/24'])).toBe(false);
+    expect(isIpAllowed('1.2.3.4', ['1.2.3.4/'])).toBe(false);
+  });
+
+  it('handles a /0 CIDR as allowing the whole range', () => {
+    expect(isIpAllowed('10.0.0.1', ['10.0.0.1/0'])).toBe(true);
+    expect(isIpAllowed('192.168.1.1', ['10.0.0.1/0'])).toBe(true);
+  });
+
   it('strips IPv6 zone ids', () => {
     expect(isIpAllowed('fe80::1%eth0', ['fe80::1'])).toBe(true);
   });

@@ -20,6 +20,13 @@ function buildHs256Token(payload: Record<string, unknown>, secret: string = HS_S
   return `${signingInput}.${signature}`;
 }
 
+function decodeHeader(token: string): Record<string, unknown> {
+  const [encodedHeader] = token.split('.');
+  const padded = encodedHeader.replace(/-/g, '+').replace(/_/g, '/');
+  const pad = padded.length % 4 === 0 ? '' : '='.repeat(4 - (padded.length % 4));
+  return JSON.parse(Buffer.from(padded + pad, 'base64').toString('utf8')) as Record<string, unknown>;
+}
+
 describe('jwt', () => {
   it('signs and verifies an RS256 token roundtrip', () => {
     const token = signJwt({
@@ -75,6 +82,35 @@ describe('jwt', () => {
       .replace(/=+$/, '');
     const forged = `${header}.${forgedPayload}.${signature}`;
     expect(() => verifyJwt({ token: forged, algorithms: ['HS256'], secret: HS_SECRET })).toThrow(/signature mismatch/);
+  });
+
+  it('rejects a token whose nbf is in the future', () => {
+    const token = signJwt({ algorithm: 'HS256', secret: HS_SECRET, expiresInSec: 60, notBeforeSec: 3600 });
+    expect(() => verifyJwt({ token, algorithms: ['HS256'], secret: HS_SECRET })).toThrow(/not yet valid/);
+  });
+
+  it('accepts a token whose nbf is in the past', () => {
+    const token = signJwt({ algorithm: 'HS256', secret: HS_SECRET, expiresInSec: 60, notBeforeSec: -10 });
+    expect(() => verifyJwt({ token, algorithms: ['HS256'], secret: HS_SECRET })).not.toThrow();
+  });
+
+  it('rejects a token with a malformed nbf claim', () => {
+    const token = buildHs256Token({ exp: Math.floor(Date.now() / 1000) + 300, nbf: 'soon' });
+    expect(() => verifyJwt({ token, algorithms: ['HS256'], secret: HS_SECRET })).toThrow(/invalid nbf/);
+  });
+
+  it('writes kid into the JOSE header and verifies it', () => {
+    const token = signJwt({ algorithm: 'HS256', secret: HS_SECRET, expiresInSec: 60, keyId: 'key-1' });
+    expect(decodeHeader(token).kid).toBe('key-1');
+    expect(() => verifyJwt({ token, algorithms: ['HS256'], secret: HS_SECRET, expectedKeyId: 'key-1' })).not.toThrow();
+    expect(() => verifyJwt({ token, algorithms: ['HS256'], secret: HS_SECRET, expectedKeyId: 'key-2' })).toThrow(
+      /key id mismatch/,
+    );
+  });
+
+  it('accepts tokens without a kid when none is expected', () => {
+    const token = signJwt({ algorithm: 'HS256', secret: HS_SECRET, expiresInSec: 60 });
+    expect(() => verifyJwt({ token, algorithms: ['HS256'], secret: HS_SECRET })).not.toThrow();
   });
 
   it('rejects a wrong issuer', () => {

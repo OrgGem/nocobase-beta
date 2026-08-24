@@ -48,5 +48,11 @@
   "Optional sub-path restriction (empty = full access)": "Optional sub-path restriction (empty = full access)",
   "Select permissions for this role on this directory": "Select permissions for this role on this directory",
   "Settings": "Settings",
-  "Browse Files": "Browse Files"
+  "Browse Files": "Browse Files",
+  "Failed to load external storage permissions": "Failed to load external storage permissions",
+  "Permissions updated": "Permissions updated",
+  "Failed to update permissions": "Failed to update permissions",
+  "Read (View & Download)": "Read (View & Download)",
+  "Write (Upload & Mkdir)": "Write (Upload & Mkdir)",
+  "Configure access permissions for each external storage directory for the role": "Configure access permissions for each external storage directory for the role"
 }

@@ -128,3 +128,93 @@ describe('MarkdownSkillService.getSkillDetail', () => {
     });
   });
 });
+
+describe('MarkdownSkillService access control', () => {
+  function sharedSkill(overrides: Record<string, unknown> = {}): RegistryModel {
+    return model({
+      id: 'skill-1',
+      ownerId: 'user-1',
+      content: 'Body',
+      visibility: 'shared',
+      packageId: 'package-1',
+      ...overrides,
+    });
+  }
+
+  function accessService(skill: RegistryModel, shareRecord: RegistryModel | null = null) {
+    const markdownSkills = repository({ findOne: vi.fn().mockResolvedValue(skill) });
+    const shares = repository({ findOne: vi.fn().mockResolvedValue(shareRecord) });
+    const versions = repository();
+    return {
+      service: createService({
+        skillRegistryMarkdownSkills: markdownSkills,
+        skillRegistryPackageShares: shares,
+        skillRegistryVersions: versions,
+      }),
+      shares,
+    };
+  }
+
+  it('allows the owner to read the skill', async () => {
+    const { service } = accessService(sharedSkill());
+
+    const skill = await service.getSkill('skill-1', 'user-1');
+
+    expect(skill.get('id')).toBe('skill-1');
+  });
+
+  it('allows a shared user with a package share record', async () => {
+    const { service, shares } = accessService(sharedSkill(), model({ id: 'share-1' }));
+
+    const skill = await service.getSkill('skill-1', 'user-2');
+
+    expect(skill.get('id')).toBe('skill-1');
+    expect(shares.findOne).toHaveBeenCalledWith({ filter: { packageId: 'package-1', userId: 'user-2' } });
+  });
+
+  it('denies a shared user without a package share record', async () => {
+    const { service } = accessService(sharedSkill(), null);
+
+    await expect(service.getSkill('skill-1', 'user-2')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      status: 403,
+    });
+  });
+
+  it('denies access to private skills even when a share record exists', async () => {
+    const { service } = accessService(sharedSkill({ visibility: 'private' }), model({ id: 'share-1' }));
+
+    await expect(service.getSkill('skill-1', 'user-2')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      status: 403,
+    });
+  });
+
+  it('denies access to unpublished shared skills without a package binding', async () => {
+    const { service } = accessService(sharedSkill({ packageId: null }), model({ id: 'share-1' }));
+
+    await expect(service.getSkill('skill-1', 'user-2')).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      status: 403,
+    });
+  });
+
+  it('skips the access check when no user id is provided', async () => {
+    const { service, shares } = accessService(sharedSkill());
+
+    const skill = await service.getSkill('skill-1');
+
+    expect(skill.get('id')).toBe('skill-1');
+    expect(shares.findOne).not.toHaveBeenCalled();
+  });
+
+  it('returns skill detail to a shared user', async () => {
+    const { service } = accessService(sharedSkill(), model({ id: 'share-1' }));
+
+    const detail = await service.getSkillDetail('skill-1', 'user-2');
+
+    expect(detail.skill.get('id')).toBe('skill-1');
+    expect(detail.markdown.body).toBe('Body');
+    expect(detail.versions).toEqual([]);
+  });
+});

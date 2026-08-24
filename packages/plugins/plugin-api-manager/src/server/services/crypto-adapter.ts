@@ -31,12 +31,11 @@ function routeField(route: RouteLike, name: string): string | undefined {
 }
 
 /**
- * The Crypto Toolkit plugin is the encryption backend for the gateway. All
- * payload crypto (AES-256-GCM NCB1, OpenPGP, RSA-OAEP NCR1) and key-material
- * resolution happens there; this adapter maps route records onto the toolkit's
- * public service API and translates errors into gateway error codes.
+ * The shape of the Crypto Toolkit public gateway API this plugin consumes.
+ * Declared structurally so the toolkit can evolve independently; the runtime
+ * check below still guards against a missing/incompatible plugin.
  */
-function getCryptoToolkit(app: Application): {
+export interface CryptoToolkitGatewayApi {
   encryptPayload: (options: {
     mode: EncryptionMode;
     wireFormat: WireFormat;
@@ -58,16 +57,19 @@ function getCryptoToolkit(app: Application): {
     pgpVerifyKeyName?: string;
     rsaDecryptKeyName?: string;
   }) => Promise<DecryptedPayload>;
-  resolveAesSecret: (route: RouteLike) => Promise<AesSecret>;
-  resolveOwnPrivateKeyMaterial: (keyRecord: Model) => Promise<{ material: string; passphrase?: string }>;
-} {
+  resolveAesSecret?: (route: RouteLike) => Promise<AesSecret>;
+  resolveOwnPrivateKeyMaterial?: (keyRecord: Model) => Promise<{ material: string; passphrase?: string }>;
+}
+
+/**
+ * The Crypto Toolkit plugin is the encryption backend for the gateway. All
+ * payload crypto (AES-256-GCM NCB1, OpenPGP, RSA-OAEP NCR1) and key-material
+ * resolution happens there; this adapter maps route records onto the toolkit's
+ * public service API and translates errors into gateway error codes.
+ */
+function getCryptoToolkit(app: Application): CryptoToolkitGatewayApi {
   const toolkit = (app.pm?.get?.('crypto-toolkit') ?? app.pm?.get?.('plugin-crypto-toolkit')) as
-    | {
-        encryptPayload?: (options: never) => Promise<EncryptedPayload>;
-        decryptPayload?: (options: never) => Promise<DecryptedPayload>;
-        resolveAesSecret?: (route: RouteLike) => Promise<AesSecret>;
-        resolveOwnPrivateKeyMaterial?: (keyRecord: Model) => Promise<{ material: string; passphrase?: string }>;
-      }
+    | Partial<CryptoToolkitGatewayApi>
     | undefined;
   if (!toolkit?.encryptPayload || !toolkit?.decryptPayload) {
     throw new ApimError(
@@ -76,7 +78,7 @@ function getCryptoToolkit(app: Application): {
       500,
     );
   }
-  return toolkit as never;
+  return toolkit as CryptoToolkitGatewayApi;
 }
 
 export async function encryptPayload(

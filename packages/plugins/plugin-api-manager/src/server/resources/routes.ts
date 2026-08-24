@@ -4,10 +4,7 @@ import type { Handlers } from '@nocobase/resourcer';
 import { DEFAULT_TIMEOUT_MS } from '../../constants';
 import { decryptPayload, encryptPayload } from '../services/crypto-adapter';
 import { sha256Hex as sha256 } from '../services/hash';
-import { buildForwardHeaders, type StaticHeader } from '../services/header-rules';
-import { buildHmacHeaders } from '../services/hmac-signer';
-import { signJwt, type JwtAlgorithm } from '../services/jwt';
-import { resolveHmacSecret, resolveJwtSecret, resolveJwtSignPrivateKey } from '../services/jwt-keys';
+import { buildOutboundForwardRequest } from '../services/outbound-pipeline';
 import { forwardRequest } from '../services/proxy-engine';
 import { capPayload, writeRequestLog } from '../services/request-logger';
 
@@ -70,49 +67,19 @@ export function registerRoutesResource(app: Application): void {
       try {
         let outgoingBody = requestBuffer;
         let outgoingContentType = plaintextContentType;
-        if (mode !== 'none' && direction === 'outbound') {
-          const encrypted = await encryptPayload(app, route, requestBuffer, plaintextContentType);
-          outgoingBody = encrypted.body;
-          outgoingContentType = encrypted.contentType ?? plaintextContentType;
-        }
-
-        const headers = buildForwardHeaders({
-          incoming: {},
-          staticHeaders: (route.get('staticHeaders') as StaticHeader[] | undefined) ?? [],
-          contentType: outgoingContentType,
-        });
-
-        // Mirror the gateway's outbound signing pipeline so the test request is
-        // authenticated the same way real traffic is.
-        if (direction === 'outbound' && route.get('hmacSignEnabled')) {
-          const hmacSecret = await resolveHmacSecret(app, route);
-          const targetUrl = new URL(String(route.get('targetUrl') ?? ''));
-          const hmacHeaders = buildHmacHeaders({
-            secret: hmacSecret,
-            method: String(route.get('method') ?? 'POST'),
-            path: targetUrl.pathname + targetUrl.search,
-            body: outgoingBody,
+        let headers: Record<string, string> = {};
+        if (direction === 'outbound') {
+          // Shared with the gateway router so the test request is built by
+          // the exact same outbound encryption + HMAC + JWT pipeline.
+          const forward = await buildOutboundForwardRequest(app, route, {
+            body: requestBuffer,
+            contentType: plaintextContentType,
+            forwardUrl: String(route.get('targetUrl') ?? ''),
+            staticHeaders: (route.get('staticHeaders') as { name: string; value: string }[] | undefined) ?? [],
           });
-          Object.assign(headers, hmacHeaders);
-        }
-        if (direction === 'outbound' && route.get('jwtSignEnabled')) {
-          const algorithm = String(route.get('jwtSignAlgorithm') ?? 'RS256') as JwtAlgorithm;
-          let secret: string | undefined;
-          let privateKeyPem: string | undefined;
-          if (algorithm === 'HS256') {
-            secret = await resolveJwtSecret(app, route);
-          } else {
-            privateKeyPem = await resolveJwtSignPrivateKey(app, route);
-          }
-          const token = signJwt({
-            algorithm,
-            secret,
-            privateKeyPem,
-            issuer: (route.get('jwtIssuer') as string | undefined) || undefined,
-            audience: (route.get('jwtAudience') as string | undefined) || undefined,
-            expiresInSec: Number(route.get('jwtExpiresInSec') ?? 300),
-          });
-          headers.Authorization = `Bearer ${token}`;
+          outgoingBody = forward.body;
+          outgoingContentType = forward.contentType;
+          headers = forward.headers;
         }
 
         const result = await forwardRequest({

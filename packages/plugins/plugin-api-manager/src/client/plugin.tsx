@@ -16,6 +16,13 @@ export class PluginApiManagerClient extends Plugin {
       componentLoader: () => import('../client-v2/components/GuidePage'),
     });
 
+    this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.settings`, {
+      title: this.t('Runtime Settings'),
+      aclSnippet: APIM_ACL,
+      sort: -10,
+      componentLoader: () => import('../client-v2/components/SettingsPage'),
+    });
+
     this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.routes`, {
       title: this.t('Routes'),
       aclSnippet: APIM_ACL,

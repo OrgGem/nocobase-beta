@@ -84,13 +84,17 @@ export function verifyHmacHeaders(input: HmacVerifyInput): void {
 }
 
 /**
- * In-memory nonce cache with TTL pruning and a bounded size.
+ * In-memory nonce cache with lazy TTL eviction and a bounded size.
+ *
+ * Lookups only delete the entry they touch (O(1) amortized), so the HMAC hot
+ * path never scans the whole map. A full sweep of expired entries only runs
+ * when the cache is at capacity and a new nonce needs room, keeping memory
+ * bounded without per-request cost.
  *
  * NOTE: This cache is process-local. In multi-instance deployments each pod
  * maintains its own nonce set, so replay protection only applies within a
  * single instance. Use a shared store (e.g. Redis) when horizontal scaling
- * is required. Under sustained high load the bounded size may evict valid
- * nonces before their TTL expires; increase maxSize if this becomes an issue.
+ * is required.
  */
 export class NonceCache {
   private entries = new Map<string, number>();
@@ -101,7 +105,6 @@ export class NonceCache {
   }
 
   has(nonce: string): boolean {
-    this.prune();
     const expiry = this.entries.get(nonce);
     if (expiry == null) return false;
     if (expiry < Date.now()) {
@@ -112,15 +115,23 @@ export class NonceCache {
   }
 
   add(nonce: string, ttlSec: number): void {
-    this.prune();
     if (this.entries.size >= this.maxSize) {
+      this.sweepExpired();
+    }
+    if (this.entries.size >= this.maxSize) {
+      // Still full after sweeping: drop the oldest insertion to make room.
       const oldest = this.entries.keys().next().value;
       if (oldest != null) this.entries.delete(oldest);
     }
     this.entries.set(nonce, Date.now() + ttlSec * 1000);
   }
 
-  private prune(): void {
+  /** Size of the live map (used by tests and diagnostics). */
+  get size(): number {
+    return this.entries.size;
+  }
+
+  private sweepExpired(): void {
     const now = Date.now();
     for (const [nonce, expiry] of this.entries) {
       if (expiry < now) this.entries.delete(nonce);

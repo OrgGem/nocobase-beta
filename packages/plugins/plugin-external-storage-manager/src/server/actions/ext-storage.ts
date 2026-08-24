@@ -15,11 +15,7 @@ import { koaMulter as multer } from '@nocobase/utils';
 import { STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
 import { buildContentDisposition } from '../content-disposition';
 import { TtlCache } from '../list-cache';
-import {
-  buildSignedDownloadUrl,
-  getDefaultUrlTtlSeconds,
-  verifyDownloadSignature,
-} from '../url-signing';
+import { verifyDownloadSignature } from '../url-signing';
 
 export interface ExtStorageActionsOptions {
   /**
@@ -109,10 +105,7 @@ function safeUploadFilename(value: string) {
  * Suffix ranges ("bytes=-500") become { start: size-500 } once the total
  * size is known; open-ended ranges ("bytes=100-") keep end undefined.
  */
-export function parseRangeHeader(
-  rangeHeader: string | undefined,
-  totalSize?: number,
-): RangeOptions | null {
+export function parseRangeHeader(rangeHeader: string | undefined, totalSize?: number): RangeOptions | null {
   if (!rangeHeader || typeof rangeHeader !== 'string') {
     return null;
   }
@@ -224,11 +217,69 @@ function normalizeEntryPath(rootPath: string, entry: FileEntry): FileEntry {
 }
 
 function getCurrentRoles(ctx: any): string[] {
-  return Array.isArray(ctx.state?.currentRoles) ? ctx.state.currentRoles : [];
+  if (Array.isArray(ctx.state?.currentRoles) && ctx.state.currentRoles.length) {
+    return ctx.state.currentRoles;
+  }
+  if (typeof ctx.state?.currentRole === 'string' && ctx.state.currentRole) {
+    return [ctx.state.currentRole];
+  }
+  return [];
 }
 
 function getRecordValue(record: any, key: string) {
   return record?.get ? record.get(key) : record?.[key];
+}
+
+/**
+ * Parse a NocoBase data scope into a canonical directory id list.
+ *
+ * Returns `null` when the scope uses operators/expression structures that
+ * cannot be safely represented as the simple `id $in [...]` list this plugin's
+ * permission UI manages (e.g. `$or`, `$ne`, template expressions). Returning
+ * `null` lets callers *refuse to overwrite* those complex scopes instead of
+ * silently replacing them.
+ */
+export function extractDirectoryIds(scope: any): number[] | null {
+  if (scope === null || scope === undefined) {
+    return [];
+  }
+
+  // Direct `{ id: { $in: [...] } }` or `{ id: 5 }`.
+  if (scope.id !== undefined) {
+    if (Array.isArray(scope.id.$in)) {
+      return scope.id.$in;
+    }
+    if (typeof scope.id === 'number' || typeof scope.id === 'string') {
+      return [scope.id];
+    }
+    return null;
+  }
+
+  if (Array.isArray(scope.$and)) {
+    if (scope.$and.length === 0) {
+      return [];
+    }
+    const ids: number[] = [];
+    for (const clause of scope.$and) {
+      const clauseIds = extractDirectoryIds(clause);
+      if (clauseIds === null) {
+        return null;
+      }
+      for (const id of clauseIds) {
+        if (!ids.includes(id)) {
+          ids.push(id);
+        }
+      }
+    }
+    return ids;
+  }
+
+  // Empty scope objects such as `{}` are representable as "no ids".
+  if (Object.keys(scope).length === 0) {
+    return [];
+  }
+
+  return null;
 }
 
 /**
@@ -313,8 +364,7 @@ export function createExtStorageActions(
   getAdapter: (directory: any) => Promise<IStorageAdapter>,
   options: ExtStorageActionsOptions = {},
 ) {
-  const listCache =
-    options.listCache ?? new TtlCache<FileEntry[]>({ ttlMs: getListCacheTtlMs(), maxEntries: 200 });
+  const listCache = options.listCache ?? new TtlCache<FileEntry[]>({ ttlMs: getListCacheTtlMs(), maxEntries: 200 });
 
   /** Drop cached listings for a directory after any mutation. */
   const invalidateDirectoryCache = (directory: any) => {
@@ -561,7 +611,11 @@ export function createExtStorageActions(
           mode: (ctx.action.params.mode === 'inline' ? 'inline' : 'attachment') as 'inline' | 'attachment',
           expires: Number(expiresParam),
         };
-        if (!Number.isFinite(payload.expires) || payload.expires <= Date.now()) {
+        if (!Number.isFinite(payload.expires)) {
+          ctx.throw(400, 'Invalid signed URL expiry');
+          return;
+        }
+        if (payload.expires <= Date.now()) {
           ctx.throw(403, 'Signed URL expired');
           return;
         }
@@ -569,6 +623,22 @@ export function createExtStorageActions(
           ctx.throw(403, 'Invalid signature');
           return;
         }
+
+        // Bind the lookup to the exact directory id covered by the signature.
+        // loadDirectoryRecord prefers filterByTk over directoryId, so if both
+        // are present and differ, a signed URL for directory A could otherwise
+        // be pointed at directory B by simply appending `filterByTk=B`.
+        const rawFilterByTk = ctx.action.params.filterByTk;
+        const rawDirectoryId = ctx.action.params.directoryId;
+        if (
+          rawFilterByTk !== undefined &&
+          rawDirectoryId !== undefined &&
+          String(rawFilterByTk) !== String(rawDirectoryId)
+        ) {
+          ctx.throw(403, 'Invalid signature');
+          return;
+        }
+
         const directory = await loadDirectoryRecord(ctx);
         if (!directory) return;
         result = { directory, subPath: payload.path };
@@ -601,10 +671,7 @@ export function createExtStorageActions(
           }
         }
 
-        const { stream, contentType, size, contentRange } = await adapter.getStream(
-          remotePath,
-          range ?? undefined,
-        );
+        const { stream, contentType, size, contentRange } = await adapter.getStream(remotePath, range ?? undefined);
 
         const filename = path.basename(subPath);
 
@@ -660,22 +727,21 @@ export function createExtStorageActions(
       const maxBytes = getMaxUploadBytes();
       const maxFiles = getMaxUploadFiles();
 
-      // Fast-fail on Content-Length before multer buffers anything to tmpdir.
-      const declaredLength = Number(ctx.request?.headers?.['content-length'] || 0);
-      if (declaredLength && declaredLength > maxBytes) {
-        ctx.throw(413, `Upload too large: content-length ${declaredLength} bytes exceeds the ${Math.floor(maxBytes / (1024 * 1024))}MB limit`);
-        return;
-      }
-
       if (!ctx.request?.is?.('multipart/*')) {
         if (!ctx.req || subPath === '/') {
           ctx.throw(400, 'Raw stream upload requires a file path');
           return;
         }
 
-        // Raw stream uploads are also bounded by the same size limit.
+        // Single-file raw stream uploads are bounded by the per-file limit.
+        const declaredLength = Number(ctx.request?.headers?.['content-length'] || 0);
         if (declaredLength && declaredLength > maxBytes) {
-          ctx.throw(413, `Upload too large: content-length ${declaredLength} bytes exceeds the ${Math.floor(maxBytes / (1024 * 1024))}MB limit`);
+          ctx.throw(
+            413,
+            `Upload too large: content-length ${declaredLength} bytes exceeds the ${Math.floor(
+              maxBytes / (1024 * 1024),
+            )}MB limit`,
+          );
           return;
         }
 
@@ -1060,24 +1126,22 @@ export function createExtStorageActions(
         appends: ['scope'],
       });
 
-      const result = { view: [], update: [], destroy: [] };
+      const result: { view: number[]; update: number[]; destroy: number[] } = {
+        view: [],
+        update: [],
+        destroy: [],
+      };
       for (const action of actions) {
         const actionData = action.toJSON ? action.toJSON() : action;
-        const actionName = actionData.name;
-        if (result[actionName]) {
-          const scopeRow = actionData.scope;
-          const scope = scopeRow?.scope || scopeRow; // handle both populated relation and raw json if legacy
-          try {
-            if (scope && scope.$and && scope.$and[0] && scope.$and[0].id) {
-              if (scope.$and[0].id.$in) {
-                result[actionName] = scope.$and[0].id.$in;
-              } else if (typeof scope.$and[0].id === 'number' || typeof scope.$and[0].id === 'string') {
-                result[actionName] = [scope.$and[0].id];
-              }
-            }
-          } catch (e) {
-            // Unrecognized scope structure, skip
-          }
+        const actionName = actionData.name as 'view' | 'update' | 'destroy';
+        if (!result[actionName]) {
+          continue;
+        }
+        const scopeRow = actionData.scope;
+        const scope = scopeRow?.scope || scopeRow; // handle both populated relation and raw json if legacy
+        const ids = extractDirectoryIds(scope);
+        if (ids !== null) {
+          result[actionName] = ids;
         }
       }
       ctx.body = result;
@@ -1126,6 +1190,17 @@ export function createExtStorageActions(
           if (action) {
             const actionData = action.toJSON ? action.toJSON() : action;
             const actionScope = actionData.scope;
+            const existingScope = actionScope?.scope ?? actionScope;
+
+            // Never overwrite a complex data scope this plugin did not author.
+            const existingIds = extractDirectoryIds(existingScope);
+            if (existingIds === null) {
+              ctx.logger?.warn?.(
+                `[ext-storage] Refusing to overwrite non-list data scope for role action ${actionName}`,
+              );
+              continue;
+            }
+
             const actionScopeId =
               getRecordValue(actionScope, 'id') || actionData.scopeId || getRecordValue(action, 'scopeId');
             // Update existing action

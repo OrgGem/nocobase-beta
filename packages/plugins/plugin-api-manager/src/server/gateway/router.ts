@@ -14,24 +14,21 @@ import { authenticateApiKey, type AuthResult } from './auth';
 import { getRawBodyBuffer } from './body';
 import { sha256Hex as sha256 } from '../services/hash';
 import { decryptPayload, encryptPayload } from '../services/crypto-adapter';
-import { ApimError } from '../services/errors';
 import { buildForwardHeaders, type StaticHeader } from '../services/header-rules';
-import { buildHmacHeaders, NonceCache, verifyHmacHeaders } from '../services/hmac-signer';
+import { buildOutboundForwardRequest } from '../services/outbound-pipeline';
+import { ApimError } from '../services/errors';
+import { NonceCache, verifyHmacHeaders } from '../services/hmac-signer';
 import { isIpAllowed } from '../services/ip-allowlist';
-import { signJwt, verifyJwt, type JwtAlgorithm } from '../services/jwt';
-import {
-  resolveHmacSecret,
-  resolveJwtSecret,
-  resolveJwtSignPrivateKey,
-  resolveJwtVerifyPublicKey,
-} from '../services/jwt-keys';
+import { verifyJwt, type JwtAlgorithm } from '../services/jwt';
+import { resolveHmacSecret, resolveJwtSecret, resolveJwtVerifyPublicKey } from '../services/jwt-keys';
 import { forwardRequest } from '../services/proxy-engine';
 import { FixedWindowRateLimiter } from '../services/rate-limiter';
+import { CapacityLimiter, type CapacityLease } from '../services/capacity-limiter';
+import { CircuitBreaker, circuitOpenError } from '../services/circuit-breaker';
+import { resolveGatewaySettings } from '../services/gateway-settings';
 import { capPayload, writeRequestLog } from '../services/request-logger';
 import { resolveGatewayRoute } from '../services/route-resolver';
-
 type GatewayContext = Context & { withoutDataWrapping?: boolean };
-
 function sniffContentType(body: Buffer): string {
   for (const byte of body) {
     if (byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d) continue;
@@ -41,13 +38,11 @@ function sniffContentType(body: Buffer): string {
   }
   return 'application/octet-stream';
 }
-
 function toNumber(value: unknown, fallback: number): number {
   if (value == null || value === '') return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
-
 function toApimError(error: unknown): ApimError {
   if (error instanceof ApimError) return error;
   const statusCode = (error as { statusCode?: unknown })?.statusCode;
@@ -57,7 +52,6 @@ function toApimError(error: unknown): ApimError {
   }
   return new ApimError(ERROR_CODES.UPSTREAM_ERROR, (error as Error)?.message ?? 'Internal gateway error', 502);
 }
-
 // Upstream error details (axios messages) can contain internal hostnames, DNS
 // errors, or URLs, so the gateway response carries a generic message and the
 // detail is only written to the server log and the request log.
@@ -65,11 +59,25 @@ const GENERIC_ERROR_MESSAGES: Partial<Record<string, string>> = {
   [ERROR_CODES.UPSTREAM_ERROR]: 'Upstream request failed',
   [ERROR_CODES.TIMEOUT]: 'Upstream request timed out',
 };
+export interface ApimRuntimeState {
+  capacityLimiter: CapacityLimiter;
+  circuitBreaker: CircuitBreaker;
+}
 
-export function createApimRouter(app: Application): Middleware {
+export function createApimRouter(app: Application, state?: ApimRuntimeState): Middleware {
   const nonceCache = new NonceCache();
   const rateLimiter = new FixedWindowRateLimiter();
-
+  const capacityLimiter =
+    state?.capacityLimiter ??
+    new CapacityLimiter({
+      maxConcurrentRequests: 50,
+      maxTotalBytes: 512 * 1024 * 1024,
+      maxRequestBytes: 0,
+      queueEnabled: true,
+      queueSize: 1000,
+      queueTimeoutMs: 30_000,
+    });
+  const circuitBreaker = state?.circuitBreaker ?? new CircuitBreaker();
   return async function apimRouter(ctx: GatewayContext, next) {
     const path = ctx.path;
     let direction: RouteDirection | null = null;
@@ -84,14 +92,13 @@ export function createApimRouter(app: Application): Middleware {
     if (!direction || !pathOrName) {
       return next();
     }
-
     ctx.withoutDataWrapping = true;
     const requestId = randomUUID();
     ctx.set('X-Request-Id', requestId);
-
     const startedAt = new Date();
     let route: Model | null = null;
     let auth: AuthResult | null = null;
+    let capacityLease: CapacityLease | null = null;
     let requestBody = Buffer.alloc(0);
     let responseBody = Buffer.alloc(0);
     let httpStatus = 500;
@@ -100,19 +107,29 @@ export function createApimRouter(app: Application): Middleware {
     let logStatus: 'ok' | 'rejected' | 'failed' = 'failed';
     let errorCode: string | null = null;
     let errorMessage: string | null = null;
-
+    let circuitKey = '';
+    let circuitOptions: Awaited<ReturnType<typeof resolveGatewaySettings>>['circuitBreaker'] | null = null;
     try {
       route = await resolveGatewayRoute(app.db, direction, pathOrName, ctx.method);
       const routeName = String(route.get('name') ?? '');
-
       // IP allowlist — checked before authentication.
       const ipAllowlist = (route.get('ipAllowlist') as string[] | undefined) ?? [];
       if (!isIpAllowed(ctx.ip, ipAllowlist)) {
         throw new ApimError(ERROR_CODES.IP_FORBIDDEN, `Client IP "${ctx.ip}" is not allowed for this route`, 403);
       }
-
       auth = await authenticateApiKey(app.db, ctx.get('x-api-key'), direction, routeName);
-
+      // Runtime settings: env > DB singleton row > built-in defaults. Cached for 5s.
+      const gatewaySettings = await resolveGatewaySettings(app);
+      capacityLimiter.updateOptions(gatewaySettings.capacity);
+      circuitOptions = gatewaySettings.circuitBreaker;
+      // Capacity guard — acquire before buffering the body so a burst of
+      // large concurrent uploads cannot exhaust process memory.
+      const estimatedRequestBytes = toNumber(ctx.get('content-length'), 0);
+      capacityLease = await capacityLimiter.acquire(estimatedRequestBytes);
+      const queuedMs = capacityLease.getWaitDecision().queuedMs ?? null;
+      if (queuedMs != null) {
+        ctx.set('X-APIM-Queued-Ms', String(queuedMs));
+      }
       // Rate limiting — keyed by API key + route.
       if (route.get('rateLimitEnabled')) {
         const max = toNumber(route.get('rateLimitMax'), 60);
@@ -123,10 +140,8 @@ export function createApimRouter(app: Application): Middleware {
           throw new ApimError(ERROR_CODES.RATE_LIMITED, 'Rate limit exceeded', 429);
         }
       }
-
       const maxBodyMb = Math.min(100, Math.max(1, toNumber(route.get('maxBodyMb'), DEFAULT_MAX_BODY_MB)));
       requestBody = await getRawBodyBuffer(ctx, maxBodyMb * 1024 * 1024);
-
       // The caller's query string is forwarded to the target and covered by
       // the HMAC canonical string (path + "?" + query).
       const querySuffix = ctx.querystring ? `?${ctx.querystring}` : '';
@@ -134,7 +149,7 @@ export function createApimRouter(app: Application): Middleware {
       const forwardUrl = ctx.querystring
         ? `${targetUrlRaw}${targetUrlRaw.includes('?') ? '&' : '?'}${ctx.querystring}`
         : targetUrlRaw;
-
+      circuitKey = forwardUrl;
       // Inbound HMAC verification — before decryption.
       if (direction === 'inbound' && route.get('hmacVerifyEnabled')) {
         const hmacSecret = await resolveHmacSecret(app, route);
@@ -152,7 +167,6 @@ export function createApimRouter(app: Application): Middleware {
           throw new ApimError(ERROR_CODES.HMAC_INVALID, (error as Error).message, 401);
         }
       }
-
       // Inbound JWT verification — Bearer token in Authorization header.
       if (direction === 'inbound' && route.get('jwtVerifyEnabled')) {
         const authorization = ctx.get('authorization');
@@ -187,67 +201,49 @@ export function createApimRouter(app: Application): Middleware {
           throw new ApimError(ERROR_CODES.JWT_INVALID, (error as Error).message, 401);
         }
       }
-
       const mode = String(route.get('encryptionMode') ?? 'none');
       // responseEncrypted defaults to true; only an explicit false skips
       // outbound response decryption / inbound response encryption (the
       // partner may return a plaintext success/log body).
       const responseEncrypted = route.get('responseEncrypted') !== false;
       const requestContentType = ctx.get('content-type') || undefined;
-
       let outgoingBody = requestBody;
       let outgoingContentType = requestContentType;
-      if (mode !== 'none') {
-        if (direction === 'inbound') {
-          const decrypted = await decryptPayload(app, route, requestBody, requestContentType);
-          outgoingBody = decrypted.body;
-          outgoingContentType = decrypted.contentType ?? sniffContentType(decrypted.body);
-        } else {
-          const encrypted = await encryptPayload(app, route, requestBody, requestContentType);
-          outgoingBody = encrypted.body;
-          outgoingContentType = encrypted.contentType ?? requestContentType;
-        }
+      if (mode !== 'none' && direction === 'inbound') {
+        const decrypted = await decryptPayload(app, route, requestBody, requestContentType);
+        outgoingBody = decrypted.body;
+        outgoingContentType = decrypted.contentType ?? sniffContentType(decrypted.body);
       }
-
-      const headers = buildForwardHeaders({
-        incoming: ctx.headers as Record<string, string | string[] | undefined>,
-        forwardHeaders: (route.get('forwardHeaders') as string[] | undefined) ?? [],
-        staticHeaders: (route.get('staticHeaders') as StaticHeader[] | undefined) ?? [],
-        contentType: outgoingContentType,
-      });
-
-      // Outbound HMAC signing — sign the forwarded request.
-      if (direction === 'outbound' && route.get('hmacSignEnabled')) {
-        const hmacSecret = await resolveHmacSecret(app, route);
-        const targetUrl = new URL(forwardUrl);
-        const hmacHeaders = buildHmacHeaders({
-          secret: hmacSecret,
-          method: String(route.get('method') ?? 'POST'),
-          path: targetUrl.pathname + targetUrl.search,
+      let headers: Record<string, string>;
+      if (direction === 'outbound') {
+        // Shared with the admin "test route" resource so both apply the
+        // exact same outbound encryption + HMAC + JWT pipeline.
+        const forward = await buildOutboundForwardRequest(app, route, {
           body: outgoingBody,
+          contentType: requestContentType,
+          forwardUrl,
+          incomingHeaders: ctx.headers as Record<string, string | string[] | undefined>,
+          forwardHeaders: (route.get('forwardHeaders') as string[] | undefined) ?? [],
+          staticHeaders: (route.get('staticHeaders') as StaticHeader[] | undefined) ?? [],
         });
-        Object.assign(headers, hmacHeaders);
+        outgoingBody = forward.body;
+        outgoingContentType = forward.contentType;
+        headers = forward.headers;
+      } else {
+        headers = buildForwardHeaders({
+          incoming: ctx.headers as Record<string, string | string[] | undefined>,
+          forwardHeaders: (route.get('forwardHeaders') as string[] | undefined) ?? [],
+          staticHeaders: (route.get('staticHeaders') as StaticHeader[] | undefined) ?? [],
+          contentType: outgoingContentType,
+        });
       }
-
-      // Outbound JWT signing — mint a Bearer token for the forwarded request.
-      if (direction === 'outbound' && route.get('jwtSignEnabled')) {
-        const algorithm = String(route.get('jwtSignAlgorithm') ?? 'RS256') as JwtAlgorithm;
-        let secret: string | undefined;
-        let privateKeyPem: string | undefined;
-        if (algorithm === 'HS256') {
-          secret = await resolveJwtSecret(app, route);
-        } else {
-          privateKeyPem = await resolveJwtSignPrivateKey(app, route);
-        }
-        const token = signJwt({
-          algorithm,
-          secret,
-          privateKeyPem,
-          issuer: (route.get('jwtIssuer') as string | undefined) || undefined,
-          audience: (route.get('jwtAudience') as string | undefined) || undefined,
-          expiresInSec: toNumber(route.get('jwtExpiresInSec'), 300),
-        });
-        headers.Authorization = `Bearer ${token}`;
+      // Circuit breaker: reject fast while the target circuit is open,
+      // and record the outcome after the attempt.
+      const circuitDecision = circuitBreaker.beforeRequest(circuitKey, circuitOptions);
+      if (!circuitDecision.allowed) {
+        const retryAfterSec = Math.max(1, Math.ceil((circuitDecision.openMs ?? circuitOptions.openDurationMs) / 1000));
+        ctx.set('Retry-After', String(retryAfterSec));
+        throw circuitOpenError(retryAfterSec);
       }
 
       const result = await forwardRequest({
@@ -260,8 +256,12 @@ export function createApimRouter(app: Application): Middleware {
         retryDelayMs: toNumber(route.get('retryDelayMs'), 1000),
       });
       attempt = result.attempt;
+      if (result.status >= 500 && circuitOptions.countServerErrors) {
+        circuitBreaker.recordFailure(circuitKey, circuitOptions);
+      } else {
+        circuitBreaker.recordSuccess(circuitKey);
+      }
       upstreamStatus = result.status;
-
       let responseContentType = result.headers['content-type'];
       let finalBody = result.body;
       if (mode !== 'none' && responseEncrypted) {
@@ -282,11 +282,9 @@ export function createApimRouter(app: Application): Middleware {
           }
         }
       }
-
       responseBody = finalBody;
       httpStatus = result.status;
       logStatus = result.status < 400 ? 'ok' : 'failed';
-
       ctx.status = result.status;
       if (responseContentType) ctx.set('content-type', responseContentType);
       // Forward allow-listed upstream response headers (e.g. content-disposition
@@ -302,6 +300,13 @@ export function createApimRouter(app: Application): Middleware {
       ctx.body = finalBody;
     } catch (error) {
       const apimError = toApimError(error);
+      if (
+        circuitKey &&
+        circuitOptions &&
+        (apimError.code === ERROR_CODES.UPSTREAM_ERROR || apimError.code === ERROR_CODES.TIMEOUT)
+      ) {
+        circuitBreaker.recordFailure(circuitKey, circuitOptions);
+      }
       httpStatus = apimError.httpStatus;
       errorCode = apimError.code;
       errorMessage = apimError.message;
@@ -317,6 +322,11 @@ export function createApimRouter(app: Application): Middleware {
       ctx.set('content-type', 'application/json');
       ctx.body = JSON.stringify({ error: { code: apimError.code, message: publicMessage, requestId } });
     } finally {
+      // Always release the capacity lease so queued requests can proceed.
+      if (capacityLease) {
+        capacityLease.release();
+        capacityLease = null;
+      }
       const finishedAt = new Date();
       const logPayloads = Boolean(route?.get('logPayloads'));
       try {

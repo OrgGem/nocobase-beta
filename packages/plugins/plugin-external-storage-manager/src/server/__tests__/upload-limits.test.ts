@@ -59,7 +59,7 @@ function createContext(overrides: Record<string, unknown> = {}) {
 }
 
 describe('extStorage:upload size limits', () => {
-  it('rejects multipart uploads whose declared content-length exceeds the limit with 413', async () => {
+  it('does not fast-fail multipart uploads based on total content-length (delegates to multer per-file limits)', async () => {
     const { actions, ctx, thrown, putStream } = createContext({
       request: {
         query: {},
@@ -69,8 +69,11 @@ describe('extStorage:upload size limits', () => {
       },
     });
 
-    await expect(actions.upload(ctx)).rejects.toMatchObject({ status: 413 });
-    expect(thrown[0].message).toContain('Upload too large');
+    // The fake ctx has no real multipart stream, so multer should reject with a
+    // parsing error. The important assertion is that the old total-content-length
+    // fast-fail (413) is no longer triggered for multipart requests.
+    await expect(actions.upload(ctx)).rejects.toBeTruthy();
+    expect(thrown[0]?.status).not.toBe(413);
     expect(putStream).not.toHaveBeenCalled();
   });
 

@@ -34,24 +34,27 @@ describe('route-resolver resolveGatewayRoute', () => {
     expect(route.get('name')).toBe('in-orders');
   });
 
-  it('throws a 405 ApimError on method mismatch', async () => {
+  it('throws a 405 ApimError with APIM_METHOD_NOT_ALLOWED on method mismatch', async () => {
     await expect(resolveGatewayRoute(app.db, 'inbound', 'orders', 'GET')).rejects.toMatchObject({
       name: 'ApimError',
       httpStatus: 405,
+      code: 'APIM_METHOD_NOT_ALLOWED',
     });
   });
 
-  it('throws a 404 ApimError for unknown paths', async () => {
+  it('throws a 404 ApimError with APIM_ROUTE_NOT_FOUND for unknown paths', async () => {
     await expect(resolveGatewayRoute(app.db, 'inbound', 'nope', 'POST')).rejects.toMatchObject({
       name: 'ApimError',
       httpStatus: 404,
+      code: 'APIM_ROUTE_NOT_FOUND',
     });
   });
 
-  it('throws a 404 ApimError for disabled routes', async () => {
+  it('throws a 404 ApimError with APIM_ROUTE_NOT_FOUND for disabled routes', async () => {
     await expect(resolveGatewayRoute(app.db, 'inbound', 'disabled-path', 'POST')).rejects.toMatchObject({
       name: 'ApimError',
       httpStatus: 404,
+      code: 'APIM_ROUTE_NOT_FOUND',
     });
   });
 

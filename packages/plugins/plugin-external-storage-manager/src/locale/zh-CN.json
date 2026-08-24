@@ -48,5 +48,11 @@
   "Optional sub-path restriction (empty = full access)": "可选的子路径限制（为空 = 完全访问）",
   "Select permissions for this role on this directory": "为此角色选择此目录的权限",
   "Settings": "设置",
-  "Browse Files": "浏览文件"
+  "Browse Files": "浏览文件",
+  "Failed to load external storage permissions": "加载外部存储权限失败",
+  "Permissions updated": "权限已更新",
+  "Failed to update permissions": "更新权限失败",
+  "Read (View & Download)": "读取（查看与下载）",
+  "Write (Upload & Mkdir)": "写入（上传与新建文件夹）",
+  "Configure access permissions for each external storage directory for the role": "为角色配置每个外部存储目录的访问权限"
 }

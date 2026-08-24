@@ -219,7 +219,7 @@ export class MarkdownSkillService {
     if (!skill) {
       throw new RegistryError('MARKDOWN_SKILL_NOT_FOUND', 404, 'Markdown skill was not found.');
     }
-    if (userId !== undefined && !this.canAccessSkill(skill, userId)) {
+    if (userId !== undefined && !(await this.canAccessSkill(skill, userId))) {
       throw new RegistryError('FORBIDDEN', 403, 'You do not have access to this markdown skill.');
     }
     return skill;
@@ -510,11 +510,22 @@ export class MarkdownSkillService {
     };
   }
 
-  private canAccessSkill(skill: RegistryModel, userId: string | number): boolean {
+  private async canAccessSkill(skill: RegistryModel, userId: string | number): Promise<boolean> {
     if (String(skill.get('ownerId')) === String(userId)) {
       return true;
     }
-    return false;
+    const visibility = getString(skill, 'visibility') || 'shared';
+    if (visibility === 'private') {
+      return false;
+    }
+    const packageId = skill.get('packageId');
+    if (!packageId) {
+      return false;
+    }
+    const share = await this.database.getRepository('skillRegistryPackageShares').findOne({
+      filter: { packageId, userId },
+    });
+    return Boolean(share);
   }
 
   async listOwnSkills(

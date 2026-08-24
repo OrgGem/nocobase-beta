@@ -91,8 +91,14 @@ export const GuidePage: React.FC = () => {
     {
       key: 'not-found',
       code: 'APIM_ROUTE_NOT_FOUND',
-      http: '404 / 405',
-      meaning: t('Route not found or disabled, or HTTP method does not match the route method'),
+      http: '404',
+      meaning: t('Route not found or disabled'),
+    },
+    {
+      key: 'method-not-allowed',
+      code: 'APIM_METHOD_NOT_ALLOWED',
+      http: '405',
+      meaning: t('HTTP method does not match the route method'),
     },
     {
       key: 'too-large',

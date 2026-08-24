@@ -186,6 +186,7 @@ describe('gateway inbound', () => {
     const key = await createTestApiKey(app, { scopes: ['inbound'] });
     const res = await request.get(`${INBOUND_PREFIX}plain`).set('X-API-Key', key);
     expect(res.status).toBe(405);
+    expect(res.body.error.code).toBe('APIM_METHOD_NOT_ALLOWED');
   });
 
   it('forwards the caller query string to the target', async () => {

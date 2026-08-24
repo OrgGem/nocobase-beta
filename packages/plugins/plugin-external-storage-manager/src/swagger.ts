@@ -9,9 +9,9 @@
 
 const directoryIdParameter = {
   name: 'filterByTk',
-  in: 'path',
+  in: 'query',
   required: true,
-  description: 'External storage directory ID',
+  description: 'External storage directory ID (use filterByTk or directoryId)',
   schema: { type: 'integer' },
 };
 
@@ -89,7 +89,7 @@ export default {
       },
     },
 
-    '/extStorage:list/{filterByTk}': {
+    '/extStorage:list': {
       get: {
         tags: ['extStorage'],
         summary: 'List files and directories',
@@ -138,7 +138,7 @@ export default {
       },
     },
 
-    '/extStorage:stat/{filterByTk}': {
+    '/extStorage:stat': {
       get: {
         tags: ['extStorage'],
         summary: 'Get file or directory metadata',
@@ -161,7 +161,7 @@ export default {
       },
     },
 
-    '/extStorage:download/{filterByTk}': {
+    '/extStorage:download': {
       get: {
         tags: ['extStorage'],
         summary: 'Download or preview a file as a stream',
@@ -197,7 +197,7 @@ export default {
       },
     },
 
-    '/extStorage:upload/{filterByTk}': {
+    '/extStorage:upload': {
       post: {
         tags: ['extStorage'],
         summary: 'Upload file data',
@@ -242,7 +242,7 @@ export default {
       },
     },
 
-    '/extStorage:mkdir/{filterByTk}': {
+    '/extStorage:mkdir': {
       post: {
         tags: ['extStorage'],
         summary: 'Create a directory',
@@ -264,7 +264,7 @@ export default {
       },
     },
 
-    '/extStorage:rename/{filterByTk}': {
+    '/extStorage:rename': {
       post: {
         tags: ['extStorage'],
         summary: 'Rename or move a file/directory',
@@ -289,7 +289,7 @@ export default {
       },
     },
 
-    '/extStorage:delete/{filterByTk}': {
+    '/extStorage:delete': {
       post: {
         tags: ['extStorage'],
         summary: 'Delete a file or directory',
@@ -311,7 +311,7 @@ export default {
       },
     },
 
-    '/extStorage:exists/{filterByTk}': {
+    '/extStorage:exists': {
       get: {
         tags: ['extStorage'],
         summary: 'Check whether a path exists',

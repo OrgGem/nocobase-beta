@@ -13,9 +13,13 @@ import {
   MIN_TIMEOUT_MS,
   ROUTE_NAME_PATTERN,
 } from '../constants';
-import { createApimRouter } from './gateway/router';
+import { createApimRouter, type ApimRuntimeState } from './gateway/router';
+import { CapacityLimiter } from './services/capacity-limiter';
+import { CircuitBreaker } from './services/circuit-breaker';
+import { registerHealthResource } from './resources/health';
 import { registerApiKeysResource } from './resources/api-keys';
 import { registerRoutesResource } from './resources/routes';
+import { registerApiManagerSettingsResource } from './resources/settings';
 import { pruneExpiredLogs } from './services/request-logger';
 
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -267,10 +271,24 @@ export class PluginApiManagerServer extends Plugin {
       { tag: 'apimDisableBodyParser', before: 'bodyParser' },
     );
 
-    this.app.use(createApimRouter(this.app), { after: 'idp-oauth-resource-auth', before: 'resourcer' });
+    const runtime: ApimRuntimeState = {
+      capacityLimiter: new CapacityLimiter({
+        maxConcurrentRequests: 50,
+        maxTotalBytes: 512 * 1024 * 1024,
+        maxRequestBytes: 0,
+        queueEnabled: true,
+        queueSize: 1000,
+        queueTimeoutMs: 30_000,
+      }),
+      circuitBreaker: new CircuitBreaker(),
+    };
 
+    this.app.use(createApimRouter(this.app, runtime), { after: 'idp-oauth-resource-auth', before: 'resourcer' });
+
+    registerHealthResource(this.app, runtime);
     registerApiKeysResource(this.app);
     registerRoutesResource(this.app);
+    registerApiManagerSettingsResource(this.app);
 
     // Mask secrets in admin API responses without affecting internal reads.
     this.app.resourceManager.use(async (ctx, next) => {
@@ -285,7 +303,16 @@ export class PluginApiManagerServer extends Plugin {
 
     this.app.acl.registerSnippet({
       name: APIM_ACL,
-      actions: ['apiRoutes:*', 'apiPartners:*', 'apiManagerApiKeys:*', 'apiRequestLogs:list', 'apiRequestLogs:get'],
+      actions: [
+        'apiRoutes:*',
+        'apiPartners:*',
+        'apiManagerApiKeys:*',
+        'apiRequestLogs:list',
+        'apiRequestLogs:get',
+        'apiManagerSettings:get',
+        'apiManagerSettings:save',
+        'apiManager:health',
+      ],
     });
 
     this.app.on('afterStart', () => {

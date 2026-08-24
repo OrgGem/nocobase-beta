@@ -171,6 +171,36 @@ describe('hmac-signer', () => {
     expect(cache.has('z')).toBe(true);
   });
 
+  it('nonce cache keeps live entries without sweeping until capacity', () => {
+    const cache = new NonceCache(3);
+    cache.add('a', 1);
+    cache.add('b', 1);
+    cache.add('c', 1);
+    expect(cache.has('a')).toBe(true);
+    expect(cache.has('b')).toBe(true);
+    expect(cache.has('c')).toBe(true);
+    cache.add('d', 1);
+    expect(cache.size).toBe(3);
+    expect(cache.has('a')).toBe(false);
+  });
+
+  it('sweeps expired entries when at capacity instead of evicting them', async () => {
+    const cache = new NonceCache(2);
+    cache.add('expired', 0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    cache.add('live', 60);
+    expect(cache.has('expired')).toBe(false);
+    expect(cache.has('live')).toBe(true);
+    expect(cache.size).toBe(1);
+  });
+
+  it('exposes size for diagnostics', () => {
+    const cache = new NonceCache(10);
+    expect(cache.size).toBe(0);
+    cache.add('x', 60);
+    expect(cache.size).toBe(1);
+  });
+
   it('produces distinct nonces per call', () => {
     const body = Buffer.alloc(0);
     const first = buildHmacHeaders({ secret: SECRET, method: 'GET', path: '/x', body });

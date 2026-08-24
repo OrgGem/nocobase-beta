@@ -34,6 +34,29 @@ describe('FixedWindowRateLimiter', () => {
     expect(limiter.check('key-a', 1, 1).allowed).toBe(true);
   });
 
+  it('prunes entries once their own window has elapsed, not after 24 h', async () => {
+    const limiter = new FixedWindowRateLimiter(2);
+    limiter.check('short-window', 10, 1);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    // With a 1 s window the entry is fully elapsed and can be pruned to make room.
+    limiter.check('other', 10, 60);
+    expect(limiter.size).toBeLessThanOrEqual(2);
+    // The expired short-window entry restarts its counter instead of being blocked.
+    expect(limiter.check('short-window', 10, 1).allowed).toBe(true);
+  });
+
+  it('evicts only expired entries when pruning at capacity', async () => {
+    const limiter = new FixedWindowRateLimiter(2);
+    limiter.check('expiring', 10, 1);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    limiter.check('live', 10, 60);
+    // Map is at capacity (2); adding another prunes 'expiring' but keeps 'live'.
+    limiter.check('third', 10, 60);
+    expect(limiter.size).toBe(2);
+    expect(limiter.check('live', 10, 60).allowed).toBe(true);
+    expect(limiter.check('expiring', 10, 1).allowed).toBe(true);
+  });
+
   it('evicts oldest entries when the map is full', () => {
     const limiter = new FixedWindowRateLimiter(2);
     limiter.check('a', 10, 60);

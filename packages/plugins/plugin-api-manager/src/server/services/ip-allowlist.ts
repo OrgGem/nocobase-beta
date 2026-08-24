@@ -21,9 +21,11 @@ function isIpv4(ip: string): boolean {
   const parts = ip.split('.');
   if (parts.length !== 4) return false;
   return parts.every((part) => {
-    if (!/^\d{1,3}$/.test(part)) return false;
+    // Reject leading zeros ("010") — they are not valid IPv4 octets and
+    // silently parsing them would alias 10.0.0.1 to 010.0.0.1.
+    if (!/^(0|[1-9]\d{0,2})$/.test(part)) return false;
     const num = Number(part);
-    return num >= 0 && num <= 255;
+    return num <= 255;
   });
 }
 
@@ -32,9 +34,14 @@ function ipv4ToNumber(ip: string): number {
 }
 
 function matchesIpv4Cidr(ip: string, cidr: string): boolean {
-  const [range, bitsRaw] = cidr.split('/');
+  const parts = cidr.split('/');
+  // Exactly one "/" — "1.2.3.4/24/evil" must not be interpreted.
+  if (parts.length !== 2) return false;
+  const [range, bitsRaw] = parts;
   const bits = Number(bitsRaw);
-  if (!isIpv4(range) || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  if (!isIpv4(range) || !/^\d{1,2}$/.test(bitsRaw) || !Number.isInteger(bits) || bits < 0 || bits > 32) {
+    return false;
+  }
   const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
   return (ipv4ToNumber(ip) & mask) === (ipv4ToNumber(range) & mask);
 }
@@ -50,7 +57,16 @@ export function isIpAllowed(ip: string | undefined, allowlist: string[]): boolea
   for (const entry of normalizedList) {
     if (entry.includes('/')) {
       if (isIpv4(normalized) && matchesIpv4Cidr(normalized, entry)) return true;
-    } else if (normalizeIp(entry).toLowerCase() === normalized.toLowerCase()) {
+      continue;
+    }
+    // Exact match. A dotted entry is IPv4-shaped: reject invalid ones (e.g.
+    // leading zeros) so they can never match — and never let a malformed
+    // entry silently drop the list down to "allow all".
+    const entryNormalized = normalizeIp(entry);
+    if (entryNormalized.includes('.') && !isIpv4(entryNormalized)) {
+      continue;
+    }
+    if (entryNormalized.toLowerCase() === normalized.toLowerCase()) {
       return true;
     }
   }

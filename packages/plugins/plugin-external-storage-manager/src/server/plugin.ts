@@ -29,16 +29,30 @@ export class PluginExternalStorageManagerServer extends Plugin {
       this.app.resourceManager.registerActionHandler(`extStorage:${key}`, handler as any);
     }
 
-    // Register ACL snippet for directory management
+    // Full management: directory CRUD plus every extStorage action.
+    // `storageOptions`, `rolePermissions`, and `updateRolePermissions` are
+    // intentionally covered here (admin-only), never by the browse snippet.
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.directories`,
       actions: ['externalStorageDirectories:*', 'extStorage:*'],
     });
 
-    // Register ACL snippet for browse files UI
+    // Browse files UI: grants the extStorage API surface used by the file
+    // browser. Actual per-directory permissions are still enforced in each
+    // handler via `externalStorageDirectories` data scopes (view/update/destroy).
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.browse`,
-      actions: [], // Empty actions: only grants UI access. Backend relies on fine-grained ACL.
+      actions: [
+        'extStorage:directories',
+        'extStorage:list',
+        'extStorage:stat',
+        'extStorage:download',
+        'extStorage:exists',
+        'extStorage:upload',
+        'extStorage:mkdir',
+        'extStorage:rename',
+        'extStorage:delete',
+      ],
     });
 
     // Define the extStorage resource
@@ -60,15 +74,18 @@ export class PluginExternalStorageManagerServer extends Plugin {
       },
     });
 
-    // Allow logged-in users to access browse API (fine-grained ACL is enforced inside handlers)
-    this.app.acl.allow('extStorage', ['directories', 'list', 'stat', 'download', 'exists', 'storageOptions'], 'loggedIn');
-    this.app.acl.allow('extStorage', ['upload', 'mkdir', 'rename', 'delete'], 'loggedIn');
-    
-    // Only root or users with specific roles should configure role permissions, but for simplicity we allow 'loggedIn' 
-    // and check inside the handler if needed, or better, just rely on the UI being hidden.
-    // Actually, it's safer to just restrict it to 'root' or use NocoBase's snippet.
-    this.app.acl.allow('extStorage', ['rolePermissions', 'updateRolePermissions'], 'loggedIn');
+    // Preview/download requests are performed by the browser carrying the
+    // user's session token (`?token=` or Authorization header), the same
+    // pattern as the S3/SFTP private-storage players. The auth middleware must
+    // therefore accept this action for any logged-in user; per-directory
+    // authorization is still enforced inside the handler via
+    // `externalStorageDirectories` data scopes.
+    this.app.acl.allow('extStorage', 'download', 'loggedIn');
 
+    // Everything else stays deny-by-default: only roles granted the
+    // `.browse` / `.directories` snippets can reach the other extStorage
+    // actions, and per-directory permissions are still enforced in each
+    // handler via `externalStorageDirectories` data scopes.
     this.log.info(`[ext-storage-manager] Plugin loaded successfully`);
   }
 

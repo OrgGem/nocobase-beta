@@ -596,5 +596,28 @@ describe('crypto-adapter (RSA-OAEP hybrid)', () => {
   });
 });
 
+describe('crypto-adapter (toolkit contract)', () => {
+  it('throws APIM_CRYPTO_CONFIG when the toolkit plugin is missing methods', async () => {
+    const app = {
+      aesEncryptor: { encrypt: async (v: string) => v, decrypt: async (v: string) => v },
+      pm: { get: () => ({}) },
+    } as unknown as Application;
+    const route = routeFrom({ encryptionMode: 'aes-256-gcm', wireFormat: 'binary', aesSecret: 'enc:x' });
+    await expect(encryptPayload(app, route, Buffer.from('x'))).rejects.toMatchObject({
+      code: ERROR_CODES.CRYPTO_CONFIG,
+      httpStatus: 500,
+    });
+    await expect(decryptPayload(app, route, Buffer.from('x'))).rejects.toMatchObject({
+      code: ERROR_CODES.CRYPTO_CONFIG,
+      httpStatus: 500,
+    });
+  });
 
-
+  it('throws APIM_CRYPTO_CONFIG when the toolkit plugin is not installed', async () => {
+    const app = { pm: { get: () => undefined } } as unknown as Application;
+    const route = routeFrom({ encryptionMode: 'pgp', wireFormat: 'binary' });
+    await expect(encryptPayload(app, route, Buffer.from('x'))).rejects.toMatchObject({
+      code: ERROR_CODES.CRYPTO_CONFIG,
+    });
+  });
+});

@@ -10,7 +10,15 @@
 import { Readable } from 'stream';
 import path from 'path';
 import type { ListObjectsV2CommandOutput } from '@aws-sdk/client-s3';
-import { IStorageAdapter, FileEntry, PutStreamOptions, ListOptions, ListResult, RangeOptions, GetStreamResult } from './types';
+import {
+  IStorageAdapter,
+  FileEntry,
+  PutStreamOptions,
+  ListOptions,
+  ListResult,
+  RangeOptions,
+  GetStreamResult,
+} from './types';
 
 /**
  * Minimal structural types for the injected S3 client and SDK classes.
@@ -40,6 +48,21 @@ export interface S3SDKLike {
  *
  * All S3 SDK types/classes are injected via the constructor.
  */
+/**
+ * Encode an S3 `x-amz-copy-source` value per AWS requirements:
+ * path segments are percent-encoded but the `/` separators remain literal.
+ * `encodeURIComponent` on the whole string would also encode `/` (breaking
+ * nested keys), while leaving `/` literal breaks keys containing spaces or
+ * reserved characters.
+ */
+function encodeCopySource(bucket: string, key: string): string {
+  const encodedKey = key
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `${bucket}/${encodedKey}`;
+}
+
 export class S3Adapter implements IStorageAdapter {
   private client: S3ClientLike;
   private bucket: string;
@@ -134,64 +157,65 @@ export class S3Adapter implements IStorageAdapter {
     const prefix = this.normalizePrefix(remotePath);
     const entries: FileEntry[] = [];
 
-    // Fallback to recursive retrieval if search query is provided to ensure global search coverage
+    // Search performs a truly recursive listing: omit the delimiter so S3
+    // returns objects in nested folders too. The caller (extStorage) applies
+    // the user's search filter, so this path only flattens reachable metadata.
     if (options?.search) {
+      const searchEntries: FileEntry[] = [];
       let continuationToken: string | undefined;
       do {
         const response = await this.client.send(
           new ListObjectsV2Command({
             Bucket: this.bucket,
             Prefix: prefix,
-            Delimiter: '/',
             MaxKeys: 1000,
             ContinuationToken: continuationToken,
           }),
         );
 
-        if (response.CommonPrefixes) {
-          for (const cp of response.CommonPrefixes) {
-            if (cp.Prefix) {
-              const name = cp.Prefix.replace(prefix, '').replace(/\/$/, '');
-              if (name) {
-                entries.push({
-                  name,
-                  path: '/' + cp.Prefix.replace(/\/$/, ''),
-                  type: 'directory',
-                  size: 0,
-                  modifiedAt: 0,
-                });
-              }
-            }
-          }
-        }
+        for (const obj of response.Contents || []) {
+          const key = obj.Key;
+          if (!key || key === prefix) continue;
 
-        if (response.Contents) {
-          for (const obj of response.Contents) {
-            if (obj.Key && obj.Key !== prefix) {
-              const name = obj.Key.replace(prefix, '');
-              if (!name.includes('/')) {
-                entries.push({
-                  name,
-                  path: '/' + obj.Key,
-                  type: 'file',
-                  size: obj.Size || 0,
-                  modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
-                  mimetype: this.guessMime(name),
-                });
-              }
-            }
+          const relative = key.slice(prefix.length);
+
+          // Explicit directory markers ("docs/sub/") become directory entries.
+          if (key.endsWith('/')) {
+            const name = relative.replace(/\/$/, '');
+            if (!name) continue;
+            const displayName = name.includes('/') ? name.split('/').pop() : name;
+            const safeName = displayName || name;
+            searchEntries.push({
+              name: safeName,
+              path: '/' + key.replace(/\/$/, ''),
+              type: 'directory',
+              size: 0,
+              modifiedAt: 0,
+            });
+            continue;
           }
+
+          const relativeName = relative.split('/').pop();
+          const safeRelativeName = relativeName || relative;
+          searchEntries.push({
+            name: safeRelativeName,
+            path: '/' + key,
+            type: 'file',
+            size: obj.Size || 0,
+            modifiedAt: obj.LastModified ? obj.LastModified.getTime() : 0,
+            mimetype: this.guessMime(relative),
+          });
         }
 
         continuationToken = response.NextContinuationToken;
       } while (continuationToken);
 
-      entries.sort((a, b) => {
+      searchEntries.sort((a, b) => {
         if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
         return a.name.localeCompare(b.name);
       });
 
-      return entries;
+      return searchEntries;
     }
 
     const limit = options?.limit || 100;
@@ -414,7 +438,7 @@ export class S3Adapter implements IStorageAdapter {
           await this.client.send(
             new CopyObjectCommand({
               Bucket: this.bucket,
-              CopySource: encodeURIComponent(`${this.bucket}/${obj.Key}`),
+              CopySource: encodeCopySource(this.bucket, obj.Key),
               Key: targetKey,
             }),
           );
@@ -438,7 +462,7 @@ export class S3Adapter implements IStorageAdapter {
     await this.client.send(
       new CopyObjectCommand({
         Bucket: this.bucket,
-        CopySource: encodeURIComponent(`${this.bucket}/${oldKey}`),
+        CopySource: encodeCopySource(this.bucket, oldKey),
         Key: newKey,
       }),
     );

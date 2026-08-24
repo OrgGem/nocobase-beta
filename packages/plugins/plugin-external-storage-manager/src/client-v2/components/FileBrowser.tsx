@@ -179,6 +179,7 @@ export const FileBrowser: React.FC = () => {
           title: file.name,
           extname: getExtname(file.name),
           url: getFileUrl(file.path, true),
+          downloadUrl: getFileUrl(file.path, false),
         })),
     [filteredFiles, getFileUrl],
   );

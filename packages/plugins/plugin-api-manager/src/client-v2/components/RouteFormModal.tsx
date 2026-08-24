@@ -155,9 +155,8 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
   }, [open, initial, form]);
 
   // Direction filter removed — all PGP/RSA keys shown regardless of direction
-  // Direction filter removed — all PGP/RSA keys shown regardless of direction
-  const isRsaKey = (k: CryptoKeyOption) => Boolean(k.kind) && k.kind.startsWith('rsa');
-  const isPgpKey = (k: CryptoKeyOption) => Boolean(k.kind) && k.kind.startsWith('pgp');
+  const isRsaKey = (k: CryptoKeyOption) => k.kind?.startsWith('rsa') ?? false;
+  const isPgpKey = (k: CryptoKeyOption) => k.kind?.startsWith('pgp') ?? false;
   const allRsaKeys = cryptoKeys.filter(isRsaKey);
   // Show the key's direction as a hint so admins can distinguish own vs partner
   // keys; both directions are selectable for any encrypt/decrypt slot.

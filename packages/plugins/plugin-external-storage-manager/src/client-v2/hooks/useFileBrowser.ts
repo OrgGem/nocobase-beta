@@ -26,6 +26,8 @@ export interface DirectoryInfo {
 export interface FileItem {
   name: string;
   path: string;
+  url?: string;
+  downloadUrl?: string;
   type: 'file' | 'directory';
   size: number;
   modifiedAt: number;
@@ -172,14 +174,29 @@ export function useFileBrowser() {
                   : [];
           const files = rawData.map((file: any) => {
             if (file.type === 'file') {
-              const params = new URLSearchParams({
+              // Preview/download requests carry the user's session token so
+              // the auth middleware accepts them (same pattern as the S3/SFTP
+              // private storage players). The download endpoint then re-checks
+              // the directory data-scope for the current user.
+              const inlineUrl = new URLSearchParams({
                 directoryId: String(dirId),
                 path: file.path,
                 mode: 'inline',
               });
+              const attachmentUrl = new URLSearchParams({
+                directoryId: String(dirId),
+                path: file.path,
+                mode: 'attachment',
+              });
+              const token = (api as any).auth?.token || '';
+              if (token) {
+                inlineUrl.set('token', token);
+                attachmentUrl.set('token', token);
+              }
               return {
                 ...file,
-                url: `/api/extStorage:download?${params.toString()}`,
+                url: `/api/extStorage:download?${inlineUrl.toString()}`,
+                downloadUrl: `/api/extStorage:download?${attachmentUrl.toString()}`,
               };
             }
             return file;
