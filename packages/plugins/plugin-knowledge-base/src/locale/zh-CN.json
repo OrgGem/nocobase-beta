@@ -1,3 +1,8 @@
 {
-  "Only administrators can configure External RAG providers that forward LLM credentials.": "只有管理员可以配置会转发 LLM 凭据的外部 RAG 提供商。"
+  "Only administrators can configure External RAG providers that forward LLM credentials.",
+  "Processing Dashboard": "处理仪表板",
+  "Document Processing": "文档处理",
+  "Total": "总计",
+  "Ready": "就绪",
+  "Retrying": "重试中": "只有管理员可以配置会转发 LLM 凭据的外部 RAG 提供商。"
 }

@@ -1,4 +1,5 @@
 import type { Database, Model, Transaction } from '@nocobase/database';
+import { read } from '../utils/record-utils';
 
 export type LoopControlState = 'running' | 'paused' | 'killed';
 
@@ -11,11 +12,6 @@ export type LoopControlSnapshot = {
   dailyMaxTokens: number | null;
   dailyMaxCost: number | null;
 };
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
 
 function optionalLimit(value: unknown, label: string) {
   if (value === null || value === undefined) return null;

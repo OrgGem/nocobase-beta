@@ -1,7 +1,9 @@
+import { asObject } from '../utils/ctx-utils';
 import { createHash } from 'node:crypto';
 import type { Database, Model } from '@nocobase/database';
 import { getRunEventBus } from './RunEventBus';
 import type { LoopPatternPolicy } from './LoopPatternSchema';
+import { read } from '../utils/record-utils';
 
 export type ToolLoopLevel = 'none' | 'warn' | 'block' | 'escalate';
 
@@ -26,15 +28,6 @@ export type ToolLoopRecordContext = {
   actorType: string;
   actorIdentity: string;
 };
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 // Key order alone must not change the signature, so object keys are sorted before hashing.
 function canonicalize(value: unknown): unknown {
@@ -116,8 +109,12 @@ export class ToolLoopDetectionService {
     }
     if (!sessionIds.size) return null;
 
+    // Limit message scan to prevent memory pressure on long-running loops.
+    // Only load the toolCalls field since that's all we inspect.
     const messages = await this.database.getRepository('aiMessages').find({
       filter: { sessionId: { $in: [...sessionIds] } },
+      fields: ['toolCalls'],
+      limit: 5_000,
     });
     const calls: ToolCallEntry[] = [];
     for (const message of messages) {
@@ -150,12 +147,12 @@ export class ToolLoopDetectionService {
     if (existing) return false;
 
     const now = new Date();
-    const runSteps = await steps.find({ filter: { runId: context.runId } });
+    const stepCount = await steps.count({ filter: { runId: context.runId } });
     const step = await steps.create({
       values: {
         runId: context.runId,
         runtimeVersion: 'control-plane-v2',
-        sequence: runSteps.length,
+        sequence: stepCount,
         role: context.role,
         kind: 'guard',
         type: 'tool_loop',

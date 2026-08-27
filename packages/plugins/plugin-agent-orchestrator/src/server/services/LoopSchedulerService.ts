@@ -3,6 +3,7 @@ import type { Application, Plugin } from '@nocobase/server';
 import type { LoopPattern } from './LoopPatternSchema';
 import { LoopPatternService } from './LoopPatternService';
 import { LoopTriggerService } from './LoopTriggerService';
+import { read } from '../utils/record-utils';
 
 type ManagedCronJob = ReturnType<Application['cronJobManager']['addJob']>;
 
@@ -19,11 +20,6 @@ export type LoopSchedulerSyncMessage = {
   type: 'loop-pattern-schedule-changed';
   patternId: number;
 };
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
 
 function positiveInteger(value: unknown) {
   const parsed = Number(value);

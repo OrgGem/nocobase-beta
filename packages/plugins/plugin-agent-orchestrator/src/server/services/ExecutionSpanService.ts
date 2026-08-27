@@ -31,7 +31,7 @@ type SpanValues = {
   employeeUsername?: string;
   toolName?: string;
   title?: string;
-  input?: any;
+  input?: Record<string, unknown>;
   output?: string;
   error?: string;
   durationMs?: number;
@@ -39,12 +39,24 @@ type SpanValues = {
   endedAt?: Date;
   orchestratorLogId?: string | number;
   skillExecutionId?: string | number;
-  metadata?: any;
+  metadata?: Record<string, unknown>;
   userId?: string | number;
 };
 
 export class ExecutionSpanService {
-  constructor(private readonly plugin: any) {}
+  constructor(
+    private readonly plugin: {
+      app: { logger?: { warn?: (...args: unknown[]) => void } };
+      db: {
+        getRepository: (name: string) =>
+          | {
+              create: (opts: Record<string, unknown>) => Promise<unknown>;
+              update: (opts: Record<string, unknown>) => Promise<unknown>;
+            }
+          | undefined;
+      };
+    },
+  ) {}
 
   async create(values: SpanValues) {
     try {
@@ -65,7 +77,7 @@ export class ExecutionSpanService {
     }
   }
 
-  async update(spanId: string | number | undefined, values: Record<string, any>) {
+  async update(spanId: string | number | undefined, values: Record<string, unknown>) {
     if (!spanId) return null;
     try {
       const repo = this.plugin.db.getRepository('agentExecutionSpans');
@@ -88,7 +100,7 @@ export class ExecutionSpanService {
     spanId: string | number | undefined,
     status: 'success' | 'error' | 'canceled' | 'timeout',
     startedAt: number,
-    values: Record<string, any> = {},
+    values: Record<string, unknown> = {},
   ) {
     return this.update(spanId, {
       ...values,
@@ -99,23 +111,36 @@ export class ExecutionSpanService {
   }
 }
 
-export function getOrchestratorTraceContext(ctx: any): OrchestratorTraceContext | null {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type NocoCtx = Record<string, unknown> & { state?: Record<string, unknown>; runtime?: Record<string, unknown> };
+
+function deepGet(obj: unknown, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (current && typeof current === 'object') return (current as Record<string, unknown>)[key];
+    return undefined;
+  }, obj);
+}
+
+export function getOrchestratorTraceContext(ctx: NocoCtx): OrchestratorTraceContext | null {
   const requestContext =
-    ctx?.[ORCHESTRATOR_TRACE_CONTEXT_KEY] ||
-    ctx?.state?.orchestratorTraceContext ||
-    ctx?.runtime?.context?.orchestratorTraceContext ||
+    ctx[ORCHESTRATOR_TRACE_CONTEXT_KEY] ||
+    deepGet(ctx, 'state.orchestratorTraceContext') ||
+    deepGet(ctx, 'runtime.context.orchestratorTraceContext') ||
     null;
   const agentContext = getAgentExecutionContext();
   if (!requestContext && !agentContext) return null;
 
   return {
     ...(agentContext || {}),
-    ...(requestContext || {}),
-    toolCallId: ctx?.runtime?.toolCallId || requestContext?.toolCallId || agentContext?.toolCallId,
+    ...((requestContext as Record<string, unknown>) || {}),
+    toolCallId:
+      deepGet(ctx, 'runtime.toolCallId') ||
+      (requestContext as Record<string, unknown>)?.toolCallId ||
+      agentContext?.toolCallId,
   };
 }
 
-export function setOrchestratorTraceContext(ctx: any, traceContext: OrchestratorTraceContext) {
+export function setOrchestratorTraceContext(ctx: NocoCtx, traceContext: OrchestratorTraceContext) {
   ctx[ORCHESTRATOR_TRACE_CONTEXT_KEY] = traceContext;
   return ctx;
 }

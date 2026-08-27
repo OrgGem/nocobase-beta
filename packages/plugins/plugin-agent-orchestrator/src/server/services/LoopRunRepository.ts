@@ -1,5 +1,6 @@
 import type { Database, Model } from '@nocobase/database';
 import { getRunEventBus } from './RunEventBus';
+import { read } from '../utils/record-utils';
 
 export type LoopRunRecord = Record<string, unknown>;
 
@@ -11,11 +12,6 @@ export class LoopRunAccessError extends Error {
     super(message);
     this.name = 'LoopRunAccessError';
   }
-}
-
-function read(record: Model | LoopRunRecord, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as LoopRunRecord)[key];
 }
 
 function plain(record: Model | LoopRunRecord): LoopRunRecord {

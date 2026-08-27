@@ -3,13 +3,9 @@ import type { Database, Model } from '@nocobase/database';
 import { LoopControlService } from './LoopControlService';
 import { LoopPatternService } from './LoopPatternService';
 import type { CompiledPatternSnapshot, HarnessSnapshot } from './LoopPatternService';
+import { read } from '../utils/record-utils';
 
 type TriggerType = 'manual' | 'cron' | 'event';
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
 
 function plain(record: Model | Record<string, unknown>) {
   return typeof (record as Model).toJSON === 'function'
@@ -43,6 +39,7 @@ export class LoopTriggerService {
   constructor(
     private readonly database: Database,
     private readonly patterns: LoopPatternService,
+    private readonly logger?: { info?: (...args: unknown[]) => void; debug?: (...args: unknown[]) => void },
   ) {
     this.control = new LoopControlService(database);
   }
@@ -151,6 +148,11 @@ export class LoopTriggerService {
         filter: { patternId: input.patternId, triggerKey },
       });
       if (!existing) throw error;
+      this.logger?.debug?.(
+        `[LoopTrigger] Deduplicated trigger key "${triggerKey}" for pattern ${input.patternId}: run ${Number(
+          existing.get?.('id') || (existing as Record<string, unknown>).id,
+        )} already exists.`,
+      );
       return { created: false, run: plain(existing) };
     }
   }

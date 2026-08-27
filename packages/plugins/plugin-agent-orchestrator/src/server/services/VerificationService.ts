@@ -6,6 +6,8 @@ import type { PluginAiRuntimeAdapter } from './PluginAiRuntimeAdapter';
 import { ToolLoopDetectionService, toolLoopReason } from './ToolLoopDetectionService';
 import { parseVerificationVerdict } from './VerificationSchema';
 import type { VerificationVerdict } from './VerificationSchema';
+import { read } from '../utils/record-utils';
+import { TokenTracker } from './TokenTracker';
 
 export type VerificationRequest = {
   runId: number;
@@ -17,6 +19,7 @@ export type VerificationRequest = {
   verifierHarness: CompiledHarness;
   policy: LoopPatternPolicy;
   makerSummary: string;
+  actingOn?: string[];
   userId?: number;
   workerId: string;
   leaseToken: string;
@@ -28,11 +31,6 @@ export type VerificationOutcome = {
   verdict: VerificationVerdict;
   finalStatus: 'succeeded' | 'waiting_human' | 'failed' | 'halted';
 };
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
 
 // The verifier answers in prose around its JSON verdict, so the object is located rather than
 // assumed to be the whole response.
@@ -47,7 +45,47 @@ function extractVerdictObject(content: string): unknown {
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
-function verifierPrompt(input: VerificationRequest, artifacts: Array<Record<string, unknown>>) {
+/**
+ * Compute additional verification checks from the run's runtime context.
+ *
+ * When `policy.verification.dynamicChecks` is configured, this inspects the number of affected
+ * paths, whether any match high-risk patterns, and adds corresponding check names to the list
+ * that the verifier must address.
+ */
+function dynamicChecksFor(input: VerificationRequest): string[] {
+  const config = input.policy.verification.dynamicChecks;
+  if (!config) return [];
+
+  const extra: string[] = [];
+  const affectedCount = input.actingOn?.length ?? 0;
+
+  if (affectedCount >= config.codeChangeThreshold) {
+    extra.push('broad_change_review');
+  }
+  if (config.riskPathPatterns.length > 0 && input.actingOn?.length) {
+    const hasRiskPath = input.actingOn.some((path) =>
+      config.riskPathPatterns.some((pattern) => path.startsWith(pattern) || path.includes(pattern)),
+    );
+    if (hasRiskPath) {
+      extra.push('risk_path_review');
+    }
+  }
+  if (config.requireSecurityReview) {
+    extra.push('security_review');
+  }
+  if (config.requirePerformanceReview) {
+    extra.push('performance_review');
+  }
+
+  return [...new Set(extra)];
+}
+
+function verifierPrompt(
+  input: VerificationRequest,
+  artifacts: Array<Record<string, unknown>>,
+  dynamicChecks: string[],
+) {
+  const allChecks = [...new Set([...input.policy.verification.requiredChecks, ...dynamicChecks])];
   const catalogue = artifacts.length
     ? artifacts.map((artifact) => `- id=${artifact.id} kind=${artifact.kind} title=${artifact.title || ''}`).join('\n')
     : '- (none)';
@@ -61,7 +99,7 @@ function verifierPrompt(input: VerificationRequest, artifacts: Array<Record<stri
     'Evidence artifacts recorded for this run:',
     catalogue,
     '',
-    `Required checks: ${input.policy.verification.requiredChecks.join(', ')}`,
+    `Required checks: ${allChecks.join(', ')}`,
     '',
     ...(input.loopNotices ?? []),
     'Reply with a single JSON object and nothing else:',
@@ -79,6 +117,7 @@ export class VerificationService {
     private readonly database: Database,
     private readonly runtime: PluginAiRuntimeAdapter,
     private readonly stateMachine: LoopRunStateMachine,
+    private readonly tokenTracker: TokenTracker,
   ) {
     this.loopGuard = new ToolLoopDetectionService(database);
   }
@@ -159,8 +198,7 @@ export class VerificationService {
   }
 
   private async nextSequence(runId: number) {
-    const steps = await this.database.getRepository('agentLoopSteps').find({ filter: { runId } });
-    return steps.length;
+    return this.database.getRepository('agentLoopSteps').count({ filter: { runId } });
   }
 
   private async collectVerdict(input: VerificationRequest, artifacts: Array<Record<string, unknown>>) {
@@ -195,9 +233,19 @@ export class VerificationService {
       systemMessage:
         'You verify completed work against its stated goal using only recorded evidence. You never modify anything.',
       harness: input.verifierHarness,
-      prompt: verifierPrompt(input, artifacts),
+      prompt: verifierPrompt(input, artifacts, dynamicChecksFor(input)),
       signal: input.signal,
     });
+
+    // Track actual token usage from the verifier's LLM response
+    await this.tokenTracker.trackActualUsage(
+      read(step, 'id'),
+      outcome.tokenUsage ?? null,
+      verifierPrompt(input, artifacts, dynamicChecksFor(input)),
+      outcome.content,
+      input.runId,
+    );
+
     await this.database.getRepository('agentLoopSteps').update({
       filterByTk: read(step, 'id'),
       values: {
@@ -212,7 +260,8 @@ export class VerificationService {
       throw new Error('The verifier requested an approval-gated tool; verification cannot complete.');
     }
     const verdict = parseVerificationVerdict(extractVerdictObject(outcome.content));
-    const required = new Set(input.policy.verification.requiredChecks);
+    const dynamicChecks = dynamicChecksFor(input);
+    const required = new Set([...input.policy.verification.requiredChecks, ...dynamicChecks]);
     for (const check of verdict.checks) required.delete(check.name);
     if (required.size) {
       throw new Error(`The verifier omitted required checks: ${Array.from(required).join(', ')}.`);

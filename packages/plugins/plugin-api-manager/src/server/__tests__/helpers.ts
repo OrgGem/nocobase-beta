@@ -115,12 +115,46 @@ export async function createTestApp(): Promise<MockServer> {
   process.env.INIT_ROOT_EMAIL = 'apim-test@nocobase.com';
   process.env.INIT_ROOT_PASSWORD = '123456';
   process.env.INIT_ROOT_NICKNAME = 'APIM Test';
-  return createMockServer({
+  const app = await createMockServer({
     // acl defaults to false in mockServer(); enable it so permission checks
     // (e.g. apiRoutes:test requiring the plugin snippet) are enforced.
     acl: true,
     plugins: ['nocobase', 'plugin-crypto-toolkit', 'plugin-api-manager'],
   });
+  // App Bearer token tests sign tokens with roleName 'admin'; bind that role to
+  // the shared test partner so the gateway's partner match passes.
+  await bindRoleToTestPartner(app, 'admin');
+  return app;
+}
+
+const TEST_PARTNER_NAME = '__apim-test__';
+
+/**
+ * Every route and API key must belong to a partner (gateway tenant isolation).
+ * Integration tests share one auto-created partner so individual tests do not
+ * have to set partnerId explicitly.
+ */
+export async function ensureTestPartner(app: MockServer): Promise<number> {
+  const repo = app.db.getRepository('apiPartners');
+  const existing = await repo.findOne({ filter: { name: TEST_PARTNER_NAME } });
+  if (existing) {
+    return Number(existing.get('id'));
+  }
+  const created = await repo.create({ values: { name: TEST_PARTNER_NAME, enabled: true } });
+  return Number(created.get('id'));
+}
+
+/**
+ * Bind a NocoBase role to the shared test partner so app Bearer tokens carrying
+ * that role pass the gateway's partner match (apiPartnerRoles).
+ */
+export async function bindRoleToTestPartner(app: MockServer, roleName: string): Promise<void> {
+  const partnerId = await ensureTestPartner(app);
+  const repo = app.db.getRepository('apiPartnerRoles');
+  const existing = await repo.findOne({ filter: { partnerId, roleName } });
+  if (!existing) {
+    await repo.create({ values: { partnerId, roleName } });
+  }
 }
 
 export async function loginAgent(app: MockServer) {
@@ -139,10 +173,11 @@ export interface TestApiKeyOptions {
 
 export async function createTestApiKey(app: MockServer, options: TestApiKeyOptions = {}): Promise<string> {
   const generated = generateApiKey();
+  const partnerId = options.partnerId ?? (await ensureTestPartner(app));
   await app.db.getRepository('apiManagerApiKeys').create({
     values: {
       name: options.name ?? `test-key-${Math.random().toString(36).slice(2, 10)}`,
-      partnerId: options.partnerId ?? null,
+      partnerId,
       keyHash: generated.keyHash,
       keyPrefix: generated.keyPrefix,
       scopes: options.scopes ?? ['inbound', 'outbound'],
@@ -155,12 +190,14 @@ export async function createTestApiKey(app: MockServer, options: TestApiKeyOptio
 }
 
 export async function createTestRoute(app: MockServer, values: Record<string, unknown>) {
+  const partnerId = values.partnerId ?? (await ensureTestPartner(app));
   return app.db.getRepository('apiRoutes').create({
     values: {
       direction: 'outbound',
       method: 'POST',
       targetUrl: 'http://127.0.0.1:9/unused',
       enabled: true,
+      authMode: 'both',
       encryptionMode: 'none',
       wireFormat: 'binary',
       timeoutMs: 5000,
@@ -169,6 +206,7 @@ export async function createTestRoute(app: MockServer, values: Record<string, un
       maxBodyMb: 1,
       logPayloads: false,
       ...values,
+      partnerId,
     },
   });
 }

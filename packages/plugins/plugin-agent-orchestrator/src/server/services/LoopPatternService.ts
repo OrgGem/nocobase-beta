@@ -4,6 +4,7 @@ import type { CompiledHarness, HarnessLayer } from './HarnessCompiler';
 import { HarnessProfileService } from './HarnessProfileService';
 import { parseLoopPattern } from './LoopPatternSchema';
 import type { LoopPattern } from './LoopPatternSchema';
+import { read } from '../utils/record-utils';
 
 export type WorktreeCapability = {
   available: boolean;
@@ -42,11 +43,6 @@ const platformHarness = {
   observability: { tracingRetentionDays: 3650 },
 };
 
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
-
 function toPlain(record: Model | Record<string, unknown>) {
   return typeof (record as Model).toJSON === 'function'
     ? ((record as Model).toJSON() as Record<string, unknown>)
@@ -82,13 +78,28 @@ export class LoopPatternService {
     await this.assertCapabilities(pattern);
 
     const makerUsernames = pattern.makerUsernames.length ? pattern.makerUsernames : [pattern.leaderUsername];
+    // Cache harness profile lookups by tag to avoid redundant DB queries.
+    // All makers share the same makerHarnessTag, so this saves N-1 profile queries.
+    const profileCache = new Map<string, { id: number; version: number; schemaVersion: number; settings: unknown }>();
     const [leaderHarness, verifierHarness, ...makerSnapshots] = await Promise.all([
-      this.compileRole(pattern.leaderHarnessTag, pattern.leaderUsername, pattern.policy.harness, perRunHarness),
-      this.compileRole(pattern.verifierHarnessTag, pattern.verifierUsername, pattern.policy.harness, perRunHarness),
+      this.compileRole(
+        pattern.leaderHarnessTag,
+        pattern.leaderUsername,
+        pattern.policy.harness,
+        perRunHarness,
+        profileCache,
+      ),
+      this.compileRole(
+        pattern.verifierHarnessTag,
+        pattern.verifierUsername,
+        pattern.policy.harness,
+        perRunHarness,
+        profileCache,
+      ),
       // Every maker gets its own snapshot: employee-level harness overrides differ per username,
       // so reusing the first maker's compilation would grant or deny the wrong tools.
       ...makerUsernames.map((username) =>
-        this.compileRole(pattern.makerHarnessTag, username, pattern.policy.harness, perRunHarness),
+        this.compileRole(pattern.makerHarnessTag, username, pattern.policy.harness, perRunHarness, profileCache),
       ),
     ]);
     const makerHarnesses = Object.fromEntries(
@@ -113,9 +124,26 @@ export class LoopPatternService {
     };
   }
 
-  private async compileRole(tag: string, username: string, patternHarness: unknown, perRunHarness?: unknown) {
-    const published = await this.harnessProfiles.getPublishedByTag(tag);
-    if (!published) throw new Error(`Harness profile "${tag}" has no published version.`);
+  private async compileRole(
+    tag: string,
+    username: string,
+    patternHarness: unknown,
+    perRunHarness?: unknown,
+    profileCache?: Map<string, { id: number; version: number; schemaVersion: number; settings: unknown }>,
+  ) {
+    // Use cache to avoid redundant DB lookups when multiple roles share the same tag.
+    let published = profileCache?.get(tag);
+    if (!published) {
+      const fetched = await this.harnessProfiles.getPublishedByTag(tag);
+      if (!fetched) throw new Error(`Harness profile "${tag}" has no published version.`);
+      published = {
+        id: Number(fetched.id),
+        version: Number(fetched.version),
+        schemaVersion: Number(fetched.schemaVersion),
+        settings: fetched.settings,
+      };
+      profileCache?.set(tag, published);
+    }
     const employeeHarness = await this.resolveEmployeeHarness(username);
     const layers: HarnessLayer[] = [
       { source: 'platform', settings: platformHarness },

@@ -39,7 +39,8 @@ export const DrawioBlock: React.FC<Props> = ({ height = 'calc(100vh - 56px)', ui
     });
   }, []);
 
-  // Setup the iframe bridge once.
+  // Recreate the bridge only when the iframe origin changes. The draw.io iframe emits
+  // its init event just once, so re-attaching on every diagram update loses that event.
   useEffect(() => {
     if (!iframeRef.current) {
       return;
@@ -71,7 +72,7 @@ export const DrawioBlock: React.FC<Props> = ({ height = 'calc(100vh - 56px)', ui
           }
         },
       },
-      diagram?.xml || '',
+      getDiagram()?.xml || '',
     );
 
     return () => {
@@ -79,10 +80,10 @@ export const DrawioBlock: React.FC<Props> = ({ height = 'calc(100vh - 56px)', ui
       bridgeRef.current = null;
       setIframeReady(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
 
   // Push store XML into the iframe whenever it changes and the editor is ready.
+  // Guard against bridge-detached state (cleanup runs before React re-renders).
   useEffect(() => {
     if (!iframeReady || !bridgeRef.current || !diagram) {
       return;

@@ -14,6 +14,7 @@ import {
 } from './services/gateway-crypto';
 import { registerCryptoKeysResource } from './resources/keys';
 import { registerCryptoOpsResource } from './resources/crypto-ops';
+import { runWithDistributedLock } from './services/ha-lock';
 
 const PRIVATE_MATERIAL_RE = /-----BEGIN [^-]*PRIVATE KEY( BLOCK)?-----/;
 const GENERATED_PRIVATE_ENV_RE = /^CRYPTO_TOOLKIT_[A-Z][A-Z0-9_]{0,47}_PRIVATE$/;
@@ -59,7 +60,12 @@ export class PluginCryptoToolkitServer extends Plugin {
 
     this.app.on('afterStart', () => {
       this.pruneExpiredOperations();
-      this.pruneTimer = setInterval(() => this.pruneExpiredOperations(), PRUNE_INTERVAL_MS);
+      this.pruneTimer = runWithDistributedLock(
+        this.app,
+        'crypto-toolkit:prune',
+        () => this.pruneExpiredOperations(),
+        PRUNE_INTERVAL_MS,
+      );
     });
     this.app.on('beforeStop', () => {
       if (this.pruneTimer) {

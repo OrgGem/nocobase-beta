@@ -28,6 +28,7 @@ interface ModelPrice {
   model: string;
   currency: string;
   inputPricePerMillionTokens: string;
+  cacheInputPricePerMillionTokens: string;
   outputPricePerMillionTokens: string;
   fixedCostPerRequest: string;
   effectiveFrom: string;
@@ -95,6 +96,7 @@ export default function ModelPricingPage() {
     form.setFieldsValue({
       currency: 'USD',
       inputPricePerMillionTokens: '0',
+      cacheInputPricePerMillionTokens: '0',
       outputPricePerMillionTokens: '0',
       fixedCostPerRequest: '0',
       effectiveFrom: dayjs(),
@@ -182,6 +184,12 @@ export default function ModelPricingPage() {
     { title: t('LLM service'), dataIndex: 'llmService', key: 'llmService', width: 180 },
     { title: t('Model'), dataIndex: 'model', key: 'model', width: 180 },
     { title: t('Input price / 1M'), dataIndex: 'inputPricePerMillionTokens', key: 'inputPrice', width: 150 },
+    {
+      title: t('Cache input price / 1M'),
+      dataIndex: 'cacheInputPricePerMillionTokens',
+      key: 'cacheInputPrice',
+      width: 170,
+    },
     { title: t('Output price / 1M'), dataIndex: 'outputPricePerMillionTokens', key: 'outputPrice', width: 150 },
     { title: t('Fixed request cost'), dataIndex: 'fixedCostPerRequest', key: 'fixedCost', width: 150 },
     { title: t('Currency'), dataIndex: 'currency', key: 'currency', width: 90 },
@@ -258,6 +266,13 @@ export default function ModelPricingPage() {
             <Input />
           </Form.Item>
           <Form.Item name="inputPricePerMillionTokens" label={t('Input price / 1M')} rules={[{ required: true }]}>
+            <InputNumber min={0} stringMode style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name="cacheInputPricePerMillionTokens"
+            label={t('Cache input price / 1M')}
+            rules={[{ required: true }]}
+          >
             <InputNumber min={0} stringMode style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="outputPricePerMillionTokens" label={t('Output price / 1M')} rules={[{ required: true }]}>

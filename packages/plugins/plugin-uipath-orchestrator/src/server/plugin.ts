@@ -36,6 +36,7 @@ import {
 import { createCustomApiActions } from './actions/customApi';
 import { createUiPathTools } from './tools/uipath-tools';
 import { UiPathWebhookVerifier } from './services/UiPathWebhookVerifier';
+import { runWithDistributedLock } from './services/ha-lock';
 
 // ─── Cache for dashboard snapshots ─────────────────────────────────
 const MAX_SNAPSHOT_HISTORY = 60; // ~30 min at 30s interval
@@ -380,53 +381,52 @@ export class PluginUiPathOrchestratorServer extends Plugin {
   }
 
   private startPollingCron() {
-    this.pollTimer = setInterval(async () => {
-      try {
-        // Distributed lock — only 1 container polls
-        const lockKey = 'plugin-uipath:poll-lock';
-        const isLocked = await this.app.cache.get(lockKey);
-        if (isLocked) return;
-        await this.app.cache.set(lockKey, 'locked', 25_000); // 25s TTL
+    this.pollTimer = runWithDistributedLock(
+      this.app,
+      'uipath:poll-cron',
+      async () => {
+        try {
+          const repo = this.db.getRepository('uipathInstances');
+          const instances = await repo.find({ filter: { enabled: true, pollEnabled: true } });
 
-        const repo = this.db.getRepository('uipathInstances');
-        const instances = await repo.find({ filter: { enabled: true, pollEnabled: true } });
+          for (const instance of instances) {
+            const id = Number(instance.get('id'));
+            try {
+              const client = await this.getApiClient(id);
 
-        for (const instance of instances) {
-          const id = Number(instance.get('id'));
-          try {
-            const client = await this.getApiClient(id);
+              // Fetch dashboard snapshot
+              const [jobsStats, sessionsStats] = await Promise.all([
+                client.get('/api/Stats/GetJobsStats').catch(() => null),
+                client.get('/api/Stats/GetSessionsStats').catch(() => null),
+              ]);
 
-            // Fetch dashboard snapshot
-            const [jobsStats, sessionsStats] = await Promise.all([
-              client.get('/api/Stats/GetJobsStats').catch(() => null),
-              client.get('/api/Stats/GetSessionsStats').catch(() => null),
-            ]);
+              const snapshot: Partial<DashboardSnapshot> = {
+                timestamp: Date.now(),
+                jobsStats,
+                sessionsStats,
+              };
 
-            const snapshot: Partial<DashboardSnapshot> = {
-              timestamp: Date.now(),
-              jobsStats,
-              sessionsStats,
-            };
+              // Store in distributed cache
+              const cacheKey = `uipath-dashboard:${id}`;
+              const history = ((await this.app.cache.get(cacheKey)) as any[]) || [];
+              history.push(snapshot);
+              if (history.length > MAX_SNAPSHOT_HISTORY) {
+                history.splice(0, history.length - MAX_SNAPSHOT_HISTORY);
+              }
+              await this.app.cache.set(cacheKey, history, 2 * 60 * 60 * 1000);
 
-            // Store in distributed cache
-            const cacheKey = `uipath-dashboard:${id}`;
-            const history = ((await this.app.cache.get(cacheKey)) as any[]) || [];
-            history.push(snapshot);
-            if (history.length > MAX_SNAPSHOT_HISTORY) {
-              history.splice(0, history.length - MAX_SNAPSHOT_HISTORY);
+              // Evaluate alert rules
+              await this.evaluateAlerts(id, snapshot);
+            } catch (err) {
+              this.app.logger.debug(`[plugin-uipath] Poll failed for instance ${id}: ${err}`);
             }
-            await this.app.cache.set(cacheKey, history, 2 * 60 * 60 * 1000);
-
-            // Evaluate alert rules
-            await this.evaluateAlerts(id, snapshot);
-          } catch (err) {
-            this.app.logger.debug(`[plugin-uipath] Poll failed for instance ${id}: ${err}`);
           }
+        } catch (err) {
+          this.app.logger.debug(`[plugin-uipath] Polling cron error: ${err}`);
         }
-      } catch (err) {
-        this.app.logger.debug(`[plugin-uipath] Polling cron error: ${err}`);
-      }
-    }, 30_000); // 30s interval
+      },
+      30_000, // 30s interval
+    );
   }
 
   private async evaluateAlerts(instanceId: number, snapshot: any) {

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
 import { hashApiKey } from '../services/key-manager';
-import { createTestApp, createTestApiKey, loginAgent } from './helpers';
+import { createTestApp, createTestApiKey, ensureTestPartner, loginAgent } from './helpers';
 
 function unwrap(res: { body: unknown }): Record<string, unknown> {
   const body = res.body as Record<string, unknown> | undefined;
@@ -31,10 +31,12 @@ function errorMessage(res: { body: unknown; text?: string }): string {
 describe('apiManagerApiKeys resource', () => {
   let app: MockServer;
   let agent: Awaited<ReturnType<typeof loginAgent>>;
+  let partnerId: number;
 
   beforeAll(async () => {
     app = await createTestApp();
     agent = await loginAgent(app);
+    partnerId = await ensureTestPartner(app);
   }, 300000);
 
   afterAll(async () => {
@@ -43,7 +45,7 @@ describe('apiManagerApiKeys resource', () => {
 
   it('create returns the plaintext key exactly once', async () => {
     const res = await agent.resource('apiManagerApiKeys').create({
-      values: { name: 'once-key', scopes: ['inbound'], expiresAt: null },
+      values: { name: 'once-key', scopes: ['inbound'], partnerId, expiresAt: null },
     });
     expect(res.status).toBe(200);
     const body = unwrap(res);
@@ -84,7 +86,7 @@ describe('apiManagerApiKeys resource', () => {
   it('create rejects malformed scopes', async () => {
     for (const scopes of [['admin'], ['inbound:'], ['inbound:bad name'], ['outbound:*'], []]) {
       const res = await agent.resource('apiManagerApiKeys').create({
-        values: { name: `bad-scope-${JSON.stringify(scopes)}`, scopes },
+        values: { name: `bad-scope-${JSON.stringify(scopes)}`, scopes, partnerId },
       });
       expect(res.status).toBe(400);
     }
@@ -92,7 +94,7 @@ describe('apiManagerApiKeys resource', () => {
 
   it('create accepts route-scoped scopes', async () => {
     const res = await agent.resource('apiManagerApiKeys').create({
-      values: { name: 'scoped-key', scopes: ['inbound:partner-a', 'outbound:sync_orders.v2'] },
+      values: { name: 'scoped-key', scopes: ['inbound:partner-a', 'outbound:sync_orders.v2'], partnerId },
     });
     expect(res.status).toBe(200);
     expect(unwrap(res).scopes).toEqual(['inbound:partner-a', 'outbound:sync_orders.v2']);
@@ -135,5 +137,23 @@ describe('apiManagerApiKeys resource', () => {
   it('revoke returns 404 for a missing key', async () => {
     const res = await agent.resource('apiManagerApiKeys').revoke({ filterByTk: 999999 });
     expect(res.status).toBe(404);
+  });
+
+  describe('authMode / no-role keys', () => {
+    it('create ignores a roleName field (keys are not role-bound)', async () => {
+      const res = await agent.resource('apiManagerApiKeys').create({
+        values: { name: 'ignored-role-key', scopes: ['outbound'], roleName: 'admin', partnerId },
+      });
+      expect(res.status).toBe(200);
+      expect(unwrap(res).roleName).toBeUndefined();
+    });
+
+    it('create leaves roleName undefined for a plain key', async () => {
+      const res = await agent.resource('apiManagerApiKeys').create({
+        values: { name: 'plain-key-create', scopes: ['outbound'], partnerId },
+      });
+      expect(res.status).toBe(200);
+      expect(unwrap(res).roleName).toBeUndefined();
+    });
   });
 });

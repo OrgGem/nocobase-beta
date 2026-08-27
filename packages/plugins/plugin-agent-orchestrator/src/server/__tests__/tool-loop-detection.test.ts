@@ -33,6 +33,7 @@ function mockDatabase(options: { steps?: Row[]; messages?: Row[] } = {}) {
         return {
           find: async ({ filter }: { filter: Row }) => steps.filter((row) => matches(row, filter)),
           findOne: async ({ filter }: { filter: Row }) => steps.find((row) => matches(row, filter)) ?? null,
+          count: async ({ filter }: { filter: Row }) => steps.filter((row) => matches(row, filter)).length,
           create: async ({ values }: { values: Row }) => {
             const row = { id: nextId++, ...values };
             steps.push(row);

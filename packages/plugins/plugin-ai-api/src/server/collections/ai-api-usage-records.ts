@@ -40,6 +40,7 @@ export default defineCollection({
     { name: 'quotaPolicyId', type: 'bigInt', allowNull: true, index: true },
     { name: 'groupId', type: 'bigInt', allowNull: true, index: true },
     { name: 'inputPricePerMillionTokens', type: 'decimal', allowNull: true, precision: 20, scale: 10 },
+    { name: 'cacheInputPricePerMillionTokens', type: 'decimal', allowNull: true, precision: 20, scale: 10 },
     { name: 'outputPricePerMillionTokens', type: 'decimal', allowNull: true, precision: 20, scale: 10 },
     { name: 'fixedCostPerRequest', type: 'decimal', allowNull: true, precision: 20, scale: 10 },
     { name: 'providerRequestId', type: 'string', allowNull: true },

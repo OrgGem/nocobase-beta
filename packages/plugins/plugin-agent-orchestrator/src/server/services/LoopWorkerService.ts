@@ -13,7 +13,10 @@ import { PathLockService } from './PathLockService';
 import { PluginAiRuntimeAdapter } from './PluginAiRuntimeAdapter';
 import type { InvocationOutcome, ToolCallDecision } from './PluginAiRuntimeAdapter';
 import { ToolLoopDetectionService, toolLoopNotice, toolLoopReason } from './ToolLoopDetectionService';
+import { TokenTracker } from './TokenTracker';
 import { VerificationService } from './VerificationService';
+import { read } from '../utils/record-utils';
+import { asObject } from '../utils/ctx-utils';
 
 const POLL_INTERVAL_MS = 3_000;
 const LEASE_MS = 120_000;
@@ -43,6 +46,37 @@ type ResumeContext = {
   makerQueue: string[];
 };
 
+export type RunProgress = {
+  currentPhase: 'leader' | 'maker' | 'verifying' | 'complete';
+  totalPhases: number;
+  completedPhases: number;
+  currentStepTitle: string;
+  currentRole: string;
+  estimatedMsRemaining: number | null;
+  startedAt: string;
+  updatedAt: string;
+};
+
+function buildProgress(
+  phase: RunProgress['currentPhase'],
+  totalPhases: number,
+  completedPhases: number,
+  stepTitle: string,
+  role: string,
+  startedAt: Date,
+): RunProgress {
+  return {
+    currentPhase: phase,
+    totalPhases,
+    completedPhases,
+    currentStepTitle: stepTitle,
+    currentRole: role,
+    estimatedMsRemaining: null,
+    startedAt: startedAt.toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 type RunSnapshot = {
   id: number;
   patternId: number;
@@ -61,15 +95,6 @@ type RunSnapshot = {
   approvalStatus: string;
   resumeContext: ResumeContext | null;
 };
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
@@ -119,6 +144,7 @@ export class LoopWorkerService {
   private readonly runtime: PluginAiRuntimeAdapter;
   private readonly verification: VerificationService;
   private readonly loopGuard: ToolLoopDetectionService;
+  private readonly tokenTracker: TokenTracker;
   private readonly workerId: string;
   private readonly active = new Map<number, AbortController>();
   private readonly heldPathLocks = new Map<number, string>();
@@ -140,7 +166,8 @@ export class LoopWorkerService {
     this.circuits = new DurableCircuitBreakerService(database, distributedLock);
     this.pathLocks = new PathLockService(database, distributedLock);
     this.runtime = new PluginAiRuntimeAdapter(app);
-    this.verification = new VerificationService(database, this.runtime, this.stateMachine);
+    this.tokenTracker = new TokenTracker({ app, db: database });
+    this.verification = new VerificationService(database, this.runtime, this.stateMachine, this.tokenTracker);
     this.loopGuard = new ToolLoopDetectionService(database);
     this.workerId = `${app.name}:${process.pid}:${randomUUID()}`;
   }
@@ -195,6 +222,18 @@ export class LoopWorkerService {
     const claimed = await this.stateMachine.claimNext(this.workerId, LEASE_MS);
     if (!claimed) return;
     await this.execute(claimed);
+  }
+
+  private async updateProgress(runId: number, progress: RunProgress) {
+    await this.database
+      .getRepository('agentLoopRuns')
+      .update({
+        filterByTk: runId,
+        values: { progress },
+      })
+      .catch((error: unknown) => {
+        this.app.logger?.warn?.(`[AgentOrchestrator] Failed to update progress for run ${runId}`, { error });
+      });
   }
 
   private async execute(claimed: ClaimedLoopRun) {
@@ -287,6 +326,8 @@ export class LoopWorkerService {
     // Loops recorded before this claim (for example before a park for approval) keep warning the
     // prompts composed later in the run.
     const loopNotices = await this.loopGuard.existingNotices(snapshot.id);
+    const totalPhases = 1 + snapshot.makerUsernames.length + 1;
+    const runStartedAt = new Date();
 
     let makerReports: string[];
     let makerQueue: string[];
@@ -340,6 +381,10 @@ export class LoopWorkerService {
         loopNotices,
       );
       if (leaderGuard === 'halt') return;
+      await this.updateProgress(
+        snapshot.id,
+        buildProgress('leader', totalPhases, 1, 'Leader plan complete', 'leader', runStartedAt),
+      );
 
       // plugin-ai stops the graph on an approval-gated tool. Approval is a human decision, so the
       // run parks here instead of the worker deciding on the operator's behalf.
@@ -397,6 +442,11 @@ export class LoopWorkerService {
         return;
       }
       makerReports.push(`# ${username}\n${maker.content}`);
+      const completedMakers = snapshot.makerUsernames.length - makerQueue.length + 1;
+      await this.updateProgress(
+        snapshot.id,
+        buildProgress('maker', totalPhases, 1 + completedMakers, `Maker "${username}" complete`, 'maker', runStartedAt),
+      );
       makerQueue = makerQueue.slice(1);
     }
     const makerSummary = makerReports.join('\n\n');
@@ -413,6 +463,17 @@ export class LoopWorkerService {
       correlationKey: `verifying:${snapshot.id}`,
       values: { currentRole: 'verifier', finalAnswer: makerSummary },
     });
+    await this.updateProgress(
+      snapshot.id,
+      buildProgress(
+        'verifying',
+        totalPhases,
+        totalPhases - 1,
+        `Verifier "${snapshot.verifierUsername}" reviewing`,
+        'verifier',
+        runStartedAt,
+      ),
+    );
 
     await this.budgets.reserve({
       runId: snapshot.id,
@@ -430,6 +491,7 @@ export class LoopWorkerService {
       verifierHarness: snapshot.verifierHarness,
       policy: snapshot.policy,
       makerSummary,
+      actingOn: snapshot.actingOn,
       userId: snapshot.userId,
       workerId: this.workerId,
       leaseToken,
@@ -452,6 +514,17 @@ export class LoopWorkerService {
       return;
     }
     await this.circuits.recordSuccess(snapshot.patternId, `pattern:${snapshot.patternId}`, snapshot.id);
+    await this.updateProgress(
+      snapshot.id,
+      buildProgress(
+        'complete',
+        totalPhases,
+        totalPhases,
+        'Run completed successfully',
+        snapshot.currentRole || 'verifier',
+        runStartedAt,
+      ),
+    );
   }
 
   private async acquirePaths(snapshot: RunSnapshot, leaseToken: string) {
@@ -538,6 +611,15 @@ export class LoopWorkerService {
       signal: input.signal,
     });
 
+    // Track actual token usage from the LLM response; fall back to text-length estimation
+    await this.tokenTracker.trackActualUsage(
+      read(step, 'id'),
+      outcome.tokenUsage ?? null,
+      input.prompt,
+      outcome.content,
+      snapshot.id,
+    );
+
     await this.database.getRepository('agentLoopSteps').update({
       filterByTk: read(step, 'id'),
       values: {
@@ -598,6 +680,15 @@ export class LoopWorkerService {
       decisions,
       signal,
     });
+
+    // Track actual token usage from the LLM response; fall back to text-length estimation
+    await this.tokenTracker.trackActualUsage(
+      read(step, 'id'),
+      outcome.tokenUsage ?? null,
+      resume.role === 'leader' ? LEADER_SYSTEM_MESSAGE : MAKER_SYSTEM_MESSAGE,
+      outcome.content,
+      snapshot.id,
+    );
 
     await this.database.getRepository('agentLoopSteps').update({
       filterByTk: read(step, 'id'),
@@ -785,8 +876,7 @@ export class LoopWorkerService {
   }
 
   private async nextSequence(runId: number) {
-    const steps = await this.database.getRepository('agentLoopSteps').find({ filter: { runId } });
-    return steps.length;
+    return this.database.getRepository('agentLoopSteps').count({ filter: { runId } });
   }
 
   private snapshotFrom(run: Record<string, unknown>): RunSnapshot {

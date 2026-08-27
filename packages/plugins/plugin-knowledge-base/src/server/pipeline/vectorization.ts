@@ -14,6 +14,9 @@ import { DocumentTextSplitter } from './text-splitter';
 import type { TextSplitterOptions } from './text-splitter';
 import { createEmbeddingsForVectorStore } from './embedding-factory';
 import type { DocPixieExtractor } from '../services/docpixie-extractor';
+import { KnowledgeSearchService } from '../services/knowledge-search';
+import { detectLanguage, getChunkSizeMultiplier, getSeparatorsForLanguage } from '../services/language-detect';
+import { WebhookDispatcher } from '../services/webhook';
 
 export type VectorizationResult = {
   success: boolean;
@@ -34,6 +37,8 @@ export type VectorizationResult = {
  *  - The DocPixie document ID is stored in chunk metadata (`docpixieDocumentId`)
  *  - This enables Stage 2 deep retrieval in the work context handler
  */
+const webhookDispatcher = new WebhookDispatcher();
+
 export class VectorizationPipeline {
   constructor(
     private plugin: PluginKnowledgeBaseServer,
@@ -167,8 +172,19 @@ export class VectorizationPipeline {
         return { success: true, chunkCount: 0 };
       }
 
-      // 3. Split text into chunks — include permission + DocPixie metadata
-      const splitter = new DocumentTextSplitter(options);
+      // 3. Split text into chunks — include permission + DocPixie metadata.
+      // Multi-language: detect dominant script and adjust separators/chunk size so that
+      // CJK/Vietnamese/Thai content splits at natural sentence boundaries.
+      const detectedLang = detectLanguage(rawText);
+      const langMultiplier = getChunkSizeMultiplier(detectedLang);
+      const effectiveOptions = {
+        ...(options ?? {}),
+        ...(options?.chunkSize ? {} : { chunkSize: Math.round(1000 * langMultiplier) }),
+        ...(!options?.separators && getSeparatorsForLanguage(detectedLang)
+          ? { separators: getSeparatorsForLanguage(detectedLang) }
+          : {}),
+      };
+      const splitter = new DocumentTextSplitter(effectiveOptions);
       const chunks = await splitter.splitText(rawText, {
         knowledgeBaseId: knowledgeBase.id,
         knowledgeBaseOuterId: knowledgeBase.id,
@@ -179,6 +195,8 @@ export class VectorizationPipeline {
         accessLevel: knowledgeBase.accessLevel ?? 'PUBLIC',
         // DocPixie reference for Stage 2 deep retrieval (null if not used)
         ...(docpixieDocumentId ? { docpixieDocumentId } : {}),
+        // Detected content language for language-aware retrieval/filtering
+        language: detectedLang,
       });
 
       if (chunks.length === 0) {
@@ -228,10 +246,32 @@ export class VectorizationPipeline {
         },
       });
 
+      // Invalidate cached search results for this KB — new chunks are searchable now
+      KnowledgeSearchService.invalidateKnowledgeBase(String(knowledgeBase.id ?? knowledgeBase.knowledgeBaseOuterId));
+
+      // Snapshot the initial text-content version once vectorization succeeds
+      if (textContent && this.plugin.documentVersionService) {
+        await this.plugin.documentVersionService.recordVersion({
+          documentId,
+          textContent,
+          filename: knowledgeBase.filename ?? doc.filename ?? 'pasted-text',
+          changeType: 'initial',
+          metadata: { chunkCount: chunks.length, source: 'vectorization' },
+          createdBy: doc.uploadedById ?? null,
+        });
+      }
+
       // 6. Auto-delete source file if KB has deleteSourceFile enabled
       if (knowledgeBase.deleteSourceFile && file) {
         await this.deleteSourceFile(documentId, file);
       }
+
+      await webhookDispatcher.dispatch('document.vectorized', {
+        knowledgeBaseId: String(knowledgeBase.id ?? knowledgeBase.knowledgeBaseOuterId ?? ''),
+        documentId: String(documentId),
+        filename: file?.filename ?? doc.filename ?? 'pasted-text',
+        chunkCount: chunks.length,
+      });
 
       return { success: true, chunkCount: chunks.length };
     } catch (error: any) {
@@ -244,6 +284,11 @@ export class VectorizationPipeline {
           error: error.message ?? String(error),
           retryCount: currentRetryCount + 1,
         },
+      });
+
+      await webhookDispatcher.dispatch('document.failed', {
+        documentId: String(documentId),
+        error: error.message ?? String(error),
       });
 
       return {

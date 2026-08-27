@@ -48,11 +48,11 @@ export class PluginApiManagerClient extends Plugin<Record<string, never>, Applic
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: SETTINGS_KEY,
-      key: 'keys',
-      title: this.t('API Keys'),
+      key: 'partner-roles',
+      title: this.t('Partner Roles'),
       aclSnippet: APIM_ACL,
-      sort: 20,
-      componentLoader: () => import('./components/ApiKeysPage'),
+      sort: 15,
+      componentLoader: () => import('./components/PartnerRolesPage'),
     });
 
     this.pluginSettingsManager.addPageTabItem({

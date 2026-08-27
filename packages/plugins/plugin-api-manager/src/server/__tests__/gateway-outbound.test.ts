@@ -510,4 +510,250 @@ describe('gateway outbound', () => {
       expect(Number(log.get('attempt'))).toBe(2);
     });
   });
+
+  describe('authMode route control', () => {
+    it("allows a plugin API key on an 'api-key' route", async () => {
+      const route = await createTestRoute(app, {
+        name: 'authmode-api-key',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'api-key',
+      });
+      expect(route.get('authMode')).toBe('api-key');
+      const key = await createTestApiKey(app, { scopes: ['outbound:authmode-api-key'] });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-api-key`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects a Bearer token on an 'api-key' route (403)", async () => {
+      await createTestRoute(app, {
+        name: 'authmode-api-key-only',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'api-key',
+      });
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'admin' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-api-key-only`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it("allows an app Bearer token on a 'role' route (ACL role check)", async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['authmode-role']);
+      await createTestRoute(app, {
+        name: 'authmode-role',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'role',
+      });
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'admin' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-role`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects an API key on a 'role' route (403)", async () => {
+      await createTestRoute(app, {
+        name: 'authmode-role-only',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'role',
+      });
+      const key = await createTestApiKey(app, { scopes: ['outbound:authmode-role-only'] });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-role-only`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it("rejects an API key on a 'role' route when the role ACL is not granted (403)", async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['authmode-role-denied']);
+      await createTestRoute(app, {
+        name: 'authmode-role-denied',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'role',
+      });
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'member' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-role-denied`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it("accepts both credential types on a 'both' route", async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['authmode-both']);
+      await createTestRoute(app, {
+        name: 'authmode-both',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'both',
+      });
+      const key = await createTestApiKey(app, { scopes: ['outbound:authmode-both'] });
+      const keyRes = await request
+        .post(`${OUTBOUND_PREFIX}authmode-both`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(keyRes.status).toBe(200);
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'admin' }, { expiresIn: '1h' });
+      const tokenRes = await request
+        .post(`${OUTBOUND_PREFIX}authmode-both`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(tokenRes.status).toBe(200);
+    });
+    it("returns 401 (APIM_UNAUTHORIZED) with no credential at all on a 'both' route", async () => {
+      await createTestRoute(app, {
+        name: 'authmode-no-cred',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'both',
+      });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-no-cred`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('APIM_UNAUTHORIZED');
+    });
+
+    it("returns 401 (APIM_UNAUTHORIZED) with no credential at all on a 'role' route", async () => {
+      await createTestRoute(app, {
+        name: 'authmode-no-cred-role',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'role',
+      });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-no-cred-role`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('APIM_UNAUTHORIZED');
+    });
+
+    it("returns 401 (APIM_UNAUTHORIZED) with no credential at all on an 'api-key' route", async () => {
+      await createTestRoute(app, {
+        name: 'authmode-no-cred-apikey',
+        direction: 'outbound',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'api-key',
+      });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}authmode-no-cred-apikey`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('APIM_UNAUTHORIZED');
+    });
+  });
+
+  describe('app Bearer token auth (NocoBase JWT)', () => {
+    it('grants access with a valid app token whose role may call the route', async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['out-plain']);
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'admin' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}out-plain`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(200);
+    });
+
+    it('denies access when the app token role lacks the route grant (403)', async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['out-plain']);
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'member' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}out-plain`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it('rejects an invalid app token with 401', async () => {
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}out-plain`)
+        .set('Authorization', 'Bearer not-a-real-token')
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('APIM_UNAUTHORIZED');
+    });
+
+    it('rejects a token without a role (403)', async () => {
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id') }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}out-plain`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it('prefers the plugin API key over a Bearer token when both are sent', async () => {
+      const key = await createTestApiKey(app, { scopes: ['outbound'] });
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'member' }, { expiresIn: '1h' });
+      // Legacy key (no role) + member token: the key wins, so the request is allowed.
+      const res = await request
+        .post(`${OUTBOUND_PREFIX}out-plain`)
+        .set('X-API-Key', key)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(200);
+    });
+  });
 });

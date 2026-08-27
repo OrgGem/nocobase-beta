@@ -10,7 +10,7 @@ import {
   OUTBOUND_PREFIX,
   type RouteDirection,
 } from '../../constants';
-import { authenticateApiKey, type AuthResult } from './auth';
+import { authenticateApiKey, authenticateBearerToken, type AuthResult } from './auth';
 import { getRawBodyBuffer } from './body';
 import { sha256Hex as sha256 } from '../services/hash';
 import { decryptPayload, encryptPayload } from '../services/crypto-adapter';
@@ -28,6 +28,7 @@ import { CircuitBreaker, circuitOpenError } from '../services/circuit-breaker';
 import { resolveGatewaySettings } from '../services/gateway-settings';
 import { capPayload, writeRequestLog } from '../services/request-logger';
 import { resolveGatewayRoute } from '../services/route-resolver';
+import { canRoleCallRoute } from '../services/acl';
 type GatewayContext = Context & { withoutDataWrapping?: boolean };
 function sniffContentType(body: Buffer): string {
   for (const byte of body) {
@@ -84,7 +85,7 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
     let pathOrName = '';
     if (path.startsWith(INBOUND_PREFIX)) {
       direction = 'inbound';
-      pathOrName = path.slice(INBOUND_PREFIX.length);
+      pathOrName = path.slice(INBOUND_PREFIX.length).replace(/\/+$/, '');
     } else if (path.startsWith(OUTBOUND_PREFIX)) {
       direction = 'outbound';
       pathOrName = path.slice(OUTBOUND_PREFIX.length);
@@ -117,7 +118,55 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
       if (!isIpAllowed(ctx.ip, ipAllowlist)) {
         throw new ApimError(ERROR_CODES.IP_FORBIDDEN, `Client IP "${ctx.ip}" is not allowed for this route`, 403);
       }
-      auth = await authenticateApiKey(app.db, ctx.get('x-api-key'), direction, routeName);
+      const apiKeyHeader = ctx.get('x-api-key');
+      const authModeRaw = String(route.get('authMode') ?? 'both');
+      const authMode = authModeRaw === 'api-key' || authModeRaw === 'role' ? authModeRaw : 'both';
+      // Early bail: no credential at all — the later branches would call
+      // authenticateBearerToken purely to have it throw "Missing Bearer
+      // token", wasting a JWT-decode-shaped call on the gateway hot path.
+      if (!apiKeyHeader && !ctx.getBearerToken()) {
+        throw new ApimError(ERROR_CODES.UNAUTHORIZED, 'Missing credentials: provide X-API-Key or a Bearer token', 401);
+      }
+      if (apiKeyHeader && authMode !== 'role') {
+        // Plugin API key: scope check only; route access is not role-bound.
+        auth = await authenticateApiKey(app.db, apiKeyHeader, direction, routeName);
+      } else if (!apiKeyHeader && authMode !== 'api-key') {
+        // App Bearer token: no plugin key scope; access is purely role-based.
+        auth = await authenticateBearerToken(app, app.db, ctx.getBearerToken());
+      } else if (apiKeyHeader) {
+        // authMode === 'role': plugin keys are rejected.
+        throw new ApimError(ERROR_CODES.FORBIDDEN, 'This route only accepts app Bearer tokens (role-based)', 403);
+      } else {
+        // authMode === 'api-key': Bearer tokens are rejected.
+        throw new ApimError(ERROR_CODES.FORBIDDEN, 'This route only accepts plugin API keys', 403);
+      }
+      // Partner-scoped access control. Both plugin API keys and app Bearer
+      // tokens are bound to a partner; a route may only be called by a
+      // principal whose partner matches the route's partner. Because partner
+      // is now required on routes and keys, a missing/auth-failed partner is
+      // always rejected.
+      const routePartnerId = route.get('partnerId') == null ? null : Number(route.get('partnerId'));
+      const principalPartnerId = auth.partnerId == null ? null : Number(auth.partnerId);
+      if (routePartnerId == null || principalPartnerId == null || routePartnerId !== principalPartnerId) {
+        throw new ApimError(
+          ERROR_CODES.FORBIDDEN,
+          'Not authorized for this route (partner mismatch)',
+          403,
+        );
+      }
+      // Role-based routes additionally require the ACL snippet grant on top of
+      // the partner match. API keys rely only on the scope + partner check.
+      if (auth.roleName) {
+        ctx.state.currentRole = auth.roleName;
+        ctx.state.currentRoles = [auth.roleName];
+        if (!canRoleCallRoute(app, auth.roleName, routeName)) {
+          throw new ApimError(
+            ERROR_CODES.FORBIDDEN,
+            `Role "${auth.roleName}" is not allowed to call route "${routeName}"`,
+            403,
+          );
+        }
+      }
       // Runtime settings: env > DB singleton row > built-in defaults. Cached for 5s.
       const gatewaySettings = await resolveGatewaySettings(app);
       capacityLimiter.updateOptions(gatewaySettings.capacity);
@@ -134,7 +183,8 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
       if (route.get('rateLimitEnabled')) {
         const max = toNumber(route.get('rateLimitMax'), 60);
         const windowSec = toNumber(route.get('rateLimitWindowSec'), 60);
-        const result = rateLimiter.check(`${auth.apiKeyId}:${route.get('id')}`, max, windowSec);
+        const rateKey = auth.apiKeyId != null ? `k:${auth.apiKeyId}` : `u:${auth.userId}`;
+        const result = rateLimiter.check(`${rateKey}:${route.get('id')}`, max, windowSec);
         if (!result.allowed) {
           ctx.set('Retry-After', String(result.retryAfterSec));
           throw new ApimError(ERROR_CODES.RATE_LIMITED, 'Rate limit exceeded', 429);
@@ -149,7 +199,9 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
       const forwardUrl = ctx.querystring
         ? `${targetUrlRaw}${targetUrlRaw.includes('?') ? '&' : '?'}${ctx.querystring}`
         : targetUrlRaw;
-      circuitKey = forwardUrl;
+      // Circuit key is the route's target URL without the caller's query
+      // string: query variations must not spawn unbounded circuit entries.
+      circuitKey = targetUrlRaw;
       // Inbound HMAC verification — before decryption.
       if (direction === 'inbound' && route.get('hmacVerifyEnabled')) {
         const hmacSecret = await resolveHmacSecret(app, route);
@@ -339,6 +391,8 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
           path,
           partnerId: auth?.partnerId ?? (route?.get('partnerId') == null ? null : Number(route.get('partnerId'))),
           apiKeyId: auth?.apiKeyId ?? null,
+          userId: auth?.userId ?? null,
+          roleName: auth?.roleName ?? null,
           clientIp: ctx.ip,
           userAgent: ctx.get('user-agent') || null,
           status: logStatus,
@@ -363,3 +417,5 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
     }
   };
 }
+
+

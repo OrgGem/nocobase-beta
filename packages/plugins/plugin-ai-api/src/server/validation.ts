@@ -16,6 +16,7 @@ function requireNonNegativeIntegerOrNull(value: unknown, field: string): void {
 
 export async function validateModelPrice(db: Database, model: Model): Promise<void> {
   requireNonNegativeDecimal(model.get('inputPricePerMillionTokens'), 'inputPricePerMillionTokens');
+  requireNonNegativeDecimal(model.get('cacheInputPricePerMillionTokens') ?? 0, 'cacheInputPricePerMillionTokens');
   requireNonNegativeDecimal(model.get('outputPricePerMillionTokens'), 'outputPricePerMillionTokens');
   requireNonNegativeDecimal(model.get('fixedCostPerRequest') ?? 0, 'fixedCostPerRequest');
 

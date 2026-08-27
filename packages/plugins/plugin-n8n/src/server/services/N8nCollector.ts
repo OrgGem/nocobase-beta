@@ -1,5 +1,6 @@
 import type { PluginN8nServer } from '../plugin';
 import { N8nApiClient } from './N8nApiClient';
+import { runWithDistributedLock } from './ha-lock';
 
 export interface MetricsSnapshot {
   timestamp: number;
@@ -83,11 +84,14 @@ export class N8nCollector {
 
   start() {
     if (this.timer) return;
-    this.timer = setInterval(() => {
-      this.runSchedulerTick().catch((err) => {
-        this.logger.debug(`[plugin-n8n] scheduler tick error: ${err}`);
-      });
-    }, SCHEDULER_TICK_MS);
+    this.timer = runWithDistributedLock(
+      this.plugin.app,
+      'n8n:collector',
+      async () => {
+        await this.runSchedulerTick();
+      },
+      SCHEDULER_TICK_MS,
+    );
     this.plugin.db.on('n8nInstances.afterDestroy', this.onInstanceDestroyed);
   }
 

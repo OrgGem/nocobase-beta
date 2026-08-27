@@ -33,6 +33,11 @@ class RunEventBusImpl {
   listenerCount(runId: string | number): number {
     return this.listeners.get(runId)?.size || 0;
   }
+
+  /** Remove all listeners for all runs. Call during plugin shutdown. */
+  destroy() {
+    this.listeners.clear();
+  }
 }
 
 let instance: RunEventBusImpl | null = null;
@@ -42,4 +47,12 @@ export function getRunEventBus(): RunEventBusImpl {
     instance = new RunEventBusImpl();
   }
   return instance;
+}
+
+/** Reset the singleton (for tests or shutdown). */
+export function resetRunEventBus() {
+  if (instance) {
+    instance.destroy();
+    instance = null;
+  }
 }

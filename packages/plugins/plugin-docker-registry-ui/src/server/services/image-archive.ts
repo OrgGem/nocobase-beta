@@ -118,11 +118,17 @@ async function collectImageGraph(
   repository: string,
   reference: string,
   maxBytes: number,
+  abortSignal?: AbortSignal,
 ): Promise<ImageGraph> {
   const entries = new Map<string, GraphEntry>();
   let totalBytes = 0;
 
   const collectManifest = async (candidate: Descriptor | undefined, manifestReference: string): Promise<GraphEntry> => {
+    // Check abort signal before each manifest fetch
+    if (abortSignal?.aborted) {
+      throw new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED');
+    }
+    
     const document = await client.getManifestDocument(repository, manifestReference);
     const digest = document.digest.startsWith('sha256:') ? document.digest : sha256(document.body);
     if (candidate?.digest && candidate.digest !== digest && candidate.digest !== sha256(document.body)) {
@@ -175,11 +181,25 @@ async function streamTarEntry(
   header: Headers,
   source: Readable,
   expectedSize: number,
+  abortSignal?: AbortSignal,
 ): Promise<void> {
   let transferred = 0;
+  
+  // Check abort signal before streaming
+  if (abortSignal?.aborted) {
+    throw new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED');
+  }
+  
   const counter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       transferred += chunk.length;
+      
+      // Check abort signal during streaming
+      if (abortSignal?.aborted) {
+        callback(new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED'));
+        return;
+      }
+      
       callback(null, chunk);
     },
   });
@@ -211,12 +231,26 @@ export async function createImageArchiveStream(options: {
   format: RegistryArchiveFormat;
   publicRegistryHost: string;
   maxBytes: number;
+  abortSignal?: AbortSignal;
 }): Promise<{ stream: PassThrough; filename: string; totalBytes: number }> {
-  const graph = await collectImageGraph(options.client, options.repository, options.reference, options.maxBytes);
+  const graph = await collectImageGraph(
+    options.client, 
+    options.repository, 
+    options.reference, 
+    options.maxBytes,
+    options.abortSignal,
+  );
   const output = new PassThrough();
   const archive = pack();
   archive.pipe(output);
   archive.once('error', (error) => output.destroy(error));
+
+  // Listen for abort signal to destroy the output stream
+  if (options.abortSignal) {
+    options.abortSignal.addEventListener('abort', () => {
+      output.destroy(new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED'));
+    }, { once: true });
+  }
 
   const write = async () => {
     const rootIndex = Buffer.from(
@@ -262,13 +296,18 @@ export async function createImageArchiveStream(options: {
     }
 
     for (const entry of graph.entries.values()) {
+      // Check abort signal before each blob download
+      if (options.abortSignal?.aborted) {
+        throw new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED');
+      }
+      
       const name = digestPath(entry.digest);
       if (entry.body) {
         await tarEntry(archive, { name, size: entry.body.length, mode: 0o644 }, entry.body);
       } else {
         const size = entry.size ?? 0;
         const blob = await options.client.openBlob(options.repository, entry.digest);
-        await streamTarEntry(archive, { name, size, mode: 0o644 }, blob.stream, size);
+        await streamTarEntry(archive, { name, size, mode: 0o644 }, blob.stream, size, options.abortSignal);
       }
     }
     archive.finalize();
@@ -603,7 +642,7 @@ export async function uploadImageArchive(options: {
   const archive = await extractImageArchive(options.input, options.maxBytes, options.timeoutMs);
   try {
     const metadata = await readArchiveMetadata(archive, options.format);
-    const destination = resolveArchiveDestination(metadata, options);
+    const destination = resolveArchiveDestination(metadata, { repository: options.repository, tag: options.tag });
     const resolvedOptions = { ...options, ...destination, archive };
     if (options.format === 'docker' && archive.entries.has('manifest.json')) {
       return await uploadLegacyDockerArchive(resolvedOptions);
@@ -628,3 +667,4 @@ export function archiveFormat(value: string | undefined): RegistryArchiveFormat 
 export function contentDispositionFilename(filename: string): string {
   return basename(filename).replace(/[^a-zA-Z0-9_.-]/g, '-');
 }
+

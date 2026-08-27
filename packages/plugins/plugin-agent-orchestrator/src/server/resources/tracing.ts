@@ -1,6 +1,7 @@
 import type { Plugin } from '@nocobase/server';
 import { LoopRunAccessError, LoopRunRepository } from '../services/LoopRunRepository';
 import { requestActor, throwResourceError } from './resource-helpers';
+import { asObject } from '../utils/ctx-utils';
 
 type TraceRecord = Record<string, unknown>;
 

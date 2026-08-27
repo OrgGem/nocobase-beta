@@ -24,6 +24,7 @@ export interface PriceSnapshot {
   id: string | number | bigint;
   currency: string;
   inputPricePerMillionTokens: string;
+  cacheInputPricePerMillionTokens: string;
   outputPricePerMillionTokens: string;
   fixedCostPerRequest: string;
 }
@@ -60,6 +61,7 @@ export interface BillingFinalization {
   groupId?: string | number | bigint;
   quotaMode?: QuotaMode;
   inputPricePerMillionTokens?: string;
+  cacheInputPricePerMillionTokens?: string;
   outputPricePerMillionTokens?: string;
   fixedCostPerRequest?: string;
 }
@@ -112,9 +114,20 @@ function divideRounded(value: bigint, divisor: bigint): bigint {
   return (value + divisor / 2n) / divisor;
 }
 
-function calculateCostUnits(inputTokens: number, outputTokens: number, price: PriceSnapshot): bigint {
+function calculateCostUnits(
+  inputTokens: number,
+  outputTokens: number,
+  promptCacheTokens: number,
+  price: PriceSnapshot,
+): bigint {
+  const cachedInputTokens = Math.min(Math.max(promptCacheTokens, 0), inputTokens);
+  const uncachedInputTokens = inputTokens - cachedInputTokens;
   const input = divideRounded(
-    BigInt(inputTokens) * decimalUnits(price.inputPricePerMillionTokens, PRICE_SCALE),
+    BigInt(uncachedInputTokens) * decimalUnits(price.inputPricePerMillionTokens, PRICE_SCALE),
+    PRICE_TO_COST_DIVISOR,
+  );
+  const cacheInput = divideRounded(
+    BigInt(cachedInputTokens) * decimalUnits(price.cacheInputPricePerMillionTokens, PRICE_SCALE),
     PRICE_TO_COST_DIVISOR,
   );
   const output = divideRounded(
@@ -122,11 +135,16 @@ function calculateCostUnits(inputTokens: number, outputTokens: number, price: Pr
     PRICE_TO_COST_DIVISOR,
   );
   const fixed = divideRounded(decimalUnits(price.fixedCostPerRequest, PRICE_SCALE), 100n);
-  return input + output + fixed;
+  return input + cacheInput + output + fixed;
 }
 
-export function calculateLlmCost(inputTokens: number, outputTokens: number, price: PriceSnapshot): string {
-  return formatUnits(calculateCostUnits(inputTokens, outputTokens, price), COST_SCALE);
+export function calculateLlmCost(
+  inputTokens: number,
+  outputTokens: number,
+  price: PriceSnapshot,
+  promptCacheTokens = 0,
+): string {
+  return formatUnits(calculateCostUnits(inputTokens, outputTokens, promptCacheTokens, price), COST_SCALE);
 }
 
 function normalizePositiveInteger(value: unknown, fallback: number): number {
@@ -184,6 +202,7 @@ async function findPrice(
     id: valueOf(price, 'id'),
     currency: valueOf<string>(price, 'currency'),
     inputPricePerMillionTokens: decimalString(valueOf(price, 'inputPricePerMillionTokens'), PRICE_SCALE),
+    cacheInputPricePerMillionTokens: decimalString(valueOf(price, 'cacheInputPricePerMillionTokens'), PRICE_SCALE),
     outputPricePerMillionTokens: decimalString(valueOf(price, 'outputPricePerMillionTokens'), PRICE_SCALE),
     fixedCostPerRequest: decimalString(valueOf(price, 'fixedCostPerRequest'), PRICE_SCALE),
   };
@@ -325,7 +344,10 @@ export async function finalizeLlmBilling(
     costStatus = billing.price ? 'usage_unavailable' : 'unpriced';
   }
 
-  const cost = numbers && billing.price ? calculateLlmCost(numbers.input, numbers.output, billing.price) : undefined;
+  const cost =
+    numbers && billing.price
+      ? calculateLlmCost(numbers.input, numbers.output, billing.price, providerUsage?.prompt_cache_tokens ?? 0)
+      : undefined;
   const reservation = billing.reservation;
   if (reservation) {
     const Bucket = ctx.db.getModel('aiApiGroupQuotaBuckets');
@@ -378,6 +400,7 @@ export async function finalizeLlmBilling(
     groupId: reservation?.groupId,
     quotaMode: reservation?.quotaMode,
     inputPricePerMillionTokens: billing.price?.inputPricePerMillionTokens,
+    cacheInputPricePerMillionTokens: billing.price?.cacheInputPricePerMillionTokens,
     outputPricePerMillionTokens: billing.price?.outputPricePerMillionTokens,
     fixedCostPerRequest: billing.price?.fixedCostPerRequest,
   };

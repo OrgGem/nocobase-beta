@@ -27,7 +27,7 @@ const PRICE_PER_1K_OUTPUT = Number(process.env.ORCHESTRATOR_PRICE_PER_1K_OUTPUT 
 /**
  * Estimate cost based on token counts.
  */
-function estimateCost(inputTokens: number, outputTokens: number): number {
+export function estimateCost(inputTokens: number, outputTokens: number): number {
   return (inputTokens / 1000) * PRICE_PER_1K_INPUT + (outputTokens / 1000) * PRICE_PER_1K_OUTPUT;
 }
 
@@ -46,7 +46,25 @@ function estimateCost(inputTokens: number, outputTokens: number): number {
  *     total_tokens: number,
  *   }
  */
-export function extractTokenUsage(finalState: any): TokenUsage | null {
+type LegacyUsageMetadata = {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+};
+
+type LegacyAIMessage = {
+  usage_metadata?: LegacyUsageMetadata;
+  [key: string]: unknown;
+};
+
+type LegacyFinalState =
+  | {
+      messages?: LegacyAIMessage[];
+    }
+  | null
+  | undefined;
+
+export function extractTokenUsage(finalState: LegacyFinalState): TokenUsage | null {
   if (!finalState?.messages || !Array.isArray(finalState.messages)) return null;
 
   // Accumulate usage across all AI messages in the run (each LLM call adds usage)
@@ -83,7 +101,18 @@ export function extractTokenUsage(finalState: any): TokenUsage | null {
  * 4. Enforce budget limits (max tokens / max cost per run)
  */
 export class TokenTracker {
-  constructor(private readonly plugin: any) {}
+  constructor(
+    private readonly plugin: {
+      app: { log?: { warn?: (...args: unknown[]) => void } };
+      db: {
+        getRepository: (name: string) => {
+          find?: (opts?: Record<string, unknown>) => Promise<unknown[]>;
+          findOne?: (opts?: Record<string, unknown>) => Promise<unknown>;
+          update?: (opts: Record<string, unknown>) => Promise<unknown>;
+        };
+      };
+    },
+  ) {}
 
   get db() {
     return this.plugin.db;
@@ -121,7 +150,7 @@ export class TokenTracker {
       if (runId != null) {
         await this.accumulateToRun(runId);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       this.app.log?.warn?.('[TokenTracker] Failed to track span tokens', e);
     }
   }
@@ -134,8 +163,11 @@ export class TokenTracker {
       const spansRepo = this.db.getRepository('agentExecutionSpans');
       if (!spansRepo) return;
 
+      // Project only token fields to minimize memory; cap at 10K spans per run.
       const spans = await spansRepo.find({
-        filter: { 'metadata.agentLoopRunId': String(runId) },
+        filter: { agentLoopRunId: String(runId) },
+        fields: ['inputTokens', 'outputTokens', 'cost'],
+        limit: 10_000,
       });
 
       let totalInput = 0;
@@ -160,7 +192,7 @@ export class TokenTracker {
           totalCost,
         },
       });
-    } catch (e: any) {
+    } catch (e: unknown) {
       this.app.log?.warn?.('[TokenTracker] Failed to accumulate run totals', e);
     }
   }
@@ -201,10 +233,30 @@ export class TokenTracker {
       }
 
       return { allowed: true };
-    } catch (e: any) {
+    } catch (e: unknown) {
       this.app.log?.warn?.('[TokenTracker] Budget check failed, allowing', e);
       return { allowed: true };
     }
+  }
+
+  /**
+   * Track actual token usage from the LLM response on a span.
+   * This is preferred over estimateAndTrack when the LLM provides real usage metadata.
+   * Falls back to estimation if usage is null.
+   */
+  async trackActualUsage(
+    spanId: string | number | undefined,
+    tokenUsage: { inputTokens: number; outputTokens: number; totalTokens: number; cost: number } | null,
+    input: string,
+    output: string,
+    runId?: string | number,
+  ): Promise<void> {
+    if (tokenUsage && tokenUsage.totalTokens > 0) {
+      await this.trackSpan(spanId, tokenUsage, runId);
+      return;
+    }
+    // Fall back to estimation when actual usage is not available
+    await this.estimateAndTrack(spanId, input, output, runId);
   }
 
   /**

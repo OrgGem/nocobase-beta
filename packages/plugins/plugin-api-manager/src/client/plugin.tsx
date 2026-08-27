@@ -37,11 +37,11 @@ export class PluginApiManagerClient extends Plugin {
       componentLoader: () => import('../client-v2/components/PartnersPage'),
     });
 
-    this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.keys`, {
-      title: this.t('API Keys'),
+    this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.partner-roles`, {
+      title: this.t('Partner Roles'),
       aclSnippet: APIM_ACL,
-      sort: 20,
-      componentLoader: () => import('../client-v2/components/ApiKeysPage'),
+      sort: 15,
+      componentLoader: () => import('../client-v2/components/PartnerRolesPage'),
     });
 
     this.app.pluginSettingsManager.add(`${SETTINGS_KEY}.logs`, {

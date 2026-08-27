@@ -5,6 +5,9 @@ import { getRunEventBus } from '../services/RunEventBus';
 import { requestActor, throwResourceError } from './resource-helpers';
 
 const POLL_INTERVAL_MS = 1500;
+// Send a keepalive comment every 15 seconds to prevent reverse proxies from
+// closing idle SSE connections (nginx default: 60s).
+const KEEPALIVE_INTERVAL_MS = 15_000;
 
 function eventId(event: unknown) {
   if (!event || typeof event !== 'object') return 0;

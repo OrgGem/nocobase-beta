@@ -69,6 +69,10 @@ export async function buildOutboundForwardRequest(
     contentType: outgoingContentType,
   });
 
+  // NOTE: HMAC signing happens AFTER encryption, so the HMAC signature covers the
+  // encrypted payload, not the plaintext. This is by design — the partner verifies
+  // the HMAC on the ciphertext before decrypting, preventing tampering with the
+  // encrypted blob in transit.
   if (route.get('hmacSignEnabled')) {
     const hmacSecret = await resolveHmacSecret(app, route);
     const targetUrl = new URL(forwardUrl);
@@ -103,3 +107,5 @@ export async function buildOutboundForwardRequest(
 
   return { headers, body: outgoingBody, contentType: outgoingContentType };
 }
+
+

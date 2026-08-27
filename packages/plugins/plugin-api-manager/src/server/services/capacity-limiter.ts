@@ -174,6 +174,8 @@ export class CapacityLimiter {
     this.drainWaiters();
   }
 
+  // NOTE: Synchronous admit loop. At 1000 waiters this takes ~1-2ms. If queueSize grows
+  // beyond 10000, consider batching with setImmediate/process.nextTick to yield the event loop.
   private drainWaiters(): void {
     while (this.waiters.length > 0) {
       const head = this.waiters[0];

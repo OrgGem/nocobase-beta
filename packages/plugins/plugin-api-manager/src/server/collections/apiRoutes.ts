@@ -3,6 +3,14 @@ import { defineCollection } from '@nocobase/database';
 export default defineCollection({
   name: 'apiRoutes',
   title: 'API Routes',
+  // Enforce inboundPath uniqueness at the DB level so two inbound routes can
+  // never claim the same public path (the beforeSave check alone races).
+  indexes: [
+    {
+      unique: true,
+      fields: ['direction', 'inboundPath'],
+    },
+  ],
   createdBy: true,
   updatedBy: true,
   fields: [
@@ -36,7 +44,15 @@ export default defineCollection({
     {
       type: 'bigInt',
       name: 'partnerId',
+      allowNull: false,
       index: true,
+      interface: 'number',
+      uiSchema: {
+        title: 'Partner',
+        type: 'number',
+        'x-component': 'InputNumber',
+        required: true,
+      },
     },
     {
       type: 'belongsTo',
@@ -63,6 +79,23 @@ export default defineCollection({
         title: 'Enabled',
         type: 'boolean',
         'x-component': 'Checkbox',
+      },
+    },
+    {
+      type: 'string',
+      name: 'authMode',
+      allowNull: false,
+      defaultValue: 'both',
+      interface: 'select',
+      uiSchema: {
+        title: 'Auth Mode',
+        type: 'string',
+        'x-component': 'Select',
+        enum: [
+          { value: 'both', label: 'API Key + Role' },
+          { value: 'api-key', label: 'API Key only' },
+          { value: 'role', label: 'Role (app token) only' },
+        ],
       },
     },
     {

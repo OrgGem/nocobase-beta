@@ -175,6 +175,7 @@ describe('AI API usage persistence', () => {
         inputTokens: 20,
         outputTokens: 4,
         totalTokens: 24,
+        cacheInputPricePerMillionTokens: null,
         providerRequestId: 'provider-id',
         responseMetadata: { usageSource: 'provider', gatewayResponseId: 'gateway-result-id' },
       }),

@@ -20,6 +20,7 @@
   "LLM service": "LLM service",
   "Model": "Model",
   "Input price / 1M": "Input price / 1M",
+  "Cache input price / 1M": "Cache input price / 1M",
   "Output price / 1M": "Output price / 1M",
   "Fixed request cost": "Fixed request cost",
   "Currency": "Currency",

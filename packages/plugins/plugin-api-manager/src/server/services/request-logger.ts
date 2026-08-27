@@ -9,6 +9,8 @@ export interface RequestLogEntry {
   path?: string | null;
   partnerId?: number | null;
   apiKeyId?: number | null;
+  userId?: number | null;
+  roleName?: string | null;
   clientIp?: string | null;
   userAgent?: string | null;
   status: 'ok' | 'rejected' | 'failed';

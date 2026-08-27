@@ -1,5 +1,6 @@
 import type { Database, Model } from '@nocobase/database';
 import type { LoopPatternPolicy } from './LoopPatternSchema';
+import { read } from '../utils/record-utils';
 
 export type UsageDelta = {
   invocations?: number;
@@ -13,11 +14,6 @@ export type UsageDelta = {
 };
 
 type UsageTotals = Required<UsageDelta>;
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
 
 function storedCount(value: unknown, label: string) {
   if (value === null || value === undefined) return 0;

@@ -3,6 +3,7 @@ import { buildAccessibleKnowledgeBaseFilter, resolveAccessContext } from '../uti
 import { EXTERNAL_HTTP_RAG_PROVIDER, EXTERNAL_RAG_KB_TYPE } from '../providers/external-rag';
 import type { RagSearchResult } from '../providers/external-rag';
 import { usesForwardedEmbeddingCredentials } from '../providers/external-rag';
+import { KbCacheService, buildSearchCacheKey } from './cache';
 
 export type KnowledgeSearchOptions = {
   knowledgeBaseIds?: string[];
@@ -107,8 +108,38 @@ function dedupeResults(results: KnowledgeSearchResult[]): KnowledgeSearchResult[
   return Array.from(byKey.values());
 }
 
+const searchCache = new KbCacheService();
+
 export class KnowledgeSearchService {
   constructor(private plugin: any) {}
+
+  /** Exposed for tests and invalidation from write paths. */
+  static get cache(): KbCacheService {
+    return searchCache;
+  }
+
+  /**
+   * Search with a short-TTL cache. Identical (query, KBs, options) requests
+   * within the TTL window reuse results; document writes invalidate per-KB.
+   */
+  async searchCached(
+    ctx: Context,
+    query: string,
+    options: KnowledgeSearchOptions = {},
+  ): Promise<KnowledgeSearchResult[]> {
+    const kbIds = (options.knowledgeBaseIds ?? []).filter(Boolean).map(String).sort();
+    const cacheKey = buildSearchCacheKey(kbIds, query?.trim() ?? '', {
+      topK: options.topK,
+      candidateK: options.candidateK,
+      scoreThreshold: options.scoreThreshold,
+      rerank: options.rerank,
+    });
+    return searchCache.getOrLoad(cacheKey, () => this.search(ctx, query, options));
+  }
+
+  static invalidateKnowledgeBase(kbId: string): void {
+    searchCache.invalidateKnowledgeBaseIds([String(kbId)]);
+  }
 
   async search(ctx: Context, query: string, options: KnowledgeSearchOptions = {}): Promise<KnowledgeSearchResult[]> {
     const trimmedQuery = query?.trim();

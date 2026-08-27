@@ -31,6 +31,7 @@ import { DocPixieExtractor } from './services/docpixie-extractor';
 import { KnowledgeSearchService } from './services/knowledge-search';
 import type { KnowledgeSearchOptions } from './services/knowledge-search';
 import { SessionContextService } from './services/session-context';
+import { DocumentVersionService } from './services/document-version';
 import { createSharedContextToolProvider } from './tools/shared-context-tool';
 import { createPromoteToKbToolProvider } from './tools/promote-to-kb-tool';
 import aiKnowledgeBase from './resources/ai-knowledge-base';
@@ -46,6 +47,7 @@ import {
   unregisterKnowledgeBaseDocumentQueue,
 } from './queue/document-vectorization';
 
+import { runWithDistributedLock } from './utils/ha-lock';
 export class PluginKnowledgeBaseServer extends Plugin {
   declare app: any;
   declare db: any;
@@ -65,6 +67,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
    *   const data = await kb.sessionContext.get({ rootRunId }, 'key');
    */
   sessionContext: SessionContextService;
+  documentVersionService: DocumentVersionService;
 
   private retryTimer: ReturnType<typeof setInterval> | null = null;
   private sessionPruneTimer: ReturnType<typeof setInterval> | null = null;
@@ -254,6 +257,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // 10. Initialize Session Context Service (Tier 1 — ephemeral cross-agent scratchpad)
     this.sessionContext = new SessionContextService(this.db);
+    this.documentVersionService = new DocumentVersionService(this.db);
 
     // 11. Register shared_context AI tool via toolsManager
     this.registerSharedContextTool();
@@ -299,64 +303,70 @@ export class PluginKnowledgeBaseServer extends Plugin {
     const RETRY_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
     const MAX_RETRY_COUNT = 3;
 
-    this.retryTimer = setInterval(async () => {
-      try {
-        const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
-        const tableName = docRepo.collection.model.tableName;
+    this.retryTimer = runWithDistributedLock(
+      this.app,
+      'knowledge-base:retry-failed-docs',
+      async () => {
+        try {
+          const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
+          const tableName = docRepo.collection.model.tableName;
 
-        // Fix P1-2: Single atomic UPDATE+RETURNING to claim failed docs.
-        // Eliminates the race window between find() and UPDATE that existed before.
-        // The subquery with LIMIT prevents over-claiming, and WHERE status='failed'
-        // ensures no double-processing across concurrent instances.
-        const claimedRows = (await this.db.sequelize.query(
-          `UPDATE "${tableName}" SET "status" = 'retrying'
-           WHERE "id" IN (
-             SELECT "id" FROM "${tableName}"
-             WHERE "status" = 'failed' AND "retryCount" < :maxRetry
-             LIMIT 10
-           )
-           RETURNING "id"`,
-          {
-            replacements: { maxRetry: MAX_RETRY_COUNT },
-            type: (this.db.sequelize.constructor as any).QueryTypes.SELECT,
-          },
-        )) as any[];
+          // Fix P1-2: Single atomic UPDATE+RETURNING to claim failed docs.
+          // Eliminates the race window between find() and UPDATE that existed before.
+          // The subquery with LIMIT prevents over-claiming, and WHERE status=failed
+          // ensures no double-processing across concurrent instances.
+          const claimedRows = (await this.db.sequelize.query(
+            `UPDATE "${tableName}" SET "status" = 'retrying'
+             WHERE "id" IN (
+               SELECT "id" FROM "${tableName}"
+               WHERE "status" = 'failed' AND "retryCount" < :maxRetry
+               LIMIT 10
+             )
+             RETURNING "id"`,
+            {
+              replacements: { maxRetry: MAX_RETRY_COUNT },
+              type: (this.db.sequelize.constructor as any).QueryTypes.SELECT,
+            },
+          )) as any[];
 
-        const claimedIds = claimedRows.map((r: any) => r.id);
-        if (claimedIds.length === 0) return;
+          const claimedIds = claimedRows.map((r: any) => r.id);
+          if (claimedIds.length === 0) return;
 
-        // Load full records for claimed docs only
-        const claimedDocs = await docRepo.find({
-          filter: { id: { $in: claimedIds } },
-          appends: ['knowledgeBase'],
-        });
+          // Load full records for claimed docs only
+          const claimedDocs = await docRepo.find({
+            filter: { id: { $in: claimedIds } },
+            appends: ['knowledgeBase'],
+          });
 
-        for (const doc of claimedDocs) {
-          if (!doc.knowledgeBase) continue;
-          const kbType = doc.knowledgeBase.type;
+          for (const doc of claimedDocs) {
+            if (!doc.knowledgeBase) continue;
+            const kbType = doc.knowledgeBase.type;
 
-          try {
-            if (kbType !== 'EXTERNAL_RAG') {
-              await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
-              await enqueueKnowledgeBaseDocument(this, {
-                documentId: String(doc.id),
-                reason: 'retry',
-                requestedById: doc.uploadedById ?? null,
-              });
-            } else {
-              await docRepo.update({
-                filter: { id: doc.id },
-                values: { status: 'failed', error: 'External RAG knowledge bases do not process local documents' },
-              });
+            try {
+              if (kbType !== 'EXTERNAL_RAG') {
+                await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
+                await enqueueKnowledgeBaseDocument(this, {
+                  documentId: String(doc.id),
+                  reason: 'retry',
+                  requestedById: doc.uploadedById ?? null,
+                });
+              } else {
+                await docRepo.update({
+                  filter: { id: doc.id },
+                  values: { status: 'failed', error: 'External RAG knowledge bases do not process local documents' },
+                });
+              }
+            } catch (err: any) {
+              this.app.logger.warn(`[KBRetry] Failed to trigger retry for doc ${doc.id}: ${err.message}`);
             }
-          } catch (err: any) {
-            this.app.logger.warn(`[KBRetry] Failed to trigger retry for doc ${doc.id}: ${err.message}`);
           }
+        } catch (err: any) {
+          this.app.logger.warn(`[KBRetry] Retry job error: ${err.message}`);
         }
-      } catch (err: any) {
-        this.app.logger.warn(`[KBRetry] Retry job error: ${err.message}`);
-      }
-    }, RETRY_INTERVAL_MS);
+      },
+      RETRY_INTERVAL_MS,
+      300_000,
+    );
   }
 
   /** Returns the plugin-docpixie instance if it is loaded and has an active service, else null */
@@ -576,6 +586,10 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.app.acl.allow('aiKnowledgeBase', 'destroy', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'search', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBase', 'addDocument', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'submitSearchFeedback', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'export', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'import', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBase', 'searchAnalytics', 'loggedIn');
 
     // Open the ACL gate for logged-in users; row-level handlers enforce the
     // three KB modes: personal owner, shared allowedRoles, and public admin-only writes.
@@ -583,6 +597,14 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.app.acl.allow('aiKnowledgeBaseDoc', 'create', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBaseDoc', 'destroy', 'loggedIn');
     this.app.acl.allow('aiKnowledgeBaseDoc', 'reprocess', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'stats', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'listVersions', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'restoreVersion', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'analyze', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'duplicates', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'visualization', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'bulkDestroy', 'loggedIn');
+    this.app.acl.allow('aiKnowledgeBaseDoc', 'bulkReprocess', 'loggedIn');
   }
 
   // ── Session Context Tool Registration ──────────────────────────────────
@@ -609,16 +631,22 @@ export class PluginKnowledgeBaseServer extends Plugin {
   private startSessionContextPruning() {
     const PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
-    this.sessionPruneTimer = setInterval(async () => {
-      try {
-        const deleted = await this.sessionContext.pruneExpired();
-        if (deleted > 0) {
-          this.app.logger.info(`[KnowledgeBase] Pruned ${deleted} expired session context entries.`);
+    this.sessionPruneTimer = runWithDistributedLock(
+      this.app,
+      'knowledge-base:prune-session-context',
+      async () => {
+        try {
+          const deleted = await this.sessionContext.pruneExpired();
+          if (deleted > 0) {
+            this.app.logger.info(`[KnowledgeBase] Pruned ${deleted} expired session context entries.`);
+          }
+        } catch (err: any) {
+          this.app.logger.warn(`[KnowledgeBase] Session context pruning failed: ${err.message}`);
         }
-      } catch (err: any) {
-        this.app.logger.warn(`[KnowledgeBase] Session context pruning failed: ${err.message}`);
-      }
-    }, PRUNE_INTERVAL_MS);
+      },
+      PRUNE_INTERVAL_MS,
+      300_000,
+    );
   }
 
   async install() {}

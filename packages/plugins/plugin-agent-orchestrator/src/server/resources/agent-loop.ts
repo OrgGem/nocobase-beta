@@ -81,7 +81,7 @@ export function registerAgentLoopResource(plugin: LoopResourcePlugin) {
   const patterns = new LoopPatternService(plugin.db, employeeHarnessResolver(plugin), async () =>
     worktreeCapability(plugin),
   );
-  const triggers = new LoopTriggerService(plugin.db, patterns);
+  const triggers = new LoopTriggerService(plugin.db, patterns, plugin.app.log);
 
   plugin.app.resource({
     name: 'agentLoops',

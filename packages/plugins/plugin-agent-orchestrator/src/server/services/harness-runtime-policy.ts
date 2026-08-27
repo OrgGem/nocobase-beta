@@ -1,22 +1,15 @@
+import { asObject } from '../utils/ctx-utils';
 import type { Database } from '@nocobase/database';
 import { compileHarness } from './HarnessCompiler';
 import type { CompiledHarness } from './HarnessCompiler';
 import { HarnessProfileService } from './HarnessProfileService';
 import { parseHarnessSettings } from './HarnessSchema';
+import { read } from '../utils/record-utils';
 
 export type TraceLike = {
   agentLoopRunId?: string | number;
   employeeUsername?: string;
 };
-
-function read(record: unknown, key: string) {
-  const model = record as { get?: (name: string) => unknown } | null;
-  return typeof model?.get === 'function' ? model.get(key) : (model as Record<string, unknown> | null)?.[key];
-}
-
-function asObject(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
-}
 
 // Run snapshots were compiled at enqueue time, possibly by an older schema revision. Re-parsing
 // through the current schema backfills new policy fields with their defaults. `sources` is a

@@ -75,7 +75,7 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
       return false;
     }
 
-    let decoded: { userId?: string | number; roleName?: string; temp?: boolean };
+    let decoded: { userId?: string | number; roleName?: string; temp?: boolean; jti?: string };
     try {
       decoded = await jwt.decode(token);
     } catch (e) {
@@ -88,6 +88,26 @@ export async function authenticateBearer(ctx: Context): Promise<boolean> {
       ctx.status = 401;
       ctx.body = toOpenAIError(401, 'Invalid or expired API key', 'invalid_request_error', 'invalid_api_key');
       return false;
+    }
+
+    // Enforce the token blacklist here as well. Revoked API keys are blocked by
+    // the core NocoBase auth path (Auth.checkToken), but this API-key fallback
+    // decodes the JWT directly and would otherwise keep accepting them.
+    if (jwt.blacklist) {
+      let blocked = false;
+      try {
+        blocked = await jwt.blacklist.has(decoded.jti ?? token);
+      } catch (err) {
+        ctx.log.error('AI API token blacklist check failed:', err);
+        ctx.status = 401;
+        ctx.body = toOpenAIError(401, 'Unable to verify API key status', 'server_error');
+        return false;
+      }
+      if (blocked) {
+        ctx.status = 401;
+        ctx.body = toOpenAIError(401, 'API key has been revoked', 'invalid_request_error', 'invalid_api_key');
+        return false;
+      }
     }
 
     // This fallback is for API keys only. A normal login/OIDC token should have

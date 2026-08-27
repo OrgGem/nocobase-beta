@@ -4,7 +4,7 @@
   "displayName.zh-CN": "Microsoft Graph 网关",
   "displayName.vi-VN": "Gateway Microsoft Graph",
   "description": "Queue-backed Microsoft Graph gateway for Outlook, Lists, OneDrive and SharePoint.",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "scripts": {

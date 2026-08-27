@@ -2,8 +2,6 @@ import type { Application } from '@nocobase/server';
 import type { Model } from '@nocobase/database';
 import { ERROR_CODES, type EncryptionMode, type WireFormat } from '../../constants';
 import { ApimError } from './errors';
-import { getEnv } from './env';
-import { sha256Hex } from './hash';
 
 export interface EncryptedPayload {
   body: Buffer;
@@ -168,6 +166,3 @@ function toApimError(error: unknown): ApimError {
   }
   return new ApimError(ERROR_CODES.CRYPTO_CONFIG, candidate.message ?? 'Crypto processing failed', 500);
 }
-
-// Re-exported helpers used elsewhere in the plugin.
-export { getEnv, sha256Hex };

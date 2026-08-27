@@ -192,7 +192,9 @@ export function toQdrantMetadataFilter(filter: Record<string, unknown> | undefin
     return filter;
   }
 
-  const must = Object.entries(filter).flatMap(([key, value]) => {
+  type QdrantCondition = { key: string; match: { value?: unknown; any?: unknown[] } };
+  const must = Object.entries(filter).flatMap<QdrantCondition>((entry: [string, unknown]) => {
+    const [key, value] = entry;
     const metadataKey = key.startsWith('metadata.') ? key : `metadata.${key}`;
     if (isRecord(value) && Array.isArray(value.in)) {
       return value.in.length ? [{ key: metadataKey, match: { any: value.in } }] : [];

@@ -23,6 +23,7 @@ export interface RouteFormValues {
   partnerId?: number | null;
   description?: string;
   enabled: boolean;
+  authMode: 'both' | 'api-key' | 'role';
   encryptionMode: 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
   wireFormat: 'binary' | 'json';
   aesSecret?: string;
@@ -112,6 +113,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
       partnerId: initial?.partnerId ?? null,
       description: initial?.description ?? '',
       enabled: initial?.enabled ?? true,
+      authMode: initial?.authMode ?? 'both',
       encryptionMode: initial?.encryptionMode ?? 'none',
       wireFormat: initial?.wireFormat ?? 'binary',
       aesSecret: initial?.aesSecret ?? '',
@@ -264,11 +266,34 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
         >
           <Input />
         </Form.Item>
-        <Form.Item name="partnerId" label={t('Partner') as string}>
-          <Select allowClear options={partners.map((p) => ({ value: p.id, label: p.name }))} />
+        <Form.Item
+          name="partnerId"
+          label={t('Partner') as string}
+          rules={[{ required: true, message: t('Partner is required') as string }]}
+        >
+          <Select
+            options={partners.map((p) => ({ value: p.id, label: p.name }))}
+            placeholder={t('Select Partner') as string}
+          />
         </Form.Item>
         <Form.Item name="description" label={t('Description') as string}>
           <Input.TextArea rows={2} />
+        </Form.Item>
+        <Form.Item
+          name="authMode"
+          label={t('Auth Mode') as string}
+          tooltip={
+            t('Choose which credentials may call this route: plugin API keys, app role tokens, or both') as string
+          }
+          rules={[{ required: true }]}
+        >
+          <Select
+            options={[
+              { value: 'both', label: t('API Key + Role') as string },
+              { value: 'api-key', label: t('API Key only') as string },
+              { value: 'role', label: t('Role (app token) only') as string },
+            ]}
+          />
         </Form.Item>
 
         <Form.Item name="encryptionMode" label={t('Encryption') as string} rules={[{ required: true }]}>

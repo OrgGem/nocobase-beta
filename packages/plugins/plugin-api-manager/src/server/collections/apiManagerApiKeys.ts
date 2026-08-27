@@ -18,7 +18,15 @@ export default defineCollection({
     {
       type: 'bigInt',
       name: 'partnerId',
+      allowNull: false,
       index: true,
+      interface: 'number',
+      uiSchema: {
+        title: 'Partner',
+        type: 'number',
+        'x-component': 'InputNumber',
+        required: true,
+      },
     },
     {
       type: 'belongsTo',

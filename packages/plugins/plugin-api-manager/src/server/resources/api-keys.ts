@@ -22,16 +22,22 @@ export function registerApiKeysResource(app: Application): void {
       if (!name) {
         ctx.throw(400, 'name is required');
       }
-      const partnerId = body.partnerId == null || body.partnerId === '' ? null : Number(body.partnerId);
-      if (partnerId != null) {
-        if (!Number.isFinite(partnerId) || partnerId <= 0) {
-          ctx.throw(400, 'partnerId must be a positive integer');
-        }
-        const partner = await app.db.getRepository('apiPartners').findOne({ filterByTk: partnerId });
-        if (!partner) {
-          ctx.throw(400, `partnerId ${partnerId} does not reference an existing partner`);
-        }
+
+      // Partner is mandatory: an API key must belong to exactly one partner so
+      // the gateway can enforce tenant isolation between routes and principals.
+      const rawPartnerId = body.partnerId == null || body.partnerId === '' ? null : body.partnerId;
+      if (rawPartnerId == null) {
+        ctx.throw(400, 'partnerId is required');
       }
+      const partnerId = Number(rawPartnerId);
+      if (!Number.isFinite(partnerId) || partnerId <= 0) {
+        ctx.throw(400, 'partnerId must be a positive integer');
+      }
+      const partner = await app.db.getRepository('apiPartners').findOne({ filterByTk: partnerId });
+      if (!partner) {
+        ctx.throw(400, `partnerId ${partnerId} does not reference an existing partner`);
+      }
+
       const scopes = parseScopes(body.scopes);
       if (scopes.length === 0) {
         ctx.throw(400, 'At least one scope is required');

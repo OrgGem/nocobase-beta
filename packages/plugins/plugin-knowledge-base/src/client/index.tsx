@@ -14,6 +14,7 @@ import { KnowledgeBaseContext } from './components/KnowledgeBaseContext';
 
 const { KnowledgeBases } = lazy(() => import('./components/KnowledgeBases'), 'KnowledgeBases');
 const { Infrastructure } = lazy(() => import('./components/Infrastructure'), 'Infrastructure');
+const { ProcessingDashboard } = lazy(() => import('./components/ProcessingDashboard'), 'ProcessingDashboard');
 
 export class PluginKnowledgeBaseClient extends Plugin {
   async load() {
@@ -44,6 +45,14 @@ export class PluginKnowledgeBaseClient extends Plugin {
       Component: KnowledgeBases,
       aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
       sort: 300,
+    });
+
+    (this as any).app.pluginSettingsManager.add('ai.processing-dashboard', {
+      title: tval('Processing Dashboard'),
+      icon: 'DashboardOutlined',
+      Component: ProcessingDashboard,
+      aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
+      sort: 305,
     });
 
     (this as any).app.pluginSettingsManager.add('ai.infrastructure', {

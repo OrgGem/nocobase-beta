@@ -12,8 +12,9 @@ import { toOpenAIError, toOpenAIEmbeddingsResponse } from '../utils/openai-forma
 import { resolveModelString } from '../utils/resolve-service';
 import { enforceModelAccess } from '../utils/user-permissions';
 import { getAiApiConfig } from '../utils/request-cache';
-import { setAiApiUsageUnavailable } from '../usage';
+import { setAiApiUsageResult } from '../usage';
 import type PluginAiApiServer from '../plugin';
+import { markLlmProviderAttempted, prepareLlmBilling, finalizeLlmBilling } from '../billing';
 
 /**
  * POST /api/ai-llm/v1/embeddings
@@ -103,6 +104,9 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
 
   const { service, modelId } = resolved;
 
+  // ─── Prepare billing/quota ────────────────────────────────────────────────
+  await prepareLlmBilling(ctx, resolved);
+
   if (service.enabled === false) {
     ctx.status = 404;
     ctx.body = toOpenAIError(
@@ -168,11 +172,21 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
     // createEmbedding() returns a LangChain EmbeddingsInterface.
     // embedDocuments() accepts string[] and returns number[][] (one vector per input).
     const embeddingModel = embeddingProvider.createEmbedding();
+    markLlmProviderAttempted(ctx);
     const vectors: number[][] = await embeddingModel.embedDocuments(inputs);
+
+    // Estimate input tokens: average 4 chars per token (conservative).
+    const estimatedInputTokens = Math.ceil(inputs.reduce((sum, s) => sum + s.length, 0) / 4);
+    const usage = {
+      prompt_tokens: estimatedInputTokens,
+      completion_tokens: 0,
+      total_tokens: estimatedInputTokens,
+    };
+    setAiApiUsageResult(ctx, usage);
+    await finalizeLlmBilling(ctx, usage, true);
 
     ctx.status = 200;
     ctx.set('Content-Type', 'application/json');
-    setAiApiUsageUnavailable(ctx);
     ctx.body = toOpenAIEmbeddingsResponse({
       model: body.model,
       embeddings: vectors,

@@ -15,6 +15,7 @@ import { BucketAggregator } from './services/bucket-aggregator';
 import { BucketFlushService } from './services/bucket-flush-service';
 import { QueryService } from './services/query-service';
 import { RetentionService } from './services/retention-service';
+import { runWithDistributedLock } from './services/ha-lock';
 
 export class PluginAppObservabilityServer extends Plugin {
   private store: MetricsStore;
@@ -152,7 +153,9 @@ export class PluginAppObservabilityServer extends Plugin {
     this.addTimer(this.sampleRuntime, this.settings.sampleIntervalSeconds * 1000);
     this.addTimer(this.flushBuckets, this.settings.bucketSeconds * 1000);
     if (this.redisAdapter) this.addTimer(this.publishRedisSnapshot, 10_000);
-    this.addTimer(this.cleanupRetention, 86_400_000);
+    this.timers.push(
+      runWithDistributedLock(this.app, 'app-observability:cleanup-retention', this.cleanupRetention, 86_400_000),
+    );
     await this.sampleRuntime();
     await this.publishRedisSnapshot();
     await this.cleanupRetention();

@@ -4,6 +4,7 @@ import type { Model } from '@nocobase/database';
 import { Plugin } from '@nocobase/server';
 import type { Client, GraphRequest } from '@microsoft/microsoft-graph-client';
 import { createGraphClient, GraphSettings } from './graph-client';
+import { runWithDistributedLock } from './services/ha-lock';
 
 type Scope = 'email:read' | 'email:write' | 'lists:read' | 'lists:write' | 'drive:read' | 'drive:write';
 type Values = Record<string, unknown>;
@@ -82,6 +83,7 @@ const errorMetadata = (error: unknown) => {
 export class PluginMicrosoftGraphGatewayServer extends Plugin {
   private clients = new Map<string, Client>();
   private timer: NodeJS.Timeout | null = null;
+  private stopping = false;
   private activeWorkers = 0;
   private readonly workerId = `${process.pid}-${randomBytes(4).toString('hex')}`;
 
@@ -95,6 +97,7 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
   }
 
   async load() {
+    this.stopping = false;
     const action =
       (operation: string, handler: (ctx: Context) => Promise<void>) => async (ctx: Context, next: Next) => {
         const startedAt = new Date();
@@ -242,21 +245,32 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
   async afterDisable() {
     this.stopWorker();
   }
+  async beforeStop() {
+    this.stopWorker();
+  }
   async beforeUnload() {
     this.stopWorker();
   }
 
   private startWorker() {
+    this.stopping = false;
     if (this.timer) return;
-    this.timer = setInterval(() => {
-      this.tick().catch((error) => this.log.error('Microsoft Graph queue tick failed', { error: safeError(error) }));
-    }, 2000);
+    this.timer = runWithDistributedLock(
+      this.app,
+      'ms-graph:queue-worker',
+      async () => {
+        await this.tick();
+      },
+      2000,
+      60_000,
+    );
     this.tick().catch((error) =>
       this.log.error('Microsoft Graph initial queue tick failed', { error: safeError(error) }),
     );
   }
 
   private stopWorker() {
+    this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.clients.clear();
@@ -423,7 +437,9 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
   }
 
   private async tick() {
+    if (this.stopping) return;
     const settings = await this.settingsRecord();
+    if (this.stopping) return;
     if (!settings) return;
     const concurrency = Math.max(1, Number(settings.get('concurrency') ?? 2));
     if (this.activeWorkers >= concurrency) return;

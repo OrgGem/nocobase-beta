@@ -48,8 +48,7 @@ export const DrawioHostPortal: React.FC = () => {
     });
   }, []);
 
-  const current = state.diagram;
-  const title = current?.title || 'Drawio Diagram';
+  const title = state.diagram?.title || 'Drawio Diagram';
 
   return createPortal(
     <Drawer
@@ -58,9 +57,10 @@ export const DrawioHostPortal: React.FC = () => {
       width="100%"
       title={title}
       destroyOnClose
+      zIndex={1000}
       styles={{ body: { padding: 0 } }}
     >
-      {state.drawerOpen && current ? <DrawioBlock /> : null}
+      {state.drawerOpen && state.diagram ? <DrawioBlock /> : null}
     </Drawer>,
     document.body,
   );

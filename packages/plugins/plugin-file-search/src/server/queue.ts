@@ -1,6 +1,7 @@
 import type { Application } from '@nocobase/server';
 import { DocumentIndexer } from './services/document-indexer';
 import { getWorkerId, workerModeServesFileSearch } from './services/file-utils';
+import { runWithDistributedLock } from './services/ha-lock';
 
 const POLL_INTERVAL_MS = Math.max(1000, Number.parseInt(process.env.FILE_SEARCH_QUEUE_POLL_MS || '5000', 10));
 
@@ -35,10 +36,7 @@ export function startFileSearchQueue(app: Application) {
     return;
   }
   app.log?.info?.(`[plugin-file-search] Queue processor started (${POLL_INTERVAL_MS}ms)`);
-  timer = setInterval(
-    () => processOne(app).catch((error) => app.log?.error?.('[plugin-file-search] queue tick failed', error)),
-    POLL_INTERVAL_MS,
-  );
+  timer = runWithDistributedLock(app, 'file-search:queue-poller', async () => processOne(app), POLL_INTERVAL_MS);
 }
 
 export function stopFileSearchQueue() {

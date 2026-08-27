@@ -1,37 +1,7 @@
 // ── Shared types for Agent Orchestrator ──────────────────────────────────
-
-export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cost: number;
-}
-
-export interface BudgetConfig {
-  budgetMaxTokens?: number;
-  budgetMaxCost?: number;
-}
-
-export interface BudgetCheckResult {
-  allowed: boolean;
-  reason?: string;
-}
-
-export interface CircuitState {
-  failures: number;
-  lastFailureTime: number;
-  state: 'closed' | 'open' | 'half-open';
-}
-
-export interface TraceEvent {
-  type: string;
-  at: string;
-  title: string;
-  content?: string;
-  toolName?: string;
-  args?: any;
-  status?: string;
-}
+// Re-export canonical types from their implementation modules.
+// This file exists for backward compatibility; prefer direct imports.
+export type { TokenUsage, BudgetConfig, BudgetCheckResult } from './services/TokenTracker';
 
 export interface DelegationLogData {
   id?: number | string;
@@ -45,11 +15,7 @@ export interface DelegationLogData {
   depth: number;
   durationMs: number;
   error?: string;
-  trace?: TraceEvent[];
-  messages?: any[];
+  trace?: unknown[];
+  messages?: unknown[];
   userId?: number | string;
 }
-
-export type CtxSnapshot = {
-  userId?: number;
-};

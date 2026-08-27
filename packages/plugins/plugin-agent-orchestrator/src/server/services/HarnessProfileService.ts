@@ -1,6 +1,7 @@
 import type { Database, Model, Transaction } from '@nocobase/database';
 import { parseHarnessSettings, validateHarnessSettings } from './HarnessSchema';
 import type { HarnessSettings } from './HarnessSchema';
+import { read } from '../utils/record-utils';
 
 type HarnessProfileVersion = {
   id: number;
@@ -12,11 +13,6 @@ type HarnessProfileVersion = {
   publishedById?: number | null;
   publishedAt?: Date | null;
 };
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
-}
 
 function positiveId(value: unknown, label: string) {
   const parsed = typeof value === 'number' ? value : Number(value);

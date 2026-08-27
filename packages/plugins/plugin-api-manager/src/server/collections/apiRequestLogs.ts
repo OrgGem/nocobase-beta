@@ -39,6 +39,15 @@ export default defineCollection({
       name: 'apiKeyId',
     },
     {
+      type: 'bigInt',
+      name: 'userId',
+      index: true,
+    },
+    {
+      type: 'string',
+      name: 'roleName',
+    },
+    {
       type: 'string',
       name: 'clientIp',
     },

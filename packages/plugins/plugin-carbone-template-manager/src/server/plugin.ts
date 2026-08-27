@@ -7,6 +7,7 @@ import { COLLECTION, DEFAULTS } from '../shared/constants';
 import { CarboneClient, CarboneClientConfig } from './services/carbone-client';
 import { CacheManager } from './services/cache-manager';
 import { RateLimiter } from './services/rate-limiter';
+import { runWithDistributedLock } from './services/ha-lock';
 import { RenderLogger } from './services/render-logger';
 import { getSettings, saveSettings, testConnection } from './resources/settings';
 import { makeTemplateActions, makeVersionActions } from './resources/templates';
@@ -132,7 +133,12 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     });
 
     // 2.6 Hourly maintenance — prune expired logs + idle rate-limit windows.
-    this.maintenanceTimer = setInterval(() => this.runMaintenance(), 3_600_000);
+    this.maintenanceTimer = runWithDistributedLock(
+      this.app,
+      'carbone:maintenance',
+      () => this.runMaintenance(),
+      3_600_000,
+    );
     this.app.on('beforeStop', () => {
       if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
     });
@@ -238,6 +244,19 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     if (!carboneTemp.length) return;
     await Promise.all(carboneTemp.map((f) => unlink(resolve(dir, f)).catch(() => undefined)));
     this.app.logger?.info(`[carbone] cleaned up ${carboneTemp.length} stale temp files`);
+  }
+
+  async beforeStop() {
+    this.stopMaintenance();
+  }
+
+  async afterDisable() {
+    this.stopMaintenance();
+  }
+
+  private stopMaintenance() {
+    if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+    this.maintenanceTimer = undefined;
   }
 
   private async runMaintenance() {

@@ -6,7 +6,7 @@
   "description": "Search accessible uploaded files with PageIndex-powered retrieval.",
   "description.vi-VN": "Tìm kiếm các tệp được phép truy cập bằng PageIndex.",
   "description.zh-CN": "使用 PageIndex 检索可访问的已上传文件。",
-  "version": "2.1.18",
+  "version": "2.1.19",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

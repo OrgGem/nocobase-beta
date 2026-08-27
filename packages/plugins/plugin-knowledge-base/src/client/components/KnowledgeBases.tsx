@@ -51,6 +51,8 @@ import {
   ClockCircleOutlined,
   SyncOutlined,
   BookOutlined,
+  LikeOutlined,
+  DislikeOutlined,
 } from '@ant-design/icons';
 
 const { Text, Title } = Typography;
@@ -505,6 +507,41 @@ export const KnowledgeBases: React.FC = () => {
     }
   };
 
+  const [selectedDocIds, setSelectedDocIds] = useState<React.Key[]>([]);
+
+  const handleBulkDelete = async () => {
+    if (!selectedDocIds.length) return;
+    try {
+      await api.request({
+        url: 'aiKnowledgeBaseDoc:bulkDestroy',
+        method: 'post',
+        data: { values: { documentIds: selectedDocIds } },
+      });
+      message.success(`Deleted ${selectedDocIds.length} document(s)`);
+      setSelectedDocIds([]);
+      if (selectedKB) fetchDocuments(selectedKB.id);
+    } catch {
+      message.error('Bulk delete failed');
+    }
+  };
+
+  const handleBulkReprocess = async () => {
+    if (!selectedDocIds.length) return;
+    try {
+      const res = await api.request({
+        url: 'aiKnowledgeBaseDoc:bulkReprocess',
+        method: 'post',
+        data: { values: { documentIds: selectedDocIds } },
+      });
+      const queuedCount = res?.data?.data?.queuedCount ?? 0;
+      message.success(`Queued ${queuedCount} of ${selectedDocIds.length} document(s) for reprocessing`);
+      setSelectedDocIds([]);
+      if (selectedKB) fetchDocuments(selectedKB.id);
+    } catch {
+      message.error('Bulk reprocess failed');
+    }
+  };
+
   const handleReprocess = async (docId: string) => {
     try {
       await api.request({
@@ -546,6 +583,28 @@ export const KnowledgeBases: React.FC = () => {
       message.error('Search failed');
     } finally {
       setKbSearchLoading(false);
+    }
+  };
+
+  const handleSearchFeedback = async (item: any, feedback: 'positive' | 'negative') => {
+    if (!selectedKB) return;
+    try {
+      await api.request({
+        url: 'aiKnowledgeBase:submitSearchFeedback',
+        method: 'post',
+        data: {
+          values: {
+            knowledgeBaseId: selectedKB.id,
+            query: kbSearchQuery,
+            documentId: item.id ?? item.metadata?.documentId,
+            feedback,
+            rerankScore: Number(item.rerankScore ?? item.score ?? 0),
+          },
+        },
+      });
+      message.success(feedback === 'positive' ? 'Thanks for the positive feedback!' : 'Feedback recorded');
+    } catch {
+      message.error('Failed to submit feedback');
     }
   };
 
@@ -905,10 +964,32 @@ export const KnowledgeBases: React.FC = () => {
                 {documentStats.failed} failed
               </Tag>
             </Space>
+            {selectedDocIds.length > 0 && (
+              <Space style={{ marginLeft: 'auto' }}>
+                <Text type="secondary">{selectedDocIds.length} selected</Text>
+                <Popconfirm title={`Reprocess ${selectedDocIds.length} document(s)?`} onConfirm={handleBulkReprocess}>
+                  <Button size="small" icon={<SyncOutlined />}>
+                    Reprocess
+                  </Button>
+                </Popconfirm>
+                <Popconfirm
+                  title={`Delete ${selectedDocIds.length} document(s)? This cannot be undone.`}
+                  onConfirm={handleBulkDelete}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />}>
+                    Delete
+                  </Button>
+                </Popconfirm>
+              </Space>
+            )}
           </div>
           <div ref={documentTableViewportRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
             <Table
               rowKey="id"
+              rowSelection={{
+                selectedRowKeys: selectedDocIds,
+                onChange: (keys: React.Key[]) => setSelectedDocIds(keys),
+              }}
               size="small"
               loading={docsLoading}
               columns={documentColumns}
@@ -939,10 +1020,15 @@ export const KnowledgeBases: React.FC = () => {
           onSearch={handleKnowledgeSearch}
           style={{ maxWidth: 720 }}
         />
-        <Space>
-          <Text type="secondary">Top K</Text>
-          <InputNumber min={1} max={20} value={kbSearchTopK} onChange={(value) => setKbSearchTopK(value || 5)} />
-        </Space>
+        <InputNumber
+          min={1}
+          max={20}
+          value={kbSearchTopK}
+          aria-label="Maximum search results"
+          addonBefore="Results"
+          style={{ flex: '0 0 auto', width: 152 }}
+          onChange={(value) => setKbSearchTopK(value || 5)}
+        />
       </div>
 
       {kbSearchLoading ? (
@@ -964,6 +1050,20 @@ export const KnowledgeBases: React.FC = () => {
                     <Tag color="blue">rerank {Number(item.rerankScore ?? item.score ?? 0).toFixed(3)}</Tag>
                     <Tag>vector {Number(item.vectorScore ?? item.score ?? 0).toFixed(3)}</Tag>
                     {item.metadata?.source && <Text type="secondary">{item.metadata.source}</Text>}
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<LikeOutlined />}
+                      onClick={() => handleSearchFeedback(item, 'positive')}
+                      aria-label="Helpful result"
+                    />
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<DislikeOutlined />}
+                      onClick={() => handleSearchFeedback(item, 'negative')}
+                      aria-label="Not helpful"
+                    />
                   </Space>
                 }
                 description={
@@ -1032,32 +1132,34 @@ export const KnowledgeBases: React.FC = () => {
             <Select options={agentAccessOptions} />
           </Form.Item>
         </Col>
-        <Col span={12}>
-          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.agentAccess !== cur.agentAccess}>
-            {({ getFieldValue }) =>
-              getFieldValue('agentAccess') === 'explicit' ? (
-                <Form.Item
-                  name="allowedAgents"
-                  label="Allowed agents"
-                  tooltip="AI Employees explicitly granted access. Agents holding a role in 'Allowed roles' also pass."
-                >
-                  <Select mode="multiple" options={agentOptions} placeholder="Select AI Employees" />
-                </Form.Item>
-              ) : null
-            }
-          </Form.Item>
-        </Col>
+        {currentType !== 'EXTERNAL_RAG' && (
+          <Col span={12}>
+            <Form.Item
+              name="vectorStoreId"
+              label="Vector Store"
+              rules={[{ required: currentType !== 'READONLY' && currentType !== 'EXTERNAL' }]}
+            >
+              <Select options={vectorStores.map((vs: any) => ({ label: vs.name, value: vs.id }))} />
+            </Form.Item>
+          </Col>
+        )}
       </Row>
 
-      {currentType !== 'EXTERNAL_RAG' ? (
-        <Form.Item
-          name="vectorStoreId"
-          label="Vector Store"
-          rules={[{ required: currentType !== 'READONLY' && currentType !== 'EXTERNAL' }]}
-        >
-          <Select options={vectorStores.map((vs: any) => ({ label: vs.name, value: vs.id }))} />
-        </Form.Item>
-      ) : (
+      <Form.Item noStyle shouldUpdate={(prev, cur) => prev.agentAccess !== cur.agentAccess}>
+        {({ getFieldValue }) =>
+          getFieldValue('agentAccess') === 'explicit' ? (
+            <Form.Item
+              name="allowedAgents"
+              label="Allowed agents"
+              tooltip="AI Employees explicitly granted access. Agents holding a role in 'Allowed roles' also pass."
+            >
+              <Select mode="multiple" options={agentOptions} placeholder="Select AI Employees" />
+            </Form.Item>
+          ) : null
+        }
+      </Form.Item>
+
+      {currentType === 'EXTERNAL_RAG' && (
         <div style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, marginBottom: 24 }}>
           <Text strong style={{ display: 'block', marginBottom: 16 }}>
             External RAG Configuration

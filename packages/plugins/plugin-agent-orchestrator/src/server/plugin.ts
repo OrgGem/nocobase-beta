@@ -24,6 +24,7 @@ import { AgentRuntimeLifecycle } from './services/AgentRuntimeLifecycle';
 import { validateInputSchemaDefinition } from './services/InputSchemaValidator';
 import { assertSkillToolNameAvailable, buildSkillToolName, getSkillToolName } from './utils/skill-tool-name';
 import { ensureAgentOrchestratorIndexes } from './utils/ensure-indexes';
+import { resetRunEventBus } from './services/RunEventBus';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -333,6 +334,21 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
         await next();
 
+        // When a skill is disabled via update, cascade-remove its tool from all AI employee
+        // bindings. This prevents stale bindings from allowing execution of disabled skills.
+        if (actionName === 'update' && values.enabled === false) {
+          const tk = ctx.action?.params?.filterByTk;
+          if (tk) {
+            const skillRecord = await ctx.db.getRepository('skillDefinitions').findOne({ filterByTk: tk });
+            if (skillRecord) {
+              const toolName = getSkillToolName(skillRecord);
+              if (toolName) {
+                await this.skillHub.skillAccessService.cascadeDisableSkill(toolName);
+              }
+            }
+          }
+        }
+
         if ((actionName === 'list' || actionName === 'get') && !isAdminUser(ctx)) {
           ctx.body = redactSkillResponse(ctx.body);
         }
@@ -362,7 +378,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     const patterns = new LoopPatternService(this.db, employeeHarnessResolver(this), async () =>
       worktreeCapability(this),
     );
-    const triggers = new LoopTriggerService(this.db, patterns);
+    const triggers = new LoopTriggerService(this.db, patterns, this.app.log);
     this.loopScheduler = new LoopSchedulerService(this, patterns, triggers);
     this.loopWorker = new LoopWorkerService(this.app, this.db);
     this.loopScheduler.install();
@@ -414,8 +430,107 @@ export class PluginAgentOrchestratorServer extends Plugin {
       },
     });
 
+    // --- Skill Metrics Aggregation ---
+    // Daily roll-up of skillExecutions into per-skill/per-employee metrics for
+    // operational dashboards. Override schedule via env: SKILL_METRICS_CRON (default 03:00).
+    this.app.cronJobManager.addJob({
+      cronTime: process.env.SKILL_METRICS_CRON || '0 0 3 * * *',
+      onTick: async () => {
+        try {
+          await this.aggregateSkillMetrics();
+        } catch (e) {
+          this.app.log.error('[AgentOrchestrator] Skill metrics aggregation job failed', e);
+        }
+      },
+    });
+
     // Native sub-agent conversations are owned by @nocobase/plugin-ai. This
     // plugin only observes their execution spans and policy context.
+  }
+
+  private async aggregateSkillMetrics() {
+    const yesterday = new Date(Date.now() - 86400000);
+    yesterday.setUTCHours(0, 0, 0, 0);
+    const today = new Date(yesterday.getTime() + 86400000);
+
+    const repo = this.db.getRepository('skillExecutions');
+    if (!repo) return;
+
+    const rows = await repo.find({
+      filter: {
+        createdAt: {
+          $gte: yesterday.toISOString(),
+          $lt: today.toISOString(),
+        },
+      },
+      fields: ['skillId', 'aiEmployeeUsername', 'status', 'durationMs'],
+    });
+
+    type MetricKey = string;
+    interface MetricBucket {
+      executions: number;
+      successes: number;
+      failures: number;
+      timeouts: number;
+      durations: number[];
+    }
+
+    const buckets = new Map<MetricKey, MetricBucket>();
+
+    for (const row of rows) {
+      const skillId = String(row.get?.('skillId') || '');
+      const username = String(row.get?.('aiEmployeeUsername') || '');
+      const status = String(row.get?.('status') || '');
+      const durationMs = Number(row.get?.('durationMs') || 0);
+      if (!skillId) continue;
+
+      const key = `${skillId}:${username}`;
+      if (!buckets.has(key)) {
+        buckets.set(key, { executions: 0, successes: 0, failures: 0, timeouts: 0, durations: [] });
+      }
+      const bucket = buckets.get(key) ?? { executions: 0, successes: 0, failures: 0, timeouts: 0, durations: [] };
+      bucket.executions += 1;
+      if (status === 'succeeded') bucket.successes += 1;
+      else if (status === 'timeout') bucket.timeouts += 1;
+      else if (status === 'failed') bucket.failures += 1;
+      if (durationMs > 0) bucket.durations.push(durationMs);
+    }
+
+    const metricsRepo = this.db.getRepository('skillMetrics');
+    if (!metricsRepo) return;
+
+    let upserted = 0;
+    for (const [key, bucket] of buckets) {
+      const firstColon = key.indexOf(':');
+      const skillId = key.substring(0, firstColon);
+      const employeeUsername = key.substring(firstColon + 1);
+      const sortedDurations = [...bucket.durations].sort((a, b) => a - b);
+      const p95Index = Math.max(0, Math.ceil(sortedDurations.length * 0.95) - 1);
+      const totalDuration = sortedDurations.reduce((sum, d) => sum + d, 0);
+
+      await metricsRepo.updateOrCreate({
+        filterKeys: ['skillId', 'employeeUsername', 'period'],
+        values: {
+          skillId: skillId,
+          employeeUsername,
+          period: yesterday.toISOString(),
+          executions: bucket.executions,
+          successes: bucket.successes,
+          failures: bucket.failures,
+          timeouts: bucket.timeouts,
+          avgDurationMs: bucket.durations.length ? Math.round(totalDuration / bucket.durations.length) : 0,
+          p95DurationMs: sortedDurations.length > 1 ? sortedDurations[p95Index] : sortedDurations[0] || 0,
+          totalDurationMs: totalDuration,
+        },
+      });
+      upserted += 1;
+    }
+
+    this.app.log.info(
+      `[AgentOrchestrator] Skill metrics aggregated for ${yesterday
+        .toISOString()
+        .slice(0, 10)}: ${upserted} metric row(s).`,
+    );
   }
 
   async install() {
@@ -442,6 +557,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     await this.loopScheduler?.dispose();
     this.nativeObserver?.uninstall();
     await this.skillHub.beforeStop();
+    resetRunEventBus();
   }
 
   async handleSyncMessage(message: unknown) {

@@ -23,6 +23,7 @@ describe('AI API group quota reservation', () => {
         { name: 'enabled', type: 'boolean' },
         { name: 'currency', type: 'string' },
         { name: 'inputPricePerMillionTokens', type: 'decimal', precision: 20, scale: 10 },
+        { name: 'cacheInputPricePerMillionTokens', type: 'decimal', precision: 20, scale: 10 },
         { name: 'outputPricePerMillionTokens', type: 'decimal', precision: 20, scale: 10 },
         { name: 'fixedCostPerRequest', type: 'decimal', precision: 20, scale: 10 },
         { name: 'effectiveFrom', type: 'datetimeTz' },
@@ -83,6 +84,7 @@ describe('AI API group quota reservation', () => {
         enabled: true,
         currency: 'USD',
         inputPricePerMillionTokens: '5',
+        cacheInputPricePerMillionTokens: '1',
         outputPricePerMillionTokens: '15',
         fixedCostPerRequest: '0',
         effectiveFrom: new Date('2020-01-01T00:00:00Z'),
@@ -140,10 +142,14 @@ describe('AI API group quota reservation', () => {
     markLlmProviderAttempted(first);
     const finalized = await finalizeLlmBilling(
       first,
-      { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, prompt_cache_tokens: 6 },
       true,
     );
-    expect(finalized).toMatchObject({ estimatedCost: '0.00012500', costStatus: 'calculated' });
+    expect(finalized).toMatchObject({
+      estimatedCost: '0.00010100',
+      costStatus: 'calculated',
+      cacheInputPricePerMillionTokens: '1.0000000000',
+    });
 
     const bucket = await db.getRepository('aiApiGroupQuotaBuckets').findOne();
     expect(String(bucket?.get('requestCount'))).toBe('1');

@@ -6,7 +6,7 @@
   "description": "Monitor and manage UiPath Orchestrator: jobs, queues, processes, assets, robot logs, folders, and incident investigation",
   "description.vi-VN": "Giám sát và quản lý UiPath Orchestrator: jobs, queues, processes, assets, robot logs, folders, và điều tra sự cố",
   "description.zh-CN": "监控和管理 UiPath Orchestrator：作业、队列、流程、资产、机器人日志、文件夹和事故调查",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [

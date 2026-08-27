@@ -74,6 +74,9 @@ export function getDiagram(): StoredDiagram | null {
 
 /** Store (or update) the single global diagram. */
 export function setDiagram(id: string, title: string, xml: string) {
+  const current = state.diagram;
+  if (current?.id === id && current.title === title && current.xml === xml) return;
+
   state = {
     ...state,
     diagram: { id, title, xml },

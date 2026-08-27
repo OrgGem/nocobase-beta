@@ -1,7 +1,7 @@
-import { Button, Popconfirm, Space, Switch, Table, Tag, message } from 'antd';
+import { Button, Input, Popconfirm, Select, Space, Switch, Table, Tag, message } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
 import { RouteFormModal, RouteFormValues, RouteOption, CryptoKeyOption } from './RouteFormModal';
@@ -18,6 +18,7 @@ interface RouteRow {
   partnerId?: number | null;
   description?: string;
   enabled: boolean;
+  authMode?: 'both' | 'api-key' | 'role';
   encryptionMode: 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
   wireFormat: 'binary' | 'json';
   aesSecret?: string;
@@ -79,6 +80,9 @@ export const RoutesPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [testRoute, setTestRoute] = useState<RouteRow | null>(null);
   const [usageRoute, setUsageRoute] = useState<RouteRow | null>(null);
+  const [search, setSearch] = useState('');
+  const [directionFilter, setDirectionFilter] = useState<'inbound' | 'outbound' | 'all'>('all');
+  const [encryptionFilter, setEncryptionFilter] = useState<string>('all');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -163,8 +167,30 @@ export const RoutesPage: React.FC = () => {
 
   const partnerName = (id?: number | null) => partners.find((p) => p.id === id)?.name;
 
+  const filteredRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (directionFilter !== 'all' && row.direction !== directionFilter) return false;
+      if (encryptionFilter !== 'all' && row.encryptionMode !== encryptionFilter) return false;
+      if (!q) return true;
+      return (
+        row.name.toLowerCase().includes(q) ||
+        (row.inboundPath ?? '').toLowerCase().includes(q) ||
+        (row.targetUrl ?? '').toLowerCase().includes(q) ||
+        (row.description ?? '').toLowerCase().includes(q) ||
+        (partnerName(row.partnerId) ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [rows, search, directionFilter, encryptionFilter, partners]);
+
   const columns = [
-    { title: t('Name') as string, dataIndex: 'name', key: 'name' },
+    {
+      title: t('Name') as string,
+      dataIndex: 'name',
+      key: 'name',
+      ellipsis: true,
+      sorter: (a: RouteRow, b: RouteRow) => a.name.localeCompare(b.name),
+    },
     {
       title: t('Direction') as string,
       dataIndex: 'direction',
@@ -175,10 +201,16 @@ export const RoutesPage: React.FC = () => {
         </Tag>
       ),
     },
-    { title: t('Method') as string, dataIndex: 'method', key: 'method' },
+    {
+      title: t('Method') as string,
+      dataIndex: 'method',
+      key: 'method',
+      sorter: (a: RouteRow, b: RouteRow) => a.method.localeCompare(b.method),
+    },
     {
       title: t('Path / Target') as string,
       key: 'target',
+      ellipsis: true,
       render: (_: unknown, record: RouteRow) =>
         record.direction === 'inbound' ? `/api/apim/inbound/${record.inboundPath ?? ''}` : record.targetUrl,
     },
@@ -192,6 +224,15 @@ export const RoutesPage: React.FC = () => {
       dataIndex: 'encryptionMode',
       key: 'encryptionMode',
       render: (mode: string) => <Tag color={ENCRYPTION_COLORS[mode] ?? 'default'}>{mode}</Tag>,
+    },
+    {
+      title: t('Auth') as string,
+      dataIndex: 'authMode',
+      key: 'authMode',
+      render: (mode: string) => {
+        const label = mode === 'api-key' ? 'API Key' : mode === 'role' ? 'Role' : 'Both';
+        return <Tag color={mode === 'role' ? 'purple' : mode === 'api-key' ? 'blue' : 'cyan'}>{label}</Tag>;
+      },
     },
     {
       title: t('Enabled') as string,
@@ -227,7 +268,36 @@ export const RoutesPage: React.FC = () => {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} wrap>
+        <Input.Search
+          allowClear
+          placeholder={t('Search routes') as string}
+          style={{ width: 260 }}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <Select
+          value={directionFilter}
+          onChange={setDirectionFilter}
+          style={{ width: 140 }}
+          options={[
+            { value: 'all', label: t('All') as string },
+            { value: 'inbound', label: t('Inbound') as string },
+            { value: 'outbound', label: t('Outbound') as string },
+          ]}
+        />
+        <Select
+          value={encryptionFilter}
+          onChange={setEncryptionFilter}
+          style={{ width: 160 }}
+          options={[
+            { value: 'all', label: t('All Encryption') as string },
+            { value: 'none', label: 'none' },
+            { value: 'aes-256-gcm', label: 'aes-256-gcm' },
+            { value: 'pgp', label: 'pgp' },
+            { value: 'rsa-oaep', label: 'rsa-oaep' },
+          ]}
+        />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           {t('Create Route')}
         </Button>
@@ -235,7 +305,16 @@ export const RoutesPage: React.FC = () => {
           {t('Refresh')}
         </Button>
       </Space>
-      <Table rowKey="id" columns={columns} dataSource={rows} loading={loading} pagination={false} />
+      <div style={{ overflowX: 'auto' }}>
+        <Table
+          rowKey="id"
+          columns={columns}
+          dataSource={filteredRows}
+          loading={loading}
+          pagination={false}
+          scroll={{ x: 1200 }}
+        />
+      </div>
       <RouteFormModal
         open={modalOpen}
         initial={editing}

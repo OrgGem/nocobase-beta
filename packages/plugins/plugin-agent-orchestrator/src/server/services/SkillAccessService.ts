@@ -10,9 +10,22 @@ function bindingName(binding: ToolBinding): string {
 }
 
 export class SkillAccessService {
-  constructor(private readonly plugin: { db: { getRepository: (name: string) => any } }) {}
+  constructor(
+    private readonly plugin: {
+      db: {
+        getRepository: (name: string) =>
+          | {
+              find: (opts?: Record<string, unknown>) => Promise<unknown[]>;
+              findOne: (opts: Record<string, unknown>) => Promise<unknown>;
+              update: (opts: Record<string, unknown>) => Promise<unknown>;
+            }
+          | undefined;
+      };
+      app?: { logger?: { info?: (...args: unknown[]) => void } };
+    },
+  ) {}
 
-  async resolveAgentUsername(ctx: any): Promise<string | undefined> {
+  async resolveAgentUsername(ctx: Record<string, unknown>): Promise<string | undefined> {
     const executionIdentity = getAgentExecutionContext();
     if (executionIdentity?.employeeUsername) return executionIdentity.employeeUsername;
 
@@ -59,7 +72,7 @@ export class SkillAccessService {
   }
 
   async assertCanExecute(
-    ctx: any,
+    ctx: Record<string, unknown>,
     skill: unknown,
     options: { privileged?: boolean } = {},
   ): Promise<string | undefined> {
@@ -76,7 +89,7 @@ export class SkillAccessService {
     return agentUsername;
   }
 
-  async filterAccessibleSkills(ctx: any, skills: unknown[]): Promise<unknown[]> {
+  async filterAccessibleSkills(ctx: Record<string, unknown>, skills: unknown[]): Promise<unknown[]> {
     if (isAdminUser(ctx)) return skills;
     const agentUsername = await this.resolveAgentUsername(ctx);
     if (!agentUsername) return [];
@@ -86,7 +99,8 @@ export class SkillAccessService {
   }
 
   async findAgentUsernamesUsingTool(toolName: string): Promise<string[]> {
-    const employees = await this.plugin.db.getRepository('aiEmployees').find({});
+    // Cap at 500 employees to prevent unbounded scans. Most deployments have <100.
+    const employees = await this.plugin.db.getRepository('aiEmployees').find({ limit: 500 });
     const usernames: string[] = [];
     for (const employee of employees || []) {
       const settings = asObject(readRecordValue(employee, 'skillSettings'));
@@ -96,5 +110,66 @@ export class SkillAccessService {
       if (username) usernames.push(username);
     }
     return usernames;
+  }
+
+  /**
+   * Cascade-disable a skill across all AI employee bindings.
+   *
+   * When a skill is disabled or deleted, this method removes its tool from every employee's
+   * `skillSettings.tools` array. This prevents stale bindings from allowing execution of
+   * skills that are no longer available.
+   *
+   * Returns the list of affected employee usernames for audit logging.
+   */
+  async cascadeDisableSkill(skillToolName: string): Promise<string[]> {
+    const affectedUsernames: string[] = [];
+    // Cap at 500 employees to prevent unbounded scans. Most deployments have <100.
+    const employees = await this.plugin.db.getRepository('aiEmployees').find({ limit: 500 });
+
+    // Collect all updates first, then apply in parallel to reduce round-trips.
+    const updates: Array<{ username: string; skillSettings: Record<string, unknown> }> = [];
+
+    for (const employee of employees || []) {
+      const skillSettings = asObject(readRecordValue(employee, 'skillSettings'));
+      const tools = Array.isArray(skillSettings.tools) ? (skillSettings.tools as ToolBinding[]) : [];
+      const filteredTools = tools.filter((binding) => bindingName(binding) !== skillToolName);
+
+      if (filteredTools.length === tools.length) continue;
+
+      const username = normalizeEmployeeUsername(readRecordValue(employee, 'username'));
+      if (!username) continue;
+
+      updates.push({
+        username,
+        skillSettings: {
+          ...skillSettings,
+          tools: filteredTools,
+        },
+      });
+    }
+
+    // Apply updates in parallel (max 10 concurrent to avoid DB overload).
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < updates.length; i += BATCH_SIZE) {
+      const batch = updates.slice(i, i + BATCH_SIZE);
+      await Promise.all(
+        batch.map((update) =>
+          this.plugin.db
+            .getRepository('aiEmployees')
+            .update({
+              filter: { username: update.username },
+              values: { skillSettings: update.skillSettings },
+            })
+            .then(() => {
+              affectedUsernames.push(update.username);
+              this.plugin.app?.logger?.info?.(
+                `[SkillAccess] Cascade-removed skill tool "${skillToolName}" from employee "${update.username}".`,
+              );
+            }),
+        ),
+      );
+    }
+
+    return affectedUsernames;
   }
 }

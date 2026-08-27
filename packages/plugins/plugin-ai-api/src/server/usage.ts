@@ -233,6 +233,7 @@ export async function finishUsageRecord(ctx: Context, id: unknown, startedAt: nu
     quotaPolicyId: billing.quotaPolicyId ?? null,
     groupId: billing.groupId ?? null,
     inputPricePerMillionTokens: billing.inputPricePerMillionTokens ?? null,
+    cacheInputPricePerMillionTokens: billing.cacheInputPricePerMillionTokens ?? null,
     outputPricePerMillionTokens: billing.outputPricePerMillionTokens ?? null,
     fixedCostPerRequest: billing.fixedCostPerRequest ?? null,
     providerRequestId: usageResult.providerRequestId ?? null,

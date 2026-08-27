@@ -302,6 +302,13 @@ export default defineCollection({
       defaultValue: {},
     },
     {
+      name: 'progress',
+      type: 'json',
+      defaultValue: {},
+      comment:
+        'Live progress snapshot: { currentPhase, totalPhases, completedPhases, currentStepTitle, currentRole, estimatedMsRemaining }',
+    },
+    {
       name: 'userId',
       type: 'bigInt',
     },

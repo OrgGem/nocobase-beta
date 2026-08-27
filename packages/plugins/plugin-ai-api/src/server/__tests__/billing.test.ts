@@ -6,6 +6,7 @@ function price(values: Partial<PriceSnapshot> = {}): PriceSnapshot {
     id: 1,
     currency: 'USD',
     inputPricePerMillionTokens: '5.0000000000',
+    cacheInputPricePerMillionTokens: '0.0000000000',
     outputPricePerMillionTokens: '15.0000000000',
     fixedCostPerRequest: '0.0000000000',
     ...values,
@@ -15,6 +16,18 @@ function price(values: Partial<PriceSnapshot> = {}): PriceSnapshot {
 describe('AI API LLM cost calculation', () => {
   it('calculates input and output token cost using decimal arithmetic', () => {
     expect(calculateLlmCost(10_000, 2_000, price())).toBe('0.08000000');
+  });
+
+  it('prices cached prompt tokens separately from uncached input tokens', () => {
+    expect(calculateLlmCost(10_000, 2_000, price({ cacheInputPricePerMillionTokens: '1.0000000000' }), 6_000)).toBe(
+      '0.05600000',
+    );
+  });
+
+  it('does not charge cached tokens beyond the reported input token count', () => {
+    expect(calculateLlmCost(100, 0, price({ cacheInputPricePerMillionTokens: '1.0000000000' }), 200)).toBe(
+      '0.00010000',
+    );
   });
 
   it('includes a fixed per-request cost', () => {

@@ -8,7 +8,7 @@ export class PluginAgentOrchestratorClient extends Plugin {
     (this as any).app.use(InteractionSchemasProvider);
 
     // Register under the "AI" settings group for consistency with other AI plugins
-    (this as any).app.pluginSettingsManager.add('ai.orchestrator', {
+    (this as any).app.pluginSettingsManager.add('ai-orchestrator', {
       title: 'Agent Orchestrator',
       icon: 'ApartmentOutlined',
       Component: OrchestratorSettings,

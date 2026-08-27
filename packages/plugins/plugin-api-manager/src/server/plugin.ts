@@ -21,6 +21,8 @@ import { registerApiKeysResource } from './resources/api-keys';
 import { registerRoutesResource } from './resources/routes';
 import { registerApiManagerSettingsResource } from './resources/settings';
 import { pruneExpiredLogs } from './services/request-logger';
+import { runWithDistributedLock } from './services/ha-lock';
+import { registerRouteSnippets, registerAllRoutesSnippet, syncApimRoutesAvailableActions } from './services/acl';
 
 const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -88,11 +90,31 @@ export class PluginApiManagerServer extends Plugin {
   private pruneTimer?: NodeJS.Timeout;
 
   async beforeLoad() {
+    this.db.addMigrations({
+      namespace: this.name,
+      directory: path.resolve(__dirname, 'migrations'),
+      context: {
+        plugin: this,
+      },
+    });
+
     this.db.on('apiRoutes.beforeSave', async (model: Model) => {
+      // Partner is mandatory: every route must belong to exactly one partner so
+      // the gateway can enforce tenant isolation between routes and callers.
+      const routePartnerId =
+        model.get('partnerId') == null || model.get('partnerId') === '' ? null : Number(model.get('partnerId'));
+      if (routePartnerId == null || !Number.isFinite(routePartnerId) || routePartnerId <= 0) {
+        throw new Error('partnerId is required for a route');
+      }
       const name = String(model.get('name') ?? '');
       if (!ROUTE_NAME_PATTERN.test(name)) {
         throw new Error('Route name may only contain letters, numbers, ".", "_" and "-"');
       }
+
+      // Validate authMode: 'both' | 'api-key' | 'role'; anything else falls
+      // back to 'both' so legacy routes keep accepting both credential types.
+      const authModeRaw = String(model.get('authMode') ?? 'both');
+      model.set('authMode', authModeRaw === 'api-key' || authModeRaw === 'role' ? authModeRaw : 'both');
 
       const targetUrl = model.get('targetUrl');
       if (targetUrl != null && targetUrl !== '' && !/^https?:\/\//i.test(String(targetUrl))) {
@@ -283,7 +305,11 @@ export class PluginApiManagerServer extends Plugin {
       circuitBreaker: new CircuitBreaker(),
     };
 
-    this.app.use(createApimRouter(this.app, runtime), { after: 'idp-oauth-resource-auth', before: 'resourcer' });
+        // Runs before the dataSource middleware so gateway requests never enter the
+    // resourcer pipeline (no resource parsing, no ACL middleware, no data
+    // wrapping). 'resourcer' is not an app-level middleware tag — the resourcer
+    // runs inside the dataSource middleware — so anchor on 'dataSource' instead.
+    this.app.use(createApimRouter(this.app, runtime), { after: 'idp-oauth-resource-auth', before: 'dataSource' });
 
     registerHealthResource(this.app, runtime);
     registerApiKeysResource(this.app);
@@ -306,6 +332,7 @@ export class PluginApiManagerServer extends Plugin {
       actions: [
         'apiRoutes:*',
         'apiPartners:*',
+        'apiPartnerRoles:*',
         'apiManagerApiKeys:*',
         'apiRequestLogs:list',
         'apiRequestLogs:get',
@@ -315,9 +342,41 @@ export class PluginApiManagerServer extends Plugin {
       ],
     });
 
+    // Register per-route ACL snippets so a role granted
+    // "pm.plugin-api-manager.routes.<routeName>" may call that route, and
+    // advertise the synthetic apimRoutes resource actions to the Roles UI
+    // (plugin-acl availableActions). The initial sync runs after start when
+    // the tables are guaranteed to exist; re-runs whenever routes change.
+    const syncRouteAcl = async () => {
+      try {
+        const repo = this.db.getRepository('apiRoutes');
+        const routes = await repo.find({ filter: { enabled: true } });
+        const routeNames = routes.map((route) => String(route.get('name') ?? '')).filter(Boolean);
+        registerRouteSnippets(this.app.acl, routeNames);
+        registerAllRoutesSnippet(this.app.acl);
+        syncApimRoutesAvailableActions(this.app.acl, routeNames);
+      } catch (error) {
+        this.log.warn(`[api-manager] route ACL sync skipped: ${(error as Error).message ?? error}`);
+      }
+    };
+    this.app.on('afterStart', async () => {
+      await syncRouteAcl();
+    });
+    this.db.on('apiRoutes.afterSave', async () => {
+      await syncRouteAcl();
+    });
+    this.db.on('apiRoutes.afterDestroy', async () => {
+      await syncRouteAcl();
+    });
+
     this.app.on('afterStart', () => {
       this.pruneLogs();
-      this.pruneTimer = setInterval(() => this.pruneLogs(), PRUNE_INTERVAL_MS);
+      this.pruneTimer = runWithDistributedLock(
+        this.app,
+        'api-manager:prune-logs',
+        async () => this.pruneLogs(),
+        PRUNE_INTERVAL_MS,
+      );
     });
     this.app.on('beforeStop', () => {
       if (this.pruneTimer) {

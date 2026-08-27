@@ -14,6 +14,7 @@ import { createGitImportRequestMethodPolicy } from './middlewares/git-import-req
 import { parseJsonText, stringifyJsonText, parseJsonLike } from './utils/json-fields';
 import { getOrchestratorTraceContext } from '../services/ExecutionSpanService';
 import { harnessTimeoutMs, resolveTraceHarness } from '../services/harness-runtime-policy';
+import { runWithDistributedLock } from '../utils/ha-lock';
 import { tryGetAIToolsManager } from '../utils/ai-manager';
 import type { ToolsRuntime } from '@nocobase/ai';
 import { SkillAccessService } from '../services/SkillAccessService';
@@ -367,14 +368,16 @@ export class SkillHubSubFeature {
       return;
     }
 
-    const tick = () => {
-      this.processSkillExecutionQueue().catch((error) => {
-        (this as any).app.logger.warn(`[skill-hub] Pending task poll failed: ${error?.message || error}`);
-      });
+    const tick = async () => {
+      await this.processSkillExecutionQueue();
     };
 
-    this.skillTaskPoller = setInterval(tick, SKILL_TASK_POLL_INTERVAL_MS);
-    (this.skillTaskPoller as any).unref?.();
+    this.skillTaskPoller = runWithDistributedLock(
+      (this as any).app,
+      'skill-hub:task-poller',
+      tick,
+      SKILL_TASK_POLL_INTERVAL_MS,
+    );
     setTimeout(tick, 1000);
   }
 
@@ -979,35 +982,40 @@ export class SkillHubSubFeature {
     // Check old execution files every hour, rate limiter every 5 minutes
     const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
 
-    this.cleanupInterval = setInterval(async () => {
-      // 1. Storage Retention Cleanup
-      try {
-        const config = await (this as any).db.getRepository('skillWorkerConfigs').findOne();
-        const hours = config ? config.get('retentionHours') : 24;
+    this.cleanupInterval = runWithDistributedLock(
+      (this as any).app,
+      'skill-hub:cleanup',
+      async () => {
+        // 1. Storage Retention Cleanup
+        try {
+          const config = await (this as any).db.getRepository('skillWorkerConfigs').findOne();
+          const hours = config ? config.get('retentionHours') : 24;
 
-        if (hours && hours > 0) {
-          const MAX_AGE_MS = hours * 60 * 60 * 1000;
-          const cutoff = new Date(Date.now() - MAX_AGE_MS);
-          const repo = (this as any).db.getRepository('skillExecutions');
+          if (hours && hours > 0) {
+            const MAX_AGE_MS = hours * 60 * 60 * 1000;
+            const cutoff = new Date(Date.now() - MAX_AGE_MS);
+            const repo = (this as any).db.getRepository('skillExecutions');
 
-          const outdated = await repo.find({
-            filter: { createdAt: { $lt: cutoff } },
-          });
+            const outdated = await repo.find({
+              filter: { createdAt: { $lt: cutoff } },
+            });
 
-          if (outdated.length > 0) {
-            for (const record of outdated) {
-              await record.destroy(); // Fires afterDestroy hook which removes physical folder
+            if (outdated.length > 0) {
+              for (const record of outdated) {
+                await record.destroy(); // Fires afterDestroy hook which removes physical folder
+              }
+              (this as any).app.logger.info(`[skill-hub] Auto-cleaned up ${outdated.length} expired execution records`);
             }
-            (this as any).app.logger.info(`[skill-hub] Auto-cleaned up ${outdated.length} expired execution records`);
           }
+        } catch (err) {
+          (this as any).app.logger.warn('[skill-hub] Auto Cleanup error:', err);
         }
-      } catch (err) {
-        (this as any).app.logger.warn('[skill-hub] Auto Cleanup error:', err);
-      }
 
-      // 2. Cleanup rate limiter stale entries
-      this.rateLimiter.cleanup();
-    }, CLEANUP_INTERVAL);
+        // 2. Cleanup rate limiter stale entries
+        this.rateLimiter.cleanup();
+      },
+      CLEANUP_INTERVAL,
+    );
   }
 
   async beforeStop() {

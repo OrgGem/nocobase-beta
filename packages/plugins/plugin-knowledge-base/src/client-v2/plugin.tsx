@@ -7,7 +7,6 @@ export class PluginKnowledgeBaseClient extends Plugin<Record<string, never>, App
       key: 'ai-knowledge-base',
       title: this.t('Knowledge Base'),
       icon: 'BookOutlined',
-      
     });
 
     this.pluginSettingsManager.addPageTabItem({
@@ -15,7 +14,16 @@ export class PluginKnowledgeBaseClient extends Plugin<Record<string, never>, App
       key: 'knowledge-base',
       title: this.t('Knowledge base'),
       aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
-      componentLoader: () => import('../client/components/KnowledgeBases').then(m => ({ default: m.KnowledgeBases })),
+      componentLoader: () => import('../client/components/KnowledgeBases').then((m) => ({ default: m.KnowledgeBases })),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-knowledge-base',
+      key: 'processing-dashboard',
+      title: this.t('Processing Dashboard'),
+      aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
+      componentLoader: () =>
+        import('../client/components/ProcessingDashboard').then((m) => ({ default: m.ProcessingDashboard })),
     });
 
     this.pluginSettingsManager.addPageTabItem({
@@ -23,9 +31,8 @@ export class PluginKnowledgeBaseClient extends Plugin<Record<string, never>, App
       key: 'infrastructure',
       title: this.t('Infrastructure'),
       aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
-      componentLoader: () => import('../client/components/Infrastructure').then(m => ({ default: m.Infrastructure })),
+      componentLoader: () => import('../client/components/Infrastructure').then((m) => ({ default: m.Infrastructure })),
     });
-
   }
 }
 

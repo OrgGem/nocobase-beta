@@ -81,8 +81,8 @@ export function createAclCacheMiddleware(app: any) {
       return next();
     }
 
-    const appName = String(ctx.headers['x-app'] || app.name || 'main');
-    const dataSource = String(ctx.headers['x-data-source'] || 'main');
+    const appName = String(ctx.get?.('x-app') || ctx.headers?.['x-app'] || app.name || 'main');
+    const dataSource = String(ctx.get?.('x-data-source') || ctx.headers?.['x-data-source'] || 'main');
     const userId = String(ctx.state?.currentUser?.id || 'anonymous');
     let cacheKey: string;
 

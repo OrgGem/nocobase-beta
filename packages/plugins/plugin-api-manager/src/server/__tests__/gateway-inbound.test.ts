@@ -182,6 +182,19 @@ describe('gateway inbound', () => {
     expect(res.status).toBe(404);
   });
 
+
+  it('normalizes a trailing slash on the inbound path', async () => {
+    const key = await createTestApiKey(app, { scopes: ['inbound'] });
+    const res = await request.post(`${INBOUND_PREFIX}plain/`).set('X-API-Key', key).send('{}');
+    expect(res.status).toBe(200);
+    expect(res.text).toBe('plain-ok');
+  });
+
+  it('normalizes multiple trailing slashes on the inbound path', async () => {
+    const key = await createTestApiKey(app, { scopes: ['inbound'] });
+    const res = await request.post(`${INBOUND_PREFIX}plain///`).set('X-API-Key', key).send('{}');
+    expect(res.status).toBe(200);
+  });
   it('returns 405 when the method does not match', async () => {
     const key = await createTestApiKey(app, { scopes: ['inbound'] });
     const res = await request.get(`${INBOUND_PREFIX}plain`).set('X-API-Key', key);
@@ -532,6 +545,107 @@ describe('gateway inbound', () => {
       const responseBody = res.body as Buffer;
       expect(isRsaHybridContainer(responseBody)).toBe(false);
       expect(responseBody.equals(plaintext)).toBe(true);
+    });
+  });
+
+  describe('authMode route control', () => {
+    it("allows a plugin API key on an 'api-key' inbound route", async () => {
+      await createTestRoute(app, {
+        name: 'in-authmode-api-key',
+        direction: 'inbound',
+        inboundPath: 'authmode-api-key',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'api-key',
+      });
+      const key = await createTestApiKey(app, { scopes: ['inbound:in-authmode-api-key'] });
+      const res = await request
+        .post(`${INBOUND_PREFIX}authmode-api-key`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(200);
+    });
+
+    it("rejects a Bearer token on an 'api-key' inbound route (403)", async () => {
+      await createTestRoute(app, {
+        name: 'in-authmode-api-key-only',
+        direction: 'inbound',
+        inboundPath: 'authmode-api-key-only',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'api-key',
+      });
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'admin' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${INBOUND_PREFIX}authmode-api-key-only`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it("rejects an API key on a 'role' inbound route (403)", async () => {
+      await createTestRoute(app, {
+        name: 'in-authmode-role-only',
+        direction: 'inbound',
+        inboundPath: 'authmode-role-only',
+        method: 'POST',
+        targetUrl: `${upstream.baseUrl}/echo`,
+        encryptionMode: 'none',
+        authMode: 'role',
+      });
+      const key = await createTestApiKey(app, { scopes: ['inbound:in-authmode-role-only'] });
+      const res = await request
+        .post(`${INBOUND_PREFIX}authmode-role-only`)
+        .set('X-API-Key', key)
+        .set('Content-Type', 'application/json')
+        .send('{"auth":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+  });
+
+  describe('app Bearer token auth (NocoBase JWT) - inbound', () => {
+    it('grants access with a valid app token whose role may call the route', async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['in-plain']);
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'admin' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${INBOUND_PREFIX}plain`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(200);
+    });
+
+    it('denies access when the app token role lacks the route grant (403)', async () => {
+      const { registerRouteSnippets } = await import('../services/acl');
+      registerRouteSnippets(app.acl, ['in-plain']);
+      const user = await app.db.getRepository('users').findOne({ filter: { email: process.env.INIT_ROOT_EMAIL } });
+      const token = app.authManager.jwt.sign({ userId: user.get('id'), roleName: 'member' }, { expiresIn: '1h' });
+      const res = await request
+        .post(`${INBOUND_PREFIX}plain`)
+        .set('Authorization', `Bearer ${token}`)
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('APIM_FORBIDDEN');
+    });
+
+    it('rejects an invalid app token with 401', async () => {
+      const res = await request
+        .post(`${INBOUND_PREFIX}plain`)
+        .set('Authorization', 'Bearer not-a-real-token')
+        .set('Content-Type', 'application/json')
+        .send('{"acl":true}');
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('APIM_UNAUTHORIZED');
     });
   });
 });

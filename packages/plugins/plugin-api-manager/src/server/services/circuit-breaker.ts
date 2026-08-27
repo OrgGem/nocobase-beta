@@ -56,15 +56,33 @@ export function circuitOpenError(circuitOpenRetryAfterSec: number): ApimError {
 
 export class CircuitBreaker {
   private readonly circuits = new Map<string, CircuitEntry>();
+  /**
+   * Hard ceiling on tracked circuits. Keys are target URLs, so an unbounded
+   * map would grow with every distinct upstream; when the ceiling is hit
+   * the oldest insertion is evicted (its failure history is simply reset).
+   */
+  private readonly maxCircuits: number;
+
+  constructor(maxCircuits = 10000) {
+    this.maxCircuits = maxCircuits;
+  }
+
+  private getOrCreate(key: string): CircuitEntry {
+    let entry = this.circuits.get(key);
+    if (entry) return entry;
+    if (this.circuits.size >= this.maxCircuits) {
+      const oldest = this.circuits.keys().next().value;
+      if (oldest != null) this.circuits.delete(oldest);
+    }
+    entry = { state: 'closed', failures: 0, openedAt: 0 };
+    this.circuits.set(key, entry);
+    return entry;
+  }
 
   beforeRequest(key: string, options: CircuitBreakerOptions): CircuitDecision {
     if (!options.enabled) return { allowed: true };
 
-    let entry = this.circuits.get(key);
-    if (!entry) {
-      entry = { state: 'closed', failures: 0, openedAt: 0 };
-      this.circuits.set(key, entry);
-    }
+    const entry = this.getOrCreate(key);
 
     if (entry.state === 'open') {
       const elapsed = Date.now() - entry.openedAt;
@@ -78,11 +96,7 @@ export class CircuitBreaker {
   }
 
   recordSuccess(key: string): void {
-    let entry = this.circuits.get(key);
-    if (!entry) {
-      entry = { state: 'closed', failures: 0, openedAt: 0 };
-      this.circuits.set(key, entry);
-    }
+    const entry = this.getOrCreate(key);
     entry.failures = 0;
     entry.state = 'closed';
   }
@@ -90,12 +104,7 @@ export class CircuitBreaker {
   recordFailure(key: string, options: CircuitBreakerOptions): void {
     if (!options.enabled) return;
 
-    let entry = this.circuits.get(key);
-    if (!entry) {
-      entry = { state: 'closed', failures: 0, openedAt: 0 };
-      this.circuits.set(key, entry);
-    }
-
+    const entry = this.getOrCreate(key);
     entry.failures += 1;
     if (entry.failures >= options.failureThreshold) {
       entry.state = 'open';

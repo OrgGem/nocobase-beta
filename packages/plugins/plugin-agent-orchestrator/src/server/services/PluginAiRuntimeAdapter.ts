@@ -2,9 +2,11 @@ import type { Model } from '@nocobase/database';
 import type { Application } from '@nocobase/server';
 import { AIEmployee } from '@nocobase/plugin-ai/server';
 import { listSystemTools } from '@nocobase/ai';
+import { estimateCost } from './TokenTracker';
 import { getAIToolsManager } from '../utils/ai-manager';
 import { decideTool } from './HarnessCompiler';
 import type { CompiledHarness } from './HarnessCompiler';
+import { read } from '../utils/record-utils';
 
 // plugin-ai keeps every tool whose name is in `listSystemTools()` regardless of the constructor
 // tool filter (ai-employee.ts getAIEmployeeTools). The harness `filter` cannot remove them, so a
@@ -30,11 +32,19 @@ export type InterruptedToolCall = {
   interruptId: string;
 };
 
+export type TokenUsageReport = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+};
+
 export type InvocationOutcome = {
   sessionId: string;
   messageId: string;
   interrupted: InterruptedToolCall[];
   content: string;
+  tokenUsage: TokenUsageReport | null;
 };
 
 type ConversationsManager = {
@@ -58,9 +68,48 @@ type PluginAi = {
   aiEmployeesManager: EmployeesManager;
 };
 
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
+function extractTokenUsageFromResult(result: Record<string, unknown>): TokenUsageReport | null {
+  // Try direct usage_metadata from the last AI message (LangChain standard)
+  const messages = result.messages;
+  if (Array.isArray(messages)) {
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalAll = 0;
+    for (const msg of messages) {
+      const um = (msg as Record<string, unknown>)?.usage_metadata as Record<string, unknown> | undefined;
+      if (um) {
+        totalInput += Number(um.input_tokens || 0);
+        totalOutput += Number(um.output_tokens || 0);
+        totalAll += Number(um.total_tokens || 0);
+      }
+    }
+    if (totalAll > 0) {
+      return {
+        inputTokens: totalInput,
+        outputTokens: totalOutput,
+        totalTokens: totalAll,
+        cost: estimateCost(totalInput, totalOutput),
+      };
+    }
+  }
+
+  // Try usage field (some providers return this)
+  const usage = result.usage as Record<string, unknown> | undefined;
+  if (usage) {
+    const inputTokens = Number(usage.prompt_tokens || usage.input_tokens || 0);
+    const outputTokens = Number(usage.completion_tokens || usage.output_tokens || 0);
+    const totalTokens = Number(usage.total_tokens || inputTokens + outputTokens);
+    if (totalTokens > 0) {
+      return {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        cost: estimateCost(inputTokens, outputTokens),
+      };
+    }
+  }
+
+  return null;
 }
 
 function textContent(messages: unknown): string {
@@ -211,6 +260,7 @@ export class PluginAiRuntimeAdapter {
       messageId: String(result.messageId || ''),
       interrupted: interruptedFrom(result),
       content: textContent(result.messages),
+      tokenUsage: extractTokenUsageFromResult(result),
     };
   }
 
@@ -259,6 +309,7 @@ export class PluginAiRuntimeAdapter {
       messageId: String(result.messageId || input.messageId),
       interrupted: interruptedFrom(result),
       content: textContent(result.messages),
+      tokenUsage: extractTokenUsageFromResult(result),
     };
   }
 
@@ -283,7 +334,11 @@ export class PluginAiRuntimeAdapter {
       db: this.app.db,
       log: this.app.log,
       logger: this.app.log,
-      state: { currentRoles },
+      state: {
+        currentRoles,
+        // Populate currentUser so currentUserId(ctx) resolves correctly.
+        currentUser: input.userId ? { id: input.userId } : undefined,
+      },
       auth: { user: { id: input.userId } },
       action: { params: { values: { sessionId: input.sessionId, model } } },
     };

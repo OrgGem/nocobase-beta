@@ -4,6 +4,7 @@ import { LoopControlService } from './LoopControlService';
 import { loopPatternPolicySchema } from './LoopPatternSchema';
 import { getRunEventBus } from './RunEventBus';
 import { isPassingVerification } from './VerificationSchema';
+import { read } from '../utils/record-utils';
 
 export const loopRunStatuses = [
   'queued',
@@ -81,11 +82,6 @@ export function assertRunTransition(input: TransitionInput) {
       throw new Error('Human acceptance is required to finish a run waiting for human review.');
     }
   }
-}
-
-function read(record: Model | Record<string, unknown>, key: string) {
-  const model = record as Model & { get?: (name: string) => unknown };
-  return typeof model.get === 'function' ? model.get(key) : (record as Record<string, unknown>)[key];
 }
 
 function asStatus(value: unknown): LoopRunStatus {

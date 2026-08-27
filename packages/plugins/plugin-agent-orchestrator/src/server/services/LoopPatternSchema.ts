@@ -51,6 +51,16 @@ export const loopPatternPolicySchema = z
     verification: z
       .object({
         requiredChecks: z.array(z.string().min(1)).min(1).default(['goal']),
+        // Risk-aware checks that are added to the verifier prompt based on runtime context
+        // (e.g. how many files the run touched, whether core paths were affected).
+        dynamicChecks: z
+          .object({
+            codeChangeThreshold: z.number().int().nonnegative().default(10),
+            riskPathPatterns: z.array(z.string().min(1)).default([]),
+            requireSecurityReview: z.boolean().default(false),
+            requirePerformanceReview: z.boolean().default(false),
+          })
+          .optional(),
         maxAttempts: z.number().int().positive().default(2),
       })
       .default({}),
@@ -104,22 +114,58 @@ export const loopPatternSchema = z
     baseRef: z.string().trim().min(1).max(200).default('main'),
     actingOn: z.array(z.string().trim().min(1)).default([]),
     policy: loopPatternPolicySchema.default({}),
+
+    // Dynamic role resolution strategies
+    roleResolution: z
+      .object({
+        enabled: z.boolean().default(false),
+        leaderStrategy: z.enum(['fixed', 'team-lead', 'round-robin', 'skill-match']).default('fixed'),
+        makerStrategy: z.enum(['fixed', 'team-members', 'auto-assign']).default('fixed'),
+        verifierStrategy: z.enum(['fixed', 'independent-only']).default('fixed'),
+        teamBindings: z
+          .array(
+            z.object({
+              teamKey: z.string().min(1),
+              role: z.enum(['leader', 'maker', 'verifier']),
+              employeeUsernames: z.array(z.string().min(1)).default([]),
+            }),
+          )
+          .default([]),
+        fallbackBehavior: z.enum(['skip', 'fail', 'assign-admin']).default('fail'),
+      })
+      .optional(),
   })
   .superRefine((pattern, context) => {
-    const makers = new Set(pattern.makerUsernames);
-    if (pattern.verifierUsername === pattern.leaderUsername || makers.has(pattern.verifierUsername)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['verifierUsername'],
-        message: 'Verifier must be different from the leader and every maker.',
-      });
-    }
-    if (makers.size !== pattern.makerUsernames.length) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['makerUsernames'],
-        message: 'Maker usernames must be unique.',
-      });
+    // Dynamic role resolution: validate strategy configuration, then skip only the
+    // static username checks below. All other validations (cron, L2/L3, etc.) always run.
+    if (pattern.roleResolution?.enabled === true) {
+      const hasStrategy =
+        pattern.roleResolution.leaderStrategy !== 'fixed' ||
+        pattern.roleResolution.makerStrategy !== 'fixed' ||
+        pattern.roleResolution.verifierStrategy !== 'fixed';
+      if (!hasStrategy && !pattern.roleResolution.teamBindings?.length) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['roleResolution'],
+          message: 'Dynamic role resolution requires at least one non-fixed strategy or team bindings.',
+        });
+      }
+    } else {
+      const makers = new Set(pattern.makerUsernames);
+      if (pattern.verifierUsername === pattern.leaderUsername || makers.has(pattern.verifierUsername)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['verifierUsername'],
+          message: 'Verifier must be different from the leader and every maker.',
+        });
+      }
+      if (makers.size !== pattern.makerUsernames.length) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['makerUsernames'],
+          message: 'Maker usernames must be unique.',
+        });
+      }
     }
     if (pattern.triggerType === 'cron') {
       const parts = pattern.cronExpression?.split(/\s+/).filter(Boolean) || [];

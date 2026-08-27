@@ -20,6 +20,7 @@
   "LLM service": "Dịch vụ LLM",
   "Model": "Model",
   "Input price / 1M": "Giá input / 1 triệu token",
+  "Cache input price / 1M": "Giá cache input / 1 triệu token",
   "Output price / 1M": "Giá output / 1 triệu token",
   "Fixed request cost": "Chi phí cố định mỗi request",
   "Currency": "Tiền tệ",

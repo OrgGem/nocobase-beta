@@ -44,5 +44,11 @@
   "Select Knowledge Base": "Select Knowledge Base",
   "No knowledge bases available": "No knowledge bases available",
   "LLM Service (Remote API)": "LLM Service (Remote API)",
-  "Only administrators can configure External RAG providers that forward LLM credentials.": "Only administrators can configure External RAG providers that forward LLM credentials."
+  "Only administrators can configure External RAG providers that forward LLM credentials.": "Only administrators can configure External RAG providers that forward LLM credentials.",
+  "Processing Dashboard": "Processing Dashboard",
+  "Document Processing": "Document Processing",
+  "Total": "Total",
+  "Pending": "Pending",
+  "Ready": "Ready",
+  "Retrying": "Retrying"
 }

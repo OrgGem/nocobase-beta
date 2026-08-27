@@ -20,6 +20,7 @@
   "LLM service": "LLM 服务",
   "Model": "模型",
   "Input price / 1M": "输入价格 / 百万令牌",
+  "Cache input price / 1M": "缓存输入价格 / 百万令牌",
   "Output price / 1M": "输出价格 / 百万令牌",
   "Fixed request cost": "每次请求固定费用",
   "Currency": "货币",

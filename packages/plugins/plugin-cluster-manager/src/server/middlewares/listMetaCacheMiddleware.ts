@@ -16,9 +16,14 @@ export function createListMetaCacheMiddleware(app: any) {
     }
 
     const currentRole = ctx.state?.currentRole || 'anonymous';
-    const appName = ctx.headers['x-app'] || 'main';
-    const dataSource = ctx.headers['x-data-source'] || 'main';
-    const locale = ctx.headers['x-locale'] || ctx.headers['accept-language'] || 'en-US';
+    const appName = ctx.get?.('x-app') || ctx.headers?.['x-app'] || 'main';
+    const dataSource = ctx.get?.('x-data-source') || ctx.headers?.['x-data-source'] || 'main';
+    const locale =
+      ctx.get?.('x-locale') ||
+      ctx.headers?.['x-locale'] ||
+      ctx.get?.('accept-language') ||
+      ctx.headers?.['accept-language'] ||
+      'en-US';
     let cacheKey = '';
     let version = 0;
 

@@ -1,5 +1,5 @@
 import type { Context } from '@nocobase/actions';
-import { resolveRequestUserGroup } from './request-cache';
+import { getAiApiConfig, resolveRequestUserGroup } from './request-cache';
 
 export type ContextOverflowBehavior = 'reject' | 'truncate';
 
@@ -39,8 +39,7 @@ export class DirectLlmContextError extends Error {
     readonly code:
       | 'context_length_exceeded'
       | 'context_estimation_unsupported'
-      | 'max_completion_tokens_exceeds_model_limit'
-      | 'model_context_metadata_not_configured',
+      | 'max_completion_tokens_exceeds_model_limit',
     message: string,
   ) {
     super(message);
@@ -297,18 +296,29 @@ function messagesWithTurns(messages: OpenAIMessage[], turns: OpenAIMessage[][]):
   return messages.filter((message) => isInstruction(message) || retainedMessages.has(message));
 }
 
+/**
+ * Gateway-wide context budget used when a model has no metadata override (or a
+ * partial one). Direct LLM mode must work out of the box for every model; the
+ * metadata table is an override mechanism, not a prerequisite. Providers still
+ * reject requests that exceed their real window, and admins can tighten the
+ * budget per model by adding a metadata row.
+ */
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+export const DEFAULT_MAX_COMPLETION_TOKENS = 8_192;
+
 async function loadModelMetadata(ctx: Context, serviceName: string, modelId: string): Promise<ModelMetadata> {
   const row = await ctx.db.getRepository('aiApiModelMetadata').findOne({
     filter: { llmService: serviceName, model: modelId, enabled: true },
   });
-  const contextWindow = positiveInteger(getValue<unknown>(row, 'contextWindow'));
-  const maxCompletionTokens = positiveInteger(getValue<unknown>(row, 'maxCompletionTokens'));
-  if (!contextWindow || !maxCompletionTokens) {
-    throw new DirectLlmContextError(
-      'model_context_metadata_not_configured',
-      `Context metadata is not configured for '${serviceName}/${modelId}'. Configure context window and max completion tokens.`,
-    );
-  }
+  const config = await getAiApiConfig(ctx);
+  const contextWindow =
+    positiveInteger(getValue<unknown>(row, 'contextWindow')) ??
+    positiveInteger(getValue<unknown>(config, 'defaultContextWindow')) ??
+    DEFAULT_CONTEXT_WINDOW;
+  const maxCompletionTokens =
+    positiveInteger(getValue<unknown>(row, 'maxCompletionTokens')) ??
+    positiveInteger(getValue<unknown>(config, 'defaultMaxCompletionTokens')) ??
+    DEFAULT_MAX_COMPLETION_TOKENS;
   const systemPromptValue = getValue<unknown>(row, 'systemPrompt');
   const systemPrompt = typeof systemPromptValue === 'string' ? systemPromptValue.trim() : '';
   return { contextWindow, maxCompletionTokens, ...(systemPrompt ? { systemPrompt } : {}) };

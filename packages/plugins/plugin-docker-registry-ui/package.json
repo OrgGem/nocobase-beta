@@ -6,7 +6,7 @@
   "description": "Browse, inspect and manage Docker Distribution Registry v2 and v3 images from NocoBase.",
   "description.zh-CN": "在 NocoBase 中浏览、检查和管理 Docker Distribution Registry v2 和 v3 镜像。",
   "description.vi-VN": "Duyệt, kiểm tra và quản lý Docker Distribution Registry v2 và v3 từ NocoBase.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

@@ -97,3 +97,64 @@ export class Throttle extends Transform {
     this.drain().catch(() => undefined);
   }
 }
+
+/**
+ * A semaphore-based limiter that restricts the number of concurrent
+ * download operations. This prevents multiple simultaneous downloads
+ * from overwhelming the server's network bandwidth.
+ */
+export class DownloadLimiter {
+  private readonly maxConcurrent: number;
+  private active = 0;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(maxConcurrent: number) {
+    this.maxConcurrent = Math.max(1, maxConcurrent);
+  }
+
+  /**
+   * Acquire a download slot. Returns a release function that must be called
+   * when the download completes (success or failure).
+   */
+  async acquire(): Promise<() => void> {
+    if (this.active < this.maxConcurrent) {
+      this.active += 1;
+      return () => this.release();
+    }
+
+    return new Promise<() => void>((resolve) => {
+      this.queue.push(() => {
+        this.active += 1;
+        resolve(() => this.release());
+      });
+    });
+  }
+
+  private release(): void {
+    this.active -= 1;
+    if (this.queue.length > 0 && this.active < this.maxConcurrent) {
+      const next = this.queue.shift();
+      next?.();
+    }
+  }
+
+  /**
+   * Returns the current number of active downloads.
+   */
+  get activeCount(): number {
+    return this.active;
+  }
+
+  /**
+   * Returns the number of downloads waiting in queue.
+   */
+  get waitingCount(): number {
+    return this.queue.length;
+  }
+}
+
+/**
+ * Global download limiter instance shared across all requests.
+ * The concurrency limit should match `maxConcurrentRequests` from settings.
+ */
+export const globalDownloadLimiter = new DownloadLimiter(5);
