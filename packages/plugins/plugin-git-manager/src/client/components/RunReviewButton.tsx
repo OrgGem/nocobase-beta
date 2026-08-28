@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, Tag, Alert } from 'antd';
 import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import * as aiClient from '@nocobase/plugin-ai/client';
+import * as aiClient from "@nocobase/plugin-ai";
 import { REVIEW_PROMPT_TEMPLATES } from '../promptTemplates';
 import { useT } from '../locale';
 
@@ -434,3 +434,4 @@ export const RunReviewButton: React.FC<{
     </>
   );
 };
+

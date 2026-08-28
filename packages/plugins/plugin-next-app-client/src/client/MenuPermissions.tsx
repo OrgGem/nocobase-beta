@@ -11,7 +11,7 @@ import { css } from '@emotion/css';
 import { createForm, Form, onFormValuesChange } from '@formily/core';
 import { uid } from '@formily/shared';
 import { SchemaComponent, useAPIClient, useCompile, useRequest, UseRequestResult } from '@nocobase/client';
-import { RolesManagerContext } from '@nocobase/plugin-acl/client';
+import { RolesManagerContext } from "@nocobase/plugin-acl";
 import { useMemoizedFn } from 'ahooks';
 import { Checkbox, message, Spin, Table, TableProps } from 'antd';
 import _, { uniq } from 'lodash';
@@ -316,3 +316,4 @@ export const NextAppAllRoutesProvider: React.FC<{ active: boolean }> = ({ active
     </div>
   );
 };
+

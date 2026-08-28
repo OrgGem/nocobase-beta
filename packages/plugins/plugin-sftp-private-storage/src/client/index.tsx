@@ -9,7 +9,7 @@
 
 import { Plugin } from '@nocobase/client';
 // @ts-ignore
-import { PluginFileManagerClient } from '@nocobase/plugin-file-manager/client';
+import { PluginFileManagerClient } from "@nocobase/plugin-file-manager";
 import { STORAGE_TYPE_SFTP_PRIVATE } from '../constants';
 
 const STORAGE_NS = 'file-manager';
@@ -171,3 +171,4 @@ export class PluginSftpPrivateStorageClient extends Plugin {
 }
 
 export default PluginSftpPrivateStorageClient;
+

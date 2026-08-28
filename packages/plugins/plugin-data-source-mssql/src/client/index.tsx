@@ -8,7 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import PluginDataSourceManagerClient from '@nocobase/plugin-data-source-manager/client';
+import PluginDataSourceManagerClient from "@nocobase/plugin-data-source-manager";
 import { MssqlConfigForm } from './components/MssqlConfigForm';
 import { MssqlDeleteCollection } from './components/MssqlDeleteCollection';
 
@@ -32,3 +32,4 @@ export class PluginDataSourceMssqlClient extends Plugin {
 }
 
 export default PluginDataSourceMssqlClient;
+

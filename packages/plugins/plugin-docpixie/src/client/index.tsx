@@ -855,3 +855,20 @@ export const DocPixieSettings: React.FC = () => {
   );
 };
 
+
+
+// Plugin entry point for NocoBase PluginManager
+import { Plugin } from '@nocobase/client-v2';
+
+export class PluginDocPixieClient extends Plugin {
+  async load() {
+    this.app.pluginSettingsManager.add('docpixie', {
+      title: 'DocPixie Document AI',
+      icon: 'FileSearchOutlined',
+      Component: DocPixieSettings,
+      aclSnippet: 'pm.docpixie',
+    });
+  }
+}
+
+export default PluginDocPixieClient;

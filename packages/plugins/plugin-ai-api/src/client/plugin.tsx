@@ -8,7 +8,7 @@
  */
 
 import { Plugin, lazy } from '@nocobase/client';
-import PluginACLClient from '@nocobase/plugin-acl/client';
+import PluginACLClient from "@nocobase/plugin-acl";
 import { AI_API_ACL_SNIPPET } from '../constants';
 import React from 'react';
 
@@ -80,3 +80,4 @@ export class PluginAiApiClient extends Plugin {
 }
 
 export default PluginAiApiClient;
+

@@ -25,7 +25,7 @@ const FileBrowserPage = () => {
   );
 };
 
-import PluginACLClient from '@nocobase/plugin-acl/client';
+import PluginACLClient from "@nocobase/plugin-acl";
 import { ExternalStoragePermissions } from './components/ExternalStoragePermissions';
 
 export class PluginExternalStorageManagerClient extends Plugin {
@@ -75,3 +75,4 @@ export default PluginExternalStorageManagerClient;
 export { default as FileBrowser } from './components/FileBrowser';
 export { DirectoryManager } from './components/DirectoryManager';
 export { ExternalStoragePermissions } from './components/ExternalStoragePermissions';
+

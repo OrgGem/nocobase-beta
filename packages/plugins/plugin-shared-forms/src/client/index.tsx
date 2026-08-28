@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { ISchema, Plugin, lazy } from '@nocobase/client';
-import PluginACLClient from '@nocobase/plugin-acl/client';
+import PluginACLClient from "@nocobase/plugin-acl";
 const { AdminSharedFormList } = lazy(() => import('./components/AdminSharedFormList'), 'AdminSharedFormList');
 const { AdminSharedFormPage } = lazy(() => import('./components/AdminSharedFormPage'), 'AdminSharedFormPage');
 const { SharedFormPage } = lazy(() => import('./components/SharedFormPage'), 'SharedFormPage');
@@ -88,3 +88,4 @@ export class PluginSharedFormsClient extends Plugin {
 }
 
 export default PluginSharedFormsClient;
+

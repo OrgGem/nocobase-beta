@@ -8,11 +8,22 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import { ChatFilePreviewProvider } from './ChatFilePreviewProvider';
 
 export class PluginAIChatFilePreviewClient extends Plugin {
   async load() {
-    this.app.use(ChatFilePreviewProvider);
+    // Only register ChatFilePreviewProvider if plugin-ai is available.
+    // Without it, the provider's hooks crash and block the entire app render.
+    try {
+      const aiPlugin = this.app.pm.get('@nocobase/plugin-ai') || this.app.pm.get('ai');
+      if (!aiPlugin) {
+        console.warn('[plugin-ai-chat-file-preview] plugin-ai not available, skipping provider registration');
+        return;
+      }
+      const { ChatFilePreviewProvider } = await import('./ChatFilePreviewProvider');
+      this.app.use(ChatFilePreviewProvider);
+    } catch (e) {
+      console.warn('[plugin-ai-chat-file-preview] Failed to load provider:', e?.message);
+    }
   }
 }
 

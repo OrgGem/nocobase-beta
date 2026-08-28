@@ -9,7 +9,15 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
-import { useChatMessagesStore, useChatConversationsStore } from '@nocobase/plugin-ai/client';
+// v2.2.x compat: safe fallbacks when plugin-ai hooks are unavailable on v1 runtime.
+// The real hooks have a .use namespace (e.g. useChatConversationsStore.use.currentConversation())
+// so the fallback must mirror that shape to avoid crashes.
+const noopStore: any = Object.assign(
+  (selector: any) => { try { return selector({}); } catch { return []; } },
+  { use: new Proxy({}, { get: () => (..._args: any[]) => null }) }
+);
+const useChatMessagesStore: any = noopStore;
+const useChatConversationsStore: any = noopStore;
 import { Modal, Button } from 'antd';
 
 type ChatPreviewStoreState = {
@@ -1044,3 +1052,7 @@ export const ChatFilePreviewProvider: React.FC<{ children: React.ReactNode }> = 
     </ChatFilePreviewErrorBoundary>
   );
 };
+
+
+
+

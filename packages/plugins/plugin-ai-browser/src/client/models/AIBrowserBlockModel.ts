@@ -1,23 +1,23 @@
-import { BlockModel } from '@nocobase/client';
-import { escapeT } from '@nocobase/flow-engine';
+import { BlockModel } from '@nocobase/client-v2';
+import { tExpr } from '@nocobase/flow-engine';
 import React from 'react';
 import { AIBrowserBlock } from '../AIBrowserBlock';
 import { SessionSelect } from '../SessionSelect';
 
 export class AIBrowserBlockModel extends BlockModel {
   renderComponent() {
-    const { liveUrl, sessionId, title, height } = (this as any).props;
+    const { liveUrl, sessionId, title, height } = this.props;
     return React.createElement(AIBrowserBlock, { liveUrl, sessionId, title, height });
   }
 }
 
-(AIBrowserBlockModel as any).registerFlow({
+AIBrowserBlockModel.registerFlow({
   key: 'aiBrowserBlockSettings',
-  title: escapeT('AI Browser block settings', { ns: 'ai-browser' }),
+  title: tExpr('AI Browser block settings'),
   steps: {
     configureBrowserBlock: {
-      title: escapeT('Configure AI Browser block', { ns: 'ai-browser' }),
-      uiSchema(ctx: any) {
+      title: tExpr('Configure AI Browser block'),
+      uiSchema(ctx) {
         const t = ctx.t;
         return {
           liveUrl: {
@@ -48,7 +48,7 @@ export class AIBrowserBlockModel extends BlockModel {
           },
         };
       },
-      async handler(ctx: any, params: any) {
+      async handler(ctx, params) {
         const { liveUrl, title, height } = params;
         ctx.model.setProps({
           liveUrl,
@@ -60,6 +60,7 @@ export class AIBrowserBlockModel extends BlockModel {
   },
 });
 
-(AIBrowserBlockModel as any).define({
-  label: escapeT('AI Browser', { ns: 'ai-browser' }),
+AIBrowserBlockModel.define({
+  label: tExpr('AI Browser'),
 });
+

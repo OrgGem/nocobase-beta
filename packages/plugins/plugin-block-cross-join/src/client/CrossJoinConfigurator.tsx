@@ -10,7 +10,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { Modal, Tabs, Form, Select, Button, Space, Radio, Input, Table, Checkbox, Typography, Divider } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useDataSourceManager } from '@nocobase/client';
+import { useApp } from '@nocobase/client-v2';
 
 const { Text } = Typography;
 
@@ -44,8 +44,8 @@ interface Props {
 }
 
 function useDataSourceOptions() {
-  const dm = useDataSourceManager();
-  const dataSources = dm?.getDataSources() || [];
+  const app = useApp();
+  const dataSources = app?.dataSourceManager?.dataSources ? [...app.dataSourceManager.dataSources.values()] : [] || [];
 
   return useMemo(
     () =>
@@ -56,29 +56,29 @@ function useDataSourceOptions() {
           value: ds.key,
           ds,
         })),
-    [dataSources],
+    [app],
   );
 }
 
 function useCollectionOptions(dsKey: string) {
-  const dm = useDataSourceManager();
+  const app = useApp();
   return useMemo(() => {
     if (!dsKey || !dm) return [];
-    const ds = dm.getDataSource(dsKey);
+    const ds = app?.dataSourceManager?.get(dsKey);
     if (!ds) return [];
     const collections = ds.collectionManager.getCollections() || [];
     return collections.map((c) => ({
       label: c.title || c.name,
       value: c.name,
     }));
-  }, [dm, dsKey]);
+  }, [app, dsKey]);
 }
 
 function useFieldOptions(dsKey: string, collectionName: string) {
-  const dm = useDataSourceManager();
+  const app = useApp();
   return useMemo(() => {
     if (!dsKey || !collectionName || !dm) return [];
-    const ds = dm.getDataSource(dsKey);
+    const ds = app?.dataSourceManager?.get(dsKey);
     if (!ds) return [];
     const collection = ds.collectionManager.getCollection(collectionName);
     if (!collection) return [];
@@ -89,7 +89,7 @@ function useFieldOptions(dsKey: string, collectionName: string) {
       type: f.type,
       interface: f.interface,
     }));
-  }, [dm, dsKey, collectionName]);
+  }, [app, dsKey, collectionName]);
 }
 
 // Tab 1: Primary Source
@@ -413,3 +413,5 @@ export const CrossJoinConfigurator: React.FC<Props> = ({ visible, onCancel, onSu
     </Modal>
   );
 };
+
+

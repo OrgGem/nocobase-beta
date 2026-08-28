@@ -1,5 +1,5 @@
 import { css, Icon, useAPIClient } from '@nocobase/client';
-import { Authenticator, AuthenticatorsContext } from '@nocobase/plugin-auth/client';
+import { Authenticator, AuthenticatorsContext } from "@nocobase/plugin-auth";
 import { Button, Space, message } from 'antd';
 import Cookies from 'js-cookie';
 import React, { useCallback, useContext, useEffect, useMemo, useRef } from 'react';
@@ -94,3 +94,4 @@ export const OIDCButton = ({ authenticator }: { authenticator: Authenticator }) 
 };
 
 export default OIDCButton;
+

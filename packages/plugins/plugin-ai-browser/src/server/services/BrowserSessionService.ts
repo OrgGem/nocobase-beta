@@ -73,7 +73,11 @@ export class BrowserSessionService {
           }
         }
       } catch (err) {
-        (this as any).app.logger.error(`[ai-browser] Zombie sweeper error: ${(err as any).message}`);
+        // Suppress errors when tables have not been created yet (e.g. fresh install before sync)
+        const msg = (err as any).message || String(err);
+        if (!msg.includes("does not exist") && !msg.includes("relation") && !msg.includes("ER_NO_SUCH_TABLE")) {
+          (this as any).app.logger.error(`[ai-browser] Zombie sweeper error: ${msg}`);
+        }
       }
     };
 
@@ -317,3 +321,4 @@ export class BrowserSessionService {
     };
   }
 }
+

@@ -4,6 +4,7 @@ import { OcrVerifyBlockProvider } from './block/OcrVerifyBlockProvider';
 import { OcrVerifyBlockInitializer } from './block/OcrVerifyBlockInitializer';
 import { OcrVerifyBlock } from './block/OcrVerifyBlock';
 import { ocrVerifyBlockSettings } from './block/schemaSettings';
+import { OcrVerifyBlockModel } from './block/OcrVerifyBlockModel';
 import { ocrVerifyCategoriesCollection } from './collections/ocrVerifyCategories';
 import { namespace } from './locale';
 
@@ -19,6 +20,7 @@ export class PluginOcrVerifyBlockClient extends Plugin {
   }
 
   async load() {
+    // --- V1 runtime registration (kept for backward compatibility) ---
     this.app.addComponents({
       OcrVerifyBlockInitializer,
       OcrVerifyBlock,
@@ -53,6 +55,13 @@ export class PluginOcrVerifyBlockClient extends Plugin {
     register('popup:common:addBlock');
     register('RecordFormBlockInitializers');
     register('mobilePage:addBlock');
+
+    // --- V2 runtime registration (FlowModel for correct rendering on /v/admin) ---
+    try {
+      this.flowEngine?.registerModels({ OcrVerifyBlockModel });
+    } catch {
+      // flowEngine may not be available on v1-only runtime; safe to ignore
+    }
   }
 }
 

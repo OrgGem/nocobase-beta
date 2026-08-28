@@ -1,42 +1,23 @@
-import { Plugin } from '@nocobase/client';
-import { AIBrowserBlock } from './AIBrowserBlock';
-import { AIBrowserSessionCard } from './AIBrowserSessionCard';
+import { Plugin } from '@nocobase/client-v2';
 import { AIBrowserManager } from './AIBrowserManager';
 import { AIBrowserWorkContext } from './AIBrowserWorkContext';
 import { namespace } from './locale';
-import { AIBrowserBlockInitializer } from './AIBrowserBlockInitializer';
-import { aiBrowserBlockSettings } from './schemaSettings';
 import { aiBrowserClientTools } from './tools';
 import { AIBrowserBlockModel } from './models';
 
 export class PluginAIBrowserClient extends Plugin {
   async load() {
-    (this as any).app.addComponents({
-      AIBrowserBlock,
-      AIBrowserSessionCard,
-      AIBrowserBlockInitializer,
+    // Register FlowModel (v2 pattern)
+    this.flowEngine.registerModels({
+      AIBrowserBlockModel,
     });
 
-    (this as any).app.schemaSettingsManager.add(aiBrowserBlockSettings);
-
-    (this as any).app.pluginSettingsManager.add('ai-browser', {
+    // Settings page (pluginSettingsManager works in both v1 and v2)
+    this.app.pluginSettingsManager.add('ai-browser', {
       icon: 'GlobalOutlined',
       title: `{{t("AI Browser", { ns: "${namespace}" })}}`,
       Component: AIBrowserManager,
       aclSnippet: 'pm.ai-browser',
-    });
-
-    const initializerItem = {
-      title: `{{t("AI Browser", { ns: "${namespace}" })}}`,
-      Component: 'AIBrowserBlockInitializer',
-    };
-
-    (this as any).app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.aiBrowser', initializerItem);
-    (this as any).app.schemaInitializerManager.addItem('popup:common:addBlock', 'otherBlocks.aiBrowser', initializerItem);
-    (this as any).app.schemaInitializerManager.addItem('popup:addNew:addBlock', 'otherBlocks.aiBrowser', initializerItem);
-
-    (this as any).flowEngine.registerModels({
-      AIBrowserBlockModel,
     });
 
     this.registerAIWorkContext();
@@ -44,7 +25,7 @@ export class PluginAIBrowserClient extends Plugin {
   }
 
   private registerAITools() {
-    const toolsManager = (this as any).app.aiManager?.toolsManager;
+    const toolsManager = this.app.ai?.toolsManager;
     if (!toolsManager) {
       console.warn('[plugin-ai-browser] aiManager not available; skipping AI integration');
       return;
@@ -56,20 +37,9 @@ export class PluginAIBrowserClient extends Plugin {
   }
 
   private registerAIWorkContext() {
-    const getAIPlugin = () => {
-      try {
-        return (this as any).app.pm.get('ai') as any;
-      } catch {
-        try {
-          return (this as any).app.pm.get('@nocobase/plugin-ai') as any;
-        } catch {
-          return null;
-        }
-      }
-    };
-
     try {
-      const aiManager = getAIPlugin()?.aiManager;
+      const aiPlugin = this.app.pm.get('ai') || this.app.pm.get('@nocobase/plugin-ai');
+      const aiManager = aiPlugin?.aiManager;
       if (aiManager?.registerWorkContext && !aiManager.getWorkContext?.('browser')) {
         aiManager.registerWorkContext('browser', AIBrowserWorkContext);
       }

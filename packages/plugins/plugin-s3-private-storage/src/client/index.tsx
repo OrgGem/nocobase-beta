@@ -9,7 +9,7 @@
 
 import { Plugin } from '@nocobase/client';
 // @ts-ignore
-import { PluginFileManagerClient } from '@nocobase/plugin-file-manager/client';
+import { PluginFileManagerClient } from "@nocobase/plugin-file-manager";
 import { NAMESPACE } from '../constants';
 
 const STORAGE_NS = 'file-manager';
@@ -148,3 +148,4 @@ export class PluginS3PrivateStorageClient extends Plugin {
 }
 
 export default PluginS3PrivateStorageClient;
+

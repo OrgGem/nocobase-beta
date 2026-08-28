@@ -8,7 +8,7 @@
  */
 
 import { PagePopups, Plugin, createRouterManager, RouterManager, lazy } from '@nocobase/client';
-import PluginACLClient from '@nocobase/plugin-acl/client';
+import PluginACLClient from "@nocobase/plugin-acl";
 import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { MenuPermissions, NextAppAllRoutesProvider } from './MenuPermissions';
@@ -175,3 +175,4 @@ export class PluginNextAppClient extends Plugin {
 }
 
 export default PluginNextAppClient;
+

@@ -8,7 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import PluginAIClient from '@nocobase/plugin-ai/client';
+import PluginAIClient from "@nocobase/plugin-ai";
 import { customLLMProviderOptions } from './llm-providers/custom-llm';
 
 export class PluginCustomLLMClient extends Plugin {
@@ -26,3 +26,4 @@ export class PluginCustomLLMClient extends Plugin {
 }
 
 export default PluginCustomLLMClient;
+

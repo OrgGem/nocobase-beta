@@ -1,5 +1,5 @@
 import { Plugin, lazy } from '@nocobase/client';
-import WorkflowPlugin from '@nocobase/plugin-workflow/client';
+import WorkflowPlugin from "@nocobase/plugin-workflow";
 import { NAMESPACE } from './locale';
 import CarboneRenderInstruction from './workflow/CarboneRenderInstruction';
 
@@ -45,3 +45,4 @@ export class PluginCarboneTemplateManagerClient extends Plugin {
 }
 
 export default PluginCarboneTemplateManagerClient;
+

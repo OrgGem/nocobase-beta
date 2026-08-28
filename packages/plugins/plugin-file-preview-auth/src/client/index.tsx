@@ -23,7 +23,7 @@ import {
 import { Modal, Button, Spin, Alert, Space, message, Tabs, Tag } from 'antd';
 import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype, useComponent } from '@nocobase/client';
 // @ts-ignore
-import { filePreviewTypes } from '@nocobase/plugin-file-manager/client';
+import { filePreviewTypes } from "@nocobase/plugin-file-manager";
 import { useT } from './locale';
 import { AIFilePreviewAction, registerFilePreviewAIWorkContext } from './AIFilePreviewAction';
 
@@ -1816,3 +1816,4 @@ export class PluginFilePreviewAuthClient extends Plugin {
 }
 
 export default PluginFilePreviewAuthClient;
+

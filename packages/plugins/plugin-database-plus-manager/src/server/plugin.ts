@@ -41,7 +41,8 @@ export class PluginDatabasePlusManagerServer extends Plugin {
     this.app.resourceManager.registerPreActionHandler('list', listPaginationOverride, {
       after: 'acl',
     });
-    this.app.db.collectionManager.defineCollection(settings);
+    // v2.2.x compat: use this.db.collection() instead of collectionManager.defineCollection()
+    this.db.collection(settings);
   }
 
   async install() {
@@ -51,3 +52,5 @@ export class PluginDatabasePlusManagerServer extends Plugin {
 }
 
 export default PluginDatabasePlusManagerServer;
+
+

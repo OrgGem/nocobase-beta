@@ -1,6 +1,6 @@
 import React from 'react';
 import { FilePdfOutlined } from '@ant-design/icons';
-import Instruction from '@nocobase/plugin-workflow/client';
+import Instruction from "@nocobase/plugin-workflow";
 import { Variable } from '@nocobase/client';
 import { NAMESPACE } from '../locale';
 import { SUPPORTED_OUTPUT_FORMATS } from '../../shared/constants';
@@ -115,3 +115,4 @@ export default class CarboneRenderInstruction extends Instruction {
     };
   }
 }
+

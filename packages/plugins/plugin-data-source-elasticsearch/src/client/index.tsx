@@ -8,7 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import PluginDataSourceManagerClient from '@nocobase/plugin-data-source-manager/client';
+import PluginDataSourceManagerClient from "@nocobase/plugin-data-source-manager";
 import { ElasticsearchConfigForm } from './components/ElasticsearchConfigForm';
 import { ElasticsearchDeleteCollection } from './components/ElasticsearchDeleteCollection';
 
@@ -31,3 +31,4 @@ export class PluginDataSourceElasticsearchClient extends Plugin {
 }
 
 export default PluginDataSourceElasticsearchClient;
+

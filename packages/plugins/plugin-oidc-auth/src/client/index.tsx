@@ -1,5 +1,5 @@
 import { Plugin } from '@nocobase/client';
-import AuthPlugin from '@nocobase/plugin-auth/client';
+import AuthPlugin from "@nocobase/plugin-auth";
 import { authType } from '../constants';
 import { OIDCButton } from './OIDCButton';
 import { Options } from './Options';
@@ -17,3 +17,4 @@ export class PluginOIDCClient extends Plugin {
 }
 
 export default PluginOIDCClient;
+

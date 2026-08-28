@@ -3,7 +3,7 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import PluginDataSourceManagerClient from '@nocobase/plugin-data-source-manager/client';
+import PluginDataSourceManagerClient from "@nocobase/plugin-data-source-manager";
 import { MssqlV2ConfigForm } from './components/MssqlV2ConfigForm';
 
 export class PluginDataSourceMssqlV2Client extends Plugin {
@@ -24,3 +24,4 @@ export class PluginDataSourceMssqlV2Client extends Plugin {
 }
 
 export default PluginDataSourceMssqlV2Client;
+

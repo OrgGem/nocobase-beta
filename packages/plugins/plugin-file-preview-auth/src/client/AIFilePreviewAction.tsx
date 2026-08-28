@@ -11,7 +11,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { FileTextOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Space, Tooltip, message } from 'antd';
 import type { Application } from '@nocobase/client';
-import { useChatBoxActions, useAIConfigRepository, type AIEmployee } from '@nocobase/plugin-ai/client';
+import { useChatBoxActions, useAIConfigRepository, type AIEmployee } from "@nocobase/plugin-ai";
 import { useT } from './locale';
 
 export const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
@@ -254,3 +254,4 @@ export function registerFilePreviewAIWorkContext(app: Application) {
     // Duplicate registration can happen during hot reload. It is harmless.
   }
 }
+

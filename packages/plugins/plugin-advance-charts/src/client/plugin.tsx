@@ -1,13 +1,8 @@
 import { Plugin } from '@nocobase/client';
-import PluginDataVisualizationClient from '@nocobase/plugin-data-visualization/client';
 
 import { createAdvancedCharts } from '../client-v2/charts';
 import { patchDataVisualizationChartBlock } from '../client-v2/compat/registerDataVisualizationCompat';
 import models from './models';
-
-type DataVisualizationPluginLike = PluginDataVisualizationClient & {
-  charts?: PluginDataVisualizationClient['charts'];
-};
 
 declare global {
   interface Window {
@@ -20,11 +15,14 @@ declare global {
 
 export class PluginAdvanceChartsClient extends Plugin {
   private getDataVisualizationPlugin() {
-    return (
-      this.app.pm.get(PluginDataVisualizationClient) ||
-      this.app.pm.get<DataVisualizationPluginLike>('@nocobase/plugin-data-visualization') ||
-      this.app.pm.get<DataVisualizationPluginLike>('data-visualization')
-    );
+    try {
+      return (
+        this.app.pm.get('@nocobase/plugin-data-visualization') ||
+        this.app.pm.get('data-visualization')
+      );
+    } catch {
+      return null;
+    }
   }
 
   private registerAdvancedCharts() {

@@ -3,7 +3,7 @@ import { Modal } from 'antd';
 // @ts-ignore
 import { attachmentFileTypes } from '@nocobase/client';
 // @ts-ignore
-import { filePreviewTypes } from '@nocobase/plugin-file-manager/client';
+import { filePreviewTypes } from "@nocobase/plugin-file-manager";
 
 interface Props {
   open: boolean;
@@ -121,3 +121,4 @@ function downloadByUrl(url: string, filename: string) {
   a.click();
   document.body.removeChild(a);
 }
+

@@ -7,43 +7,12 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { Plugin, SchemaComponentOptions } from '@nocobase/client';
-import React from 'react';
-import { CrossJoinBlockProvider } from './CrossJoinBlockProvider';
-import { CrossJoinTable } from './CrossJoinTable';
-import { CrossJoinBlockInitializer } from './CrossJoinBlockInitializer';
-import { crossJoinBlockSchemaSettings } from './schemaSettings';
-
-const CrossJoinComponentProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  return (
-    <SchemaComponentOptions
-      components={{
-        CrossJoinBlockProvider,
-        CrossJoinTable,
-        CrossJoinBlockInitializer,
-      }}
-    >
-      {children}
-    </SchemaComponentOptions>
-  );
-};
+import { Plugin } from '@nocobase/client-v2';
+import { CrossJoinBlockModel } from './CrossJoinBlockModel';
 
 export class PluginBlockCrossJoinClient extends Plugin {
   async load() {
-    this.app.use(CrossJoinComponentProvider);
-    this.app.schemaSettingsManager.add(crossJoinBlockSchemaSettings);
-
-    // Add to page block initializers
-    this.app.schemaInitializerManager.addItem('page:addBlock', 'otherBlocks.crossJoin', {
-      title: '{{t("Cross Join")}}',
-      Component: 'CrossJoinBlockInitializer',
-    });
-
-    // Add to popup initializers
-    this.app.schemaInitializerManager.addItem('popup:common:addBlock', 'otherBlocks.crossJoin', {
-      title: '{{t("Cross Join")}}',
-      Component: 'CrossJoinBlockInitializer',
-    });
+    this.flowEngine.registerModels({ CrossJoinBlockModel });
   }
 }
 

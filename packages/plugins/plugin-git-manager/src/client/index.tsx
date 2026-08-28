@@ -18,7 +18,7 @@ const GitAccounts = React.lazy(() =>
 // Reuse the v2 subtree UI here so the feature is available in both runtimes.
 const SubtreeSplits = React.lazy(() => import('../client-v2/components/SubtreeSplits'));
 
-import PluginACLClient from '@nocobase/plugin-acl/client';
+import PluginACLClient from "@nocobase/plugin-acl";
 import { RepositoryPermissions } from './components/RepositoryPermissions';
 
 export class PluginGitManagerClient extends Plugin {
@@ -80,3 +80,4 @@ export class PluginGitManagerClient extends Plugin {
 }
 
 export default PluginGitManagerClient;
+
