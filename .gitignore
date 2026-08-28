@@ -104,3 +104,5 @@ scripts/plugin-server-smoke.mjs
 scripts/publish-plugins.ps1
 testing/test-llm-provider.ts
 testing/test-output.log
+paseo.json
+
