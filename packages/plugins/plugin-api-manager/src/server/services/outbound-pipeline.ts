@@ -56,7 +56,8 @@ export async function buildOutboundForwardRequest(
   let outgoingBody = body;
   let outgoingContentType = contentType;
   const mode = routeString(route, 'encryptionMode') ?? 'none';
-  if (mode !== 'none') {
+  const requestEncrypted = route.get('requestEncrypted') !== false;
+  if (mode !== 'none' && requestEncrypted) {
     const encrypted = await encryptPayload(app, route, body, contentType);
     outgoingBody = encrypted.body;
     outgoingContentType = encrypted.contentType ?? contentType;

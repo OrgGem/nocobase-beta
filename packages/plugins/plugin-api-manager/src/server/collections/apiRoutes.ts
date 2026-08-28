@@ -173,6 +173,17 @@ export default defineCollection({
       },
     },
     {
+      type: 'boolean',
+      name: 'requestEncrypted',
+      defaultValue: true,
+      interface: 'checkbox',
+      uiSchema: {
+        title: 'Request Encrypted',
+        type: 'boolean',
+        'x-component': 'Checkbox',
+      },
+    },
+    {
       type: 'text',
       name: 'aesSecret',
     },
@@ -182,6 +193,16 @@ export default defineCollection({
       interface: 'input',
       uiSchema: {
         title: 'AES Secret Env Variable',
+        type: 'string',
+        'x-component': 'Input',
+      },
+    },
+    {
+      type: 'string',
+      name: 'aesKeyName',
+      interface: 'input',
+      uiSchema: {
+        title: 'AES Key (Crypto Toolkit)',
         type: 'string',
         'x-component': 'Input',
       },

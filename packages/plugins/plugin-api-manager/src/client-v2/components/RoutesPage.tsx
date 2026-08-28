@@ -29,6 +29,8 @@ interface RouteRow {
   pgpVerifyKeyName?: string;
   rsaEncryptKeyName?: string;
   rsaDecryptKeyName?: string;
+  aesKeyName?: string;
+  requestEncrypted?: boolean;
   responseEncrypted?: boolean;
   hmacSignEnabled?: boolean;
   hmacVerifyEnabled?: boolean;

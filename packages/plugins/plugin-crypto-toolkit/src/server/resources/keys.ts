@@ -1,4 +1,4 @@
-import { createHash, createPublicKey } from 'crypto';
+import { createHash, createPublicKey, randomBytes } from 'crypto';
 import type { Application } from '@nocobase/server';
 import type { Repository, Model } from '@nocobase/database';
 import type { Handlers, ResourcerContext } from '@nocobase/resourcer';
@@ -10,7 +10,7 @@ import type { KeyMaterialInput } from '../services/load-key-material';
 import { loadRawMaterial } from '../services/load-key-material';
 import { CryptoToolkitHttpError } from '../http-error';
 
-type Kind = 'pgp-rsa4096' | 'pgp-curve25519' | 'rsa-4096' | 'ed25519' | 'ssh-ed25519' | 'ssh-rsa';
+type Kind = 'pgp-rsa4096' | 'pgp-curve25519' | 'rsa-4096' | 'ed25519' | 'ssh-ed25519' | 'ssh-rsa' | 'aes-256';
 
 type Direction = 'own' | 'partner';
 type Purpose = 'encrypt' | 'sign' | 'both';
@@ -23,7 +23,8 @@ const ENV_BASENAME_RE = /^[A-Z][A-Z0-9_]{0,47}$/;
 const VALID_PGP_KINDS: Kind[] = ['pgp-rsa4096', 'pgp-curve25519'];
 const VALID_RAW_KINDS: Kind[] = ['rsa-4096', 'ed25519'];
 const VALID_SSH_KINDS: Kind[] = ['ssh-ed25519', 'ssh-rsa'];
-const ALL_KINDS: Kind[] = [...VALID_PGP_KINDS, ...VALID_RAW_KINDS, ...VALID_SSH_KINDS];
+const VALID_AES_KINDS: Kind[] = ['aes-256'];
+const ALL_KINDS: Kind[] = [...VALID_PGP_KINDS, ...VALID_RAW_KINDS, ...VALID_SSH_KINDS, ...VALID_AES_KINDS];
 
 type CryptoKeysRepo = Repository;
 
@@ -126,6 +127,17 @@ async function generateForKind(
       publicFormat: 'openssh',
       privateMaterial: pair.privateOpenSsh,
       fingerprint: pair.fingerprint,
+    };
+  }
+  if (VALID_AES_KINDS.includes(kind)) {
+    const keyBytes = randomBytes(32);
+    const base64Key = keyBytes.toString('base64');
+    const fp = sha256Hex(keyBytes);
+    return {
+      publicMaterial: base64Key,
+      publicFormat: 'pem',
+      privateMaterial: base64Key,
+      fingerprint: 'SHA256:' + fp,
     };
   }
   throw new Error(`Unknown kind: ${kind}`);

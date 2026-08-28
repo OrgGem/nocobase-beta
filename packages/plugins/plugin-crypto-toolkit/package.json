@@ -6,7 +6,7 @@
   "description": "Generate and manage crypto keys (PGP, RSA, Ed25519, SSH), encrypt/decrypt/sign/verify files through file manager, create CSR and self-signed X.509 certificates. Private keys are stored as NocoBase secret environment variables.",
   "description.zh-CN": "生成并管理加密密钥（PGP、RSA、Ed25519、SSH），通过文件管理器加密/解密/签名/验签文件，创建 CSR 与自签名 X.509 证书。私钥保存为 NocoBase 环境变量（secret）。",
   "description.vi-VN": "Tạo và quản lý khóa mã hóa (PGP, RSA, Ed25519, SSH), mã hóa/giải mã/ký/xác minh file qua file manager, tạo CSR và chứng chỉ X.509 tự ký. Private key lưu dưới dạng biến môi trường secret của NocoBase.",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

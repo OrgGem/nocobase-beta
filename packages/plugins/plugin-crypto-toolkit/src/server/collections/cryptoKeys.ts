@@ -44,6 +44,7 @@ export default defineCollection({
           { value: 'ed25519', label: 'Ed25519' },
           { value: 'ssh-ed25519', label: 'SSH (Ed25519)' },
           { value: 'ssh-rsa', label: 'SSH (RSA 4096)' },
+          { value: 'aes-256', label: 'AES-256 (symmetric)' },
         ],
       },
     },

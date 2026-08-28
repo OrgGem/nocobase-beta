@@ -28,12 +28,14 @@ export interface RouteFormValues {
   wireFormat: 'binary' | 'json';
   aesSecret?: string;
   aesSecretEnvVar?: string;
+  aesKeyName?: string;
   pgpEncryptKeyName?: string;
   pgpDecryptKeyName?: string;
   pgpSignKeyName?: string;
   pgpVerifyKeyName?: string;
   rsaEncryptKeyName?: string;
   rsaDecryptKeyName?: string;
+  requestEncrypted?: boolean;
   responseEncrypted?: boolean;
   hmacSignEnabled?: boolean;
   hmacVerifyEnabled?: boolean;
@@ -95,6 +97,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
   const encryptionMode = Form.useWatch('encryptionMode', form);
   const direction = Form.useWatch('direction', form);
   const responseEncrypted = Form.useWatch('responseEncrypted', form) !== false;
+  const requestEncrypted = Form.useWatch('requestEncrypted', form) !== false;
   const hmacSignEnabled = Form.useWatch('hmacSignEnabled', form) === true;
   const hmacVerifyEnabled = Form.useWatch('hmacVerifyEnabled', form) === true;
   const jwtSignEnabled = Form.useWatch('jwtSignEnabled', form) === true;
@@ -118,12 +121,14 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
       wireFormat: initial?.wireFormat ?? 'binary',
       aesSecret: initial?.aesSecret ?? '',
       aesSecretEnvVar: initial?.aesSecretEnvVar ?? '',
+      aesKeyName: initial?.aesKeyName ?? undefined,
       pgpEncryptKeyName: initial?.pgpEncryptKeyName ?? undefined,
       pgpDecryptKeyName: initial?.pgpDecryptKeyName ?? undefined,
       pgpSignKeyName: initial?.pgpSignKeyName ?? undefined,
       pgpVerifyKeyName: initial?.pgpVerifyKeyName ?? undefined,
       rsaEncryptKeyName: initial?.rsaEncryptKeyName ?? undefined,
       rsaDecryptKeyName: initial?.rsaDecryptKeyName ?? undefined,
+      requestEncrypted: initial?.requestEncrypted ?? true,
       responseEncrypted: initial?.responseEncrypted ?? true,
       hmacSignEnabled: initial?.hmacSignEnabled ?? false,
       hmacVerifyEnabled: initial?.hmacVerifyEnabled ?? false,
@@ -158,6 +163,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
 
   // Direction filter removed — all PGP/RSA keys shown regardless of direction
   const isRsaKey = (k: CryptoKeyOption) => k.kind?.startsWith('rsa') ?? false;
+  const isAesKey = (k: CryptoKeyOption) => k.kind?.startsWith('aes') ?? false;
   const isPgpKey = (k: CryptoKeyOption) => k.kind?.startsWith('pgp') ?? false;
   const allRsaKeys = cryptoKeys.filter(isRsaKey);
   // Show the key's direction as a hint so admins can distinguish own vs partner
@@ -165,6 +171,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
   const keyLabel = (k: CryptoKeyOption) => (k.direction === 'own' ? `${k.name} (own)` : `${k.name} (partner)`);
   // allRsaKeys used instead of filtering by direction
   const allPgpKeys = cryptoKeys.filter(isPgpKey);
+  const allAesKeys = cryptoKeys.filter(isAesKey);
   // allPgpKeys used instead of filtering by direction
 
   const handleOk = async () => {
@@ -318,12 +325,32 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               />
             </Form.Item>
             <Form.Item
-              name="responseEncrypted"
-              label={t('Response Encrypted') as string}
+              name="requestEncrypted"
+              label={
+                direction === 'inbound'
+                  ? (t('Decrypt Request') as string)
+                  : (t('Encrypt Request') as string)
+              }
               tooltip={
-                t(
-                  'Turn off when the other side returns a plaintext response (e.g. a simple success/log body)',
-                ) as string
+                direction === 'inbound'
+                  ? (t('Decrypt incoming payload before forwarding to backend') as string)
+                  : (t('Encrypt outgoing payload before forwarding to upstream') as string)
+              }
+              valuePropName="checked"
+            >
+              <Switch />
+            </Form.Item>
+            <Form.Item
+              name="responseEncrypted"
+              label={
+                direction === 'inbound'
+                  ? (t('Encrypt Response') as string)
+                  : (t('Decrypt Response') as string)
+              }
+              tooltip={
+                direction === 'inbound'
+                  ? (t('Encrypt backend response before sending to client') as string)
+                  : (t('Decrypt upstream response before returning to client') as string)
               }
               valuePropName="checked"
             >
@@ -335,16 +362,27 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
         {encryptionMode === 'aes-256-gcm' && (
           <>
             <Form.Item
+              name="aesKeyName"
+              label={t('AES Key (Crypto Toolkit)') as string}
+              tooltip={t('Select an AES key from Crypto Toolkit. When set, overrides inline secret and env variable') as string}
+            >
+              <Select
+                allowClear
+                placeholder={t('None (use inline secret below)') as string}
+                options={allAesKeys.map((k) => ({ value: k.name, label: keyLabel(k) }))}
+              />
+            </Form.Item>
+            <Form.Item
               name="aesSecret"
               label={t('AES Secret') as string}
-              tooltip={t('Shared secret: 32-byte base64 key or any passphrase') as string}
+              tooltip={t('Shared secret: 32-byte base64 key or any passphrase (fallback when no Crypto Toolkit key is selected)') as string}
             >
               <Input.Password autoComplete="new-password" placeholder={MASK} />
             </Form.Item>
             <Form.Item
               name="aesSecretEnvVar"
               label={t('AES Secret Env Variable') as string}
-              tooltip={t('Env variable takes precedence over the stored secret') as string}
+              tooltip={t('Env variable takes precedence over the stored secret (fallback when no Crypto Toolkit key is selected)') as string}
             >
               <Input />
             </Form.Item>
@@ -359,7 +397,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Public key of the recipient (cryptoToolkit key name)') as string}
               rules={[
                 {
-                  required: direction !== 'inbound' || responseEncrypted,
+                  required: (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted),
                   message: t('PGP encrypt key is required') as string,
                 },
               ]}
@@ -372,7 +410,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Own key whose private material decrypts incoming payloads') as string}
               rules={[
                 {
-                  required: direction === 'inbound' || responseEncrypted,
+                  required: (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted),
                   message: t('PGP decrypt key is required') as string,
                 },
               ]}
@@ -396,7 +434,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Partner RSA public key that encrypts outgoing payloads (Crypto Toolkit key name)') as string}
               rules={[
                 {
-                  required: direction !== 'inbound' || responseEncrypted,
+                  required: (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted),
                   message: t('RSA encrypt key is required') as string,
                 },
               ]}
@@ -409,7 +447,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Own RSA key whose private material decrypts incoming payloads') as string}
               rules={[
                 {
-                  required: direction === 'inbound' || responseEncrypted,
+                  required: (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted),
                   message: t('RSA decrypt key is required') as string,
                 },
               ]}

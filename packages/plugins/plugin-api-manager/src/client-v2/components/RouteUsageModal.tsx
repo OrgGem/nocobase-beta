@@ -17,32 +17,27 @@ export const RouteUsageModal: React.FC<RouteUsageModalProps> = ({ route, onClose
   }
 
   const encrypted = route.encryptionMode !== 'none';
+  const requestEncrypted = route.requestEncrypted !== false;
   const responseEncrypted = route.responseEncrypted !== false;
   const [bareScope, routeScope] = getRequiredScopes(route);
-  const flowMessage =
-    route.direction === 'outbound'
-      ? encrypted
-        ? responseEncrypted
-          ? t(
-              'Callers send a plaintext body to the gateway endpoint. The gateway encrypts it and forwards the request to the target URL, then decrypts the response before returning it.',
-            )
-          : t(
-              'Callers send a plaintext body to the gateway endpoint. The gateway encrypts it and forwards the request to the target URL, then returns the plaintext response as-is.',
-            )
-        : t(
-            'Callers send a plaintext body to the gateway endpoint. The gateway forwards the request to the target URL and returns the response as-is.',
-          )
-      : encrypted
-        ? responseEncrypted
-          ? t(
-              'Callers must send an already-encrypted body to the gateway endpoint. The gateway decrypts it and forwards the request to the target URL, then encrypts the response before returning it.',
-            )
-          : t(
-              'Callers must send an already-encrypted body to the gateway endpoint. The gateway decrypts it and forwards the request to the target URL, then returns the plaintext response as-is.',
-            )
-        : t(
-            'Callers send the body to the gateway endpoint. The gateway forwards the request to the target URL and returns the response as-is.',
-          );
+  let flowMessage = t('No encryption configured for this route.');
+  if (route.direction === 'outbound') {
+    const req = requestEncrypted
+      ? t('The gateway encrypts the request body before forwarding to the target URL.')
+      : t('The gateway forwards the request body as-is (no encryption on send).');
+    const resp = responseEncrypted
+      ? t('It then decrypts the upstream response before returning it.')
+      : t('It then returns the upstream response as-is (no decryption).');
+    flowMessage = `${t('Callers send a body to the gateway endpoint.')} ${req} ${resp}`;
+  } else {
+    const req = requestEncrypted
+      ? t('The gateway decrypts the incoming body before forwarding to the backend.')
+      : t('The gateway forwards the incoming body as-is (no decryption).');
+    const resp = responseEncrypted
+      ? t('It then encrypts the backend response before returning it to the caller.')
+      : t('It then returns the backend response as-is (no encryption).');
+    flowMessage = `${t('Callers send a body to the gateway endpoint.')} ${req} ${resp}`;
+  }
 
   return (
     <Modal title={`${t('Usage') as string}: ${route.name}`} open onCancel={onClose} footer={null} width={760}>

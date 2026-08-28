@@ -53,6 +53,7 @@ export function registerRoutesResource(app: Application): void {
       const mode = String(route.get('encryptionMode') ?? 'none');
       const direction = String(route.get('direction') ?? 'outbound');
       const routeResponseEncrypted = route.get('responseEncrypted') !== false;
+      const routeRequestEncrypted = route.get('requestEncrypted') !== false;
 
       const requestId = randomUUID();
       const startedAt = new Date();
@@ -70,7 +71,8 @@ export function registerRoutesResource(app: Application): void {
         let headers: Record<string, string> = {};
         if (direction === 'outbound') {
           // Shared with the gateway router so the test request is built by
-          // the exact same outbound encryption + HMAC + JWT pipeline.
+          // the exact same outbound encryption + HMAC + JWT pipeline. The
+          // pipeline respects requestEncrypted (skips encrypt when false).
           const forward = await buildOutboundForwardRequest(app, route, {
             body: requestBuffer,
             contentType: plaintextContentType,

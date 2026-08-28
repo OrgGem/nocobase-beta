@@ -6,7 +6,7 @@
   "description": "API proxy gateway with centralized payload encryption. Register inbound/outbound routes, forward requests with timeout/retry, and encrypt/decrypt payloads (AES-256-GCM or PGP via Crypto Toolkit) before they leave or enter the system.",
   "description.zh-CN": "集中式负载加密的 API 代理网关。注册入站/出站路由，转发请求（超时/重试），并在 payload 离开或进入系统前进行加密/解密（AES-256-GCM 或通过加密工具箱的 PGP）。",
   "description.vi-VN": "API proxy gateway với tầng mã hóa payload tập trung. Đăng ký route inbound/outbound, forward request (timeout/retry), và mã hóa/giải mã payload (AES-256-GCM hoặc PGP qua Crypto Toolkit) trước khi gửi ra ngoài hoặc nhận vào.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

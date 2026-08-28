@@ -6,6 +6,8 @@ export interface UsageRoute {
   targetUrl: string;
   encryptionMode: 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
   wireFormat: 'binary' | 'json';
+  aesKeyName?: string;
+  requestEncrypted?: boolean;
   responseEncrypted?: boolean;
 }
 
@@ -25,7 +27,8 @@ export function getRequiredScopes(route: UsageRoute): [string, string] {
 
 export function buildCurlExample(route: UsageRoute, origin: string = getGatewayOrigin()): string {
   const url = getRouteEndpoint(route, origin);
-  const encryptedInbound = route.direction === 'inbound' && route.encryptionMode !== 'none';
+  const requestEncrypted = route.requestEncrypted !== false;
+  const encryptedInbound = route.direction === 'inbound' && route.encryptionMode !== 'none' && requestEncrypted;
   const useJsonEnvelope = encryptedInbound && route.wireFormat === 'json';
   const lines = [`curl -X ${route.method} '${url}' \\`, `  -H 'X-API-Key: <YOUR_API_KEY>' \\`];
   if (route.method === 'GET') {

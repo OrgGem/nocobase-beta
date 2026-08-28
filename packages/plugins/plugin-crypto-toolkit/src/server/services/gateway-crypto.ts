@@ -35,6 +35,8 @@ export interface GatewayEncryptOptions {
   aesSecretEnvVar?: string;
   /** AES secret encrypted at rest via the application AES encryptor. */
   aesSecretEncrypted?: string;
+  /** cryptoKeys row name holding an AES-256 symmetric key. */
+  aesKeyName?: string;
   /** cryptoKeys row name holding the recipient public key. */
   pgpEncryptKeyName?: string;
   /** cryptoKeys row name holding the own sign key (private material in env). */
@@ -51,6 +53,7 @@ export interface GatewayDecryptOptions {
   contentType?: string;
   aesSecretEnvVar?: string;
   aesSecretEncrypted?: string;
+  aesKeyName?: string;
   pgpDecryptKeyName?: string;
   /** When set, unsigned messages are rejected with a typed error. */
   pgpVerifyKeyName?: string;
@@ -110,6 +113,28 @@ export async function resolveAesSecret(
   route: { get(name: string): unknown },
 ): Promise<AesSecret> {
   const getEnv = createEnvGetter(app);
+  // A Crypto Toolkit AES key takes precedence: its privateEnvVar holds the
+  // 32-byte base64 symmetric secret (or passphrase) in the env.
+  const aesKeyName = routeField(route, 'aesKeyName');
+  if (aesKeyName) {
+    const keyRecord = await findCryptoKey(app, aesKeyName, 'an AES key');
+    const name = String(keyRecord.get('name') ?? aesKeyName);
+    const envVar = String(keyRecord.get('privateEnvVar') ?? '');
+    if (!envVar) {
+      throw new GatewayCryptoError('APIM_CRYPTO_CONFIG', `Crypto Toolkit AES key "${name}" has no privateEnvVar`, 500);
+    }
+    const resolvedEnvVar = envVar.endsWith('_PRIVATE') ? envVar : `${envVar}_PRIVATE`;
+    const rawSecret = getEnv(resolvedEnvVar);
+    if (!rawSecret) {
+      throw new GatewayCryptoError(
+        'APIM_CRYPTO_CONFIG',
+        `Private env variable "${resolvedEnvVar}" for AES key "${name}" is not set`,
+        500,
+      );
+    }
+    const asKey = tryBase64To32Bytes(rawSecret);
+    return asKey ? { key: asKey } : { passphrase: rawSecret };
+  }
   const envVar = routeField(route, 'aesSecretEnvVar');
   let rawSecret: string | undefined;
   if (envVar) {

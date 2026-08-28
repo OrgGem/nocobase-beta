@@ -41,6 +41,7 @@ export interface CryptoToolkitGatewayApi {
     plaintextContentType?: string;
     aesSecretEnvVar?: string;
     aesSecretEncrypted?: string;
+    aesKeyName?: string;
     pgpEncryptKeyName?: string;
     pgpSignKeyName?: string;
     rsaEncryptKeyName?: string;
@@ -51,6 +52,7 @@ export interface CryptoToolkitGatewayApi {
     contentType?: string;
     aesSecretEnvVar?: string;
     aesSecretEncrypted?: string;
+    aesKeyName?: string;
     pgpDecryptKeyName?: string;
     pgpVerifyKeyName?: string;
     rsaDecryptKeyName?: string;
@@ -94,6 +96,7 @@ export async function encryptPayload(
       plaintextContentType,
       aesSecretEnvVar: routeField(route, 'aesSecretEnvVar'),
       aesSecretEncrypted: routeField(route, 'aesSecret'),
+      aesKeyName: routeField(route, 'aesKeyName'),
       pgpEncryptKeyName: routeField(route, 'pgpEncryptKeyName'),
       pgpSignKeyName: routeField(route, 'pgpSignKeyName'),
       rsaEncryptKeyName: routeField(route, 'rsaEncryptKeyName'),
@@ -117,6 +120,7 @@ export async function decryptPayload(
       contentType,
       aesSecretEnvVar: routeField(route, 'aesSecretEnvVar'),
       aesSecretEncrypted: routeField(route, 'aesSecret'),
+      aesKeyName: routeField(route, 'aesKeyName'),
       pgpDecryptKeyName: routeField(route, 'pgpDecryptKeyName'),
       pgpVerifyKeyName: routeField(route, 'pgpVerifyKeyName'),
       rsaDecryptKeyName: routeField(route, 'rsaDecryptKeyName'),

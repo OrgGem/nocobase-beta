@@ -191,6 +191,9 @@ export class PluginApiManagerServer extends Plugin {
         if (model.get('aesSecretEnvVar') != null && model.get('aesSecretEnvVar') !== '') {
           model.set('aesSecretEnvVar', null);
         }
+        if (model.get('aesKeyName') != null && model.get('aesKeyName') !== '') {
+          model.set('aesKeyName', null);
+        }
       }
       if (mode !== 'pgp') {
         for (const field of ['pgpEncryptKeyName', 'pgpDecryptKeyName', 'pgpSignKeyName', 'pgpVerifyKeyName']) {
@@ -203,49 +206,46 @@ export class PluginApiManagerServer extends Plugin {
         }
       }
 
-      // responseEncrypted defaults to true; only an explicit false disables
-      // response crypto (outbound response decrypt / inbound response encrypt).
+      // Independent request/response encryption toggles (both default true).
+      const requestEncrypted = model.get('requestEncrypted') !== false;
       const responseEncrypted = model.get('responseEncrypted') !== false;
 
       if (mode === 'aes-256-gcm') {
         const hasEnvVar = String(model.get('aesSecretEnvVar') ?? '').trim() !== '';
         const hasSecret = String(model.get('aesSecret') ?? '').trim() !== '';
-        if (!hasEnvVar && !hasSecret) {
-          throw new Error('AES-256-GCM routes require a shared secret: set aesSecret or aesSecretEnvVar');
+        const hasKeyName = String(model.get('aesKeyName') ?? '').trim() !== '';
+        if (!hasEnvVar && !hasSecret && !hasKeyName) {
+          throw new Error('AES-256-GCM routes require a shared secret: set aesKeyName, aesSecret, or aesSecretEnvVar');
         }
       }
       if (mode === 'pgp') {
         const hasEncryptKey = String(model.get('pgpEncryptKeyName') ?? '').trim() !== '';
         const hasDecryptKey = String(model.get('pgpDecryptKeyName') ?? '').trim() !== '';
-        const needsEncryptKey = direction === 'outbound' || responseEncrypted;
-        const needsDecryptKey = direction === 'inbound' || responseEncrypted;
+        const needsEncryptKey = (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted);
+        const needsDecryptKey = (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted);
         if (needsEncryptKey && !hasEncryptKey) {
-          throw new Error('PGP routes require pgpEncryptKeyName (recipient public key)');
+          throw new Error('PGP routes require pgpEncryptKeyName when encryption is enabled for that direction');
         }
         if (needsDecryptKey && !hasDecryptKey) {
-          throw new Error('PGP routes require pgpDecryptKeyName (own key with private material)');
+          throw new Error('PGP routes require pgpDecryptKeyName when decryption is enabled for that direction');
         }
       }
       if (mode === 'rsa-oaep') {
         const hasEncryptKey = String(model.get('rsaEncryptKeyName') ?? '').trim() !== '';
         const hasDecryptKey = String(model.get('rsaDecryptKeyName') ?? '').trim() !== '';
         if (direction === 'outbound') {
-          if (!hasEncryptKey) {
-            throw new Error('RSA routes require rsaEncryptKeyName (partner RSA public key)');
+          if (requestEncrypted && !hasEncryptKey) {
+            throw new Error('RSA outbound routes require rsaEncryptKeyName when request encryption is enabled');
           }
           if (responseEncrypted && !hasDecryptKey) {
-            throw new Error(
-              'RSA routes require rsaDecryptKeyName (own key with private material) when the response is encrypted',
-            );
+            throw new Error('RSA outbound routes require rsaDecryptKeyName when response decryption is enabled');
           }
         } else {
-          if (!hasDecryptKey) {
-            throw new Error('RSA routes require rsaDecryptKeyName (own key with private material)');
+          if (requestEncrypted && !hasDecryptKey) {
+            throw new Error('RSA inbound routes require rsaDecryptKeyName when request decryption is enabled');
           }
           if (responseEncrypted && !hasEncryptKey) {
-            throw new Error(
-              'RSA routes require rsaEncryptKeyName (partner RSA public key) when the response is encrypted',
-            );
+            throw new Error('RSA inbound routes require rsaEncryptKeyName when response encryption is enabled');
           }
         }
       }

@@ -254,14 +254,17 @@ export function createApimRouter(app: Application, state?: ApimRuntimeState): Mi
         }
       }
       const mode = String(route.get('encryptionMode') ?? 'none');
-      // responseEncrypted defaults to true; only an explicit false skips
-      // outbound response decryption / inbound response encryption (the
-      // partner may return a plaintext success/log body).
+      // Independent request/response encryption toggles (both default true).
+      // requestEncrypted: inbound decrypts the caller's payload before
+      //   forwarding; outbound encrypts the outgoing payload to the upstream.
+      // responseEncrypted: inbound encrypts the backend response back to the
+      //   caller; outbound decrypts the upstream's response to the caller.
+      const requestEncrypted = route.get('requestEncrypted') !== false;
       const responseEncrypted = route.get('responseEncrypted') !== false;
       const requestContentType = ctx.get('content-type') || undefined;
       let outgoingBody = requestBody;
       let outgoingContentType = requestContentType;
-      if (mode !== 'none' && direction === 'inbound') {
+      if (mode !== 'none' && direction === 'inbound' && requestEncrypted) {
         const decrypted = await decryptPayload(app, route, requestBody, requestContentType);
         outgoingBody = decrypted.body;
         outgoingContentType = decrypted.contentType ?? sniffContentType(decrypted.body);
