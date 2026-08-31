@@ -30,10 +30,10 @@
     "@nocobase/flow-engine": "2.x"
   },
   "keywords": [
+    "Blocks",
     "ocr",
     "pdf",
     "verify",
-    "block",
     "pdfjs"
   ],
   "license": "Apache-2.0"

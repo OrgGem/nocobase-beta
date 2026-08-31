@@ -39,9 +39,10 @@
   },
   "devDependencies": {},
   "keywords": [
+    "Collections",
+    "Collection fields",
     "File manager",
-    "File preview",
-    "Authentication"
+    "File preview"
   ],
   "license": "Apache-2.0",
   "dependencies": {

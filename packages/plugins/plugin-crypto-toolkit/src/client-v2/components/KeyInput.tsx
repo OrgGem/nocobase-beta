@@ -85,7 +85,14 @@ export const KeyInput: React.FC<KeyInputProps> = ({
     (detected === 'private' || (current.mode === 'text' && current.text && PRIVATE_MATERIAL_RE.test(current.text)));
 
   const update = (patch: Partial<KeyInputValue>) => {
-    onChange?.({ ...current, ...patch });
+    // When switching modes, clear fields belonging to other modes so the
+    // server never receives conflicting inputs (e.g. text + attachmentId).
+    const next: KeyInputValue = { ...current, ...patch };
+    const newMode = patch.mode ?? current.mode;
+    if (newMode !== 'text') next.text = undefined;
+    if (newMode !== 'attachment') next.attachmentId = undefined;
+    if (newMode !== 'env') next.envVar = undefined;
+    onChange?.(next);
   };
 
   const handleUpload = async (file: File): Promise<boolean> => {
@@ -101,7 +108,7 @@ export const KeyInput: React.FC<KeyInputProps> = ({
       });
       const attachment = res?.data?.data;
       if (!attachment?.id) throw new Error('attachment upload failed');
-      update({ attachmentId: attachment.id });
+      update({ mode: 'attachment', attachmentId: attachment.id });
       message.success(file.name);
     } catch (err) {
       const msg = (err as { message?: string })?.message ?? 'Upload failed';

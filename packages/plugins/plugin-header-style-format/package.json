@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
+    "Collection fields",
     "nocobase",
     "plugin",
     "header",

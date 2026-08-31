@@ -8,12 +8,12 @@
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
+    "Workflow",
     "automation",
     "selector",
     "self-healing",
     "uipath",
-    "registry",
-    "AI"
+    "registry"
   ],
   "files": [
     "dist",

@@ -13,8 +13,9 @@ import { computeElementKey, selectorFingerprint } from './key-service';
 import { LLMResolver, type LLMResolveResult } from './llm-resolver';
 import { captureSignature, selectorSignatureScore } from './signature-service';
 import type { SelectorSettingsService } from './settings-service';
+import { read, toIso, toNumber, type AnyRecord } from '../utils/record-helpers';
 
-export type AnyRecord = { get?: (name: string) => unknown } & Record<string, unknown>;
+export type { AnyRecord };
 
 export interface RepositoryLike {
   findOne(options?: {
@@ -29,6 +30,8 @@ export interface RepositoryLike {
     filter?: Record<string, unknown>;
     values: Record<string, unknown>;
   }): Promise<unknown>;
+  destroy(options?: { filter?: Record<string, unknown> }): Promise<number>;
+  count(options?: { filter?: Record<string, unknown> }): Promise<number>;
 }
 
 export interface DatabaseLike {
@@ -60,18 +63,6 @@ interface ChosenSelector {
   latencyMs?: number;
 }
 
-const read = (record: AnyRecord | null | undefined, key: string): unknown => {
-  if (!record) return undefined;
-  return typeof record.get === 'function' ? record.get(key) : record[key];
-};
-
-const toNumber = (value: unknown, fallback = 0): number => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const iso = (date: Date): string => date.toISOString();
-
 // Candidates whose signature resemblance falls below this are treated as the
 // wrong element and rejected, even when they match exactly one node.
 const SIGNATURE_REJECT_THRESHOLD = 0.3;
@@ -79,8 +70,13 @@ const IDEMPOTENCY_WINDOW_MS = 5 * 60 * 1000;
 const MAX_FALLBACKS = 3;
 const LOG_SNIPPET_MAX = 2000;
 
+interface InflightEntry {
+  promise: Promise<ResolveResponsePayload>;
+  timer: NodeJS.Timeout;
+}
+
 export class ResolvePipeline {
-  private readonly inflight = new Map<string, Promise<ResolveResponsePayload>>();
+  private readonly inflight = new Map<string, InflightEntry>();
   private readonly now: () => Date;
 
   constructor(private readonly options: ResolvePipelineOptions) {
@@ -190,7 +186,9 @@ export class ResolvePipeline {
     // fleet of failing bots triggers a single repair attempt.
     const dedupeKey = `${appId}:${elementKey}`;
     const running = this.inflight.get(dedupeKey);
-    if (running) return running;
+    if (running) {
+      return running.promise;
+    }
     const promise = this.heal({
       appId,
       elementKey,
@@ -201,10 +199,19 @@ export class ResolvePipeline {
       startedAt,
       dryRun: dryRun || Boolean(meta.forceDryRun),
       settings,
-    }).finally(() => {
-      this.inflight.delete(dedupeKey);
     });
-    this.inflight.set(dedupeKey, promise);
+    const timer = setTimeout(() => {
+      this.inflight.delete(dedupeKey);
+    }, 30_000);
+    this.inflight.set(dedupeKey, { promise, timer });
+    promise
+      .finally(() => {
+        clearTimeout(timer);
+        this.inflight.delete(dedupeKey);
+      })
+      .catch(() => {
+        // Unhandled rejection is expected: the caller awaits the same promise.
+      });
     return promise;
   }
 
@@ -219,7 +226,7 @@ export class ResolvePipeline {
     if (!entry) return;
     await this.repo('selectorEntries').update({
       filterByTk: read(entry, 'id'),
-      values: { hitCount: toNumber(read(entry, 'hitCount')) + 1, lastUsedAt: iso(this.now()) },
+      values: { hitCount: toNumber(read(entry, 'hitCount')) + 1, lastUsedAt: toIso(this.now()) },
     });
   }
 
@@ -276,7 +283,7 @@ export class ResolvePipeline {
     payload: ResolveRequestPayload;
     selector: string;
   }): Promise<AnyRecord> {
-    const now = iso(this.now());
+    const nowIso = toIso(this.now());
     const entry = await this.repo('selectorEntries').create({
       values: {
         appId: input.appId,
@@ -290,7 +297,7 @@ export class ResolvePipeline {
         status: 'probation',
         pinned: false,
         confidence: 0.5,
-        confidenceUpdatedAt: now,
+        confidenceUpdatedAt: nowIso,
         hitCount: 1,
         successCount: 0,
         failCount: 0,
@@ -298,7 +305,7 @@ export class ResolvePipeline {
         probationSuccessCount: 0,
         version: 1,
         resolvedBy: 'registry',
-        lastUsedAt: now,
+        lastUsedAt: nowIso,
       },
     });
     await this.repo('selectorVersions').create({
@@ -381,10 +388,10 @@ export class ResolvePipeline {
           await this.repo('selectorEntries').update({
             filterByTk: read(entry, 'id'),
             values: {
-              circuitBrokenUntil: iso(new Date(now.getTime() + settings.circuitBreakerCooldownMs)),
+              circuitBrokenUntil: toIso(new Date(now.getTime() + settings.circuitBreakerCooldownMs)),
               status: 'quarantined',
               healAttempts,
-              healWindowStartedAt: iso(now),
+              healWindowStartedAt: toIso(now),
             },
           });
         }
@@ -396,7 +403,7 @@ export class ResolvePipeline {
       if (!preview) {
         await this.repo('selectorEntries').update({
           filterByTk: read(entry, 'id'),
-          values: { healAttempts, healWindowStartedAt: iso(now) },
+          values: { healAttempts, healWindowStartedAt: toIso(now) },
         });
       }
     }
@@ -452,7 +459,7 @@ export class ResolvePipeline {
       if (!preview && entry && statusOf(entry) !== 'quarantined' && statusOf(entry) !== 'disabled') {
         await this.repo('selectorEntries').update({
           filterByTk: read(entry, 'id'),
-          values: { status: 'degraded', lastResolvedAt: iso(now) },
+          values: { status: 'degraded', lastResolvedAt: toIso(now) },
         });
       }
       const response = this.missResponse(elementKey, entry, true);
@@ -618,7 +625,7 @@ export class ResolvePipeline {
     now: Date;
   }): Promise<{ entry: AnyRecord; version: number; fallbacks: SelectorRef[] }> {
     const { appId, elementKey, entry, payload, chosen, newSignature, storedSignature, healAttempts, now } = context;
-    const nowIso = iso(now);
+    const nowIso = toIso(now);
 
     if (!entry) {
       const created = await this.repo('selectorEntries').create({
@@ -715,7 +722,7 @@ export class ResolvePipeline {
     elementKey: string,
     idempotencyKey: string,
   ): Promise<ResolveResponsePayload | null> {
-    const since = iso(new Date(this.now().getTime() - IDEMPOTENCY_WINDOW_MS));
+    const since = toIso(new Date(this.now().getTime() - IDEMPOTENCY_WINDOW_MS));
     const log = await this.repo('selectorResolveLogs').findOne({
       filter: { appId, elementKey, idempotencyKey, createdAt: { $gt: since } },
       sort: ['-createdAt'],

@@ -121,4 +121,53 @@ describe('heuristic-repair', () => {
   it('returns nothing without a snapshot or candidates', () => {
     expect(heuristicRepair({ failedSelector: '#x', selectorType: 'css' })).toHaveLength(0);
   });
+
+  describe('xpath-id-extract', () => {
+    it('converts an XPath @id reference to a CSS prefix anchor', () => {
+      const candidates = heuristicRepair({
+        failedSelector: '//button[@id="btn-submit-5678"]',
+        selectorType: 'xpath',
+        domSnippet: PAGE,
+      });
+      const xpathExtract = candidates.find((candidate) => candidate.source === 'xpath-id-extract');
+      expect(xpathExtract).toBeDefined();
+      expect(xpathExtract?.selector).toBe('[id^="btn-submit"]');
+      expect(xpathExtract?.unique).toBe(true);
+      expect(xpathExtract?.selectorType).toBe('css');
+    });
+
+    it('ignores XPath without dynamic id suffix', () => {
+      const candidates = heuristicRepair({
+        failedSelector: '//button[@id="stable-id"]',
+        selectorType: 'xpath',
+        domSnippet: PAGE,
+      });
+      expect(candidates.filter((candidate) => candidate.source === 'xpath-id-extract')).toHaveLength(0);
+    });
+
+    it('ignores XPath id that matches multiple elements', () => {
+      const ambiguousPage = `
+        <div><span id="row-1">A</span><span id="row-2">B</span></div>
+      `;
+      const candidates = heuristicRepair({
+        failedSelector: '//span[@id="row-999"]',
+        selectorType: 'xpath',
+        domSnippet: ambiguousPage,
+      });
+      // [id^="row"] would match 2 elements -> not unique -> not emitted
+      expect(candidates.filter((candidate) => candidate.source === 'xpath-id-extract')).toHaveLength(0);
+    });
+
+    it('combines with other strategies for xpath input', () => {
+      const candidates = heuristicRepair({
+        failedSelector: '//button[@id="btn-submit-5678"]',
+        selectorType: 'xpath',
+        domSnippet: PAGE,
+        candidates: [{ text: 'Submit' }],
+      });
+      // xpath-id-extract should produce a CSS candidate, text anchor should NOT fire
+      expect(candidates.some((candidate) => candidate.source === 'xpath-id-extract')).toBe(true);
+      expect(candidates.every((candidate) => candidate.selectorType !== 'text')).toBe(true);
+    });
+  });
 });

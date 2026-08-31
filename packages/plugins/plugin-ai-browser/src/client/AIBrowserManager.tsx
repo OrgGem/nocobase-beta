@@ -72,7 +72,7 @@ function matchesSearch(record: any, search: string, fields: string[]) {
  * AIBrowserManager - admin page for managing sessions, profiles, workflow caches.
  * Registered in plugin settings under "AI Browser".
  */
-export const AIBrowserManager: React.FC = () => {
+export const AIBrowserManager: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) => {
   const t = useT();
   const api = useApp().apiClient;
   const [activeTab, setActiveTab] = useState('sessions');
@@ -411,7 +411,7 @@ export const AIBrowserManager: React.FC = () => {
       <Space direction="vertical" style={{ width: '100%' }} size="large">
         <Space>
           <GlobalOutlined style={{ fontSize: 24 }} />
-          <Title level={4} style={{ margin: 0 }}>{t('AI Browser Automation')}</Title>
+          {!embedded && <Title level={4} style={{ margin: 0 }}>{t('AI Browser Automation')}</Title>}
           {driverStatus && (
             <Badge
               status={driverStatus.available ? 'success' : 'error'}

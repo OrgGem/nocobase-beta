@@ -13,6 +13,7 @@
     "prepack": "npm run build:plugin && npm run copy:runtime-deps"
   },
   "keywords": [
+    "Data sources",
     "Microsoft Graph",
     "Outlook",
     "OneDrive",

@@ -41,4 +41,6 @@
     "antd": "5.x",
     "react": "^18.2.0"
   }
+,
+  "keywords": "Blocks"
 }

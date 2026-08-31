@@ -35,4 +35,6 @@
     "client-v2.d.ts",
     "server.d.ts"
   ]
+,
+  "keywords": ["Blocks"]
 }

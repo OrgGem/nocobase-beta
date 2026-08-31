@@ -17,7 +17,7 @@
   ],
   "license": "Apache-2.0",
   "keywords": [
-    "Block"
+    "Blocks"
   ],
   "peerDependencies": {
     "@nocobase/client": "2.x",

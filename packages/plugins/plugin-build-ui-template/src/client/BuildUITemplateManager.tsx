@@ -30,7 +30,7 @@ import {
 
 const { Title, Paragraph, Text } = Typography;
 
-export const BuildUITemplateManager: React.FC = () => {
+export const BuildUITemplateManager: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) => {
   const api = useApp().apiClient;
   const [spaces, setSpaces] = useState<any[]>([]);
   const [collections, setCollections] = useState<any[]>([]);
@@ -243,14 +243,13 @@ export const BuildUITemplateManager: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
+    <div style={embedded ? undefined : { padding: '24px', maxWidth: '1200px', margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <div>
-          <Title level={2}>AI UI Template Builder</Title>
-          <Paragraph type="secondary">
+          {!embedded && <Title level={2}>AI UI Template Builder</Title>}
+          {!embedded && <Paragraph type="secondary">
             Generate stunning custom UI Blocks and Popups in seconds using state-of-the-art LLMs, then reuse them in
-            NocoBase v2 dynamic forms, dashboards and listings.
-          </Paragraph>
+            NocoBase v2 dynamic forms, dashboards and listings.</Paragraph>}
         </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openModal()}>
           New Generation Space

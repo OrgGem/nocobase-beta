@@ -145,7 +145,7 @@ function renderEnvGuide(spec: FieldSpec) {
   );
 }
 
-export const SettingsPage: React.FC = () => {
+export const SettingsPage: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) => {
   const t = useT();
   const app = useApp();
   const api = app.apiClient;
@@ -217,7 +217,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: 760, padding: 16 }}>
+    <div style={embedded ? undefined : { maxWidth: 760, padding: 16 }}>
       <Alert
         type="info"
         showIcon

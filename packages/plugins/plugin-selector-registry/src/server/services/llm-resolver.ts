@@ -45,7 +45,8 @@ Strict rules:
 - Maximum ${MAX_CANDIDATES} candidates, best first. confidence is between 0 and 1.
 - Prefer stable anchors: data-testid, name, aria-label, role, placeholder, unique visible text. Avoid positional paths, generated ids and volatile classes.
 - A CSS candidate must be valid CSS that matches exactly one element in the provided DOM snapshot.
-- If the DOM snapshot is missing or no reliable selector can be derived, return {"candidates":[]}.`;
+- NEVER re-propose a selector listed under "SELECTOR HISTORY" — those already broke and proposing them again wastes healing budget.
+- If the DOM snippet is missing or no reliable selector can be derived, return {"candidates":[]}.`;
 
 const clampConfidence = (value: unknown): number => {
   const parsed = Number(value);
@@ -75,7 +76,7 @@ export const buildResolverPrompt = (input: LLMResolveInput): { system: string; u
   }
 
   if (input.history?.length) {
-    lines.push('', 'SELECTOR HISTORY FOR THIS ELEMENT (newest last):');
+    lines.push('', 'SELECTOR HISTORY FOR THIS ELEMENT (newest last) — DO NOT REPROPOSE THESE:');
     input.history.slice(-5).forEach((record) => {
       lines.push(`- [${record.status}] (${record.selectorType}) ${record.selector}`);
     });

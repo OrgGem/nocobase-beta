@@ -8,15 +8,16 @@ export class PluginBlockEmbedSettingsClient extends Plugin<Record<string, never>
       key: 'block-embed-settings',
       title: this.t('Embed Settings Block'),
       icon: 'BlockOutlined',
-      aclSnippet: 'pm.block-embed-settings',
+      aclSnippet: 'pm.plugin-block-embed-settings',
     });
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'block-embed-settings',
       key: 'index',
       title: this.t('Embed Settings Block'),
-      
-      componentLoader: () => import('../client/EmbedSettingsManager').then(m => ({ default: m.EmbedSettingsManager })),
+
+      componentLoader: () =>
+        import('../client/EmbedSettingsManager').then((m) => ({ default: m.EmbedSettingsManager })),
     });
 
     this.app.flowEngine.registerModels({

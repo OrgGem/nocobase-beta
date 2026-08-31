@@ -208,22 +208,33 @@ describe('GitManagerSourceProvider', () => {
     expect(listTree).toHaveBeenCalledWith(expect.objectContaining({ rootPath: 'automation/skills' }));
   });
 
-  it('builds an instruction-only candidate from SKILL.md without scanning unrelated files', async () => {
+  it('builds an instruction-only candidate from SKILL.md and includes all files in the skill folder', async () => {
     const markdown = Buffer.from(
       '---\nname: gen-doc-ppt-master\ndescription: Generate documents\n---\nFollow these instructions.\n',
     );
-    const listTree = vi.fn().mockImplementation(async ({ recursive }: { recursive: boolean }) => {
-      expect(recursive).toBe(false);
-      return [
-        { type: 'blob', path: 'SKILL.md', size: markdown.length },
-        { type: 'tree', path: 'references', size: 0 },
-        { type: 'blob', path: 'large-model.bin', size: ARTIFACT_LIMITS.maxExpandedBytes + 1 },
-      ];
+    const helperContent = Buffer.from('# helper utility\n');
+    const listTree = vi.fn().mockImplementation(async ({ recursive, rootPath }: { recursive: boolean; rootPath: string }) => {
+      // The non-recursive call fetches SKILL.md size; the recursive call collects all skill files.
+      if (rootPath === '.kiro/gen-doc-ppt-master') {
+        if (recursive) {
+          return [
+            { type: 'blob', path: 'SKILL.md', size: markdown.length },
+            { type: 'blob', path: 'helper.py', size: helperContent.length },
+          ];
+        }
+        return [{ type: 'blob', path: 'SKILL.md', size: markdown.length }];
+      }
+      // Discovery calls at the root level.
+      return [{ type: 'tree', path: 'gen-doc-ppt-master', size: 0 }];
     });
-    const readFile = vi
-      .fn()
-      .mockRejectedValueOnce(Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }))
-      .mockResolvedValue(markdown);
+    const readFile = vi.fn().mockImplementation(async ({ filePath }: { filePath: string }) => {
+        if (filePath.endsWith('skills.json')) {
+          throw Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' });
+        }
+        if (filePath.endsWith('SKILL.md')) return markdown;
+        if (filePath.endsWith('helper.py')) return helperContent;
+        throw new Error(`Unexpected readFile: ${filePath}`);
+      });
     const provider = new GitManagerSourceProvider({
       get: () => ({
         registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
@@ -240,12 +251,11 @@ describe('GitManagerSourceProvider', () => {
       'gen-doc-ppt-master',
     );
 
-    expect(candidate.manifest.runtime).toEqual({ kind: 'instruction', entrypoint: 'SKILL.md' });
-    expect(candidate.files.map((file) => file.path)).toEqual(['SKILL.md']);
-    expect(listTree).toHaveBeenCalledTimes(3);
-    expect(listTree).toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/gen-doc-ppt-master' }));
+    // Auto-detected entrypoint from helper.py since no explicit codeFile was declared.
+    expect(candidate.manifest.runtime).toEqual({ kind: 'python', entrypoint: 'helper.py' });
+    expect(candidate.files.map((file) => file.path).sort()).toEqual(['SKILL.md', 'helper.py']);
+    expect(listTree).toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/gen-doc-ppt-master', recursive: true }));
     expect(listTree).not.toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/skills/gen-doc-ppt-master' }));
-    expect(readFile).toHaveBeenCalledTimes(3);
   });
 
   it('does not treat an export denial while reading optional skills.json as a missing file', async () => {

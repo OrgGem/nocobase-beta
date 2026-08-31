@@ -12,6 +12,7 @@ export class PluginAgentOrchestratorClient extends Plugin {
       title: 'Agent Orchestrator',
       icon: 'ApartmentOutlined',
       Component: OrchestratorSettings,
+      aclSnippet: 'pm.ai-orchestrator',
     });
 
     (this as any).app.eventBus?.addEventListener?.('auth:tokenChanged', (event: Event) => {

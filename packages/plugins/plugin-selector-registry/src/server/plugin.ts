@@ -104,17 +104,10 @@ export class PluginSelectorRegistryServer extends Plugin {
       return { removedResolveLogs: 0, removedFeedbacks: 0 };
     }
     const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
-    const logsRepo = this.db.getRepository('selectorResolveLogs');
-    const feedbacksRepo = this.db.getRepository('selectorFeedbacks');
-    const oldLogs = await logsRepo.find({ filter: { createdAt: { $lt: cutoff } } });
-    const oldFeedbacks = await feedbacksRepo.find({ filter: { createdAt: { $lt: cutoff } } });
-    if (oldLogs.length) {
-      await logsRepo.destroy({ filter: { createdAt: { $lt: cutoff } } });
-    }
-    if (oldFeedbacks.length) {
-      await feedbacksRepo.destroy({ filter: { createdAt: { $lt: cutoff } } });
-    }
-    return { removedResolveLogs: oldLogs.length, removedFeedbacks: oldFeedbacks.length };
+    const filter = { createdAt: { $lt: cutoff } };
+    const removedResolveLogs = await this.db.getRepository('selectorResolveLogs').destroy({ filter });
+    const removedFeedbacks = await this.db.getRepository('selectorFeedbacks').destroy({ filter });
+    return { removedResolveLogs, removedFeedbacks };
   }
 }
 

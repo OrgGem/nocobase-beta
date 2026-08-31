@@ -8,7 +8,12 @@ export default {
     { name: 'pluginName', type: 'string', length: 255, unique: true },
     { name: 'title', type: 'string', length: 255 },
     { name: 'enabled', type: 'boolean', defaultValue: true },
-    { name: 'createdAt', type: 'date' },
-    { name: 'updatedAt', type: 'date' },
+  ],
+  indexes: [
+    {
+      fields: ['pluginName'],
+      unique: true,
+      name: 'idx_embed_allowed_plugins_plugin_name',
+    },
   ],
 } as CollectionOptions;

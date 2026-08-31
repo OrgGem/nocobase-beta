@@ -35,6 +35,31 @@ describe('llm-resolver', () => {
       });
       expect(user.length).toBeLessThan(5000);
     });
+
+    it('instructs the LLM to never repropose historical selectors', () => {
+      const { system, user } = buildResolverPrompt({
+        failedSelector: '#broken',
+        selectorType: 'css',
+        history: [
+          { selector: '#old-1', selectorType: 'css', status: 'superseded' },
+          { selector: '#old-2', selectorType: 'css', status: 'rolled_back' },
+        ],
+      });
+      expect(system).toContain('NEVER re-propose');
+      expect(system).toContain('SELECTOR HISTORY');
+      expect(user).toContain('DO NOT REPROPOSE THESE');
+      expect(user).toContain('#old-1');
+      expect(user).toContain('#old-2');
+    });
+
+    it('omits the history section when no history exists', () => {
+      const { user } = buildResolverPrompt({
+        failedSelector: '#x',
+        selectorType: 'css',
+      });
+      expect(user).not.toContain('SELECTOR HISTORY');
+      expect(user).not.toContain('DO NOT REPROPOSE');
+    });
   });
 
   describe('parseLLMCandidates', () => {

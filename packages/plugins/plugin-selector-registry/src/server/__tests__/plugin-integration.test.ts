@@ -166,6 +166,58 @@ describe('Selector Registry plugin integration', () => {
     expect(bulk.body.data).toMatchObject({ app: 'crm', unchanged: 1, unknown: ['never-seen'], updates: [] });
   });
 
+  it('bulkLookup returns updates for changed entries in a single call', async () => {
+    const server = requireApp();
+    const admin = await rootAgent();
+    const bot = requireBot();
+
+    // Create a second app for isolation.
+    await admin.resource('selectorApps').create({ values: { name: 'erp', displayName: 'ERP' } });
+    const erpApp = await server.db.getRepository('selectorApps').findOne({ filter: { name: 'erp' } });
+    const erpAppId = erpApp?.get('id') as number;
+
+    // Seed entries directly to test batch lookup behavior.
+    for (let index = 0; index < 10; index += 1) {
+      await server.db.getRepository('selectorEntries').create({
+        values: {
+          appId: erpAppId,
+          elementKey: `erp-step-${index}`,
+          currentSelector: `#sel-${index}`,
+          selectorType: 'css',
+          fallbackSelectors: [],
+          signature: null,
+          status: 'active',
+          pinned: false,
+          confidence: 0.8,
+          hitCount: 0,
+          successCount: 5,
+          failCount: 0,
+          failStreak: 0,
+          probationSuccessCount: 3,
+          version: index % 3 === 0 ? 2 : 1,
+          resolvedBy: 'client',
+        },
+      });
+    }
+
+    const bulk = await bot.post('/selectorRegistry:bulkLookup').send({
+      app: 'erp',
+      items: [
+        { elementKey: 'erp-step-0', version: 1 }, // stale version -> update
+        { elementKey: 'erp-step-1', version: 1 }, // current version -> unchanged
+        { elementKey: 'erp-step-2', version: 1 }, // current version -> unchanged
+        { elementKey: 'erp-step-99' }, // unknown
+      ],
+    });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.data.app).toBe('erp');
+    expect(bulk.body.data.updates).toHaveLength(1);
+    expect(bulk.body.data.updates[0].elementKey).toBe('erp-step-0');
+    expect(bulk.body.data.updates[0].version).toBe(2);
+    expect(bulk.body.data.unknown).toEqual(['erp-step-99']);
+    expect(bulk.body.data.unchanged).toBe(2);
+  });
+
   it('returns structured errors for unknown apps', async () => {
     const response = await requireBot()
       .post('/selectorRegistry:resolve')

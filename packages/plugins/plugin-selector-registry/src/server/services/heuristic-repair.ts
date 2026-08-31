@@ -27,7 +27,7 @@ export interface RepairInput {
 export interface RepairCandidate {
   selector: string;
   selectorType: SelectorType;
-  source: 'client-candidate' | 'id-drift' | 'segment-reanchor' | 'text-anchor';
+  source: 'client-candidate' | 'id-drift' | 'segment-reanchor' | 'text-anchor' | 'xpath-id-extract';
   matchCount: number;
   unique: boolean;
   signatureScore: number;
@@ -194,6 +194,34 @@ const repairSegmentReanchor = (dom: Document, input: RepairInput, out: RepairCan
   }
 };
 
+// Extract id references from basic XPath expressions and convert them to CSS
+// prefix anchors. This gives XPath-using clients at least some heuristic repair
+// coverage instead of falling straight through to LLM or miss.
+const repairXPathIdExtract = (dom: Document, input: RepairInput, out: RepairCandidate[]) => {
+  if (input.selectorType !== 'xpath') return;
+  // Match @id='value' or @id="value" patterns inside XPath predicates.
+  const idRefs = input.failedSelector.match(/@id\s*=\s*['"]([^'"]+)['"]/g) ?? [];
+  for (const ref of idRefs) {
+    const id = ref.match(/['"]([^'"]+)['"]/)?.[1];
+    if (!id) continue;
+    const prefix = stripDynamicSuffix(id);
+    if (!prefix) continue;
+    const selector = `[id^="${escapeCssValue(prefix)}"]`;
+    const validation = validateSelector(dom, selector, 'css');
+    if (validation.validatable && validation.unique) {
+      out.push({
+        selector,
+        selectorType: 'css',
+        source: 'xpath-id-extract',
+        matchCount: validation.matchCount,
+        unique: true,
+        signatureScore: elementSignatureScore(dom, selector, input.signature ?? null),
+        reason: `extracted id "${id}" from XPath and stripped dynamic suffix`,
+      });
+    }
+  }
+};
+
 // Text anchors are executed client-side (UiPath text selectors); emit them only
 // when no CSS repair survived, and never mark them unique.
 const repairTextAnchor = (input: RepairInput, out: RepairCandidate[]) => {
@@ -222,6 +250,7 @@ export const heuristicRepair = (input: RepairInput): RepairCandidate[] => {
     repairClientCandidates(dom, input, out);
     repairIdDrift(dom, input, out);
     repairSegmentReanchor(dom, input, out);
+    repairXPathIdExtract(dom, input, out);
   }
   repairTextAnchor(input, out);
 

@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Table, Button, Switch, Empty, Space, Popconfirm, Typography, Card, message } from 'antd';
+import { Table, Button, Switch, Empty, Space, Popconfirm, Typography, message, Spin } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
-import { useApp, useSystemSettings } from '@nocobase/client-v2';
+import { useApp } from '@nocobase/client-v2';
 import { useRequest } from 'ahooks';
 import { useT } from './locale';
 import { collectEmbeddablePlugins, normalizeAllowedRecords } from './EmbedSettingsPluginSelect';
+import type { AllowedPluginRecord } from './types';
 
 const { Title } = Typography;
 
@@ -13,74 +14,73 @@ export const EmbedSettingsManager: React.FC = () => {
   const app = useApp();
   const api = app.apiClient;
 
-  const systemSettings = useSystemSettings();
-  const showHelp = systemSettings?.data?.data?.options?.showHelp !== false;
-  const [savingSettings, setSavingSettings] = useState(false);
+  const [togglingIds, setTogglingIds] = useState<Set<number>>(new Set());
+  const [removingIds, setRemovingIds] = useState<Set<number>>(new Set());
+  const [addingPlugin, setAddingPlugin] = useState<string | null>(null);
 
-  const { data, loading, refresh } = useRequest<any, any[]>(() =>
-    api.resource('embedAllowedPlugins').list({ pageSize: 200 }),
-  );
+  const { data, loading, refresh } = useRequest(() => api.resource('embedAllowedPlugins').list({ pageSize: 200 }));
 
   const allPlugins = useMemo(() => collectEmbeddablePlugins(app), [app]);
 
-  const allowedRecords: any[] = normalizeAllowedRecords(data);
-  const allowedKeys = new Set(allowedRecords.map((r: any) => r.pluginName));
+  const allowedRecords: AllowedPluginRecord[] = normalizeAllowedRecords(data);
+  const allowedKeys = new Set(allowedRecords.map((r) => r.pluginName));
 
   const availablePlugins = allPlugins.filter((p) => !allowedKeys.has(p.value));
 
   const handleAdd = async (pluginName: string, title: string) => {
-    await api.resource('embedAllowedPlugins').create({
-      values: { pluginName, title, enabled: true },
-    });
-    refresh();
+    setAddingPlugin(pluginName);
+    try {
+      await api.resource('embedAllowedPlugins').create({
+        values: { pluginName, title, enabled: true },
+      });
+      message.success(t('Saved successfully'));
+      refresh();
+    } catch (error) {
+      console.error('[EmbedSettingsManager] Failed to add plugin:', error);
+      message.error(t('Save failed'));
+    } finally {
+      setAddingPlugin(null);
+    }
   };
 
   const handleToggle = async (id: number, enabled: boolean) => {
-    await api.resource('embedAllowedPlugins').update({
-      filterByTk: id,
-      values: { enabled },
-    });
-    refresh();
+    setTogglingIds((prev) => new Set(prev).add(id));
+    try {
+      await api.resource('embedAllowedPlugins').update({
+        filterByTk: id,
+        values: { enabled },
+      });
+      message.success(t('Saved successfully'));
+      refresh();
+    } catch (error) {
+      console.error('[EmbedSettingsManager] Failed to toggle plugin:', error);
+      message.error(t('Save failed'));
+    } finally {
+      setTogglingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
   };
 
   const handleRemove = async (id: number) => {
-    await api.resource('embedAllowedPlugins').destroy({
-      filterByTk: id,
-    });
-    refresh();
-  };
-
-  const handleToggleHelp = async (checked: boolean) => {
-    setSavingSettings(true);
+    setRemovingIds((prev) => new Set(prev).add(id));
     try {
-      const options = {
-        ...systemSettings?.data?.data?.options,
-        showHelp: checked,
-      };
-
-      await api.request({
-        url: 'systemSettings:put',
-        method: 'post',
-        data: {
-          options,
-        },
+      await api.resource('embedAllowedPlugins').destroy({
+        filterByTk: id,
       });
-
-      if (systemSettings?.mutate) {
-        systemSettings.mutate({
-          data: {
-            ...systemSettings.data?.data,
-            options,
-          },
-        });
-      }
-
       message.success(t('Saved successfully'));
+      refresh();
     } catch (error) {
-      console.error(error);
+      console.error('[EmbedSettingsManager] Failed to remove plugin:', error);
       message.error(t('Save failed'));
     } finally {
-      setSavingSettings(false);
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -100,17 +100,21 @@ export const EmbedSettingsManager: React.FC = () => {
       dataIndex: 'enabled',
       key: 'enabled',
       width: 100,
-      render: (enabled: boolean, record: any) => (
-        <Switch checked={enabled} onChange={(val) => handleToggle(record.id, val)} />
+      render: (enabled: boolean, record: AllowedPluginRecord) => (
+        <Switch
+          checked={enabled}
+          loading={togglingIds.has(record.id)}
+          onChange={(val) => handleToggle(record.id, val)}
+        />
       ),
     },
     {
       title: t('Actions'),
       key: 'actions',
       width: 100,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: AllowedPluginRecord) => (
         <Popconfirm title={t('Confirm remove?')} onConfirm={() => handleRemove(record.id)}>
-          <Button type="link" danger icon={<DeleteOutlined />} />
+          <Button type="link" danger icon={<DeleteOutlined />} loading={removingIds.has(record.id)} />
         </Popconfirm>
       ),
     },
@@ -118,13 +122,6 @@ export const EmbedSettingsManager: React.FC = () => {
 
   return (
     <div style={{ padding: 24 }}>
-      <Card title={t('Header Settings')} style={{ marginBottom: 24 }}>
-        <Space size="middle" align="center">
-          <span>{t('Show help button in header')}</span>
-          <Switch checked={showHelp} loading={savingSettings} onChange={handleToggleHelp} />
-        </Space>
-      </Card>
-
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Title level={5} style={{ margin: 0 }}>
           {t('Allowed plugins for embedding')}
@@ -135,7 +132,13 @@ export const EmbedSettingsManager: React.FC = () => {
         <div style={{ marginBottom: 16 }}>
           <Space wrap>
             {availablePlugins.map((p) => (
-              <Button key={p.value} size="small" icon={<PlusOutlined />} onClick={() => handleAdd(p.value, p.label)}>
+              <Button
+                key={p.value}
+                size="small"
+                icon={<PlusOutlined />}
+                loading={addingPlugin === p.value}
+                onClick={() => handleAdd(p.value, p.label)}
+              >
                 {p.label}
               </Button>
             ))}

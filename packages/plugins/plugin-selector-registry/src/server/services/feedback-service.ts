@@ -6,8 +6,9 @@ import {
   type SelectorType,
 } from '../../constants';
 import { SelectorRegistryError } from './errors';
-import type { AnyRecord, DatabaseLike, RepositoryLike } from './resolve-pipeline';
+import type { DatabaseLike, RepositoryLike } from './resolve-pipeline';
 import type { SelectorSettingsService } from './settings-service';
+import { read, toNumber, type AnyRecord } from '../utils/record-helpers';
 
 export interface FeedbackServiceOptions {
   database: DatabaseLike;
@@ -24,16 +25,6 @@ export interface ReportResult {
   newSelectorType?: SelectorType;
   version?: number;
 }
-
-const read = (record: AnyRecord | null | undefined, key: string): unknown => {
-  if (!record) return undefined;
-  return typeof record.get === 'function' ? record.get(key) : record[key];
-};
-
-const toNumber = (value: unknown, fallback = 0): number => {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
 
 const round4 = (value: number): number => Math.round(value * 10000) / 10000;
 

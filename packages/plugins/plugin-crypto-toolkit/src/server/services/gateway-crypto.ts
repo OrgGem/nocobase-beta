@@ -329,7 +329,7 @@ function wrapWire(
   return { body: container, contentType: 'application/octet-stream' };
 }
 
-function unwrapWire(raw: Buffer, contentType?: string): { container: Buffer; plaintextContentType?: string } {
+export function unwrapWire(raw: Buffer, contentType?: string): { container: Buffer; plaintextContentType?: string } {
   const ct = (contentType ?? '').toLowerCase();
   if (ct.includes('application/json')) {
     try {

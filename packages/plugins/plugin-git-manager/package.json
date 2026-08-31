@@ -38,4 +38,6 @@
   "dependencies": {
     "simple-git": "^3.27.0"
   }
+,
+  "keywords": "System management"
 }

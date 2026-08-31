@@ -18,6 +18,7 @@ import { logOperation } from '../services/operation-logger';
 import type { KeyMaterialInput } from '../services/load-key-material';
 import { CryptoToolkitHttpError } from '../http-error';
 import { loadRawMaterial } from '../services/load-key-material';
+import { unwrapWire } from '../services/gateway-crypto';
 
 const MAX_PAYLOAD_BYTES = 200 * 1024 * 1024; // 200 MB
 
@@ -330,7 +331,10 @@ export function registerCryptoOpsResource(app: Application): void {
 
       try {
         if (algorithm === 'aes-256-gcm') {
-          const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
+          const rawPayload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
+          // Unwrap JSON wire envelope produced by the API Manager gateway so that
+          // both binary (.ncb1) and JSON-wrapped payloads can be decrypted here.
+          const { container: payload } = unwrapWire(rawPayload);
           if (!body.secret) badRequest('secret is required for AES');
           let plain: Buffer;
           try {
@@ -346,7 +350,10 @@ export function registerCryptoOpsResource(app: Application): void {
             extension: '.bin',
           });
         } else if (algorithm === 'pgp') {
-          const payload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
+          const rawPayload = await loadBuffer(ctx, body.payload as KeyMaterialInput);
+          // Unwrap JSON wire envelope produced by the API Manager gateway so that
+          // both binary (.pgp) and JSON-wrapped payloads can be decrypted here.
+          const { container: payload } = unwrapWire(rawPayload);
           const envVar = String(body.privateEnvVar ?? '');
           const passphrase = typeof body.passphrase === 'string' ? body.passphrase : undefined;
           if (!envVar) badRequest('privateEnvVar is required for PGP');
@@ -670,6 +677,7 @@ export function registerCryptoOpsResource(app: Application): void {
         // Only treat the input as binary DER when it is not PEM text.
         let source: string | Buffer = material.toString('utf8');
         if (!/-----BEGIN/.test(source) && material.length > 0 && material[0] === 0x30) source = material;
+        const info = await inspectCert(source);
         await logForCtx(app, ctx, {
           action: 'inspect',
           algorithm: 'x509',

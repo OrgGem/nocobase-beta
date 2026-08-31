@@ -12,6 +12,9 @@ const matchesOperator = (actual: unknown, operator: string, expected: unknown): 
       return a != null && a < (b as never);
     case '$ne':
       return a !== b;
+    case '$in':
+      if (!Array.isArray(expected)) return false;
+      return expected.includes(a);
     default:
       return false;
   }
@@ -68,6 +71,10 @@ export class FakeRepository implements RepositoryLike {
     const matched = this.rows.filter((row) => matchFilter(row, options?.filter));
     const sorted = sortRows(matched, options?.sort);
     return options?.limit ? sorted.slice(0, options.limit) : sorted;
+  }
+
+  async count(options?: { filter?: Record<string, unknown> }): Promise<number> {
+    return this.rows.filter((row) => matchFilter(row, options?.filter)).length;
   }
 
   async create(options: { values: Record<string, unknown> }): Promise<AnyRecord> {

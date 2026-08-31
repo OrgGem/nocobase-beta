@@ -467,15 +467,12 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
     );
     const frontmatter = parseSkillMarkdownFrontmatter(frontmatterMarkdown.toString('utf8'));
     const codeFile = declaredCodeFile || (typeof frontmatter.codeFile === 'string' ? frontmatter.codeFile : undefined);
-    const entries = codeFile
-      ? await requireGitExport(
-          listTree(
-            service,
-            { repositoryId: config.repositoryId, commitSha, rootPath: skillRoot, recursive: true },
-            access,
-          ),
-        )
-      : [{ type: 'blob' as const, path: 'SKILL.md', size: skillMarkdownSize }];
+    // Always include all files in the skill folder so downloads contain scripts (.py, .js, etc.)
+    // even when no explicit codeFile is declared. The entrypoint is resolved later from the
+    // collected files or falls back to SKILL.md for instruction-only skills.
+    const entries = await requireGitExport(
+      listTree(service, { repositoryId: config.repositoryId, commitSha, rootPath: skillRoot, recursive: true }, access),
+    );
     const fileEntries = entries.filter((item) => item.type === 'blob');
     if (fileEntries.length === 0) {
       throw new RegistryError('INVALID_MANIFEST', 422, `Git source item ${externalKey} has no files.`);
@@ -525,10 +522,31 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
       });
     }
     const skillMarkdown = files.find((file) => file.path === 'SKILL.md')?.content.toString('utf8') || '';
-    const language = codeFile
+    // When no explicit codeFile is declared, auto-detect the entrypoint from collected files.
+    // Prefer index.py/index.js, then any .py/.js file. Fall back to instruction-only if none found.
+    // Supported executable extensions for auto-detected entrypoints. The registry runtime
+    // currently executes python and node, but we collect every file so downloads are complete.
+    // When no explicit codeFile is declared, prefer index.* then the first executable file.
+    const EXECUTABLE_EXT_PATTERN = /\.(py|js|ts|sh|bash|rb|go|rs|java|php|pl|lua|r|m)$/;
+    const INDEX_EXT_PATTERN = /(^|\/)index\.(py|js|ts|sh|bash|rb|go|rs|java|php|pl|lua|r|m)$/;
+    const resolvedCodeFile =
+      codeFile ||
+      (() => {
+        const candidates = files.filter((f) => EXECUTABLE_EXT_PATTERN.test(f.path));
+        if (candidates.length === 0) return undefined;
+        const indexFile = candidates.find((f) => INDEX_EXT_PATTERN.test(f.path));
+        return indexFile ? indexFile.path : candidates[0].path;
+      })();
+    function inferLanguageFromPath(filePath: string): 'python' | 'node' {
+      // The registry runtime only supports python and node. TypeScript is treated as node
+      // because it is typically executed via ts-node or compiled to JS. Other extensions
+      // default to python as the most common skill runtime.
+      return filePath.endsWith('.js') || filePath.endsWith('.ts') ? 'node' : 'python';
+    }
+    const language = resolvedCodeFile
       ? (typeof frontmatter.language === 'string' && frontmatter.language) ||
         (typeof entry?.language === 'string' && entry.language) ||
-        (codeFile.endsWith('.js') ? 'node' : 'python')
+        inferLanguageFromPath(resolvedCodeFile)
       : 'instruction';
     if (language !== 'python' && language !== 'node' && language !== 'instruction') {
       throw new RegistryError('INVALID_MANIFEST', 422, `Unsupported runtime language ${language}.`);
@@ -558,7 +576,7 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
         (typeof frontmatter.description === 'string' && frontmatter.description) ||
         (typeof entry?.description === 'string' && entry.description) ||
         '',
-      runtime: { kind: language, entrypoint: codeFile ? normalizeRelativePath(codeFile) : 'SKILL.md' },
+      runtime: { kind: language, entrypoint: resolvedCodeFile ? normalizeRelativePath(resolvedCodeFile) : 'SKILL.md' },
       inputSchema: asJsonValue(inputSchema, { type: 'object', properties: {} }),
       outputSchema: { type: 'object' },
       permissions: { network: 'deny', filesystem: ['workdir:read', 'output:write'] },

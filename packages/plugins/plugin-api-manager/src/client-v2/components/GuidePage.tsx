@@ -13,7 +13,7 @@ const codeStyle: React.CSSProperties = {
   fontFamily: 'monospace',
 };
 
-export const GuidePage: React.FC = () => {
+export const GuidePage: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) => {
   const t = useT();
   const origin = getGatewayOrigin();
 
@@ -202,7 +202,7 @@ export const GuidePage: React.FC = () => {
   ];
 
   return (
-    <Space direction="vertical" size={24} style={{ width: '100%', maxWidth: 960 }}>
+    <Space direction="vertical" size={24} style={embedded ? { width: '100%' } : { width: '100%', maxWidth: 960 }}>
       <div>
         <Typography.Title level={4}>{t('How to call APIs through the proxy')}</Typography.Title>
         <Typography.Paragraph type="secondary">

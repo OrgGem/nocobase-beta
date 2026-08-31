@@ -4,16 +4,22 @@ import { useApp } from '@nocobase/client-v2';
 import { Empty, Result, Button, Typography, Tabs, Spin } from 'antd';
 import { css } from '@emotion/css';
 import { useT } from './locale';
-import { collectEmbeddablePluginTabs, EmbedSettingsTabOption } from './EmbedSettingsPluginSelect';
+import { collectEmbeddablePluginTabs } from './EmbedSettingsPluginSelect';
+import type { EmbedSettingsBlockProps, EmbedSettingsTabOption } from './types';
 
 const { Text } = Typography;
 
-type EmbedSettingsBlockProps = {
-  pluginName?: string;
-  enabledTabKeys?: string[];
-  dataSourceName?: string;
-  collectionName?: string;
-};
+const embedBlockStyles = css`
+  min-height: 200px;
+
+  & > div,
+  & > section,
+  & > main {
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+`;
 
 class EmbedErrorBoundary extends ReactComponent<
   { children: React.ReactNode; pluginName: string },
@@ -36,6 +42,47 @@ class EmbedErrorBoundary extends ReactComponent<
           status="error"
           title={`Plugin "${this.props.pluginName}" render failed`}
           subTitle={this.state.error.message}
+          extra={<Button onClick={() => this.setState({ error: null })}>Retry</Button>}
+        />
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/**
+ * Per-tab error boundary that catches rendering errors from individual embedded
+ * plugin components (e.g., parseVariable null errors from missing VariablesProvider).
+ */
+class EmbedTabErrorBoundary extends ReactComponent<
+  { children: React.ReactNode; tabLabel: string },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(`[EmbedSettingsBlock] Tab "${this.props.tabLabel}" render error:`, error);
+  }
+
+  render() {
+    if (this.state.error) {
+      const msg = this.state.error.message || '';
+      const isContextError =
+        msg.includes('parseVariable') ||
+        msg.includes('Cannot read properties of null');
+      return (
+        <Result
+          status="warning"
+          title={`"${this.props.tabLabel}" encountered a rendering issue`}
+          subTitle={
+            isContextError
+              ? 'This settings page requires additional context providers not available in embedded mode. Try opening the full settings page instead.'
+              : msg
+          }
           extra={<Button onClick={() => this.setState({ error: null })}>Retry</Button>}
         />
       );
@@ -93,25 +140,21 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
 
   return (
     <EmbedErrorBoundary pluginName={pluginName}>
-      <div
-        className={css`
-          min-height: 200px;
-          /* Force override the inline styles (like max-width 800px and padding 16px)
-             often set by other plugins' settings components */
-          > div {
-            max-width: 100% !important;
-            padding: 0 !important;
-          }
-        `}
-      >
+      <div className={embedBlockStyles}>
         {tabsToRender.length === 1 ? (
-          <EmbedTabContent tab={tabsToRender[0]} dataSourceName={dataSourceName} collectionName={collectionName} />
+          <EmbedTabErrorBoundary tabLabel={tabsToRender[0].label}>
+            <EmbedTabContent tab={tabsToRender[0]} dataSourceName={dataSourceName} collectionName={collectionName} />
+          </EmbedTabErrorBoundary>
         ) : (
           <Tabs
             items={tabsToRender.map((tab) => ({
               key: tab.value,
               label: tab.label,
-              children: <EmbedTabContent tab={tab} dataSourceName={dataSourceName} collectionName={collectionName} />,
+              children: (
+                <EmbedTabErrorBoundary tabLabel={tab.label}>
+                  <EmbedTabContent tab={tab} dataSourceName={dataSourceName} collectionName={collectionName} />
+                </EmbedTabErrorBoundary>
+              ),
             }))}
           />
         )}
@@ -125,7 +168,7 @@ const EmbedTabContent: React.FC<{
   dataSourceName?: string;
   collectionName?: string;
 }> = ({ tab, dataSourceName, collectionName }) => {
-  const Comp = useMemo<React.ComponentType<any>>(() => {
+  const Comp = useMemo<React.ComponentType<Record<string, unknown>>>(() => {
     if (tab.Component) return tab.Component;
     if (tab.componentLoader) return React.lazy(tab.componentLoader);
     return () => null;

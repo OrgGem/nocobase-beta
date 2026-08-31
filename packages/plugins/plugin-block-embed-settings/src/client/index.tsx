@@ -1,6 +1,5 @@
 import { Plugin, RemoteSelect } from '@nocobase/client';
 import { EmbedSettingsBlockProvider } from './EmbedSettingsBlockProvider';
-import { HelpVisibilityProvider } from './HelpVisibilityProvider';
 import { EmbedSettingsBlock } from './EmbedSettingsBlock';
 import { embedSettingsBlockSettings } from './schemaSettings';
 import { EmbedSettingsManager } from './EmbedSettingsManager';
@@ -28,7 +27,6 @@ export class PluginBlockEmbedSettingsClient extends Plugin {
 
     // Register component provider for SchemaComponentOptions
     this.app.use(EmbedSettingsBlockProvider);
-    this.app.use(HelpVisibilityProvider);
 
     // Register FlowEngine model
     this.flowEngine.registerModels({

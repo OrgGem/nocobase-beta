@@ -9,9 +9,29 @@
   "version": "1.0.0",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
-  "keywords": ["nocobase", "plugin", "database", "pagination", "index", "sql", "aggregate"],
-  "publishConfig": { "access": "public" },
-  "files": ["dist", "src", "client.js", "client.d.ts", "server.js", "server.d.ts", "client-v2.js", "client-v2.d.ts"],
+  "keywords": [
+    "Data model tools",
+    "nocobase",
+    "plugin",
+    "database",
+    "pagination",
+    "index",
+    "sql",
+    "aggregate"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts"
+  ],
   "peerDependencies": {
     "@nocobase/client-v2": "2.x",
     "@nocobase/database": "2.x",
@@ -21,5 +41,10 @@
     "ahooks": "*",
     "sequelize": "6.x"
   },
-  "nocobase": { "supportedVersions": ["2.x"], "editionLevel": 0 }
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  }
 }

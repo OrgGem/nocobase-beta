@@ -7,7 +7,8 @@ import type {
 } from '../../constants';
 import { SelectorRegistryError } from '../services/errors';
 import type { FeedbackService } from '../services/feedback-service';
-import type { AnyRecord, DatabaseLike, ResolvePipeline } from '../services/resolve-pipeline';
+import type { DatabaseLike, ResolvePipeline } from '../services/resolve-pipeline';
+import { read, toNumber, type AnyRecord } from '../utils/record-helpers';
 
 type ActionContext = {
   request: { body?: unknown };
@@ -23,11 +24,6 @@ export interface ClientActionsDeps {
   pipeline: ResolvePipeline;
   feedback: FeedbackService;
 }
-
-const read = (record: AnyRecord | null | undefined, key: string): unknown => {
-  if (!record) return undefined;
-  return typeof record.get === 'function' ? record.get(key) : record[key];
-};
 
 const bodyOf = (ctx: ActionContext): Record<string, unknown> =>
   ctx.request.body && typeof ctx.request.body === 'object' ? (ctx.request.body as Record<string, unknown>) : {};
@@ -68,7 +64,8 @@ export const createClientActions = (deps: ClientActionsDeps) => {
   };
 
   // Delta sync for client local caches: the client sends the versions it has,
-  // the registry answers only with what changed.
+  // the registry answers only with what changed. Entries are fetched in a
+  // single batch query to avoid N sequential round-trips.
   const bulkLookup = async (ctx: ActionContext) => {
     try {
       const payload = bodyOf(ctx) as unknown as BulkLookupRequestPayload;
@@ -86,20 +83,31 @@ export const createClientActions = (deps: ClientActionsDeps) => {
       }
       const appId = read(app, 'id');
 
+      const items = payload.items.slice(0, 500).filter((item) => item?.elementKey);
+      const keys = items.map((item) => item.elementKey.trim()).filter(Boolean);
+
+      const entries = keys.length
+        ? await deps.database.getRepository('selectorEntries').find({
+            filter: { appId, elementKey: { $in: keys } },
+          })
+        : [];
+      const byKey = new Map<string, AnyRecord>();
+      for (const entry of entries) {
+        const key = String(read(entry, 'elementKey') ?? '');
+        if (key) byKey.set(key, entry);
+      }
+
       const updates: (ResolveResponsePayload & { name?: string | null })[] = [];
       const unknown: string[] = [];
       let unchanged = 0;
 
-      for (const item of payload.items.slice(0, 500)) {
-        if (!item?.elementKey) continue;
-        const entry = await deps.database.getRepository('selectorEntries').findOne({
-          filter: { appId, elementKey: item.elementKey },
-        });
+      for (const item of items) {
+        const entry = byKey.get(item.elementKey.trim());
         if (!entry || read(entry, 'status') === 'disabled') {
           unknown.push(item.elementKey);
           continue;
         }
-        const version = Number(read(entry, 'version') ?? 0);
+        const version = toNumber(read(entry, 'version'));
         if (item.version !== undefined && Number(item.version) === version) {
           unchanged += 1;
           continue;
@@ -114,7 +122,7 @@ export const createClientActions = (deps: ClientActionsDeps) => {
           selectorType: (read(entry, 'selectorType') as ResolveResponsePayload['selectorType']) ?? 'css',
           fallbacks,
           signature: (read(entry, 'signature') as ResolveResponsePayload['signature']) ?? undefined,
-          confidence: Number(read(entry, 'confidence') ?? 0.5),
+          confidence: toNumber(read(entry, 'confidence'), 0.5),
           source: 'registry',
           version,
           status: (read(entry, 'status') as ResolveResponsePayload['status']) ?? 'probation',

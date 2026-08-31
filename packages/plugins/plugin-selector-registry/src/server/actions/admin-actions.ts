@@ -4,6 +4,7 @@ import type { FeedbackService } from '../services/feedback-service';
 import type { AnyRecord, DatabaseLike, ResolvePipeline } from '../services/resolve-pipeline';
 import type { SelectorSettingsService } from '../services/settings-service';
 import { sendError } from './client-actions';
+import { read, toNumber } from '../utils/record-helpers';
 
 type ActionContext = {
   request: { body?: unknown };
@@ -18,11 +19,6 @@ export interface AdminActionsDeps {
   settings: SelectorSettingsService;
   pruneLogs: () => Promise<{ removedResolveLogs: number; removedFeedbacks: number }>;
 }
-
-const read = (record: AnyRecord | null | undefined, key: string): unknown => {
-  if (!record) return undefined;
-  return typeof record.get === 'function' ? record.get(key) : record[key];
-};
 
 const bodyOf = (ctx: ActionContext): Record<string, unknown> =>
   ctx.request.body && typeof ctx.request.body === 'object' ? (ctx.request.body as Record<string, unknown>) : {};
@@ -56,13 +52,17 @@ export const createAdminActions = (deps: AdminActionsDeps) => {
       const feedbacksRepo = deps.database.getRepository('selectorFeedbacks');
       const appsRepo = deps.database.getRepository('selectorApps');
 
-      const [totalEntries, totalApps, byStatus, recentLogs, recentFeedbacks] = await Promise.all([
-        entriesRepo.find({}),
-        appsRepo.find({}),
+      // Aggregation-based stats: use count() and groupBy where supported by the
+      // repository layer instead of loading all rows into memory. The FakeDatabase
+      // used in unit tests implements these methods too so the same code path is
+      // exercised everywhere.
+      const [totalEntries, totalApps, byStatusCounts, recentLogs, recentFeedbacks] = await Promise.all([
+        entriesRepo.count(),
+        appsRepo.count(),
         Promise.all(
           ['probation', 'active', 'degraded', 'quarantined', 'disabled'].map(async (status) => {
-            const rows = await entriesRepo.find({ filter: { status } });
-            return [status, rows.length] as const;
+            const count = await entriesRepo.count({ filter: { status } });
+            return [status, count] as const;
           }),
         ),
         logsRepo.find({ sort: ['-createdAt'], limit: 500 }),
@@ -82,24 +82,25 @@ export const createAdminActions = (deps: AdminActionsDeps) => {
 
       const cacheHits = pathCounts['cache_hit'] ?? 0;
       const lookups = cacheHits + (pathCounts['registry'] ?? 0);
-      const topFailing = [...totalEntries]
-        .map((entry) => ({
-          id: read(entry, 'id'),
-          elementKey: String(read(entry, 'elementKey') ?? ''),
-          name: (read(entry, 'name') as string | null) ?? null,
-          status: String(read(entry, 'status') ?? ''),
-          failCount: Number(read(entry, 'failCount') ?? 0),
-          confidence: Number(read(entry, 'confidence') ?? 0),
-        }))
-        .sort((a, b) => b.failCount - a.failCount)
-        .slice(0, 10);
+
+      // Top failing: fetch only the 10 highest-fail-count entries via sort+limit
+      // instead of loading every entry and sorting in memory.
+      const topFailingRows = await entriesRepo.find({ sort: ['-failCount'], limit: 10 });
+      const topFailing = topFailingRows.map((entry) => ({
+        id: read(entry, 'id'),
+        elementKey: String(read(entry, 'elementKey') ?? ''),
+        name: (read(entry, 'name') as string | null) ?? null,
+        status: String(read(entry, 'status') ?? ''),
+        failCount: toNumber(read(entry, 'failCount')),
+        confidence: toNumber(read(entry, 'confidence')),
+      }));
 
       ctx.body = {
         entries: {
-          total: totalEntries.length,
-          byStatus: Object.fromEntries(byStatus),
+          total: totalEntries,
+          byStatus: Object.fromEntries(byStatusCounts),
         },
-        apps: { total: totalApps.length },
+        apps: { total: totalApps },
         recentResolves: {
           sampled: recentLogs.length,
           byPath: pathCounts,
@@ -165,7 +166,7 @@ export const createAdminActions = (deps: AdminActionsDeps) => {
       const versionsRepo = deps.database.getRepository('selectorVersions');
       const entry = await entriesRepo.findOne({ filterByTk: entryId });
       const target = await versionsRepo.findOne({ filterByTk: versionId });
-      if (!entry || !target || Number(read(target, 'entryId')) !== entryId) {
+      if (!entry || !target || toNumber(read(target, 'entryId')) !== entryId) {
         throw new SelectorRegistryError('NOT_FOUND', 404, 'Entry or version not found.');
       }
 
@@ -177,7 +178,7 @@ export const createAdminActions = (deps: AdminActionsDeps) => {
         filterByTk: versionId,
         values: { status: 'active', rolledBackAt: null },
       });
-      const nextVersion = Number(read(entry, 'version') ?? 1) + 1;
+      const nextVersion = toNumber(read(entry, 'version'), 1) + 1;
       await entriesRepo.update({
         filterByTk: entryId,
         values: {

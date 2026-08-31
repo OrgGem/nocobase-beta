@@ -29,4 +29,6 @@
     "server.d.ts"
   ],
   "license": "Apache-2.0"
+,
+  "keywords": ["Collection fields"]
 }

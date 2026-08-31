@@ -25,12 +25,12 @@ import { AIEmployeesProvider } from '../client-v2/components/AIEmployeesContext'
 import { useT } from './skill-hub/locale';
 import { SkillManager, ExecutionHistory, SkillMetrics, LoopSettings } from './skill-hub';
 
-const OrchestratorSettings: React.FC = () => {
+const OrchestratorSettings: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) => {
   const t = useT();
 
   return (
     <AIEmployeesProvider>
-      <div style={{ padding: '0 24px 24px' }}>
+      <div style={embedded ? undefined : { padding: '0 24px 24px' }}>
         <Tabs
           defaultActiveKey="native-monitor"
           items={[

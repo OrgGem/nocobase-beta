@@ -5,16 +5,17 @@ import { Checkbox, Empty, Space, Typography } from 'antd';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from './locale';
 import { collectEmbeddablePluginTabs } from './EmbedSettingsPluginSelect';
+import type { EmbedSettingsTabSelectProps } from './types';
 
 const { Text } = Typography;
 
-export const EmbedSettingsTabSelect = observer((props: any) => {
+export const EmbedSettingsTabSelect = observer((props: EmbedSettingsTabSelectProps) => {
   const { value, onChange, disabled, ...others } = props;
   const form = useForm();
   const app = useApp();
   const t = useT();
-  const pluginName = form.values?.pluginName;
-  const previousPluginNameRef = useRef(pluginName);
+  const pluginName = form.values?.pluginName as string | undefined;
+  const previousPluginNameRef = useRef<string | undefined>(pluginName);
 
   const options = useMemo(() => {
     return collectEmbeddablePluginTabs(app, pluginName).map((tab) => ({
@@ -24,33 +25,46 @@ export const EmbedSettingsTabSelect = observer((props: any) => {
   }, [app, pluginName]);
 
   useEffect(() => {
-    const clearSelectedTabs = () => {
-      if (!Array.isArray(value) || value.length > 0) {
+    if (!pluginName) {
+      if (Array.isArray(value) && value.length > 0) {
         onChange?.([]);
       }
-    };
-
-    if (!pluginName) {
-      clearSelectedTabs();
       previousPluginNameRef.current = pluginName;
       return;
     }
 
     if (options.length === 0) {
-      clearSelectedTabs();
+      if (Array.isArray(value) && value.length > 0) {
+        onChange?.([]);
+      }
       return;
     }
 
-    if (previousPluginNameRef.current !== pluginName || !Array.isArray(value)) {
-      onChange?.(options.map((option) => option.value));
+    const optionKeys = new Set(options.map((option) => option.value));
+
+    // Plugin changed: preserve existing selection if keys still exist, otherwise select all
+    if (previousPluginNameRef.current !== pluginName) {
       previousPluginNameRef.current = pluginName;
+      if (Array.isArray(value) && value.length > 0) {
+        const preserved = value.filter((key) => optionKeys.has(key));
+        if (preserved.length > 0) {
+          onChange?.(preserved);
+          return;
+        }
+      }
+      onChange?.(options.map((option) => option.value));
       return;
     }
 
-    const validKeys = new Set(options.map((option) => option.value));
-    const nextValue = value.filter((key: string) => validKeys.has(key));
-    if (nextValue.length !== value.length) {
-      onChange?.(nextValue);
+    // Same plugin: filter out invalid keys, select all if no selection yet
+    if (!Array.isArray(value) || value.length === 0) {
+      onChange?.(options.map((option) => option.value));
+      return;
+    }
+
+    const validKeys = value.filter((key: string) => optionKeys.has(key));
+    if (validKeys.length !== value.length) {
+      onChange?.(validKeys);
     }
   }, [onChange, options, pluginName, value]);
 

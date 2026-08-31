@@ -18,6 +18,8 @@
     "client-v2.d.ts"
   ],
   "keywords": [
+    "Collections",
+    "Collection fields",
     "nocobase",
     "nocobase-plugin",
     "s3",
