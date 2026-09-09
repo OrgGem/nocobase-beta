@@ -107,7 +107,7 @@ describe('skill registry artifact builder', () => {
   });
 
   it('rejects a candidate count that leaves no quota for the generated manifest', () => {
-    const files = Array.from({ length: 2000 }, (_, index) => ({
+    const files = Array.from({ length: 10000 }, (_, index) => ({
       path: index === 0 ? 'src/index.py' : `files/${index}.txt`,
       content: Buffer.alloc(0),
     }));

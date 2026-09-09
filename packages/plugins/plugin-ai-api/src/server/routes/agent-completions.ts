@@ -104,6 +104,9 @@ export async function handleAgentCompletions(ctx: Context, plugin: PluginAiApiSe
   }
 
   // ─── Resolve model ─────────────────────────────────────────────────────────
+  // Agent mode runs the AI Employee pipeline, so virtual aliases ("auto") are intentionally
+  // not resolved here: capability-bucket routing is a direct-LLM concept. The model field
+  // selects the concrete model the employee uses.
   const resolved = await resolveModelString(ctx, body.model);
   if (!resolved) {
     ctx.status = 404;

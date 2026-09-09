@@ -7,6 +7,7 @@ import { resolveModelString } from '../utils/resolve-service';
 
 vi.mock('../utils/resolve-service', () => ({
   resolveModelString: vi.fn(),
+  resolveModelReference: vi.fn(),
 }));
 
 interface ModelResult {

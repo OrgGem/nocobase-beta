@@ -20,6 +20,7 @@ import {
   OpenAIToolCallChunk,
 } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { resolveVirtualModel, respondVirtualModelUnavailable } from '../utils/virtual-models';
 import {
   createRequestAbortController,
   isClientDisconnected,
@@ -96,8 +97,17 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
 
   const stream = isStreamingRequested(body.stream);
 
-  // ─── Resolve model string against DB ───
-  const resolved = await resolveModelString(ctx, body.model);
+  // ─── Resolve model string against DB (virtual alias first, then concrete) ───
+  const virtual = await resolveVirtualModel(ctx, body.model, body, 'chat');
+  if (virtual?.status === 'unavailable') {
+    respondVirtualModelUnavailable(ctx, virtual);
+    return;
+  }
+  if (virtual?.status === 'resolved') {
+    ctx.state.aiApiVirtualModel = virtual.virtualModel;
+    ctx.state.aiApiRoutingReason = virtual.reason;
+  }
+  const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model));
   if (!resolved) {
     ctx.status = 404;
     ctx.body = toOpenAIError(
@@ -236,7 +246,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
         chatModel,
         langchainMessages,
         completionId,
-        body.model,
+        `${service.name}/${modelId}`,
         providerRequestParameters,
       );
     } else {
@@ -246,7 +256,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
         chatModel,
         langchainMessages,
         completionId,
-        body.model,
+        `${service.name}/${modelId}`,
         providerRequestParameters,
       );
     }
@@ -722,7 +732,7 @@ function describeImageUrlProblem(imageUrl: unknown): string | undefined {
  * A LangChain message content value: plain text, or an array of content blocks
  * (`{type:'text'}`, `{type:'image_url'}`, ...) for multimodal requests.
  */
-type MessageContent = string | Record<string, unknown>[];
+export type MessageContent = string | Record<string, unknown>[];
 
 /**
  * Normalize an OpenAI `message.content` into something LangChain accepts.
@@ -763,7 +773,7 @@ export function normalizeMessageContent(content: unknown): MessageContent {
  * block (e.g. a `file_url` becomes a `file` block, which may then be converted
  * to images by the PDF processor).
  */
-async function processMessageContentFileBlocks(
+export async function processMessageContentFileBlocks(
   content: unknown,
   ctx: Context,
   plugin: PluginAiApiServer,
@@ -807,7 +817,21 @@ async function processFileBlockChain(
   return next;
 }
 
-const GATEWAY_MANAGED_PARAMETERS = new Set(['model', 'messages', 'prompt', 'tools', 'tool_choice', 'stream', 'n']);
+const GATEWAY_MANAGED_PARAMETERS = new Set([
+  'model',
+  'messages',
+  'prompt',
+  'tools',
+  'tool_choice',
+  'stream',
+  'n',
+  // Responses API specific fields that should not be passed to providers
+  'input',
+  'previous_response_id',
+  'store',
+  'truncation',
+  'metadata',
+]);
 
 export function getProviderRequestParameters(body: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
@@ -836,7 +860,7 @@ export function applyProviderRequestParameters(chatModel: unknown, parameters: R
   model.modelKwargs = { ...modelKwargs, ...parameters };
 }
 
-function bindRequestTools(
+export function bindRequestTools(
   chatModel: any,
   tools: unknown,
   toolChoice: unknown,
@@ -865,7 +889,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function normalizeToolCalls(value: unknown): OpenAIToolCall[] | undefined {
+export function normalizeToolCalls(value: unknown): OpenAIToolCall[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined;
   return value.map((call: any) => ({
     id: String(call.id || ''),
@@ -877,7 +901,7 @@ function normalizeToolCalls(value: unknown): OpenAIToolCall[] | undefined {
   }));
 }
 
-function normalizeToolCallChunks(value: unknown): OpenAIToolCallChunk[] {
+export function normalizeToolCallChunks(value: unknown): OpenAIToolCallChunk[] {
   if (!Array.isArray(value)) return [];
   return value.map((call: any, fallbackIndex) => ({
     index: typeof call.index === 'number' ? call.index : fallbackIndex,

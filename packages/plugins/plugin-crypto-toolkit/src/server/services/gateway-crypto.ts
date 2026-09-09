@@ -3,16 +3,21 @@ import type { Application } from '@nocobase/server';
 import type { Model } from '@nocobase/database';
 import {
   aesGcmDecrypt,
+  aesGcmDecryptFields,
   aesGcmEncrypt,
+  aesGcmEncryptFields,
+  assembleAesContainer,
+  assembleRsaHybridContainer,
   rsaHybridDecrypt,
   rsaHybridEncrypt,
+  rsaHybridEncryptFields,
   type AesSecret,
 } from './crypto-core';
 import { createEnvGetter } from './resolve-env';
 import { decryptAndVerify, encryptAndSign } from './pgp-service';
 
 export type GatewayEncryptionMode = 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
-export type GatewayWireFormat = 'binary' | 'json';
+export type GatewayWireFormat = 'binary' | 'json' | 'hybrid-json';
 
 export interface GatewayEncryptedPayload {
   body: Buffer;
@@ -108,10 +113,7 @@ function tryBase64To32Bytes(raw: string): Buffer | null {
  * `aesSecretEnvVar` (name of an env variable) or `aesSecret` (encrypted at
  * rest via the application AES encryptor, masked in admin responses).
  */
-export async function resolveAesSecret(
-  app: Application,
-  route: { get(name: string): unknown },
-): Promise<AesSecret> {
+export async function resolveAesSecret(app: Application, route: { get(name: string): unknown }): Promise<AesSecret> {
   const getEnv = createEnvGetter(app);
   // A Crypto Toolkit AES key takes precedence: its privateEnvVar holds the
   // 32-byte base64 symmetric secret (or passphrase) in the env.
@@ -329,17 +331,42 @@ function wrapWire(
   return { body: container, contentType: 'application/octet-stream' };
 }
 
+function wrapHybridJson(fields: Record<string, string>, plaintextContentType?: string): GatewayEncryptedPayload {
+  const envelope: Record<string, string> = { ...fields };
+  if (plaintextContentType) {
+    envelope.contentType = plaintextContentType;
+  }
+  return { body: Buffer.from(JSON.stringify(envelope), 'utf8'), contentType: 'application/json' };
+}
+
 export function unwrapWire(raw: Buffer, contentType?: string): { container: Buffer; plaintextContentType?: string } {
   const ct = (contentType ?? '').toLowerCase();
   if (ct.includes('application/json')) {
     try {
-      const parsed = JSON.parse(raw.toString('utf8')) as { ciphertext?: unknown; contentType?: unknown };
-      if (parsed && typeof parsed.ciphertext === 'string') {
+      const parsed = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+      if (parsed && typeof parsed === 'object') {
         const plaintextContentType =
-          typeof parsed.contentType === 'string' && parsed.contentType.trim() !== ''
-            ? parsed.contentType
-            : undefined;
-        return { container: Buffer.from(parsed.ciphertext, 'base64'), plaintextContentType };
+          typeof parsed.contentType === 'string' && parsed.contentType.trim() !== '' ? parsed.contentType : undefined;
+        if (
+          typeof parsed.nonce === 'string' &&
+          typeof parsed.tag === 'string' &&
+          typeof parsed.ciphertext === 'string'
+        ) {
+          // hybrid-json envelope: crypto fields exposed separately.
+          const iv = Buffer.from(parsed.nonce, 'base64');
+          const tag = Buffer.from(parsed.tag, 'base64');
+          const ciphertext = Buffer.from(parsed.ciphertext, 'base64');
+          if (typeof parsed.encryptedKey === 'string') {
+            const wrappedKey = Buffer.from(parsed.encryptedKey, 'base64');
+            return { container: assembleRsaHybridContainer({ wrappedKey, iv, tag, ciphertext }), plaintextContentType };
+          }
+          const salt = typeof parsed.salt === 'string' ? Buffer.from(parsed.salt, 'base64') : undefined;
+          return { container: assembleAesContainer({ iv, tag, ciphertext, salt }), plaintextContentType };
+        }
+        if (typeof parsed.ciphertext === 'string') {
+          // Legacy envelope: { container, encoding, ciphertext }.
+          return { container: Buffer.from(parsed.ciphertext, 'base64'), plaintextContentType };
+        }
       }
     } catch {
       // Not a JSON envelope — fall through and treat the raw bytes as the container.
@@ -363,10 +390,23 @@ export async function encryptGatewayPayload(
 
   if (mode === 'aes-256-gcm') {
     const secret = await resolveAesSecret(app, { get: (n) => (options as Record<string, unknown>)[n] });
+    if (wireFormat === 'hybrid-json') {
+      const parts = aesGcmEncryptFields(plaintext, secret);
+      const fields: Record<string, string> = {
+        nonce: parts.iv.toString('base64'),
+        tag: parts.tag.toString('base64'),
+        ciphertext: parts.ciphertext.toString('base64'),
+      };
+      if (parts.salt) fields.salt = parts.salt.toString('base64');
+      return wrapHybridJson(fields, plaintextContentType);
+    }
     return wrapWire(aesGcmEncrypt(plaintext, secret), wireFormat, 'NCB1', plaintextContentType);
   }
 
   if (mode === 'pgp') {
+    if (wireFormat === 'hybrid-json') {
+      throw new GatewayCryptoError('APIM_CRYPTO_CONFIG', 'hybrid-json wire format is not supported with PGP mode', 400);
+    }
     const recipientPublic = await resolvePgpRecipientPublic(app, options.pgpEncryptKeyName);
     let signerKey: { armored: string; passphrase?: string } | undefined;
     if (options.pgpSignKeyName) {
@@ -382,6 +422,18 @@ export async function encryptGatewayPayload(
 
   if (mode === 'rsa-oaep') {
     const publicKeyPem = await resolveRsaPublicKey(app, options.rsaEncryptKeyName);
+    if (wireFormat === 'hybrid-json') {
+      const parts = rsaHybridEncryptFields(plaintext, publicKeyPem);
+      return wrapHybridJson(
+        {
+          encryptedKey: parts.wrappedKey.toString('base64'),
+          nonce: parts.iv.toString('base64'),
+          tag: parts.tag.toString('base64'),
+          ciphertext: parts.ciphertext.toString('base64'),
+        },
+        plaintextContentType,
+      );
+    }
     return wrapWire(rsaHybridEncrypt(plaintext, publicKeyPem), wireFormat, 'NCR1', plaintextContentType);
   }
 

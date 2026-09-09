@@ -93,7 +93,11 @@ export class FilesystemArtifactStore {
       );
     }
     const destination = this.absolutePath(storageKey);
-    await mkdir(dirname(destination), { recursive: true });
+    try {
+      await mkdir(dirname(destination), { recursive: true });
+    } catch (error) {
+      throw new RegistryError('ARTIFACT_STORAGE_UNAVAILABLE', 503, 'Artifact storage directory is unavailable.');
+    }
     try {
       const existing = await readFile(destination);
       if (sha256(existing) !== digest) {
@@ -110,14 +114,21 @@ export class FilesystemArtifactStore {
     }
 
     const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-    await writeFile(temporary, content, { flag: 'wx' });
+    try {
+      await writeFile(temporary, content, { flag: 'wx' });
+    } catch (error) {
+      if (error instanceof RegistryError) {
+        throw error;
+      }
+      throw new RegistryError('ARTIFACT_STORAGE_UNAVAILABLE', 503, 'Artifact storage write failed.');
+    }
     try {
       await rename(temporary, destination);
     } catch (error) {
       await unlink(temporary).catch(() => undefined);
       const existing = await readFile(destination).catch(() => undefined);
       if (!existing || sha256(existing) !== digest) {
-        throw error;
+        throw new RegistryError('ARTIFACT_STORAGE_UNAVAILABLE', 503, 'Artifact storage rename failed.');
       }
     }
     // Verify the exact destination bytes after the atomic rename. This catches

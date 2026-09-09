@@ -13,7 +13,7 @@ import {
 
 export type { RegistryGitAccessContext } from '../repository-access';
 
-function positiveLimit(value: string | undefined, fallback: number, maximum: number): number {
+function positiveLimit(value: string | undefined, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed > 0 && parsed <= maximum ? parsed : fallback;
 }
@@ -26,15 +26,19 @@ export interface RegistryGitContentLimits {
   maxTreeOutputBytes: number;
 }
 
-const DEFAULT_REGISTRY_GIT_CONTENT_LIMITS: RegistryGitContentLimits = Object.freeze({
-  maxFileBytes: positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES, 10 * 1024 * 1024, 250 * 1024 * 1024),
-  maxTreeEntries: positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_TREE_ENTRIES, 5000, 100_000),
-  maxTreeOutputBytes: positiveLimit(
-    process.env.SKILL_REGISTRY_MAX_SOURCE_TREE_OUTPUT_BYTES,
-    4 * 1024 * 1024,
-    250 * 1024 * 1024,
-  ),
-});
+// Getter-based limits re-read env vars on every access, so runtime settings
+// applied via Skill Registry's applyRuntimeOverrides() take effect without restart.
+const DEFAULT_REGISTRY_GIT_CONTENT_LIMITS: RegistryGitContentLimits = {
+  get maxFileBytes() {
+    return positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES, 100 * 1024 * 1024);
+  },
+  get maxTreeEntries() {
+    return positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_TREE_ENTRIES, 50000);
+  },
+  get maxTreeOutputBytes() {
+    return positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_TREE_OUTPUT_BYTES, 64 * 1024 * 1024);
+  },
+};
 
 export interface RegistryGitTreeEntry {
   type: 'blob' | 'tree';
@@ -104,6 +108,17 @@ export class RegistryGitFileNotFoundError extends Error {
   constructor() {
     super('Git file was not found at the pinned commit.');
     this.name = 'RegistryGitFileNotFoundError';
+  }
+}
+
+export const REGISTRY_GIT_COMMAND_FAILED = 'REGISTRY_GIT_COMMAND_FAILED';
+
+export class RegistryGitCommandError extends Error {
+  readonly code = REGISTRY_GIT_COMMAND_FAILED;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'RegistryGitCommandError';
   }
 }
 
@@ -203,7 +218,7 @@ function runGitBuffer(localPath: string, args: string[], maximumBytes: number, t
           reject(new RegistryGitFileNotFoundError());
           return;
         }
-        reject(new Error(`git command failed: ${stderr.trim() || String(code)}`));
+        reject(new RegistryGitCommandError(`git command failed: ${stderr.trim() || String(code)}`));
         return;
       }
       resolve(Buffer.concat(chunks, outputBytes));
@@ -290,7 +305,7 @@ class GitContentService {
       .toString('utf8')
       .trim();
     if (!/^[a-f0-9]{40,64}$/i.test(result)) {
-      throw new Error('Git reference did not resolve to a commit SHA');
+      throw new RegistryGitCommandError('Git reference did not resolve to a commit SHA');
     }
     return result.toLowerCase();
   }
@@ -383,7 +398,7 @@ class GitContentService {
       child.once('spawn', () => resolve(child.stdout));
       child.once('close', (code) => {
         if (code !== 0) {
-          child.stdout.destroy(new Error(`git archive failed: ${stderr.trim() || String(code)}`));
+          child.stdout.destroy(new RegistryGitCommandError(`git archive failed: ${stderr.trim() || String(code)}`));
         }
       });
     });
@@ -442,7 +457,7 @@ class GitContentService {
   private assertCommitSha(value: string): string {
     const normalized = validateRef(value);
     if (!/^[a-f0-9]{40,64}$/i.test(normalized)) {
-      throw new Error('Registry reads require a full commit SHA');
+      throw new RegistryGitCommandError('Registry reads require a full commit SHA');
     }
     return normalized.toLowerCase();
   }

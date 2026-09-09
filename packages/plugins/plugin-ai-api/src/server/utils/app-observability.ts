@@ -48,7 +48,7 @@ function safely(ctx: Context, callback: () => void): void {
 export function startAiApiObservation(
   ctx: Context,
   input: {
-    service: 'llm.chat' | 'llm.agent' | 'llm.completion' | 'llm.embedding';
+    service: 'llm.chat' | 'llm.agent' | 'llm.completion' | 'llm.embedding' | 'llm.responses';
     operation: string;
     streaming: boolean;
     model?: string;

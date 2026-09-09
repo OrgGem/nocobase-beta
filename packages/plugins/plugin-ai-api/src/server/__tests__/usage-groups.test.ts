@@ -130,6 +130,102 @@ describe('AI API usage groups', () => {
     expect(group.allowedModels).toEqual(['svc/model-a']);
   });
 
+  it('rejects adding a member to the default group via the beforeSave guard', async () => {
+    // Mirror the plugin.ts aiApiGroupMembers.beforeSave hook: adding a member to the
+    // default group is rejected because the default group is a fallback, not a target.
+    const defaultGroup = await db.getRepository('aiApiUsageGroups').create({
+      values: {
+        name: 'Default',
+        isDefault: true,
+        quotaMode: 'per_user',
+        rateLimitPerMinute: 60,
+        enabled: false,
+        periodType: 'monthly',
+        timezone: 'UTC',
+        currency: 'USD',
+        rejectUnpricedModel: true,
+        missingUsageBehavior: 'use_reserved',
+        contextOverflowBehavior: 'reject',
+      },
+    });
+
+    db.on('aiApiGroupMembers.beforeSave', async (model) => {
+      const targetGroupId = model.get('groupId');
+      if (!targetGroupId) return;
+      const targetGroup = await db.getRepository('aiApiUsageGroups').findOne({ filterByTk: targetGroupId });
+      if (targetGroup?.get('isDefault')) {
+        throw new Error('Cannot add members to the default group.');
+      }
+    });
+
+    await expect(
+      db.getRepository('aiApiGroupMembers').create({ values: { groupId: defaultGroup.get('id'), userId: 7 } }),
+    ).rejects.toThrow('Cannot add members to the default group');
+  });
+
+  it('drops members of a deleted group so they fall back to the default group', async () => {
+    // Mirror the plugin.ts aiApiUsageGroups.beforeDestroy hook: deleting a non-default
+    // group destroys its member rows, and affected users resolve to the default group
+    // implicitly instead of being reassigned to an explicit default membership.
+    await db.getRepository('aiApiUsageGroups').create({
+      values: {
+        name: 'Default',
+        isDefault: true,
+        quotaMode: 'per_user',
+        rateLimitPerMinute: 60,
+        enabled: false,
+        periodType: 'monthly',
+        timezone: 'UTC',
+        currency: 'USD',
+        rejectUnpricedModel: true,
+        missingUsageBehavior: 'use_reserved',
+        contextOverflowBehavior: 'reject',
+      },
+    });
+    const custom = await db.getRepository('aiApiUsageGroups').create({
+      values: {
+        name: 'Pro',
+        isDefault: false,
+        quotaMode: 'share',
+        rateLimitPerMinute: 120,
+        enabled: true,
+        periodType: 'monthly',
+        timezone: 'UTC',
+        currency: 'USD',
+        rejectUnpricedModel: true,
+        missingUsageBehavior: 'use_reserved',
+        contextOverflowBehavior: 'reject',
+      },
+    });
+    await db.getRepository('aiApiGroupMembers').create({
+      values: { groupId: custom.get('id'), userId: 55 },
+    });
+
+    db.on('aiApiUsageGroups.beforeDestroy', async (model, options) => {
+      if (model.get('isDefault')) {
+        throw new Error('The default usage group cannot be deleted.');
+      }
+      const members = await db.getRepository('aiApiGroupMembers').find({
+        filter: { groupId: model.get('id') },
+        transaction: options?.transaction,
+      });
+      for (const member of members) {
+        await db.getRepository('aiApiGroupMembers').destroy({
+          filterByTk: member.get('id'),
+          transaction: options?.transaction,
+        });
+      }
+    });
+
+    await db.getRepository('aiApiUsageGroups').destroy({ filterByTk: custom.get('id') });
+
+    const remaining = await db.getRepository('aiApiGroupMembers').findOne({ filter: { userId: 55 } });
+    expect(remaining).toBeNull();
+    // With no explicit membership, the user now resolves to the default group.
+    const resolved = await resolveUserGroup(context(), 55);
+    expect(resolved.name).toBe('Default');
+    expect(resolved.isDefault).toBe(true);
+  });
   it('drops non-string entries from the access lists', async () => {
     const custom = await db.getRepository('aiApiUsageGroups').create({
       values: {

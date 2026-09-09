@@ -22,11 +22,13 @@ export class MssqlRepository<
   constructor(collection: Collection) {
     super(collection);
 
-    // Initialize MSSQL-specific cursor builder
+    // Initialize MSSQL-specific cursor builder (pass schema so OBJECT_ID() can resolve non-default schemas)
+    const modelOptions = this.model.options as { schema?: string };
     this.mssqlCursorBuilder = new MssqlSmartCursorBuilder(
-      (this as any).database.sequelize,
-      (this as any).model.tableName,
+      this.database.sequelize,
+      this.model.tableName,
       collection,
+      modelOptions?.schema,
     );
   }
 
@@ -51,7 +53,7 @@ export class MssqlRepository<
   ) {
     return await this.mssqlCursorBuilder.chunk({
       ...options,
-      find: (this as any).find.bind(this),
+      find: this.find.bind(this),
     });
   }
 }

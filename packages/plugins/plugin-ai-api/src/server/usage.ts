@@ -7,6 +7,7 @@ export type Usage = {
   completion_tokens: number | null;
   total_tokens: number | null;
   prompt_cache_tokens?: number | null;
+  reasoning_tokens?: number | null;
 };
 
 export type AiApiAuthType = 'apiKey' | 'bearer' | 'oidc' | 'unknown';
@@ -39,6 +40,8 @@ interface AiApiContextState {
   currentUser?: { id?: string | number | bigint };
   oauthPrincipal?: OAuthPrincipal;
   aiApiLlmBilling?: LlmBillingState;
+  aiApiVirtualModel?: string;
+  aiApiRoutingReason?: string;
 }
 
 function getAiApiState(ctx: Context): AiApiContextState {
@@ -76,6 +79,21 @@ function extractPromptCacheTokens(source: Record<string, unknown>): number | nul
   return null;
 }
 
+function extractReasoningTokens(source: Record<string, unknown>): number | null {
+  const detailCandidates = [
+    source.output_token_details,
+    source.output_tokens_details,
+    source.completion_tokens_details,
+  ];
+  for (const details of detailCandidates) {
+    if (!details || typeof details !== 'object') continue;
+    const record = details as Record<string, unknown>;
+    const value = normalizeTokenCount(record.reasoning ?? record.reasoning_tokens);
+    if (value !== null) return value;
+  }
+  return normalizeTokenCount(source.reasoning_tokens ?? source.reasoningTokens);
+}
+
 export function normalizeUsage(value: unknown): Usage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const source = value as Record<string, unknown>;
@@ -97,6 +115,7 @@ export function normalizeUsage(value: unknown): Usage | undefined {
     // usage once and hand the result to setAiApiUsageResult, which normalizes
     // again — an already-extracted prompt_cache_tokens must survive that pass.
     prompt_cache_tokens: extractPromptCacheTokens(source) ?? normalizeTokenCount(source.prompt_cache_tokens),
+    reasoning_tokens: extractReasoningTokens(source) ?? normalizeTokenCount(source.reasoning_tokens),
   };
 }
 
@@ -180,7 +199,11 @@ export async function startUsageRecord(
     values: {
       requestId,
       userId,
-      roleName: state.currentRole || state.currentRoles?.[0] || 'unknown',
+      // When several roles granted access (union semantics), record all of them so the
+      // audit trail shows the full set, not just the first role in the list.
+      roleName: state.currentRoles?.length
+        ? (state.currentRoles as string[]).join(',')
+        : state.currentRole || 'unknown',
       authType: state.aiApiAuthType || (oauth ? 'oidc' : 'unknown'),
       oauthClientId: oauth?.clientId,
       oauthSubject: oauth?.subject,
@@ -195,7 +218,7 @@ export async function startUsageRecord(
         messageCount: messages?.length,
         promptCount,
         embeddingInputCount,
-        requestedMaxTokens: body.max_completion_tokens ?? body.max_tokens,
+        requestedMaxTokens: body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens,
       },
     },
   });
@@ -242,6 +265,10 @@ export async function finishUsageRecord(ctx: Context, id: unknown, startedAt: nu
     responseMetadata: {
       usageSource: usageResult.source,
       ...(gatewayResponseId ? { gatewayResponseId } : {}),
+      // When the request went through a virtual alias, keep both the alias and why
+      // it routed there; resolvedModel (from billing state) already holds the concrete model.
+      ...(state.aiApiVirtualModel ? { virtualModel: state.aiApiVirtualModel } : {}),
+      ...(state.aiApiRoutingReason ? { routingReason: state.aiApiRoutingReason } : {}),
     },
   };
   await ctx.db.getRepository('aiApiUsageRecords').update({ filterByTk: id, values });

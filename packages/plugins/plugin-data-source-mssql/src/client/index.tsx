@@ -8,13 +8,12 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import PluginDataSourceManagerClient from "@nocobase/plugin-data-source-manager";
+import PluginDataSourceManagerClient from '@nocobase/plugin-data-source-manager';
 import { MssqlConfigForm } from './components/MssqlConfigForm';
 import { MssqlDeleteCollection } from './components/MssqlDeleteCollection';
 
 export class PluginDataSourceMssqlClient extends Plugin {
   async load() {
-    console.log('[MSSQL Plugin] Client loading...');
     const manager = this.app.pm.get(PluginDataSourceManagerClient);
 
     manager.registerType('mssql', {
@@ -32,4 +31,3 @@ export class PluginDataSourceMssqlClient extends Plugin {
 }
 
 export default PluginDataSourceMssqlClient;
-

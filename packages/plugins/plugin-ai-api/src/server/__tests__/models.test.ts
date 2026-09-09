@@ -9,7 +9,7 @@
 
 import { Context } from '@nocobase/actions';
 import { describe, expect, it, vi } from 'vitest';
-import { buildModelObject, handleGetModel, handleListModels } from '../routes/models';
+import { buildModelObject, buildVirtualModelObject, handleGetModel, handleListModels } from '../routes/models';
 
 const CREATED = 1_700_000_000;
 
@@ -92,6 +92,26 @@ describe('buildModelObject', () => {
     expect(buildModelObject('svc/m', CREATED, 'Svc', { enabled: false }).active).toBe(false);
     // Override present with enabled undefined → treated as active.
     expect(buildModelObject('svc/m', CREATED, 'Svc', { contextWindow: 10 }).active).toBe(true);
+  });
+});
+
+describe('buildVirtualModelObject', () => {
+  it('surfaces the endpoint family of an alias', () => {
+    expect(
+      buildVirtualModelObject(
+        {
+          name: 'embed-auto',
+          mode: 'embedding',
+          fallbackModel: 'openai/text-embedding-3-small',
+        },
+        CREATED,
+      ),
+    ).toMatchObject({
+      id: 'embed-auto',
+      object: 'model',
+      virtual: true,
+      mode: 'embedding',
+    });
   });
 });
 

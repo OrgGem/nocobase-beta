@@ -7,6 +7,11 @@ export interface RegistryRuntimeOverrides {
   publicEnabled?: boolean;
   maxSourceItems?: number;
   maxSourceFileBytes?: number;
+  maxSourceTreeEntries?: number;
+  maxSourceTreeOutputBytes?: number;
+  maxFiles?: number;
+  maxExpandedBytes?: number;
+  maxArtifactBytes?: number;
   downloadConcurrencyPerIp?: number;
   downloadConcurrencyGlobal?: number;
   downloadResponseTimeoutMs?: number;
@@ -55,11 +60,32 @@ export class RegistrySettingsService {
       overrides,
       effective: {
         publicEnabled,
-        maxSourceItems: integerSetting(overrides.maxSourceItems, 'SKILL_REGISTRY_MAX_SOURCE_ITEMS', 1000),
+        maxSourceItems: integerSetting(overrides.maxSourceItems, 'SKILL_REGISTRY_MAX_SOURCE_ITEMS', 5000),
         maxSourceFileBytes: integerSetting(
           overrides.maxSourceFileBytes,
           'SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES',
-          10 * 1024 * 1024,
+          100 * 1024 * 1024,
+        ),
+        maxSourceTreeEntries: integerSetting(
+          overrides.maxSourceTreeEntries,
+          'SKILL_REGISTRY_MAX_SOURCE_TREE_ENTRIES',
+          50000,
+        ),
+        maxSourceTreeOutputBytes: integerSetting(
+          overrides.maxSourceTreeOutputBytes,
+          'SKILL_REGISTRY_MAX_SOURCE_TREE_OUTPUT_BYTES',
+          64 * 1024 * 1024,
+        ),
+        maxFiles: integerSetting(overrides.maxFiles, 'SKILL_REGISTRY_MAX_FILES', 10000),
+        maxExpandedBytes: integerSetting(
+          overrides.maxExpandedBytes,
+          'SKILL_REGISTRY_MAX_EXPANDED_BYTES',
+          1024 * 1024 * 1024,
+        ),
+        maxArtifactBytes: integerSetting(
+          overrides.maxArtifactBytes,
+          'SKILL_REGISTRY_MAX_ARTIFACT_BYTES',
+          500 * 1024 * 1024,
         ),
         downloadConcurrencyPerIp: integerSetting(
           overrides.downloadConcurrencyPerIp,
@@ -95,6 +121,11 @@ export class RegistrySettingsService {
     const environmentNames: Partial<Record<keyof RegistryRuntimeOverrides, string>> = {
       maxSourceItems: 'SKILL_REGISTRY_MAX_SOURCE_ITEMS',
       maxSourceFileBytes: 'SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES',
+      maxSourceTreeEntries: 'SKILL_REGISTRY_MAX_SOURCE_TREE_ENTRIES',
+      maxSourceTreeOutputBytes: 'SKILL_REGISTRY_MAX_SOURCE_TREE_OUTPUT_BYTES',
+      maxFiles: 'SKILL_REGISTRY_MAX_FILES',
+      maxExpandedBytes: 'SKILL_REGISTRY_MAX_EXPANDED_BYTES',
+      maxArtifactBytes: 'SKILL_REGISTRY_MAX_ARTIFACT_BYTES',
       downloadConcurrencyPerIp: 'SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_PER_IP',
       downloadConcurrencyGlobal: 'SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_GLOBAL',
       downloadResponseTimeoutMs: 'SKILL_REGISTRY_DOWNLOAD_RESPONSE_TIMEOUT_MS',

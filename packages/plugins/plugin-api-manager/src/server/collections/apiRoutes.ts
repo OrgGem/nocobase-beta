@@ -169,6 +169,7 @@ export default defineCollection({
         enum: [
           { value: 'binary', label: 'Binary' },
           { value: 'json', label: 'JSON' },
+          { value: 'hybrid-json', label: 'Hybrid JSON' },
         ],
       },
     },

@@ -16,6 +16,7 @@ import {
   toOpenAIUsageChunk,
 } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { resolveVirtualModel, respondVirtualModelUnavailable } from '../utils/virtual-models';
 import { enforceModelAccess } from '../utils/user-permissions';
 import {
   createRequestAbortController,
@@ -70,7 +71,16 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
   const stream = isStreamingRequested(body.stream);
 
   // ─── Resolve model string against DB ───
-  const resolved = await resolveModelString(ctx, body.model);
+  const virtual = await resolveVirtualModel(ctx, body.model, body, 'chat');
+  if (virtual?.status === 'unavailable') {
+    respondVirtualModelUnavailable(ctx, virtual);
+    return;
+  }
+  if (virtual?.status === 'resolved') {
+    ctx.state.aiApiVirtualModel = virtual.virtualModel;
+    ctx.state.aiApiRoutingReason = virtual.reason;
+  }
+  const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model));
   if (!resolved) {
     ctx.status = 404;
     ctx.body = toOpenAIError(
@@ -124,7 +134,8 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
 
     if (body.temperature !== undefined) modelOptions.temperature = body.temperature;
     if (body.top_p !== undefined) modelOptions.topP = body.top_p;
-    if (body.max_tokens !== undefined) modelOptions.maxTokens = body.max_tokens;
+    if (body.max_completion_tokens !== undefined) modelOptions.maxTokens = body.max_completion_tokens;
+    else if (body.max_tokens !== undefined) modelOptions.maxTokens = body.max_tokens;
     if (body.stop !== undefined) modelOptions.stop = body.stop;
 
     // ─── Convert prompt to message tuple ───
@@ -142,6 +153,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
       serviceName: service.name,
       modelId,
       messages,
+      maxCompletionTokens: body.max_completion_tokens,
       maxTokens: body.max_tokens,
     });
     await prepareLlmBilling(ctx, resolved);
@@ -169,7 +181,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
         chatModel,
         langchainMessages,
         completionId,
-        body.model,
+        `${service.name}/${modelId}`,
         body.stream_options,
         providerRequestParameters,
       );
@@ -179,7 +191,7 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
         chatModel,
         langchainMessages,
         completionId,
-        body.model,
+        `${service.name}/${modelId}`,
         providerRequestParameters,
       );
     }

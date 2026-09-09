@@ -213,28 +213,30 @@ describe('GitManagerSourceProvider', () => {
       '---\nname: gen-doc-ppt-master\ndescription: Generate documents\n---\nFollow these instructions.\n',
     );
     const helperContent = Buffer.from('# helper utility\n');
-    const listTree = vi.fn().mockImplementation(async ({ recursive, rootPath }: { recursive: boolean; rootPath: string }) => {
-      // The non-recursive call fetches SKILL.md size; the recursive call collects all skill files.
-      if (rootPath === '.kiro/gen-doc-ppt-master') {
-        if (recursive) {
-          return [
-            { type: 'blob', path: 'SKILL.md', size: markdown.length },
-            { type: 'blob', path: 'helper.py', size: helperContent.length },
-          ];
+    const listTree = vi
+      .fn()
+      .mockImplementation(async ({ recursive, rootPath }: { recursive: boolean; rootPath: string }) => {
+        // The non-recursive call fetches SKILL.md size; the recursive call collects all skill files.
+        if (rootPath === '.kiro/gen-doc-ppt-master') {
+          if (recursive) {
+            return [
+              { type: 'blob', path: 'SKILL.md', size: markdown.length },
+              { type: 'blob', path: 'helper.py', size: helperContent.length },
+            ];
+          }
+          return [{ type: 'blob', path: 'SKILL.md', size: markdown.length }];
         }
-        return [{ type: 'blob', path: 'SKILL.md', size: markdown.length }];
-      }
-      // Discovery calls at the root level.
-      return [{ type: 'tree', path: 'gen-doc-ppt-master', size: 0 }];
-    });
-    const readFile = vi.fn().mockImplementation(async ({ filePath }: { filePath: string }) => {
-        if (filePath.endsWith('skills.json')) {
-          throw Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' });
-        }
-        if (filePath.endsWith('SKILL.md')) return markdown;
-        if (filePath.endsWith('helper.py')) return helperContent;
-        throw new Error(`Unexpected readFile: ${filePath}`);
+        // Discovery calls at the root level.
+        return [{ type: 'tree', path: 'gen-doc-ppt-master', size: 0 }];
       });
+    const readFile = vi.fn().mockImplementation(async ({ filePath }: { filePath: string }) => {
+      if (filePath.endsWith('skills.json')) {
+        throw Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' });
+      }
+      if (filePath.endsWith('SKILL.md')) return markdown;
+      if (filePath.endsWith('helper.py')) return helperContent;
+      throw new Error(`Unexpected readFile: ${filePath}`);
+    });
     const provider = new GitManagerSourceProvider({
       get: () => ({
         registryContentService: { resolveCommit: vi.fn().mockResolvedValue(commitA), listTree, readFile },
@@ -254,7 +256,9 @@ describe('GitManagerSourceProvider', () => {
     // Auto-detected entrypoint from helper.py since no explicit codeFile was declared.
     expect(candidate.manifest.runtime).toEqual({ kind: 'python', entrypoint: 'helper.py' });
     expect(candidate.files.map((file) => file.path).sort()).toEqual(['SKILL.md', 'helper.py']);
-    expect(listTree).toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/gen-doc-ppt-master', recursive: true }));
+    expect(listTree).toHaveBeenCalledWith(
+      expect.objectContaining({ rootPath: '.kiro/gen-doc-ppt-master', recursive: true }),
+    );
     expect(listTree).not.toHaveBeenCalledWith(expect.objectContaining({ rootPath: '.kiro/skills/gen-doc-ppt-master' }));
   });
 
@@ -406,7 +410,7 @@ describe('GitManagerSourceProvider', () => {
     expect(readFile).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects bytes that do not match the pinned Git tree size', async () => {
+  it('accepts file bytes that differ from pinned tree size when smudge filters transform content', async () => {
     const provider = new GitManagerSourceProvider({
       get: () => ({
         registryContentService: {
@@ -417,22 +421,23 @@ describe('GitManagerSourceProvider', () => {
             .mockRejectedValueOnce(
               Object.assign(new Error('skills.json is absent'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' }),
             )
+            .mockResolvedValueOnce(Buffer.from('more than one byte'))
             .mockResolvedValueOnce(Buffer.from('more than one byte')),
         },
       }),
     });
 
-    await expect(
-      provider.getCandidate(
-        {
-          id: 'source-1',
-          providerType: 'git-manager',
-          namespace: 'acme',
-          providerConfig: { repositoryId: 9, ref: 'refs/heads/main' },
-        },
-        'report',
-      ),
-    ).rejects.toMatchObject({ code: 'SOURCE_CONTENT_CHANGED', status: 409 });
+    const candidate = await provider.getCandidate(
+      {
+        id: 'source-1',
+        providerType: 'git-manager',
+        namespace: 'acme',
+        providerConfig: { repositoryId: 9, ref: 'refs/heads/main' },
+      },
+      'report',
+    );
+    expect(candidate.files).toHaveLength(1);
+    expect(candidate.files[0].path).toBe('SKILL.md');
   });
 
   it('forwards the requesting user to Git Manager and maps repository scope denial to a stable 403', async () => {

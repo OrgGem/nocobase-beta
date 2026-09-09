@@ -15,9 +15,13 @@ import type { Context } from '@nocobase/actions';
 import { Op, literal, type Dialect } from 'sequelize';
 import fs from 'fs';
 import path from 'path';
+import { formatDateTimeParameter, quoteIdentifier, quoteUnicodeStringLiteral } from '../security/sql-quote';
 
+// Escape the LIKE wildcard chars (% and _) plus the escape char itself (\) so a literal
+// backslash in user input is not misparsed as escaping the following char. Order matters:
+// escape the escape character first.
 function escapeLike(value: string) {
-  return value.replace(/[_%]/g, '\\$&');
+  return value.replace(/[\\_%]/g, '\\$&');
 }
 
 const MSSQL_DRIVER_NAME = 'tedious';
@@ -64,13 +68,14 @@ const resolveMssqlDriverPath = () => {
     const resolved = require.resolve(MSSQL_DRIVER_NAME);
     return resolved;
   } catch (error) {
-    console.error(`[MSSQL] Failed to resolve tedious driver. Error: ${error.message}`);
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[MSSQL] Failed to resolve tedious driver. Error: ${message}\n`);
   }
 
   return undefined;
 };
 
-const formatDatabaseOptions = (options: MssqlDataSourceOptions = {}) => {
+export const formatDatabaseOptions = (options: MssqlDataSourceOptions = {}) => {
   const {
     host,
     port,
@@ -93,9 +98,15 @@ const formatDatabaseOptions = (options: MssqlDataSourceOptions = {}) => {
   const mergedDialectOptions = {
     ...(dialectOptions || {}),
     options: {
+      // enableArithAbort: ON is the recommended SQL Server session setting. Leaving it
+      // OFF (tedious default) makes the optimizer treat indexed computed columns /
+      // indexed views as unusable and can cause inconsistent behavior for parametrized
+      // queries. A user-supplied dialectOptions.options.enableArithAbort still wins.
+      enableArithAbort: true,
       ...(dialectOptions?.options || {}),
       ...(encrypt === undefined ? {} : { encrypt }),
-      // Use UTC to avoid timezone offset format issues with DATETIME columns
+      // useUTC is intentionally forced ON (placed after the user options spread so it cannot be
+      // overridden): disabling it reintroduces timezone-offset format errors on DATETIME columns.
       useUTC: true,
       // Timeout tuning: tedious defaults to 15s which is too low for large tables
       requestTimeout: dialectOptions?.options?.requestTimeout ?? 120000, // 2 min (default: 15s)
@@ -209,14 +220,15 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
 
     /**
      * Build a safe CONTAINS() literal.
-     * The column name comes from the model definition (not user input) so bracket-quoting is safe.
-     * The search value is escaped via sequelize.escape() to prevent SQL injection.
+     * The column name is bracket-quoted via quoteIdentifier (escaping embedded `]` so a crafted
+     * column name cannot terminate the identifier), and the search value is rendered as a
+     * Unicode string literal (N'...') so a quote in it cannot break out of the CONTAINS term.
      */
     const buildContains = (fieldName: string, tableName: string, value: string, negate = false) => {
       // Use prefix search (*) for intuitive search feel; wrap in double-quotes and escape internal quotes
       const ftsValue = '"' + value.trim().replace(/"/g, '""') + '*"';
-      const escapedFts = db.sequelize.escape(ftsValue);
-      const expr = `CONTAINS([${fieldName}], ${escapedFts})`;
+      const escapedFts = quoteUnicodeStringLiteral(ftsValue);
+      const expr = `CONTAINS(${quoteIdentifier(fieldName)}, ${escapedFts})`;
       return literal(negate ? `NOT (${expr})` : expr);
     };
 
@@ -308,8 +320,9 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
         }
 
         if (dateValue && !isNaN(dateValue.getTime())) {
-          // Format: 'YYYY-MM-DD HH:mm:ss.SSS' — MSSQL native datetime format
-          instance.dataValues[key] = dateValue.toISOString().replace('T', ' ').replace('Z', '');
+          // Format: 'YYYY-MM-DD HH:mm:ss.SSS[SSSS]' — MSSQL native datetime format, preserving
+          // sub-millisecond precision from tedious's nanosecondsDelta when present.
+          instance.dataValues[key] = formatDateTimeParameter(dateValue);
         }
       }
     });
@@ -348,7 +361,10 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       const total = tables.length;
       let loaded = 0;
 
-      // Pre-load all primary key info in one query before parallel introspection
+      // Pre-load all column metadata + primary keys in one bulk query each before the
+      // parallel introspection loop, so per-table describeTable()/sys.indexes calls are
+      // served from memory (anti-N+1).
+      await (this.introspector as MssqlIntrospector).preloadAllColumns(schema);
       await (this.introspector as MssqlIntrospector).preloadAllPrimaryKeys(schema);
 
       // Pre-load FTS index info, then register smart text operators (CONTAINS vs LIKE routing)
@@ -437,7 +453,7 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
    * Return public connection options (safe to expose to client).
    */
   publicOptions() {
-    const opts = (this as any).options || {};
+    const opts = (this.options as MssqlDataSourceOptions) || {};
     return {
       host: opts.host,
       port: opts.port,

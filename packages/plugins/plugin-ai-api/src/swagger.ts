@@ -181,6 +181,145 @@ export default {
         },
       },
     },
+    '/ai-llm/v1/responses': {
+      post: {
+        tags: ['ai-llm'],
+        summary: 'Create a model response',
+        description:
+          'OpenAI Responses API endpoint. Supports text/image/file inputs, function calling, streaming, reasoning output when exposed by the provider, and owner-scoped previous_response_id chains. Built-in web_search and file_search tools are not supported.',
+        security: [{ BearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  model: { type: 'string', example: 'openai/gpt-4o' },
+                  input: {
+                    oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'object' } }],
+                  },
+                  instructions: { type: 'string' },
+                  max_output_tokens: { type: 'integer' },
+                  temperature: { type: 'number', minimum: 0, maximum: 2 },
+                  top_p: { type: 'number', minimum: 0, maximum: 1 },
+                  tools: { type: 'array', description: 'Function tools only', items: { type: 'object' } },
+                  tool_choice: { oneOf: [{ type: 'string' }, { type: 'object' }] },
+                  metadata: { type: 'object' },
+                  previous_response_id: { type: 'string' },
+                  store: { type: 'boolean', default: true },
+                  stream: { type: 'boolean', default: false },
+                  truncation: { type: 'string', enum: ['auto', 'disabled'], default: 'disabled' },
+                  service_tier: { type: 'string', enum: ['auto', 'default', 'flex', 'scale', 'priority'] },
+                  prompt_cache_key: { type: 'string' },
+                  prompt_cache_retention: { type: 'string', enum: ['in_memory', '24h'], nullable: true },
+                  reasoning: { type: 'object' },
+                  safety_identifier: { type: 'string', maxLength: 64 },
+                  parallel_tool_calls: { type: 'boolean', default: true },
+                  text: { type: 'object' },
+                },
+                required: ['model', 'input'],
+              },
+            },
+          },
+        },
+        responses: {
+          200: {
+            description: 'OpenAI Response object, or Responses API SSE events when stream=true',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string', example: 'resp_abc123' },
+                    object: { type: 'string', const: 'response' },
+                    created_at: { type: 'integer' },
+                    completed_at: { type: 'integer', nullable: true },
+                    model: { type: 'string' },
+                    status: {
+                      type: 'string',
+                      enum: ['completed', 'failed', 'in_progress', 'cancelled', 'queued', 'incomplete'],
+                    },
+                    output_text: { type: 'string' },
+                    output: { type: 'array', items: { type: 'object' } },
+                    usage: {
+                      type: 'object',
+                      properties: {
+                        input_tokens: { type: 'integer' },
+                        input_tokens_details: {
+                          type: 'object',
+                          properties: { cached_tokens: { type: 'integer' } },
+                        },
+                        output_tokens: { type: 'integer' },
+                        output_tokens_details: {
+                          type: 'object',
+                          properties: { reasoning_tokens: { type: 'integer' } },
+                        },
+                        total_tokens: { type: 'integer' },
+                      },
+                    },
+                    metadata: { type: 'object', nullable: true },
+                    previous_response_id: { type: 'string', nullable: true },
+                    truncation: { type: 'string', enum: ['auto', 'disabled'] },
+                    error: { type: 'object', nullable: true },
+                  },
+                },
+              },
+              'text/event-stream': { schema: { type: 'string' } },
+            },
+          },
+          400: { description: 'Invalid request or unsupported tool' },
+          404: { description: 'Model or previous response not found' },
+          429: { description: 'Rate limit or quota exceeded' },
+        },
+      },
+    },
+    '/ai-llm/v1/responses/{id}': {
+      get: {
+        tags: ['ai-llm'],
+        summary: 'Retrieve a stored model response',
+        description:
+          'Returns a non-expired response created by the authenticated user. Responses created with store=false cannot be retrieved.',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', example: 'resp_abc123' },
+          },
+          {
+            name: 'stream',
+            in: 'query',
+            schema: { type: 'boolean', default: false },
+            description: 'Only false is currently supported; stream retrieval is rejected.',
+          },
+        ],
+        responses: {
+          200: { description: 'Stored OpenAI Response object' },
+          400: { description: 'Unsupported retrieve expansion or streaming parameter' },
+          404: { description: 'Response not found, expired, or owned by another user' },
+        },
+      },
+      delete: {
+        tags: ['ai-llm'],
+        summary: 'Delete a stored model response',
+        description: 'Deletes a stored response owned by the authenticated user.',
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', example: 'resp_abc123' },
+          },
+        ],
+        responses: {
+          204: { description: 'Response deleted' },
+          404: { description: 'Response not found, expired, or owned by another user' },
+        },
+      },
+    },
     '/ai-llm/v1/embeddings': {
       post: {
         tags: ['ai-llm'],

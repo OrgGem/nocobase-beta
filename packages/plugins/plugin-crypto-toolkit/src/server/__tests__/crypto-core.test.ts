@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   aesGcmDecrypt,
+  aesGcmDecryptFields,
   aesGcmEncrypt,
+  aesGcmEncryptFields,
+  assembleAesContainer,
+  assembleRsaHybridContainer,
   fingerprintPublicKey,
   generateRawKeyPair,
   normalizeAesKey,
   privateKeyFromPem,
   publicKeyFromPem,
+  rsaHybridDecrypt,
+  rsaHybridDecryptFields,
+  rsaHybridEncrypt,
+  rsaHybridEncryptFields,
   sha256Hex,
   signDetached,
   verifyDetached,
 } from '../services/crypto-core';
-import { randomBytes } from 'crypto';
+import { generateKeyPairSync, randomBytes } from 'crypto';
 
 describe('generateRawKeyPair', () => {
   it('generates an Ed25519 pair exportable as PEM', () => {
@@ -77,6 +85,51 @@ describe('aesGcm round-trip', () => {
     const key = randomBytes(32);
     expect(normalizeAesKey(key.toString('base64')).equals(key)).toBe(true);
     expect(() => normalizeAesKey(randomBytes(16))).toThrow(/32 bytes/);
+  });
+
+  it('round-trips Fields functions with a raw key', () => {
+    const key = randomBytes(32);
+    const parts = aesGcmEncryptFields(plaintext, { key });
+    expect(parts.iv.length).toBe(12);
+    expect(parts.tag.length).toBe(16);
+    expect(parts.salt).toBeUndefined();
+    expect(aesGcmDecryptFields(parts, { key }).equals(plaintext)).toBe(true);
+  });
+
+  it('round-trips Fields functions with a passphrase', () => {
+    const parts = aesGcmEncryptFields(plaintext, { passphrase: 'correct horse battery staple' });
+    expect(parts.salt?.length).toBe(16);
+    expect(aesGcmDecryptFields(parts, { passphrase: 'correct horse battery staple' }).equals(plaintext)).toBe(true);
+  });
+
+  it('assembles a container from Fields parts', () => {
+    const key = randomBytes(32);
+    const parts = aesGcmEncryptFields(plaintext, { key });
+    const box = assembleAesContainer(parts);
+    expect(box.subarray(0, 4).toString('ascii')).toBe('NCB1');
+    expect(aesGcmDecrypt(box, { key }).equals(plaintext)).toBe(true);
+  });
+});
+
+describe('rsaHybrid Fields functions', () => {
+  const plaintext = Buffer.from('hybrid confidential payload', 'utf8');
+  const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const publicPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+
+  it('round-trips Fields functions', () => {
+    const parts = rsaHybridEncryptFields(plaintext, publicPem);
+    expect(parts.iv.length).toBe(12);
+    expect(parts.tag.length).toBe(16);
+    expect(parts.wrappedKey.length).toBe(256);
+    expect(rsaHybridDecryptFields(parts, privatePem).equals(plaintext)).toBe(true);
+  });
+
+  it('assembles a container from Fields parts', () => {
+    const parts = rsaHybridEncryptFields(plaintext, publicPem);
+    const box = assembleRsaHybridContainer(parts);
+    expect(box.subarray(0, 4).toString('ascii')).toBe('NCR1');
+    expect(rsaHybridDecrypt(box, privatePem).equals(plaintext)).toBe(true);
   });
 });
 

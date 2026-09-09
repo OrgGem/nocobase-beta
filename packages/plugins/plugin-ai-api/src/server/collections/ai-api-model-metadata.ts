@@ -63,6 +63,32 @@ export default defineCollection({
         'Initial system prompt prepended as the first system message of every request for this model. Never replaces the client system prompt.',
     },
     {
+      name: 'supportsVision',
+      type: 'boolean',
+      defaultValue: false,
+      index: true,
+      comment: 'Whether the model accepts image content blocks. Used by virtual-model routing.',
+    },
+    {
+      name: 'supportsToolCalling',
+      type: 'boolean',
+      defaultValue: true,
+      index: true,
+      comment: 'Whether the model accepts tools / tool_choice. Used by virtual-model routing.',
+    },
+    {
+      name: 'reasoningTier',
+      type: 'string',
+      defaultValue: 'general',
+      comment: 'Cost/capability tier for routing: cheap | general | reasoning.',
+    },
+    {
+      name: 'sortOrder',
+      type: 'integer',
+      defaultValue: 0,
+      comment: 'Ascending priority used when deriving a routing bucket from metadata (lower = preferred).',
+    },
+    {
       name: 'enabled',
       type: 'boolean',
       defaultValue: true,

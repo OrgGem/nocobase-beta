@@ -54,6 +54,7 @@ describe('AI API v2 settings registration', () => {
       'ai-api.index',
       'ai-api.model-pricing',
       'ai-api.model-metadata',
+      'ai-api.model-routing',
       'ai-api.usage-groups',
       'ai-api.usage',
     ]);

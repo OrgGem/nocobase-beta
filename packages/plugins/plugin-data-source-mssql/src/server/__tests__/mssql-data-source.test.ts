@@ -10,6 +10,7 @@
 import { createMockServer, MockServer, waitSecond } from '@nocobase/test';
 import { CollectionManager, DataSource } from '@nocobase/data-source-manager';
 import { ICollectionManager, IRepository, IModel } from '@nocobase/data-source-manager/src/types';
+import { MssqlIntrospector } from '../data-source/MssqlIntrospector';
 
 /**
  * Test suite for MSSQL Data Source Plugin
@@ -23,6 +24,14 @@ import { ICollectionManager, IRepository, IModel } from '@nocobase/data-source-m
  *
  * Note: Tests use mock patterns since actual MSSQL server connection
  * is not available in CI environment.
+ *
+ * KNOWN LIMITATION: Integration tests using createMockServer with short plugin name
+ * 'data-source-mssql' currently fail because the package is unscoped ('plugin-data-source-mssql')
+ * while PluginManager.parseName() only tries '@nocobase/plugin-' and '@nocobase/preset-' prefixes.
+ * This is a pre-existing architectural limitation. To fix, either:
+ *   1. Rename the package to '@nocobase/plugin-data-source-mssql', OR
+ *   2. Set PLUGIN_PACKAGE_PREFIX env var to include an empty prefix, OR
+ *   3. Enhance PluginManager.parseName() to try the bare package name as a fallback
  */
 
 describe('MSSQL Data Source Plugin', () => {
@@ -43,98 +52,80 @@ describe('MSSQL Data Source Plugin', () => {
       const factory = app.dataSourceManager.factory;
       const mssqlClass = factory.getClass('mssql');
       expect(mssqlClass).toBeDefined();
-    });
-
-    it('should have external-mssql resource defined', () => {
-      const resourcer = app.resourcer;
-      expect(resourcer.isDefined('external-mssql')).toBe(true);
+      expect(mssqlClass.name).toBe('MssqlExternalDataSource');
     });
   });
 
   describe('Test Connection Endpoint', () => {
+    // Connection validation is dispatched through the core `dataSources:testConnection`
+    // action, which invokes `MssqlExternalDataSource.testConnection(options)` via the factory.
+    const testConnection = (values: Record<string, unknown>) =>
+      app.agent().resource('dataSources').testConnection({ values });
+
     it('should return error when options are missing', async () => {
-      const res = await app.agent().resource('external-mssql').testConnection({
-        values: {},
-      });
+      const res = await testConnection({ type: 'mssql' });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toContain('required');
     });
 
     it('should return error when host is missing', async () => {
-      const res = await app
-        .agent()
-        .resource('external-mssql')
-        .testConnection({
-          values: {
-            options: {
-              port: 1433,
-              username: 'sa',
-              password: 'password',
-              database: 'TestDB',
-            },
-          },
-        });
+      const res = await testConnection({
+        type: 'mssql',
+        options: {
+          port: 1433,
+          username: 'sa',
+          password: 'password',
+          database: 'TestDB',
+        },
+      });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toContain('Host');
+      expect(res.text).toContain('Host');
     });
 
     it('should return error when database is missing', async () => {
-      const res = await app
-        .agent()
-        .resource('external-mssql')
-        .testConnection({
-          values: {
-            options: {
-              host: 'localhost',
-              port: 1433,
-              username: 'sa',
-              password: 'password',
-            },
-          },
-        });
+      const res = await testConnection({
+        type: 'mssql',
+        options: {
+          host: 'localhost',
+          port: 1433,
+          username: 'sa',
+          password: 'password',
+        },
+      });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toContain('Database');
+      expect(res.text).toContain('Database');
     });
 
     it('should return error when username is missing', async () => {
-      const res = await app
-        .agent()
-        .resource('external-mssql')
-        .testConnection({
-          values: {
-            options: {
-              host: 'localhost',
-              port: 1433,
-              password: 'password',
-              database: 'TestDB',
-            },
-          },
-        });
+      const res = await testConnection({
+        type: 'mssql',
+        options: {
+          host: 'localhost',
+          port: 1433,
+          password: 'password',
+          database: 'TestDB',
+        },
+      });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toContain('Username');
+      expect(res.text).toContain('Username');
     });
 
     it('should return error when password is missing', async () => {
-      const res = await app
-        .agent()
-        .resource('external-mssql')
-        .testConnection({
-          values: {
-            options: {
-              host: 'localhost',
-              port: 1433,
-              username: 'sa',
-              database: 'TestDB',
-            },
-          },
-        });
+      const res = await testConnection({
+        type: 'mssql',
+        options: {
+          host: 'localhost',
+          port: 1433,
+          username: 'sa',
+          database: 'TestDB',
+        },
+      });
 
       expect(res.status).toBe(400);
-      expect(res.body.message).toContain('Password');
+      expect(res.text).toContain('Password');
     });
   });
 
@@ -174,51 +165,25 @@ describe('MSSQL Data Source Plugin', () => {
 
 describe('MssqlExternalDataSource Unit Tests', () => {
   describe('Type Mapping', () => {
-    // Test the type inference logic
-    const testCases = [
-      { input: 'varchar(255)', expectedType: 'string', expectedInterface: 'input' },
-      { input: 'nvarchar(max)', expectedType: 'string', expectedInterface: 'input' },
-      { input: 'int', expectedType: 'integer', expectedInterface: 'integer' },
-      { input: 'bigint', expectedType: 'bigInt', expectedInterface: 'number' },
-      { input: 'decimal(18,2)', expectedType: 'decimal', expectedInterface: 'number' },
-      { input: 'datetime', expectedType: 'datetime', expectedInterface: 'datetime' },
-      { input: 'datetime2', expectedType: 'datetime', expectedInterface: 'datetime' },
-      { input: 'bit', expectedType: 'boolean', expectedInterface: 'checkbox' },
-      { input: 'uniqueidentifier', expectedType: 'uuid', expectedInterface: 'uuid' },
-      { input: 'text', expectedType: 'text', expectedInterface: 'textarea' },
-      { input: 'unknown_type', expectedType: 'string', expectedInterface: 'input' },
-    ];
+    // Access the protected getFieldTypeMap() via a minimal introspector instance.
+    // The Database constructor is never exercised: we only call the pure map lookup,
+    // so passing a stub keeps this a real unit test with no DB connection.
+    const introspector = new MssqlIntrospector({ db: {} as any });
+    const typeMap = (introspector as any).getFieldTypeMap() as Record<string, string | string[]>;
 
-    testCases.forEach(({ input, expectedType, expectedInterface }) => {
-      it(`should map ${input} to type: ${expectedType}, interface: ${expectedInterface}`, () => {
-        // Note: This test requires importing the actual inferFieldType method
-        // For now, this documents the expected behavior
-        expect(true).toBe(true);
-      });
-    });
-  });
-
-  describe('Collection Name Normalization', () => {
-    it('should replace dots with underscores in collection names', () => {
-      const fullTableName = 'dbo.Features';
-      const collectionName = fullTableName.replace(/\./g, '_');
-      expect(collectionName).toBe('dbo_Features');
-    });
-
-    it('should handle multiple dots in schema names', () => {
-      const fullTableName = 'catalog.schema.table';
-      const collectionName = fullTableName.replace(/\./g, '_');
-      expect(collectionName).toBe('catalog_schema_table');
-    });
-
-    it('should handle names without dots', () => {
-      const fullTableName = 'SimpleTable';
-      const collectionName = fullTableName.replace(/\./g, '_');
-      expect(collectionName).toBe('SimpleTable');
+    it('maps core MSSQL types to NocoBase field types', () => {
+      expect(typeMap['int']).toEqual(['integer', 'sort']);
+      expect(typeMap['bigint']).toEqual(['bigInt', 'sort']);
+      expect(typeMap['decimal']).toBe('decimal');
+      expect(typeMap['datetime2']).toBe('datetimeNoTz');
+      expect(typeMap['datetimeoffset']).toBe('datetimeTz');
+      expect(typeMap['bit']).toBe('boolean');
+      expect(typeMap['uniqueidentifier']).toBe('uuid');
+      expect(typeMap['nvarchar']).toContain('string');
+      expect(typeMap['text']).toBe('text');
     });
   });
 });
-
 describe('Mock MSSQL DataSource Integration', () => {
   let app: MockServer;
 

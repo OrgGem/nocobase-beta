@@ -24,6 +24,7 @@ interface ContextPreparationOptions {
   tools?: unknown;
   maxCompletionTokens?: unknown;
   maxTokens?: unknown;
+  overflowBehavior?: ContextOverflowBehavior;
 }
 
 export interface PreparedDirectLlmContext {
@@ -348,7 +349,7 @@ export async function prepareDirectLlmContext(
 ): Promise<PreparedDirectLlmContext> {
   const [metadata, behavior] = await Promise.all([
     loadModelMetadata(ctx, options.serviceName, options.modelId),
-    resolveOverflowBehavior(ctx),
+    options.overflowBehavior ? Promise.resolve(options.overflowBehavior) : resolveOverflowBehavior(ctx),
   ]);
   const reservedOutputTokens = resolveReservedOutputTokens(options, metadata);
   const inputTokenBudget = metadata.contextWindow - reservedOutputTokens;

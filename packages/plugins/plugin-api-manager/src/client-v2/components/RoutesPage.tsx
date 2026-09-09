@@ -20,7 +20,7 @@ interface RouteRow {
   enabled: boolean;
   authMode?: 'both' | 'api-key' | 'role';
   encryptionMode: 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
-  wireFormat: 'binary' | 'json';
+  wireFormat: 'binary' | 'json' | 'hybrid-json';
   aesSecret?: string;
   aesSecretEnvVar?: string;
   pgpEncryptKeyName?: string;

@@ -19,34 +19,25 @@ export function parseArtifactLimit(
   return Number.isSafeInteger(parsed) && parsed <= maximum ? parsed : fallback;
 }
 
-const MAX_FILES = parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_FILES, 2000, 10_000);
-const MAX_EXPANDED_BYTES = parseArtifactLimit(
-  process.env.SKILL_REGISTRY_MAX_EXPANDED_BYTES,
-  250 * 1024 * 1024,
-  1024 * 1024 * 1024,
-);
-const MAX_ARTIFACT_BYTES = parseArtifactLimit(
-  process.env.SKILL_REGISTRY_MAX_ARTIFACT_BYTES,
-  50 * 1024 * 1024,
-  256 * 1024 * 1024,
-);
-const MAX_MANIFEST_BYTES = parseArtifactLimit(
-  process.env.SKILL_REGISTRY_MAX_MANIFEST_BYTES,
-  10 * 1024 * 1024,
-  25 * 1024 * 1024,
-);
-const MAX_INSTRUCTION_BYTES = parseArtifactLimit(
-  process.env.SKILL_REGISTRY_MAX_INSTRUCTION_BYTES,
-  10 * 1024 * 1024,
-  25 * 1024 * 1024,
-);
-export const ARTIFACT_LIMITS = Object.freeze({
-  maxFiles: MAX_FILES,
-  maxExpandedBytes: MAX_EXPANDED_BYTES,
-  maxArtifactBytes: MAX_ARTIFACT_BYTES,
-  maxManifestBytes: MAX_MANIFEST_BYTES,
-  maxInstructionBytes: MAX_INSTRUCTION_BYTES,
-});
+// Getter-based limits re-read env vars on every access, so runtime settings
+// applied via applyRuntimeOverrides() take effect without a server restart.
+export const ARTIFACT_LIMITS = {
+  get maxFiles() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_FILES, 10000);
+  },
+  get maxExpandedBytes() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_EXPANDED_BYTES, 1024 * 1024 * 1024);
+  },
+  get maxArtifactBytes() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_ARTIFACT_BYTES, 500 * 1024 * 1024);
+  },
+  get maxManifestBytes() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_MANIFEST_BYTES, 50 * 1024 * 1024);
+  },
+  get maxInstructionBytes() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_INSTRUCTION_BYTES, 50 * 1024 * 1024);
+  },
+} as const;
 const DETERMINISTIC_ZIP_TIME = new Date('1980-01-01T00:00:00.000Z');
 const MANIFEST_PATH = 'manifest.json';
 const MANIFEST_PATH_KEY = MANIFEST_PATH.toLowerCase();
@@ -88,18 +79,23 @@ function validateManifest(manifest: unknown): asserts manifest is RegistrySkillM
 
 export function buildArtifact(candidate: RegistrySkillCandidateV1): BuiltArtifact {
   validateManifest(candidate.manifest);
-  const maximumCandidateFiles = Math.max(0, MAX_FILES - 1);
+  const maxFiles = ARTIFACT_LIMITS.maxFiles;
+  const maxExpandedBytes = ARTIFACT_LIMITS.maxExpandedBytes;
+  const maxArtifactBytes = ARTIFACT_LIMITS.maxArtifactBytes;
+  const maxManifestBytes = ARTIFACT_LIMITS.maxManifestBytes;
+  const maxInstructionBytes = ARTIFACT_LIMITS.maxInstructionBytes;
+  const maximumCandidateFiles = Math.max(0, maxFiles - 1);
   if (candidate.files.length === 0 || candidate.files.length > maximumCandidateFiles) {
     throw new RegistryError(
       'ARTIFACT_TOO_LARGE',
       422,
-      `Artifact must contain between 1 and ${maximumCandidateFiles} candidate files; manifest.json counts toward the ${MAX_FILES}-file limit.`,
+      `Artifact must contain between 1 and ${maximumCandidateFiles} candidate files; manifest.json counts toward the ${maxFiles}-file limit.`,
     );
   }
 
   const manifestJson = canonicalJson(candidate.manifest);
   const manifestData = Buffer.from(manifestJson, 'utf8');
-  if (manifestData.length > MAX_MANIFEST_BYTES) {
+  if (manifestData.length > maxManifestBytes) {
     throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact manifest.json exceeds the configured limit.');
   }
   const entrypoint = normalizeRelativePath(candidate.manifest.runtime.entrypoint);
@@ -115,7 +111,7 @@ export function buildArtifact(candidate: RegistrySkillCandidateV1): BuiltArtifac
   const collisionKeys = new Set<string>();
   let expandedSizeBytes = manifestData.length;
 
-  if (expandedSizeBytes > MAX_EXPANDED_BYTES) {
+  if (expandedSizeBytes > maxExpandedBytes) {
     throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact expanded size exceeds the configured limit.');
   }
 
@@ -137,11 +133,11 @@ export function buildArtifact(candidate: RegistrySkillCandidateV1): BuiltArtifac
     }
     filePaths.add(file.path);
     collisionKeys.add(collisionKey);
-    if (collisionKey === INSTRUCTION_PATH_KEY && file.content.length > MAX_INSTRUCTION_BYTES) {
+    if (collisionKey === INSTRUCTION_PATH_KEY && file.content.length > maxInstructionBytes) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact SKILL.md exceeds the configured limit.');
     }
     expandedSizeBytes += file.content.length;
-    if (expandedSizeBytes > MAX_EXPANDED_BYTES) {
+    if (expandedSizeBytes > maxExpandedBytes) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact expanded size exceeds the configured limit.');
     }
   }
@@ -157,8 +153,13 @@ export function buildArtifact(candidate: RegistrySkillCandidateV1): BuiltArtifac
     const entry = archive.addFile(file.path, file.content, '', 0o644);
     entry.header.time = DETERMINISTIC_ZIP_TIME;
   }
-  const content = archive.toBuffer();
-  if (content.length > MAX_ARTIFACT_BYTES) {
+  let content: Buffer;
+  try {
+    content = archive.toBuffer();
+  } catch {
+    throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Failed to build artifact ZIP archive.');
+  }
+  if (content.length > maxArtifactBytes) {
     throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact compressed size exceeds the configured limit.');
   }
   return {
@@ -170,7 +171,12 @@ export function buildArtifact(candidate: RegistrySkillCandidateV1): BuiltArtifac
 }
 
 export function unpackArtifact(content: Buffer): { manifest: RegistrySkillManifestV1; files: Map<string, Buffer> } {
-  if (content.length > MAX_ARTIFACT_BYTES) {
+  const maxFiles = ARTIFACT_LIMITS.maxFiles;
+  const maxExpandedBytes = ARTIFACT_LIMITS.maxExpandedBytes;
+  const maxArtifactBytes = ARTIFACT_LIMITS.maxArtifactBytes;
+  const maxManifestBytes = ARTIFACT_LIMITS.maxManifestBytes;
+  const maxInstructionBytes = ARTIFACT_LIMITS.maxInstructionBytes;
+  if (content.length > maxArtifactBytes) {
     throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact compressed size exceeds the configured limit.');
   }
   // Normalize through node:buffer so adm-zip's internal `instanceof
@@ -205,18 +211,18 @@ export function unpackArtifact(content: Buffer): { manifest: RegistrySkillManife
     if (isDirectory) {
       continue;
     }
-    if (files.size >= MAX_FILES) {
+    if (files.size >= maxFiles) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact exceeds extraction limits.');
     }
     // Reject on the declared size BEFORE decompressing, or a zip bomb entry would be
     // fully expanded into memory just to find out it is too large.
-    const entryLimit = collisionKey === MANIFEST_PATH_KEY ? MAX_MANIFEST_BYTES : MAX_EXPANDED_BYTES;
+    const entryLimit = collisionKey === MANIFEST_PATH_KEY ? maxManifestBytes : maxExpandedBytes;
     if (
       !Number.isSafeInteger(entry.header.size) ||
       entry.header.size < 0 ||
       entry.header.size > entryLimit ||
-      (collisionKey === INSTRUCTION_PATH_KEY && entry.header.size > MAX_INSTRUCTION_BYTES) ||
-      expandedSizeBytes + entry.header.size > MAX_EXPANDED_BYTES
+      (collisionKey === INSTRUCTION_PATH_KEY && entry.header.size > maxInstructionBytes) ||
+      expandedSizeBytes + entry.header.size > maxExpandedBytes
     ) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact exceeds extraction limits.');
     }
@@ -227,8 +233,8 @@ export function unpackArtifact(content: Buffer): { manifest: RegistrySkillManife
     expandedSizeBytes += data.length;
     if (
       data.length > entryLimit ||
-      (collisionKey === INSTRUCTION_PATH_KEY && data.length > MAX_INSTRUCTION_BYTES) ||
-      expandedSizeBytes > MAX_EXPANDED_BYTES
+      (collisionKey === INSTRUCTION_PATH_KEY && data.length > maxInstructionBytes) ||
+      expandedSizeBytes > maxExpandedBytes
     ) {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Artifact exceeds extraction limits.');
     }

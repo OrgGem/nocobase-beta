@@ -66,7 +66,7 @@ interface GroupMember {
 export default function UsageGroupsPage() {
   const ctx = useFlowContext();
   const t = useT();
-  const [form] = Form.useForm<UsageGroup>();
+  const [form] = Form.useForm<Partial<UsageGroup>>();
   const [memberForm] = Form.useForm<{ userId: string | number }>();
   const selectedServices = Form.useWatch('allowedLlmServices', form);
   const allowAllModels = Form.useWatch('allowAllModels', form);
@@ -127,13 +127,39 @@ export default function UsageGroupsPage() {
   const loadUnassignedUsers = useCallback(
     async (keyword?: string) => {
       try {
-        const response = await ctx.api.request({
-          url: 'aiApiUsageGroups:listUnassignedUsers',
+        // Plain collection reads on the main data source, so core ACL enforces
+        // aiApiGroupMembers:list and users:list. No custom server action needed.
+        const memberResponse = await ctx.api.request({
+          url: 'aiApiGroupMembers:list',
           method: 'get',
-          params: { keyword, pageSize: 100 },
+          params: { fields: ['userId'], paginate: false, pageSize: 10000 },
         });
-        const rows = unwrapData<UserSummary[]>(response, []);
-        setUnassignedUsers(rows);
+        const assignedIds = new Set(
+          unwrapData<Array<{ userId: string | number }>>(memberResponse, []).map((row) => String(row.userId)),
+        );
+        const conditions: Record<string, unknown>[] = [];
+        if (keyword) {
+          conditions.push({
+            $or: [
+              { username: { $includes: keyword } },
+              { email: { $includes: keyword } },
+              { nickname: { $includes: keyword } },
+            ],
+          });
+        }
+        if (assignedIds.size > 0) {
+          conditions.push({ id: { $notIn: [...assignedIds] } });
+        }
+        const response = await ctx.api.request({
+          url: 'users:list',
+          method: 'get',
+          params: {
+            filter: conditions.length ? { $and: conditions } : {},
+            fields: ['id', 'username', 'nickname', 'email'],
+            pageSize: 100,
+          },
+        });
+        setUnassignedUsers(unwrapData<UserSummary[]>(response, []));
       } catch (error) {
         message.error(errorMessage(error));
       }
@@ -162,7 +188,7 @@ export default function UsageGroupsPage() {
       allowedLlmServices: [],
       allowAllModels: true,
       allowedModels: [],
-    } as UsageGroup);
+    });
     setOpen(true);
   };
 
@@ -170,8 +196,10 @@ export default function UsageGroupsPage() {
     setEditing(record);
     form.setFieldsValue(record);
     setOpen(true);
-    await loadMembers(record.id);
+    // The default group has no explicit members by design; only load the member
+    // list and unassigned users for regular groups.
     if (!record.isDefault) {
+      await loadMembers(record.id);
       await loadUnassignedUsers();
     }
   };
@@ -212,8 +240,10 @@ export default function UsageGroupsPage() {
     if (!editing) return;
     const values = await memberForm.validateFields();
     try {
+      // Plain create on aiApiGroupMembers; the server beforeSave hook enforces the
+      // one-group-per-user and no-default-group-membership rules.
       await ctx.api.request({
-        url: 'aiApiUsageGroups:addMember',
+        url: 'aiApiGroupMembers:create',
         method: 'post',
         data: { groupId: editing.id, userId: values.userId },
       });
@@ -229,9 +259,8 @@ export default function UsageGroupsPage() {
   const removeMember = async (member: GroupMember) => {
     try {
       await ctx.api.request({
-        url: 'aiApiUsageGroups:removeMember',
+        url: `aiApiGroupMembers:destroy/${member.id}`,
         method: 'post',
-        data: { groupId: member.groupId, userId: member.userId },
       });
       message.success(t('Member removed'));
       if (editing) {
@@ -246,23 +275,44 @@ export default function UsageGroupsPage() {
   const searchGroupByUser = async () => {
     if (!searchUserKeyword.trim()) return;
     try {
-      const response = await ctx.api.request({
-        url: 'aiApiUsageGroups:searchUsers',
+      const userResponse = await ctx.api.request({
+        url: 'users:list',
         method: 'get',
-        params: { keyword: searchUserKeyword, pageSize: 1 },
+        params: {
+          filter: {
+            $or: [
+              { username: { $includes: searchUserKeyword } },
+              { email: { $includes: searchUserKeyword } },
+              { nickname: { $includes: searchUserKeyword } },
+            ],
+          },
+          fields: ['id', 'username', 'nickname', 'email'],
+          pageSize: 1,
+        },
       });
-      const users = unwrapData<UserSummary[]>(response, []);
+      const users = unwrapData<UserSummary[]>(userResponse, []);
       if (users.length === 0) {
         message.warning(t('User not found'));
         setSearchedGroup(null);
         return;
       }
-      const groupResponse = await ctx.api.request({
-        url: 'aiApiUsageGroups:getByUser',
+      // Look up the membership row; a user with no row falls back to the default group.
+      const memberResponse = await ctx.api.request({
+        url: 'aiApiGroupMembers:list',
         method: 'get',
-        params: { userId: users[0].id },
+        params: { filter: { userId: users[0].id }, appends: ['group'], pageSize: 1 },
       });
-      setSearchedGroup(unwrapData<UsageGroup>(groupResponse, null));
+      const memberRows = unwrapData<Array<{ group?: UsageGroup }>>(memberResponse, []);
+      if (memberRows[0]?.group) {
+        setSearchedGroup(memberRows[0].group);
+        return;
+      }
+      const defaultResponse = await ctx.api.request({
+        url: 'aiApiUsageGroups:list',
+        method: 'get',
+        params: { filter: { isDefault: true }, pageSize: 1 },
+      });
+      setSearchedGroup(unwrapData<UsageGroup[]>(defaultResponse, [])[0] ?? null);
     } catch (error) {
       message.error(errorMessage(error));
     }
@@ -491,28 +541,15 @@ export default function UsageGroupsPage() {
           </Form.Item>
         </Form>
         {editing && (
-          <Card title={t('Members')} size="small" style={{ marginTop: 24 }}>
+          <Card title={editing.isDefault ? t('Membership') : t('Members')} size="small" style={{ marginTop: 24 }}>
             {editing.isDefault ? (
-              <>
-                <Alert
-                  type="info"
-                  showIcon
-                  message={t(
-                    'Users who do not belong to any other group automatically use this default group — no need to add members.',
-                  )}
-                  style={{ marginBottom: members.length > 0 ? 12 : 0 }}
-                />
-                {members.length > 0 && (
-                  <Table
-                    rowKey="id"
-                    columns={memberColumns}
-                    dataSource={members}
-                    loading={membersLoading}
-                    pagination={false}
-                    size="small"
-                  />
+              <Alert
+                type="info"
+                showIcon
+                message={t(
+                  'Users who do not belong to any other group automatically use this default group — no need to add members.',
                 )}
-              </>
+              />
             ) : (
               <>
                 <Form form={memberForm} layout="inline">

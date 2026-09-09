@@ -166,6 +166,37 @@ describe('crypto-adapter (AES-256-GCM)', () => {
     expect(decrypted.body.equals(plaintext)).toBe(true);
   });
 
+  it('round-trips the hybrid-json wire format', async () => {
+    const { app } = createFakeApp();
+    const route = routeFrom({
+      encryptionMode: 'aes-256-gcm',
+      wireFormat: 'hybrid-json',
+      aesSecret: `enc:${keyB64}`,
+    });
+    const encrypted = await encryptPayload(app, route, plaintext);
+    expect(encrypted.contentType).toBe('application/json');
+    const envelope = JSON.parse(encrypted.body.toString('utf8')) as Record<string, string>;
+    expect(typeof envelope.nonce).toBe('string');
+    expect(typeof envelope.tag).toBe('string');
+    expect(typeof envelope.ciphertext).toBe('string');
+    expect(envelope).not.toHaveProperty('container');
+    const decrypted = await decryptPayload(app, route, encrypted.body, 'application/json');
+    expect(decrypted.body.equals(plaintext)).toBe(true);
+  });
+
+  it('decrypts a hybrid-json envelope even when the route wireFormat is binary', async () => {
+    const { app } = createFakeApp();
+    const hybridRoute = routeFrom({
+      encryptionMode: 'aes-256-gcm',
+      wireFormat: 'hybrid-json',
+      aesSecret: `enc:${keyB64}`,
+    });
+    const encrypted = await encryptPayload(app, hybridRoute, plaintext);
+    const binaryRoute = routeFrom({ encryptionMode: 'aes-256-gcm', wireFormat: 'binary', aesSecret: `enc:${keyB64}` });
+    const decrypted = await decryptPayload(app, binaryRoute, encrypted.body, 'application/json');
+    expect(decrypted.body.equals(plaintext)).toBe(true);
+  });
+
   it('detects tampering', async () => {
     const { app } = createFakeApp();
     const route = routeFrom({ encryptionMode: 'aes-256-gcm', wireFormat: 'binary', aesSecret: `enc:${keyB64}` });
@@ -519,6 +550,33 @@ describe('crypto-adapter (RSA-OAEP hybrid)', () => {
     const decryptRoute = routeFrom({
       encryptionMode: 'rsa-oaep',
       wireFormat: 'json',
+      rsaDecryptKeyName: 'rsa-decryptor',
+    });
+    const decrypted = await decryptPayload(app, decryptRoute, encrypted.body, 'application/json');
+    expect(decrypted.body.equals(plaintext)).toBe(true);
+  });
+
+  it('round-trips the hybrid-json wire format', async () => {
+    const { app, keys } = createFakeApp();
+    setupPartnerKeys(keys, partnerPrivatePem, 'APIM_RSA_PARTNER_PRIVATE');
+    const plaintext = Buffer.from('rsa hybrid-json wire');
+    const encryptRoute = routeFrom({
+      encryptionMode: 'rsa-oaep',
+      wireFormat: 'hybrid-json',
+      rsaEncryptKeyName: 'rsa-partner',
+    });
+    const encrypted = await encryptPayload(app, encryptRoute, plaintext);
+    expect(encrypted.contentType).toBe('application/json');
+    const envelope = JSON.parse(encrypted.body.toString('utf8')) as Record<string, string>;
+    expect(typeof envelope.encryptedKey).toBe('string');
+    expect(typeof envelope.nonce).toBe('string');
+    expect(typeof envelope.tag).toBe('string');
+    expect(typeof envelope.ciphertext).toBe('string');
+    expect(envelope).not.toHaveProperty('container');
+
+    const decryptRoute = routeFrom({
+      encryptionMode: 'rsa-oaep',
+      wireFormat: 'hybrid-json',
       rsaDecryptKeyName: 'rsa-decryptor',
     });
     const decrypted = await decryptPayload(app, decryptRoute, encrypted.body, 'application/json');

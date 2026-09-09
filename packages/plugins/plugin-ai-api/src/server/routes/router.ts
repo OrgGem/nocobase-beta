@@ -15,6 +15,7 @@ import { handleChatCompletions } from './chat-completions';
 import { handleCompletions } from './completions';
 import { handleAgentCompletions } from './agent-completions';
 import { handleEmbeddings } from './embeddings';
+import { handleDeleteResponse, handleGetResponse, handleResponses } from './responses';
 import { toOpenAIError } from '../utils/openai-format';
 import { createRateLimitMiddleware } from '../middleware/rate-limit';
 import { checkRolePermission } from '../middleware/role-permission';
@@ -51,6 +52,8 @@ type DataWrappingContext = Context & { withoutDataWrapping?: boolean };
  *   POST /v1/chat/completions  — OpenAI chat completions (LLM or agent mode)
  *   POST /v1/completions       — Legacy text completions (LiteLLM compat)
  *   POST /v1/embeddings        — OpenAI embeddings
+ *   POST /v1/responses         — OpenAI Responses API
+ *   GET/DELETE /v1/responses/:id — Retrieve or delete a stored response
  *   GET  /v1/models            — List available models
  *   GET  /v1/models/:id        — Get a single model
  *   DELETE /v1/models/:id      — Not implemented (501 stub)
@@ -148,11 +151,18 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
     const requestBody = (ctx.request.body || {}) as Record<string, unknown>;
     const model = requestBody.model === undefined || requestBody.model === null ? '-' : String(requestBody.model);
     const isUsageEndpoint =
-      method === 'POST' && (subPath === '/chat/completions' || subPath === '/completions' || subPath === '/embeddings');
-    const isStreamingEndpoint = method === 'POST' && (subPath === '/chat/completions' || subPath === '/completions');
-    const resolvedMode = isUsageEndpoint ? await resolveMode(ctx) : 'llm';
-    const streaming = isStreamingEndpoint && isStreamingRequested(requestBody.stream);
-    if (streaming) {
+      method === 'POST' &&
+      (subPath === '/chat/completions' ||
+        subPath === '/completions' ||
+        subPath === '/embeddings' ||
+        subPath === '/responses');
+    const isStreamingEndpoint =
+      method === 'POST' && (subPath === '/chat/completions' || subPath === '/completions' || subPath === '/responses');
+    const resolvedMode = subPath === '/responses' ? 'llm' : isUsageEndpoint ? await resolveMode(ctx) : 'llm';
+    const streaming =
+      isStreamingEndpoint &&
+      (subPath === '/responses' ? requestBody.stream === true : isStreamingRequested(requestBody.stream));
+    if (streaming && subPath !== '/responses') {
       const streamOptions = requestBody.stream_options;
       ctx.request.body = {
         ...requestBody,
@@ -167,11 +177,13 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       const service =
         subPath === '/embeddings'
           ? 'llm.embedding'
-          : resolvedMode === 'agent'
-            ? 'llm.agent'
-            : subPath === '/completions'
-              ? 'llm.completion'
-              : 'llm.chat';
+          : subPath === '/responses'
+            ? 'llm.responses'
+            : resolvedMode === 'agent'
+              ? 'llm.agent'
+              : subPath === '/completions'
+                ? 'llm.completion'
+                : 'llm.chat';
       startAiApiObservation(ctx, {
         service,
         operation: subPath,
@@ -210,6 +222,54 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
         return;
       }
 
+      // POST /v1/responses — OpenAI Responses API
+      if (method === 'POST' && subPath === '/responses') {
+        await handleResponses(ctx, plugin);
+        logRequest(
+          ctx,
+          requestId,
+          model,
+          ctx.state.aiApiStreamResult?.succeeded === false ? 'error' : 'ok',
+          Date.now() - t0,
+        );
+        return;
+      }
+
+      // GET/DELETE /v1/responses/:id — stored Responses API objects, scoped to the authenticated user
+      if ((method === 'GET' || method === 'DELETE') && subPath.startsWith('/responses/')) {
+        const responseId = subPath.substring('/responses/'.length);
+        if (responseId) {
+          let decodedResponseId: string;
+          try {
+            decodedResponseId = decodeURIComponent(responseId);
+          } catch {
+            ctx.status = 400;
+            ctx.body = toOpenAIError(
+              400,
+              'Response ID contains invalid URL encoding',
+              'invalid_request_error',
+              'invalid_response_id',
+            );
+            logRequest(ctx, requestId, '-', 'invalid_response_id', Date.now() - t0);
+            return;
+          }
+          if (decodedResponseId.includes('/')) {
+            ctx.status = 404;
+            ctx.body = toOpenAIError(
+              404,
+              `Unknown endpoint: ${method} ${path}`,
+              'invalid_request_error',
+              'unknown_url',
+            );
+            logRequest(ctx, requestId, '-', 'not_found', Date.now() - t0);
+            return;
+          }
+          if (method === 'GET') await handleGetResponse(ctx, decodedResponseId);
+          else await handleDeleteResponse(ctx, decodedResponseId);
+          logRequest(ctx, requestId, '-', ctx.status === 404 ? 'not_found' : 'ok', Date.now() - t0);
+          return;
+        }
+      }
       // POST /v1/completions (legacy text completions — used by LiteLLM)
       if (method === 'POST' && subPath === '/completions') {
         const completionsMode = resolvedMode;
@@ -250,7 +310,16 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       if (method === 'GET' && subPath.startsWith('/models/')) {
         const modelId = subPath.substring('/models/'.length);
         if (modelId) {
-          await handleGetModel(ctx, decodeURIComponent(modelId), plugin);
+          let decodedModelId: string;
+          try {
+            decodedModelId = decodeURIComponent(modelId);
+          } catch {
+            ctx.status = 400;
+            ctx.body = toOpenAIError(400, 'Model ID contains invalid URL encoding', 'invalid_request_error');
+            logRequest(ctx, requestId, modelId, 'bad_request', Date.now() - t0);
+            return;
+          }
+          await handleGetModel(ctx, decodedModelId, plugin);
           logRequest(ctx, requestId, modelId, 'ok', Date.now() - t0);
           return;
         }
@@ -275,7 +344,7 @@ export function createAiLlmRouter(plugin: PluginAiApiServer) {
       ctx.body = toOpenAIError(
         404,
         `Unknown endpoint: ${method} ${path}. ` +
-          `Supported: POST /v1/chat/completions, POST /v1/completions, POST /v1/embeddings, GET /v1/models`,
+          `Supported: POST /v1/chat/completions, POST /v1/completions, POST /v1/embeddings, POST /v1/responses, GET/DELETE /v1/responses/:id, GET /v1/models`,
         'invalid_request_error',
         'unknown_url',
       );

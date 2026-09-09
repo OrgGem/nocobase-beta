@@ -8,6 +8,7 @@
  */
 
 import { Context } from '@nocobase/actions';
+import type { Model } from '@nocobase/database';
 import { getAiApiConfig } from './request-cache';
 
 /**
@@ -36,7 +37,7 @@ export async function resolveLlmService(ctx: Context, serviceKey: string) {
 export async function resolveModelString(
   ctx: Context,
   modelString: string,
-): Promise<{ service: any; modelId: string } | null> {
+): Promise<{ service: Model; modelId: string } | null> {
   const repo = ctx.db.getRepository('llmServices');
 
   // ─── Strategy 1: Try splitting at "/" positions ───
@@ -77,6 +78,43 @@ export async function resolveModelString(
   const enabledServices = await repo.find({ filter: { enabled: true } });
   if (enabledServices.length === 1) {
     return { service: enabledServices[0], modelId: modelString };
+  }
+
+  return null;
+}
+/**
+ * Resolve a configured model reference strictly. Unlike resolveModelString, this never falls
+ * back to the default or single enabled service: a reference like "missing-service/gpt-4o"
+ * must fail instead of being reinterpreted as a model id on an unrelated service. Use this for
+ * admin-configured references (virtual model buckets and fallbacks), where silent misrouting
+ * would route traffic to the wrong model.
+ */
+export async function resolveModelReference(
+  ctx: Context,
+  reference: string,
+): Promise<{ service: Model; modelId: string } | null> {
+  const repo = ctx.db.getRepository('llmServices');
+
+  const slashPositions: number[] = [];
+  for (let i = 0; i < reference.length; i++) {
+    if (reference[i] === '/') {
+      slashPositions.push(i);
+    }
+  }
+
+  for (const pos of slashPositions) {
+    const serviceKey = reference.substring(0, pos);
+    const modelId = reference.substring(pos + 1);
+    if (!serviceKey || !modelId) continue;
+
+    let service = await repo.findOne({ filter: { name: serviceKey } });
+    if (!service) {
+      service = await repo.findOne({ filter: { title: serviceKey } });
+    }
+
+    if (service) {
+      return { service, modelId };
+    }
   }
 
   return null;

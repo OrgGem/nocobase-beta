@@ -25,7 +25,7 @@ export interface RouteFormValues {
   enabled: boolean;
   authMode: 'both' | 'api-key' | 'role';
   encryptionMode: 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
-  wireFormat: 'binary' | 'json';
+  wireFormat: 'binary' | 'json' | 'hybrid-json';
   aesSecret?: string;
   aesSecretEnvVar?: string;
   aesKeyName?: string;
@@ -321,16 +321,13 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
                 options={[
                   { value: 'binary', label: t('Binary') as string },
                   { value: 'json', label: t('JSON') as string },
+                  ...(encryptionMode !== 'pgp' ? [{ value: 'hybrid-json', label: t('Hybrid JSON') as string }] : []),
                 ]}
               />
             </Form.Item>
             <Form.Item
               name="requestEncrypted"
-              label={
-                direction === 'inbound'
-                  ? (t('Decrypt Request') as string)
-                  : (t('Encrypt Request') as string)
-              }
+              label={direction === 'inbound' ? (t('Decrypt Request') as string) : (t('Encrypt Request') as string)}
               tooltip={
                 direction === 'inbound'
                   ? (t('Decrypt incoming payload before forwarding to backend') as string)
@@ -342,11 +339,7 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
             </Form.Item>
             <Form.Item
               name="responseEncrypted"
-              label={
-                direction === 'inbound'
-                  ? (t('Encrypt Response') as string)
-                  : (t('Decrypt Response') as string)
-              }
+              label={direction === 'inbound' ? (t('Encrypt Response') as string) : (t('Decrypt Response') as string)}
               tooltip={
                 direction === 'inbound'
                   ? (t('Encrypt backend response before sending to client') as string)
@@ -364,7 +357,9 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
             <Form.Item
               name="aesKeyName"
               label={t('AES Key (Crypto Toolkit)') as string}
-              tooltip={t('Select an AES key from Crypto Toolkit. When set, overrides inline secret and env variable') as string}
+              tooltip={
+                t('Select an AES key from Crypto Toolkit. When set, overrides inline secret and env variable') as string
+              }
             >
               <Select
                 allowClear
@@ -375,14 +370,22 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
             <Form.Item
               name="aesSecret"
               label={t('AES Secret') as string}
-              tooltip={t('Shared secret: 32-byte base64 key or any passphrase (fallback when no Crypto Toolkit key is selected)') as string}
+              tooltip={
+                t(
+                  'Shared secret: 32-byte base64 key or any passphrase (fallback when no Crypto Toolkit key is selected)',
+                ) as string
+              }
             >
               <Input.Password autoComplete="new-password" placeholder={MASK} />
             </Form.Item>
             <Form.Item
               name="aesSecretEnvVar"
               label={t('AES Secret Env Variable') as string}
-              tooltip={t('Env variable takes precedence over the stored secret (fallback when no Crypto Toolkit key is selected)') as string}
+              tooltip={
+                t(
+                  'Env variable takes precedence over the stored secret (fallback when no Crypto Toolkit key is selected)',
+                ) as string
+              }
             >
               <Input />
             </Form.Item>
@@ -397,7 +400,8 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Public key of the recipient (cryptoToolkit key name)') as string}
               rules={[
                 {
-                  required: (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted),
+                  required:
+                    (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted),
                   message: t('PGP encrypt key is required') as string,
                 },
               ]}
@@ -410,7 +414,8 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Own key whose private material decrypts incoming payloads') as string}
               rules={[
                 {
-                  required: (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted),
+                  required:
+                    (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted),
                   message: t('PGP decrypt key is required') as string,
                 },
               ]}
@@ -434,7 +439,8 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Partner RSA public key that encrypts outgoing payloads (Crypto Toolkit key name)') as string}
               rules={[
                 {
-                  required: (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted),
+                  required:
+                    (direction === 'outbound' && requestEncrypted) || (direction === 'inbound' && responseEncrypted),
                   message: t('RSA encrypt key is required') as string,
                 },
               ]}
@@ -447,7 +453,8 @@ export const RouteFormModal: React.FC<RouteFormModalProps> = ({
               tooltip={t('Own RSA key whose private material decrypts incoming payloads') as string}
               rules={[
                 {
-                  required: (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted),
+                  required:
+                    (direction === 'inbound' && requestEncrypted) || (direction === 'outbound' && responseEncrypted),
                   message: t('RSA decrypt key is required') as string,
                 },
               ]}

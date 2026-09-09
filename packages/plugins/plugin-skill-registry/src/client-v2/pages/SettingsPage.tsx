@@ -11,6 +11,11 @@ type Overrides = {
   publicEnabled?: boolean;
   maxSourceItems?: number;
   maxSourceFileBytes?: number;
+  maxSourceTreeEntries?: number;
+  maxSourceTreeOutputBytes?: number;
+  maxFiles?: number;
+  maxExpandedBytes?: number;
+  maxArtifactBytes?: number;
   downloadConcurrencyPerIp?: number;
   downloadConcurrencyGlobal?: number;
   downloadResponseTimeoutMs?: number;
@@ -98,7 +103,7 @@ export default function SettingsPage() {
               </Space>
             }
           >
-            <InputNumber min={1} max={10000} style={{ width: 260 }} />
+            <InputNumber min={1} style={{ width: 260 }} />
           </Form.Item>
           <Form.Item
             name="maxSourceFileBytes"
@@ -109,7 +114,62 @@ export default function SettingsPage() {
               </Space>
             }
           >
-            <InputNumber min={1} max={268435456} style={{ width: 260 }} />
+            <InputNumber min={1} style={{ width: 260 }} />
+          </Form.Item>
+          <Form.Item
+            name="maxSourceTreeEntries"
+            label={
+              <Space>
+                {t('Maximum source tree entries')}
+                {sourceTag('maxSourceTreeEntries')}
+              </Space>
+            }
+          >
+            <InputNumber min={1} style={{ width: 260 }} />
+          </Form.Item>
+          <Form.Item
+            name="maxSourceTreeOutputBytes"
+            label={
+              <Space>
+                {t('Maximum source tree output bytes')}
+                {sourceTag('maxSourceTreeOutputBytes')}
+              </Space>
+            }
+          >
+            <InputNumber min={1} style={{ width: 260 }} />
+          </Form.Item>
+          <Form.Item
+            name="maxFiles"
+            label={
+              <Space>
+                {t('Maximum artifact files')}
+                {sourceTag('maxFiles')}
+              </Space>
+            }
+          >
+            <InputNumber min={1} style={{ width: 260 }} />
+          </Form.Item>
+          <Form.Item
+            name="maxExpandedBytes"
+            label={
+              <Space>
+                {t('Maximum expanded size (bytes)')}
+                {sourceTag('maxExpandedBytes')}
+              </Space>
+            }
+          >
+            <InputNumber min={1} style={{ width: 260 }} />
+          </Form.Item>
+          <Form.Item
+            name="maxArtifactBytes"
+            label={
+              <Space>
+                {t('Maximum artifact compressed size (bytes)')}
+                {sourceTag('maxArtifactBytes')}
+              </Space>
+            }
+          >
+            <InputNumber min={1} style={{ width: 260 }} />
           </Form.Item>
           <Form.Item
             name="downloadConcurrencyPerIp"

@@ -11,6 +11,18 @@ import { createMockServer, MockServer, waitSecond } from '@nocobase/test';
 import { SequelizeDataSource, SequelizeCollectionManager } from '@nocobase/data-source-manager';
 import { Database } from '@nocobase/database';
 
+/**
+ * KNOWN LIMITATION: Integration tests using createMockServer with short plugin name
+ * 'data-source-mssql' currently fail because the package is unscoped ('plugin-data-source-mssql')
+ * while PluginManager.parseName() only tries '@nocobase/plugin-' and '@nocobase/preset-' prefixes.
+ * This is a pre-existing architectural limitation. To fix, either:
+ *   1. Rename the package to '@nocobase/plugin-data-source-mssql', OR
+ *   2. Set PLUGIN_PACKAGE_PREFIX env var to include an empty prefix, OR
+ *   3. Enhance PluginManager.parseName() to try the bare package name as a fallback
+ *
+ * Unit tests (mssql-dialect.test.ts, mssql-format-options.test.ts, sql-quote.test.ts,
+ * mssql-bulk-introspection.test.ts) provide coverage without requiring the mock server.
+ */
 describe('mssql data source collection api', () => {
   let app: MockServer;
 

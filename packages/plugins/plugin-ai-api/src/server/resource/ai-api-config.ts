@@ -59,7 +59,8 @@ const aiApiConfigResource: ResourceOptions = {
     },
 
     async save(ctx, next) {
-      const values = ctx.action.params.values || (ctx.request.body as any) || {};
+      const values: Record<string, unknown> =
+        ctx.action.params.values || (ctx.request.body as Record<string, unknown>) || {};
       const repo = ctx.db.getRepository('aiApiConfig');
       let config = await repo.findOne();
 

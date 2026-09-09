@@ -139,6 +139,7 @@ describe('pdfFileProcessor', () => {
           },
         },
         log: { warn: vi.fn() },
+        state: {},
       },
     } as any;
   }

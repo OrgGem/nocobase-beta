@@ -49,6 +49,16 @@ function requirePositiveIntegerOrNull(value: unknown, field: string): void {
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${field} must be a positive integer.`);
 }
 
+function requireBooleanOrNull(value: unknown, field: string): void {
+  if (value === null || value === undefined) return;
+  if (typeof value !== 'boolean') throw new Error(`${field} must be a boolean.`);
+}
+
+function requireInteger(value: unknown, field: string): void {
+  if (value === null || value === undefined || value === '') return;
+  if (!Number.isSafeInteger(Number(value))) throw new Error(`${field} must be an integer.`);
+}
+
 export function validateModelMetadata(model: Model): void {
   if (!String(model.get('llmService') ?? '').trim()) throw new Error('llmService is required.');
   if (!String(model.get('model') ?? '').trim()) throw new Error('model is required.');
@@ -58,6 +68,18 @@ export function validateModelMetadata(model: Model): void {
   if (systemPrompt !== null && systemPrompt !== undefined && typeof systemPrompt !== 'string') {
     throw new Error('systemPrompt must be a string.');
   }
+  requireBooleanOrNull(model.get('supportsVision'), 'supportsVision');
+  requireBooleanOrNull(model.get('supportsToolCalling'), 'supportsToolCalling');
+  requireBooleanOrNull(model.get('enabled'), 'enabled');
+  const reasoningTier = model.get('reasoningTier');
+  if (
+    reasoningTier !== null &&
+    reasoningTier !== undefined &&
+    !['cheap', 'general', 'reasoning'].includes(String(reasoningTier))
+  ) {
+    throw new Error('reasoningTier must be cheap, general, or reasoning.');
+  }
+  requireInteger(model.get('sortOrder'), 'sortOrder');
 
   const contextWindow = model.get('contextWindow');
   const maxCompletionTokens = model.get('maxCompletionTokens');
@@ -72,6 +94,33 @@ export function validateModelMetadata(model: Model): void {
   ) {
     throw new Error('maxCompletionTokens cannot exceed contextWindow.');
   }
+}
+
+function requireModelReference(value: unknown, field: string): void {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  const slash = normalized.indexOf('/');
+  if (slash <= 0 || slash === normalized.length - 1) {
+    throw new Error(`${field} must use the service/modelId format.`);
+  }
+}
+
+function requireModelReferenceList(value: unknown, field: string): void {
+  if (value === null || value === undefined) return;
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array.`);
+  value.forEach((item, index) => requireModelReference(item, `${field}[${index}]`));
+}
+
+export function validateVirtualModel(model: Model): void {
+  if (!String(model.get('name') ?? '').trim()) throw new Error('name is required.');
+  const mode = model.get('mode');
+  if (mode !== null && mode !== undefined && !['chat', 'embedding'].includes(String(mode))) {
+    throw new Error('mode must be chat or embedding.');
+  }
+  requireModelReference(model.get('fallbackModel'), 'fallbackModel');
+  for (const field of ['visionModels', 'toolModels', 'reasoningModels', 'cheapModels', 'generalModels']) {
+    requireModelReferenceList(model.get(field), field);
+  }
+  requireBooleanOrNull(model.get('enabled'), 'enabled');
 }
 
 export function validateQuotaPolicy(model: Model): void {

@@ -10,6 +10,7 @@
 import { Sequelize, QueryTypes, Op } from 'sequelize';
 import { Model } from '@nocobase/database';
 import _ from 'lodash';
+import { quoteIdentifier } from '../security/sql-quote';
 
 interface IndexInfo {
   name: string;
@@ -125,11 +126,28 @@ export class MssqlSmartCursorBuilder {
   private sequelize: Sequelize;
   private tableName: string;
   private collection: { filterTargetKey: string | string[] };
+  private schema?: string;
 
-  constructor(sequelize: Sequelize, tableName: string, collection: { filterTargetKey: string | string[] }) {
+  constructor(
+    sequelize: Sequelize,
+    tableName: string,
+    collection: { filterTargetKey: string | string[] },
+    schema?: string,
+  ) {
     this.sequelize = sequelize;
     this.tableName = tableName;
     this.collection = collection;
+    this.schema = schema;
+  }
+
+  /**
+   * Fully schema-qualified, bracket-quoted object name for OBJECT_ID(). NocoBase stores the schema
+   * separately from tableName, so passing a bare tableName makes OBJECT_ID() resolve only the
+   * connection's default schema and silently miss every table living in any other schema.
+   */
+  private getQualifiedTableName(): string {
+    const quotedTable = quoteIdentifier(this.tableName);
+    return this.schema ? `${quoteIdentifier(this.schema)}.${quotedTable}` : quotedTable;
   }
 
   /**
@@ -164,7 +182,7 @@ export class MssqlSmartCursorBuilder {
     try {
       const indexRows = (await this.sequelize.query(indexInfoSql, {
         type: QueryTypes.SELECT,
-        replacements: [this.tableName],
+        replacements: [this.getQualifiedTableName()],
         raw: true,
       })) as any[];
 
@@ -260,7 +278,8 @@ export class MssqlSmartCursorBuilder {
       // Fallback to filterTargetKey
       return this.getFallbackStrategy();
     } catch (error) {
-      console.error('[MssqlSmartCursorBuilder] Error getting index info:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`[MssqlSmartCursorBuilder] Error getting index info: ${message}\n`);
       return this.getFallbackStrategy();
     }
   }
@@ -295,9 +314,14 @@ export class MssqlSmartCursorBuilder {
     options.order = cursorStrategy.buildSort();
     options['parseSort'] = false;
 
+    // Snapshot the caller's WHERE once. The composite-key strategy wraps baseWhere in Op.and, so
+    // reusing options.where (already mutated by the previous batch) would nest one Op.and deeper on
+    // every batch and grow the generated SQL linearly. Rebuilding from baseWhere keeps it constant.
+    const baseWhere = options.where;
+
     while (hasMoreData) {
       if (!isFirst) {
-        options.where = cursorStrategy.buildWhere(options.where, cursorRecord);
+        options.where = cursorStrategy.buildWhere(baseWhere, cursorRecord);
       }
       if (isFirst) {
         isFirst = false;

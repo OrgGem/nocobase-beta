@@ -231,7 +231,14 @@ function versionResponse(version: RegistryModel) {
     registrySignature: getString(version, 'registrySignature') || null,
     signatureKeyId: getString(version, 'signatureKeyId') || null,
     changelog: getString(version, 'changelog') || null,
-    publishedAt: (() => { const v = version.get('publishedAt'); return v instanceof Date ? v.toISOString() : (typeof v === 'string' || typeof v === 'number' ? new Date(v).toISOString() : null); })(),
+    publishedAt: (() => {
+      const v = version.get('publishedAt');
+      return v instanceof Date
+        ? v.toISOString()
+        : typeof v === 'string' || typeof v === 'number'
+          ? new Date(v).toISOString()
+          : null;
+    })(),
   };
 }
 
@@ -245,7 +252,14 @@ function versionSummaryResponse(version: RegistryModel) {
     artifactDigest: getString(version, 'artifactDigest'),
     registrySignature: getString(version, 'registrySignature') || null,
     signatureKeyId: getString(version, 'signatureKeyId') || null,
-    publishedAt: (() => { const v = version.get('publishedAt'); return v instanceof Date ? v.toISOString() : (typeof v === 'string' || typeof v === 'number' ? new Date(v).toISOString() : null); })(),
+    publishedAt: (() => {
+      const v = version.get('publishedAt');
+      return v instanceof Date
+        ? v.toISOString()
+        : typeof v === 'string' || typeof v === 'number'
+          ? new Date(v).toISOString()
+          : null;
+    })(),
   };
 }
 
@@ -290,6 +304,9 @@ async function runAction(ctx: Context, next: () => Promise<void>, handler: () =>
     await handler();
     await next();
   } catch (error) {
+    if (!(error instanceof RegistryError)) {
+      ctx.logger?.error('[skill-registry] action handler failed', error);
+    }
     throw toRegistryError(error);
   }
 }
@@ -610,6 +627,11 @@ export function createAdminActions(input: {
           'publicEnabled',
           'maxSourceItems',
           'maxSourceFileBytes',
+          'maxSourceTreeEntries',
+          'maxSourceTreeOutputBytes',
+          'maxFiles',
+          'maxExpandedBytes',
+          'maxArtifactBytes',
           'downloadConcurrencyPerIp',
           'downloadConcurrencyGlobal',
           'downloadResponseTimeoutMs',
@@ -1175,4 +1197,3 @@ export function createHealthActions(readiness: RegistryReadinessService) {
     },
   };
 }
-

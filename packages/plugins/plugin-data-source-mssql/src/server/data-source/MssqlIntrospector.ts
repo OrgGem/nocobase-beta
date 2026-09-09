@@ -9,6 +9,12 @@
 
 import { DatabaseIntrospector } from '@nocobase/data-source-manager';
 import { tableInfo } from '@nocobase/data-source-manager';
+import {
+  buildBulkColumnsSql,
+  groupColumnsByTable,
+  type MssqlBulkColumnRow,
+  type MssqlTableColumns,
+} from './mssql-bulk-introspection';
 
 /**
  * MSSQL field type → NocoBase field type mapping.
@@ -63,6 +69,15 @@ export class MssqlIntrospector extends DatabaseIntrospector {
   private primaryKeyCache: Map<string, string[]> | null = null;
 
   /**
+   * Cache of { tableName → describeTable-compatible column map } loaded in ONE
+   * schema-wide query by preloadAllColumns(). When present, getTableColumnsInfo()
+   * serves column metadata from memory instead of a per-table describeTable() call,
+   * eliminating the N+1 introspection round trips. null = not preloaded (fall back
+   * to per-table describeTable).
+   */
+  private columnsCache: Map<string, MssqlTableColumns> | null = null;
+
+  /**
    * Cache of { tableName → Set<columnName> } for columns with Full-Text Search indexes.
    * null = not yet loaded; empty Map = loaded but no FTS columns found (or FTS not installed).
    */
@@ -103,6 +118,28 @@ export class MssqlIntrospector extends DatabaseIntrospector {
     } catch (err) {
       this.db.logger.warn('[MSSQL] Failed to preload primary keys, will fall back to per-table query:', err);
       this.primaryKeyCache = null;
+    }
+  }
+
+  /**
+   * Load column metadata for ALL tables in the schema in ONE bulk query and cache it.
+   * This is the anti-N+1 path: instead of Sequelize's describeTable() issuing a
+   * per-table `sp_columns`-style round trip, the whole catalog is fetched once and
+   * grouped in memory. Call before the parallel introspection loop; getTableColumnsInfo()
+   * then serves from `columnsCache` and falls back to describeTable() only if the
+   * preload failed.
+   */
+  async preloadAllColumns(schemaName = 'dbo'): Promise<void> {
+    try {
+      const rows = (await this.db.sequelize.query(buildBulkColumnsSql(schemaName), {
+        type: 'SELECT',
+      })) as MssqlBulkColumnRow[];
+
+      this.columnsCache = groupColumnsByTable(rows);
+      this.db.logger.debug(`[MSSQL] Preloaded column metadata for ${this.columnsCache.size} tables`);
+    } catch (err) {
+      this.db.logger.warn('[MSSQL] Failed to bulk-preload columns, will fall back to per-table describeTable:', err);
+      this.columnsCache = null;
     }
   }
 
@@ -169,13 +206,20 @@ export class MssqlIntrospector extends DatabaseIntrospector {
    * Adds PK detection fallback via sys.indexes query.
    */
   async getTableColumnsInfo(tableInfo: tableInfo) {
-    const columns = await this.db.sequelize.getQueryInterface().describeTable(tableInfo);
+    const tableName = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
+    const cached = this.columnsCache?.get(tableName);
+
+    // Serve from the bulk-preloaded cache when available (anti-N+1 path); otherwise
+    // fall back to a per-table describeTable() call. Clone the cached map so per-table
+    // PK/default mutations below never leak back into the shared cache.
+    const columns = cached
+      ? (Object.fromEntries(Object.entries(cached).map(([k, v]) => [k, { ...v }])) as typeof cached)
+      : await this.db.sequelize.getQueryInterface().describeTable(tableInfo);
 
     // Check if any column is already marked as PK
     let hasPrimaryKey = Object.values(columns).some((col: any) => col.primaryKey);
 
     if (!hasPrimaryKey) {
-      const tableName = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
       const schemaName = typeof tableInfo === 'string' ? 'dbo' : tableInfo.schema || 'dbo';
       let pkColumns: string[] | undefined;
 
@@ -245,19 +289,6 @@ export class MssqlIntrospector extends DatabaseIntrospector {
       );
       return [];
     }
-  }
-
-  /**
-   * Override to handle MSSQL auto-increment detection.
-   * MSSQL uses IDENTITY columns, not serial/nextval sequences.
-   */
-  protected columnAttribute(columnsInfo: any, columnName: string, indexes: any) {
-    const attr = super.columnAttribute(columnsInfo, columnName, indexes);
-
-    // MSSQL IDENTITY columns are already detected by Sequelize as autoIncrement
-    // No need for nextval/uuid_generate_v4 checks (those are PostgreSQL-specific)
-
-    return attr;
   }
 
   /**

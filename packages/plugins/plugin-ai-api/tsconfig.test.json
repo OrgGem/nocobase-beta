@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "esModuleInterop": true,
+    "noImplicitAny": false
+  },
+  "include": ["src/server/__tests__/types/responses-sdk.types.test-d.ts"]
+}

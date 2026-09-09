@@ -23,6 +23,10 @@ interface ModelMetadata {
   id: string | number;
   llmService: string;
   model: string;
+  supportsVision?: boolean;
+  supportsToolCalling?: boolean;
+  reasoningTier?: string;
+  sortOrder?: number;
   contextWindow?: number | null;
   maxCompletionTokens?: number | null;
   ownedByOverride?: string | null;
@@ -138,6 +142,10 @@ export default function ModelMetadataPage() {
       displayName: values.displayName?.trim() || null,
       description: values.description?.trim() || null,
       systemPrompt: values.systemPrompt?.trim() || null,
+      supportsVision: !!values.supportsVision,
+      supportsToolCalling: values.supportsToolCalling !== false,
+      reasoningTier: values.reasoningTier || 'general',
+      sortOrder: values.sortOrder ?? 0,
     };
     setSaving(true);
     try {
@@ -288,6 +296,42 @@ export default function ModelMetadataPage() {
             )}
           >
             <Input.TextArea rows={4} placeholder={t('Leave empty to not override')} />
+          </Form.Item>
+          <Form.Item
+            name="supportsVision"
+            label={t('Supports vision')}
+            valuePropName="checked"
+            tooltip={t('Used by virtual-model routing for image/file requests.')}
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="supportsToolCalling"
+            label={t('Supports tool calling')}
+            valuePropName="checked"
+            tooltip={t('Used by virtual-model routing for requests with tools/tool_choice.')}
+          >
+            <Switch defaultChecked />
+          </Form.Item>
+          <Form.Item
+            name="reasoningTier"
+            label={t('Reasoning tier')}
+            tooltip={t('cheap | general | reasoning. Used by virtual-model routing buckets.')}
+          >
+            <Select
+              options={[
+                { value: 'cheap', label: t('Cheap') },
+                { value: 'general', label: t('General') },
+                { value: 'reasoning', label: t('Reasoning') },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            name="sortOrder"
+            label={t('Routing priority')}
+            tooltip={t('Ascending — lower is preferred when a bucket is derived from metadata.')}
+          >
+            <InputNumber precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />

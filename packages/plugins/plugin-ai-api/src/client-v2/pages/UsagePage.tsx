@@ -37,6 +37,10 @@ interface UsageRecord {
   currency?: string;
   costStatus?: string;
   startedAt?: string;
+  responseMetadata?: {
+    virtualModel?: string;
+    routingReason?: string;
+  };
 }
 
 interface UsageFilters {
@@ -150,9 +154,27 @@ export default function UsagePage() {
   const columns: ColumnsType<UsageRecord> = [
     { title: t('Started at'), dataIndex: 'startedAt', key: 'startedAt', width: 180 },
     { title: t('User'), dataIndex: 'userId', key: 'userId', width: 90 },
-    { title: t('Requested model'), dataIndex: 'model', key: 'model', width: 170 },
+    {
+      title: t('Model'),
+      key: 'model',
+      width: 220,
+      render: (_, record) => {
+        const actual = record.resolvedModel || record.model || '-';
+        const alias = record.responseMetadata?.virtualModel;
+        const viaAlias = alias && alias !== actual;
+        return (
+          <Space size={4}>
+            <span>{actual}</span>
+            {viaAlias && (
+              <Tag color="blue">
+                {t('via')} {alias}
+              </Tag>
+            )}
+          </Space>
+        );
+      },
+    },
     { title: t('Resolved service'), dataIndex: 'resolvedService', key: 'resolvedService', width: 170 },
-    { title: t('Resolved model'), dataIndex: 'resolvedModel', key: 'resolvedModel', width: 170 },
     { title: t('Input tokens'), dataIndex: 'inputTokens', key: 'inputTokens', width: 110 },
     { title: t('Output tokens'), dataIndex: 'outputTokens', key: 'outputTokens', width: 110 },
     { title: t('Total tokens'), dataIndex: 'totalTokens', key: 'totalTokens', width: 110 },

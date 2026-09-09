@@ -8,13 +8,14 @@
  */
 
 import { Plugin, lazy } from '@nocobase/client';
-import PluginACLClient from "@nocobase/plugin-acl";
+import PluginACLClient from '@nocobase/plugin-acl';
 import { AI_API_ACL_SNIPPET } from '../constants';
 import React from 'react';
 
 const AiApiConfigPage = React.lazy(() => import('../client-v2/pages/GeneralPage'));
 const AiApiModelPricingPage = React.lazy(() => import('../client-v2/pages/ModelPricingPage'));
 const AiApiModelMetadataPage = React.lazy(() => import('../client-v2/pages/ModelMetadataPage'));
+const AiApiModelRoutingPage = React.lazy(() => import('../client-v2/pages/ModelRoutingPage'));
 const AiApiUsageGroupsPage = React.lazy(() => import('../client-v2/pages/UsageGroupsPage'));
 const AiApiUsagePage = React.lazy(() => import('../client-v2/pages/UsagePage'));
 const { AiApiRolePermissions } = lazy(() => import('./components/AiApiRolePermissions'), 'AiApiRolePermissions');
@@ -46,6 +47,13 @@ export class PluginAiApiClient extends Plugin {
       Component: AiApiModelMetadataPage,
       aclSnippet: AI_API_ACL_SNIPPET,
       sort: 3,
+    });
+
+    this.app.pluginSettingsManager.add('ai-api.model-routing', {
+      title: this.t('Model routing'),
+      Component: AiApiModelRoutingPage,
+      aclSnippet: AI_API_ACL_SNIPPET,
+      sort: 4,
     });
 
     this.app.pluginSettingsManager.add('ai-api.usage-groups', {
@@ -80,4 +88,3 @@ export class PluginAiApiClient extends Plugin {
 }
 
 export default PluginAiApiClient;
-

@@ -117,6 +117,7 @@ export type OpenAIUsage = {
   completion_tokens: number | null;
   total_tokens: number | null;
   prompt_cache_tokens?: number | null;
+  reasoning_tokens?: number | null;
 };
 
 export type OpenAIStreamObject = 'chat.completion.chunk' | 'text_completion';

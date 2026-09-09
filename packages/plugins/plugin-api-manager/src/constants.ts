@@ -36,7 +36,7 @@ export const API_KEY_SCOPE_PATTERN = /^(inbound|outbound)(:[A-Za-z0-9._-]+)?$/;
 
 export type RouteDirection = 'inbound' | 'outbound';
 export type EncryptionMode = 'none' | 'aes-256-gcm' | 'pgp' | 'rsa-oaep';
-export type WireFormat = 'binary' | 'json';
+export type WireFormat = 'binary' | 'json' | 'hybrid-json';
 
 export const ERROR_CODES = {
   TIMEOUT: 'APIM_TIMEOUT',

@@ -1,0 +1,19 @@
+{
+  "Host": "Host",
+  "Port": "Port",
+  "Database": "Database",
+  "Schema": "Schema",
+  "Username": "Username",
+  "Password": "Password",
+  "Encrypt": "Encrypt",
+  "Table prefix": "Table prefix",
+  "Load all collections": "Load all collections",
+  "Collections": "Collections",
+  "Delete collection": "Delete collection",
+  "Delete": "Delete",
+  "Are you sure you want to delete it?": "Are you sure you want to delete it?",
+  "Automatically drop objects that depend on the collection (such as views), and in turn all objects that depend on those objects": "Automatically drop objects that depend on the collection (such as views), and in turn all objects that depend on those objects",
+  "Collection name is missing": "Collection name is missing",
+  "Collection deleted successfully": "Collection deleted successfully",
+  "Failed to delete collection": "Failed to delete collection"
+}

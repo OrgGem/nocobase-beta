@@ -267,7 +267,9 @@ export const GuidePage: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) =
       <div>
         <Typography.Title level={5}>{t('Encryption')}</Typography.Title>
         <Typography.Paragraph>
-          {t('Each route sets encryptionMode (none, aes-256-gcm, pgp, rsa-oaep) and wireFormat (binary or json).')}
+          {t(
+            'Each route sets encryptionMode (none, aes-256-gcm, pgp, rsa-oaep) and wireFormat (binary, json or hybrid-json).',
+          )}
         </Typography.Paragraph>
         <ul style={{ paddingLeft: 20 }}>
           <li>
@@ -318,7 +320,17 @@ export const GuidePage: React.FC<{ embedded?: boolean }> = ({ embedded } = {}) =
           </li>
           <li>
             {t(
+              'Inbound callers encrypt the request with the gateway RSA public key (rsaEncryptKeyName) and decrypt the response with their own private key. Outbound targets decrypt the request with their own private key.',
+            )}
+          </li>
+          <li>
+            {t(
               'Turn off "Response Encrypted" when the other side replies in plaintext: the gateway then skips decrypting outbound responses and encrypting inbound responses.',
+            )}
+          </li>
+          <li>
+            {t(
+              'Hybrid JSON wire format (rsa-oaep and aes-256-gcm only) exposes the crypto components as separate JSON fields (encryptedKey, nonce, tag, ciphertext) instead of the opaque NCR1/NCB1 container — useful for interoperability with external systems that expect the components separately.',
             )}
           </li>
         </ul>

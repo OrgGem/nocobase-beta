@@ -76,6 +76,13 @@ async function requireGitExport<T>(operation: Promise<T>): Promise<T> {
     if (isRecord(error) && error.code === 'REGISTRY_CONTENT_LIMIT_EXCEEDED') {
       throw new RegistryError('ARTIFACT_TOO_LARGE', 422, 'Git source content exceeds the registry ingestion limit.');
     }
+    if (isRecord(error) && error.code === 'REGISTRY_GIT_COMMAND_FAILED') {
+      throw new RegistryError(
+        'SOURCE_GIT_COMMAND_FAILED',
+        422,
+        'Git command failed while reading the source repository.',
+      );
+    }
     throw error;
   }
 }
@@ -460,7 +467,7 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
           repositoryId: config.repositoryId,
           commitSha,
           filePath: skillMarkdownPath,
-          maxBytes: Math.max(1, skillMarkdownSize),
+          maxBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
         },
         access,
       ),
@@ -500,16 +507,16 @@ export class GitManagerSourceProvider implements RegistrySourceProvider {
             repositoryId: config.repositoryId,
             commitSha,
             filePath: joinPath(skillRoot, relativePath),
-            maxBytes: Math.max(1, file.size),
+            maxBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
           },
           access,
         ),
       );
-      if (
-        !Buffer.isBuffer(content) ||
-        content.length !== file.size ||
-        content.length > SOURCE_INGESTION_LIMITS.maxFileBytes
-      ) {
+      // Git smudge filters (e.g. CRLF conversion) can make `git show` output
+      // larger than the blob size reported by `ls-tree -l`, so only the
+      // configured per-file limit bounds the read; the candidate digest covers
+      // the actual bytes.
+      if (!Buffer.isBuffer(content) || content.length > SOURCE_INGESTION_LIMITS.maxFileBytes) {
         throw new RegistryError(
           'SOURCE_CONTENT_CHANGED',
           409,

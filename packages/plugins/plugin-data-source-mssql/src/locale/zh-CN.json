@@ -1,0 +1,19 @@
+{
+  "Host": "主机",
+  "Port": "端口",
+  "Database": "数据库",
+  "Schema": "架构",
+  "Username": "用户名",
+  "Password": "密码",
+  "Encrypt": "加密",
+  "Table prefix": "表前缀",
+  "Load all collections": "加载所有数据表",
+  "Collections": "数据表",
+  "Delete collection": "删除数据表",
+  "Delete": "删除",
+  "Are you sure you want to delete it?": "确定要删除吗？",
+  "Automatically drop objects that depend on the collection (such as views), and in turn all objects that depend on those objects": "自动删除依赖于该数据表的对象（如视图），以及依赖于这些对象的所有对象",
+  "Collection name is missing": "缺少数据表名称",
+  "Collection deleted successfully": "数据表删除成功",
+  "Failed to delete collection": "删除数据表失败"
+}

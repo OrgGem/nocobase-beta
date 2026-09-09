@@ -25,6 +25,7 @@ describe('AI API usage normalization', () => {
       completion_tokens: 5,
       total_tokens: 17,
       prompt_cache_tokens: null,
+      reasoning_tokens: null,
     });
   });
 
@@ -34,6 +35,7 @@ describe('AI API usage normalization', () => {
       completion_tokens: 0,
       total_tokens: 0,
       prompt_cache_tokens: null,
+      reasoning_tokens: null,
     });
   });
 
@@ -45,13 +47,24 @@ describe('AI API usage normalization', () => {
       completion_tokens: 5,
       total_tokens: 15,
       prompt_cache_tokens: 8,
+      reasoning_tokens: null,
     });
     expect(normalizeUsage({ input_tokens: 20, output_tokens: 10, input_token_details: { cache_read: 15 } })).toEqual({
       prompt_tokens: 20,
       completion_tokens: 10,
       total_tokens: 30,
       prompt_cache_tokens: 15,
+      reasoning_tokens: null,
     });
+  });
+
+  it('extracts reasoning token details from LangChain and OpenAI usage shapes', () => {
+    expect(
+      normalizeUsage({ input_tokens: 10, output_tokens: 5, output_token_details: { reasoning: 3 } }),
+    ).toMatchObject({ reasoning_tokens: 3 });
+    expect(
+      normalizeUsage({ prompt_tokens: 10, completion_tokens: 5, completion_tokens_details: { reasoning_tokens: 4 } }),
+    ).toMatchObject({ reasoning_tokens: 4 });
   });
 
   it('is idempotent so streaming double-normalization keeps prompt_cache_tokens', () => {
@@ -85,6 +98,7 @@ describe('AI API usage normalization', () => {
       completion_tokens: 50,
       total_tokens: 150,
       prompt_cache_tokens: 80,
+      reasoning_tokens: null,
     });
     expect(ctx.state.aiApiUsageResult).toMatchObject({
       source: 'provider',

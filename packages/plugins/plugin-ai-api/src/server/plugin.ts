@@ -12,11 +12,12 @@ import type { Transactionable } from '@nocobase/database';
 import { createAiLlmRouter, AI_LLM_PREFIX } from './routes/router';
 import aiApiConfigResource from './resource/ai-api-config';
 import aiApiUsageMonitorResource from './resource/ai-api-usage-monitor';
-import aiApiUsageGroupsResource from './resource/ai-api-usage-groups';
 import { RateLimiter } from './utils/rate-limiter';
 import { invalidateRolePermissionCache } from './middleware/role-permission';
+import { blockResponseRecordResource } from './middleware/response-record-resource';
 import { invalidateGroupAccessCache } from './utils/user-permissions';
-import { validateModelPrice, validateModelMetadata, validateQuotaPolicy } from './validation';
+import { cleanupExpiredResponseRecords } from './utils/response-store';
+import { validateModelPrice, validateModelMetadata, validateQuotaPolicy, validateVirtualModel } from './validation';
 import { AI_API_ACL_SNIPPET } from '../constants';
 import {
   FileProcessorService,
@@ -52,6 +53,7 @@ export class PluginAiApiServer extends Plugin {
   fileProcessorService = new FileProcessorService();
 
   private gcInterval: NodeJS.Timeout | null = null;
+  private responseCleanupInterval: NodeJS.Timeout | null = null;
 
   async afterAdd() {}
 
@@ -61,6 +63,9 @@ export class PluginAiApiServer extends Plugin {
     });
     this.app.db.on('aiApiModelMetadata.beforeSave', (model) => {
       validateModelMetadata(model);
+    });
+    this.app.db.on('aiApiVirtualModels.beforeSave', (model) => {
+      validateVirtualModel(model);
     });
     this.app.db.on('aiApiUsageGroups.beforeSave', async (model, options) => {
       validateQuotaPolicy(model);
@@ -82,6 +87,19 @@ export class PluginAiApiServer extends Plugin {
     this.app.db.on('aiApiGroupMembers.beforeSave', async (model, options) => {
       const userId = model.get('userId');
       if (!userId) return;
+      // The default group is a fallback, not a membership target: an explicit row would pin the
+      // user there and make them invisible to any unassigned-users filter. Reject it here so the
+      // rule holds whether the row comes from a custom action or a plain aiApiGroupMembers:create.
+      const targetGroupId = model.get('groupId');
+      if (targetGroupId) {
+        const targetGroup = await this.db.getRepository('aiApiUsageGroups').findOne({
+          filterByTk: targetGroupId,
+          transaction: options?.transaction,
+        });
+        if (targetGroup?.get('isDefault')) {
+          throw new Error('Cannot add members to the default group: users without another group use it automatically.');
+        }
+      }
       const existing = await this.db.getRepository('aiApiGroupMembers').findOne({
         filter: { userId },
         transaction: options?.transaction,
@@ -95,24 +113,16 @@ export class PluginAiApiServer extends Plugin {
       if (model.get('isDefault')) {
         throw new Error('The default usage group cannot be deleted.');
       }
+      // Drop membership rows so the affected users fall back to the default group
+      // implicitly. Rows are destroyed one by one to keep the repository-level
+      // destroy events firing for any listener that tracks membership changes.
       const members = await this.db.getRepository('aiApiGroupMembers').find({
         filter: { groupId: model.get('id') },
         transaction: options?.transaction,
       });
-      if (members.length === 0) return;
-
-      const defaultGroup = await this.db.getRepository('aiApiUsageGroups').findOne({
-        filter: { isDefault: true },
-        transaction: options?.transaction,
-      });
-      if (!defaultGroup) {
-        throw new Error('Default usage group is missing; cannot reassign members.');
-      }
-
       for (const member of members) {
-        await this.db.getRepository('aiApiGroupMembers').update({
+        await this.db.getRepository('aiApiGroupMembers').destroy({
           filterByTk: member.get('id'),
-          values: { groupId: defaultGroup.get('id') },
           transaction: options?.transaction,
         });
       }
@@ -151,13 +161,20 @@ export class PluginAiApiServer extends Plugin {
     // 2. Register admin config resource
     this.app.resourceManager.define(aiApiConfigResource);
     this.app.resourceManager.define(aiApiUsageMonitorResource);
-    this.app.resourceManager.define(aiApiUsageGroupsResource);
 
-    this.app.db.on('aiApiRolePermissions.afterSave', (model) => {
-      invalidateRolePermissionCache(model.get('roleName'));
+    // Stored prompts are only exposed through the owner-scoped OpenAI routes. This
+    // explicit policy also blocks root, whose generic NocoBase ACL bypass is unconditional.
+    this.app.resourceManager.use(blockResponseRecordResource(), {
+      tag: 'aiApiResponseRecordsPrivate',
+      after: 'auth',
+      before: 'acl',
     });
-    this.app.db.on('aiApiRolePermissions.afterDestroy', (model) => {
-      invalidateRolePermissionCache(model.get('roleName'));
+
+    this.app.db.on('aiApiRolePermissions.afterSave', (model, options) => {
+      this.invalidateRolePermissionSync(model.get('roleName'), options?.transaction);
+    });
+    this.app.db.on('aiApiRolePermissions.afterDestroy', (model, options) => {
+      this.invalidateRolePermissionSync(model.get('roleName'), options?.transaction);
     });
 
     this.app.db.on('aiApiUsageGroups.afterSave', (model, options) => {
@@ -175,6 +192,7 @@ export class PluginAiApiServer extends Plugin {
         'aiApiRolePermissions:*',
         'aiApiModelPrices:*',
         'aiApiModelMetadata:*',
+        'aiApiVirtualModels:*',
         'aiApiUsageGroups:*',
         'aiApiGroupMembers:*',
         'aiApiGroupQuotaBuckets:list',
@@ -189,6 +207,24 @@ export class PluginAiApiServer extends Plugin {
     //    .unref() prevents this timer from keeping the process alive on shutdown.
     this.gcInterval = setInterval(() => this.rateLimiter.gc(), 5 * 60 * 1000);
     this.gcInterval.unref();
+
+    // Expired stored responses are removed daily; run once at startup as well.
+    this.cleanupResponseRecords();
+    this.responseCleanupInterval = setInterval(() => this.cleanupResponseRecords(), 24 * 60 * 60 * 1000);
+    this.responseCleanupInterval.unref();
+  }
+
+  /**
+   * Drop a role's cached permission record on every node.
+   *
+   * Mirrors invalidateGroupAccess: the local call is not redundant because
+   * syncMessageManager hardcodes skipSelf, so the publishing node never receives
+   * its own message. Passing the transaction defers the broadcast until the
+   * write commits, so other nodes cannot re-read the old row and re-cache it.
+   */
+  private invalidateRolePermissionSync(roleName: unknown, transaction?: Transactionable['transaction']) {
+    invalidateRolePermissionCache(roleName as string | undefined);
+    this.sendSyncMessage({ type: 'invalidateRolePermission', roleName }, { transaction });
   }
 
   /**
@@ -206,9 +242,11 @@ export class PluginAiApiServer extends Plugin {
   /**
    * Received only on the *other* nodes (skipSelf), so this must not re-broadcast.
    */
-  async handleSyncMessage(message: { type?: string; groupId?: unknown }) {
+  async handleSyncMessage(message: { type?: string; groupId?: unknown; roleName?: unknown }) {
     if (message?.type === 'invalidateGroupAccess') {
       invalidateGroupAccessCache(message.groupId as string | number | bigint);
+    } else if (message?.type === 'invalidateRolePermission') {
+      invalidateRolePermissionCache(message.roleName as string | undefined);
     }
   }
 
@@ -227,6 +265,19 @@ export class PluginAiApiServer extends Plugin {
       });
     }
 
+    // Root and admin get explicit AI API permission rows on fresh installs. There is no
+    // built-in role bypass anymore, so without these rows even root/admin would be denied
+    // until an admin grants access in Settings → Users & Permissions.
+    for (const roleName of ['root', 'admin']) {
+      const perm = await this.db.getRepository('aiApiRolePermissions').findOne({
+        filter: { roleName },
+      });
+      if (!perm) {
+        await this.db.getRepository('aiApiRolePermissions').create({
+          values: { roleName, enabled: true, allowAllEmployees: true, allowedEmployees: [] },
+        });
+      }
+    }
     // Create default usage group on first install
     const defaultGroup = await this.db.getRepository('aiApiUsageGroups').findOne({
       filter: { isDefault: true },
@@ -256,6 +307,15 @@ export class PluginAiApiServer extends Plugin {
     }
   }
 
+  private async cleanupResponseRecords(): Promise<void> {
+    try {
+      const deleted = await cleanupExpiredResponseRecords({ db: this.db });
+      if (deleted > 0) this.app.logger.info(`[ai-api] Cleaned up ${deleted} expired response records`);
+    } catch (error) {
+      this.app.logger.warn('[ai-api] Failed to clean up expired response records:', error);
+    }
+  }
+
   async afterEnable() {}
 
   async afterDisable() {}
@@ -265,6 +325,10 @@ export class PluginAiApiServer extends Plugin {
     if (this.gcInterval) {
       clearInterval(this.gcInterval);
       this.gcInterval = null;
+    }
+    if (this.responseCleanupInterval) {
+      clearInterval(this.responseCleanupInterval);
+      this.responseCleanupInterval = null;
     }
     this.rateLimiter.clear();
   }

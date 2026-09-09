@@ -7,12 +7,7 @@ import {
   GatewayCryptoError,
   resolveOwnPrivateKeyMaterial,
 } from '../services/gateway-crypto';
-import {
-  aesGcmDecrypt,
-  isAesContainer,
-  isRsaHybridContainer,
-  rsaHybridDecrypt,
-} from '../services/crypto-core';
+import { aesGcmDecrypt, isAesContainer, isRsaHybridContainer, rsaHybridDecrypt } from '../services/crypto-core';
 import { generatePgpKey } from '../services/pgp-service';
 
 interface FakeKeyRow {
@@ -112,6 +107,53 @@ describe('gateway-crypto AES-256-GCM', () => {
         aesSecretEncrypted: `enc:${keyB64}`,
       }),
     ).rejects.toMatchObject({ code: 'APIM_DECRYPT_FAILED' });
+  });
+
+  it('round-trips the hybrid-json wire format with a raw key', async () => {
+    const app = createFakeApp(new Map());
+    process.env.APIM_TEST_AES = keyB64;
+    const encrypted = await encryptGatewayPayload(app, {
+      mode: 'aes-256-gcm',
+      wireFormat: 'hybrid-json',
+      plaintext,
+      aesSecretEnvVar: 'APIM_TEST_AES',
+    });
+    expect(encrypted.contentType).toBe('application/json');
+    const envelope = JSON.parse(encrypted.body.toString('utf8')) as Record<string, string>;
+    expect(typeof envelope.nonce).toBe('string');
+    expect(typeof envelope.tag).toBe('string');
+    expect(typeof envelope.ciphertext).toBe('string');
+    expect(envelope).not.toHaveProperty('container');
+    expect(envelope).not.toHaveProperty('salt');
+    const decrypted = await decryptGatewayPayload(app, {
+      mode: 'aes-256-gcm',
+      data: encrypted.body,
+      contentType: 'application/json',
+      aesSecretEnvVar: 'APIM_TEST_AES',
+    });
+    expect(decrypted.body.equals(plaintext)).toBe(true);
+    delete process.env.APIM_TEST_AES;
+  });
+
+  it('round-trips the hybrid-json wire format with a passphrase', async () => {
+    const app = createFakeApp(new Map());
+    const passphrase = 'correct horse battery staple';
+    const encrypted = await encryptGatewayPayload(app, {
+      mode: 'aes-256-gcm',
+      wireFormat: 'hybrid-json',
+      plaintext,
+      aesSecretEncrypted: `enc:${passphrase}`,
+    });
+    expect(encrypted.contentType).toBe('application/json');
+    const envelope = JSON.parse(encrypted.body.toString('utf8')) as Record<string, string>;
+    expect(typeof envelope.salt).toBe('string');
+    const decrypted = await decryptGatewayPayload(app, {
+      mode: 'aes-256-gcm',
+      data: encrypted.body,
+      contentType: 'application/json',
+      aesSecretEncrypted: `enc:${passphrase}`,
+    });
+    expect(decrypted.body.equals(plaintext)).toBe(true);
   });
 });
 
@@ -274,22 +316,45 @@ describe('gateway-crypto RSA-OAEP hybrid', () => {
     expect(decrypted.body.equals(plaintext)).toBe(true);
     delete process.env.CRYPTO_TOOLKIT_GW_RSA_PRIVATE;
   });
+
+  it('round-trips the hybrid-json wire format for rsa-oaep', async () => {
+    const app = appWithKeys();
+    const plaintext = Buffer.from('rsa-hybrid-json-payload');
+    const encrypted = await encryptGatewayPayload(app, {
+      mode: 'rsa-oaep',
+      wireFormat: 'hybrid-json',
+      plaintext,
+      rsaEncryptKeyName: 'rsa-partner',
+    });
+    expect(encrypted.contentType).toBe('application/json');
+    const envelope = JSON.parse(encrypted.body.toString('utf8')) as Record<string, string>;
+    expect(typeof envelope.encryptedKey).toBe('string');
+    expect(typeof envelope.nonce).toBe('string');
+    expect(typeof envelope.tag).toBe('string');
+    expect(typeof envelope.ciphertext).toBe('string');
+    expect(envelope).not.toHaveProperty('container');
+    const decrypted = await decryptGatewayPayload(app, {
+      mode: 'rsa-oaep',
+      data: encrypted.body,
+      contentType: 'application/json',
+      rsaDecryptKeyName: 'rsa-own',
+    });
+    expect(decrypted.body.equals(plaintext)).toBe(true);
+    delete process.env.CRYPTO_TOOLKIT_GW_RSA_PRIVATE;
+  });
 });
 
 describe('gateway-crypto resolveOwnPrivateKeyMaterial', () => {
   it('resolves a legacy privateEnvVar without the _PRIVATE suffix', async () => {
     const app = createFakeApp(new Map());
     process.env.CRYPTO_TOOLKIT_LEGACY_PRIVATE = 'legacy-secret';
-    const material = await resolveOwnPrivateKeyMaterial(
-      app,
-      {
-        get: (name: string) =>
-          ({
-            privateEnvVar: 'CRYPTO_TOOLKIT_LEGACY',
-            name: 'legacy-key',
-          })[name],
-      } as unknown as { get(name: string): unknown },
-    );
+    const material = await resolveOwnPrivateKeyMaterial(app, {
+      get: (name: string) =>
+        ({
+          privateEnvVar: 'CRYPTO_TOOLKIT_LEGACY',
+          name: 'legacy-key',
+        })[name],
+    } as unknown as { get(name: string): unknown });
     expect(material.material).toBe('legacy-secret');
     expect(material.passphrase).toBeUndefined();
     delete process.env.CRYPTO_TOOLKIT_LEGACY_PRIVATE;
@@ -299,16 +364,13 @@ describe('gateway-crypto resolveOwnPrivateKeyMaterial', () => {
     const app = createFakeApp(new Map());
     process.env.CRYPTO_TOOLKIT_PW_PRIVATE = 'private-material';
     process.env.CRYPTO_TOOLKIT_PW_PRIVATE_PASSPHRASE = 's3cret';
-    const material = await resolveOwnPrivateKeyMaterial(
-      app,
-      {
-        get: (name: string) =>
-          ({
-            privateEnvVar: 'CRYPTO_TOOLKIT_PW_PRIVATE',
-            name: 'pw-key',
-          })[name],
-      } as unknown as { get(name: string): unknown },
-    );
+    const material = await resolveOwnPrivateKeyMaterial(app, {
+      get: (name: string) =>
+        ({
+          privateEnvVar: 'CRYPTO_TOOLKIT_PW_PRIVATE',
+          name: 'pw-key',
+        })[name],
+    } as unknown as { get(name: string): unknown });
     expect(material.material).toBe('private-material');
     expect(material.passphrase).toBe('s3cret');
     delete process.env.CRYPTO_TOOLKIT_PW_PRIVATE;
@@ -318,16 +380,13 @@ describe('gateway-crypto resolveOwnPrivateKeyMaterial', () => {
   it('throws APIM_CRYPTO_CONFIG when the env variable is missing', async () => {
     const app = createFakeApp(new Map());
     await expect(
-      resolveOwnPrivateKeyMaterial(
-        app,
-        {
-          get: (name: string) =>
-            ({
-              privateEnvVar: 'CRYPTO_TOOLKIT_MISSING_PRIVATE',
-              name: 'missing-key',
-            })[name],
-        } as unknown as { get(name: string): unknown },
-      ),
+      resolveOwnPrivateKeyMaterial(app, {
+        get: (name: string) =>
+          ({
+            privateEnvVar: 'CRYPTO_TOOLKIT_MISSING_PRIVATE',
+            name: 'missing-key',
+          })[name],
+      } as unknown as { get(name: string): unknown }),
     ).rejects.toBeInstanceOf(GatewayCryptoError);
   });
 });

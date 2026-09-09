@@ -10,11 +10,12 @@
 import { Context } from '@nocobase/actions';
 import { toOpenAIError, toOpenAIEmbeddingsResponse } from '../utils/openai-format';
 import { resolveModelString } from '../utils/resolve-service';
+import { resolveVirtualModel, respondVirtualModelUnavailable } from '../utils/virtual-models';
 import { enforceModelAccess } from '../utils/user-permissions';
 import { getAiApiConfig } from '../utils/request-cache';
 import { setAiApiUsageResult } from '../usage';
 import type PluginAiApiServer from '../plugin';
-import { markLlmProviderAttempted, prepareLlmBilling, finalizeLlmBilling } from '../billing';
+import { markLlmProviderAttempted, prepareLlmBilling, AiApiQuotaError } from '../billing';
 
 /**
  * POST /api/ai-llm/v1/embeddings
@@ -90,7 +91,16 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
   }
 
   // ─── Resolve model ────────────────────────────────────────────────────────
-  const resolved = await resolveModelString(ctx, body.model);
+  const virtual = await resolveVirtualModel(ctx, body.model, body, 'embedding');
+  if (virtual?.status === 'unavailable') {
+    respondVirtualModelUnavailable(ctx, virtual);
+    return;
+  }
+  if (virtual?.status === 'resolved') {
+    ctx.state.aiApiVirtualModel = virtual.virtualModel;
+    ctx.state.aiApiRoutingReason = virtual.reason;
+  }
+  const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model));
   if (!resolved) {
     ctx.status = 404;
     ctx.body = toOpenAIError(
@@ -103,9 +113,6 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
   }
 
   const { service, modelId } = resolved;
-
-  // ─── Prepare billing/quota ────────────────────────────────────────────────
-  await prepareLlmBilling(ctx, resolved);
 
   if (service.enabled === false) {
     ctx.status = 404;
@@ -160,7 +167,12 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
     return;
   }
 
+  // ─── Prepare billing/quota after access checks ────────────────────────────
+  // Running this after service.enabled and enforceModelAccess avoids a needless
+  // reserve/release round-trip on every rejected request.
+
   try {
+    await prepareLlmBilling(ctx, resolved);
     // ─── Instantiate and call the embedding provider ──────────────────────
     const EmbeddingClass = providerMeta.embedding;
     const embeddingProvider = new EmbeddingClass({
@@ -183,12 +195,11 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
       total_tokens: estimatedInputTokens,
     };
     setAiApiUsageResult(ctx, usage);
-    await finalizeLlmBilling(ctx, usage, true);
 
     ctx.status = 200;
     ctx.set('Content-Type', 'application/json');
     ctx.body = toOpenAIEmbeddingsResponse({
-      model: body.model,
+      model: `${service.name}/${modelId}`,
       embeddings: vectors,
       // LangChain's EmbeddingsInterface does not expose token counts.
       promptTokens: null,
@@ -196,8 +207,19 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
   } catch (err) {
     ctx.log.error('AI API embeddings error:', err);
     if (!ctx.res.headersSent) {
-      ctx.status = 500;
-      ctx.body = toOpenAIError(500, err.message || 'Failed to generate embeddings', 'server_error');
+      const isQuotaError = err instanceof AiApiQuotaError;
+      ctx.status = isQuotaError ? 429 : 500;
+      if (isQuotaError) ctx.set('X-RateLimit-Reason', err.code);
+      ctx.body = toOpenAIError(
+        ctx.status,
+        getErrorMessage(err, 'Failed to generate embeddings'),
+        isQuotaError ? 'quota_error' : 'server_error',
+        isQuotaError ? err.code : undefined,
+      );
     }
   }
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }

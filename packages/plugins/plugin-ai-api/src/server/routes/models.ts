@@ -11,6 +11,7 @@ import { Context } from '@nocobase/actions';
 import { toOpenAIError } from '../utils/openai-format';
 import { isModelAllowed, isServiceAllowed, resolveUserAccessScope } from '../utils/user-permissions';
 import { getAiApiConfig } from '../utils/request-cache';
+import { listAccessibleVirtualModels, type VirtualModel } from '../utils/virtual-models';
 import type PluginAiApiServer from '../plugin';
 
 /**
@@ -75,6 +76,17 @@ export async function handleListModels(ctx: Context, plugin: PluginAiApiServer) 
       }
     }
 
+    // Expose enabled virtual aliases (e.g. "auto") so clients can discover and use them.
+    // They carry virtual:true and a description, but no capability overrides of their own.
+    try {
+      const virtualModels = await listAccessibleVirtualModels(ctx, scope, config?.enabledLlmServices);
+      for (const virtualModel of virtualModels) {
+        models.push(buildVirtualModelObject(virtualModel, now));
+      }
+    } catch {
+      // Virtual models table may not exist yet during a rolling upgrade — skip silently.
+    }
+
     ctx.status = 200;
     ctx.body = {
       object: 'list',
@@ -135,6 +147,16 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
         }
       }
       if (found) break;
+    }
+
+    if (!found) {
+      try {
+        const virtualModels = await listAccessibleVirtualModels(ctx, scope, config?.enabledLlmServices);
+        const virtualModel = virtualModels.find((candidate) => candidate.name === modelId);
+        if (virtualModel) found = buildVirtualModelObject(virtualModel, now);
+      } catch {
+        // Virtual models table may not exist yet during a rolling upgrade.
+      }
     }
 
     if (!found) {
@@ -244,6 +266,18 @@ export function buildModelObject(
   }
 
   return model;
+}
+
+export function buildVirtualModelObject(virtualModel: VirtualModel, created: number): Record<string, unknown> {
+  return {
+    id: virtualModel.name,
+    object: 'model',
+    created,
+    owned_by: 'ai-api-gateway',
+    virtual: true,
+    mode: virtualModel.mode,
+    description: `Virtual ${virtualModel.mode} alias routed to a concrete model based on the request shape.`,
+  };
 }
 
 function toPositiveInt(value: unknown): number | null {

@@ -27,4 +27,3 @@ export class PluginDataSourceMssqlServer extends Plugin {
 }
 
 export default PluginDataSourceMssqlServer;
-

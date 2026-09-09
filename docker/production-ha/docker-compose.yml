@@ -58,14 +58,14 @@ x-nocobase-env: &nocobase-env
   # Dynamic worker containers read this deployment-specific endpoint through
   # Cluster Manager; plugin code deliberately does not assume a service name.
   CLUSTER_MANAGER_WORKER_READY_URL: ${CLUSTER_MANAGER_WORKER_READY_URL:-http://app-main:13000/api/app:getInfo}
-  CLUSTER_MANAGER_WORKER_IMAGE: ${CLUSTER_MANAGER_WORKER_IMAGE:-nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}}
+  CLUSTER_MANAGER_WORKER_IMAGE: ${CLUSTER_MANAGER_WORKER_IMAGE:-nocobase/nocobase:${NOCOBASE_VERSION:-2.2.3-no-nginx}}
   # Logging
   LOGGER_LEVEL: debug
   LOGGER_TRANSPORT: console,dailyRotateFile
   # Timezone
   TZ: ${TZ:-UTC}
   APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-}
-  NOCOBASE_IMAGE_VERSION: ${NOCOBASE_VERSION:-2.1.30-full}
+  NOCOBASE_IMAGE_VERSION: ${NOCOBASE_VERSION:-2.2.3-no-nginx}
   NPM_REGISTRY_URL: 'http://nginx-cache-registry/npm/'
   APT_MIRROR_URL: 'http://nginx-cache-registry/debian/'
   PYPI_INDEX_URL: 'http://nginx-cache-registry/pypi-simple/'
@@ -89,7 +89,7 @@ x-nocobase-env: &nocobase-env
   KB_DEFAULT_LOCAL_EMBED_DTYPE: ${KB_DEFAULT_LOCAL_EMBED_DTYPE:-q8}
 
 x-nocobase-base: &nocobase-base
-  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.1.30-full}
+  image: nocobase/nocobase:${NOCOBASE_VERSION:-2.2.3-no-nginx}
   restart: unless-stopped
   volumes:
     - app-storage:/app/nocobase/storage

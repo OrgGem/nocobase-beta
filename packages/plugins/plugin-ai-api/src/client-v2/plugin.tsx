@@ -53,6 +53,14 @@ export class PluginAiApiClient extends Plugin<Record<string, never>, Application
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-api',
+      key: 'model-routing',
+      title: this.t('Model routing'),
+      aclSnippet: AI_API_ACL_SNIPPET,
+      sort: 4,
+      componentLoader: () => import('./pages/ModelRoutingPage'),
+    });
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-api',
       key: 'usage-groups',
       title: this.t('Usage groups'),
       aclSnippet: AI_API_ACL_SNIPPET,

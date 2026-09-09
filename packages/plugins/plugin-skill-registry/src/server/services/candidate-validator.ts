@@ -10,26 +10,25 @@ import { ARTIFACT_LIMITS, parseArtifactLimit } from './artifact-builder';
 import { candidateDigest, canonicalJson } from './canonical-json';
 import { containsControlCharacters, normalizeIdentity, normalizeRelativePath } from './validation';
 
-export const SOURCE_INGESTION_LIMITS = Object.freeze({
-  maxItems: parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS, 1000, 10_000),
-  maxFileBytes: parseArtifactLimit(
-    process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES,
-    10 * 1024 * 1024,
-    256 * 1024 * 1024,
-  ),
+// Getter-based limits re-read env vars on every access, so runtime settings
+// applied via applyRuntimeOverrides() take effect without a server restart.
+export const SOURCE_INGESTION_LIMITS = {
+  get maxItems() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS, 5000);
+  },
+  get maxFileBytes() {
+    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES, 100 * 1024 * 1024);
+  },
   maxExternalKeyLength: 500,
   maxPathLength: 500,
-});
+} as const;
 
-function sourceIngestionLimits() {
+export function sourceIngestionLimits() {
   return {
-    ...SOURCE_INGESTION_LIMITS,
-    maxItems: parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS, 1000, 10_000),
-    maxFileBytes: parseArtifactLimit(
-      process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES,
-      10 * 1024 * 1024,
-      256 * 1024 * 1024,
-    ),
+    maxItems: SOURCE_INGESTION_LIMITS.maxItems,
+    maxFileBytes: SOURCE_INGESTION_LIMITS.maxFileBytes,
+    maxExternalKeyLength: SOURCE_INGESTION_LIMITS.maxExternalKeyLength,
+    maxPathLength: SOURCE_INGESTION_LIMITS.maxPathLength,
   };
 }
 

@@ -68,6 +68,13 @@ export interface AesSecret {
   passphrase?: string;
 }
 
+export interface AesGcmParts {
+  iv: Buffer;
+  tag: Buffer;
+  ciphertext: Buffer;
+  salt?: Buffer;
+}
+
 function deriveAesKey(passphrase: string, salt: Buffer): Buffer {
   return scryptSync(passphrase, salt, AES_KEY_LENGTH);
 }
@@ -80,16 +87,14 @@ export function normalizeAesKey(raw: Buffer | string): Buffer {
   return buffer;
 }
 
-export function aesGcmEncrypt(plaintext: Buffer, secret: AesSecret): Buffer {
+export function aesGcmEncryptFields(plaintext: Buffer, secret: AesSecret): AesGcmParts {
   let key: Buffer;
-  let header: Buffer;
+  let salt: Buffer | undefined;
   if (secret.key) {
     key = normalizeAesKey(secret.key);
-    header = Buffer.concat([AES_MAGIC, Buffer.from([AES_MODE_RAW_KEY])]);
   } else if (secret.passphrase) {
-    const salt = randomBytes(AES_SALT_LENGTH);
+    salt = randomBytes(AES_SALT_LENGTH);
     key = deriveAesKey(secret.passphrase, salt);
-    header = Buffer.concat([AES_MAGIC, Buffer.from([AES_MODE_PASSPHRASE]), salt]);
   } else {
     throw new Error('AES encryption requires a key or a passphrase');
   }
@@ -97,7 +102,32 @@ export function aesGcmEncrypt(plaintext: Buffer, secret: AesSecret): Buffer {
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return Buffer.concat([header, iv, tag, ciphertext]);
+  return { iv, tag, ciphertext, salt };
+}
+
+export function aesGcmEncrypt(plaintext: Buffer, secret: AesSecret): Buffer {
+  return assembleAesContainer(aesGcmEncryptFields(plaintext, secret));
+}
+
+export function assembleAesContainer(parts: AesGcmParts): Buffer {
+  const header = parts.salt
+    ? Buffer.concat([AES_MAGIC, Buffer.from([AES_MODE_PASSPHRASE]), parts.salt])
+    : Buffer.concat([AES_MAGIC, Buffer.from([AES_MODE_RAW_KEY])]);
+  return Buffer.concat([header, parts.iv, parts.tag, parts.ciphertext]);
+}
+
+export function aesGcmDecryptFields(parts: AesGcmParts, secret: AesSecret): Buffer {
+  let key: Buffer;
+  if (parts.salt) {
+    if (!secret.passphrase) throw new Error('This payload was encrypted with a passphrase; provide the passphrase');
+    key = deriveAesKey(secret.passphrase, parts.salt);
+  } else {
+    if (!secret.key) throw new Error('This payload was encrypted with a raw key; provide the AES key');
+    key = normalizeAesKey(secret.key);
+  }
+  const decipher = createDecipheriv('aes-256-gcm', key, parts.iv);
+  decipher.setAuthTag(parts.tag);
+  return Buffer.concat([decipher.update(parts.ciphertext), decipher.final()]);
 }
 
 export function aesGcmDecrypt(payload: Buffer, secret: AesSecret): Buffer {
@@ -110,15 +140,12 @@ export function aesGcmDecrypt(payload: Buffer, secret: AesSecret): Buffer {
   }
   const mode = payload[AES_MAGIC.length];
   let offset = AES_MAGIC.length + 1;
-  let key: Buffer;
+  let salt: Buffer | undefined;
   if (mode === AES_MODE_RAW_KEY) {
-    if (!secret.key) throw new Error('This payload was encrypted with a raw key; provide the AES key');
-    key = normalizeAesKey(secret.key);
+    // raw key — no salt
   } else if (mode === AES_MODE_PASSPHRASE) {
-    if (!secret.passphrase) throw new Error('This payload was encrypted with a passphrase; provide the passphrase');
-    const salt = payload.subarray(offset, offset + AES_SALT_LENGTH);
+    salt = payload.subarray(offset, offset + AES_SALT_LENGTH);
     offset += AES_SALT_LENGTH;
-    key = deriveAesKey(secret.passphrase, salt);
   } else {
     throw new Error(`Unknown AES container mode 0x${mode.toString(16)}`);
   }
@@ -127,9 +154,7 @@ export function aesGcmDecrypt(payload: Buffer, secret: AesSecret): Buffer {
   const tag = payload.subarray(offset, offset + AES_TAG_LENGTH);
   offset += AES_TAG_LENGTH;
   const ciphertext = payload.subarray(offset);
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return aesGcmDecryptFields({ iv, tag, ciphertext, salt }, secret);
 }
 export function isAesContainer(payload: Buffer): boolean {
   return payload.length >= AES_MAGIC.length && payload.subarray(0, AES_MAGIC.length).equals(AES_MAGIC);
@@ -142,10 +167,17 @@ export function isAesContainer(payload: Buffer): boolean {
 const RSA_MAGIC = Buffer.from('NCR1', 'ascii');
 const RSA_OAEP_HASH = 'sha256';
 
+export interface RsaHybridParts {
+  wrappedKey: Buffer;
+  iv: Buffer;
+  tag: Buffer;
+  ciphertext: Buffer;
+}
+
 export function rsaOaepWrapSessionKey(publicKeyPem: string, sessionKey: Buffer): Buffer {
   const publicKey = createPublicKey(publicKeyPem);
   if (publicKey.asymmetricKeyType !== 'rsa') {
-    throw new Error("RSA-OAEP encryption requires an RSA public key; got " + publicKey.asymmetricKeyType);
+    throw new Error('RSA-OAEP encryption requires an RSA public key; got ' + publicKey.asymmetricKeyType);
   }
   return publicEncrypt(
     { key: publicKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: RSA_OAEP_HASH },
@@ -156,7 +188,7 @@ export function rsaOaepWrapSessionKey(publicKeyPem: string, sessionKey: Buffer):
 export function rsaOaepUnwrapSessionKey(privateKeyPem: string, wrappedKey: Buffer, passphrase?: string): Buffer {
   const privateKey = createPrivateKey(passphrase ? { key: privateKeyPem, passphrase } : privateKeyPem);
   if (privateKey.asymmetricKeyType !== 'rsa') {
-    throw new Error("RSA-OAEP decryption requires an RSA private key; got " + privateKey.asymmetricKeyType);
+    throw new Error('RSA-OAEP decryption requires an RSA private key; got ' + privateKey.asymmetricKeyType);
   }
   return privateDecrypt(
     { key: privateKey, padding: constants.RSA_PKCS1_OAEP_PADDING, oaepHash: RSA_OAEP_HASH },
@@ -164,16 +196,31 @@ export function rsaOaepUnwrapSessionKey(privateKeyPem: string, wrappedKey: Buffe
   );
 }
 
-export function rsaHybridEncrypt(plaintext: Buffer, publicKeyPem: string): Buffer {
+export function rsaHybridEncryptFields(plaintext: Buffer, publicKeyPem: string): RsaHybridParts {
   const sessionKey = randomBytes(AES_KEY_LENGTH);
   const wrappedKey = rsaOaepWrapSessionKey(publicKeyPem, sessionKey);
-  const lengthPrefix = Buffer.alloc(2);
-  lengthPrefix.writeUInt16BE(wrappedKey.length, 0);
   const iv = randomBytes(AES_IV_LENGTH);
   const cipher = createCipheriv('aes-256-gcm', sessionKey, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return Buffer.concat([RSA_MAGIC, lengthPrefix, wrappedKey, iv, tag, ciphertext]);
+  return { wrappedKey, iv, tag, ciphertext };
+}
+
+export function rsaHybridEncrypt(plaintext: Buffer, publicKeyPem: string): Buffer {
+  return assembleRsaHybridContainer(rsaHybridEncryptFields(plaintext, publicKeyPem));
+}
+
+export function assembleRsaHybridContainer(parts: RsaHybridParts): Buffer {
+  const lengthPrefix = Buffer.alloc(2);
+  lengthPrefix.writeUInt16BE(parts.wrappedKey.length, 0);
+  return Buffer.concat([RSA_MAGIC, lengthPrefix, parts.wrappedKey, parts.iv, parts.tag, parts.ciphertext]);
+}
+
+export function rsaHybridDecryptFields(parts: RsaHybridParts, privateKeyPem: string, passphrase?: string): Buffer {
+  const sessionKey = rsaOaepUnwrapSessionKey(privateKeyPem, parts.wrappedKey, passphrase);
+  const decipher = createDecipheriv('aes-256-gcm', sessionKey, parts.iv);
+  decipher.setAuthTag(parts.tag);
+  return Buffer.concat([decipher.update(parts.ciphertext), decipher.final()]);
 }
 
 export function rsaHybridDecrypt(payload: Buffer, privateKeyPem: string, passphrase?: string): Buffer {
@@ -198,10 +245,7 @@ export function rsaHybridDecrypt(payload: Buffer, privateKeyPem: string, passphr
   const tag = payload.subarray(offset, offset + AES_TAG_LENGTH);
   offset += AES_TAG_LENGTH;
   const ciphertext = payload.subarray(offset);
-  const sessionKey = rsaOaepUnwrapSessionKey(privateKeyPem, wrappedKey, passphrase);
-  const decipher = createDecipheriv('aes-256-gcm', sessionKey, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  return rsaHybridDecryptFields({ wrappedKey, iv, tag, ciphertext }, privateKeyPem, passphrase);
 }
 
 export function isRsaHybridContainer(payload: Buffer): boolean {
