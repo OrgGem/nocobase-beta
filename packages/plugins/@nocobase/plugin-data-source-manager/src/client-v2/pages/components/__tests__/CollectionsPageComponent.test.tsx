@@ -8,7 +8,7 @@
  */
 
 import React from 'react';
-import { App } from 'antd';
+import { App, Form, Input } from 'antd';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -44,6 +44,7 @@ const apiRequest = vi.fn((options: { url: string }) => {
             title: '{{t("Orders")}}',
             template: 'general',
             description: 'Order records',
+            storage: 'archive',
             category: [{ id: 1, name: 'Business', color: 'blue' }],
             fields: [{ name: 'id', primaryKey: true }],
           },
@@ -119,6 +120,18 @@ const plugin = {
     title: '{{t("General collection")}}',
     collection: {
       fields: [],
+    },
+    configure: {
+      items: [
+        {
+          name: 'storage',
+          Component: ({ item }: { item: { name: string } }) => (
+            <Form.Item name={item.name} label="Storage">
+              <Input />
+            </Form.Item>
+          ),
+        },
+      ],
     },
   })),
   getCollectionTemplates: vi.fn(() => [
@@ -399,7 +412,7 @@ describe('CollectionsPage', () => {
     expect(externalDataSource.reload).toHaveBeenCalled();
   });
 
-  it('submits main collection edits through the collections resource', async () => {
+  it('shows and submits the record unique key when editing a main collection without template capability', async () => {
     renderCollectionsPage();
 
     const row = await screen.findByTestId('collection-row-orders');
@@ -407,6 +420,7 @@ describe('CollectionsPage', () => {
 
     const drawerContent = flowMocks.ctx.viewer.drawer.mock.calls[0][0].content();
     render(<App>{drawerContent}</App>);
+    expect(screen.getByText('t:Record unique key')).toBeInTheDocument();
     fireEvent.click(screen.getByText('t:Submit'));
 
     await waitFor(() =>
@@ -415,6 +429,8 @@ describe('CollectionsPage', () => {
         values: expect.objectContaining({
           title: '{{t("Orders")}}',
           category: ['1'],
+          filterTargetKey: ['id'],
+          storage: 'archive',
         }),
       }),
     );

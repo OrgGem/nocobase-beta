@@ -75,6 +75,7 @@ type CollectionCategoryRecord = {
 };
 
 type CollectionFormValues = {
+  [key: string]: unknown;
   title: string;
   name: string;
   template: string;
@@ -536,7 +537,7 @@ const CollectionTemplatePreview: FC<{ template?: CollectionTemplateOptions }> = 
   );
 };
 
-function buildCollectionCreateValues(options: {
+export function buildCollectionCreateValues(options: {
   template: CollectionTemplateOptions;
   formValues: CollectionFormValues;
   selectedPresetFields: React.Key[];
@@ -1014,6 +1015,7 @@ function CollectionEditDrawer(props: {
           : undefined,
       category: Array.isArray(collection.category) ? collection.category.map((item) => String(item.id)) : [],
       description: collection.description,
+      storage: collection.storage,
       simplePaginate: collection.simplePaginate,
       filterTargetKey: getCollectionRecordUniqueKey(collection, collection.fields),
       databaseView: getDatabaseViewFormValue(collection),
@@ -1198,17 +1200,15 @@ function CollectionEditDrawer(props: {
         >
           <Checkbox>{t('Use simple pagination mode')}</Checkbox>
         </Form.Item>
-        {hasTemplateCapability(template, 'recordUniqueKey') ? (
-          <Form.Item
-            name="filterTargetKey"
-            label={t('Record unique key')}
-            extra={t(
-              'If a collection lacks a primary key, you must configure a unique record key to locate row records within a block, failure to configure this will prevent the creation of data blocks for the collection.',
-            )}
-          >
-            <Select mode="multiple" options={filterTargetKeyOptions} loading={fieldsRequest.loading} allowClear />
-          </Form.Item>
-        ) : null}
+        <Form.Item
+          name="filterTargetKey"
+          label={t('Record unique key')}
+          extra={t(
+            'If a collection lacks a primary key, you must configure a unique record key to locate row records within a block, failure to configure this will prevent the creation of data blocks for the collection.',
+          )}
+        >
+          <Select mode="multiple" options={filterTargetKeyOptions} loading={fieldsRequest.loading} allowClear />
+        </Form.Item>
       </Form>
     </DrawerFormLayout>
   );
