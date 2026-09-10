@@ -1,0 +1,41 @@
+{
+  "name": "plugin-block-timeline",
+  "displayName": "Timeline Block",
+  "displayName.zh-CN": "时间线区块",
+  "description": "Render the bound block's records as a configurable timeline with field mapping, status colors, pagination and empty/loading states.",
+  "description.zh-CN": "将数据区块的记录渲染为可配置的时间线，支持字段映射、状态配色、分页与空/加载状态。",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "main": "dist/server/index.js",
+  "keywords": [
+    "nocobase",
+    "plugin",
+    "block",
+    "timeline"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "client.d.ts",
+    "server.js",
+    "server.d.ts",
+    "client-v2.js",
+    "client-v2.d.ts"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x"
+  }
+}
