@@ -53,6 +53,25 @@ export default defineCollection({
     { name: 'reasoningModels', type: 'json', defaultValue: [], comment: 'Ordered list for reasoning-tier requests.' },
     { name: 'cheapModels', type: 'json', defaultValue: [], comment: 'Ordered list for cheap-tier requests.' },
     { name: 'generalModels', type: 'json', defaultValue: [], comment: 'Ordered list for general requests.' },
+    {
+      name: 'complexityKeywords',
+      type: 'json',
+      defaultValue: [],
+      comment: 'Keywords that mark a request as complex and route it to the reasoning bucket.',
+    },
+    {
+      name: 'complexityMinLength',
+      type: 'integer',
+      allowNull: true,
+      comment: 'Minimum total message length that marks a request as complex.',
+    },
+    {
+      name: 'complexityClassifierModel',
+      type: 'string',
+      allowNull: true,
+      comment:
+        'Optional "service/modelId" of a cheap model used to classify request complexity when keyword/length detection says simple.',
+    },
     { name: 'enabled', type: 'boolean', defaultValue: true, index: true },
   ],
 });

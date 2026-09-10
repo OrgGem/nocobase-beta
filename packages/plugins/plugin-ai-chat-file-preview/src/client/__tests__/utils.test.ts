@@ -1,13 +1,26 @@
+import { vi, describe, it, expect, beforeEach } from 'vitest';
+
+vi.mock('@nocobase/client', () => ({
+  useAPIClient: () => ({ request: vi.fn(), resource: vi.fn() }),
+  attachmentFileTypes: { getTypeByFile: () => undefined },
+}));
+
+vi.mock('@nocobase/plugin-ai/client-v2', () => ({
+  getGlobalChatBoxRuntime: vi.fn(),
+}));
+
+import { getGlobalChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import {
   stripFilenameNoise,
   extractFilenameFromText,
   getDisplayNameCandidates,
   isKnownFileUrl,
-  selectChatAttachments,
-  selectChatMessages,
   buildSkillHubManifestMap,
   findManifestEntryForName,
+  readActiveSession,
 } from '../ChatFilePreviewProvider';
+
+const mockedGetRuntime = vi.mocked(getGlobalChatBoxRuntime);
 
 describe('AI Chat File Preview client utils', () => {
   describe('stripFilenameNoise', () => {
@@ -57,44 +70,42 @@ describe('AI Chat File Preview client utils', () => {
     });
   });
 
-  describe('chat store selectors', () => {
-    it('should read legacy flat chat message state', () => {
-      expect(selectChatMessages({ messages: [{ key: 'm1' }], attachments: [] })).toEqual([{ key: 'm1' }]);
-      expect(selectChatAttachments({ messages: [], attachments: [{ filename: 'a.pdf' }] })).toEqual([
-        { filename: 'a.pdf' },
-      ]);
+  describe('readActiveSession (FlowEngine runtime bridge)', () => {
+    beforeEach(() => vi.resetAllMocks());
+
+    it('returns empty arrays when runtime throws', () => {
+      mockedGetRuntime.mockImplementation(() => {
+        throw new Error('no runtime');
+      });
+      const result = readActiveSession('s1');
+      expect(result.messages).toEqual([]);
+      expect(result.attachments).toEqual([]);
     });
 
-    it('should read NocoBase 2.1 session chat message state', () => {
-      const state = {
-        sessions: {
-          s1: {
-            messages: [{ key: 'm2' }],
-            attachments: [{ filename: 'b.pdf' }],
-          },
+    it('returns messages and attachments from getSessionState', () => {
+      mockedGetRuntime.mockReturnValue({
+        chatMessageModel: {
+          getSessionState: (sid?: string) => ({
+            messages: sid === 's1' ? [{ key: 'm2' }] : [],
+            attachments: sid === 's1' ? [{ filename: 'b.pdf' }] : [],
+          }),
         },
-      };
-
-      expect(selectChatMessages(state, 's1')).toEqual([{ key: 'm2' }]);
-      expect(selectChatAttachments(state, 's1')).toEqual([{ filename: 'b.pdf' }]);
+        chatConversationModel: { currentConversation: 's1' },
+      } as any);
+      expect(readActiveSession('s1')).toEqual({
+        messages: [{ key: 'm2' }],
+        attachments: [{ filename: 'b.pdf' }],
+      });
     });
 
-    it('should read session arrays directly when getSessionState is also available', () => {
-      const state = {
-        sessions: {
-          s2: {
-            messages: [{ key: 'm4' }],
-            attachments: [{ filename: 'd.pdf' }],
-          },
-        },
-        getSessionState: () => ({
-          messages: [{ key: 'm3' }],
-          attachments: [{ filename: 'c.pdf' }],
-        }),
-      };
-
-      expect(selectChatMessages(state, 's2')).toBe(state.sessions.s2.messages);
-      expect(selectChatAttachments(state, 's2')).toBe(state.sessions.s2.attachments);
+    it('falls back to empty arrays when session fields are not arrays', () => {
+      mockedGetRuntime.mockReturnValue({
+        chatMessageModel: { getSessionState: () => ({ messages: null, attachments: 'bad' }) },
+        chatConversationModel: { currentConversation: undefined },
+      } as any);
+      const result = readActiveSession();
+      expect(result.messages).toEqual([]);
+      expect(result.attachments).toEqual([]);
     });
   });
 

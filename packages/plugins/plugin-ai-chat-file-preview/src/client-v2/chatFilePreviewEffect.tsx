@@ -1,6 +1,6 @@
 import { DownloadOutlined } from '@ant-design/icons';
 import type { Application } from '@nocobase/client-v2';
-import { useChatConversationsStore, useChatMessagesStore } from '@nocobase/plugin-ai/client-v2';
+import { getGlobalChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
 import { Alert, Button, Modal, Space, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -247,15 +247,28 @@ const getSessionSnapshot = (state: ChatMessagesSnapshot, sessionId?: string) => 
 
 const getChatPreviewFiles = () => {
   const files = [...browserFileCache.values()];
-  const messagesState = useChatMessagesStore.getState() as ChatMessagesSnapshot;
-  const conversationsState = useChatConversationsStore.getState() as ChatConversationsSnapshot;
-  const sessionIds = Array.from(new Set([conversationsState.currentConversation, undefined]));
+  let messagesState: ChatMessagesSnapshot | null = null;
+  let conversationsState: ChatConversationsSnapshot | null = null;
+  try {
+    const runtime = getGlobalChatBoxRuntime();
+    conversationsState = {
+      currentConversation: runtime.chatConversationModel.currentConversation,
+    };
+    messagesState = {
+      getSessionState: (sessionId?: string) => runtime.chatMessageModel.getSessionState(sessionId),
+    };
+  } catch {
+    // plugin-ai not ready — fall back to browser cache only
+  }
 
-  for (const sessionId of sessionIds) {
-    const session = getSessionSnapshot(messagesState, sessionId);
-    pushPreviewFile(files, session.attachments);
-    for (const chatMessage of session.messages || []) {
-      collectMessageFiles(files, chatMessage);
+  if (messagesState) {
+    const sessionIds = Array.from(new Set([conversationsState?.currentConversation, undefined]));
+    for (const sessionId of sessionIds) {
+      const session = getSessionSnapshot(messagesState, sessionId);
+      pushPreviewFile(files, session.attachments);
+      for (const chatMessage of session.messages || []) {
+        collectMessageFiles(files, chatMessage);
+      }
     }
   }
 

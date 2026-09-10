@@ -174,5 +174,13 @@
 
 
   "unavailable": "(không khả dụng)",
-  "via": "qua"
+  "via": "qua",
+  "Complexity keywords": "Từ khóa phức tạp",
+  "Requests whose messages contain any of these keywords are treated as complex and routed to the reasoning bucket. Matching is case-insensitive at word boundaries. Leave empty to use the built-in defaults.": "Request có nội dung chứa bất kỳ từ khóa nào trong danh sách này sẽ được coi là phức tạp và định tuyến tới bucket reasoning. So khớp không phân biệt hoa thường và theo ranh giới từ. Để trống để dùng mặc định.",
+  "Type a keyword and press Enter": "Nhập từ khóa rồi Enter",
+  "Complexity min length": "Ngưỡng độ dài phức tạp",
+  "Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).": "Request có tổng độ dài nội dung đạt ngưỡng này sẽ được coi là phức tạp. Để trống để dùng mặc định (500).",
+  "Complexity classifier model": "Mô hình phân loại độ phức tạp",
+  "Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.": "Tùy chọn. Khi phát hiện từ khóa/độ dài cho rằng request đơn giản, mô hình giá rẻ này sẽ được gọi để kiểm tra lại. Để trống để tắt.",
+  "Optional — a cheap model used to double-check simple requests": "Tùy chọn — mô hình giá rẻ dùng để kiểm tra lại các request đơn giản"
 }

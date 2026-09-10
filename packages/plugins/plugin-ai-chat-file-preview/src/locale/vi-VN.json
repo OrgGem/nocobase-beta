@@ -4,6 +4,8 @@
   "Failed to download file": "Không thể tải file",
   "Download": "Tải xuống",
   "Close": "Đóng",
+  "File Preview (Fallback)": "Xem trước file (dự phòng)",
+  "Open Default": "Mở mặc định",
   "Clear cache": "Xóa bộ nhớ đệm",
   "Cache cleared": "Đã xóa bộ nhớ đệm",
   "This file type cannot be previewed. Click Download to save the file.": "Loại file này không thể xem trước. Nhấn Tải xuống để lưu file."

@@ -36,6 +36,10 @@ interface RegistrySettingsFormValues {
   clientCertificate?: RegistrySettingsInput['clientCertificate'];
   clientPrivateKey?: RegistrySettingsInput['clientPrivateKey'];
   clientPrivateKeyPassphrase?: RegistrySettingsInput['clientPrivateKeyPassphrase'];
+  awsRegion?: RegistrySettingsInput['awsRegion'];
+  awsRoleArn?: RegistrySettingsInput['awsRoleArn'];
+  awsAccessKeyId?: RegistrySettingsInput['awsAccessKeyId'];
+  awsSecretAccessKey?: RegistrySettingsInput['awsSecretAccessKey'];
   requestTimeoutMs?: RegistrySettingsInput['requestTimeoutMs'];
   catalogPageSize?: RegistrySettingsInput['catalogPageSize'];
   maxConcurrentRequests?: RegistrySettingsInput['maxConcurrentRequests'];
@@ -52,6 +56,8 @@ interface RegistrySettingsFormValues {
   clearBearerToken?: RegistrySettingsInput['clearBearerToken'];
   clearClientPrivateKey?: RegistrySettingsInput['clearClientPrivateKey'];
   clearClientPrivateKeyPassphrase?: RegistrySettingsInput['clearClientPrivateKeyPassphrase'];
+  clearAwsAccessKeyId?: RegistrySettingsInput['clearAwsAccessKeyId'];
+  clearAwsSecretAccessKey?: RegistrySettingsInput['clearAwsSecretAccessKey'];
 }
 
 export default function RegistrySettingsPage({ permissions }: DockerRegistryPageProps) {
@@ -60,6 +66,7 @@ export default function RegistrySettingsPage({ permissions }: DockerRegistryPage
   const aclPermissions = useDockerRegistryPermissions();
   const { canConfigure } = permissions ?? aclPermissions;
   const [form] = Form.useForm<RegistrySettingsFormValues>();
+  const credentialMode = Form.useWatch('credentialMode', form);
   const {
     data: settings,
     loading,
@@ -88,6 +95,10 @@ export default function RegistrySettingsPage({ permissions }: DockerRegistryPage
         'clearBearerToken',
         'clearClientPrivateKey',
         'clearClientPrivateKeyPassphrase',
+        'awsAccessKeyId',
+        'awsSecretAccessKey',
+        'clearAwsAccessKeyId',
+        'clearAwsSecretAccessKey',
       ]);
       ctx.message.success(t('Settings saved'));
       return result;
@@ -209,41 +220,130 @@ export default function RegistrySettingsPage({ permissions }: DockerRegistryPage
               { value: 'anonymous', label: t('Anonymous') },
               { value: 'basic', label: t('Username and password') },
               { value: 'bearer', label: t('Static Bearer token') },
+              { value: 'ecr', label: t('AWS ECR') },
             ]}
           />
         </Form.Item>
-        <Form.Item label={t('Username')} name="username">
-          <Input autoComplete="username" />
-        </Form.Item>
-        <Form.Item
-          label={t('Password')}
-          name="password"
-          extra={
-            settings?.hasPassword ? t('A password is already stored. Leave this field blank to keep it.') : undefined
-          }
-        >
-          <Input.Password autoComplete="new-password" placeholder={settings?.hasPassword ? '••••••••' : undefined} />
-        </Form.Item>
-        {settings?.hasPassword && (
-          <Form.Item name="clearPassword" valuePropName="checked">
-            <Checkbox>{t('Clear stored password')}</Checkbox>
-          </Form.Item>
+        {credentialMode === 'basic' && (
+          <>
+            <Form.Item label={t('Username')} name="username">
+              <Input autoComplete="username" />
+            </Form.Item>
+            <Form.Item
+              label={t('Password')}
+              name="password"
+              extra={
+                settings?.hasPassword
+                  ? t('A password is already stored. Leave this field blank to keep it.')
+                  : undefined
+              }
+            >
+              <Input.Password
+                autoComplete="new-password"
+                placeholder={settings?.hasPassword ? '••••••••' : undefined}
+              />
+            </Form.Item>
+            {settings?.hasPassword && (
+              <Form.Item name="clearPassword" valuePropName="checked">
+                <Checkbox>{t('Clear stored password')}</Checkbox>
+              </Form.Item>
+            )}
+          </>
         )}
-        <Form.Item
-          label={t('Bearer token')}
-          name="bearerToken"
-          extra={
-            settings?.hasBearerToken
-              ? t('A Bearer token is already stored. Leave this field blank to keep it.')
-              : undefined
-          }
-        >
-          <Input.Password autoComplete="new-password" placeholder={settings?.hasBearerToken ? '••••••••' : undefined} />
-        </Form.Item>
-        {settings?.hasBearerToken && (
-          <Form.Item name="clearBearerToken" valuePropName="checked">
-            <Checkbox>{t('Clear stored Bearer token')}</Checkbox>
-          </Form.Item>
+        {credentialMode === 'bearer' && (
+          <>
+            <Form.Item
+              label={t('Bearer token')}
+              name="bearerToken"
+              extra={
+                settings?.hasBearerToken
+                  ? t('A Bearer token is already stored. Leave this field blank to keep it.')
+                  : undefined
+              }
+            >
+              <Input.Password
+                autoComplete="new-password"
+                placeholder={settings?.hasBearerToken ? '••••••••' : undefined}
+              />
+            </Form.Item>
+            {settings?.hasBearerToken && (
+              <Form.Item name="clearBearerToken" valuePropName="checked">
+                <Checkbox>{t('Clear stored Bearer token')}</Checkbox>
+              </Form.Item>
+            )}
+          </>
+        )}
+        {credentialMode === 'ecr' && (
+          <>
+            <Alert
+              type="info"
+              showIcon
+              message={t(
+                'Running in a container or on EC2? Leave credentials blank — the plugin uses the ECS task role or EC2 instance profile automatically.',
+              )}
+              style={{ marginBottom: 16 }}
+            />
+            <Alert
+              type="info"
+              showIcon
+              message={t('ECR tokens expire after 12 hours and are rotated automatically.')}
+              style={{ marginBottom: 16 }}
+            />
+            <Form.Item
+              label={t('AWS Region')}
+              name="awsRegion"
+              rules={[{ required: true, message: t('Please enter the AWS region') }]}
+            >
+              <Input placeholder="ap-southeast-1" autoComplete="off" />
+            </Form.Item>
+            <Form.Item
+              label={t('AWS Role ARN (optional)')}
+              name="awsRoleArn"
+              extra={t(
+                'If set, assumes this role using the container credentials (ECS task role / EC2 instance profile) or the static keys below.',
+              )}
+            >
+              <Input placeholder="arn:aws:iam::123456789012:role/example-role" autoComplete="off" />
+            </Form.Item>
+            <Form.Item
+              label={t('AWS Access Key ID (optional)')}
+              name="awsAccessKeyId"
+              extra={
+                settings?.hasAwsAccessKeyId
+                  ? t('An Access Key ID is already stored. Leave this field blank to keep it.')
+                  : t('Leave blank to use the container role (ECS task role / EC2 instance profile).')
+              }
+            >
+              <Input.Password
+                autoComplete="new-password"
+                placeholder={settings?.hasAwsAccessKeyId ? '••••••••' : undefined}
+              />
+            </Form.Item>
+            {settings?.hasAwsAccessKeyId && (
+              <Form.Item name="clearAwsAccessKeyId" valuePropName="checked">
+                <Checkbox>{t('Clear stored Access Key ID')}</Checkbox>
+              </Form.Item>
+            )}
+            <Form.Item
+              label={t('AWS Secret Access Key (optional)')}
+              name="awsSecretAccessKey"
+              extra={
+                settings?.hasAwsSecretAccessKey
+                  ? t('A Secret Access Key is already stored. Leave this field blank to keep it.')
+                  : t('Leave blank to use the container role (ECS task role / EC2 instance profile).')
+              }
+            >
+              <Input.Password
+                autoComplete="new-password"
+                placeholder={settings?.hasAwsSecretAccessKey ? '••••••••' : undefined}
+              />
+            </Form.Item>
+            {settings?.hasAwsSecretAccessKey && (
+              <Form.Item name="clearAwsSecretAccessKey" valuePropName="checked">
+                <Checkbox>{t('Clear stored Secret Access Key')}</Checkbox>
+              </Form.Item>
+            )}
+          </>
         )}
         <Divider />
         <Typography.Title level={4}>{t('TLS and mTLS')}</Typography.Title>

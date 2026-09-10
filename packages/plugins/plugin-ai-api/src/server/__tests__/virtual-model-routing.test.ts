@@ -22,6 +22,10 @@ vi.mock('../utils/resolve-service', () => ({
   resolveModelReference: vi.fn(),
 }));
 
+vi.mock('../utils/complexity-classifier', () => ({
+  classifyComplexity: vi.fn().mockResolvedValue(false),
+}));
+
 interface ModelResult {
   content: string;
   response_metadata?: Record<string, unknown>;
@@ -118,6 +122,24 @@ const VIRTUAL_MODEL_ROW = {
       reasoningModels: ['reasoning-svc/reasoning-model'],
       cheapModels: [],
       generalModels: ['general-svc/general-model'],
+    };
+    return row[key];
+  },
+};
+
+const VIRTUAL_MODEL_ROW_WITH_CLASSIFIER = {
+  get: (key: string) => {
+    const row: Record<string, unknown> = {
+      name: 'auto',
+      mode: 'chat',
+      enabled: true,
+      fallbackModel: 'fallback-svc/fallback-model',
+      visionModels: ['vision-svc/vision-model'],
+      toolModels: ['tool-svc/tool-model'],
+      reasoningModels: ['reasoning-svc/reasoning-model'],
+      cheapModels: [],
+      generalModels: ['general-svc/general-model'],
+      complexityClassifierModel: 'classifier-svc/classifier-model',
     };
     return row[key];
   },
@@ -585,5 +607,305 @@ describe('AI API virtual model routing (llm mode)', () => {
     };
 
     await expect(listAccessibleVirtualModels(ctx, scope, [])).resolves.toEqual([]);
+  });
+
+  // ─── Content-complexity detection tests ───
+
+  it('routes a complex content request with tools to the tools bucket (structural signals first)', async () => {
+    const { ctx } = createContext(
+      { content: 'ok' },
+      {
+        model: 'auto',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an orchestrator that plans migration tasks. Analyze the provided codebase, decompose the work into phases, and produce a comprehensive final report summarizing the strategy.',
+          },
+          { role: 'user', content: 'Plan the migration for our monolith to microservices' },
+        ],
+        tools: [{ type: 'function', function: { name: 'run_plan' } }],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.state.aiApiRoutingReason).toBe('tools');
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'tool-svc', model: 'tool-model' },
+    });
+  });
+
+  it('routes complex content without tools to the reasoning bucket', async () => {
+    const { ctx } = createContext(
+      { content: 'reasoned answer' },
+      {
+        model: 'auto',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an orchestrator that plans migration tasks. Analyze the provided codebase, decompose the work into phases, and produce a comprehensive final report summarizing the strategy.',
+          },
+          { role: 'user', content: 'Plan the migration for our monolith to microservices' },
+        ],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
+    });
+  });
+
+  it('does not route a simple short message to reasoning when tools are present', async () => {
+    const { ctx } = createContext(
+      { content: 'ok' },
+      {
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Hello' }],
+        tools: [{ type: 'function', function: { name: 'x' } }],
+        reasoning_effort: 'high',
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    // Short "Hello" with tools → tools bucket, NOT reasoning
+    expect(ctx.state.aiApiRoutingReason).toBe('tools');
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'tool-svc', model: 'tool-model' },
+    });
+  });
+
+  it('falls back to general bucket when reasoning bucket is empty but content is complex', async () => {
+    const vmNoReasoning = {
+      get: (key: string) => {
+        const row: Record<string, unknown> = {
+          name: 'auto',
+          mode: 'chat',
+          enabled: true,
+          fallbackModel: 'fallback-svc/fallback-model',
+          visionModels: ['vision-svc/vision-model'],
+          toolModels: ['tool-svc/tool-model'],
+          reasoningModels: [],
+          cheapModels: ['cheap-svc/cheap-model'],
+          generalModels: ['general-svc/general-model'],
+        };
+        return row[key];
+      },
+    };
+    const { ctx } = createContext(
+      { content: 'reasoned answer' },
+      {
+        model: 'auto',
+        messages: [
+          {
+            role: 'user',
+            content:
+              'Please orchestrate a comprehensive analysis of the architecture and provide a strategic recommendation with a detailed breakdown of the migration roadmap.',
+          },
+        ],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(vmNoReasoning) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    // Complex content but empty reasoning bucket → general bucket (not fallback)
+    expect(ctx.state.aiApiRoutingReason).toBe('general');
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'general-svc', model: 'general-model' },
+    });
+  });
+
+  it('detectRequestSignals detects complex content via default keywords', () => {
+    const signals = detectRequestSignals({
+      messages: [{ role: 'user', content: 'Please orchestrate the data migration plan' }],
+    });
+    expect(signals.hasComplexContent).toBe(true);
+  });
+
+  it('detectRequestSignals detects complex content via custom keywords', () => {
+    const vm = {
+      name: 'auto',
+      mode: 'chat' as const,
+      fallbackModel: 'svc/model',
+      complexityKeywords: ['foobar', 'zyxwv'],
+    };
+    const signals = detectRequestSignals(
+      { messages: [{ role: 'user', content: 'This request needs foobar processing' }] },
+      vm,
+    );
+    expect(signals.hasComplexContent).toBe(true);
+  });
+
+  it('detectRequestSignals detects complex content via length threshold', () => {
+    const longContent = 'word '.repeat(150); // 750 chars, exceeds default 500
+    const signals = detectRequestSignals({
+      messages: [{ role: 'user', content: longContent }],
+    });
+    expect(signals.hasComplexContent).toBe(true);
+  });
+
+  it('detectRequestSignals does not flag short simple messages as complex', () => {
+    const signals = detectRequestSignals({
+      messages: [{ role: 'user', content: 'Hello' }],
+    });
+    expect(signals.hasComplexContent).toBe(false);
+  });
+
+  it('detectRequestSignals uses custom minLength when provided', () => {
+    const vm = {
+      name: 'auto',
+      mode: 'chat' as const,
+      fallbackModel: 'svc/model',
+      complexityMinLength: 2000,
+    };
+    const content200 = 'a'.repeat(200);
+    const signals1 = detectRequestSignals({ messages: [{ role: 'user', content: content200 }] }, vm);
+    expect(signals1.hasComplexContent).toBe(false);
+
+    const content2000 = 'a'.repeat(2000);
+    const signals2 = detectRequestSignals({ messages: [{ role: 'user', content: content2000 }] }, vm);
+    expect(signals2.hasComplexContent).toBe(true);
+  });
+
+  it('does not false-positive on "plan" inside "explanation" or "plane"', () => {
+    const signals = detectRequestSignals({
+      messages: [{ role: 'user', content: 'Please explain this plane crash in detail' }],
+    });
+    expect(signals.hasComplexContent).toBe(false);
+  });
+
+  it('matches "plan" as a standalone word but not inside other words', () => {
+    const signalsMatch = detectRequestSignals({
+      messages: [{ role: 'user', content: 'Please plan the migration carefully' }],
+    });
+    expect(signalsMatch.hasComplexContent).toBe(true);
+
+    const signalsNoMatch = detectRequestSignals({
+      messages: [{ role: 'user', content: 'Give me a planet fact' }],
+    });
+    expect(signalsNoMatch.hasComplexContent).toBe(false);
+  });
+
+  it('matches keyword stems like "orchestrat" as word prefixes', () => {
+    const signals = detectRequestSignals({
+      messages: [{ role: 'user', content: 'Help me orchestrate the workflow' }],
+    });
+    expect(signals.hasComplexContent).toBe(true);
+  });
+
+  // ─── Complexity classifier integration tests ───
+
+  it('routes to tools when the classifier confirms complex but tools are present (structural first)', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(true);
+
+    const { ctx } = createContext(
+      { content: 'ok' },
+      {
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Phân tích kiến trúc hệ thống và đề xuất giải pháp' }],
+        tools: [{ type: 'function', function: { name: 'search' } }],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.state.aiApiRoutingReason).toBe('tools');
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'tool-svc', model: 'tool-model' },
+    });
+    expect(classifyComplexity).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes to reasoning when the classifier confirms complex without tools', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(true);
+
+    const { ctx } = createContext(
+      { content: 'reasoned answer' },
+      {
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Phân tích kiến trúc hệ thống và đề xuất giải pháp' }],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    expect(ctx.state.aiApiLlmBilling).toMatchObject({
+      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
+    });
+    expect(classifyComplexity).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call the classifier when keyword detection already says complex', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(false);
+
+    const { ctx } = createContext(
+      { content: 'reasoned answer' },
+      {
+        model: 'auto',
+        messages: [
+          {
+            role: 'user',
+            content: 'Please orchestrate a comprehensive analysis of the architecture and migration plan',
+          },
+        ],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    expect(classifyComplexity).not.toHaveBeenCalled();
+  });
+
+  it('falls back to normal routing when the classifier is not configured', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(false);
+
+    const { ctx } = createContext(
+      { content: 'ok' },
+      {
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Hello' }],
+        tools: [{ type: 'function', function: { name: 'x' } }],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+    );
+
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.state.aiApiRoutingReason).toBe('tools');
+    expect(classifyComplexity).not.toHaveBeenCalled();
   });
 });

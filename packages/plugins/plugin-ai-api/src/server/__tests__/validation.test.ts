@@ -100,7 +100,42 @@ describe('AI API virtual model validation', () => {
     [{ ...validVirtualModel, fallbackModel: 'gpt-5' }, 'fallbackModel must use the service/modelId format.'],
     [{ ...validVirtualModel, toolModels: 'openai/gpt-5' }, 'toolModels must be an array.'],
     [{ ...validVirtualModel, visionModels: ['invalid'] }, 'visionModels[0] must use the service/modelId format.'],
+    [{ ...validVirtualModel, complexityKeywords: 'not-array' }, 'complexityKeywords must be an array.'],
+    [{ ...validVirtualModel, complexityKeywords: ['ok', ''] }, 'complexityKeywords[1] must be a non-empty string.'],
+    [{ ...validVirtualModel, complexityMinLength: -1 }, 'complexityMinLength must be a positive integer.'],
+    [{ ...validVirtualModel, complexityMinLength: 1.5 }, 'complexityMinLength must be a positive integer.'],
   ])('rejects an invalid virtual model', (values, message) => {
     expect(() => validateVirtualModel(record(values))).toThrow(message);
+  });
+
+  it('accepts complexity keywords and min length', () => {
+    expect(() =>
+      validateVirtualModel(
+        record({ ...validVirtualModel, complexityKeywords: ['plan', 'migration'], complexityMinLength: 800 }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('accepts null complexity fields (collection defaults apply)', () => {
+    expect(() =>
+      validateVirtualModel(record({ ...validVirtualModel, complexityKeywords: null, complexityMinLength: null })),
+    ).not.toThrow();
+  });
+
+  it('accepts a valid complexity classifier model reference', () => {
+    expect(() =>
+      validateVirtualModel(record({ ...validVirtualModel, complexityClassifierModel: 'cheap-svc/classifier-model' })),
+    ).not.toThrow();
+  });
+
+  it('accepts null or empty complexity classifier model', () => {
+    expect(() => validateVirtualModel(record({ ...validVirtualModel, complexityClassifierModel: null }))).not.toThrow();
+    expect(() => validateVirtualModel(record({ ...validVirtualModel, complexityClassifierModel: '' }))).not.toThrow();
+  });
+
+  it('rejects an invalid complexity classifier model reference', () => {
+    expect(() => validateVirtualModel(record({ ...validVirtualModel, complexityClassifierModel: 'no-slash' }))).toThrow(
+      'complexityClassifierModel must use the service/modelId format.',
+    );
   });
 });

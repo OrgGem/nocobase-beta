@@ -174,5 +174,13 @@
 
 
   "unavailable": "(不可用)",
-  "via": "通过"
+  "via": "通过",
+  "Complexity keywords": "复杂度关键词",
+  "Requests whose messages contain any of these keywords are treated as complex and routed to the reasoning bucket. Matching is case-insensitive at word boundaries. Leave empty to use the built-in defaults.": "请求消息中包含任意这些关键词时，会被视为复杂请求并路由到推理桶。匹配不区分大小写且基于单词边界。留空则使用内置默认值。",
+  "Type a keyword and press Enter": "输入关键词后回车",
+  "Complexity min length": "复杂度最小长度",
+  "Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).": "请求消息总长度达到此阈值时被视为复杂请求。留空则使用默认值（500）。",
+  "Complexity classifier model": "复杂度分类模型",
+  "Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.": "可选。当关键词/长度检测判定请求为简单时，会调用此低成本模型进行复核。留空则禁用。",
+  "Optional — a cheap model used to double-check simple requests": "可选 — 用于复核简单请求的低成本模型"
 }

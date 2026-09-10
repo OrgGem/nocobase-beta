@@ -4,6 +4,8 @@
   "Failed to download file": "Failed to download file",
   "Download": "Download",
   "Close": "Close",
+  "File Preview (Fallback)": "File Preview (Fallback)",
+  "Open Default": "Open Default",
   "Clear cache": "Clear cache",
   "Cache cleared": "Cache cleared",
   "This file type cannot be previewed. Click Download to save the file.": "This file type cannot be previewed. Click Download to save the file."

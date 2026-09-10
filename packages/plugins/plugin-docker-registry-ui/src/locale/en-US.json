@@ -223,5 +223,21 @@
   "A valid tag is required": "A valid tag is required",
   "Maximum download speed (kbps)": "Maximum download speed (kbps)",
   "Maximum upload speed (kbps)": "Maximum upload speed (kbps)",
-  "0 means unlimited bandwidth.": "0 means unlimited bandwidth."
+  "0 means unlimited bandwidth.": "0 means unlimited bandwidth.",
+  "AWS ECR": "AWS ECR",
+  "AWS Region": "AWS Region",
+  "Please enter the AWS region": "Please enter the AWS region",
+  "AWS Role ARN (optional)": "AWS Role ARN (optional)",
+  "If set, assumes this role using the container credentials (ECS task role / EC2 instance profile) or the static keys below.": "If set, assumes this role using the container credentials (ECS task role / EC2 instance profile) or the static keys below.",
+  "AWS Access Key ID (optional)": "AWS Access Key ID (optional)",
+  "AWS Secret Access Key (optional)": "AWS Secret Access Key (optional)",
+  "An Access Key ID is already stored. Leave this field blank to keep it.": "An Access Key ID is already stored. Leave this field blank to keep it.",
+  "A Secret Access Key is already stored. Leave this field blank to keep it.": "A Secret Access Key is already stored. Leave this field blank to keep it.",
+  "Clear stored Access Key ID": "Clear stored Access Key ID",
+  "Clear stored Secret Access Key": "Clear stored Secret Access Key",
+  "Running in a container or on EC2? Leave credentials blank — the plugin uses the ECS task role or EC2 instance profile automatically.": "Running in a container or on EC2? Leave credentials blank — the plugin uses the ECS task role or EC2 instance profile automatically.",
+  "ECR tokens expire after 12 hours and are rotated automatically.": "ECR tokens expire after 12 hours and are rotated automatically.",
+  "AWS region is required for ECR registries": "AWS region is required for ECR registries",
+  "Enter a valid IAM role ARN": "Enter a valid IAM role ARN",
+  "Leave blank to use the container role (ECS task role / EC2 instance profile).": "Leave blank to use the container role (ECS task role / EC2 instance profile)."
 }

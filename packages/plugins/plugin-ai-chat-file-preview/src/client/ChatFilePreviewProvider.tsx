@@ -9,60 +9,70 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
-// v2.2.x compat: safe fallbacks when plugin-ai hooks are unavailable on v1 runtime.
-// The real hooks have a .use namespace (e.g. useChatConversationsStore.use.currentConversation())
-// so the fallback must mirror that shape to avoid crashes.
-const noopStore: any = Object.assign(
-  (selector: any) => { try { return selector({}); } catch { return []; } },
-  { use: new Proxy({}, { get: () => (..._args: any[]) => null }) }
-);
-const useChatMessagesStore: any = noopStore;
-const useChatConversationsStore: any = noopStore;
+import { getGlobalChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { Modal, Button } from 'antd';
+import { useTranslation } from './locale';
 
-type ChatPreviewStoreState = {
-  messages?: any[];
-  attachments?: any[];
-  sessions?: Record<string, { messages?: any[]; attachments?: any[] } | undefined>;
-  getSessionState?: (sessionId?: string) => { messages?: any[]; attachments?: any[] };
-};
-
-type ChatMessagesStoreArrayHook = (selector: (state: ChatPreviewStoreState) => any[]) => any[];
-
-const CHAT_DEFAULT_SESSION_KEY = '__draft__';
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_ATTACHMENTS: any[] = [];
+
+type ChatSessionSnapshot = {
+  messages?: any[];
+  attachments?: any[];
+};
+
+// plugin-ai v2 exposes FlowEngine models (not zustand), so the v1 provider cannot subscribe
+// reactively. Poll the global runtime and only setState when the active session's content
+// actually changes (signature compare) to keep effect deps like [messages] stable.
+export function readActiveSession(sessionId?: string): { messages: any[]; attachments: any[] } {
+  try {
+    const runtime = getGlobalChatBoxRuntime();
+    const session: ChatSessionSnapshot = runtime.chatMessageModel.getSessionState(sessionId) as ChatSessionSnapshot;
+    return {
+      messages: Array.isArray(session.messages) ? session.messages : EMPTY_MESSAGES,
+      attachments: Array.isArray(session.attachments) ? session.attachments : EMPTY_ATTACHMENTS,
+    };
+  } catch {
+    return { messages: EMPTY_MESSAGES, attachments: EMPTY_ATTACHMENTS };
+  }
+}
+
+export function useChatRuntimeState() {
+  const [snapshot, setSnapshot] = useState(() => ({
+    currentConversation: undefined as string | undefined,
+    messages: EMPTY_MESSAGES,
+    attachments: EMPTY_ATTACHMENTS,
+  }));
+  const signatureRef = useRef('');
+
+  useEffect(() => {
+    const sync = () => {
+      let currentConversation: string | undefined;
+      try {
+        currentConversation = getGlobalChatBoxRuntime().chatConversationModel.currentConversation;
+      } catch {
+        currentConversation = undefined;
+      }
+      const { messages, attachments } = readActiveSession(currentConversation);
+      const signature = `${currentConversation || '__draft__'}|${messages.length}|${attachments.length}|${
+        messages.length ? messages[messages.length - 1]?.key || '' : ''
+      }|${messages.length ? messages[messages.length - 1]?.loading ?? '' : ''}`;
+      if (signature !== signatureRef.current) {
+        signatureRef.current = signature;
+        setSnapshot({ currentConversation, messages, attachments });
+      }
+    };
+    sync();
+    const timer = setInterval(sync, 800);
+    return () => clearInterval(timer);
+  }, []);
+
+  return snapshot;
+}
 
 // Ant Design X 1.1.0 prefixes: sender -> ant-sender, bubble -> ant-bubble, attachment -> ant-attachment.
 const AI_CHAT_CONTAINER_SELECTOR = '.ant-sender, .ant-attachment, .ant-bubble';
 const AI_CHAT_SENDER_SELECTOR = '.ant-sender, .ant-attachment';
-
-function pickSessionState(state: ChatPreviewStoreState, sessionId?: string) {
-  const sessions = state.sessions;
-  if (!sessions) return null;
-
-  const sessionKey = sessionId || CHAT_DEFAULT_SESSION_KEY;
-  const selectedSession = sessions[sessionKey];
-  if (selectedSession) return selectedSession;
-
-  return (
-    Object.values(sessions).find(
-      (session) => (session?.messages?.length || 0) > 0 || (session?.attachments?.length || 0) > 0,
-    ) || null
-  );
-}
-
-export function selectChatMessages(state: ChatPreviewStoreState, sessionId?: string) {
-  const session = pickSessionState(state, sessionId);
-  if (Array.isArray(session?.messages)) return session.messages;
-  return Array.isArray(state.messages) ? state.messages : EMPTY_MESSAGES;
-}
-
-export function selectChatAttachments(state: ChatPreviewStoreState, sessionId?: string) {
-  const session = pickSessionState(state, sessionId);
-  if (Array.isArray(session?.attachments)) return session.attachments;
-  return Array.isArray(state.attachments) ? state.attachments : EMPTY_ATTACHMENTS;
-}
 
 export interface PreviewFile {
   id?: string | number;
@@ -95,6 +105,7 @@ export interface PreviewFile {
 // the AI chat still gets a 90% wide modal rather than doing nothing.
 
 function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
+  const { t } = useTranslation();
   const file = list?.[index];
 
   if (!file) return null;
@@ -108,12 +119,12 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
   return (
     <Modal
       open={index != null}
-      title={file?.title || file?.filename || file?.name || 'File Preview (Fallback)'}
+      title={file?.title || file?.filename || file?.name || t('File Preview (Fallback)')}
       onCancel={() => onSwitchIndex(null)}
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button onClick={() => window.open(resolvedUrl, '_blank')}>Open Default</Button>
-          <Button onClick={() => onSwitchIndex(null)}>Close</Button>
+          <Button onClick={() => window.open(resolvedUrl, '_blank')}>{t('Open Default')}</Button>
+          <Button onClick={() => onSwitchIndex(null)}>{t('Close')}</Button>
         </div>
       }
       width="90%"
@@ -331,6 +342,17 @@ export function buildSkillHubManifestMap(messages: any[]): Map<string, SkillHubM
   return map;
 }
 
+// The marking interval and click handler both rebuild the manifest from the same `messages` array on
+// every tick/click. The poll bridge only swaps the array reference when the session actually changes,
+// so keying the cache on array identity skips the redundant JSON/base64 parse work between changes.
+let manifestCache: { messages: any[]; map: Map<string, SkillHubManifestEntry> } | null = null;
+function getCachedSkillHubManifestMap(messages: any[]): Map<string, SkillHubManifestEntry> {
+  if (manifestCache && manifestCache.messages === messages) return manifestCache.map;
+  const map = buildSkillHubManifestMap(messages);
+  manifestCache = { messages, map };
+  return map;
+}
+
 /**
  * Resolve a manifest entry for a displayed filename, trying exact and normalized names.
  */
@@ -537,7 +559,7 @@ function findFileByUrl(url: string, messages: any[], pendingAttachments: any[]):
 }
 
 /**
- * Inner component that reads from plugin-ai's zustand stores via hooks.
+ * Inner component that reads from plugin-ai's global runtime via polling bridge.
  * Uses refs to make latest state available inside the DOM click handler.
  */
 const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -545,21 +567,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
   const apiClient = useAPIClient();
 
-  const currentConversation = useChatConversationsStore.use.currentConversation();
-  const activeSessionId = currentConversation || '';
-
-  // NocoBase 2.1 moved chat messages into per-session store state.
-  const chatStore = useChatMessagesStore as unknown as ChatMessagesStoreArrayHook;
-  const selectMessagesForSession = useCallback(
-    (state: ChatPreviewStoreState) => selectChatMessages(state, activeSessionId),
-    [activeSessionId],
-  );
-  const selectAttachmentsForSession = useCallback(
-    (state: ChatPreviewStoreState) => selectChatAttachments(state, activeSessionId),
-    [activeSessionId],
-  );
-  const messages = chatStore(selectMessagesForSession);
-  const pendingAttachments = chatStore(selectAttachmentsForSession);
+  const { currentConversation, messages, attachments: pendingAttachments } = useChatRuntimeState();
 
   // Keep latest values in refs for the click handler (avoids stale closures)
   const messagesRef = useRef(messages);
@@ -759,7 +767,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         const isAIGenerated = isKnownFileUrl(fallbackUrl);
 
         // Manifest match marks a card previewable even when the LLM wrote a broken download/ link.
-        const manifestMap = buildSkillHubManifestMap(messagesRef.current);
+        const manifestMap = getCachedSkillHubManifestMap(messagesRef.current);
         const hasManifestEntry =
           !!findManifestEntryForName(displayName, manifestMap) ||
           !!findManifestEntryForName(normalizedDisplayName, manifestMap);
@@ -777,7 +785,7 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
   // Inject global CSS for explicit UI and native z-index click interception for child texts/tags
   useEffect(() => {
     const style = document.createElement('style');
-    style.innerHTML = `
+    style.textContent = `
       .ant-attachment-list-card {
         position: relative !important;
         cursor: pointer !important;
@@ -1037,9 +1045,13 @@ export class ChatFilePreviewErrorBoundary extends React.Component<
     return { hasError: true };
   }
 
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.warn('[plugin-ai-chat-file-preview] ErrorBoundary caught:', error, info.componentStack);
+  }
+
   render() {
     if (this.state.hasError) {
-      return this.props.children;
+      return null;
     }
     return this.props.children;
   }
@@ -1052,7 +1064,3 @@ export const ChatFilePreviewProvider: React.FC<{ children: React.ReactNode }> = 
     </ChatFilePreviewErrorBoundary>
   );
 };
-
-
-
-

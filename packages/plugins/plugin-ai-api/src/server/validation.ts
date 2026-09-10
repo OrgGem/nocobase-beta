@@ -120,6 +120,30 @@ export function validateVirtualModel(model: Model): void {
   for (const field of ['visionModels', 'toolModels', 'reasoningModels', 'cheapModels', 'generalModels']) {
     requireModelReferenceList(model.get(field), field);
   }
+  const complexityKeywords = model.get('complexityKeywords');
+  if (complexityKeywords !== null && complexityKeywords !== undefined) {
+    if (!Array.isArray(complexityKeywords)) throw new Error('complexityKeywords must be an array.');
+    complexityKeywords.forEach((keyword, index) => {
+      if (typeof keyword !== 'string' || !keyword.trim()) {
+        throw new Error(`complexityKeywords[${index}] must be a non-empty string.`);
+      }
+    });
+  }
+  const complexityMinLength = model.get('complexityMinLength');
+  if (complexityMinLength !== null && complexityMinLength !== undefined && complexityMinLength !== '') {
+    const parsed = Number(complexityMinLength);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      throw new Error('complexityMinLength must be a positive integer.');
+    }
+  }
+  const complexityClassifierModel = model.get('complexityClassifierModel');
+  if (
+    complexityClassifierModel !== null &&
+    complexityClassifierModel !== undefined &&
+    String(complexityClassifierModel).trim() !== ''
+  ) {
+    requireModelReference(complexityClassifierModel, 'complexityClassifierModel');
+  }
   requireBooleanOrNull(model.get('enabled'), 'enabled');
 }
 

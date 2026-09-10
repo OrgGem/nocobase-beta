@@ -172,5 +172,13 @@
   "Name": "Name",
   "Rate limit/min": "Rate limit/min",
   "unavailable": "(unavailable)",
-  "via": "via"
+  "via": "via",
+  "Complexity keywords": "Complexity keywords",
+  "Requests whose messages contain any of these keywords are treated as complex and routed to the reasoning bucket. Matching is case-insensitive at word boundaries. Leave empty to use the built-in defaults.": "Requests whose messages contain any of these keywords are treated as complex and routed to the reasoning bucket. Matching is case-insensitive at word boundaries. Leave empty to use the built-in defaults.",
+  "Type a keyword and press Enter": "Type a keyword and press Enter",
+  "Complexity min length": "Complexity min length",
+  "Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).": "Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).",
+  "Complexity classifier model": "Complexity classifier model",
+  "Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.": "Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.",
+  "Optional — a cheap model used to double-check simple requests": "Optional — a cheap model used to double-check simple requests"
 }

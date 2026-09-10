@@ -1,4 +1,4 @@
-export type CredentialMode = 'anonymous' | 'basic' | 'bearer';
+export type CredentialMode = 'anonymous' | 'basic' | 'bearer' | 'ecr';
 export type RegistryArchiveFormat = 'docker' | 'oci';
 
 export interface RegistrySettingsInput {
@@ -15,6 +15,10 @@ export interface RegistrySettingsInput {
   clientCertificate?: string;
   clientPrivateKey?: string;
   clientPrivateKeyPassphrase?: string;
+  awsRegion?: string;
+  awsRoleArn?: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
   requestTimeoutMs?: number;
   catalogPageSize?: number;
   maxConcurrentRequests?: number;
@@ -31,6 +35,8 @@ export interface RegistrySettingsInput {
   clearBearerToken?: boolean;
   clearClientPrivateKey?: boolean;
   clearClientPrivateKeyPassphrase?: boolean;
+  clearAwsAccessKeyId?: boolean;
+  clearAwsSecretAccessKey?: boolean;
 }
 
 export interface SafeRegistrySettings {
@@ -40,6 +46,8 @@ export interface SafeRegistrySettings {
   publicRegistryHost: string;
   credentialMode: CredentialMode;
   username: string;
+  awsRegion: string;
+  awsRoleArn: string;
   verifyTls: boolean;
   allowInsecureHttp: boolean;
   caCertificate: string;
@@ -60,6 +68,8 @@ export interface SafeRegistrySettings {
   hasBearerToken: boolean;
   hasClientPrivateKey: boolean;
   hasClientPrivateKeyPassphrase: boolean;
+  hasAwsAccessKeyId: boolean;
+  hasAwsSecretAccessKey: boolean;
 }
 
 export type PublicRegistrySettings = Pick<
@@ -77,6 +87,8 @@ export interface RegistryConnection extends SafeRegistrySettings {
   bearerToken?: string;
   clientPrivateKey?: string;
   clientPrivateKeyPassphrase?: string;
+  awsAccessKeyId?: string;
+  awsSecretAccessKey?: string;
 }
 
 export interface Descriptor {

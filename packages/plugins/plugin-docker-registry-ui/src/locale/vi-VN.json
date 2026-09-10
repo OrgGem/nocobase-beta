@@ -223,5 +223,21 @@
   "A valid tag is required": "Cần nhập tag hợp lệ",
   "Maximum download speed (kbps)": "Tốc độ tải xuống tối đa (kbps)",
   "Maximum upload speed (kbps)": "Tốc độ tải lên tối đa (kbps)",
-  "0 means unlimited bandwidth.": "0 có nghĩa là không giới hạn băng thông."
+  "0 means unlimited bandwidth.": "0 có nghĩa là không giới hạn băng thông.",
+  "AWS ECR": "AWS ECR",
+  "AWS Region": "AWS Region",
+  "Please enter the AWS region": "Vui lòng nhập AWS region",
+  "AWS Role ARN (optional)": "AWS Role ARN (tùy chọn)",
+  "If set, assumes this role using the container credentials (ECS task role / EC2 instance profile) or the static keys below.": "Nếu đặt, sẽ assume role này bằng thông tin container (ECS task role / EC2 instance profile) hoặc khóa tĩnh bên dưới.",
+  "AWS Access Key ID (optional)": "AWS Access Key ID (tùy chọn)",
+  "AWS Secret Access Key (optional)": "AWS Secret Access Key (tùy chọn)",
+  "An Access Key ID is already stored. Leave this field blank to keep it.": "Access Key ID đã được lưu. Để trống trường này để giữ nguyên.",
+  "A Secret Access Key is already stored. Leave this field blank to keep it.": "Secret Access Key đã được lưu. Để trống trường này để giữ nguyên.",
+  "Clear stored Access Key ID": "Xóa Access Key ID đã lưu",
+  "Clear stored Secret Access Key": "Xóa Secret Access Key đã lưu",
+  "Running in a container or on EC2? Leave credentials blank — the plugin uses the ECS task role or EC2 instance profile automatically.": "Đang chạy trong container hoặc trên EC2? Để trống thông tin xác thực — plugin sẽ tự động sử dụng ECS task role hoặc EC2 instance profile.",
+  "ECR tokens expire after 12 hours and are rotated automatically.": "Token ECR hết hạn sau 12 giờ và được tự động xoay vòng.",
+  "AWS region is required for ECR registries": "AWS region là bắt buộc cho ECR registries",
+  "Enter a valid IAM role ARN": "Nhập IAM role ARN hợp lệ",
+  "Leave blank to use the container role (ECS task role / EC2 instance profile).": "Để trống để sử dụng role container (ECS task role / EC2 instance profile)."
 }

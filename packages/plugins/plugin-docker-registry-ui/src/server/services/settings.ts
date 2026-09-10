@@ -8,13 +8,21 @@ import type {
 
 const DEFAULTS: Omit<
   SafeRegistrySettings,
-  'id' | 'hasPassword' | 'hasBearerToken' | 'hasClientPrivateKey' | 'hasClientPrivateKeyPassphrase'
+  | 'id'
+  | 'hasPassword'
+  | 'hasBearerToken'
+  | 'hasClientPrivateKey'
+  | 'hasClientPrivateKeyPassphrase'
+  | 'hasAwsAccessKeyId'
+  | 'hasAwsSecretAccessKey'
 > = {
   displayName: 'Docker Registry',
   registryUrl: '',
   publicRegistryHost: '',
   credentialMode: 'anonymous',
   username: '',
+  awsRegion: '',
+  awsRoleArn: '',
   verifyTls: true,
   allowInsecureHttp: false,
   caCertificate: '',
@@ -123,8 +131,12 @@ function safeSettings(row: SettingsRow): SafeRegistrySettings {
     registryUrl: stringValue(row.registryUrl, DEFAULTS.registryUrl),
     publicRegistryHost: stringValue(row.publicRegistryHost, DEFAULTS.publicRegistryHost),
     credentialMode:
-      row.credentialMode === 'basic' || row.credentialMode === 'bearer' ? row.credentialMode : 'anonymous',
+      row.credentialMode === 'basic' || row.credentialMode === 'bearer' || row.credentialMode === 'ecr'
+        ? row.credentialMode
+        : 'anonymous',
     username: stringValue(row.username, DEFAULTS.username),
+    awsRegion: stringValue(row.awsRegion, DEFAULTS.awsRegion),
+    awsRoleArn: stringValue(row.awsRoleArn, DEFAULTS.awsRoleArn),
     verifyTls: booleanValue(row.verifyTls, DEFAULTS.verifyTls),
     allowInsecureHttp: booleanValue(row.allowInsecureHttp, DEFAULTS.allowInsecureHttp),
     caCertificate: stringValue(row.caCertificate, DEFAULTS.caCertificate),
@@ -145,6 +157,8 @@ function safeSettings(row: SettingsRow): SafeRegistrySettings {
     hasBearerToken: Boolean(row.bearerTokenCiphertext),
     hasClientPrivateKey: Boolean(row.clientPrivateKeyCiphertext),
     hasClientPrivateKeyPassphrase: Boolean(row.clientPrivateKeyPassphraseCiphertext),
+    hasAwsAccessKeyId: Boolean(row.awsAccessKeyIdCiphertext),
+    hasAwsSecretAccessKey: Boolean(row.awsSecretAccessKeyCiphertext),
   };
 }
 
@@ -164,11 +178,22 @@ export async function getPublicSettings(ctx: Context): Promise<PublicRegistrySet
   };
 }
 
+const ROLE_ARN_PATTERN = /^arn:aws(?:-cn|-us-gov)?:iam::\d{12}:role\/.+$/;
+
 function mergeSettings(previous: SafeRegistrySettings, values: RegistrySettingsInput): SafeRegistrySettings {
   const nextAllowInsecureHttp = booleanValue(values.allowInsecureHttp, previous.allowInsecureHttp);
   const credentialMode = values.credentialMode ?? previous.credentialMode;
-  if (!['anonymous', 'basic', 'bearer'].includes(credentialMode)) {
-    throw new RegistryConfigurationError('Credential mode must be anonymous, basic, or bearer');
+  if (!['anonymous', 'basic', 'bearer', 'ecr'].includes(credentialMode)) {
+    throw new RegistryConfigurationError('Credential mode must be anonymous, basic, bearer, or ecr');
+  }
+
+  const awsRegion = stringValue(values.awsRegion, previous.awsRegion);
+  const awsRoleArn = stringValue(values.awsRoleArn, previous.awsRoleArn);
+  if (credentialMode === 'ecr' && !awsRegion) {
+    throw new RegistryConfigurationError('AWS region is required for ECR registries');
+  }
+  if (awsRoleArn && !ROLE_ARN_PATTERN.test(awsRoleArn)) {
+    throw new RegistryConfigurationError('AWS Role ARN must look like arn:aws:iam::123456789012:role/example-role');
   }
 
   return {
@@ -180,6 +205,8 @@ function mergeSettings(previous: SafeRegistrySettings, values: RegistrySettingsI
       .replace(/\/$/, ''),
     credentialMode,
     username: stringValue(values.username, previous.username),
+    awsRegion,
+    awsRoleArn,
     verifyTls: booleanValue(values.verifyTls, previous.verifyTls),
     allowInsecureHttp: nextAllowInsecureHttp,
     caCertificate: stringValue(values.caCertificate, previous.caCertificate),
@@ -230,6 +257,8 @@ export async function getRegistryConnection(
       'clearClientPrivateKeyPassphrase',
       'clientPrivateKeyPassphraseCiphertext',
     ),
+    awsAccessKeyId: await secret('awsAccessKeyId', 'clearAwsAccessKeyId', 'awsAccessKeyIdCiphertext'),
+    awsSecretAccessKey: await secret('awsSecretAccessKey', 'clearAwsSecretAccessKey', 'awsSecretAccessKeyCiphertext'),
   };
 }
 
@@ -245,6 +274,8 @@ export async function updateRegistrySettings(ctx: Context): Promise<SafeRegistry
     publicRegistryHost: next.publicRegistryHost,
     credentialMode: next.credentialMode,
     username: next.username,
+    awsRegion: next.awsRegion,
+    awsRoleArn: next.awsRoleArn,
     verifyTls: next.verifyTls,
     allowInsecureHttp: next.allowInsecureHttp,
     caCertificate: next.caCertificate,
@@ -268,6 +299,8 @@ export async function updateRegistrySettings(ctx: Context): Promise<SafeRegistry
     ['bearerToken', 'bearerTokenCiphertext', 'clearBearerToken'],
     ['clientPrivateKey', 'clientPrivateKeyCiphertext', 'clearClientPrivateKey'],
     ['clientPrivateKeyPassphrase', 'clientPrivateKeyPassphraseCiphertext', 'clearClientPrivateKeyPassphrase'],
+    ['awsAccessKeyId', 'awsAccessKeyIdCiphertext', 'clearAwsAccessKeyId'],
+    ['awsSecretAccessKey', 'awsSecretAccessKeyCiphertext', 'clearAwsSecretAccessKey'],
   ];
   for (const [inputKey, storageKey, clearKey] of secretUpdates) {
     if (typeof values[inputKey] === 'string' && values[inputKey]) {

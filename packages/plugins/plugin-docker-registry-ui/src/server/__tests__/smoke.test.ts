@@ -10,10 +10,10 @@ describe('Docker Registry UI plugin smoke', () => {
 
   it('loads the plugin, collection and resource without creating a desktop route', async () => {
     app = await createMockServer({
-      plugins: ['nocobase', 'docker-registry-ui'],
+      plugins: ['nocobase', 'plugin-docker-registry-ui'],
     });
 
-    const plugin = app.pm.get('docker-registry-ui') as PluginDockerRegistryUiServer | undefined;
+    const plugin = app.pm.get('plugin-docker-registry-ui') as PluginDockerRegistryUiServer | undefined;
     expect(plugin).toBeTruthy();
     expect(app.db.getCollection('dockerRegistrySettings')).toBeTruthy();
     expect(app.resourceManager.getResource('dockerRegistry')).toBeTruthy();
@@ -41,5 +41,25 @@ describe('Docker Registry UI plugin smoke', () => {
       publicRegistryHost: 'localhost:15000',
       allowInsecureHttp: true,
     });
+
+    const ecrResponse = await rootAgent.post('/dockerRegistry:updateSettings').send({
+      values: {
+        credentialMode: 'ecr',
+        registryUrl: 'https://123456789012.dkr.ecr.ap-southeast-1.amazonaws.com',
+        awsRegion: 'ap-southeast-1',
+      },
+    });
+    expect(ecrResponse.status).toBe(200);
+    expect(ecrResponse.body.data).toMatchObject({
+      credentialMode: 'ecr',
+      awsRegion: 'ap-southeast-1',
+      hasAwsAccessKeyId: false,
+      hasAwsSecretAccessKey: false,
+    });
+
+    const invalidEcrResponse = await rootAgent.post('/dockerRegistry:updateSettings').send({
+      values: { credentialMode: 'ecr', awsRegion: '' },
+    });
+    expect(invalidEcrResponse.status).toBe(400);
   });
 });

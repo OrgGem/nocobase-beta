@@ -9,6 +9,7 @@
 
 import { Context } from '@nocobase/actions';
 import type { Model } from '@nocobase/database';
+import { classifyComplexity } from './complexity-classifier';
 import { toOpenAIError } from './openai-format';
 import { resolveModelReference } from './resolve-service';
 import { AiApiAccessScope, isModelAllowed, isServiceAllowed, resolveUserAccessScope } from './user-permissions';
@@ -37,6 +38,9 @@ export interface VirtualModel {
   reasoningModels?: string[];
   cheapModels?: string[];
   generalModels?: string[];
+  complexityKeywords?: string[];
+  complexityMinLength?: number | null;
+  complexityClassifierModel?: string | null;
   enabled?: boolean;
 }
 
@@ -67,10 +71,86 @@ interface RequestSignals {
   hasTools: boolean;
   wantsStructuredOutput: boolean;
   wantsReasoning: boolean;
+  hasComplexContent: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+export const DEFAULT_COMPLEXITY_KEYWORDS = [
+  'orchestrat',
+  'plan',
+  'analys',
+  'synthes',
+  'final report',
+  'final_report',
+  'summary',
+  'summarize',
+  'strategy',
+  'strategic',
+  'architect',
+  'design',
+  'review',
+  'migration',
+  'roadmap',
+  'decompos',
+  'breakdown',
+  'comparison',
+  'evaluat',
+  'recommend',
+  'comprehensive',
+  'feasib',
+];
+
+export const DEFAULT_COMPLEXITY_MIN_LENGTH = 500;
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      if (!isRecord(block)) return '';
+      if (typeof block.text === 'string') return block.text;
+      if (typeof block.content === 'string') return block.content;
+      return '';
+    })
+    .join(' ');
+}
+
+function collectRelevantText(body: Record<string, unknown>): string {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const parts: string[] = [];
+  for (const msg of messages) {
+    if (!isRecord(msg)) continue;
+    const role = typeof msg.role === 'string' ? msg.role : '';
+    if (role && !['user', 'system', 'developer'].includes(role)) continue;
+    const text = extractMessageText(msg.content);
+    if (text) parts.push(text);
+  }
+  return parts.join(' ');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function hasComplexContentForBody(body: Record<string, unknown>, vm?: VirtualModel | null): boolean {
+  const text = collectRelevantText(body);
+  if (!text) return false;
+  const keywords =
+    vm?.complexityKeywords && vm.complexityKeywords.length > 0 ? vm.complexityKeywords : DEFAULT_COMPLEXITY_KEYWORDS;
+  for (const keyword of keywords) {
+    if (!keyword) continue;
+    // Short keywords match only as whole words so "plan" does not fire inside "explanation"
+    // or "plane"; longer keywords match as word prefixes so stems like "orchestrat" still
+    // catch "orchestrating".
+    const pattern = keyword.length < 6 ? `\\b${escapeRegExp(keyword)}\\b` : `\\b${escapeRegExp(keyword)}`;
+    if (new RegExp(pattern, 'i').test(text)) return true;
+  }
+  const minLength = vm?.complexityMinLength ?? DEFAULT_COMPLEXITY_MIN_LENGTH;
+  if (typeof minLength === 'number' && minLength > 0 && text.length >= minLength) return true;
+  return false;
 }
 
 function contentHasImage(content: unknown): boolean {
@@ -85,7 +165,7 @@ function contentHasImage(content: unknown): boolean {
 }
 
 /** Extract the structural signals that decide the routing bucket. */
-export function detectRequestSignals(body: Record<string, unknown>): RequestSignals {
+export function detectRequestSignals(body: Record<string, unknown>, vm?: VirtualModel | null): RequestSignals {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const hasImage = messages.some((msg) => isRecord(msg) && contentHasImage(msg.content));
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
@@ -94,7 +174,8 @@ export function detectRequestSignals(body: Record<string, unknown>): RequestSign
   const wantsReasoning =
     (Object.hasOwn(body, 'reasoning') && body.reasoning !== undefined && body.reasoning !== null) ||
     (Object.hasOwn(body, 'reasoning_effort') && body.reasoning_effort !== undefined && body.reasoning_effort !== null);
-  return { hasImage, hasTools, wantsStructuredOutput, wantsReasoning };
+  const hasComplexContent = hasComplexContentForBody(body, vm ?? null);
+  return { hasImage, hasTools, wantsStructuredOutput, wantsReasoning, hasComplexContent };
 }
 
 function valueOf<T>(model: unknown, key: string): T | undefined {
@@ -119,6 +200,9 @@ function toVirtualModel(row: unknown, fallbackName = ''): VirtualModel {
     reasoningModels: stringList(valueOf(row, 'reasoningModels')),
     cheapModels: stringList(valueOf(row, 'cheapModels')),
     generalModels: stringList(valueOf(row, 'generalModels')),
+    complexityKeywords: stringList(valueOf(row, 'complexityKeywords')),
+    complexityMinLength: valueOf<number | null>(row, 'complexityMinLength'),
+    complexityClassifierModel: valueOf<string | null>(row, 'complexityClassifierModel'),
     enabled: valueOf<boolean>(row, 'enabled'),
   };
 }
@@ -158,6 +242,8 @@ async function bucketFor(
   signals: RequestSignals,
 ): Promise<{ reason: VirtualResolution['reason']; candidates: string[] }> {
   const explicit = (list: string[] | undefined) => (list && list.length ? list : null);
+  // Deterministic structural signals first — these are unambiguous properties of
+  // the request (tools array present, image blocks, explicit reasoning param).
   if (signals.hasImage) {
     return { reason: 'vision', candidates: explicit(vm.visionModels) ?? (await deriveBucket(ctx, 'vision')) };
   }
@@ -172,6 +258,11 @@ async function bucketFor(
       reason: 'structured_output',
       candidates: explicit(vm.generalModels) ?? (await deriveBucket(ctx, 'general')),
     };
+  }
+  // Content-complexity heuristic is a soft signal — only used when no structural
+  // signal matched. Keyword/length matching can false-positive on normal prompts.
+  if (signals.hasComplexContent) {
+    return { reason: 'reasoning', candidates: explicit(vm.reasoningModels) ?? (await deriveBucket(ctx, 'reasoning')) };
   }
   // Default to the cheapest bucket the admin configured; fall back to general.
   const cheap = explicit(vm.cheapModels);
@@ -237,8 +328,29 @@ export async function resolveVirtualModel(
       requestedMode,
     };
   }
-  const signals = detectRequestSignals(body);
-  const { reason, candidates } = await bucketFor(ctx, vm, signals);
+  const signals = detectRequestSignals(body, vm);
+  // When the keyword/length fast-path says the content is simple, an optional
+  // cheap LLM classifier can overrule it — useful for non-English text where
+  // word-boundary matching does not apply.
+  if (!signals.hasComplexContent && vm.complexityClassifierModel) {
+    const text = collectRelevantText(body);
+    if (await classifyComplexity(ctx, vm.complexityClassifierModel, text)) {
+      signals.hasComplexContent = true;
+    }
+  }
+  let { reason, candidates } = await bucketFor(ctx, vm, signals);
+
+  // When content-complexity routed to reasoning but the bucket is empty (no explicit list and
+  // no derived metadata), prefer the general bucket (strongest available model) over the
+  // cheap fallback. The fallback remains the last resort.
+  if (reason === 'reasoning' && candidates.length === 0) {
+    const generalExplicit = vm.generalModels && vm.generalModels.length ? vm.generalModels : null;
+    const generalCandidates = generalExplicit ?? (await deriveBucket(ctx, 'general'));
+    if (generalCandidates.length > 0) {
+      reason = 'general';
+      candidates = generalCandidates;
+    }
+  }
 
   for (const candidate of candidates) {
     const resolved = await resolveModelReference(ctx, candidate);

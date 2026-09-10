@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Form, Input, Select, Space, Switch, Typography, message } from 'antd';
+import { Button, Card, Form, Input, InputNumber, Select, Space, Switch, Typography, message } from 'antd';
 import { useFlowContext } from '@nocobase/flow-engine';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
@@ -16,6 +16,9 @@ interface VirtualModel {
   reasoningModels: string[];
   cheapModels: string[];
   generalModels: string[];
+  complexityKeywords: string[];
+  complexityMinLength: number | null;
+  complexityClassifierModel?: string | null;
   enabled: boolean;
 }
 
@@ -78,6 +81,7 @@ export default function ModelRoutingPage() {
         const known = new Set(opts.map((option) => option.value));
         const configured = [
           existing.fallbackModel,
+          existing.complexityClassifierModel,
           ...(existing.visionModels || []),
           ...(existing.toolModels || []),
           ...(existing.reasoningModels || []),
@@ -102,6 +106,9 @@ export default function ModelRoutingPage() {
           reasoningModels: existing.reasoningModels || [],
           cheapModels: existing.cheapModels || [],
           generalModels: existing.generalModels || [],
+          complexityKeywords: existing.complexityKeywords || [],
+          complexityMinLength: existing.complexityMinLength ?? null,
+          complexityClassifierModel: existing.complexityClassifierModel ?? null,
           enabled: existing.enabled !== false,
         });
       } else {
@@ -115,6 +122,9 @@ export default function ModelRoutingPage() {
           reasoningModels: [],
           cheapModels: [],
           generalModels: [],
+          complexityKeywords: [],
+          complexityMinLength: null,
+          complexityClassifierModel: null,
         });
       }
     } catch (error) {
@@ -219,6 +229,43 @@ export default function ModelRoutingPage() {
             'Default bucket when no capability rule matched. Leave empty to derive from all enabled models ordered by Model metadata sortOrder.',
           ),
         )}
+
+        <Form.Item
+          name="complexityKeywords"
+          label={t('Complexity keywords')}
+          tooltip={t(
+            'Requests whose messages contain any of these keywords are treated as complex and routed to the reasoning bucket. Matching is case-insensitive at word boundaries. Leave empty to use the built-in defaults.',
+          )}
+        >
+          <Select mode="tags" placeholder={t('Type a keyword and press Enter')} tokenSeparators={[',']} options={[]} />
+        </Form.Item>
+
+        <Form.Item
+          name="complexityMinLength"
+          label={t('Complexity min length')}
+          tooltip={t(
+            'Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).',
+          )}
+        >
+          <InputNumber min={1} step={100} placeholder="500" style={{ width: 200 }} />
+        </Form.Item>
+
+        <Form.Item
+          name="complexityClassifierModel"
+          label={t('Complexity classifier model')}
+          tooltip={t(
+            'Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.',
+          )}
+        >
+          <Select
+            allowClear
+            placeholder={t('Optional — a cheap model used to double-check simple requests')}
+            options={options}
+            optionFilterProp="label"
+            showSearch
+            style={{ maxWidth: 480 }}
+          />
+        </Form.Item>
 
         <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
           <Switch />

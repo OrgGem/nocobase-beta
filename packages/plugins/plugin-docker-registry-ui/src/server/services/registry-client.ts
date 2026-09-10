@@ -15,6 +15,8 @@ import type {
   RegistryTagSummary,
 } from '../../shared/types';
 import { mergeImageConfig, normalizeManifest } from './manifest-normalizer';
+import { EcrAuthProvider } from './ecr-auth';
+import { EcrCatalogProvider } from './ecr-catalog';
 
 interface RegistryResponse {
   status: number;
@@ -150,8 +152,38 @@ async function mapWithConcurrency<T, R>(values: T[], limit: number, mapper: (val
   return output;
 }
 
+export interface RegistryClientProviders {
+  ecrAuth?: EcrAuthProvider;
+  ecrCatalog?: EcrCatalogProvider;
+}
+
 export class RegistryClient {
-  constructor(private readonly settings: RegistryConnection) {}
+  private readonly ecrAuth?: EcrAuthProvider;
+  private readonly ecrCatalog?: EcrCatalogProvider;
+
+  constructor(
+    private readonly settings: RegistryConnection,
+    providers?: RegistryClientProviders,
+  ) {
+    if (settings.credentialMode === 'ecr') {
+      const ecrOptions = {
+        region: settings.awsRegion,
+        accessKeyId: settings.awsAccessKeyId,
+        secretAccessKey: settings.awsSecretAccessKey,
+        roleArn: settings.awsRoleArn,
+      };
+      this.ecrAuth =
+        providers?.ecrAuth ??
+        new EcrAuthProvider({
+          ...ecrOptions,
+          registryHost: settings.registryUrl ? new URL(settings.registryUrl).hostname : '',
+        });
+      this.ecrCatalog = providers?.ecrCatalog ?? new EcrCatalogProvider(ecrOptions);
+    } else {
+      this.ecrAuth = providers?.ecrAuth;
+      this.ecrCatalog = providers?.ecrCatalog;
+    }
+  }
 
   private registryUrl(path: string): URL {
     if (!this.settings.registryUrl) throw new RegistryRequestError('Registry URL is not configured');
@@ -291,7 +323,10 @@ export class RegistryClient {
     });
   }
 
-  private authorizationHeader(): string | undefined {
+  private async authorizationHeader(): Promise<string | undefined> {
+    if (this.settings.credentialMode === 'ecr' && this.ecrAuth) {
+      return this.ecrAuth.getAuthorizationHeader();
+    }
     if (this.settings.credentialMode === 'bearer' && this.settings.bearerToken) {
       return `Bearer ${this.settings.bearerToken}`;
     }
@@ -339,9 +374,14 @@ export class RegistryClient {
     body?: Buffer,
   ): Promise<RegistryResponse> {
     const withAuth = { ...headers };
-    const authorization = this.authorizationHeader();
+    const authorization = await this.authorizationHeader();
     if (authorization) withAuth.authorization = authorization;
     const response = await this.send(url, method, withAuth, 0, body);
+    if (response.status === 401 && this.settings.credentialMode === 'ecr' && this.ecrAuth) {
+      await this.ecrAuth.forceRefresh();
+      const refreshed = await this.authorizationHeader();
+      if (refreshed) return this.send(url, method, { ...headers, authorization: refreshed }, 0, body);
+    }
     const challenge = parseBearerChallenge(response.headers['www-authenticate']);
     if (response.status !== 401 || !challenge || this.settings.credentialMode === 'bearer') return response;
     const token = await this.bearerToken(challenge);
@@ -361,9 +401,16 @@ export class RegistryClient {
   private async requestStreaming(path: string): Promise<RegistryBlobStream> {
     const url = this.registryUrl(path);
     const headers: Record<string, string> = {};
-    const authorization = this.authorizationHeader();
+    const authorization = await this.authorizationHeader();
     if (authorization) headers.authorization = authorization;
     let response = await this.sendStreaming(url, 'GET', headers);
+    if (response.status === 401 && this.settings.credentialMode === 'ecr' && this.ecrAuth) {
+      response.stream.resume();
+      await once(response.stream, 'end');
+      await this.ecrAuth.forceRefresh();
+      const refreshed = await this.authorizationHeader();
+      if (refreshed) return this.sendStreaming(url, 'GET', { authorization: refreshed });
+    }
     const challenge = parseBearerChallenge(response.headers['www-authenticate']);
     if (response.status !== 401 || !challenge || this.settings.credentialMode === 'bearer') return response;
     const drained = once(response.stream, 'end');
@@ -393,9 +440,13 @@ export class RegistryClient {
       };
     }
     if (response.status === 401) {
+      const hasCredentials =
+        this.settings.credentialMode === 'ecr' ||
+        (this.settings.credentialMode === 'basic' && Boolean(this.settings.username && this.settings.password)) ||
+        (this.settings.credentialMode === 'bearer' && Boolean(this.settings.bearerToken));
       return {
         reachable: true,
-        authentication: this.authorizationHeader() ? 'failed' : 'required',
+        authentication: hasCredentials ? 'failed' : 'required',
         apiVersion: response.headers['docker-distribution-api-version'],
       };
     }
@@ -407,6 +458,9 @@ export class RegistryClient {
   }
 
   private async listRepositoriesPage(last?: string): Promise<RegistryListResult> {
+    if (this.settings.credentialMode === 'ecr' && this.ecrCatalog) {
+      return this.ecrCatalog.listRepositoriesPage(last);
+    }
     const query = new URLSearchParams({ n: String(this.settings.catalogPageSize) });
     if (last) query.set('last', last);
     const response = await this.request(`v2/_catalog?${query.toString()}`);

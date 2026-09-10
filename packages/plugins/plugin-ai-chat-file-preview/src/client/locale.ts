@@ -12,6 +12,6 @@ import { useApp } from '@nocobase/client';
 export function useTranslation() {
   const app = useApp();
   return {
-    t: (key: string) => app.i18n.t(key, { ns: '@nocobase/plugin-ai-chat-file-preview' }),
+    t: (key: string) => app.i18n.t(key, { ns: 'plugin-ai-chat-file-preview' }),
   };
 }

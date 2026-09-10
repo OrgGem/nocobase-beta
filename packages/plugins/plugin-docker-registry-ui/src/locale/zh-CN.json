@@ -223,5 +223,21 @@
   "A valid tag is required": "请输入有效的标签",
   "Maximum download speed (kbps)": "最大下载速度 (kbps)",
   "Maximum upload speed (kbps)": "最大上传速度 (kbps)",
-  "0 means unlimited bandwidth.": "0 表示不限带宽。"
+  "0 means unlimited bandwidth.": "0 表示不限带宽。",
+  "AWS ECR": "AWS ECR",
+  "AWS Region": "AWS 区域",
+  "Please enter the AWS region": "请输入 AWS 区域",
+  "AWS Role ARN (optional)": "AWS Role ARN（可选）",
+  "If set, assumes this role using the container credentials (ECS task role / EC2 instance profile) or the static keys below.": "如设置，则使用容器凭据（ECS 任务角色 / EC2 实例角色）或下方的静态密钥来扮演此角色。",
+  "AWS Access Key ID (optional)": "AWS Access Key ID（可选）",
+  "AWS Secret Access Key (optional)": "AWS Secret Access Key（可选）",
+  "An Access Key ID is already stored. Leave this field blank to keep it.": "Access Key ID 已存储。留空此字段以保留。",
+  "A Secret Access Key is already stored. Leave this field blank to keep it.": "Secret Access Key 已存储。留空此字段以保留。",
+  "Clear stored Access Key ID": "清除已存储的 Access Key ID",
+  "Clear stored Secret Access Key": "清除已存储的 Secret Access Key",
+  "Running in a container or on EC2? Leave credentials blank — the plugin uses the ECS task role or EC2 instance profile automatically.": "在容器或 EC2 上运行？将凭据留空 — 插件会自动使用 ECS 任务角色或 EC2 实例角色。",
+  "ECR tokens expire after 12 hours and are rotated automatically.": "ECR 令牌在 12 小时后过期并自动轮换。",
+  "AWS region is required for ECR registries": "ECR 仓库需要 AWS 区域",
+  "Enter a valid IAM role ARN": "输入有效的 IAM 角色 ARN",
+  "Leave blank to use the container role (ECS task role / EC2 instance profile).": "留空以使用容器角色（ECS 任务角色 / EC2 实例角色）。"
 }
