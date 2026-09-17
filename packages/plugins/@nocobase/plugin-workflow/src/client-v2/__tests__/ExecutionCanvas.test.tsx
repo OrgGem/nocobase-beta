@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('@nocobase/client-v2', () => ({
   useApp: () => ({
     getHref: (path: string) => `/v${path}`,
-    pluginSettingsManager: { getRoutePath: () => '/admin/settings/workflow' },
+    pluginSettingsManager: { getRoutePath: () => '/app/settings/workflow' },
   }),
 }));
 
@@ -42,7 +42,7 @@ describe('ExecutionCanvas', () => {
 
     expect(screen.getByRole('link', { name: 'Back to Workflow List' })).toHaveAttribute(
       'href',
-      '/v/admin/settings/workflow',
+      '/v/app/settings/workflow',
     );
   });
 });

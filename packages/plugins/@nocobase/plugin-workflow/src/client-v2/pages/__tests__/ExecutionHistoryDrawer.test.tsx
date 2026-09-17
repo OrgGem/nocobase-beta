@@ -43,7 +43,7 @@ vi.mock('../../locale', () => ({
 
 vi.mock('../../hooks/useWorkflowRuntimePaths', () => ({
   useWorkflowRuntimePaths: () => ({
-    getWorkflowExecutionPath: (id: string | number) => `/admin/workflow/executions/${id}`,
+    getWorkflowExecutionPath: (id: string | number) => `/app/workflow/executions/${id}`,
   }),
 }));
 

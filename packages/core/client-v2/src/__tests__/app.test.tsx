@@ -81,22 +81,22 @@ describe('app', () => {
     it('should normalize publicPath and webpack public path with a single trailing slash', () => {
       const app = new Application({
         router,
-        publicPath: '/admin//',
+        publicPath: '/app//',
       });
 
-      expect(app.getPublicPath()).toBe('/admin/');
+      expect(app.getPublicPath()).toBe('/app/');
 
       window['__webpack_public_path__'] = '/cdn/assets///';
       expect(app.getCdnUrl()).toBe('/cdn/assets/');
 
       delete window['__webpack_public_path__'];
-      expect(app.getCdnUrl()).toBe('/admin/');
+      expect(app.getCdnUrl()).toBe('/app/');
     });
 
     it('should normalize webpack public path without a trailing slash', () => {
       const app = new Application({
         router,
-        publicPath: '/admin/',
+        publicPath: '/app/',
       });
 
       window['__webpack_public_path__'] = '/cdn/assets';
@@ -342,14 +342,14 @@ describe('app', () => {
     }
     const app = createMockClient({
       plugins: [PluginHelloClient],
-      router: { type: 'memory', initialEntries: ['/admin/settings/demo'] },
+      router: { type: 'memory', initialEntries: ['/app/settings/demo'] },
     });
     app.router.add('admin', {
-      path: '/admin',
+      path: '/app',
       Component: Outlet,
     });
     app.router.add('admin.settings', {
-      path: '/admin/settings',
+      path: '/app/settings',
       Component: Outlet,
     });
     await renderApp(app);
@@ -456,7 +456,7 @@ describe('app', () => {
 
       await waitFor(() => expect(screen.queryByText('maintaining error message')).not.toBeInTheDocument());
       expect(screen.getByText('Hello')).toBeInTheDocument();
-      // Aligned with v1: a routine maintaining→APP_RUNNING cycle does not
+      // Aligned with v1: a routine maintainingâ†’APP_RUNNING cycle does not
       // reload the page. Only `hasLoadError === true` (set when the initial
       // `app.load()` itself fails) triggers a recovery reload.
       expect(reloadMock).not.toHaveBeenCalled();
@@ -483,7 +483,7 @@ describe('app', () => {
     const app = createMockClient({
       publicPath: '/v2/',
       plugins: [NocoBaseBuildInPlugin as any],
-      router: { type: 'memory', initialEntries: ['/v2/admin/7vu4c2sdk6h'] },
+      router: { type: 'memory', initialEntries: ['/v2/app/7vu4c2sdk6h'] },
     });
 
     app.apiMock.onGet('app:getLang').reply(200, {
@@ -518,7 +518,7 @@ describe('app', () => {
     const app = createMockClient({
       publicPath: '/v2/',
       plugins: [NocoBaseBuildInPlugin as any],
-      router: { type: 'memory', initialEntries: ['/v2/admin/7vu4c2sdk6h'] },
+      router: { type: 'memory', initialEntries: ['/v2/app/7vu4c2sdk6h'] },
     });
 
     app.apiMock.onGet('app:getLang').reply(200, {
@@ -540,7 +540,7 @@ describe('app', () => {
     });
 
     await act(async () => {
-      await app.router.navigate('/v2/admin/e4qpeoh8suv');
+      await app.router.navigate('/v2/app/e4qpeoh8suv');
     });
 
     await waitFor(() => {
@@ -548,3 +548,4 @@ describe('app', () => {
     });
   });
 });
+

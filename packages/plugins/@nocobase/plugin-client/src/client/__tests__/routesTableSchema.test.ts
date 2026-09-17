@@ -26,7 +26,7 @@ vi.mock('@nocobase/client', async (importOriginal) => {
 
 describe('v1 routes table schema', () => {
   it('should scope desktop route management to the default AdminLayout', () => {
-    const schema = createRoutesTableSchema('desktopRoutes', '/admin');
+    const schema = createRoutesTableSchema('desktopRoutes', '/app');
     const params = schema['x-decorator-props'].params;
 
     expect(params.filter).toEqual({

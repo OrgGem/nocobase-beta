@@ -62,7 +62,7 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
     });
     engine.context.defineProperty('location', {
       value: {
-        pathname: '/admin/current-page',
+        pathname: '/app/current-page',
       },
     });
     engine.context.defineProperty('app', {
@@ -113,12 +113,12 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
 
     return (
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/current-page']}>
+        <MemoryRouter initialEntries={['/app/current-page']}>
           <AdminLayoutMenuItemRenderer
             renderType={renderType}
             item={{
               name,
-              path: '/admin/menu-title',
+              path: '/app/menu-title',
               _depth: depth,
               _route: {
                 type: NocoBaseDesktopRouteType.page,
@@ -465,7 +465,7 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
 
     expect(deleteRoute).toHaveBeenCalledWith(1);
     expect(removeSchema).toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith('/admin/next-page');
+    expect(navigate).toHaveBeenCalledWith('/app/next-page');
   });
 
   it('should keep page drag on group target as sibling reorder in client v1', () => {
@@ -602,7 +602,7 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
       },
     });
 
-    await model.hydrateLegacyPersistedStateIfCurrentPath('/admin/page-1');
+    await model.hydrateLegacyPersistedStateIfCurrentPath('/app/page-1');
 
     expect(findOne).toHaveBeenCalledWith({ uid: 'legacy-menu-item-backfill' });
     expect(model.getFlow('beforeRender')).toBeDefined();
@@ -660,8 +660,8 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
 
     expect(findOne).not.toHaveBeenCalled();
 
-    expect(await currentModel.hydrateLegacyPersistedStateIfCurrentPath('/admin/page-1')).toBe(true);
-    expect(await otherModel.hydrateLegacyPersistedStateIfCurrentPath('/admin/page-1')).toBe(false);
+    expect(await currentModel.hydrateLegacyPersistedStateIfCurrentPath('/app/page-1')).toBe(true);
+    expect(await otherModel.hydrateLegacyPersistedStateIfCurrentPath('/app/page-1')).toBe(false);
 
     expect(findOne).toHaveBeenCalledTimes(1);
     expect(findOne).toHaveBeenCalledWith({ uid: 'legacy-menu-item-current' });
@@ -768,7 +768,7 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
     });
     const item = {
       name: 'Page 1',
-      path: '/admin/page-1',
+      path: '/app/page-1',
       _route: route,
       _model: model,
     };
@@ -864,7 +864,7 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
       },
     });
 
-    await model.hydrateLegacyPersistedStateIfCurrentPath('/admin/page-1');
+    await model.hydrateLegacyPersistedStateIfCurrentPath('/app/page-1');
 
     expect(model.getStepParams('menuSettings', 'linkageRules')).toMatchObject({
       value: [{ key: 'r1' }],
@@ -921,7 +921,7 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
     model.setProps({
       item: {
         name: 'Page 1',
-        path: '/admin/page-1',
+        path: '/app/page-1',
         _route: createRoute(),
         _model: model,
       },
@@ -1085,12 +1085,13 @@ describe('AdminLayoutMenuItemModel legacy behavior', () => {
     await expect(
       hydrateLegacyActiveMenuPersistedStateForTest(
         [group, sibling] as unknown as AdminLayoutMenuItemModel[],
-        '/admin/page-1',
+        '/app/page-1',
       ),
     ).resolves.toBe(true);
 
-    expect(child.hydrateLegacyPersistedStateIfCurrentPath).toHaveBeenCalledWith('/admin/page-1', undefined);
-    expect(group.hydrateLegacyPersistedStateIfCurrentPath).toHaveBeenCalledWith('/admin/page-1', undefined);
+    expect(child.hydrateLegacyPersistedStateIfCurrentPath).toHaveBeenCalledWith('/app/page-1', undefined);
+    expect(group.hydrateLegacyPersistedStateIfCurrentPath).toHaveBeenCalledWith('/app/page-1', undefined);
     expect(sibling.hydrateLegacyPersistedStateIfCurrentPath).not.toHaveBeenCalled();
   });
 });
+

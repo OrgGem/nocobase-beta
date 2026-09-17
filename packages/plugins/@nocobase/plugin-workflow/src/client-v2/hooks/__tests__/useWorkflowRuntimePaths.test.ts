@@ -30,16 +30,16 @@ describe('useWorkflowRuntimePaths', () => {
     holder.runtime = 'legacy';
 
     expect(isWorkflowV2Runtime()).toBe(false);
-    expect(getWorkflowCanvasRuntimePath(123)).toBe('/admin/settings/workflow/workflows/123');
-    expect(getWorkflowExecutionRuntimePath(456)).toBe('/admin/settings/workflow/executions/456');
+    expect(getWorkflowCanvasRuntimePath(123)).toBe('/app/settings/workflow/workflows/123');
+    expect(getWorkflowExecutionRuntimePath(456)).toBe('/app/settings/workflow/executions/456');
   });
 
   it('maps modern runtime to modern workflow routes', () => {
     holder.runtime = 'modern';
 
     expect(isWorkflowV2Runtime()).toBe(true);
-    expect(getWorkflowCanvasRuntimePath(123)).toBe('/admin/workflow/workflows/123');
-    expect(getWorkflowExecutionRuntimePath(456)).toBe('/admin/workflow/executions/456');
+    expect(getWorkflowCanvasRuntimePath(123)).toBe('/app/workflow/workflows/123');
+    expect(getWorkflowExecutionRuntimePath(456)).toBe('/app/workflow/executions/456');
   });
 
   it('exposes memoized route helpers through the hook', () => {
@@ -47,7 +47,7 @@ describe('useWorkflowRuntimePaths', () => {
 
     const { result } = renderHook(() => useWorkflowRuntimePaths());
     expect(result.current.isV2Runtime).toBe(true);
-    expect(result.current.getWorkflowCanvasPath(123)).toBe('/admin/workflow/workflows/123');
-    expect(result.current.getWorkflowExecutionPath(456)).toBe('/admin/workflow/executions/456');
+    expect(result.current.getWorkflowCanvasPath(123)).toBe('/app/workflow/workflows/123');
+    expect(result.current.getWorkflowExecutionPath(456)).toBe('/app/workflow/executions/456');
   });
 });

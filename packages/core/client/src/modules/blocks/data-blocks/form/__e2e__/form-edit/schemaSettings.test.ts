@@ -121,7 +121,7 @@ test.describe('edit form block schema settings', () => {
     await expect(page.getByRole('menuitem', { name: 'Convert reference to duplicate' })).not.toBeVisible();
 
     // 保存为模板之后，应该在 ui-schema-storage 页面显示出来
-    await page.goto('/admin/settings/ui-schema-storage');
+    await page.goto('/app/settings/ui-schema-storage');
     await expect(page.getByRole('row', { name: 'General_Form' }).first()).toBeVisible();
 
     // 删除创建的模板，以免影响其它测试

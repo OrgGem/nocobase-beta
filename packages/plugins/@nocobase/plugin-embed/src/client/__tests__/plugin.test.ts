@@ -207,7 +207,7 @@ describe('PluginEmbedClient', () => {
     };
     const plugin = new PluginEmbedClient({} as never, app as never);
 
-    window.history.pushState({}, '', '/admin/page-uid?token=test-token');
+    window.history.pushState({}, '', '/app/page-uid?token=test-token');
     await plugin.beforeLoad();
 
     expect(app.apiClient.createStorage).not.toHaveBeenCalled();
@@ -520,7 +520,7 @@ describe('PluginEmbedClient', () => {
         status: 401,
       },
     };
-    window.history.pushState({}, '', '/admin/page-uid');
+    window.history.pushState({}, '', '/app/page-uid');
 
     await plugin.load();
 

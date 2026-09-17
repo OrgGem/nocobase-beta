@@ -9,11 +9,9 @@
 
 import { ISchema, Schema } from '@formily/json-schema';
 import { BlockTemplatesPane, Plugin, SchemaSettingsFormItemTemplate, SchemaSettingsTemplate } from '@nocobase/client';
-import PluginMobileClient from '@nocobase/plugin-mobile/client';
 import * as _ from 'lodash';
 import { BlockTemplateList, BlockTemplatePage } from './components';
 import { BlockTemplateMenusProvider } from './components/BlockTemplateMenusProvider';
-import { BlockTemplateMobilePage } from './components/BlockTemplateMobilePage';
 import { TemplateGridDecorator } from './components/TemplateGridDecorator';
 import { NAMESPACE } from './constants';
 import { templateBlockInitializerItem } from './initializers';
@@ -108,19 +106,10 @@ export class PluginBlockTemplateClient extends Plugin {
       isTopLevel: false,
       Component: BlockTemplatePage,
     });
-
-    // add mobile router
-    this.app.pluginManager.get<PluginMobileClient>('mobile')?.mobileRouter?.add('mobile.schema.blockTemplate', {
-      path: `/ui-templates/inherited-v1/:key/:pageSchemaUid`,
-      Component: BlockTemplateMobilePage,
-    });
   }
-
   isInBlockTemplateConfigPage() {
-    const mobilePath =
-      this.app.pluginManager.get<PluginMobileClient>('mobile')?.mobileBasename + '/ui-templates/inherited-v1';
     const desktopPath = 'admin/settings/ui-templates/inherited-v1';
-    return window.location.pathname.includes(desktopPath) || window.location.pathname.includes(mobilePath);
+    return window.location.pathname.includes(desktopPath);
   }
 
   setTemplateCache = (schema?: ISchema) => {

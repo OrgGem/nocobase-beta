@@ -154,7 +154,7 @@ function LegacyAdminPublicFormPage(props: { name?: string; data?: PublicFormAdmi
           style={{ marginLeft: '10px' }}
           items={[
             {
-              title: <Link to={`/admin/settings/public-forms`}>{t('Public forms', { ns: NAMESPACE })}</Link>,
+              title: <Link to={`/app/settings/public-forms`}>{t('Public forms', { ns: NAMESPACE })}</Link>,
             },
             {
               title: compile(title),

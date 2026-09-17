@@ -301,7 +301,7 @@ export const BuildUITemplateManager: React.FC<{ embedded?: boolean }> = ({ embed
               </div>
 
               {space.templateUid && (
-                <Button type="primary" ghost icon={<ArrowRightOutlined />} href="/admin/settings/ui-templates.block">
+                <Button type="primary" ghost icon={<ArrowRightOutlined />} href="/app/settings/ui-templates.block">
                   View Template Library
                 </Button>
               )}
@@ -447,3 +447,4 @@ export const BuildUITemplateManager: React.FC<{ embedded?: boolean }> = ({ embed
     </div>
   );
 };
+

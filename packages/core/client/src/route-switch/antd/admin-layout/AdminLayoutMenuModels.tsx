@@ -572,7 +572,7 @@ export class AdminLayoutMenuItemModel extends FlowModel<AdminLayoutMenuItemStruc
 
     const sibling = prevSibling || nextSibling;
     const nextPath = sibling
-      ? `/admin/${sibling.type === NocoBaseDesktopRouteType.group ? sibling.id : sibling.schemaUid}`
+      ? `/app/${sibling.type === NocoBaseDesktopRouteType.group ? sibling.id : sibling.schemaUid}`
       : '/';
     this.context.router.navigate(nextPath);
     return true;
@@ -613,8 +613,8 @@ export class AdminLayoutMenuItemModel extends FlowModel<AdminLayoutMenuItemStruc
       return {
         name,
         icon,
-        path: `/admin/${route.schemaUid}`,
-        redirect: `/admin/${route.schemaUid}`,
+        path: `/app/${route.schemaUid}`,
+        redirect: `/app/${route.schemaUid}`,
         hideInMenu: route.hideInMenu,
         _route: route,
         _parentRoute: parentRoute,
@@ -642,11 +642,11 @@ export class AdminLayoutMenuItemModel extends FlowModel<AdminLayoutMenuItemStruc
       const groupRoute: AdminLayoutMenuNode = {
         name,
         icon,
-        path: `/admin/${route.id}`,
+        path: `/app/${route.id}`,
         redirect:
           children[0]?.key === 'x-designer-button'
             ? undefined
-            : `/admin/${findFirstPageRoute(itemChildren)?.schemaUid || route.id}`,
+            : `/app/${findFirstPageRoute(itemChildren)?.schemaUid || route.id}`,
         hideInMenu: route.hideInMenu,
         _route: route,
         _parentRoute: parentRoute,

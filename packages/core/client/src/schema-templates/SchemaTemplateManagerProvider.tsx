@@ -184,7 +184,7 @@ export class RemoteSchemaTemplateManagerPlugin extends Plugin {
 
   addRoutes() {
     this.app.router.add('admin.plugins.block-templates-key', {
-      path: '/admin/plugins/block-templates/:key',
+      path: '/app/plugins/block-templates/:key',
       Component: 'BlockTemplateDetails',
     });
   }

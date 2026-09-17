@@ -10,7 +10,6 @@
 export * from './AddNewTemplate';
 export * from './BlockTemplateList';
 export * from './BlockTemplatePage';
-export * from './BlockTemplateMobilePage';
 export * from './ConfigureLink';
 export * from './RevertSetting';
 export * from './BlockTemplateInfoContext';

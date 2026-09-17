@@ -565,7 +565,7 @@ function UiLayoutForm(props: { layoutType: UiLayoutType; record?: UiLayoutRecord
         <Form.Item
           name="routePath"
           label={t('Access path')}
-          extra={t('Must start with /. For example: /admin.')}
+          extra={t('Must start with /. For example: /app.')}
           rules={[
             { required: true, message: t('The field value is required') },
             {

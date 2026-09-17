@@ -45,7 +45,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
         },
       }),
     ).toEqual({
-      runtimePath: '/nocobase/v2/admin/flow-page-1',
+      runtimePath: '/nocobase/v2/app/flow-page-1',
       navigationMode: 'spa',
       isLegacy: false,
       reason: 'ok',
@@ -106,7 +106,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
         },
       }),
     ).toEqual({
-      runtimePath: '/apps/demo/admin/legacy-page-1',
+      runtimePath: '/apps/demo/app/legacy-page-1',
       navigationMode: 'spa',
       isLegacy: false,
       reason: 'ok',
@@ -122,7 +122,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
           schemaUid: 'legacy-page-1',
         },
         location: {
-          pathname: '/nocobase/v2/admin/legacy-page-1/tab/tab-1/view/detail',
+          pathname: '/nocobase/v2/app/legacy-page-1/tab/tab-1/view/detail',
           search: '?from=direct',
           hash: '#dialog',
         },
@@ -161,7 +161,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
     };
 
     expect(resolveAdminRouteRuntimeTarget({ app, route })).toEqual({
-      runtimePath: '/nocobase/v2/admin/flow-page-2',
+      runtimePath: '/nocobase/v2/app/flow-page-2',
       navigationMode: 'spa',
       isLegacy: false,
       reason: 'ok',
@@ -277,8 +277,8 @@ describe('resolveAdminRouteRuntimeTarget', () => {
   });
 
   it('should convert root-relative path to router internal path under basename', () => {
-    expect(toRouterNavigationPath('/nocobase/v2/admin/page-1', '/nocobase/v2')).toBe('/admin/page-1');
-    expect(toRouterNavigationPath('/admin/page-1', '/nocobase/v2')).toBe('/admin/page-1');
+    expect(toRouterNavigationPath('/nocobase/v2/app/page-1', '/nocobase/v2')).toBe('/app/page-1');
+    expect(toRouterNavigationPath('/app/page-1', '/nocobase/v2')).toBe('/app/page-1');
   });
 
   describe('v2 sub-app context (router basename contains /apps/<id>/)', () => {
@@ -299,7 +299,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
           },
         }),
       ).toEqual({
-        runtimePath: '/nocobase/v2/apps/test-app/admin/fp1',
+        runtimePath: '/nocobase/v2/apps/test-app/app/fp1',
         navigationMode: 'spa',
         isLegacy: false,
         reason: 'ok',
@@ -331,7 +331,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
       };
 
       expect(resolveAdminRouteRuntimeTarget({ app: subApp, route })).toEqual({
-        runtimePath: '/nocobase/v2/apps/test-app/admin/nested-fp',
+        runtimePath: '/nocobase/v2/apps/test-app/app/nested-fp',
         navigationMode: 'spa',
         isLegacy: false,
         reason: 'ok',
@@ -339,11 +339,11 @@ describe('resolveAdminRouteRuntimeTarget', () => {
     });
 
     it('should strip sub-app basename when converting to router internal path', () => {
-      expect(toRouterNavigationPath('/nocobase/v2/apps/test-app/admin/page-1', '/nocobase/v2/apps/test-app')).toBe(
-        '/admin/page-1',
+      expect(toRouterNavigationPath('/nocobase/v2/apps/test-app/app/page-1', '/nocobase/v2/apps/test-app')).toBe(
+        '/app/page-1',
       );
-      expect(toRouterNavigationPath('/nocobase/v2/apps/test-app/admin/page-1', '/nocobase/v2/apps/test-app/')).toBe(
-        '/admin/page-1',
+      expect(toRouterNavigationPath('/nocobase/v2/apps/test-app/app/page-1', '/nocobase/v2/apps/test-app/')).toBe(
+        '/app/page-1',
       );
     });
   });
@@ -364,7 +364,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
           },
         }),
       ).toMatchObject({
-        runtimePath: '/nocobase/v2/admin/fp1',
+        runtimePath: '/nocobase/v2/app/fp1',
         reason: 'ok',
       });
     });
@@ -386,7 +386,7 @@ describe('resolveAdminRouteRuntimeTarget', () => {
           },
         }),
       ).toMatchObject({
-        runtimePath: '/nocobase/v2/admin/fp1',
+        runtimePath: '/nocobase/v2/app/fp1',
         reason: 'ok',
       });
     });

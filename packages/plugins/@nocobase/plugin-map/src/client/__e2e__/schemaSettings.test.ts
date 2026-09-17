@@ -11,7 +11,7 @@ import { expect, expectSettingsMenu, test } from '@nocobase/test/e2e';
 import { oneMapUsedToTestSettings } from './templates';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/admin/settings/map');
+  await page.goto('/app/settings/map');
   await page.waitForLoadState('load');
   await page.waitForTimeout(1000);
   if (await page.getByRole('button', { name: 'Edit' }).first().isVisible()) {
@@ -25,7 +25,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.afterEach(async ({ page }) => {
-  await page.goto('/admin/settings/map');
+  await page.goto('/app/settings/map');
   await page.waitForLoadState('load');
   await page.waitForTimeout(1000);
   await page.getByRole('button', { name: 'Edit' }).first().click();

@@ -232,7 +232,7 @@ const LegacyPageUnsupported = ({
  *
  * @example
  * ```tsx
- * <Route path="/admin/:name" element={<FlowRoute />} />
+ * <Route path="/app/:name" element={<FlowRoute />} />
  * ```
  *
  * @returns {JSX.Element} 当前动态页面的布局挂载节点

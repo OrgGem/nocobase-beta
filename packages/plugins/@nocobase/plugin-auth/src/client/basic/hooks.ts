@@ -21,7 +21,7 @@ function shouldUseHardRedirect(target: string) {
   }
 }
 
-export function useRedirect(next = '/admin') {
+export function useRedirect(next = '/app') {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 

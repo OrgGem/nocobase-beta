@@ -140,11 +140,11 @@ describe('LayoutManager', () => {
     const manager = new LayoutManager(app);
 
     app.router.add('admin', {
-      path: '/admin',
+      path: '/app',
       element: <div />,
     });
     app.router.add('admin.settings', {
-      path: '/admin/settings',
+      path: '/app/settings',
       element: <div />,
     });
     app.router.add('admin.settings.route-empty', {
@@ -158,7 +158,7 @@ describe('LayoutManager', () => {
       layoutModelClass: 'PublicFormLayoutModel',
     });
 
-    const matches = matchRoutes(app.router.getRoutesTree(), '/admin/settings/public-forms/form-1/view/popup');
+    const matches = matchRoutes(app.router.getRoutesTree(), '/app/settings/public-forms/form-1/view/popup');
 
     expect(matches?.map((match) => match.route.id)).toEqual([
       'admin',
@@ -176,15 +176,15 @@ describe('LayoutManager', () => {
     const manager = new LayoutManager(app);
 
     app.router.add('admin', {
-      path: '/admin',
+      path: '/app',
       element: <div />,
     });
     app.router.add('admin.settings', {
-      path: '/admin/settings',
+      path: '/app/settings',
       element: <div />,
     });
     app.router.add('admin.settings.publicForms', {
-      path: '/admin/settings/public-forms',
+      path: '/app/settings/public-forms',
       element: <div />,
     });
     manager.registerLayout({
@@ -194,7 +194,7 @@ describe('LayoutManager', () => {
       layoutModelClass: 'PublicFormLayoutModel',
     });
 
-    const matches = matchRoutes(app.router.getRoutesTree(), '/admin/settings/public-forms/form-1/view/popup');
+    const matches = matchRoutes(app.router.getRoutesTree(), '/app/settings/public-forms/form-1/view/popup');
 
     expect(matches?.map((match) => match.route.id)).toEqual([
       'admin',
@@ -310,7 +310,7 @@ describe('LayoutManager', () => {
 
     manager.registerLayout({
       routeName: 'admin',
-      routePath: '/admin',
+      routePath: '/app',
       uid: 'admin-layout-model',
       layoutModelClass: 'AdminLayoutModel',
     });
@@ -333,3 +333,4 @@ describe('LayoutManager', () => {
     ).toThrowError(/uid 'admin-layout-model'/);
   });
 });
+

@@ -21,7 +21,7 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = (pr
   const observerRef = useRef<MutationObserver | null>(null);
   const siderRef = useRef<HTMLElement | null>(null);
 
-  const isSettingsPage = window.location.pathname.startsWith('/admin/settings');
+  const isSettingsPage = window.location.pathname.startsWith('/app/settings');
 
   const filterMenuItems = useCallback((term: string) => {
     const sider = siderRef.current;
@@ -116,7 +116,7 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = (pr
       'pointer-events: none',
       'font-size: 14px',
     ].join(';');
-    icon.textContent = '🔍';
+    icon.textContent = 'ðŸ”';
     wrapper.appendChild(icon);
 
     container.appendChild(wrapper);
@@ -169,10 +169,10 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = (pr
     };
   }, [isSettingsPage, injectSearchBox, removeSearchBox]);
 
-  // Track route changes globally so the search box lifecycle follows /admin/settings
+  // Track route changes globally so the search box lifecycle follows /app/settings
   useEffect(() => {
     const handlePopState = () => {
-      const onSettings = window.location.pathname.startsWith('/admin/settings');
+      const onSettings = window.location.pathname.startsWith('/app/settings');
       if (!onSettings) {
         removeSearchBox();
       } else {
@@ -185,3 +185,4 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = (pr
 
   return <>{props.children}</>;
 };
+

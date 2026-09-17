@@ -56,11 +56,11 @@ export function normalizeHubLink(link: string, appPath: string) {
   if (/^(https?:)?\/\//i.test(link) || /^(mailto|tel):/i.test(link)) {
     return link;
   }
-  if (link === '/admin' || link === '/admin/') {
+  if (link === '/app' || link === '/app/') {
     return joinRoutePath(appPath);
   }
-  if (link.startsWith('/admin/')) {
-    return getHubInternalPagePath(appPath, link.slice('/admin/'.length));
+  if (link.startsWith('/app/')) {
+    return getHubInternalPagePath(appPath, link.slice('/app/'.length));
   }
   if (link === HUB_PATH || link === `${HUB_PATH}/`) {
     return joinRoutePath(appPath);
@@ -70,3 +70,4 @@ export function normalizeHubLink(link: string, appPath: string) {
   }
   return getHubInternalPagePath(appPath, link);
 }
+

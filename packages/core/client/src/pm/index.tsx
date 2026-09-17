@@ -63,9 +63,9 @@ export class PMPlugin extends Plugin {
 
   addRoutes() {
     this.app.router.add('admin.pm.list', {
-      path: '/admin/pm/*',
+      path: '/app/pm/*',
       Component: () => {
-        return <Navigate to="/admin/settings/plugin-manager" replace />;
+        return <Navigate to="/app/settings/plugin-manager" replace />;
       },
     });
     // this.app.router.add('admin.pm.list-tab', {

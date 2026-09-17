@@ -33,7 +33,7 @@ export class PluginKnowledgeBaseClient extends Plugin {
     (this as any).app.pluginSettingsManager.add('plugin-knowledge-base', {
       title: tval('Knowledge base'),
       icon: 'BookOutlined',
-      link: '/admin/settings/ai/knowledge-base',
+      link: '/app/settings/ai/knowledge-base',
       aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
       hidden: true,
     });
@@ -66,3 +66,4 @@ export class PluginKnowledgeBaseClient extends Plugin {
 }
 
 export default PluginKnowledgeBaseClient;
+

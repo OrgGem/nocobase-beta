@@ -88,7 +88,7 @@ function setupRouteReplay(viewParams: Record<string, unknown>) {
   engine.context.defineProperty('route', {
     value: {
       params: { name: 'test-route' },
-      pathname: '/admin/popup/filterbytk/member',
+      pathname: '/app/popup/filterbytk/member',
     },
   });
   engine.context.defineProperty('routeRepository', {
@@ -122,7 +122,7 @@ function setupRouteReplay(viewParams: Record<string, unknown>) {
   });
   coordinator.syncRoute({
     params: { name: 'test-route' },
-    pathname: '/admin/popup/filterbytk/member',
+    pathname: '/app/popup/filterbytk/member',
   });
 
   return { dispatchEvent };
@@ -197,7 +197,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(layoutContentElement);
     coordinator.registerPage('test-route', {
       active: true,
@@ -205,7 +205,7 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     expect(dispatchEvent.mock.calls[0][1].target).toBe(layoutContentElement);
@@ -232,14 +232,14 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.registerPage('test-route', {
       active: true,
       layoutContentElement: document.createElement('div'),
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
       state: {
         usr: {
           [ROUTE_TRANSIENT_INPUT_ARGS_KEY]: {
@@ -305,19 +305,19 @@ describe('AdminLayoutRouteCoordinator', () => {
         },
       },
     };
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.registerPage('test-route', {
       active: true,
       layoutContentElement: document.createElement('div'),
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
       state: routeState,
     });
 
-    expect(navigate).toHaveBeenCalledWith('/admin/test-route', { replace: true, state: routeState });
-    expect(navigate).toHaveBeenCalledWith('/admin/test-route/view/popup', { state: routeState });
+    expect(navigate).toHaveBeenCalledWith('/app/test-route', { replace: true, state: routeState });
+    expect(navigate).toHaveBeenCalledWith('/app/test-route/view/popup', { state: routeState });
     expect(popupDispatchEvent).not.toHaveBeenCalled();
 
     await Promise.resolve();
@@ -364,7 +364,7 @@ describe('AdminLayoutRouteCoordinator', () => {
     const secondLayoutContentElement = document.createElement('div');
     const routePageElement = document.createElement('div');
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(firstLayoutContentElement);
     const routeModel = coordinator.registerPage('test-route', {
       active: true,
@@ -372,7 +372,7 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     expect(dispatchEvent).toHaveBeenCalledTimes(1);
@@ -420,7 +420,7 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     const firstLayoutContentElement = document.createElement('div');
     const secondLayoutContentElement = document.createElement('div');
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(firstLayoutContentElement);
     coordinator.registerPage('test-route', {
       active: true,
@@ -428,17 +428,17 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     coordinator.syncRoute({
       pageUid: 'other-route',
-      pathname: '/admin/other-route',
+      pathname: '/app/other-route',
     });
     coordinator.setLayoutContentElement(secondLayoutContentElement);
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     expect(dispatchEvent).toHaveBeenCalledTimes(2);
@@ -485,7 +485,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -493,13 +493,13 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem, popupViewItem, detailViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     expect(popupDispatchEvent).toHaveBeenCalledTimes(1);
@@ -559,7 +559,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -567,13 +567,13 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem, popupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem];
@@ -630,7 +630,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -638,19 +638,19 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem, popupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
 
     resolvedViewList = [rootViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
     resolvePopupModels.forEach((resolvePopupModel) => {
       resolvePopupModel(createViewModel('popup', popupDispatchEvent));
@@ -706,7 +706,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -714,17 +714,17 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem, popupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
 
     resolvePopupModels.forEach((resolvePopupModel) => {
@@ -768,7 +768,7 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -776,13 +776,13 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
     await nextTick();
 
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     expect(dispatchEvent).toHaveBeenCalledTimes(2);
@@ -832,7 +832,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -840,12 +840,12 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
 
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
     await nextTick();
 
@@ -898,7 +898,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -906,13 +906,13 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem, popupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
 
     coordinator.syncRoute({});
@@ -984,7 +984,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -996,25 +996,25 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [pageRootViewItem, firstPopupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
 
     resolvedViewList = [otherRootViewItem];
     coordinator.syncRoute({
       pageUid: 'other-route',
-      pathname: '/admin/other-route',
+      pathname: '/app/other-route',
     });
 
     resolvedViewList = [pageRootViewItem, secondPopupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
 
     resolvePopupModels[0]?.(createViewModel('popup', stalePopupDispatchEvent));
@@ -1065,7 +1065,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       dataSourceKey: '',
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.setLayoutContentElement(document.createElement('div'));
     coordinator.registerPage('test-route', {
       active: true,
@@ -1073,13 +1073,13 @@ describe('AdminLayoutRouteCoordinator', () => {
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     resolvedViewList = [rootViewItem, popupViewItem];
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup',
+      pathname: '/app/test-route/view/popup',
     });
     navigate.mockClear();
 
@@ -1098,7 +1098,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       uid: 'test-route',
       use: 'FlowModel',
     });
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
 
     const routeModel = coordinator.registerPage('test-route', {
       active: true,
@@ -1211,14 +1211,14 @@ describe('AdminLayoutRouteCoordinator', () => {
       viewsToOpen: [],
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.registerPage('test-route', {
       active: false,
       layoutContentElement: document.createElement('div'),
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     const payload = dispatchEvent.mock.calls[0][1];
@@ -1227,11 +1227,11 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       pageUid: 'other-route',
-      pathname: '/admin/other-route',
+      pathname: '/app/other-route',
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     expect(payload.deactivateRef.current).toHaveBeenCalledTimes(1);
@@ -1281,7 +1281,7 @@ describe('AdminLayoutRouteCoordinator', () => {
       });
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.registerPage('page-1', {
       active: false,
       layoutContentElement: document.createElement('div'),
@@ -1293,14 +1293,14 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       pageUid: 'page-3',
-      pathname: '/admin/page-3',
+      pathname: '/app/page-3',
     });
     const page3ViewItem = viewItemsByPageUid.get('page-3');
     expect(page3ViewItem.hidden.value).toBe(false);
 
     coordinator.syncRoute({
       pageUid: 'page-1',
-      pathname: '/admin/page-1',
+      pathname: '/app/page-1',
     });
     const page1ViewItem = viewItemsByPageUid.get('page-1');
     expect(page1ViewItem.hidden.value).toBe(false);
@@ -1308,7 +1308,7 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       pageUid: 'page-3',
-      pathname: '/admin/page-3',
+      pathname: '/app/page-3',
     });
     expect(page3ViewItem.hidden.value).toBe(false);
     expect(page1ViewItem.hidden.value).toBe(true);
@@ -1342,14 +1342,14 @@ describe('AdminLayoutRouteCoordinator', () => {
       viewsToOpen: [],
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.registerPage('test-route', {
       active: true,
       layoutContentElement: document.createElement('div'),
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route',
+      pathname: '/app/test-route',
     });
 
     const payload = dispatchEvent.mock.calls[0][1];
@@ -1398,17 +1398,17 @@ describe('AdminLayoutRouteCoordinator', () => {
       viewsToOpen: [],
     });
 
-    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/admin' });
+    const coordinator = new BaseLayoutRouteCoordinator(engine, { basePathname: '/app' });
     coordinator.registerPage('test-route', {
       active: false,
       layoutContentElement: document.createElement('div'),
     });
     coordinator.syncRoute({
       pageUid: 'test-route',
-      pathname: '/admin/test-route/view/popup/filterbytk/1',
+      pathname: '/app/test-route/view/popup/filterbytk/1',
     });
 
-    expect(navigate).toHaveBeenCalledWith('/admin/test-route', { replace: true });
+    expect(navigate).toHaveBeenCalledWith('/app/test-route', { replace: true });
     expect(mockGetViewDiffAndUpdateHidden).not.toHaveBeenCalled();
 
     await Promise.resolve();
@@ -1450,8 +1450,8 @@ describe('AdminLayoutRouteCoordinator', () => {
 
   it('parses view stack with nested basePath', () => {
     expect(
-      toViewStack('/admin/settings/public-forms/form-1/view/popup', {
-        basePathname: '/admin/settings/public-forms',
+      toViewStack('/app/settings/public-forms/form-1/view/popup', {
+        basePathname: '/app/settings/public-forms',
       }),
     ).toEqual([{ viewUid: 'form-1' }, { viewUid: 'popup' }]);
   });
@@ -1462,7 +1462,7 @@ describe('AdminLayoutRouteCoordinator', () => {
     engine.context.defineProperty('route', {
       value: {
         params: { name: 'form-1' },
-        pathname: '/admin/settings/public-forms/form-1/view/popup/filterbytk/member',
+        pathname: '/app/settings/public-forms/form-1/view/popup/filterbytk/member',
       },
     });
     engine.context.defineProperty('routeRepository', {
@@ -1496,8 +1496,8 @@ describe('AdminLayoutRouteCoordinator', () => {
     coordinator.syncRoute({
       layoutRouteName: 'admin.settings.publicForms.layout',
       params: { name: 'form-1' },
-      pathname: '/admin/settings/public-forms/form-1/view/popup/filterbytk/member',
-      layoutBasePathname: '/admin/settings/public-forms',
+      pathname: '/app/settings/public-forms/form-1/view/popup/filterbytk/member',
+      layoutBasePathname: '/app/settings/public-forms',
     });
 
     expect(mockResolveViewParamsToViewList).toHaveBeenCalledWith(
@@ -1509,7 +1509,7 @@ describe('AdminLayoutRouteCoordinator', () => {
 
   it('does not parse relative layout routePath without runtime basePathname', () => {
     expect(
-      toViewStack('/admin/settings/public-forms/form-1/view/popup', {
+      toViewStack('/app/settings/public-forms/form-1/view/popup', {
         layout: {
           routeName: 'admin.settings.publicForms',
           routePath: 'public-forms',
@@ -1569,3 +1569,4 @@ describe('AdminLayoutRouteCoordinator', () => {
     expect(engine.getModel('test-route')?.context.layoutMarker).toBe('layout-context');
   });
 });
+

@@ -2,7 +2,7 @@ import { expect, test } from '@nocobase/test/e2e';
 
 test.describe('backups listing view', () => {
   test.beforeAll(async ({ page }) => {
-    await page.goto('/admin/settings/backups/list');
+    await page.goto('/app/settings/backups/list');
   });
 
   test('should be able to create new backup', async ({ page }) => {

@@ -19,9 +19,9 @@ export const useIsPageBlock = () => {
     if (!fieldSchema || fieldSchema['x-template-uid']) {
       return false;
     }
-    const isPage = location.pathname.startsWith('/admin/') || location.pathname.startsWith('/page/');
+    const isPage = location.pathname.startsWith('/app/') || location.pathname.startsWith('/page/');
     const notInPopup = !location.pathname.includes('/popups/');
-    const notInSetting = !location.pathname.startsWith('/admin/settings/');
+    const notInSetting = !location.pathname.startsWith('/app/settings/');
     const notInBlockTemplate = !location.pathname.includes('/ui-templates/inherited-v1/');
     return isPage && notInPopup && notInSetting && notInBlockTemplate;
   }, [location.pathname, fieldSchema]);

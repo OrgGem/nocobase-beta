@@ -274,7 +274,7 @@ const ShowTipWhenNoPagesV1: FC<{ allAccessRoutes: NocoBaseDesktopRoute[] }> = ({
   const location = useLocation();
   const designable = !!flowEngine.context.flowSettingsEnabled;
 
-  if (allAccessRoutes.length === 0 && !designable && ['/admin', '/admin/'].includes(location.pathname)) {
+  if (allAccessRoutes.length === 0 && !designable && ['/app', '/app/'].includes(location.pathname)) {
     return (
       <Result
         icon={<HighlightOutlined style={{ fontSize: '8em', color: token.colorText }} />}
@@ -402,8 +402,8 @@ const matchesRoutePath = (route: NocoBaseDesktopRoute | undefined, pathname: str
   }
 
   const candidates = [
-    route.id != null ? `/admin/${route.id}` : null,
-    route.schemaUid ? `/admin/${route.schemaUid}` : null,
+    route.id != null ? `/app/${route.id}` : null,
+    route.schemaUid ? `/app/${route.schemaUid}` : null,
   ].filter(Boolean) as string[];
 
   if (candidates.some((candidate) => pathname === candidate || pathname.startsWith(`${candidate}/`))) {

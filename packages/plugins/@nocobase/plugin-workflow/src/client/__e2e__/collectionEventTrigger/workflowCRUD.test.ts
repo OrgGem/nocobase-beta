@@ -40,7 +40,7 @@ test.describe('Filter', () => {
     const workflowId = workflowObj.id;
 
     // 2、筛选工作流
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     await page.getByLabel('action-Filter.Action-Filter-filter-workflows').click();
     await page.getByRole('textbox').fill(workFlowName);
@@ -57,7 +57,7 @@ test.describe('Filter', () => {
 test.describe('Add new', () => {
   test('add new Collection event', async ({ page }) => {
     // 添加工作流
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     await page.getByLabel('action-Action-Add new-workflows').click();
     const createWorkFlow = new CreateWorkFlow(page);
@@ -99,7 +99,7 @@ test.describe('Delete', () => {
     const workflowId = workflowObj.id;
 
     // 删除工作流
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     await page.getByLabel('action-Filter.Action-Filter-filter-workflows').click();
     await page.getByRole('textbox').fill(workFlowName);
@@ -131,7 +131,7 @@ test.describe('Edit', () => {
     const workflowId = workflowObj.id;
 
     // 编辑工作流
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     await page.getByLabel(`action-Action.Link-Edit-workflows-${workFlowName}`).click();
     const editWorkFlow = new EditWorkFlow(page, workFlowName);
@@ -164,7 +164,7 @@ test.describe('Duplicate', () => {
     const workflowId = workflowObj.id;
 
     // 2、复制工作流
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     await page.getByLabel(`action-Action.Link-Duplicate-workflows-${workFlowName}`).click();
     await page.getByLabel(`action-Action-Submit-workflows-${workFlowName}`).click();

@@ -32,7 +32,7 @@ const MultiAppManager = () => {
   const instance = useApp();
   const items = [
     ...(data?.data || []).map((app) => {
-      let link = instance.getRouteUrl(`/apps/${app.name}/admin/`);
+      let link = instance.getRouteUrl(`/apps/${app.name}/app/`);
       if (app.cname) {
         link = `//${app.cname}`;
       }

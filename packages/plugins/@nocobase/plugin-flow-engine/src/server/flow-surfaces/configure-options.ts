@@ -635,7 +635,7 @@ const ACTION_AFTER_SUCCESS_OPTIONS: FlowSurfaceConfigureOptions = {
       successMessage: 'Saved successfully',
       manualClose: false,
       actionAfterSuccess: 'stay',
-      redirectTo: '/admin/example',
+      redirectTo: '/app/example',
     },
   }),
 };

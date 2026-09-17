@@ -130,7 +130,7 @@ describe('PluginUiLayoutClientV2', () => {
     });
     expect(mobileSetting?.children?.[0]).toMatchObject({
       name: 'mobile.index',
-      path: '/admin/settings/mobile',
+      path: '/app/settings/mobile',
       Component: expect.any(Function),
     });
     expect(mobileSetting?.children?.[0]).not.toHaveProperty('link');

@@ -24,11 +24,11 @@ export function traverseSchema(schema, fn) {
 }
 
 export function getWorkflowDetailPath(id: string | number) {
-  return `/admin/settings/workflow/workflows/${id}`;
+  return `/app/settings/workflow/workflows/${id}`;
 }
 
 export function getWorkflowExecutionsPath(id: string | number) {
-  return `/admin/settings/workflow/executions/${id}`;
+  return `/app/settings/workflow/executions/${id}`;
 }
 
 type WorkflowCapabilityContext = {

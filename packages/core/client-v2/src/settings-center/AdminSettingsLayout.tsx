@@ -18,6 +18,7 @@ import { generatePath, Navigate, Outlet, useLocation, useNavigate, useParams } f
 import { useACLRoleContext } from '../acl';
 import { ADMIN_SETTINGS_PATH, type PluginSettingsPageType } from '../PluginSettingsManager';
 import { useApp } from '../hooks/useApp';
+import { getDefaultV2AdminRedirectPath } from '../authRedirect';
 import { AdminSettingsLayoutModel } from './AdminSettingsLayoutModel';
 import {
   ADMIN_SETTINGS_LAYOUT_MODEL_UID,
@@ -193,7 +194,7 @@ export const InternalAdminSettingsLayout = () => {
       return <Navigate replace to={firstVisibleTabPath} />;
     }
     if (!defaultSettingsPath) {
-      return <Navigate replace to="/admin" />;
+      return <Navigate replace to={getDefaultV2AdminRedirectPath(app)} />;
     }
 
     return <SettingsEmpty type="route" />;

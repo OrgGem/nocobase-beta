@@ -2,7 +2,7 @@ import { expect, test } from '@nocobase/test/e2e';
 
 test.describe('backups settings view', () => {
   test.beforeAll(async ({ page }) => {
-    await page.goto('/admin/settings/backups/settings');
+    await page.goto('/app/settings/backups/settings');
   });
 
   test('should be able to set backup interval', async ({ page }) => {

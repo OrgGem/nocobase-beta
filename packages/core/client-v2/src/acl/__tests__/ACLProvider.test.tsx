@@ -75,7 +75,7 @@ describe('ACLRolesCheckProvider', () => {
     writeFlowSettingsPreference(true);
 
     render(
-      <MemoryRouter initialEntries={['/admin']}>
+      <MemoryRouter initialEntries={['/app']}>
         <ACLRolesCheckProvider>
           <div>Page content</div>
         </ACLRolesCheckProvider>

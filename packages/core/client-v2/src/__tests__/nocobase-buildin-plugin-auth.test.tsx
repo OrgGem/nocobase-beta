@@ -93,7 +93,7 @@ describe('nocobase buildin plugin auth redirect', () => {
     const app = createMockClient({
       publicPath: '/v2/',
       plugins: [NocoBaseBuildInPlugin as any],
-      router: { type: 'memory', initialEntries: ['/v2/admin/7vu4c2sdk6h'] },
+      router: { type: 'memory', initialEntries: ['/v2/app/7vu4c2sdk6h'] },
     });
     app.apiMock.onGet('app:getLang').reply(200, {
       data: { lang: 'en-US', resources: { client: {} }, cron: {} },
@@ -105,7 +105,7 @@ describe('nocobase buildin plugin auth redirect', () => {
 
     await waitFor(() => {
       expect(app.router.router.state.location.pathname).toBe('/v2/signin');
-      expect(app.router.router.state.location.search).toBe('?redirect=%2Fv2%2Fadmin%2F7vu4c2sdk6h');
+      expect(app.router.router.state.location.search).toBe('?redirect=%2Fv2%2Fapp%2F7vu4c2sdk6h');
     });
   });
 
@@ -116,14 +116,14 @@ describe('nocobase buildin plugin auth redirect', () => {
     const app = createMockClient({
       publicPath: '/v2/',
       plugins: [NocoBaseBuildInPlugin as any],
-      router: { type: 'memory', initialEntries: ['/v2/admin'] },
+      router: { type: 'memory', initialEntries: ['/v2/app'] },
     });
     app.apiClient.auth.setToken('test-token');
     app.apiMock.onGet('app:getLang').reply(200, {
       data: { lang: 'en-US', resources: { client: {} }, cron: {} },
     });
     app.apiMock.onGet('/auth:check').reply(200, {
-      data: { code: 302, redirect: '/2fa?redirect=/admin' },
+      data: { code: 302, redirect: '/2fa?redirect=/app' },
     });
 
     const Root = app.getRootComponent();
@@ -131,7 +131,7 @@ describe('nocobase buildin plugin auth redirect', () => {
 
     // Give CurrentUserProvider time to process the response.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(app.router.router.state.location.pathname).toBe('/v2/admin');
+    expect(app.router.router.state.location.pathname).toBe('/v2/app');
     expect(app.router.router.state.location.search).toBe('');
     expect(app.apiMock.history.post.filter((request) => request.url === 'auth:syncCookies')).toHaveLength(0);
   });
@@ -151,7 +151,7 @@ describe('nocobase buildin plugin auth redirect', () => {
 
     await waitFor(() => {
       expect(app.router.router.state.location.pathname).toBe('/nocobase/v2/signin');
-      expect(app.router.router.state.location.search).toBe('?redirect=%2Fnocobase%2Fv2%2Fadmin');
+      expect(app.router.router.state.location.search).toBe('?redirect=%2Fnocobase%2Fv2%2Fapp');
     });
   });
 
@@ -176,7 +176,7 @@ describe('nocobase buildin plugin auth redirect', () => {
     expect(authCheckRequestsBeforeNavigation).toBe(0);
 
     await act(async () => {
-      await app.router.router.navigate('/v2/admin');
+      await app.router.router.navigate('/v2/app');
     });
 
     await waitFor(() => {
@@ -184,7 +184,7 @@ describe('nocobase buildin plugin auth redirect', () => {
         authCheckRequestsBeforeNavigation,
       );
       expect(app.router.router.state.location.pathname).toBe('/v2/signin');
-      expect(app.router.router.state.location.search).toBe('?redirect=%2Fv2%2Fadmin');
+      expect(app.router.router.state.location.search).toBe('?redirect=%2Fv2%2Fapp');
     });
   });
 
@@ -386,7 +386,7 @@ describe('nocobase buildin plugin auth redirect', () => {
     const app = createMockClient({
       publicPath: '/v2/',
       plugins: [NocoBaseBuildInPlugin as any],
-      router: { type: 'memory', initialEntries: ['/v2/admin'] },
+      router: { type: 'memory', initialEntries: ['/v2/app'] },
     });
     app.apiMock.onGet('app:getLang').reply(200, {
       data: { lang: 'en-US', resources: { client: {} }, cron: {} },
@@ -410,11 +410,11 @@ describe('nocobase buildin plugin auth redirect', () => {
     await waitFor(() => {
       expect(container.innerHTML).toContain('No pages yet, please configure first');
     });
-    expect(app.router.router.state.location.pathname).toBe('/v2/admin');
+    expect(app.router.router.state.location.pathname).toBe('/v2/app');
     expect(container.innerHTML).not.toContain('Legacy page');
   });
 
-  it.each(['/v2/admin/legacy-page/tab/tab-1', '/v2/admin/legacy-page/view/detail'])(
+  it.each(['/v2/app/legacy-page/tab/tab-1', '/v2/app/legacy-page/view/detail'])(
     'should explain authenticated direct v1-style v2 page access: %s',
     async (pathname) => {
       const app = createMockClient({

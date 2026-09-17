@@ -121,7 +121,7 @@ type AdminLayoutMenuItemsParent = FlowModel & {
  * @returns 唯一占位路径
  */
 export const getAdminLayoutMenuVirtualPath = (type: 'link' | 'designer', identity: string | number) => {
-  return `/admin/__admin_layout__/${type}/${encodeURIComponent(String(identity))}`;
+  return `/app/__admin_layout__/${type}/${encodeURIComponent(String(identity))}`;
 };
 
 const menuItemStyle = { display: 'flex', alignItems: 'center', justifyContent: 'space-between' };

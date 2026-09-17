@@ -53,7 +53,7 @@ export function getConfigFormCommonFieldset({ variableOptions }) {
             // delimiters: ['{{{', '}}}'],
           },
           description: tval(
-            'Support two types of links: internal links and external links. If using an internal link, the link starts with "/", for example, "/admin". If using an external link, the link starts with "http", for example, "https://example.com".',
+            'Support two types of links: internal links and external links. If using an internal link, the link starts with "/", for example, "/app". If using an external link, the link starts with "http", for example, "https://example.com".',
             { ns: NAMESPACE },
           ),
         },

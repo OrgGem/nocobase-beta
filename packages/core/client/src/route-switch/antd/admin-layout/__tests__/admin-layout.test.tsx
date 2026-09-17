@@ -23,14 +23,14 @@ describe('AdminLayout', () => {
         providers: [CurrentUserProvider],
         router: {
           type: 'memory',
-          initialEntries: ['/admin/9zva4x7mblv'],
+          initialEntries: ['/app/9zva4x7mblv'],
           routes: {
             admin: {
-              path: '/admin',
+              path: '/app',
               element: <AdminLayout />,
             },
             'admin.name': {
-              path: '/admin/:name',
+              path: '/app/:name',
               element: <div />,
             },
           },

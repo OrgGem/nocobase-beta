@@ -15,7 +15,7 @@ import React from 'react';
 const ReadPretty = (props) => {
   const app = useApp();
   const content = props.value && (
-    <a target={'_blank'} href={app.getRouteUrl(`/apps/${props.value}/admin`)} rel="noreferrer">
+    <a target={'_blank'} href={app.getRouteUrl(`/apps/${props.value}/app`)} rel="noreferrer">
       {props.value}
     </a>
   );

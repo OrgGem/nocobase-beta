@@ -76,9 +76,9 @@ describe('Page', () => {
 
 describe('utils', () => {
   it('isTabPage', () => {
-    expect(isTabPage('/admin')).toBe(false);
-    expect(isTabPage('/admin/test/tabs/tabId')).toBe(true);
-    expect(isTabPage('/admin/test/tabs/tabId/')).toBe(true);
+    expect(isTabPage('/app')).toBe(false);
+    expect(isTabPage('/app/test/tabs/tabId')).toBe(true);
+    expect(isTabPage('/app/test/tabs/tabId/')).toBe(true);
   });
 
   it('navigateToTab with basename "/"', () => {
@@ -91,49 +91,49 @@ describe('utils', () => {
     const navigate7 = vi.fn();
     const navigate8 = vi.fn();
 
-    navigateToTab({ activeKey: 'tabId', navigate: navigate1, pathname: '/admin/test', basename: '/' });
-    expect(navigate1).toBeCalledWith('/admin/test/tabs/tabId', { replace: true });
+    navigateToTab({ activeKey: 'tabId', navigate: navigate1, pathname: '/app/test', basename: '/' });
+    expect(navigate1).toBeCalledWith('/app/test/tabs/tabId', { replace: true });
 
-    navigateToTab({ activeKey: 'tabId', navigate: navigate2, pathname: '/admin/test/', basename: '/' });
-    expect(navigate2).toBeCalledWith('/admin/test/tabs/tabId', { replace: true });
+    navigateToTab({ activeKey: 'tabId', navigate: navigate2, pathname: '/app/test/', basename: '/' });
+    expect(navigate2).toBeCalledWith('/app/test/tabs/tabId', { replace: true });
 
-    navigateToTab({ activeKey: 'tabId', navigate: navigate3, pathname: '/admin/test/tabs/oldTabId', basename: '/' });
-    expect(navigate3).toBeCalledWith('/admin/test/tabs/tabId', { replace: true });
+    navigateToTab({ activeKey: 'tabId', navigate: navigate3, pathname: '/app/test/tabs/oldTabId', basename: '/' });
+    expect(navigate3).toBeCalledWith('/app/test/tabs/tabId', { replace: true });
 
-    navigateToTab({ activeKey: 'tabId', navigate: navigate4, pathname: '/admin/test/tabs/oldTabId/', basename: '/' });
-    expect(navigate4).toBeCalledWith('/admin/test/tabs/tabId', { replace: true });
+    navigateToTab({ activeKey: 'tabId', navigate: navigate4, pathname: '/app/test/tabs/oldTabId/', basename: '/' });
+    expect(navigate4).toBeCalledWith('/app/test/tabs/tabId', { replace: true });
 
     navigateToTab({
       activeKey: 'tabId',
       navigate: navigate5,
-      pathname: '/admin/test/tabs/tab1/pages/pageId/tabs/tab2',
+      pathname: '/app/test/tabs/tab1/pages/pageId/tabs/tab2',
       basename: '/',
     });
-    expect(navigate5).toBeCalledWith('/admin/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
+    expect(navigate5).toBeCalledWith('/app/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
 
     navigateToTab({
       activeKey: 'tabId',
       navigate: navigate6,
-      pathname: '/admin/test/tabs/tab1/pages/pageId/tabs/tab2/',
+      pathname: '/app/test/tabs/tab1/pages/pageId/tabs/tab2/',
       basename: '/',
     });
-    expect(navigate6).toBeCalledWith('/admin/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
+    expect(navigate6).toBeCalledWith('/app/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
 
     navigateToTab({
       activeKey: 'tabId',
       navigate: navigate7,
-      pathname: '/admin/test/tabs/tab1/pages/pageId',
+      pathname: '/app/test/tabs/tab1/pages/pageId',
       basename: '/',
     });
-    expect(navigate7).toBeCalledWith('/admin/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
+    expect(navigate7).toBeCalledWith('/app/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
 
     navigateToTab({
       activeKey: 'tabId',
       navigate: navigate8,
-      pathname: '/admin/test/tabs/tab1/pages/pageId/',
+      pathname: '/app/test/tabs/tab1/pages/pageId/',
       basename: '/',
     });
-    expect(navigate8).toBeCalledWith('/admin/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
+    expect(navigate8).toBeCalledWith('/app/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
   });
 
   it('navigateToTab with basename "/apps/appId"', () => {
@@ -266,3 +266,4 @@ describe('utils', () => {
     expect(navigate8).toBeCalledWith('/test/tabs/tab1/pages/pageId/tabs/tabId', { replace: true });
   });
 });
+

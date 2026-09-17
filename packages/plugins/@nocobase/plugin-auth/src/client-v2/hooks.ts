@@ -32,7 +32,7 @@ function stripV2Basename(target: string, basename?: string): string {
   return target;
 }
 
-export function useRedirect(next = '/admin') {
+export function useRedirect(next = '/app') {
   const app = useApp();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();

@@ -15,5 +15,5 @@ export function ConfigureLink() {
   const value = useFilterByTk();
   const t = useT();
 
-  return <Link to={`/admin/settings/public-forms/${value}`}>{t('Configure')}</Link>;
+  return <Link to={`/app/settings/public-forms/${value}`}>{t('Configure')}</Link>;
 }

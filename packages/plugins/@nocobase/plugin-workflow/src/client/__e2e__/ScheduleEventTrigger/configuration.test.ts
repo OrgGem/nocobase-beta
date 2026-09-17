@@ -64,7 +64,7 @@ test.describe('Configuration page copy to new version', () => {
 
     // 2、测试步骤：等待60秒
     await page.waitForTimeout(60000);
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     const workflowListRecords = new WorkflowListRecords(page, workFlowName);
 

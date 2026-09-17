@@ -53,13 +53,13 @@ describe('flowSurfaces update action after-success contract', () => {
         successMessage: 'Updated',
         manualClose: true,
         actionAfterSuccess: 'redirect',
-        redirectTo: '/admin/updated',
+        redirectTo: '/app/updated',
       }),
     ).toEqual({
       successMessage: 'Updated',
       manualClose: true,
       actionAfterSuccess: 'redirect',
-      redirectTo: '/admin/updated',
+      redirectTo: '/app/updated',
     });
 
     expect(() => normalizeAfterSuccess({ actionAfterSuccess: 'close' })).toThrow(

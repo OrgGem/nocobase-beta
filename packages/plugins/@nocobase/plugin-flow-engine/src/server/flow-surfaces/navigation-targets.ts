@@ -337,7 +337,7 @@ export class FlowSurfaceNavigationTargetsService {
         layoutUid: DEFAULT_ADMIN_UI_LAYOUT_UID,
         layoutType: 'desktop',
         routeName: 'admin',
-        routePath: '/admin',
+        routePath: '/app',
         authCheck: true,
         default: true,
       });

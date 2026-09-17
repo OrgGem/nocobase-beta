@@ -13,7 +13,7 @@ import { uid } from '@nocobase/utils';
 // //预设字段
 test.describe('create collection with preset fields', () => {
   test('all preset fields by default', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();
@@ -58,7 +58,7 @@ test.describe('create collection with preset fields', () => {
   });
 
   test('id preset field', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();
@@ -85,7 +85,7 @@ test.describe('create collection with preset fields', () => {
     });
   });
   test('createdAt preset field', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();
@@ -112,7 +112,7 @@ test.describe('create collection with preset fields', () => {
     });
   });
   test('createdBy preset field', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();
@@ -139,7 +139,7 @@ test.describe('create collection with preset fields', () => {
     });
   });
   test('updatedBy preset field', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();
@@ -166,7 +166,7 @@ test.describe('create collection with preset fields', () => {
     });
   });
   test('updatedAt preset field', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();
@@ -193,7 +193,7 @@ test.describe('create collection with preset fields', () => {
     });
   });
   test('unselect preset fields', async ({ page }) => {
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByRole('button', { name: 'plus Create collection down' }).click();
     await page.getByRole('menuitem', { name: 'General collection' }).locator('span').click();

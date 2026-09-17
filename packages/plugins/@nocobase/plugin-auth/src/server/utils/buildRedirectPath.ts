@@ -49,10 +49,22 @@ export interface BuildRedirectPathOptions {
  *
  * Single export shared by all auth-related SSO plugins (CAS, SAML, …).
  */
+
+/**
+ * Map any legacy `/admin` segment to the new `/app` route prefix so SSO
+ * relays and stale bookmarks pointing at `/admin/...` land on the modern
+ * admin app route instead of a 404. Segment-boundary aware: only a path
+ * segment equal to "admin" is replaced (e.g. `/admin`, `/admin/abc`,
+ * `/nocobase/v2/admin/abc`), never a deeper uid that happens to contain it.
+ */
+function normalizeAdminSegment(target: string): string {
+  return target.replace(/(^|\/)admin(?=(\/|\?|#|$))/g, '$1app');
+}
+
 export function buildRedirectPath({ appPublicPath, subAppSegment, target }: BuildRedirectPathOptions): string {
   const normalizedAppPublicPath = (appPublicPath || '').replace(/\/+$/, '');
   const normalizedSubAppSegment = (subAppSegment || '').replace(/\/+$/, '');
-  const resolvedTarget = target || '/admin';
+  const resolvedTarget = normalizeAdminSegment(target || '/app');
   const [resolvedPathname] = resolvedTarget.split(/[?#]/, 1);
 
   if (

@@ -90,7 +90,7 @@ export class PluginNextAppClient extends Plugin {
     });
 
     router.add('hub-admin-compat', {
-      path: '/admin/*',
+      path: '/app/*',
       Component: HubAdminRedirect,
     });
 

@@ -226,7 +226,7 @@ describe('LayoutRoute', () => {
       [
         {
           id: 'admin.settings',
-          path: '/admin/settings',
+          path: '/app/settings',
           element: <Outlet />,
           children: [
             {
@@ -252,7 +252,7 @@ describe('LayoutRoute', () => {
         },
       ],
       {
-        initialEntries: ['/admin/settings/public-forms/form-1/view/popup'],
+        initialEntries: ['/app/settings/public-forms/form-1/view/popup'],
       },
     );
 
@@ -420,12 +420,12 @@ describe('LayoutContentRoute', () => {
       routes = [
         {
           id: 'admin.settings',
-          path: '/admin/settings',
+          path: '/app/settings',
           element: <Outlet />,
           children: [
             {
               id: 'admin.settings.publicForms',
-              path: '/admin/settings/public-forms',
+              path: '/app/settings/public-forms',
               element: <Outlet />,
               children: [layoutRoute],
             },
@@ -436,7 +436,7 @@ describe('LayoutContentRoute', () => {
       routes = [
         {
           id: 'admin.settings',
-          path: '/admin/settings',
+          path: '/app/settings',
           element: <Outlet />,
           children: [layoutRoute],
         },
@@ -506,12 +506,12 @@ describe('LayoutContentRoute', () => {
       routePath: 'public-forms',
       rootRouteName: 'admin',
     };
-    const { model } = setup('/admin/settings/public-forms/form-1/view/popup', nestedLayout);
+    const { model } = setup('/app/settings/public-forms/form-1/view/popup', nestedLayout);
 
     await waitFor(() => {
       expect(model.currentLayoutRoute).toMatchObject({
         type: 'page',
-        basePathname: '/admin/settings/public-forms',
+        basePathname: '/app/settings/public-forms',
         pageUid: 'form-1',
         viewStack: [{ viewUid: 'form-1' }, { viewUid: 'popup' }],
       });
@@ -525,12 +525,12 @@ describe('LayoutContentRoute', () => {
       routePath: '',
       rootRouteName: 'admin',
     };
-    const { model } = setup('/admin/settings/public-forms/form-1/view/popup', nestedLayout);
+    const { model } = setup('/app/settings/public-forms/form-1/view/popup', nestedLayout);
 
     await waitFor(() => {
       expect(model.currentLayoutRoute).toMatchObject({
         type: 'page',
-        basePathname: '/admin/settings/public-forms',
+        basePathname: '/app/settings/public-forms',
         pageUid: 'form-1',
         viewStack: [{ viewUid: 'form-1' }, { viewUid: 'popup' }],
       });
@@ -597,3 +597,4 @@ describe('LayoutContentRoute', () => {
     });
   });
 });
+

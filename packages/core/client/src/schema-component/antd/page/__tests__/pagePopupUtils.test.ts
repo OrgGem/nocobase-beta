@@ -106,19 +106,19 @@ describe('getPopupPathFromParams', () => {
 
 describe('removeLastPopupPath', () => {
   it('should remove the last popup path from the given path', () => {
-    const path1 = '/admin/page/popups/popupUid/popups/popupUid2';
+    const path1 = '/app/page/popups/popupUid/popups/popupUid2';
     const result1 = removeLastPopupPath(path1);
 
-    expect(result1).toBe('/admin/page/popups/popupUid');
+    expect(result1).toBe('/app/page/popups/popupUid');
 
-    const path2 = '/admin/page/popups/popupUid';
+    const path2 = '/app/page/popups/popupUid';
     const result2 = removeLastPopupPath(path2);
 
-    expect(result2).toBe('/admin/page');
+    expect(result2).toBe('/app/page');
   });
 
   it('should handle paths without popups', () => {
-    const path = '/admin/page';
+    const path = '/app/page';
     const result = removeLastPopupPath(path);
 
     expect(result).toBe(path);
@@ -131,3 +131,4 @@ describe('removeLastPopupPath', () => {
     expect(result).toBe('');
   });
 });
+

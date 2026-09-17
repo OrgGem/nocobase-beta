@@ -283,7 +283,7 @@ test.describe('linkage rules', () => {
       throw err;
     } finally {
       // 4. 把创建的模板删除
-      await page.goto('/admin/settings/ui-schema-storage');
+      await page.goto('/app/settings/ui-schema-storage');
       await page.getByLabel('Select all').check();
       await page.getByLabel('action-Action-Delete-destroy-').click();
       await page.getByRole('button', { name: 'OK', exact: true }).click();

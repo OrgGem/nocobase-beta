@@ -307,7 +307,7 @@ function getLegacyRouterBasename(basename?: string) {
 function getLegacyWorkflowTaskDetailPath(basename: string | undefined, recordKey: unknown) {
   const legacyBasename = getLegacyRouterBasename(basename);
   const encodedRecordKey = recordKey == null ? '' : encodeURIComponent(String(recordKey));
-  const fallbackPath = `${legacyBasename}/admin/workflow/tasks/${TASK_TYPE_MANUAL}/pending${
+  const fallbackPath = `${legacyBasename}/app/workflow/tasks/${TASK_TYPE_MANUAL}/pending${
     encodedRecordKey ? `/${encodedRecordKey}` : ''
   }`;
   if (typeof window === 'undefined' || recordKey == null) {
@@ -315,7 +315,7 @@ function getLegacyWorkflowTaskDetailPath(basename: string | undefined, recordKey
   }
 
   const routerPath = stripRouterBasename(window.location.pathname, basename);
-  const taskRoutePrefix = '/admin/workflow/tasks/';
+  const taskRoutePrefix = '/app/workflow/tasks/';
   if (routerPath.startsWith(taskRoutePrefix)) {
     const [currentTaskType, status, currentRecordKey, ...rest] = routerPath.slice(taskRoutePrefix.length).split('/');
     const matchesCurrentRecord =
@@ -324,7 +324,7 @@ function getLegacyWorkflowTaskDetailPath(basename: string | undefined, recordKey
       currentTaskType === TASK_TYPE_MANUAL &&
       (currentRecordKey === String(recordKey) || currentRecordKey === encodedRecordKey);
     if (matchesCurrentRecord) {
-      const routePath = `${legacyBasename}/admin/workflow/tasks/${TASK_TYPE_MANUAL}/${status}/${encodedRecordKey}`;
+      const routePath = `${legacyBasename}/app/workflow/tasks/${TASK_TYPE_MANUAL}/${status}/${encodedRecordKey}`;
       return `${routePath}${window.location.search}${window.location.hash}`;
     }
   }

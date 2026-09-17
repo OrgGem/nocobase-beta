@@ -84,6 +84,16 @@ function getCurrentTimezone() {
   return offsetToTimeZone(new Date().getTimezoneOffset() / -60);
 }
 
+function getTenantAppNameFromRuntime(): string | undefined {
+  try {
+    const w = window as unknown as Record<string, unknown>;
+    const value = w['__nocobase_tenant_app_name__'];
+    return typeof value === 'string' && value ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export class APIClient extends APIClientSDK {
   app?: APIClientApplication;
 
@@ -106,6 +116,11 @@ export class APIClient extends APIClientSDK {
     const headers = super.getHeaders();
     if (this.appName) {
       headers['X-App'] = this.appName;
+    } else {
+      const tenantApp = getTenantAppNameFromRuntime();
+      if (tenantApp) {
+        headers['X-App'] = tenantApp;
+      }
     }
     headers['X-Timezone'] = getCurrentTimezone();
     headers['X-Hostname'] = this.getHostname();

@@ -20,7 +20,7 @@ const useLink = () => {
   if (record.cname) {
     return `//${record.cname}`;
   }
-  return app.getRouteUrl(`/apps/${record.name}/admin/`);
+  return app.getRouteUrl(`/apps/${record.name}/app/`);
 };
 
 const AppVisitor = () => {

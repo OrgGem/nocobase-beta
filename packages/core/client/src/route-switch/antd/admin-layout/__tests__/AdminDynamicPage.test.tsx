@@ -77,10 +77,10 @@ const NavigateToPopup = () => {
   const navigate = useNavigate();
   return (
     <>
-      <button type="button" onClick={() => navigate('/admin/flow-page-1/view/detail')}>
+      <button type="button" onClick={() => navigate('/app/flow-page-1/view/detail')}>
         open popup
       </button>
-      <button type="button" onClick={() => navigate('/admin/flow-page-1')}>
+      <button type="button" onClick={() => navigate('/app/flow-page-1')}>
         close popup
       </button>
     </>
@@ -125,10 +125,10 @@ describe('AdminDynamicPage', () => {
   it('should sync legacy admin route into admin layout model', async () => {
     const result = render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/flow-page-1/view/detail']}>
+        <MemoryRouter initialEntries={['/app/flow-page-1/view/detail']}>
           <Routes>
             <Route
-              path="/admin/:name/view/*"
+              path="/app/:name/view/*"
               element={
                 <CurrentPageUidProvider>
                   <AdminDynamicPage />
@@ -144,8 +144,8 @@ describe('AdminDynamicPage', () => {
       expect(adminLayoutModel.currentLayoutRoute).toMatchObject({
         type: 'page',
         pageUid: 'flow-page-1',
-        pathname: '/admin/flow-page-1/view/detail',
-        basePathname: '/admin',
+        pathname: '/app/flow-page-1/view/detail',
+        basePathname: '/app',
       });
     });
 
@@ -159,10 +159,10 @@ describe('AdminDynamicPage', () => {
   it('should not deactivate the current page when opening a popup route in legacy admin route', async () => {
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/flow-page-1']}>
+        <MemoryRouter initialEntries={['/app/flow-page-1']}>
           <Routes>
-            <Route path="/admin/:name" element={<AdminDynamicPageRoute />} />
-            <Route path="/admin/:name/view/*" element={<AdminDynamicPageRoute />} />
+            <Route path="/app/:name" element={<AdminDynamicPageRoute />} />
+            <Route path="/app/:name/view/*" element={<AdminDynamicPageRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -172,7 +172,7 @@ describe('AdminDynamicPage', () => {
       expect(adminLayoutModel.currentLayoutRoute).toMatchObject({
         type: 'page',
         pageUid: 'flow-page-1',
-        pathname: '/admin/flow-page-1',
+        pathname: '/app/flow-page-1',
       });
     });
 
@@ -192,10 +192,10 @@ describe('AdminDynamicPage', () => {
 
     adminLayoutModel.syncLayoutRoute({
       name: 'admin.page',
-      pathname: '/admin/flow-page-1',
+      pathname: '/app/flow-page-1',
       params: { name: 'flow-page-1' },
       layoutRouteName: 'admin',
-      layoutBasePathname: '/admin',
+      layoutBasePathname: '/app',
     });
     await flushPromises();
 
@@ -204,7 +204,7 @@ describe('AdminDynamicPage', () => {
     });
     await waitFor(() => {
       expect(adminLayoutModel.currentLayoutRoute).toMatchObject({
-        pathname: '/admin/flow-page-1/view/detail',
+        pathname: '/app/flow-page-1/view/detail',
       });
     });
     await flushPromises();
@@ -220,7 +220,7 @@ describe('AdminDynamicPage', () => {
     });
     await waitFor(() => {
       expect(adminLayoutModel.currentLayoutRoute).toMatchObject({
-        pathname: '/admin/flow-page-1',
+        pathname: '/app/flow-page-1',
       });
     });
     await flushPromises();
@@ -232,10 +232,10 @@ describe('AdminDynamicPage', () => {
   it('should render flow pages through v2 FlowRoute in legacy admin route', async () => {
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/flow-page-1/view/detail']}>
+        <MemoryRouter initialEntries={['/app/flow-page-1/view/detail']}>
           <Routes>
             <Route
-              path="/admin/:name/view/*"
+              path="/app/:name/view/*"
               element={
                 <CurrentPageUidProvider>
                   <AdminDynamicPage />
@@ -257,10 +257,10 @@ describe('AdminDynamicPage', () => {
 
     const { container } = render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/flow-page-1/view/detail']}>
+        <MemoryRouter initialEntries={['/app/flow-page-1/view/detail']}>
           <Routes>
             <Route
-              path="/admin/:name/view/*"
+              path="/app/:name/view/*"
               element={
                 <CurrentPageUidProvider>
                   <AdminDynamicPage />
@@ -285,10 +285,10 @@ describe('AdminDynamicPage', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/legacy-page-1']}>
+        <MemoryRouter initialEntries={['/app/legacy-page-1']}>
           <Routes>
             <Route
-              path="/admin/:name"
+              path="/app/:name"
               element={
                 <CurrentPageUidProvider>
                   <AdminDynamicPage />
@@ -304,3 +304,4 @@ describe('AdminDynamicPage', () => {
     expect(screen.queryByTestId('flow-route')).toBeNull();
   });
 });
+

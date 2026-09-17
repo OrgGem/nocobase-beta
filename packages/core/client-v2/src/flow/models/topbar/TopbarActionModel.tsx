@@ -147,7 +147,7 @@ const prependTopbarAppPath = (pathname: string, appPath: string) => {
 };
 
 const isAdminRuntimePath = (pathname: string) => {
-  return pathname === '/admin' || pathname.startsWith('/admin/');
+  return pathname === '/app' || pathname.startsWith('/app/');
 };
 
 const getTopbarAdminRoutePath = (app: TopbarSettingsAppLike | undefined) => {
@@ -184,7 +184,7 @@ function TopbarExternalSettingsLabel(props: { title: React.ReactNode; link: stri
 function TopbarInternalSettingsLabel(props: { title: React.ReactNode; path?: string }) {
   const app = useApp();
   const location = useLocation();
-  const targetPath = props.path || '/admin/settings';
+  const targetPath = props.path || '/app/settings';
   const basename = getTopbarRouterBasePath(app);
   const currentPath = stripTopbarRouterBasePath(location.pathname, basename);
   const currentLocationAppPath = getTopbarAppPath(currentPath);

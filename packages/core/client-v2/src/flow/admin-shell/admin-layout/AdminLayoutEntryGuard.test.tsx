@@ -183,7 +183,7 @@ describe('AdminLayoutEntryGuard', () => {
         return {
           authCheck: true,
           routeName: 'admin',
-          routePath: '/admin',
+          routePath: '/app',
           uid: 'admin-layout-model',
         };
       },
@@ -201,7 +201,7 @@ describe('AdminLayoutEntryGuard', () => {
     const router = createMemoryRouter(
       [
         {
-          path: '/admin',
+          path: '/app',
           id: 'admin',
           element: (
             <FlowEngineProvider engine={engine}>
@@ -211,7 +211,7 @@ describe('AdminLayoutEntryGuard', () => {
         },
       ],
       {
-        initialEntries: ['/admin'],
+        initialEntries: ['/app'],
       },
     );
 
@@ -261,7 +261,7 @@ describe('AdminLayoutEntryGuard', () => {
         return {
           authCheck: true,
           routeName: 'admin',
-          routePath: '/admin',
+          routePath: '/app',
           uid: layoutUid,
         };
       },
@@ -279,7 +279,7 @@ describe('AdminLayoutEntryGuard', () => {
     const router = createMemoryRouter(
       [
         {
-          path: '/admin',
+          path: '/app',
           id: 'admin',
           element: (
             <FlowEngineProvider engine={engine}>
@@ -289,7 +289,7 @@ describe('AdminLayoutEntryGuard', () => {
         },
       ],
       {
-        initialEntries: ['/admin'],
+        initialEntries: ['/app'],
       },
     );
 
@@ -354,14 +354,14 @@ describe('AdminLayoutEntryGuard', () => {
     const model = {
       layout: {
         routeName: 'admin',
-        routePath: '/admin',
+        routePath: '/app',
         uid: 'admin-layout-model',
       },
     } as AdminLayoutModel;
     const router = createMemoryRouter(
       [
         {
-          path: '/admin',
+          path: '/app',
           id: 'admin',
           element: (
             <FlowEngineProvider engine={engine}>
@@ -380,7 +380,7 @@ describe('AdminLayoutEntryGuard', () => {
         },
       ],
       {
-        initialEntries: ['/admin/1'],
+        initialEntries: ['/app/1'],
       },
     );
 
@@ -388,7 +388,7 @@ describe('AdminLayoutEntryGuard', () => {
       render(<RouterProvider router={router} />);
 
       await waitFor(() => {
-        expect(router.state.location.pathname).toBe('/admin/flow-page-1');
+        expect(router.state.location.pathname).toBe('/app/flow-page-1');
       });
       expect(await screen.findByText('Admin page shell')).toBeInTheDocument();
     } finally {
@@ -443,14 +443,14 @@ describe('AdminLayoutEntryGuard', () => {
     const model = {
       layout: {
         routeName: 'admin',
-        routePath: '/admin',
+        routePath: '/app',
         uid: 'admin-layout-model',
       },
     } as AdminLayoutModel;
     const router = createMemoryRouter(
       [
         {
-          path: '/admin',
+          path: '/app',
           id: 'admin',
           element: (
             <FlowEngineProvider engine={engine}>
@@ -469,7 +469,7 @@ describe('AdminLayoutEntryGuard', () => {
         },
       ],
       {
-        initialEntries: ['/admin/1'],
+        initialEntries: ['/app/1'],
       },
     );
 
@@ -477,7 +477,7 @@ describe('AdminLayoutEntryGuard', () => {
       render(<RouterProvider router={router} />);
 
       await screen.findByText('Admin page shell');
-      expect(router.state.location.pathname).toBe('/admin/1');
+      expect(router.state.location.pathname).toBe('/app/1');
       expect(routeRepository.getRouteById).not.toHaveBeenCalled();
     } finally {
       delete modernWindow.__nocobase_modern_client_prefix__;

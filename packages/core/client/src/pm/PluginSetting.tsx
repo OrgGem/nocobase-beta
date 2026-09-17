@@ -105,7 +105,7 @@ export const InternalAdminSettingsLayout = () => {
   }, [app.pluginSettingsManager, compile]);
   const getFirstDeepChildPath = useCallback((settings: PluginSettingsPageType[]) => {
     if (!settings || !settings.length) {
-      return '/admin';
+      return '/app';
     }
 
     if (settings.filter((item) => item.isTopLevel).length === 1) {
@@ -113,7 +113,7 @@ export const InternalAdminSettingsLayout = () => {
       const pluginSetting = settings.find((item) => item.isTopLevel);
       // 如果仅有 1 个，且是外链类型的，跳转到 /admin
       // @see https://nocobase.height.app/inbox/T-5038
-      return pluginSetting.link ? '/admin' : pluginSetting.path;
+      return pluginSetting.link ? '/app' : pluginSetting.path;
     }
 
     function find(settings: PluginSettingsPageType[]) {

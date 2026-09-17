@@ -82,7 +82,7 @@ describe('AdminLayoutModel menu items', () => {
     });
     engine.context.defineProperty('location', {
       value: {
-        pathname: '/admin/current-page',
+        pathname: '/app/current-page',
         search: '?from=header',
       },
     });
@@ -152,13 +152,13 @@ describe('AdminLayoutModel menu items', () => {
       { engine },
       React.createElement(
         MemoryRouter,
-        { initialEntries: ['/admin/current-page'] },
+        { initialEntries: ['/app/current-page'] },
         React.createElement(AdminLayoutMenuItemRenderer, {
           renderType,
           item: {
             name,
-            path: '/admin/menu-title',
-            _runtimePath: '/apps/demo/v2/admin/menu-title',
+            path: '/app/menu-title',
+            _runtimePath: '/apps/demo/v2/app/menu-title',
             _navigationMode: 'spa',
             _isLegacy: false,
             _depth: depth,
@@ -424,11 +424,11 @@ describe('AdminLayoutModel menu items', () => {
 
     const result = await resolveAdminLayoutMenuLink({
       context: engine.context as any,
-      href: '/admin#/?tab=1',
+      href: '/app#/?tab=1',
       params: [{ name: 'role', value: '{{ ctx.role }}' }],
     });
 
-    expect(result).toBe('/admin#/?tab=1&role=admin');
+    expect(result).toBe('/app#/?tab=1&role=admin');
   });
 
   it('should sync route tree into menuItems subModels and cleanup stale branches', () => {
@@ -519,18 +519,18 @@ describe('AdminLayoutModel menu items', () => {
 
     expect(route.path).toBe('/');
     expect(route.children).toHaveLength(2);
-    expect(route.children[0].path).toBe('/admin/1');
-    expect(route.children[0].redirect).toBe('/admin/page-1');
-    expect(route.children[0]._runtimePath).toBe('/apps/demo/v2/admin/page-1');
+    expect(route.children[0].path).toBe('/app/1');
+    expect(route.children[0].redirect).toBe('/app/page-1');
+    expect(route.children[0]._runtimePath).toBe('/apps/demo/v2/app/page-1');
     expect(route.children[0]._navigationMode).toBe('spa');
     expect(route.children[0]._isLegacy).toBe(false);
     expect(route.children[0]._depth).toBe(0);
     expect(route.children[0]._route).toMatchObject({ id: 1, type: NocoBaseDesktopRouteType.group });
     expect(route.children[0]._model).toBe(adminLayoutModel.subModels.menuItems?.[0]);
     expect(route.children[0].routes).toHaveLength(1);
-    expect(route.children[0].routes?.[0].path).toBe('/admin/page-1');
-    expect(route.children[0].routes?.[0].redirect).toBe('/admin/page-1');
-    expect(route.children[0].routes?.[0]._runtimePath).toBe('/apps/demo/v2/admin/page-1');
+    expect(route.children[0].routes?.[0].path).toBe('/app/page-1');
+    expect(route.children[0].routes?.[0].redirect).toBe('/app/page-1');
+    expect(route.children[0].routes?.[0]._runtimePath).toBe('/apps/demo/v2/app/page-1');
     expect(route.children[0].routes?.[0]._navigationMode).toBe('spa');
     expect(route.children[0].routes?.[0]._depth).toBe(1);
     expect(route.children[0].routes?.[0]._route).toMatchObject({
@@ -540,7 +540,7 @@ describe('AdminLayoutModel menu items', () => {
     expect(route.children[0].routes?.[0]._model).toBe(
       adminLayoutModel.subModels.menuItems?.[0].subModels.menuItems?.[0],
     );
-    expect(route.children[1].path).toBe('/admin/__admin_layout__/link/2');
+    expect(route.children[1].path).toBe('/app/__admin_layout__/link/2');
     expect(route.children[1]._depth).toBe(0);
     expect(route.children[1]._route).toMatchObject({ id: 2, type: NocoBaseDesktopRouteType.link });
     expect(route.children[1]._model).toBe(adminLayoutModel.subModels.menuItems?.[1]);
@@ -650,29 +650,29 @@ describe('AdminLayoutModel menu items', () => {
 
     expect(route.children).toHaveLength(3);
     expect(route.children[0]).toMatchObject({
-      path: '/admin/2',
-      redirect: '/admin/2',
+      path: '/app/2',
+      redirect: '/app/2',
       _runtimePath: null,
       _navigationMode: 'spa',
       _isLegacy: false,
     });
     expect(route.children[0].routes).toBeUndefined();
     expect(route.children[1]).toMatchObject({
-      path: '/admin/3',
-      redirect: '/admin/nested-flow-page',
-      _runtimePath: '/apps/demo/v2/admin/nested-flow-page',
+      path: '/app/3',
+      redirect: '/app/nested-flow-page',
+      _runtimePath: '/apps/demo/v2/app/nested-flow-page',
       _navigationMode: 'spa',
       _isLegacy: false,
     });
     expect(route.children[1].routes).toHaveLength(1);
     expect(route.children[1].routes?.[0]).toMatchObject({
-      path: '/admin/nested-flow-page',
-      _runtimePath: '/apps/demo/v2/admin/nested-flow-page',
+      path: '/app/nested-flow-page',
+      _runtimePath: '/apps/demo/v2/app/nested-flow-page',
       _navigationMode: 'spa',
       _isLegacy: false,
     });
     expect(route.children[2]).toMatchObject({
-      path: '/admin/__admin_layout__/link/4',
+      path: '/app/__admin_layout__/link/4',
     });
   });
 
@@ -697,7 +697,7 @@ describe('AdminLayoutModel menu items', () => {
         t: (title) => title,
       }),
     ).toMatchObject({
-      _runtimePath: '/apps/demo/v2/admin/flow-page-1',
+      _runtimePath: '/apps/demo/v2/app/flow-page-1',
       _navigationMode: 'spa',
       _isLegacy: false,
     });
@@ -735,7 +735,7 @@ describe('AdminLayoutModel menu items', () => {
         t: (title) => title,
       }),
     ).toMatchObject({
-      _runtimePath: '/apps/demo/admin/sub-app-page-1',
+      _runtimePath: '/apps/demo/app/sub-app-page-1',
       _navigationMode: 'spa',
       _isLegacy: false,
     });
@@ -788,13 +788,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'item',
             item: {
               name: 'Legacy page',
-              path: '/admin/legacy-page',
-              _runtimePath: '/apps/demo/admin/legacy-page',
+              path: '/app/legacy-page',
+              _runtimePath: '/apps/demo/app/legacy-page',
               _navigationMode: 'document',
               _isLegacy: true,
               _route: {
@@ -813,12 +813,12 @@ describe('AdminLayoutModel menu items', () => {
     );
 
     const link = screen.getByRole('link', { name: 'Legacy page' });
-    expect(link).toHaveAttribute('href', '/apps/demo/admin/legacy-page');
+    expect(link).toHaveAttribute('href', '/apps/demo/app/legacy-page');
 
     fireEvent.click(link, { button: 0 });
 
     return waitFor(() => {
-      expect(assign).toHaveBeenCalledWith('/apps/demo/admin/legacy-page');
+      expect(assign).toHaveBeenCalledWith('/apps/demo/app/legacy-page');
       expect(modalConfirmMock).not.toHaveBeenCalled();
       expect(navigateMock).not.toHaveBeenCalled();
     });
@@ -841,13 +841,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'item',
             item: {
               name: 'Legacy page',
-              path: '/admin/legacy-page',
-              _runtimePath: '/apps/demo/admin/legacy-page',
+              path: '/app/legacy-page',
+              _runtimePath: '/apps/demo/app/legacy-page',
               _navigationMode: 'document',
               _isLegacy: true,
               _route: {
@@ -894,13 +894,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'item',
             item: {
               name: 'Legacy page',
-              path: '/admin/legacy-page',
-              _runtimePath: '/apps/demo/admin/legacy-page',
+              path: '/app/legacy-page',
+              _runtimePath: '/apps/demo/app/legacy-page',
               _navigationMode: 'document',
               _isLegacy: true,
               _route: {
@@ -921,7 +921,7 @@ describe('AdminLayoutModel menu items', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Legacy page' }), { button: 0 });
 
     await waitFor(() => {
-      expect(assign).toHaveBeenCalledWith('/apps/demo/admin/legacy-page');
+      expect(assign).toHaveBeenCalledWith('/apps/demo/app/legacy-page');
     });
     expect(modalConfirmMock).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalled();
@@ -934,13 +934,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'item',
             item: {
               name: 'Flow page',
-              path: '/admin/flow-page-1',
-              _runtimePath: '/apps/demo/v2/admin/flow-page-1',
+              path: '/app/flow-page-1',
+              _runtimePath: '/apps/demo/v2/app/flow-page-1',
               _navigationMode: 'spa',
               _isLegacy: false,
               _route: {
@@ -957,7 +957,7 @@ describe('AdminLayoutModel menu items', () => {
       ),
     );
 
-    expect(screen.getByRole('link', { name: 'Flow page' })).toHaveAttribute('href', '/apps/demo/v2/admin/flow-page-1');
+    expect(screen.getByRole('link', { name: 'Flow page' })).toHaveAttribute('href', '/apps/demo/v2/app/flow-page-1');
   });
 
   it('should render legacy group target as native anchor', () => {
@@ -967,13 +967,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'group',
             item: {
               name: 'Legacy group',
-              path: '/admin/group-1',
-              _runtimePath: '/apps/demo/admin/legacy-page',
+              path: '/app/group-1',
+              _runtimePath: '/apps/demo/app/legacy-page',
               _navigationMode: 'document',
               _isLegacy: true,
               _route: {
@@ -994,7 +994,7 @@ describe('AdminLayoutModel menu items', () => {
     expect(screen.queryByRole('link', { name: 'Legacy group' })).toBeNull();
     expect(screen.getByRole('link', { name: 'Legacy group-landing-entry' })).toHaveAttribute(
       'href',
-      '/apps/demo/admin/legacy-page',
+      '/apps/demo/app/legacy-page',
     );
   });
 
@@ -1014,13 +1014,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'group',
             item: {
               name: 'Legacy group',
-              path: '/admin/group-1',
-              _runtimePath: '/apps/demo/admin/legacy-page',
+              path: '/app/group-1',
+              _runtimePath: '/apps/demo/app/legacy-page',
               _navigationMode: 'document',
               _isLegacy: true,
               _route: {
@@ -1043,7 +1043,7 @@ describe('AdminLayoutModel menu items', () => {
 
     fireEvent.click(screen.getByRole('link', { name: 'Legacy group-landing-entry' }), { button: 0 });
     return waitFor(() => {
-      expect(assign).toHaveBeenCalledWith('/apps/demo/admin/legacy-page');
+      expect(assign).toHaveBeenCalledWith('/apps/demo/app/legacy-page');
       expect(modalConfirmMock).not.toHaveBeenCalled();
     });
   });
@@ -1055,13 +1055,13 @@ describe('AdminLayoutModel menu items', () => {
         { engine },
         React.createElement(
           MemoryRouter,
-          { initialEntries: ['/admin/current-page'] },
+          { initialEntries: ['/app/current-page'] },
           React.createElement(AdminLayoutMenuItemRenderer, {
             renderType: 'group',
             item: {
               name: 'Flow group',
-              path: '/admin/group-2',
-              _runtimePath: '/apps/demo/v2/admin/flow-page-1',
+              path: '/app/group-2',
+              _runtimePath: '/apps/demo/v2/app/flow-page-1',
               _navigationMode: 'spa',
               _isLegacy: false,
               _route: {
@@ -1080,7 +1080,7 @@ describe('AdminLayoutModel menu items', () => {
 
     expect(screen.getByRole('link', { name: 'Flow group-landing-entry' })).toHaveAttribute(
       'href',
-      '/apps/demo/v2/admin/flow-page-1',
+      '/apps/demo/v2/app/flow-page-1',
     );
   });
 
@@ -1113,10 +1113,10 @@ describe('AdminLayoutModel menu items', () => {
     });
 
     expect(desktopRoute.children[0].key).toBe('x-designer-button');
-    expect(desktopRoute.children[0].path).toBe('/admin/__admin_layout__/designer/admin-layout-model');
+    expect(desktopRoute.children[0].path).toBe('/app/__admin_layout__/designer/admin-layout-model');
     expect(React.isValidElement(desktopRoute.children[0].name)).toBe(true);
     expect(desktopRoute.children[1].routes?.[1].key).toBe('x-designer-button');
-    expect(desktopRoute.children[1].routes?.[1].path).toBe('/admin/__admin_layout__/designer/1');
+    expect(desktopRoute.children[1].routes?.[1].path).toBe('/app/__admin_layout__/designer/1');
 
     const mobileRoute = adminLayoutModel.toProLayoutRoute({
       designable: true,
@@ -1126,10 +1126,10 @@ describe('AdminLayoutModel menu items', () => {
 
     expect(mobileRoute.children[mobileRoute.children.length - 1].key).toBe('x-designer-button');
     expect(mobileRoute.children[mobileRoute.children.length - 1].path).toBe(
-      '/admin/__admin_layout__/designer/admin-layout-model',
+      '/app/__admin_layout__/designer/admin-layout-model',
     );
     expect(mobileRoute.children[0].routes?.[1].key).toBe('x-designer-button');
-    expect(mobileRoute.children[0].routes?.[1].path).toBe('/admin/__admin_layout__/designer/1');
+    expect(mobileRoute.children[0].routes?.[1].path).toBe('/app/__admin_layout__/designer/1');
     expect(desktopRoute.children[0]._launcherModel).toBe(adminLayoutModel);
     expect(desktopRoute.children[1].routes?.[1]._launcherModel).toBe(adminLayoutModel.subModels.menuItems?.[0]);
   });
@@ -1263,7 +1263,7 @@ describe('AdminLayoutModel menu items', () => {
     });
     const item = {
       name: 'Page 1',
-      path: '/admin/page-1',
+      path: '/app/page-1',
       _route: route,
       _model: model,
     };
@@ -1452,7 +1452,7 @@ describe('AdminLayoutModel menu items', () => {
     model.setProps({
       item: {
         name: 'Page 1',
-        path: '/admin/page-1',
+        path: '/app/page-1',
         _route: createRoute(),
         _model: model,
       },
@@ -2286,7 +2286,7 @@ describe('AdminLayoutModel menu items', () => {
     expect(deleteRoute).toHaveBeenCalledWith(1);
     expect(removeSchema).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith('/apps/demo/v2/admin/next-page');
+    expect(navigate).toHaveBeenCalledWith('/apps/demo/v2/app/next-page');
   });
 
   it('should match current route with router basename before navigating away after delete', async () => {
@@ -2320,7 +2320,7 @@ describe('AdminLayoutModel menu items', () => {
     engine.context.api.resource = vi.fn(() => ({
       'remove/current-page': removeSchema,
     }));
-    engine.context.location.pathname = '/apps/demo/v2/admin/current-page';
+    engine.context.location.pathname = '/apps/demo/v2/app/current-page';
     engine.context.defineProperty('router', {
       value: {
         basename: '/apps/demo/v2',
@@ -2346,7 +2346,7 @@ describe('AdminLayoutModel menu items', () => {
     expect(deleteRoute).toHaveBeenCalledWith(1);
     expect(removeSchema).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith('/admin/next-page');
+    expect(navigate).toHaveBeenCalledWith('/app/next-page');
   });
 
   it('should reject inner move when target is not a group', async () => {
@@ -2666,3 +2666,4 @@ describe('AdminLayoutModel menu items', () => {
     });
   });
 });
+

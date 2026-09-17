@@ -40,7 +40,7 @@ export const usePopupSettings = () => {
     const hash = window.location.hash;
     const isOldMobileMode = pathname?.includes('/mobile/') || hash?.includes('/mobile/');
     const isNewMobileMode = pathname?.includes('/m/');
-    const isPCMode = pathname?.includes('/admin/');
+    const isPCMode = pathname?.includes('/app/');
     const isMobileTemplateSettingsPage = pathname?.includes('/m/ui-templates/inherited-v1');
 
     return (

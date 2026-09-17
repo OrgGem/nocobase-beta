@@ -19,7 +19,6 @@ import {
 } from '@nocobase/client';
 import React, { createContext, useContext, useEffect } from 'react';
 import PluginBlockTemplateClient from '..';
-import PluginMobileClient from '@nocobase/plugin-mobile/client';
 import { useT } from '../locale';
 import { findBlockRootSchema } from '../utils/schema';
 import { convertTemplateToBlock, correctIdReferences } from '../initializers/TemplateBlockInitializer';
@@ -45,10 +44,9 @@ export const useBlockTemplateMenus = () => {
 export const BlockTemplateMenusProvider = ({ children }) => {
   const api = useAPIClient();
   const plugin = usePlugin(PluginBlockTemplateClient);
-  const mobilePlugin = usePlugin(PluginMobileClient);
   const blockTemplatesResource = useResource('blockTemplates');
   const t = useT();
-  const isMobile = window.location.pathname.startsWith(mobilePlugin.mobileBasename);
+  const isMobile = false;
   const location = useLocation();
   const previousPathRef = React.useRef(location.pathname);
   const user = useCurrentUserContext();
@@ -143,7 +141,7 @@ export const BlockTemplateMenusProvider = ({ children }) => {
     const generator = ({ collection, association, item, index, field, componentName, dataSource, keyPrefix, name }) => {
       let collectionName = collection?.name || item?.options?.name;
       const dataSourceName = dataSource || item?.options?.dataSource || collection?.dataSource;
-      const isInWorkflowPage = window.location.pathname.includes('/admin/workflow');
+      const isInWorkflowPage = window.location.pathname.includes('/app/workflow');
 
       if (componentName?.startsWith('mobile-')) {
         componentName = componentName.replace('mobile-', '');

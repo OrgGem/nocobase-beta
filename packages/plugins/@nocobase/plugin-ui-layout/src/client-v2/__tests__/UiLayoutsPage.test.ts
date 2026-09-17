@@ -78,7 +78,7 @@ const formValues: UiLayoutFormValues = {
   uid: 'desktop-layout',
   layoutType: 'desktop',
   routeName: 'adminDesktop',
-  routePath: '/admin',
+  routePath: '/app',
   authCheck: true,
   enabled: true,
 };
@@ -348,7 +348,7 @@ describe('plugin-ui-layout settings page', () => {
             ...uiLayoutRecord,
             title: 'Desktop layout',
             uid: DEFAULT_ADMIN_UI_LAYOUT.uid,
-            routePath: '/admin',
+            routePath: '/app',
           },
           {
             ...uiLayoutRecord,
@@ -569,7 +569,7 @@ describe('plugin-ui-layout settings page', () => {
 
 describe('plugin-ui-layout form values', () => {
   it('should require access path to start with slash', () => {
-    expect(isUiLayoutRoutePathFormatValid('/admin')).toBe(true);
+    expect(isUiLayoutRoutePathFormatValid('/app')).toBe(true);
     expect(isUiLayoutRoutePathFormatValid('/foo')).toBe(true);
     expect(isUiLayoutRoutePathFormatValid(' /mobile ')).toBe(true);
     expect(isUiLayoutRoutePathFormatValid('admin')).toBe(false);
@@ -582,7 +582,7 @@ describe('plugin-ui-layout form values', () => {
   });
 
   it('should derive route name from the access path', () => {
-    expect(getRouteNameFromRoutePath('/admin')).toBe('admin');
+    expect(getRouteNameFromRoutePath('/app')).toBe('app');
     expect(getRouteNameFromRoutePath('mobile')).toBe('mobile');
     expect(getRouteNameFromRoutePath('/mobile/pages?tab=main')).toBe('mobile');
   });
@@ -714,9 +714,9 @@ describe('plugin-ui-layout route URL', () => {
             getBasename: () => '/v2/apps/app1',
           },
         },
-        '/admin',
+        '/app',
       ),
-    ).toBe('/v2/apps/app1/admin');
+    ).toBe('/v2/apps/app1/app');
   });
 
   it('should fall back to app route URL', () => {

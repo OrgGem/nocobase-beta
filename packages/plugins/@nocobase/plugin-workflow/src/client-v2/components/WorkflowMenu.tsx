@@ -18,7 +18,7 @@ import { ExecutionHistoryDrawer } from '../pages/ExecutionHistoryDrawer';
 import { WorkflowDetailsModal } from './WorkflowDetailsModal';
 import { normalizeRecordResponse, type WorkflowCanvasRecord, type WorkflowRevision } from './workflowCanvas';
 
-const WORKFLOW_HOMEPAGE = '/admin/settings/workflow';
+const WORKFLOW_HOMEPAGE = '/app/settings/workflow';
 
 export function WorkflowMenu({
   record,

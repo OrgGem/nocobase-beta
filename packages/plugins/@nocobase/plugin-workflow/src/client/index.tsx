@@ -10,7 +10,6 @@
 import { observer } from '@nocobase/flow-engine';
 import { Plugin, useCompile, lazy } from '@nocobase/client';
 import { Registry } from '@nocobase/utils/client';
-import MobileManager from '@nocobase/plugin-mobile/client';
 
 // import { ExecutionPage } from './ExecutionPage';
 // import { WorkflowPage } from './WorkflowPage';
@@ -36,15 +35,7 @@ import CollectionTrigger from './triggers/collection';
 import ScheduleTrigger from './triggers/schedule';
 import { getWorkflowDetailPath, getWorkflowExecutionsPath } from './utils';
 import { VariableOption } from './variable';
-import {
-  MobileTabBarWorkflowTasksItem,
-  TasksCountsProvider,
-  TasksProvider,
-  tasksSchemaInitializerItem,
-  TaskTypeOptions,
-  WorkflowTasks,
-  WorkflowTasksMobile,
-} from './WorkflowTasks';
+import { TasksCountsProvider, TasksProvider, TaskTypeOptions, WorkflowTasks } from './WorkflowTasks';
 import { WorkflowCollectionsProvider } from './WorkflowCollectionsProvider';
 import { Tooltip } from 'antd';
 import React from 'react';
@@ -172,24 +163,9 @@ export default class PluginWorkflowClient extends Plugin {
     });
 
     this.router.add('admin.workflow.tasks', {
-      path: '/admin/workflow/tasks/:taskType?/:status?/:popupId?',
+      path: '/app/workflow/tasks/:taskType?/:status?/:popupId?',
       Component: WorkflowTasks,
     });
-
-    const mobileManager = this.pm.get(MobileManager);
-    this.app.schemaInitializerManager.addItem('mobile:tab-bar', 'workflow-tasks', tasksSchemaInitializerItem);
-    this.app.addComponents({ TasksCountsProvider, MobileTabBarWorkflowTasksItem });
-    if (mobileManager.mobileRouter) {
-      const MobileComponent = observer(WorkflowTasksMobile, { displayName: 'WorkflowTasksMobile' });
-      // mobileManager.mobileRouter.add('mobile.page.workflow.tasks', {
-      //   path: '/page/workflow-tasks',
-      //   Component: MobileComponent,
-      // });
-      mobileManager.mobileRouter.add('mobile.page.workflow.tasks.list', {
-        path: '/page/workflow-tasks/:taskType?/:status?/:popupId?',
-        Component: MobileComponent,
-      });
-    }
 
     this.registerInstructionGroup('control', { key: 'control', label: `{{t("Control", { ns: "${NAMESPACE}" })}}` });
     this.registerInstructionGroup('calculation', {

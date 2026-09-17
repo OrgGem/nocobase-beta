@@ -46,10 +46,10 @@ describe('MarkdownVditorRuntime', () => {
 
   it('builds the production CDN from the public path', () => {
     vi.stubEnv('NODE_ENV', 'production');
-    const getCdnUrl = vi.fn(() => '/admin/');
+    const getCdnUrl = vi.fn(() => '/app/');
     const runtime = new MarkdownVditorRuntime({ getCdnUrl } as never, () => '/v2/admin/');
 
-    expect(runtime.getCDN()).toBe('/admin/static/plugins/@nocobase/plugin-block-markdown/dist/client/vditor');
+    expect(runtime.getCDN()).toBe('/app/static/plugins/@nocobase/plugin-block-markdown/dist/client/vditor');
     expect(getCdnUrl).toHaveBeenCalledTimes(1);
   });
 

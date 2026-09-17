@@ -20,7 +20,7 @@ function transactionKey(state: string) {
   return `oidc-plus:transaction:${state}`;
 }
 
-export function normalizeInternalRedirect(value: unknown, fallback = '/admin') {
+export function normalizeInternalRedirect(value: unknown, fallback = '/app') {
   if (typeof value !== 'string' || !value) return fallback;
   const hasControlCharacter = Array.from(value).some((character) => character.charCodeAt(0) < 32);
   if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || hasControlCharacter) {
@@ -99,3 +99,4 @@ export async function consumeTransaction(ctx: Context, state: string) {
 export function logoutIdTokenCookieName(authenticator: string) {
   return `oidc_plus_id_${authenticator.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40)}`;
 }
+

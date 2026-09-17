@@ -29,7 +29,7 @@ vi.mock('../../locale', () => ({
 
 vi.mock('../../hooks/useWorkflowRuntimePaths', () => ({
   useWorkflowRuntimePaths: () => ({
-    getWorkflowCanvasPath: (id: string | number) => `/admin/workflow/workflows/${id}`,
+    getWorkflowCanvasPath: (id: string | number) => `/app/workflow/workflows/${id}`,
   }),
 }));
 

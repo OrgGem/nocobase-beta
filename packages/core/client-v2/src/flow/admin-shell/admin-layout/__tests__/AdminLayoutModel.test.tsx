@@ -216,7 +216,7 @@ describe('AdminLayoutModel runtime', () => {
 
     const { unmount } = render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/lrmg36pcahi']}>
+        <MemoryRouter initialEntries={['/app/lrmg36pcahi']}>
           <AdminLayoutComponent model={model} />
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -244,7 +244,7 @@ describe('AdminLayoutModel runtime', () => {
 
     expect(model.context.layout).toMatchObject({
       routeName: 'admin',
-      routePath: '/admin',
+      routePath: '/app',
       rootRouteName: 'admin',
       rootPageModelClass: 'RootPageModel',
       childPageModelClass: 'ChildPageModel',
@@ -277,8 +277,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageViewRouteName('admin'),
-        pathname: '/admin/page-1/view/popup',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-1/view/popup',
+        layoutBasePathname: '/app',
       });
     });
 
@@ -294,7 +294,7 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: 'admin.settings',
-        pathname: '/admin/settings',
+        pathname: '/app/settings',
       });
     });
 
@@ -327,8 +327,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageViewRouteName('admin'),
-        pathname: '/admin/page-1/view/popup',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-1/view/popup',
+        layoutBasePathname: '/app',
         state: routeState,
       });
     });
@@ -346,7 +346,7 @@ describe('AdminLayoutModel runtime', () => {
     expect(syncRoute).toHaveBeenCalledWith(
       expect.objectContaining({
         pageUid: 'page-1',
-        pathname: '/admin/page-1/view/popup',
+        pathname: '/app/page-1/view/popup',
         state: routeState,
       }),
     );
@@ -375,8 +375,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageViewRouteName('admin'),
-        pathname: `/admin/page-1/view/popup/opts/${token}/filterbytk/1`,
-        layoutBasePathname: '/admin',
+        pathname: `/app/page-1/view/popup/opts/${token}/filterbytk/1`,
+        layoutBasePathname: '/app',
       });
     });
 
@@ -412,19 +412,19 @@ describe('AdminLayoutModel runtime', () => {
     expect(model).toBeTruthy();
 
     [
-      '/admin/page-1/sourceid',
-      '/admin/page-1/AbCdEfGh/filterbytk/1',
-      '/admin/page-1/view/popup/AbCdEfGh/filterbytk/1',
-      '/admin/page-1/view/popup/opts/AbCdEfGh/filterbytk/1',
-      '/admin/page-1/view/popup/openviewmode/dialog',
-      '/admin/page-1/view/popup/openviewsize/large',
-      `/admin/page-1/view/popup/opts/${wrongViewToken}/filterbytk/1`,
+      '/app/page-1/sourceid',
+      '/app/page-1/AbCdEfGh/filterbytk/1',
+      '/app/page-1/view/popup/AbCdEfGh/filterbytk/1',
+      '/app/page-1/view/popup/opts/AbCdEfGh/filterbytk/1',
+      '/app/page-1/view/popup/openviewmode/dialog',
+      '/app/page-1/view/popup/openviewsize/large',
+      `/app/page-1/view/popup/opts/${wrongViewToken}/filterbytk/1`,
     ].forEach((pathname) => {
       expect(
         model.resolveLayoutRoute({
           name: getLayoutPageViewRouteName('admin'),
           pathname,
-          layoutBasePathname: '/admin',
+          layoutBasePathname: '/app',
         }),
       ).toMatchObject({
         type: 'notFound',
@@ -458,12 +458,12 @@ describe('AdminLayoutModel runtime', () => {
     expect(
       model.resolveLayoutRoute({
         name: getLayoutPageRouteName('admin'),
-        pathname: '/admin/1',
-        layoutBasePathname: '/admin',
+        pathname: '/app/1',
+        layoutBasePathname: '/app',
       }),
     ).toMatchObject({
       type: 'root',
-      pathname: '/admin/1',
+      pathname: '/app/1',
       relativePath: '1',
     });
   });
@@ -500,8 +500,8 @@ describe('AdminLayoutModel runtime', () => {
     expect(
       model.resolveLayoutRoute({
         name: getLayoutPageRouteName('admin'),
-        pathname: '/admin/1',
-        layoutBasePathname: '/admin',
+        pathname: '/app/1',
+        layoutBasePathname: '/app',
       }),
     ).toMatchObject({
       type: 'page',
@@ -513,9 +513,9 @@ describe('AdminLayoutModel runtime', () => {
     const engine = new FlowEngine();
     const routeRef = observable.ref({
       name: getLayoutPageViewRouteName('admin.settings.publicForms'),
-      pathname: '/admin/settings/public-forms/form-1/view/popup',
+      pathname: '/app/settings/public-forms/form-1/view/popup',
       params: { name: 'form-1' },
-      layoutBasePathname: '/admin/settings/public-forms',
+      layoutBasePathname: '/app/settings/public-forms',
     });
     engine.context.defineProperty('routeRepository', {
       value: {
@@ -544,9 +544,9 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       routeRef.value = {
         name: getLayoutPageViewRouteName('admin.settings.publicForms'),
-        pathname: '/admin/settings/public-forms/form-2/view/popup',
+        pathname: '/app/settings/public-forms/form-2/view/popup',
         params: { name: 'form-2' },
-        layoutBasePathname: '/admin/settings/public-forms',
+        layoutBasePathname: '/app/settings/public-forms',
       };
     });
 
@@ -580,8 +580,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageRouteName('admin'),
-        pathname: '/admin/page-1',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-1',
+        layoutBasePathname: '/app',
       });
     });
 
@@ -599,8 +599,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageRouteName('admin'),
-        pathname: '/admin/page-2',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-2',
+        layoutBasePathname: '/app',
       });
     });
 
@@ -614,7 +614,7 @@ describe('AdminLayoutModel runtime', () => {
     engine.context.defineProperty('route', {
       value: {
         name: 'admin.page',
-        pathname: '/admin/page-1',
+        pathname: '/app/page-1',
         params: { name: 'page-1' },
       },
     });
@@ -634,9 +634,9 @@ describe('AdminLayoutModel runtime', () => {
     expect(model).toBeTruthy();
     const routeLike = {
       name: 'admin.page',
-      pathname: '/admin/page-1',
+      pathname: '/app/page-1',
       layoutRouteName: 'admin',
-      layoutBasePathname: '/admin',
+      layoutBasePathname: '/app',
     };
 
     act(() => {
@@ -658,7 +658,7 @@ describe('AdminLayoutModel runtime', () => {
       expect(model.context.layoutRoute).toMatchObject({
         type: 'page',
         pageUid: 'page-1',
-        pathname: '/admin/page-1',
+        pathname: '/app/page-1',
       });
     });
     expect(model.context.currentRoute.title).toBe('page-1');
@@ -666,8 +666,8 @@ describe('AdminLayoutModel runtime', () => {
       expect.objectContaining({
         layoutRouteName: 'admin',
         pageUid: 'page-1',
-        pathname: '/admin/page-1',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-1',
+        layoutBasePathname: '/app',
       }),
     );
   });
@@ -677,7 +677,7 @@ describe('AdminLayoutModel runtime', () => {
     engine.context.defineProperty('route', {
       value: {
         name: 'admin.page.view',
-        pathname: '/admin/page-1/view/popup',
+        pathname: '/app/page-1/view/popup',
         params: { name: 'page-1' },
       },
     });
@@ -705,7 +705,7 @@ describe('AdminLayoutModel runtime', () => {
     expect(model.context.layoutRoute).toMatchObject({
       type: 'page',
       pageUid: 'page-1',
-      pathname: '/admin/page-1/view/popup',
+      pathname: '/app/page-1/view/popup',
       viewStack: [{ viewUid: 'page-1' }, { viewUid: 'popup' }],
     });
     expect(model.context.currentRoute.title).toBe('page-1');
@@ -716,10 +716,10 @@ describe('AdminLayoutModel runtime', () => {
     engine.context.defineProperty('route', {
       value: {
         name: 'admin.settings.publicForms.page',
-        pathname: '/admin/settings/public-forms/form-1',
+        pathname: '/app/settings/public-forms/form-1',
         params: { name: 'form-1' },
         layoutRouteName: 'admin.settings.publicForms',
-        layoutBasePathname: '/admin/settings/public-forms',
+        layoutBasePathname: '/app/settings/public-forms',
       },
     });
     engine.context.defineProperty('routeRepository', {
@@ -752,9 +752,9 @@ describe('AdminLayoutModel runtime', () => {
     engine.context.defineProperty('route', {
       value: {
         name: 'admin.settings.publicForms.page',
-        pathname: '/admin/settings/public-forms/form-1',
+        pathname: '/app/settings/public-forms/form-1',
         params: { name: 'form-1' },
-        layoutBasePathname: '/admin/settings/public-forms',
+        layoutBasePathname: '/app/settings/public-forms',
       },
     });
     engine.context.defineProperty('routeRepository', {
@@ -787,7 +787,7 @@ describe('AdminLayoutModel runtime', () => {
     engine.context.defineProperty('route', {
       value: {
         name: 'admin.page',
-        pathname: '/admin/page-1',
+        pathname: '/app/page-1',
         params: { name: 'page-1' },
       },
     });
@@ -807,9 +807,9 @@ describe('AdminLayoutModel runtime', () => {
     expect(model).toBeTruthy();
     const staleRouteLike = {
       name: 'admin.page',
-      pathname: '/admin/page-1',
+      pathname: '/app/page-1',
       layoutRouteName: 'admin',
-      layoutBasePathname: '/admin',
+      layoutBasePathname: '/app',
     };
 
     act(() => {
@@ -824,7 +824,7 @@ describe('AdminLayoutModel runtime', () => {
     expect(model.context.layoutRoute).toMatchObject({
       type: 'page',
       pageUid: 'page-1',
-      pathname: '/admin/page-1',
+      pathname: '/app/page-1',
     });
     expect(model.context.currentRoute.title).toBe('page-1');
   });
@@ -849,8 +849,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageRouteName('admin'),
-        pathname: '/admin/page-1',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-1',
+        layoutBasePathname: '/app',
       });
     });
 
@@ -875,8 +875,8 @@ describe('AdminLayoutModel runtime', () => {
     act(() => {
       model.syncLayoutRoute({
         name: getLayoutPageRouteName('admin'),
-        pathname: '/admin/page-2',
-        layoutBasePathname: '/admin',
+        pathname: '/app/page-2',
+        layoutBasePathname: '/app',
       });
     });
 
@@ -920,3 +920,4 @@ describe('AdminLayoutModel runtime', () => {
     ]);
   });
 });
+

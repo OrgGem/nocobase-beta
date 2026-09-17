@@ -185,7 +185,7 @@ function createFlowContext() {
         getBasename: () => '',
       },
       pluginSettingsManager: {
-        getRoutePath: () => '/admin/settings/public-forms',
+        getRoutePath: () => '/app/settings/public-forms',
       },
     },
   });
@@ -250,8 +250,8 @@ function createSettingsLayoutModel() {
 
   model.currentLayoutRoute = {
     type: 'page',
-    pathname: '/admin/settings/public-forms/configure/form-1',
-    basePathname: '/admin/settings/public-forms/configure',
+    pathname: '/app/settings/public-forms/configure/form-1',
+    basePathname: '/app/settings/public-forms/configure',
     relativePath: 'form-1',
     pageUid: 'form-1',
     viewStack: [{ viewUid: 'form-1' }],
@@ -379,7 +379,7 @@ describe('PublicFormsSettingsPage toolbar', () => {
         expect.objectContaining({ key: 'form-1' }),
         expect.any(Function),
       );
-      expect(testState.navigate).toHaveBeenCalledWith('/admin/settings/public-forms/form-1');
+      expect(testState.navigate).toHaveBeenCalledWith('/app/settings/public-forms/form-1');
     });
   });
 });

@@ -651,7 +651,7 @@ export const GoogleMapsCom = React.forwardRef<GoogleMapForwardedRefProps, Google
             type="primary"
             onClick={() => {
               ctx.view?.close?.();
-              navigate('/admin/settings/map' + '?tab=google');
+              navigate('/app/settings/map' + '?tab=google');
             }}
           >
             {t('Go to the configuration page')}

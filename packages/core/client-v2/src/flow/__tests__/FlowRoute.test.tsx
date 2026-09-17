@@ -56,7 +56,7 @@ describe('FlowRoute', () => {
     engine.context.defineProperty('route', {
       value: {
         params: { name: 'test-page' },
-        pathname: '/admin/test-page',
+        pathname: '/app/test-page',
       },
     });
     engine.context.defineProperty('routeRepository', {
@@ -419,7 +419,7 @@ describe('FlowRoute', () => {
     engine.context.defineProperty('route', {
       value: {
         params: { name: 'test-page' },
-        pathname: '/admin/test-page',
+        pathname: '/app/test-page',
       },
     });
     engine.context.defineProperty('routeRepository', {
@@ -546,7 +546,7 @@ describe('FlowRoute', () => {
     const stableLayout = {
       uid: 'admin-layout-model',
       routeName: 'admin',
-      routePath: '/admin',
+      routePath: '/app',
       authCheck: true,
     };
     Object.defineProperty(layoutModel, 'layout', {
@@ -589,7 +589,7 @@ describe('FlowRoute', () => {
       configurable: true,
       value: {
         ...originalLocation,
-        pathname: '/nocobase/v2/apps/jhb20/admin/test-page/tab/tab-1',
+        pathname: '/nocobase/v2/apps/jhb20/app/test-page/tab/tab-1',
         search: '?from=direct',
         hash: '#dialog',
         replace,
@@ -626,9 +626,9 @@ describe('FlowRoute', () => {
 
       render(
         <FlowEngineProvider engine={engine}>
-          <MemoryRouter initialEntries={['/nocobase/v2/apps/jhb20/admin/test-page/tab/tab-1?from=direct#dialog']}>
+          <MemoryRouter initialEntries={['/nocobase/v2/apps/jhb20/app/test-page/tab/tab-1?from=direct#dialog']}>
             <Routes>
-              <Route path="/nocobase/v2/apps/jhb20/admin/:name/*" element={<FlowRoute />} />
+              <Route path="/nocobase/v2/apps/jhb20/app/:name/*" element={<FlowRoute />} />
             </Routes>
           </MemoryRouter>
         </FlowEngineProvider>,
@@ -643,7 +643,7 @@ describe('FlowRoute', () => {
       expect(screen.queryByText('404')).not.toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'Open from the original entry' })).toHaveAttribute(
         'href',
-        '/nocobase/apps/jhb20/admin/test-page/tab/tab-1?from=direct#dialog',
+        '/nocobase/apps/jhb20/app/test-page/tab/tab-1?from=direct#dialog',
       );
       expect(replace).not.toHaveBeenCalled();
       expect(adminLayoutModel.registerRoutePage).not.toHaveBeenCalled();
@@ -1002,9 +1002,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/admin-denied-page']}>
+        <MemoryRouter initialEntries={['/app/admin-denied-page']}>
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1053,9 +1053,9 @@ describe('FlowRoute', () => {
 
     const { container } = render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/371750686228480']}>
+        <MemoryRouter initialEntries={['/app/371750686228480']}>
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1116,9 +1116,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/371750686228480']}>
+        <MemoryRouter initialEntries={['/app/371750686228480']}>
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1174,9 +1174,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/371750686228480/view/not-exists']}>
+        <MemoryRouter initialEntries={['/app/371750686228480/view/not-exists']}>
           <Routes>
-            <Route path="/admin/:name/view/*" element={<FlowRoute />} />
+            <Route path="/app/:name/view/*" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1230,9 +1230,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/371750686228480/tab/not-exists']}>
+        <MemoryRouter initialEntries={['/app/371750686228480/tab/not-exists']}>
           <Routes>
-            <Route path="/admin/:name/tab/:tabUid" element={<FlowRoute />} />
+            <Route path="/app/:name/tab/:tabUid" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1297,9 +1297,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <Router location="/admin/371750686228480" navigator={navigator}>
+        <Router location="/app/371750686228480" navigator={navigator}>
           <Routes>
-            <Route path="/admin/:name" element={<RerenderAfterReplace />} />
+            <Route path="/app/:name" element={<RerenderAfterReplace />} />
           </Routes>
         </Router>
       </FlowEngineProvider>,
@@ -1383,10 +1383,10 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/371750686228480']}>
+        <MemoryRouter initialEntries={['/app/371750686228480']}>
           <CaptureNavigate />
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1397,7 +1397,7 @@ describe('FlowRoute', () => {
     });
 
     act(() => {
-      navigateTo('/admin/371750755434496');
+      navigateTo('/app/371750755434496');
     });
 
     await waitFor(() => {
@@ -1445,9 +1445,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/not-exists-4822']}>
+        <MemoryRouter initialEntries={['/app/not-exists-4822']}>
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1495,9 +1495,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/10001']}>
+        <MemoryRouter initialEntries={['/app/10001']}>
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1544,9 +1544,9 @@ describe('FlowRoute', () => {
 
     render(
       <FlowEngineProvider engine={engine}>
-        <MemoryRouter initialEntries={['/admin/group-schema']}>
+        <MemoryRouter initialEntries={['/app/group-schema']}>
           <Routes>
-            <Route path="/admin/:name" element={<FlowRoute />} />
+            <Route path="/app/:name" element={<FlowRoute />} />
           </Routes>
         </MemoryRouter>
       </FlowEngineProvider>,
@@ -1864,7 +1864,7 @@ describe('FlowRoute', () => {
       configurable: true,
       value: {
         ...originalLocation,
-        pathname: '/v2/admin/test-page',
+        pathname: '/v2/app/test-page',
         replace,
       },
     });
@@ -1986,7 +1986,7 @@ describe('FlowRoute', () => {
       configurable: true,
       value: {
         ...originalLocation,
-        pathname: '/apps/demo/admin/test-page',
+        pathname: '/apps/demo/app/test-page',
         search: '?from=sub-app',
         hash: '#panel',
         replace,
@@ -2106,3 +2106,4 @@ describe('FlowRoute', () => {
     }
   });
 });
+

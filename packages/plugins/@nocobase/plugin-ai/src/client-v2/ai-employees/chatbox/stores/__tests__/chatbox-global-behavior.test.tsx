@@ -33,7 +33,7 @@ vi.mock('@nocobase/flow-engine', async () => {
 
 vi.mock('react-router-dom', () => ({
   useLocation: () => ({
-    pathname: '/admin',
+    pathname: '/app',
   }),
 }));
 

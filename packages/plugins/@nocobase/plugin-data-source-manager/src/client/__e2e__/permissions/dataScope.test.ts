@@ -12,7 +12,7 @@ import { expect, test } from '@nocobase/test/e2e';
 test.describe('data scope in action permission', () => {
   // TODO: 本地可以跑通，但是在 github actions 里面跑不通，先 skip 掉
   test.skip('should no Current form and Current popup variables', async ({ page }) => {
-    await page.goto('/admin/settings/users-permissions/roles');
+    await page.goto('/app/settings/users-permissions/roles');
 
     await page.getByRole('tab', { name: 'Data sources' }).click();
     await page.getByLabel('action-Action.Link-Configure-').click();

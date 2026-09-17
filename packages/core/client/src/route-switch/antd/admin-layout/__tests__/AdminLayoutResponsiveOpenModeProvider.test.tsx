@@ -81,7 +81,7 @@ const UrlPopupContextProvider = ({ children }: { children: React.ReactNode }) =>
 
 describe('AdminLayoutResponsiveOpenModeProvider', () => {
   beforeEach(() => {
-    window.history.pushState({}, '', '/admin/sgevn66i362/popups/70iob7ialv1/filterbytk/1');
+    window.history.pushState({}, '', '/app/sgevn66i362/popups/70iob7ialv1/filterbytk/1');
   });
 
   it('renders URL-controlled drawer and modal popups as subpages in responsive admin layout', () => {

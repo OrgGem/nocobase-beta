@@ -142,12 +142,12 @@ describe('auth redirect helpers', () => {
         },
       } as any;
 
-      expect(normalizeV2RedirectPath(app, '')).toBe('/v/apps/test-app/admin/');
-      expect(normalizeV2RedirectPath(app, '/admin/?tab=overview#panel')).toBe(
-        '/v/apps/test-app/admin/?tab=overview#panel',
+      expect(normalizeV2RedirectPath(app, '')).toBe('/v/apps/test-app/app/');
+      expect(normalizeV2RedirectPath(app, '/app/?tab=overview#panel')).toBe(
+        '/v/apps/test-app/app/?tab=overview#panel',
       );
-      expect(normalizeV2RedirectPath(app, '/v/apps/test-app/admin/')).toBe('/v/apps/test-app/admin/');
-      expect(normalizeV2RedirectPath(app, '/v/admin/')).toBe('/v/apps/test-app/admin/');
+      expect(normalizeV2RedirectPath(app, '/v/apps/test-app/app/')).toBe('/v/apps/test-app/app/');
+      expect(normalizeV2RedirectPath(app, '/v/admin/')).toBe('/v/apps/test-app/app/');
     });
 
     it('should preserve sub-app segment when building current redirect path under simple public path', () => {

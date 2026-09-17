@@ -61,9 +61,9 @@ const stripBasePath = (pathname: string, basePath: string) => {
  *
  * @example
  * ```typescript
- * parsePathnameToViewParams('/admin/xxx') // [{ viewUid: 'xxx' }]
- * parsePathnameToViewParams('/admin/xxx/tab/yyy') // [{ viewUid: 'xxx', tabUid: 'yyy' }]
- * parsePathnameToViewParams('/admin/xxx/view/yyy') // [{ viewUid: 'xxx' }, { viewUid: 'yyy' }]
+ * parsePathnameToViewParams('/app/xxx') // [{ viewUid: 'xxx' }]
+ * parsePathnameToViewParams('/app/xxx/tab/yyy') // [{ viewUid: 'xxx', tabUid: 'yyy' }]
+ * parsePathnameToViewParams('/app/xxx/view/yyy') // [{ viewUid: 'xxx' }, { viewUid: 'yyy' }]
  * ```
  */
 export const parsePathnameToViewParams = (
@@ -74,7 +74,7 @@ export const parsePathnameToViewParams = (
     return [];
   }
 
-  const rootPrefix = options.rootPrefix || 'admin';
+  const rootPrefix = options.rootPrefix || 'app';
   const relativePath = options.basePath ? stripBasePath(pathname, options.basePath) : '';
 
   // 移除开头的斜杠并分割路径

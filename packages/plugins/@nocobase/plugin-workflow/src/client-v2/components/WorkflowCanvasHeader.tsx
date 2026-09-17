@@ -18,7 +18,7 @@ import { WorkflowRevisionsDropdown } from './WorkflowRevisionsDropdown';
 import { ExecuteWorkflowButton } from '../triggers/ExecuteWorkflowButton';
 import { SyncModeTag } from './SyncModeTag';
 
-const WORKFLOW_HOMEPAGE = '/admin/settings/workflow';
+const WORKFLOW_HOMEPAGE = '/app/settings/workflow';
 
 export function WorkflowCanvasHeader({
   record,

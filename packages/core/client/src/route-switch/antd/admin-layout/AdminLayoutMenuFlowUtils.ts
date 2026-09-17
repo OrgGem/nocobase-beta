@@ -310,8 +310,8 @@ export const matchesRoutePath = (
       : pathname;
 
   const candidates = [
-    route.id != null ? `/admin/${route.id}` : null,
-    route.schemaUid ? `/admin/${route.schemaUid}` : null,
+    route.id != null ? `/app/${route.id}` : null,
+    route.schemaUid ? `/app/${route.schemaUid}` : null,
   ].filter(Boolean) as string[];
 
   if (

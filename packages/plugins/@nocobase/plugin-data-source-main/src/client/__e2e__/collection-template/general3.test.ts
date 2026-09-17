@@ -181,7 +181,7 @@ test.describe('configure fields', () => {
 test.describe('create primary key  or unique index other than ID.', () => {
   test('integer field as primary key', async ({ page, mockCollection }) => {
     const name = uid();
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await mockCollection({
       name: name,
@@ -214,7 +214,7 @@ test.describe('create primary key  or unique index other than ID.', () => {
   });
   test('integer field set unique index', async ({ page, mockCollection }) => {
     const name = uid();
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await mockCollection({
       name: name,
@@ -249,7 +249,7 @@ test.describe('create primary key  or unique index other than ID.', () => {
   });
   test('input(string) field set unique index', async ({ page, mockCollection }) => {
     const name = uid();
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await mockCollection({
       name: name,
@@ -284,7 +284,7 @@ test.describe('create primary key  or unique index other than ID.', () => {
   });
   test('input(string) field set as primary key', async ({ page, mockCollection }) => {
     const name = uid();
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await mockCollection({
       name: name,

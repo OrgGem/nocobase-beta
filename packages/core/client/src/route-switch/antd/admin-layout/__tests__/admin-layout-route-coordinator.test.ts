@@ -80,7 +80,7 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1/view/popup-1',
+      pathname: '/app/page-1/view/popup-1',
     });
 
     expect(navigateToSpy).toHaveBeenCalledTimes(2);
@@ -92,7 +92,7 @@ describe('AdminLayoutRouteCoordinator', () => {
     engine.context.defineProperty('route', {
       value: {
         params: { name: 'page-1' },
-        pathname: '/admin/page-1/view/popup-1',
+        pathname: '/app/page-1/view/popup-1',
       },
     });
     const coordinator = new AdminLayoutRouteCoordinator(engine);
@@ -140,11 +140,11 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1/view/popup-1',
+      pathname: '/app/page-1/view/popup-1',
     });
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1/view/popup-1',
+      pathname: '/app/page-1/view/popup-1',
     });
     await flushPromises();
 
@@ -189,16 +189,16 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1/view/popup-1',
+      pathname: '/app/page-1/view/popup-1',
     });
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1/view/popup-1',
+      pathname: '/app/page-1/view/popup-1',
     });
 
     coordinator.syncRoute({
       params: { name: 'page-2' },
-      pathname: '/admin/page-2',
+      pathname: '/app/page-2',
     });
 
     const popupModel = engine.createModel<FlowModel>({
@@ -248,7 +248,7 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1/view/popup-1',
+      pathname: '/app/page-1/view/popup-1',
     });
 
     // Unregister the page while model loading is still in flight
@@ -298,7 +298,7 @@ describe('AdminLayoutRouteCoordinator', () => {
 
     coordinator.syncRoute({
       params: { name: 'page-1' },
-      pathname: '/admin/page-1',
+      pathname: '/app/page-1',
     });
     await flushPromises();
 

@@ -48,7 +48,7 @@ test.describe('where map block can be added', () => {
     await expect(page.getByLabel('block-item-CollectionField-').locator('.amap-layer')).toBeAttached();
 
     // 4. 清空配置信息，以免影响其他测试用例
-    await page.goto('/admin/settings/map');
+    await page.goto('/app/settings/map');
     await page.waitForLoadState('load');
     await page.waitForTimeout(1000);
     await page.getByRole('button', { name: 'Edit' }).first().click();

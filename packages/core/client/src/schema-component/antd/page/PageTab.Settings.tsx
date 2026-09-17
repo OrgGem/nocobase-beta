@@ -131,7 +131,7 @@ export const pageTabSettings = new SchemaSettings({
 
                 // 如果删除的是当前打开的 tab，需要跳转到其他 tab
                 if (window.location.pathname.includes(currentRoute.schemaUid)) {
-                  navigate(`/admin/${schema['x-uid']}`);
+                  navigate(`/app/${schema['x-uid']}`);
                 }
               },
             });

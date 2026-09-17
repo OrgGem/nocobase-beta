@@ -49,7 +49,7 @@ type ResolveAdminRouteRuntimeTargetOptions = {
 };
 
 const LOG_PREFIX = '[NocoBase] Admin route runtime target:';
-export const DEFAULT_ADMIN_LAYOUT_ROUTE_PATH = '/admin';
+export const DEFAULT_ADMIN_LAYOUT_ROUTE_PATH = '/app';
 
 const EMPTY_TARGET: AdminRouteRuntimeTarget = {
   runtimePath: null,

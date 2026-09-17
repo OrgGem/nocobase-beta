@@ -16,7 +16,7 @@ import type { Application } from './Application';
 import type { RouteType } from './RouterManager';
 
 export const ADMIN_SETTINGS_KEY = 'admin.settings.';
-export const ADMIN_SETTINGS_PATH = '/admin/settings/';
+export const ADMIN_SETTINGS_PATH = '/app/settings/';
 export const SNIPPET_PREFIX = 'pm.';
 
 export interface PluginSettingOptions {

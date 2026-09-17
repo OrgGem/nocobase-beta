@@ -443,7 +443,7 @@ export const AMapCom = React.forwardRef<AMapForwardedRefProps, AMapComponentProp
             type="primary"
             onClick={() => {
               ctx.view?.close?.();
-              navigate('/admin/settings/map');
+              navigate('/app/settings/map');
             }}
           >
             {t('Go to the configuration page')}

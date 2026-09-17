@@ -51,7 +51,7 @@ const waitForGetRequests = async (app: MockClientApplication, urls: string[]) =>
 const setupApp = (pmList: any[], plugins: Array<typeof Plugin> = []) => {
   const app = createMockClient({
     plugins: [NocoBaseBuildInPlugin, TestAclPlugin, ...plugins],
-    router: { type: 'memory', initialEntries: ['/admin/settings/plugin-manager'] },
+    router: { type: 'memory', initialEntries: ['/app/settings/plugin-manager'] },
   });
 
   app.apiMock.onGet('/auth:check').reply(200, {
@@ -217,3 +217,4 @@ describe('plugin-manager page', () => {
     expect(await screen.findByText('Target settings page')).toBeInTheDocument();
   });
 });
+

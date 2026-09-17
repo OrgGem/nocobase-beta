@@ -62,6 +62,13 @@ type GatewayMiddleware = (ctx: GatewayRequestContext, next: () => Promise<void>)
 export type AppSelector = (req: IncomingRequest) => string | Promise<string>;
 export type AppSelectorMiddleware = (ctx: AppSelectorMiddlewareContext, next: () => Promise<void>) => void;
 
+// Resolves the modern-client URL prefix for a single request. Returns the tenant path segment (e.g. `acme`) when the
+// request belongs to a tenant, or null/empty to fall back to the process-wide APP_MODERN_CLIENT_PREFIX. Registered by
+// plugins (e.g. plugin-tenant-path) so the gateway can serve `/<tenant>/...` without a client rebuild.
+export type ModernClientPrefixResolver = (
+  req: IncomingMessage | IncomingRequest,
+) => string | null | Promise<string | null>;
+
 interface StartHttpServerOptions {
   port: number;
   host: string;
@@ -121,6 +128,7 @@ export class Gateway extends EventEmitter {
   private host = '0.0.0.0';
   private socketPath = getSocketPath();
   private v2IndexTemplateCache: { file: string; mtimeMs: number; html: string } | null = null;
+  private modernClientPrefixResolvers: ModernClientPrefixResolver[] = [];
   private terminating = false;
 
   private getOriginalRequestUrl(req: IncomingMessage) {
@@ -304,6 +312,25 @@ export class Gateway extends EventEmitter {
     this.emit('appSelectorChanged');
   }
 
+  /**
+   * Registers a per-request resolver that maps an incoming request to a tenant modern-client prefix (the URL
+   * segment that replaces APP_MODERN_CLIENT_PREFIX). The first resolver returning a non-empty string wins; if all
+   * return null the gateway falls back to the process-wide env value. Backward compatible with single-prefix deploys.
+   */
+  addModernClientPrefixResolver(resolver: ModernClientPrefixResolver) {
+    this.modernClientPrefixResolvers.push(resolver);
+  }
+
+  private async resolveModernClientPrefix(req: IncomingMessage | IncomingRequest): Promise<string | null> {
+    for (const resolver of this.modernClientPrefixResolvers) {
+      const prefix = await resolver(req);
+      if (prefix) {
+        return prefix;
+      }
+    }
+    return null;
+  }
+
   getLogger(appName: string, res: ServerResponse) {
     const reqId = randomUUID();
     res.setHeader('X-Request-Id', reqId);
@@ -350,24 +377,24 @@ export class Gateway extends EventEmitter {
     this.responseError(res, error);
   }
 
-  private getV2PublicPath() {
-    return resolveV2PublicPath(process.env.APP_PUBLIC_PATH || '/');
+  private getV2PublicPath(tenantPrefix?: string | null) {
+    return resolveV2PublicPath(process.env.APP_PUBLIC_PATH || '/', tenantPrefix || undefined);
   }
 
   private getAppPublicPath() {
     return resolvePublicPath(process.env.APP_PUBLIC_PATH || '/');
   }
 
-  private isV2Request(pathname: string) {
-    const v2PublicPath = this.getV2PublicPath();
+  private isV2Request(pathname: string, tenantPrefix?: string | null) {
+    const v2PublicPath = this.getV2PublicPath(tenantPrefix);
     return pathname === v2PublicPath.slice(0, -1) || pathname.startsWith(v2PublicPath);
   }
 
-  private isV2IndexRequest(pathname: string) {
-    if (!this.isV2Request(pathname)) {
+  private isV2IndexRequest(pathname: string, tenantPrefix?: string | null) {
+    if (!this.isV2Request(pathname, tenantPrefix)) {
       return false;
     }
-    const v2PublicPath = this.getV2PublicPath();
+    const v2PublicPath = this.getV2PublicPath(tenantPrefix);
     if (
       pathname === v2PublicPath ||
       pathname === v2PublicPath.slice(0, -1) ||
@@ -378,10 +405,15 @@ export class Gateway extends EventEmitter {
     return !extname(pathname);
   }
 
-  private getV2RuntimeConfig() {
+  private getV2RuntimeConfig(tenantPrefix?: string | null, handleApp?: string | null) {
     return {
-      __nocobase_public_path__: this.getV2PublicPath(),
-      __nocobase_modern_client_prefix__: normalizeModernClientPrefix(process.env.APP_MODERN_CLIENT_PREFIX),
+      __nocobase_public_path__: this.getV2PublicPath(tenantPrefix),
+      __nocobase_modern_client_prefix__: normalizeModernClientPrefix(
+        tenantPrefix || process.env.APP_MODERN_CLIENT_PREFIX,
+      ),
+      // The sub-app this tenant's request is served by. Emitted only when a non-main app was resolved so the
+      // client can stamp X-App on every /api/... call (the URL tenant segment is not present on /api/ requests).
+      ...(handleApp && handleApp !== 'main' ? { __nocobase_tenant_app_name__: handleApp } : {}),
       __webpack_public_path__: process.env.CDN_BASE_URL ? `${process.env.CDN_BASE_URL.replace(/\/+$/, '')}/` : '',
       __nocobase_api_base_url__: process.env.API_BASE_URL || process.env.API_BASE_PATH,
       __nocobase_api_client_storage_prefix__: process.env.API_CLIENT_STORAGE_PREFIX,
@@ -395,8 +427,8 @@ export class Gateway extends EventEmitter {
     };
   }
 
-  private getV2RuntimeConfigScript() {
-    const runtimeConfig = this.getV2RuntimeConfig();
+  private getV2RuntimeConfigScript(tenantPrefix?: string | null, handleApp?: string | null) {
+    const runtimeConfig = this.getV2RuntimeConfig(tenantPrefix, handleApp);
     const scriptContent = Object.entries(runtimeConfig)
       .map(([key, value]) => `window['${key}'] = ${JSON.stringify(value)};`)
       .join('\n');
@@ -404,13 +436,13 @@ export class Gateway extends EventEmitter {
     return `<script>${scriptContent}</script>`;
   }
 
-  private getV2AssetPublicPath() {
+  private getV2AssetPublicPath(tenantPrefix?: string | null) {
     if (process.env.CDN_BASE_URL) {
       // CDN hosts the assets under the fixed build-output directory name.
       return `${process.env.CDN_BASE_URL.replace(/\/+$/, '')}/${MODERN_CLIENT_DIST_DIR}/`;
     }
 
-    return this.getV2PublicPath();
+    return this.getV2PublicPath(tenantPrefix);
   }
 
   private getV2IndexTemplate() {
@@ -436,13 +468,13 @@ export class Gateway extends EventEmitter {
     return html;
   }
 
-  private renderV2IndexHtml() {
+  private renderV2IndexHtml(tenantPrefix?: string | null, handleApp?: string | null) {
     const template = this.getV2IndexTemplate();
     if (!template) {
       return null;
     }
-    const html = rewriteV2AssetPublicPath(template, this.getV2AssetPublicPath());
-    return injectRuntimeScript(html, this.getV2RuntimeConfigScript());
+    const html = rewriteV2AssetPublicPath(template, this.getV2AssetPublicPath(tenantPrefix));
+    return injectRuntimeScript(html, this.getV2RuntimeConfigScript(tenantPrefix, handleApp));
   }
 
   async requestHandler(req: IncomingMessage, res: ServerResponse) {
@@ -518,7 +550,11 @@ export class Gateway extends EventEmitter {
     const isLegacyUploadRequest = pathname.startsWith(APP_PUBLIC_PATH + 'storage/uploads/');
 
     if (!pathname.startsWith(process.env.API_BASE_PATH) && !isFilesRequest && !isLegacyUploadRequest) {
-      if (this.isV2Request(pathname)) {
+      // Resolve a per-request modern-client prefix (e.g. a tenant path segment) before the v2 checks so the gateway
+      // can serve `/<tenant>/...` and inject the matching runtime config. Null falls back to the env prefix, keeping
+      // single-prefix deployments byte-for-byte identical.
+      const tenantPrefix = await this.resolveModernClientPrefix(req);
+      if (this.isV2Request(pathname, tenantPrefix)) {
         if (handleApp !== 'main') {
           const isProxy = await this.proxyRequestToSubApp(supervisor, handleApp, req, res);
           if (isProxy) {
@@ -526,8 +562,8 @@ export class Gateway extends EventEmitter {
           }
         }
 
-        if (this.isV2IndexRequest(pathname)) {
-          const v2Html = this.renderV2IndexHtml();
+        if (this.isV2IndexRequest(pathname, tenantPrefix)) {
+          const v2Html = this.renderV2IndexHtml(tenantPrefix, handleApp);
           if (v2Html) {
             res.setHeader('Content-Type', 'text/html; charset=utf-8');
             res.end(v2Html);
@@ -537,10 +573,10 @@ export class Gateway extends EventEmitter {
 
         req.url = req.url.substring(APP_PUBLIC_PATH.length - 1);
         // Map the runtime modern-client prefix segment back to the fixed
-        // on-disk build directory (e.g. /admin/assets/x.js -> /v/assets/x.js)
+        // on-disk build directory (e.g. /acme/assets/x.js -> /v/assets/x.js)
         // so assets resolve when serving standalone (no nginx) and the runtime
         // prefix differs from the dist dir. No-op when they match (the default).
-        const modernPrefix = normalizeModernClientPrefix(process.env.APP_MODERN_CLIENT_PREFIX);
+        const modernPrefix = normalizeModernClientPrefix(tenantPrefix || process.env.APP_MODERN_CLIENT_PREFIX);
         if (modernPrefix !== MODERN_CLIENT_DIST_DIR && req.url.startsWith(`/${modernPrefix}/`)) {
           req.url = `/${MODERN_CLIENT_DIST_DIR}/${req.url.slice(modernPrefix.length + 2)}`;
         }

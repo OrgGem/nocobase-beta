@@ -34,7 +34,7 @@ export const ChartQueryMetadataProvider: React.FC = (props) => {
   const api = useAPIClient();
   const location = useLocation();
 
-  const isAdminPage = location.pathname.startsWith('/admin');
+  const isAdminPage = location.pathname.startsWith('/app');
   const token = api.auth.getToken() || '';
 
   const service = useRequest<{

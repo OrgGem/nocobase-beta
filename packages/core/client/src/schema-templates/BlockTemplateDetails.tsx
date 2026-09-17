@@ -94,7 +94,7 @@ export const BlockTemplateDetails = () => {
       <AntdPageHeader
         style={{ backgroundColor: 'white' }}
         onBack={() => {
-          navigate('/admin/plugins/block-templates');
+          navigate('/app/plugins/block-templates');
         }}
         ghost={false}
         title={<EditableTitle filterByTk={key} title={data?.data?.name} />}

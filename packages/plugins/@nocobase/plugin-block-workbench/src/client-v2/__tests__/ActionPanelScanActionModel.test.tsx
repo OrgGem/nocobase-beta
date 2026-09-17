@@ -137,7 +137,7 @@ describe('ActionPanelScanActionModel', () => {
 
     await act(async () => {
       await getScanFlow()?.steps.scanClick.handler({
-        app: { router: { basename: '/admin' } },
+        app: { router: { basename: '/app' } },
         router: { navigate },
         t: (key) => key,
       });
@@ -182,7 +182,7 @@ describe('QRCodeScannerInner', () => {
     render(
       <QRCodeScannerInner
         setVisible={setVisible}
-        app={{ router: { getBasename: () => '/admin/' } }}
+        app={{ router: { getBasename: () => '/app/' } }}
         navigate={navigate}
         onClose={onClose}
         t={(key) => key}
@@ -191,7 +191,7 @@ describe('QRCodeScannerInner', () => {
 
     await waitFor(() => expect(qrMocks.instances[0]?.start).toHaveBeenCalled());
     expect(qrMocks.instances[0].elementId).toBe('qrcode');
-    qrMocks.instances[0].success?.('/admin/mobile/page');
+    qrMocks.instances[0].success?.('/app/mobile/page');
 
     expect(navigate).toHaveBeenCalledWith('/mobile/page');
     expect(setVisible).toHaveBeenCalledWith(false);
@@ -232,7 +232,7 @@ describe('QRCodeScannerInner', () => {
     render(
       <QRCodeScannerInner
         setVisible={setVisible}
-        app={{ router: { basename: '/admin' } }}
+        app={{ router: { basename: '/app' } }}
         navigate={navigate}
         onClose={onClose}
         t={(key) => key}
@@ -241,7 +241,7 @@ describe('QRCodeScannerInner', () => {
 
     await waitFor(() => expect(qrMocks.instances[0]?.start).toHaveBeenCalled());
     qrMocks.instances[0].getState.mockReturnValue(2);
-    qrMocks.instances[0].scanFileV2.mockResolvedValue({ decodedText: '/admin/dashboard' });
+    qrMocks.instances[0].scanFileV2.mockResolvedValue({ decodedText: '/app/dashboard' });
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
       target: { files: [file] },

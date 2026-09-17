@@ -38,7 +38,7 @@ test.describe('data will be updated && Assign field values && after successful s
     await page.getByLabel('Manually close').check();
     await page.getByLabel('Redirect to').check();
     await page.getByLabel('textbox').click();
-    await page.getByLabel('textbox').fill('/admin/pm/list/local/');
+    await page.getByLabel('textbox').fill('/app/pm/list/local/');
     await page.getByRole('button', { name: 'OK', exact: true }).click();
     await page.getByLabel('action-Action-Bulk update-customize:bulkUpdate-general-table').click();
     const [request] = await Promise.all([
@@ -50,6 +50,6 @@ test.describe('data will be updated && Assign field values && after successful s
     expect(postData.singleSelect).toEqual('option3');
     await page.getByRole('button', { name: 'OK', exact: true }).click();
     //成功后跳转路由
-    expect(page.url()).toContain('/admin/pm/list/local/');
+    expect(page.url()).toContain('/app/pm/list/local/');
   });
 });

@@ -42,7 +42,7 @@ const DEFAULT_PORTALS: Array<Omit<AppPortalItem, 'appName'>> = [
     uid: '__default_admin__',
     title: 'Admin',
     icon: 'DesktopOutlined',
-    routePath: '/admin',
+    routePath: '/app',
     layout: 'desktop',
     defaultPortal: true,
   },

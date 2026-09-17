@@ -80,7 +80,7 @@ interface SyncRuntimeOptions {
 const hasUsableSourceId = (sourceId: unknown) => sourceId !== undefined && sourceId !== null && String(sourceId) !== '';
 
 const normalizeBasePathname = (basePathname?: string) => {
-  return `/${(basePathname || '/admin').replace(/^\/+/, '').replace(/\/+$/, '')}`;
+  return `/${(basePathname || '/app').replace(/^\/+/, '').replace(/\/+$/, '')}`;
 };
 
 const getDefaultBasePathnameFromRoutePath = (routePath?: string) => {

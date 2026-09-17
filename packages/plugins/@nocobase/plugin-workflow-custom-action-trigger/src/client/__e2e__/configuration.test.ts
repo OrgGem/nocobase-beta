@@ -189,7 +189,7 @@ test.describe('Upper Left Path Jump', () => {
     );
     await page.waitForTimeout(1000);
 
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     const workflowListRecords = new WorkflowListRecords(page, workFlowName);
     await workflowListRecords.executionCountPopup.click();
@@ -252,7 +252,7 @@ test.describe('Upper Left Path Jump', () => {
     );
     await page.waitForTimeout(1000);
 
-    await page.goto('/admin/settings/workflow');
+    await page.goto('/app/settings/workflow');
     await page.waitForLoadState('load');
     const workflowListRecords = new WorkflowListRecords(page, workFlowName);
     await workflowListRecords.executionCountPopup.click();

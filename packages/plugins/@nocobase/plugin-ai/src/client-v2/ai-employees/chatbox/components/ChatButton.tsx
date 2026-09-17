@@ -72,7 +72,7 @@ export const ChatButton: React.FC = observer(() => {
     };
   }, [unreadCount]);
 
-  if (open || !aiEmployees?.length || isV1Page || isMobileLayout || !pathname.startsWith('/admin')) {
+  if (open || !aiEmployees?.length || isV1Page || isMobileLayout || !pathname.startsWith('/app')) {
     return null;
   }
 

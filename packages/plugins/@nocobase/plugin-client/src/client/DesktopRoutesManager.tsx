@@ -21,7 +21,7 @@ import desktopRoutes from '../collections/desktopRoutes';
 import { useRoutesTranslation } from './locale';
 import { createRoutesTableSchema } from './routesTableSchema';
 
-const routesSchema: ISchema = createRoutesTableSchema('desktopRoutes', '/admin');
+const routesSchema: ISchema = createRoutesTableSchema('desktopRoutes', '/app');
 
 export const DesktopRoutesManager: FC = () => {
   const { t } = useRoutesTranslation();

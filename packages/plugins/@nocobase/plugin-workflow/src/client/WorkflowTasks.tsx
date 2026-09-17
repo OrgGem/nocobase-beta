@@ -44,7 +44,7 @@ import {
   MobileTabBarItem,
   useMobilePage,
   useMobileRoutes,
-} from '@nocobase/plugin-mobile/client';
+} from './mobileFallback';
 
 import PluginWorkflowClient from '.';
 import {
@@ -128,7 +128,7 @@ function StatusTabs() {
       if (!type?.key) {
         return;
       }
-      navigate(mobilePage ? `/page/workflow-tasks/${type.key}/${key}` : `/admin/workflow/tasks/${type.key}/${key}`);
+      navigate(mobilePage ? `/page/workflow-tasks/${type.key}/${key}` : `/app/workflow/tasks/${type.key}/${key}`);
     },
     [navigate, mobilePage, type],
   );
@@ -247,7 +247,7 @@ function PopupContext(props: any) {
           navigate(-1);
         } else {
           navigate(
-            mobilePage ? `/page/workflow-tasks/${taskType}/${status}` : `/admin/workflow/tasks/${taskType}/${status}`,
+            mobilePage ? `/page/workflow-tasks/${taskType}/${status}` : `/app/workflow/tasks/${taskType}/${status}`,
           );
         }
       }
@@ -504,7 +504,7 @@ function TaskNavigation({ forceMobile }: { forceMobile?: boolean }) {
       navigate(
         mobilePage || forceMobile
           ? `/page/workflow-tasks/${nextTypeKey}/${TASK_STATUS.PENDING}`
-          : `/admin/workflow/tasks/${nextTypeKey}/${TASK_STATUS.PENDING}`,
+          : `/app/workflow/tasks/${nextTypeKey}/${TASK_STATUS.PENDING}`,
       );
     },
     [forceMobile, mobilePage, navigate],
@@ -517,7 +517,7 @@ function TaskNavigation({ forceMobile }: { forceMobile?: boolean }) {
     navigate(
       mobilePage || forceMobile
         ? `/page/workflow-tasks/${currentTypeKey}/${status}`
-        : `/admin/workflow/tasks/${currentTypeKey}/${status}`,
+        : `/app/workflow/tasks/${currentTypeKey}/${status}`,
       { replace: true },
     );
   }, [currentTypeKey, forceMobile, items.length, mobilePage, navigate, status, taskType]);
@@ -582,7 +582,7 @@ function WorkflowTasksBadge() {
   return items.length ? (
     <Tooltip title={lang('Workflow todos')}>
       <Button>
-        <Link to={`/admin/workflow/tasks`} onClick={reload}>
+        <Link to={`/app/workflow/tasks`} onClick={reload}>
           <Badge count={total} size="small">
             <CheckCircleOutlined />
           </Badge>

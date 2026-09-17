@@ -65,7 +65,7 @@ function isBuiltinAuthRoute(pathname: string, basename?: string) {
 
 function isAdminRuntimeRoute(pathname: string, basename?: string) {
   const normalizedPathname = removeBasename(pathname, basename);
-  return normalizedPathname === '/admin' || normalizedPathname.startsWith('/admin/');
+  return normalizedPathname === '/app' || normalizedPathname.startsWith('/app/');
 }
 
 function hasAuthCheckRoute(app: Application, pathname: string) {
@@ -320,7 +320,7 @@ const RootRedirect: FC = () => {
     return <Navigate replace to={`/signin?redirect=${encodeURIComponent(targetPath)}`} />;
   }
 
-  return <Navigate replace to="/admin" />;
+  return <Navigate replace to="/app" />;
 };
 
 /**
@@ -348,7 +348,7 @@ export class NocoBaseBuildInPlugin extends Plugin<any, Application> {
     });
     this.app.layoutManager.registerLayout({
       routeName: 'admin',
-      routePath: '/admin',
+      routePath: '/app',
       uid: ADMIN_LAYOUT_MODEL_UID,
       layoutModelClass: 'AdminLayoutModel',
     });
@@ -402,7 +402,7 @@ export class NocoBaseBuildInPlugin extends Plugin<any, Application> {
     });
 
     this.router.add('admin.settings', {
-      path: '/admin/settings',
+      path: '/app/settings',
       componentLoader: () => import('../settings-center/AdminSettingsLayout'),
     });
     this.router.add('admin.settings.route-empty', {

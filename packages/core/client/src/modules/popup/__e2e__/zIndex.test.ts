@@ -53,7 +53,7 @@ test.describe('z-index of dialog', () => {
   });
 
   test('Users & Permissions', async ({ page }) => {
-    await page.goto('/admin/settings/users-permissions/roles');
+    await page.goto('/app/settings/users-permissions/roles');
 
     // Data source
     await page.getByRole('tab', { name: 'Data sources' }).click();

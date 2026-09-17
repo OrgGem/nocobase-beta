@@ -18,14 +18,14 @@ export function getWorkflowCanvasRuntimePath(id: string | number) {
   if (isWorkflowV2Runtime()) {
     return getWorkflowCanvasPath(id);
   }
-  return `/admin/settings/workflow/workflows/${id}`;
+  return `/app/settings/workflow/workflows/${id}`;
 }
 
 export function getWorkflowExecutionRuntimePath(id: string | number) {
   if (isWorkflowV2Runtime()) {
     return getWorkflowExecutionPath(id);
   }
-  return `/admin/settings/workflow/executions/${id}`;
+  return `/app/settings/workflow/executions/${id}`;
 }
 
 export function useWorkflowRuntimePaths() {

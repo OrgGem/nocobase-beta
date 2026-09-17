@@ -201,7 +201,7 @@ function stripCurrentV2Basename(app: AppLike, pathname: string) {
 }
 
 function getDefaultV2AdminRedirectPath(app: AppLike) {
-  return joinRootRelativePath(getV2EffectiveBasePath(app), '/admin');
+  return joinRootRelativePath(getV2EffectiveBasePath(app), '/app');
 }
 
 function isSafeRootRelativePath(value?: string | null) {
@@ -215,11 +215,11 @@ function preserveTrailingSlash(originalPathname: string, value: string) {
   return value;
 }
 
-export function normalizeV2RedirectPath(app: AppLike, target?: string | null, fallbackPath = '/admin/') {
+export function normalizeV2RedirectPath(app: AppLike, target?: string | null, fallbackPath = '/app/') {
   // In a v2 sub-app, publicPath can be `/v/` while the active router
   // basename is `/v/apps/a/`. Redirects must resolve under the basename.
   const basePath = trimTrailingSlashes(getV2EffectiveBasePath(app)) || '/';
-  const fallbackTarget = isSafeRootRelativePath(fallbackPath) ? fallbackPath : '/admin/';
+  const fallbackTarget = isSafeRootRelativePath(fallbackPath) ? fallbackPath : '/app/';
   const rawTarget = isSafeRootRelativePath(target) ? target : fallbackTarget;
   let { pathname, search, hash } = splitPathLike(rawTarget);
   let normalizedPathname = normalizePathname(pathname);

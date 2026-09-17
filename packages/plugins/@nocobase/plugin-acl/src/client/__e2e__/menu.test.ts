@@ -64,14 +64,14 @@ test.skip('menu permission ', async ({ page, mockPage, mockRole, updateRole }) =
   });
   await expect(page.getByRole('row', { name: 'page2' }).locator('.ant-checkbox-input')).toBeChecked({ checked: true });
   //通过路由访问无权限的菜单,跳到有权限的第一个菜单
-  await page.goto(`/admin/${routeId1}`);
+  await page.goto(`/app/${routeId1}`);
   await expect(page.locator('.nb-page-wrapper')).toBeVisible();
   expect(page.url()).toContain(routeId2);
 });
 
 // TODO: this is not stable
 test.skip('i18n should not fallbackNS', async ({ page }) => {
-  await page.goto('/admin/settings/system-settings');
+  await page.goto('/app/settings/system-settings');
 
   // 创建 Users 页面
   await page.getByTestId('schema-initializer-Menu-header').hover();

@@ -10,7 +10,7 @@
 import { expect, test } from '@nocobase/test/e2e';
 
 test('create Attachment (URL) field', async ({ page }) => {
-  await page.goto('/admin/settings/data-source-manager/main/collections?type=main');
+  await page.goto('/app/settings/data-source-manager/main/collections?type=main');
   await page.getByLabel('action-Action.Link-Configure fields-collections-users', { exact: true }).click();
   await page.getByRole('button', { name: 'plus Add field' }).click();
   await page.getByRole('menuitem', { name: 'Attachment (URL)' }).click();

@@ -196,7 +196,7 @@ export function useBlockSettingProps() {
     title: t('Copy embedded link'),
     onClick: () => {
       const url = window.location.href
-        .replace('/admin', '/embed')
+        .replace('/app', '/embed')
         .replace(pageUid, fieldSchema['x-uid'])
         .replace(window.location.search || '', '');
       copy(url);

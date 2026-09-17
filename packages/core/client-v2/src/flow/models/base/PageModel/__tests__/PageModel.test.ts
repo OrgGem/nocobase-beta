@@ -1680,7 +1680,7 @@ describe('PageModel', () => {
         getModel: vi.fn(),
         context: {
           route: {
-            pathname: '/admin/main-view/view/popup-view',
+            pathname: '/app/main-view/view/popup-view',
           },
         },
       } as any;
@@ -1711,7 +1711,7 @@ describe('PageModel', () => {
         getModel: vi.fn(),
         context: {
           route: {
-            pathname: '/admin/main-view/view/popup-view',
+            pathname: '/app/main-view/view/popup-view',
           },
         },
       } as any;

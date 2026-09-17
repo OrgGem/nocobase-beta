@@ -56,7 +56,7 @@ describe('plugin-users client-v2', () => {
     });
     expect(app.pluginSettingsManager.getPluginSettingsName('users')).toBe('users-permissions.users');
     expect(app.pluginSettingsManager.getPluginSettingsRoutePath('users')).toBe(
-      '/admin/settings/users-permissions/users',
+      '/app/settings/users-permissions/users',
     );
 
     await expect(app.flowEngine.getModelClassAsync('EditProfileItemModel')).resolves.toBeTruthy();

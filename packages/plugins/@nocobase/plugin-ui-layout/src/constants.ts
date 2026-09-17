@@ -17,7 +17,7 @@ export const DEFAULT_ADMIN_UI_LAYOUT = {
   uid: 'admin-layout-model',
   layoutType: UI_LAYOUT_TYPE_DESKTOP,
   routeName: 'admin',
-  routePath: '/admin',
+  routePath: '/app',
   authCheck: true,
   enabled: true,
 } as const;

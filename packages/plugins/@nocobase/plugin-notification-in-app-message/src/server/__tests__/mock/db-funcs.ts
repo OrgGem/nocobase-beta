@@ -20,7 +20,7 @@ export async function createMessages({ messagesRepo }, { unreadNum, readNum, cha
       content: 'unread',
       receiveTimestamp: startTimeStamp - idx * 1000,
       options: {
-        url: '/admin/pages',
+        url: '/app/pages',
       },
     };
   });
@@ -34,7 +34,7 @@ export async function createMessages({ messagesRepo }, { unreadNum, readNum, cha
       content: 'unread',
       receiveTimestamp: startTimeStamp - idx - 100000000,
       options: {
-        url: '/admin/pages',
+        url: '/app/pages',
       },
     };
   });

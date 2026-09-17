@@ -115,8 +115,8 @@ describe('PluginWorkflowClientV2 task type registry', () => {
 
   it('matches a settings-compatible workflow URL inside the v2 basename to the canvas route', () => {
     const app = createMockClient({ publicPath: '/v/' });
-    app.router.add('admin', { path: '/admin', Component: Outlet });
-    app.router.add('admin.settings', { path: '/admin/settings', Component: Outlet });
+    app.router.add('admin', { path: '/app', Component: Outlet });
+    app.router.add('admin.settings', { path: '/app/settings', Component: Outlet });
     app.pluginSettingsManager.addMenuItem({ key: 'workflow', title: 'Workflow' });
     app.pluginSettingsManager.addPageTabItem({ menuKey: 'workflow', key: 'index', title: 'Workflow' });
     app.router.add(WORKFLOW_CANVAS_SETTINGS_ROUTE_NAME, {
@@ -124,7 +124,7 @@ describe('PluginWorkflowClientV2 task type registry', () => {
       Component: () => null,
     });
 
-    const matches = app.router.matchRoutes('/v/admin/settings/workflow/workflows/342944512737281') || [];
+    const matches = app.router.matchRoutes('/v/app/settings/workflow/workflows/342944512737281') || [];
 
     expect(matches.at(-1)?.route.id).toBe(WORKFLOW_CANVAS_SETTINGS_ROUTE_NAME);
   });

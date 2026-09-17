@@ -884,7 +884,7 @@ export const URLSearchParamsUseAssociationFieldValue = {
                                       linkageAction: true,
                                     },
                                     'x-component-props': {
-                                      url: '/admin/ocal3pnltf2',
+                                      url: '/app/ocal3pnltf2',
                                       params: [
                                         {
                                           name: 'roles',

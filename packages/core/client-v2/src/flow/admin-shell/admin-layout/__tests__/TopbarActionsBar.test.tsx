@@ -134,7 +134,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'plugin-manager',
           name: 'plugin-manager',
           title: 'Plugin manager',
-          path: '/admin/settings/plugin-manager',
+          path: '/app/settings/plugin-manager',
           icon: null,
           componentLoader: async () => null,
         },
@@ -142,7 +142,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'system-settings',
           name: 'system-settings',
           title: 'System settings',
-          path: '/admin/settings/system-settings',
+          path: '/app/settings/system-settings',
           icon: null,
           isPinned: true,
           componentLoader: async () => null,
@@ -151,7 +151,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'security',
           name: 'security',
           title: 'Security',
-          path: '/admin/settings/security',
+          path: '/app/settings/security',
           icon: null,
           componentLoader: async () => null,
         },
@@ -168,7 +168,7 @@ describe('TopbarActionsBar helpers', () => {
     expect((items as any[])[2]).toMatchObject({
       key: 'system-settings',
       name: 'system-settings',
-      path: '/admin/settings/system-settings',
+      path: '/app/settings/system-settings',
     });
   });
 
@@ -181,7 +181,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'system-settings',
           name: 'system-settings',
           title: 'System settings',
-          path: '/admin/settings/system-settings',
+          path: '/app/settings/system-settings',
           icon: null,
           componentLoader: async () => null,
         },
@@ -191,7 +191,7 @@ describe('TopbarActionsBar helpers', () => {
     renderSettingsLabel((items as any[])[0].label, '/sales/p1');
 
     const link = screen.getByRole('link', { name: 'System settings' });
-    expect(link).toHaveAttribute('href', '/nocobase/v/admin/settings/system-settings');
+    expect(link).toHaveAttribute('href', '/nocobase/v/app/settings/system-settings');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
     expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
@@ -206,7 +206,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'plugin-manager',
           name: 'plugin-manager',
           title: 'Plugin manager',
-          path: '/admin/settings/plugin-manager',
+          path: '/app/settings/plugin-manager',
           icon: null,
           componentLoader: async () => null,
         },
@@ -216,7 +216,7 @@ describe('TopbarActionsBar helpers', () => {
     renderSettingsLabel((items as any[])[0].label, '/sales/p1');
 
     const link = screen.getByRole('link', { name: 'Plugin manager' });
-    expect(link).toHaveAttribute('href', '/nocobase/v/admin/settings/plugin-manager');
+    expect(link).toHaveAttribute('href', '/nocobase/v/app/settings/plugin-manager');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
     expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
@@ -231,7 +231,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'system-settings',
           name: 'system-settings',
           title: 'System settings',
-          path: '/admin/settings/system-settings',
+          path: '/app/settings/system-settings',
           icon: null,
           componentLoader: async () => null,
         },
@@ -241,7 +241,7 @@ describe('TopbarActionsBar helpers', () => {
     renderSettingsLabel((items as any[])[0].label, '/apps/a_9xlild35jir/crm-amd/ekeisumx1zu');
 
     const link = screen.getByRole('link', { name: 'System settings' });
-    expect(link).toHaveAttribute('href', '/nocobase/v/apps/a_9xlild35jir/admin/settings/system-settings');
+    expect(link).toHaveAttribute('href', '/nocobase/v/apps/a_9xlild35jir/app/settings/system-settings');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
     expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
@@ -256,17 +256,17 @@ describe('TopbarActionsBar helpers', () => {
           key: 'routes',
           name: 'routes',
           title: 'Routes',
-          path: '/admin/settings/routes',
+          path: '/app/settings/routes',
           icon: null,
           componentLoader: async () => null,
         },
       ] as any,
     });
 
-    renderSettingsLabel((items as any[])[0].label, '/admin/settings/routes');
+    renderSettingsLabel((items as any[])[0].label, '/app/settings/routes');
 
     const link = screen.getByRole('link', { name: 'Routes' });
-    expect(link).toHaveAttribute('href', '/admin/settings/routes');
+    expect(link).toHaveAttribute('href', '/app/settings/routes');
     expect(link).not.toHaveAttribute('target', '_blank');
   });
 
@@ -282,7 +282,7 @@ describe('TopbarActionsBar helpers', () => {
             key: 'ai',
             name: 'ai',
             title: 'AI employees',
-            path: '/admin/settings/ai',
+            path: '/app/settings/ai',
             icon: null,
             componentLoader: async () => null,
           },
@@ -293,10 +293,10 @@ describe('TopbarActionsBar helpers', () => {
         throw new Error('Expected settings menu item');
       }
       const appBase = basename.endsWith('/apps/jhb20') ? basename : `${basename}/apps/jhb20`;
-      const targetHref = `${appBase}/admin/settings/ai`;
+      const targetHref = `${appBase}/app/settings/ai`;
       const LocationDisplay = () => <output aria-label="Current route">{useLocation().pathname}</output>;
       render(
-        <MemoryRouter basename={basename} initialEntries={[`${appBase}/admin/a3pq1t1773a`]}>
+        <MemoryRouter basename={basename} initialEntries={[`${appBase}/app/a3pq1t1773a`]}>
           {item.label}
           <LocationDisplay />
         </MemoryRouter>,
@@ -321,7 +321,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'system-settings',
           name: 'system-settings',
           title: 'System settings',
-          path: '/admin/settings/system-settings',
+          path: '/app/settings/system-settings',
           icon: null,
           componentLoader: async () => null,
         },
@@ -331,7 +331,7 @@ describe('TopbarActionsBar helpers', () => {
     renderSettingsLabel((items as any[])[0].label, '/admin2/foo');
 
     const link = screen.getByRole('link', { name: 'System settings' });
-    expect(link).toHaveAttribute('href', '/nocobase/v/admin/settings/system-settings');
+    expect(link).toHaveAttribute('href', '/nocobase/v/app/settings/system-settings');
     expect(link).toHaveAttribute('target', '_blank');
   });
 
@@ -344,7 +344,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'system-settings',
           name: 'system-settings',
           title: 'System settings',
-          path: '/nocobase/v/admin/settings/system-settings',
+          path: '/nocobase/v/app/settings/system-settings',
           icon: null,
           componentLoader: async () => null,
         },
@@ -354,7 +354,7 @@ describe('TopbarActionsBar helpers', () => {
     renderSettingsLabel((items as any[])[0].label, '/sales/p1');
 
     const link = screen.getByRole('link', { name: 'System settings' });
-    expect(link).toHaveAttribute('href', '/nocobase/v/admin/settings/system-settings');
+    expect(link).toHaveAttribute('href', '/nocobase/v/app/settings/system-settings');
   });
 
   it('should keep external settings opening in a new tab', () => {
@@ -399,7 +399,7 @@ describe('TopbarActionsBar helpers', () => {
           key: 'plugin-manager',
           name: 'plugin-manager',
           title: 'Plugin manager',
-          path: '/admin/settings/plugin-manager',
+          path: '/app/settings/plugin-manager',
           icon: null,
           hidden: true,
         },
@@ -440,3 +440,4 @@ describe('TopbarActionsBar', () => {
     expect(screen.getByTestId('help-lite')).toBeInTheDocument();
   });
 });
+

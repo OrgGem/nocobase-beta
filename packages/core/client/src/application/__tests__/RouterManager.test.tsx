@@ -279,7 +279,7 @@ describe('Router', () => {
     it('basename and type', async () => {
       const router = new RouterManager({ type: 'browser' }, app);
       router.setType('hash');
-      router.setBasename('/admin');
+      router.setBasename('/app');
       router.add('home', {
         path: '/',
         element: <div data-testid="content">123</div>,
@@ -288,7 +288,7 @@ describe('Router', () => {
       const RouterComponent = router.getRouterComponent();
       render(<RouterComponent />);
       expect(screen.queryByTestId('content')).not.toBeInTheDocument();
-      expect(router.getBasename()).toBe('/admin');
+      expect(router.getBasename()).toBe('/app');
 
       window.location.hash = '#/admin';
 

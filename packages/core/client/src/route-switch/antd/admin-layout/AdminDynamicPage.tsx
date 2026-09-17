@@ -56,7 +56,7 @@ const useSyncLegacyAdminLayoutRoute = () => {
       state: routeState,
       params: routeParams,
       layoutRouteName: 'admin',
-      layoutBasePathname: '/admin',
+      layoutBasePathname: '/app',
     }),
     [location.pathname, routeParams, routeState, tabUid],
   );

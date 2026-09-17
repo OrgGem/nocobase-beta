@@ -182,7 +182,7 @@ export const Options = () => {
   const noChannelsFoundMessage = (
     <span>
       {t('No notification channels found. Please ')}
-      <Link to="/admin/settings/notification-manager/channels">{t('add one first')}</Link>.
+      <Link to="/app/settings/notification-manager/channels">{t('add one first')}</Link>.
     </span>
   );
 

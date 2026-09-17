@@ -23,18 +23,18 @@ describe('admin v1/v2 compatibility', () => {
 
     expect(paths).toEqual(
       expect.arrayContaining([
-        '/admin/:name/tabs/:tabUid',
-        '/admin/:name/popups/*',
-        '/admin/:name/tabs/:tabUid/popups/*',
-        '/admin/:name/tab/:tabUid',
-        '/admin/:name/view/*',
-        '/admin/:name/tab/:tabUid/view/*',
+        '/app/:name/tabs/:tabUid',
+        '/app/:name/popups/*',
+        '/app/:name/tabs/:tabUid/popups/*',
+        '/app/:name/tab/:tabUid',
+        '/app/:name/view/*',
+        '/app/:name/tab/:tabUid/view/*',
       ]),
     );
   });
 
   it('should keep v2 tab/view deep link replay semantics', () => {
-    const result = parsePathnameToViewParams('/admin/pageA/tab/tabA/view/popupA/tab/tabB/filterbytk/1/sourceid/2');
+    const result = parsePathnameToViewParams('/app/pageA/tab/tabA/view/popupA/tab/tabB/filterbytk/1/sourceid/2');
     expect(result).toEqual([
       { viewUid: 'pageA', tabUid: 'tabA' },
       { viewUid: 'popupA', tabUid: 'tabB', filterByTk: '1', sourceId: '2' },
@@ -42,7 +42,8 @@ describe('admin v1/v2 compatibility', () => {
   });
 
   it('should keep v1 tabs/popups nested close semantics', () => {
-    const path = '/admin/pageA/tabs/tabA/popups/popup1/filterbytk/1/popups/popup2/sourceid/2';
-    expect(removeLastPopupPath(path)).toBe('/admin/pageA/tabs/tabA/popups/popup1/filterbytk/1');
+    const path = '/app/pageA/tabs/tabA/popups/popup1/filterbytk/1/popups/popup2/sourceid/2';
+    expect(removeLastPopupPath(path)).toBe('/app/pageA/tabs/tabA/popups/popup1/filterbytk/1');
   });
 });
+

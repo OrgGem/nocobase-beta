@@ -7588,7 +7588,7 @@ describe('flowSurfaces catalog + compose contract', () => {
                 successMessage: 'Employees archived',
                 manualClose: false,
                 actionAfterSuccess: 'redirect',
-                redirectTo: '/admin/archived-employees',
+                redirectTo: '/app/archived-employees',
               },
             },
           },
@@ -7644,7 +7644,7 @@ describe('flowSurfaces catalog + compose contract', () => {
       successMessage: 'Employees archived',
       manualClose: false,
       actionAfterSuccess: 'redirect',
-      redirectTo: '/admin/archived-employees',
+      redirectTo: '/app/archived-employees',
     });
 
     const { actionSurface: popupSurface, popupBlock } = await readPrimaryPopupBlock(

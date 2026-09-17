@@ -36,7 +36,7 @@ describe('PluginSettingsManager v2', () => {
       key: 'demo.index',
       menuKey: 'demo',
       pageKey: 'index',
-      path: '/admin/settings/demo',
+      path: '/app/settings/demo',
       children: undefined,
       isTopLevel: false,
     });
@@ -67,15 +67,15 @@ describe('PluginSettingsManager v2', () => {
     app.pluginSettingsManager.addPageTabItem({ menuKey: 'demo', key: 'index', title: 'Overview' });
     app.pluginSettingsManager.addPageTabItem({ menuKey: 'demo', key: 'advanced', title: 'Advanced' });
 
-    expect(app.pluginSettingsManager.getRouteName('demo')).toBe('admin.settings.demo');
-    expect(app.pluginSettingsManager.getRouteName('demo.advanced')).toBe('admin.settings.demo.advanced');
-    expect(app.pluginSettingsManager.getRoutePath('demo')).toBe('/admin/settings/demo');
-    expect(app.pluginSettingsManager.getRoutePath('demo.index')).toBe('/admin/settings/demo');
-    expect(app.pluginSettingsManager.getRoutePath('demo.advanced')).toBe('/admin/settings/demo/advanced');
+    expect(app.pluginSettingsManager.getRouteName('demo')).toBe('settings.demo');
+    expect(app.pluginSettingsManager.getRouteName('demo.advanced')).toBe('settings.demo.advanced');
+    expect(app.pluginSettingsManager.getRoutePath('demo')).toBe('/app/settings/demo');
+    expect(app.pluginSettingsManager.getRoutePath('demo.index')).toBe('/app/settings/demo');
+    expect(app.pluginSettingsManager.getRoutePath('demo.advanced')).toBe('/app/settings/demo/advanced');
 
-    expect(app.router.get('admin.settings.demo')).toMatchObject({ path: 'demo' });
-    expect(app.router.get('admin.settings.demo.index')).toMatchObject({ path: '' });
-    expect(app.router.get('admin.settings.demo.advanced')).toMatchObject({ path: 'advanced' });
+    expect(app.router.get('settings.demo')).toMatchObject({ path: 'demo' });
+    expect(app.router.get('settings.demo.index')).toMatchObject({ path: '' });
+    expect(app.router.get('settings.demo.advanced')).toMatchObject({ path: 'advanced' });
   });
 
   it('should resolve plugin settings links for plugin manager entries', () => {
@@ -88,7 +88,7 @@ describe('PluginSettingsManager v2', () => {
     expect(app.pluginSettingsManager.has('demo-plugin')).toBe(false);
     expect(app.pluginSettingsManager.hasPluginSettings('demo-plugin')).toBe(true);
     expect(app.pluginSettingsManager.getPluginSettingsName('demo-plugin')).toBe('shared.target');
-    expect(app.pluginSettingsManager.getPluginSettingsRoutePath('demo-plugin')).toBe('/admin/settings/shared/target');
+    expect(app.pluginSettingsManager.getPluginSettingsRoutePath('demo-plugin')).toBe('/app/settings/shared/target');
   });
 
   it('should render string icon on both menu and page tab via renderIcon', () => {
@@ -125,7 +125,7 @@ describe('PluginSettingsManager v2', () => {
     });
 
     expect(app.pluginSettingsManager.get('demo.index')).toMatchObject({ componentLoader });
-    expect(app.router.get('admin.settings.demo.index')).toMatchObject({ componentLoader, path: '' });
+    expect(app.router.get('settings.demo.index')).toMatchObject({ componentLoader, path: '' });
   });
 
   it('should allow nested routes under index page route', () => {
@@ -145,21 +145,21 @@ describe('PluginSettingsManager v2', () => {
 
     app.pluginSettingsManager.addMenuItem({ key: 'demo', title: 'Demo' });
     app.pluginSettingsManager.addPageTabItem({ menuKey: 'demo', key: 'index', title: 'Overview' });
-    app.router.add('admin.settings.demo.index.layout', {
+    app.router.add('settings.demo.index.layout', {
       path: 'configure',
       Component: () => React.createElement('div', null, 'configure'),
     });
 
     const routes = app.router.getRoutesTree();
-    const indexRoute = findRoute(routes, 'admin.settings.demo.index');
+    const indexRoute = findRoute(routes, 'settings.demo.index');
 
     expect(indexRoute).toMatchObject({
-      id: 'admin.settings.demo.index',
+      id: 'settings.demo.index',
       path: '',
     });
     expect(indexRoute).not.toHaveProperty('index');
-    expect(findRoute(routes, 'admin.settings.demo.index.layout')).toMatchObject({
-      id: 'admin.settings.demo.index.layout',
+    expect(findRoute(routes, 'settings.demo.index.layout')).toMatchObject({
+      id: 'settings.demo.index.layout',
       path: 'configure',
     });
     expect(() => createMemoryRouter(routes, { initialEntries: ['/demo/configure/form-1'] })).not.toThrow();
@@ -182,7 +182,7 @@ describe('PluginSettingsManager v2', () => {
       sort: 1,
       hidden: true,
     });
-    expect(app.router.get('admin.settings.demo.advanced')).toMatchObject({ path: 'advanced' });
+    expect(app.router.get('settings.demo.advanced')).toMatchObject({ path: 'advanced' });
   });
 
   it('should remove menu and page correctly', () => {
@@ -294,6 +294,7 @@ describe('PluginSettingsManager v2', () => {
 
     expect(() => {
       app.pluginSettingsManager.addMenuItem({ key: 'demo/advanced', title: 'Bad menu' });
-    }).toThrow(/path=\/admin\/settings\/demo\/advanced/);
+    }).toThrow(/path=\/app\/settings\/demo\/advanced/);
   });
 });
+

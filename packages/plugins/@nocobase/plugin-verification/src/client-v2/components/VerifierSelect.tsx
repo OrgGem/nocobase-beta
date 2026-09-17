@@ -92,7 +92,7 @@ export function VerifierSelect(props: VerifierSelectProps) {
         <Typography.Text type="secondary">
           {t('The following types of verifiers are available:')} {availableTypeNames.join(', ')}
           {'. '}
-          {t('Go to')} <Link to="/admin/settings/verification">{t('create verifiers')}</Link>
+          {t('Go to')} <Link to="/app/settings/verification">{t('create verifiers')}</Link>
         </Typography.Text>
       )}
     </>

@@ -46,7 +46,7 @@ describe('getRouteRuntimeVersion', () => {
   it('returns legacy when root public path is "/"', () => {
     window.__nocobase_modern_client_prefix__ = 'v';
     window.__nocobase_public_path__ = '/';
-    replacePathname('/admin/settings/workflow/workflows/123');
+    replacePathname('/app/settings/workflow/workflows/123');
 
     expect(getRouteRuntimeVersion()).toBe('legacy');
   });

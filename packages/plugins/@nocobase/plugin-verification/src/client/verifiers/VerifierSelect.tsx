@@ -54,7 +54,7 @@ export const VerifierSelect = connect((props) => {
           {t('The following types of verifiers are available:')}
           {availableTypes.map((item: { title: string }) => Schema.compile(item.title, { t })).join(', ')}
           {'. '}
-          {t('Go to')} <Link to="/admin/settings/verification">{t('create verifiers')}</Link>
+          {t('Go to')} <Link to="/app/settings/verification">{t('create verifiers')}</Link>
         </>
       }
     >

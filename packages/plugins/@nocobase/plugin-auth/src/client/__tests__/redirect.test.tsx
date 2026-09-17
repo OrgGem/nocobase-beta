@@ -97,7 +97,7 @@ describe('auth redirect in v1 signin', () => {
     );
 
     await waitFor(() => {
-      expect(mockedNavigate).toHaveBeenCalledWith('/admin', { replace: true });
+      expect(mockedNavigate).toHaveBeenCalledWith('/app', { replace: true });
     });
   });
 });

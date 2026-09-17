@@ -41,7 +41,7 @@ function hasUsableSourceId(sourceId: unknown): sourceId is string | number {
 }
 
 function normalizeBasePath(basePath?: string) {
-  const value = basePath || '/admin';
+  const value = basePath || '/app';
   return `/${value.replace(/^\/+/, '').replace(/\/+$/, '')}`;
 }
 
@@ -53,9 +53,9 @@ function normalizeBasePath(basePath?: string) {
  *
  * @example
  * ```typescript
- * generatePathnameFromViewParams([{ viewUid: 'xxx' }]) // '/admin/xxx'
- * generatePathnameFromViewParams([{ viewUid: 'xxx', tabUid: 'yyy' }]) // '/admin/xxx/tab/yyy'
- * generatePathnameFromViewParams([{ viewUid: 'xxx' }, { viewUid: 'yyy' }]) // '/admin/xxx/view/yyy'
+ * generatePathnameFromViewParams([{ viewUid: 'xxx' }]) // '/app/xxx'
+ * generatePathnameFromViewParams([{ viewUid: 'xxx', tabUid: 'yyy' }]) // '/app/xxx/tab/yyy'
+ * generatePathnameFromViewParams([{ viewUid: 'xxx' }, { viewUid: 'yyy' }]) // '/app/xxx/view/yyy'
  * ```
  */
 export function generatePathnameFromViewParams(
@@ -162,9 +162,7 @@ export class ViewNavigation {
   private getLayoutBasePath() {
     const routePath = (this.ctx as any).layout?.routePath;
     return (
-      this.basePath ||
-      (this.ctx as any).layoutRoute?.basePathname ||
-      (routePath?.startsWith('/') ? routePath : '/admin')
+      this.basePath || (this.ctx as any).layoutRoute?.basePathname || (routePath?.startsWith('/') ? routePath : '/app')
     );
   }
 }

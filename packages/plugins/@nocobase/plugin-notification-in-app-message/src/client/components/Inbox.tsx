@@ -18,7 +18,7 @@
 
 import { observer } from '@nocobase/flow-engine';
 import { Icon, useApp, useCurrentUserContext, useMobileLayout } from '@nocobase/client';
-import { MobilePopup } from '@nocobase/plugin-mobile/client';
+import { MobilePopup } from '../mobileFallback';
 import { Badge, Button, ConfigProvider, Drawer, notification, theme, Tooltip } from 'antd';
 import { createStyles } from 'antd-style';
 import React, { FC, useCallback, useEffect, useState } from 'react';

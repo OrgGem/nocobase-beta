@@ -19,10 +19,10 @@ describe('route-schema-component', () => {
       appOptions: {
         router: {
           type: 'memory',
-          initialEntries: ['/admin/test'],
+          initialEntries: ['/app/test'],
           routes: {
             test: {
-              path: '/admin/:name',
+              path: '/app/:name',
               element: (
                 <CurrentPageUidProvider>
                   <RouteSchemaComponent />

@@ -50,7 +50,7 @@ describe('PluginSettingsManager', () => {
       ...test,
       name,
       label: test.title,
-      path: '/admin/settings/test',
+      path: '/app/settings/test',
       isAllow: true,
       aclSnippet: 'pm.test',
       key: name,
@@ -192,8 +192,8 @@ describe('PluginSettingsManager', () => {
   it('getRoutePath()', () => {
     app.pluginSettingsManager.add('test1', test1);
     app.pluginSettingsManager.add('test1.test2', test2);
-    expect(app.pluginSettingsManager.getRoutePath('test1')).toBe('/admin/settings/test1');
-    expect(app.pluginSettingsManager.getRoutePath('test1.test2')).toBe('/admin/settings/test1/test2');
+    expect(app.pluginSettingsManager.getRoutePath('test1')).toBe('/app/settings/test1');
+    expect(app.pluginSettingsManager.getRoutePath('test1.test2')).toBe('/app/settings/test1/test2');
   });
 
   it('router', () => {
@@ -226,3 +226,4 @@ describe('PluginSettingsManager', () => {
     `);
   });
 });
+

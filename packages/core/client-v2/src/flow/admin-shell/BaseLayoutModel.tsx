@@ -37,7 +37,7 @@ export type GetLayoutModelOptions<TModel extends FlowModel = BaseLayoutModel> = 
 
 const DEFAULT_LAYOUT_DEFINITION: LayoutDefinition = {
   routeName: 'admin',
-  routePath: '/admin',
+  routePath: '/app',
   rootRouteName: 'admin',
   uid: 'admin-layout-model',
   layoutModelClass: 'AdminLayoutModel',
@@ -80,7 +80,7 @@ export interface LayoutRouteLike {
 }
 
 const normalizeBasePathname = (basePathname?: string) =>
-  `/${(basePathname || '/admin').replace(/^\/+/, '').replace(/\/+$/, '')}`;
+  `/${(basePathname || '/app').replace(/^\/+/, '').replace(/\/+$/, '')}`;
 
 const normalizePathname = (pathname?: string) => {
   if (!pathname || pathname === '/') {

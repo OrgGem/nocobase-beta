@@ -22,7 +22,7 @@ import { useT, useWorkflowTranslation } from '../locale';
 import { ExecutionsDropdown } from './ExecutionsDropdown';
 import { formatTime } from './workflowCanvas';
 
-const WORKFLOW_HOMEPAGE = '/admin/settings/workflow';
+const WORKFLOW_HOMEPAGE = '/app/settings/workflow';
 
 type ExecutionWorkflow = {
   id?: number | string;

@@ -56,7 +56,7 @@ export interface RouteType extends Omit<RouteObject, 'children' | 'Component'> {
 export type RenderComponentType = (Component: ComponentTypeAndString, props?: any) => React.ReactNode;
 export type RouterComponentType = React.FC<{ BaseLayout?: ComponentType }>;
 
-const DEFAULT_ADMIN_ROUTE_PATH = '/admin';
+const DEFAULT_ADMIN_ROUTE_PATH = '/app';
 
 type AdminRouteNavigationTarget = {
   currentPathname?: string;

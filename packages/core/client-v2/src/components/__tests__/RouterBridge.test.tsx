@@ -15,13 +15,14 @@ describe('RouterBridge', () => {
     const match = findDeepestLayoutMatch(
       [{ routeName: 'admin' }, { routeName: 'admin.settings.publicForms' }],
       [
-        { id: 'admin', pathname: '/admin' },
-        { id: 'admin.settings', pathname: '/admin/settings' },
-        { id: 'admin.settings.publicForms', pathname: '/admin/settings/public-forms' },
-        { id: 'admin.settings.publicForms.page.view', pathname: '/admin/settings/public-forms/form-1/view/popup' },
+        { id: 'admin', pathname: '/app' },
+        { id: 'admin.settings', pathname: '/app/settings' },
+        { id: 'admin.settings.publicForms', pathname: '/app/settings/public-forms' },
+        { id: 'admin.settings.publicForms.page.view', pathname: '/app/settings/public-forms/form-1/view/popup' },
       ],
     );
 
-    expect(match?.pathname).toBe('/admin/settings/public-forms');
+    expect(match?.pathname).toBe('/app/settings/public-forms');
   });
 });
+

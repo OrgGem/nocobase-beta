@@ -12,33 +12,33 @@
 // `/admin/workflow/executions/:id`) can line up under the same prefix, mirroring v1's `admin.workflow.workflows.id`
 // route.
 export const WORKFLOW_CANVAS_ROUTE_NAME = 'admin.workflow.workflows.id';
-export const WORKFLOW_CANVAS_ROUTE_PATH = '/admin/workflow/workflows/:id';
+export const WORKFLOW_CANVAS_ROUTE_PATH = '/app/workflow/workflows/:id';
 export const WORKFLOW_CANVAS_SETTINGS_ROUTE_NAME = 'admin.workflow.settings.workflows.id';
-export const WORKFLOW_CANVAS_SETTINGS_ROUTE_PATH = '/admin/settings/workflow/workflows/:id';
+export const WORKFLOW_CANVAS_SETTINGS_ROUTE_PATH = '/app/settings/workflow/workflows/:id';
 
 export function getWorkflowCanvasPath(id: string | number) {
-  return `/admin/workflow/workflows/${id}`;
+  return `/app/workflow/workflows/${id}`;
 }
 
 // Execution detail page, a sibling of the canvas under the same `admin.workflow` namespace — mirrors v1's
 // `admin.workflow.executions.id` route.
 export const WORKFLOW_EXECUTION_ROUTE_NAME = 'admin.workflow.executions.id';
-export const WORKFLOW_EXECUTION_ROUTE_PATH = '/admin/workflow/executions/:id';
+export const WORKFLOW_EXECUTION_ROUTE_PATH = '/app/workflow/executions/:id';
 export const WORKFLOW_EXECUTION_SETTINGS_ROUTE_NAME = 'admin.workflow.settings.executions.id';
-export const WORKFLOW_EXECUTION_SETTINGS_ROUTE_PATH = '/admin/settings/workflow/executions/:id';
+export const WORKFLOW_EXECUTION_SETTINGS_ROUTE_PATH = '/app/settings/workflow/executions/:id';
 
 export function getWorkflowExecutionPath(id: string | number) {
-  return `/admin/workflow/executions/${id}`;
+  return `/app/workflow/executions/${id}`;
 }
 
 export const WORKFLOW_TASKS_ROUTE_NAME = 'admin.workflow.tasks';
-export const WORKFLOW_TASKS_ROUTE_PATH = '/admin/workflow/tasks/:taskType?/:status?/:popupId?';
+export const WORKFLOW_TASKS_ROUTE_PATH = '/app/workflow/tasks/:taskType?/:status?/:popupId?';
 
 export const WORKFLOW_TASKS_MOBILE_ROUTE_NAME = 'mobile.page.workflow.tasks.list';
 export const WORKFLOW_TASKS_MOBILE_ROUTE_PATH = 'page/workflow-tasks/:taskType?/:status?/:popupId?';
 
 export function getWorkflowTasksPath(taskType?: string, status?: string, popupId?: string | number, mobile = false) {
-  const basePath = mobile ? '/mobile/page/workflow-tasks' : '/admin/workflow/tasks';
+  const basePath = mobile ? '/mobile/page/workflow-tasks' : '/app/workflow/tasks';
   const segments = [taskType, status, popupId]
     .filter((segment) => segment !== undefined && segment !== null && segment !== '')
     .map((segment) => encodeURIComponent(String(segment)));

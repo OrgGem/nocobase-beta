@@ -52,7 +52,7 @@ vi.mock('@nocobase/client-v2', async (importOriginal) => {
     ...actual,
     useApp: () => ({
       getHref: (path: string) => `/v${path}`,
-      pluginSettingsManager: { getRoutePath: () => '/admin/settings/workflow' },
+      pluginSettingsManager: { getRoutePath: () => '/app/settings/workflow' },
     }),
   };
 });
@@ -123,7 +123,7 @@ describe('WorkflowCanvasPage', () => {
     expect(await screen.findByText('Workflow does not exist')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to Workflow List' })).toHaveAttribute(
       'href',
-      '/v/admin/settings/workflow',
+      '/v/app/settings/workflow',
     );
     expect(holder.listRevisions).not.toHaveBeenCalled();
   });

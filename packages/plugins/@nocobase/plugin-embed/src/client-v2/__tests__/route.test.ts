@@ -72,6 +72,6 @@ describe('embed route helpers', () => {
       ),
     ).toBe(true);
     expect(isEmbedRoutePathname(undefined, '/embed/page-uid')).toBe(true);
-    expect(isEmbedRoutePathname(undefined, '/admin/embed/page-uid')).toBe(false);
+    expect(isEmbedRoutePathname(undefined, '/app/embed/page-uid')).toBe(false);
   });
 });

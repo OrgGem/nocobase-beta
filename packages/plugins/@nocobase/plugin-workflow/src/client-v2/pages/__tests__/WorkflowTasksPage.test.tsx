@@ -22,7 +22,7 @@ import { useWorkflowTaskCounts, useWorkflowTaskRecord } from '../../taskCenter';
 const holder = vi.hoisted(() => ({
   ctx: null as WorkflowTaskFlowContext | null,
   params: { taskType: 'demo', status: 'pending', popupId: undefined as string | undefined },
-  location: { pathname: '/admin/workflow/tasks/demo/pending', search: '', hash: '' },
+  location: { pathname: '/app/workflow/tasks/demo/pending', search: '', hash: '' },
   navigate: vi.fn(),
   isMobileLayout: false,
   detailModalRecords: [] as Array<Record<string, unknown> | null>,
@@ -161,7 +161,7 @@ describe('WorkflowTasksPage', () => {
     vi.clearAllMocks();
     document.title = 'Loading...';
     holder.params = { taskType: 'demo', status: 'pending', popupId: undefined };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending', search: '', hash: '' };
     holder.isMobileLayout = false;
     holder.detailModalRecords = [];
     Object.defineProperty(window, 'matchMedia', {
@@ -380,7 +380,7 @@ describe('WorkflowTasksPage', () => {
     await screen.findByText('detail:Demo popup');
 
     holder.params = { taskType: 'other', status: 'pending', popupId: '7' };
-    holder.location = { pathname: '/admin/workflow/tasks/other/pending/7', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/other/pending/7', search: '', hash: '' };
     rerender(
       <App>
         <WorkflowTasksPage />
@@ -466,7 +466,7 @@ describe('WorkflowTasksPage', () => {
         ],
       }),
     };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending', search: '', hash: '' };
     holder.isMobileLayout = true;
     holder.ctx = makeCtx(registry, { demoTasks, otherTasks, userWorkflowTasks });
 
@@ -476,7 +476,7 @@ describe('WorkflowTasksPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Select workflow' }));
     fireEvent.click(await screen.findByText('Other tasks'));
 
-    expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/other/pending');
+    expect(holder.navigate).toHaveBeenCalledWith('/app/workflow/tasks/other/pending');
     expect(holder.navigate).not.toHaveBeenCalledWith('/mobile/page/workflow-tasks/other/pending');
   });
 
@@ -502,7 +502,7 @@ describe('WorkflowTasksPage', () => {
     await screen.findByText('detail:Open me');
     expect(document.body.querySelector('.ant-modal')).toBeInTheDocument();
     expect(document.body.querySelector('.ant-drawer')).not.toBeInTheDocument();
-    expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/demo/pending/9');
+    expect(holder.navigate).toHaveBeenCalledWith('/app/workflow/tasks/demo/pending/9');
   });
 
   it('uses the mobile detail page when the desktop route is viewed on a narrow viewport', async () => {
@@ -531,7 +531,7 @@ describe('WorkflowTasksPage', () => {
     renderWithApp(<WorkflowTasksPage />);
     fireEvent.click(await screen.findByText('Open me'));
 
-    expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/demo/pending/9');
+    expect(holder.navigate).toHaveBeenCalledWith('/app/workflow/tasks/demo/pending/9');
     expect(await screen.findByTestId('workflow-task-mobile-detail-page')).toBeInTheDocument();
     expect(document.body.querySelector('.ant-modal')).not.toBeInTheDocument();
   });
@@ -604,7 +604,7 @@ describe('WorkflowTasksPage', () => {
     const recordsAfterOpen = holder.detailModalRecords.length;
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '9' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/9', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/9', search: '', hash: '' };
     rerender(
       <App>
         <WorkflowTasksPage />
@@ -644,7 +644,7 @@ describe('WorkflowTasksPage', () => {
     const recordsAfterOpen = holder.detailModalRecords.length;
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '9' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/9', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/9', search: '', hash: '' };
     unmount();
     renderWithApp(<WorkflowTasksPage />);
 
@@ -679,7 +679,7 @@ describe('WorkflowTasksPage', () => {
     await screen.findByText('detail:Open me');
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '9' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/9', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/9', search: '', hash: '' };
     unmount();
     renderWithApp(<WorkflowTasksPage />);
 
@@ -714,7 +714,7 @@ describe('WorkflowTasksPage', () => {
     await screen.findByText('detail:Open me');
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '10' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/10', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/10', search: '', hash: '' };
     rerender(
       <App>
         <WorkflowTasksPage />
@@ -752,7 +752,7 @@ describe('WorkflowTasksPage', () => {
     await screen.findByText('detail:Open me');
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '10' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/10', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/10', search: '', hash: '' };
     rerender(
       <App>
         <WorkflowTasksPage />
@@ -763,7 +763,7 @@ describe('WorkflowTasksPage', () => {
     unmount();
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '9' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/9', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/9', search: '', hash: '' };
     renderWithApp(<WorkflowTasksPage />);
 
     await waitFor(() => expect(getPopupRecord).toHaveBeenCalledWith(holder.ctx.api, { params: { filterByTk: '9' } }));
@@ -820,7 +820,7 @@ describe('WorkflowTasksPage', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'custom close' }));
-    expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks/demo/pending', { replace: true });
+    expect(holder.navigate).toHaveBeenCalledWith('/app/workflow/tasks/demo/pending', { replace: true });
   });
 
   it('preserves the current search query when switching status and opening or closing a task detail', async () => {
@@ -834,7 +834,7 @@ describe('WorkflowTasksPage', () => {
       listMine: vi.fn().mockResolvedValue({ data: [{ type: 'demo', stats: { pending: 1, all: 1 } }] }),
     };
     holder.location = {
-      pathname: '/admin/workflow/tasks/demo/pending',
+      pathname: '/app/workflow/tasks/demo/pending',
       search: '?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
       hash: '',
     };
@@ -848,13 +848,13 @@ describe('WorkflowTasksPage', () => {
     fireEvent.click(screen.getByLabelText('Close'));
 
     expect(holder.navigate).toHaveBeenCalledWith(
-      '/admin/workflow/tasks/demo/completed?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
+      '/app/workflow/tasks/demo/completed?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
     );
     expect(holder.navigate).toHaveBeenCalledWith(
-      '/admin/workflow/tasks/demo/pending/9?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
+      '/app/workflow/tasks/demo/pending/9?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
     );
     expect(holder.navigate).toHaveBeenCalledWith(
-      '/admin/workflow/tasks/demo/pending?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
+      '/app/workflow/tasks/demo/pending?workflowCcTasksFilter=%7B%22title%22%3A%22cc%22%7D',
       { replace: true },
     );
   });
@@ -1084,7 +1084,7 @@ describe('WorkflowTasksPage', () => {
     await waitFor(() => expect(demoTasks.listMine).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 })));
 
     holder.location = {
-      pathname: '/admin/workflow/tasks/demo/pending',
+      pathname: '/app/workflow/tasks/demo/pending',
       search: '?workflowCcTasksFilter=%7B%22title%22%3A%22Task%22%7D',
       hash: '',
     };
@@ -1331,7 +1331,7 @@ describe('WorkflowTasksPage', () => {
     });
 
     holder.location = {
-      pathname: '/admin/workflow/tasks/demo/pending',
+      pathname: '/app/workflow/tasks/demo/pending',
       search: '?workflowCcTasksFilter=%7B%22title%22%3A%22Old%22%7D',
       hash: '',
     };
@@ -1345,7 +1345,7 @@ describe('WorkflowTasksPage', () => {
     const staleRequestCount = routeRequests.length;
 
     holder.location = {
-      pathname: '/admin/workflow/tasks/demo/pending',
+      pathname: '/app/workflow/tasks/demo/pending',
       search: '?workflowCcTasksFilter=%7B%22title%22%3A%22New%22%7D',
       hash: '',
     };
@@ -1399,7 +1399,7 @@ describe('WorkflowTasksPage', () => {
       });
 
       holder.location = {
-        pathname: '/admin/workflow/tasks/demo/pending',
+        pathname: '/app/workflow/tasks/demo/pending',
         search: '?workflowCcTasksFilter=%7B%22title%22%3A%22Old%22%7D',
         hash: '',
       };
@@ -1413,7 +1413,7 @@ describe('WorkflowTasksPage', () => {
       const staleRequestCount = routeRequests.length;
 
       holder.location = {
-        pathname: '/admin/workflow/tasks/demo/pending',
+        pathname: '/app/workflow/tasks/demo/pending',
         search: '?workflowCcTasksFilter=%7B%22title%22%3A%22New%22%7D',
         hash: '',
       };
@@ -1497,7 +1497,7 @@ describe('WorkflowTasksPage', () => {
       demoTasks.listMine.mockRejectedValue(latestError);
 
       holder.location = {
-        pathname: '/admin/workflow/tasks/demo/pending',
+        pathname: '/app/workflow/tasks/demo/pending',
         search: '?workflowCcTasksFilter=%7B%22title%22%3A%22Missing%22%7D',
         hash: '',
       };
@@ -1532,7 +1532,7 @@ describe('WorkflowTasksPage', () => {
     await waitFor(() => expect(getPopupRecord).toHaveBeenCalledTimes(1));
 
     holder.params = { taskType: 'demo', status: 'pending', popupId: '8' };
-    holder.location = { pathname: '/admin/workflow/tasks/demo/pending/8', search: '', hash: '' };
+    holder.location = { pathname: '/app/workflow/tasks/demo/pending/8', search: '', hash: '' };
     rerender(
       <App>
         <WorkflowTasksPage />
@@ -1575,7 +1575,7 @@ describe('WorkflowTasksPage', () => {
       await waitFor(() => expect(getPopupRecord).toHaveBeenCalledTimes(1));
 
       holder.params = { taskType: 'demo', status: 'pending', popupId: '8' };
-      holder.location = { pathname: '/admin/workflow/tasks/demo/pending/8', search: '', hash: '' };
+      holder.location = { pathname: '/app/workflow/tasks/demo/pending/8', search: '', hash: '' };
       rerender(
         <App>
           <WorkflowTasksPage />

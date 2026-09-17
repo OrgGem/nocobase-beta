@@ -116,7 +116,7 @@ const IsInSettingsPageProvider: FC = ({ children }) => {
 
 const IsAdminPageProvider: FC = ({ children }) => {
   const location = useLocation();
-  const isAdminPage = location.pathname.startsWith('/admin');
+  const isAdminPage = location.pathname.startsWith('/app');
   return <IsAdminPageContext.Provider value={isAdminPage}>{children}</IsAdminPageContext.Provider>;
 };
 

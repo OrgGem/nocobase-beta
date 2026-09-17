@@ -499,7 +499,7 @@ describe('plugin-ui-layout RoutesPage', () => {
     expect(screen.queryByRole('columnheader', { name: 'UID' })).not.toBeInTheDocument();
     expect(screen.getAllByText('Page').length).toBeGreaterThan(0);
     expect(screen.queryByText('Page (v2)')).not.toBeInTheDocument();
-    expect(screen.getByText('/admin/desktop-dashboard')).toBeInTheDocument();
+    expect(screen.getByText('/app/desktop-dashboard')).toBeInTheDocument();
     expect(screen.getByText('20 / page')).toBeInTheDocument();
 
     const desktopRow = screen.getByRole('row', { name: /Desktop dashboard/ });
@@ -507,7 +507,7 @@ describe('plugin-ui-layout RoutesPage', () => {
     expect(within(desktopRow).getByRole('button', { name: 'Edit Desktop dashboard' })).toBeEnabled();
     expect(within(desktopRow).getByRole('link', { name: 'View Desktop dashboard' })).toHaveAttribute(
       'href',
-      '/admin/desktop-dashboard',
+      '/app/desktop-dashboard',
     );
     expect(within(desktopRow).getByRole('button', { name: 'Delete Desktop dashboard' })).toBeEnabled();
 
@@ -515,7 +515,7 @@ describe('plugin-ui-layout RoutesPage', () => {
     const tabRow = await screen.findByRole('row', { name: /Desktop tab/ });
     expect(within(tabRow).getByRole('link', { name: 'View Desktop tab' })).toHaveAttribute(
       'href',
-      '/admin/desktop-dashboard/tab/desktop-tab',
+      '/app/desktop-dashboard/tab/desktop-tab',
     );
 
     const linkRow = screen.getByRole('row', { name: /Desktop link/ });
@@ -584,7 +584,7 @@ describe('plugin-ui-layout RoutesPage', () => {
     const emptyTabRow = await screen.findByRole('row', { name: /Untitled/ });
     expect(within(emptyTabRow).getByRole('link', { name: 'View Untitled' })).toHaveAttribute(
       'href',
-      '/admin/desktop-dashboard/tab/desktop-empty-title-tab',
+      '/app/desktop-dashboard/tab/desktop-empty-title-tab',
     );
     expect(within(emptyTabRow).getByRole('button', { name: 'Edit Untitled' })).toBeEnabled();
     expect(within(emptyTabRow).queryByRole('button', { name: /Edit desktop-empty-title-tab/ })).not.toBeInTheDocument();
@@ -592,7 +592,7 @@ describe('plugin-ui-layout RoutesPage', () => {
     const titledTabRow = screen.getByRole('row', { name: /Desktop tab/ });
     expect(within(titledTabRow).getByRole('link', { name: 'View Desktop tab' })).toHaveAttribute(
       'href',
-      '/admin/desktop-dashboard/tab/desktop-tab',
+      '/app/desktop-dashboard/tab/desktop-tab',
     );
   });
 
@@ -896,7 +896,7 @@ function createRoutesPageResources() {
           title: 'Desktop link',
           type: 'link',
           options: {
-            href: '/admin/external',
+            href: '/app/external',
           },
         },
         {

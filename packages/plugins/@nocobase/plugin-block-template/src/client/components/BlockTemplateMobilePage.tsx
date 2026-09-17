@@ -8,7 +8,9 @@
  */
 
 import React, { useEffect } from 'react';
-import { MobilePage } from '@nocobase/plugin-mobile/client';
+// MobilePage was removed when plugin-mobile was dropped — stub for dead code
+// @ts-ignore
+const MobilePage = () => null;
 import { useParams } from 'react-router-dom';
 import { useRequest } from '@nocobase/client';
 import { Spin } from 'antd';

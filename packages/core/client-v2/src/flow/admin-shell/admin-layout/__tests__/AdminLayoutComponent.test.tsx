@@ -230,7 +230,7 @@ describe('AdminLayoutComponent', () => {
     proLayoutLifecycle.routes = [];
     const layout: LayoutDefinition = {
       routeName: 'admin',
-      routePath: '/admin',
+      routePath: '/app',
       rootRouteName: 'admin',
       uid: 'admin-layout-model',
       layoutModelClass: 'AdminLayoutModel',
@@ -287,7 +287,7 @@ describe('AdminLayoutComponent', () => {
         },
       ],
       {
-        initialEntries: ['/admin/workflow/tasks/approval-apply/pending'],
+        initialEntries: ['/app/workflow/tasks/approval-apply/pending'],
       },
     );
 
@@ -305,7 +305,7 @@ describe('AdminLayoutComponent', () => {
     });
 
     await act(async () => {
-      await router.navigate('/admin/workflow/tasks/approval-apply/pending/1');
+      await router.navigate('/app/workflow/tasks/approval-apply/pending/1');
     });
 
     expect(screen.getByTestId('custom-admin-route')).toBeInTheDocument();
@@ -319,7 +319,7 @@ describe('AdminLayoutComponent', () => {
     (window as Window & { __nocobase_modern_client_prefix__?: string }).__nocobase_modern_client_prefix__ = 'v2';
     const layout: LayoutDefinition = {
       routeName: 'admin',
-      routePath: '/admin',
+      routePath: '/app',
       rootRouteName: 'admin',
       uid: 'admin-layout-model',
       layoutModelClass: 'AdminLayoutModel',
@@ -398,7 +398,7 @@ describe('AdminLayoutComponent', () => {
         },
       ],
       {
-        initialEntries: ['/admin/workflow/tasks/approval-apply/pending'],
+        initialEntries: ['/app/workflow/tasks/approval-apply/pending'],
       },
     );
 
@@ -421,7 +421,7 @@ describe('AdminLayoutComponent', () => {
     });
 
     await act(async () => {
-      await router.navigate('/admin/workflow/tasks/approval-apply/pending/1');
+      await router.navigate('/app/workflow/tasks/approval-apply/pending/1');
     });
 
     expect(screen.getByTestId('custom-admin-route')).toBeInTheDocument();
@@ -433,3 +433,4 @@ describe('AdminLayoutComponent', () => {
     expect(proLayoutLifecycle.routes.at(-1)?.children?.some((item) => item.name === 'Visible page')).toBe(false);
   });
 });
+

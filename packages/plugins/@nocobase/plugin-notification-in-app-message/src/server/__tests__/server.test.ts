@@ -125,7 +125,7 @@ describe('inapp message channels', () => {
             content: 'unread',
             receiveTimestamp: now,
             options: {
-              url: '/admin/pages',
+              url: '/app/pages',
             },
           },
           {
@@ -136,7 +136,7 @@ describe('inapp message channels', () => {
             content: 'unread',
             receiveTimestamp: now + 1000,
             options: {
-              url: '/admin/pages',
+              url: '/app/pages',
             },
           },
           {
@@ -147,7 +147,7 @@ describe('inapp message channels', () => {
             content: 'read',
             receiveTimestamp: now + 1001,
             options: {
-              url: '/admin/pages',
+              url: '/app/pages',
             },
           },
         ],
@@ -446,7 +446,7 @@ describe('inapp message channels', () => {
         title: 'test title',
         content: 'test content',
         options: {
-          url: '/admin/test',
+          url: '/app/test',
         },
       } as any,
       receivers: {
@@ -465,7 +465,7 @@ describe('inapp message channels', () => {
       status: 'unread',
       channelName: 'in-app',
       options: {
-        url: '/admin/test',
+        url: '/app/test',
       },
     });
     expect(messages[0].id).toBeTypeOf('string');
@@ -532,7 +532,7 @@ describe('inapp message channels', () => {
         title: 'batched title',
         content: 'batched content',
         options: {
-          url: '/admin/batched',
+          url: '/app/batched',
         },
       } as any,
       receivers: {

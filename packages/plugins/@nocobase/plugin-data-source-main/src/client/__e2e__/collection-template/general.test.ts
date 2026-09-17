@@ -57,7 +57,7 @@ test.describe('association constraints support selecting non-primary key fields 
       autoGenId: true,
       fields,
     });
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByLabel('action-Filter.Action-Filter-').click();
     await page.getByRole('textbox').nth(1).click();
@@ -83,7 +83,7 @@ test.describe('association constraints support selecting non-primary key fields 
       autoGenId: true,
       fields,
     });
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByLabel('action-Filter.Action-Filter-').click();
     await page.getByRole('textbox').nth(1).click();
@@ -115,7 +115,7 @@ test.describe('association constraints support selecting non-primary key fields 
       autoGenId: true,
       fields,
     });
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByLabel('action-Filter.Action-Filter-').click();
     await page.getByRole('textbox').nth(1).click();
@@ -174,7 +174,7 @@ test.describe('association constraints support selecting non-primary key fields 
       autoGenId: true,
       fields,
     });
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByLabel('action-Filter.Action-Filter-').click();
     await page.getByRole('textbox').nth(1).click();
@@ -242,7 +242,7 @@ test.describe('association constraints support selecting non-primary key fields 
       autoGenId: true,
       fields,
     });
-    await page.goto('/admin/settings/data-source-manager/list');
+    await page.goto('/app/settings/data-source-manager/list');
     await page.getByRole('button', { name: 'Configure' }).first().click();
     await page.getByLabel('action-Filter.Action-Filter-').click();
     await page.getByRole('textbox').nth(1).click();

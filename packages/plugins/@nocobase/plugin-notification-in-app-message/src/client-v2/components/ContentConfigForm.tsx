@@ -50,7 +50,7 @@ export function ContentConfigForm(props: ContentConfigFormProps) {
         name={withPrefix(props.namePrefix, 'options', 'url')}
         label={t('Details page for desktop')}
         extra={compileT(
-          'Support two types of links: internal links and external links. If using an internal link, the link starts with "/", for example, "/admin". If using an external link, the link starts with "http", for example, "https://example.com".',
+          'Support two types of links: internal links and external links. If using an internal link, the link starts with "/", for example, "/app". If using an external link, the link starts with "http", for example, "https://example.com".',
         )}
       >
         <WorkflowVariableInput metaTree={variableOptions} />

@@ -16,9 +16,9 @@ describe('RouterManager', () => {
       expect(
         shouldOpenAdminRouteInNewWindow({
           currentPathname: '/v/test',
-          targetPathname: '/admin/settings',
+          targetPathname: '/app/settings',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(true);
     });
@@ -29,7 +29,7 @@ describe('RouterManager', () => {
           currentPathname: '/nocobase/v/test',
           targetPathname: '/nocobase/v/admin/settings',
           basePath: '/nocobase/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(true);
     });
@@ -40,7 +40,7 @@ describe('RouterManager', () => {
           currentPathname: '/v/apps/a_9xlild35jir/crm-amd/ekeisumx1zu',
           targetPathname: '/v/apps/a_9xlild35jir/admin/settings',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(true);
     });
@@ -51,7 +51,7 @@ describe('RouterManager', () => {
           currentPathname: '/v/apps/a_9xlild35jir/admin',
           targetPathname: '/v/apps/a_9xlild35jir/admin/settings',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(false);
     });
@@ -60,9 +60,9 @@ describe('RouterManager', () => {
       expect(
         shouldOpenAdminRouteInNewWindow({
           currentPathname: '/v/admin',
-          targetPathname: '/admin/settings',
+          targetPathname: '/app/settings',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(false);
     });
@@ -73,7 +73,7 @@ describe('RouterManager', () => {
           currentPathname: '/v/test',
           targetPathname: '/test/page',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(false);
     });
@@ -82,9 +82,9 @@ describe('RouterManager', () => {
       expect(
         shouldOpenAdminRouteInNewWindow({
           currentPathname: '/v/test',
-          targetPathname: '/admin/settings',
+          targetPathname: '/app/settings',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
           replace: true,
         }),
       ).toBe(false);
@@ -93,7 +93,7 @@ describe('RouterManager', () => {
           currentPathname: '/v/test',
           targetPathname: 'admin/settings',
           basePath: '/v',
-          adminRoutePath: '/admin',
+          adminRoutePath: '/app',
         }),
       ).toBe(false);
     });
@@ -105,7 +105,7 @@ describe('RouterManager', () => {
       getPublicPath: () => '/v/',
       getHref: (pathname: string) => `/v/apps/a_9xlild35jir/${pathname.replace(/^\/+/, '')}`,
       layoutManager: {
-        getLayout: () => ({ routePath: '/admin' }),
+        getLayout: () => ({ routePath: '/app' }),
       },
       renderComponent: () => null,
     } as unknown as BaseApplication<unknown>;
@@ -114,7 +114,7 @@ describe('RouterManager', () => {
 
     window.history.pushState({}, '', '/v/apps/a_9xlild35jir/crm-amd/ekeisumx1zu');
     manager.getRouterComponent();
-    await manager.router.navigate('/admin/settings/version-control/list');
+    await manager.router.navigate('/app/settings/version-control/list');
 
     expect(open).toHaveBeenCalledWith(
       '/v/apps/a_9xlild35jir/admin/settings/version-control/list',

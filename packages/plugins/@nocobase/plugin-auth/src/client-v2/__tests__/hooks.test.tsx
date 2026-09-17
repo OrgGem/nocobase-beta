@@ -51,12 +51,12 @@ describe('plugin-auth client-v2 useRedirect', () => {
 
   it('should navigate to default next when no redirect param is present', () => {
     mockState.basename = '/nocobase/v2';
-    const { result } = renderHook(() => useRedirect('/admin'), {
+    const { result } = renderHook(() => useRedirect('/app'), {
       wrapper: wrap(['/signin']),
     });
     result.current();
 
-    expect(navigateMock).toHaveBeenCalledWith('/admin', { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith('/app', { replace: true });
   });
 
   it('should strip v2 basename from redirect param and navigate relative', () => {
@@ -65,24 +65,24 @@ describe('plugin-auth client-v2 useRedirect', () => {
     // (so the server can echo a root-relative path) is stripped before handing off
     // to react-router, which will prepend it again on its own.
     mockState.basename = '/nocobase/v2';
-    const { result } = renderHook(() => useRedirect('/admin'), {
-      wrapper: wrap(['/signin?redirect=%2Fnocobase%2Fv2%2Fadmin%2Fxyz']),
+    const { result } = renderHook(() => useRedirect('/app'), {
+      wrapper: wrap(['/signin?redirect=%2Fnocobase%2Fv2%2Fapp%2Fxyz']),
     });
     result.current();
 
-    expect(navigateMock).toHaveBeenCalledWith('/admin/xyz', { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith('/app/xyz', { replace: true });
   });
 
   it('should pass redirect param through as-is when not prefixed with basename', () => {
-    // Server's 2FA middleware returns a bare path like `/admin` in its redirect
+    // Server's 2FA middleware returns a bare path like `/app` in its redirect
     // template; react-router navigate prepends the basename automatically.
     mockState.basename = '/nocobase/v2';
     const { result } = renderHook(() => useRedirect('/fallback'), {
-      wrapper: wrap(['/signin?redirect=%2Fadmin']),
+      wrapper: wrap(['/signin?redirect=%2Fapp']),
     });
     result.current();
 
-    expect(navigateMock).toHaveBeenCalledWith('/admin', { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith('/app', { replace: true });
   });
 
   it('should treat exact basename match as root', () => {
@@ -97,12 +97,12 @@ describe('plugin-auth client-v2 useRedirect', () => {
 
   it('should accept relative target when basename is unset', () => {
     mockState.basename = undefined;
-    const { result } = renderHook(() => useRedirect('/admin'), {
+    const { result } = renderHook(() => useRedirect('/app'), {
       wrapper: wrap(['/signin']),
     });
     result.current();
 
-    expect(navigateMock).toHaveBeenCalledWith('/admin', { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith('/app', { replace: true });
   });
 });
 

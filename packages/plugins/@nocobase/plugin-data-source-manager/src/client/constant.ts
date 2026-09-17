@@ -8,5 +8,5 @@
  */
 
 export const getConnectionCollectionPath = ({ key, type }: { key: string | number; type: string }) => {
-  return `/admin/settings/data-source-manager/${key}/collections?type=${type}`;
+  return `/app/settings/data-source-manager/${key}/collections?type=${type}`;
 };

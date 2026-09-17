@@ -32,9 +32,14 @@ export function normalizeModernClientPrefix(value?: string) {
   return segment || MODERN_CLIENT_DIST_DIR;
 }
 
-export function resolveV2PublicPath(appPublicPath = '/') {
+export function resolveV2PublicPath(appPublicPath = '/', prefixOverride?: string) {
   const publicPath = resolvePublicPath(appPublicPath);
-  const prefix = normalizeModernClientPrefix(process.env.APP_MODERN_CLIENT_PREFIX);
+  // prefixOverride lets a request resolve the modern-client prefix from a per-request source (e.g. a tenant
+  // path prefix from the DB) instead of the single process-wide APP_MODERN_CLIENT_PREFIX. Empty string falls back
+  // to the env value so callers can pass tenant prefix unconditionally and keep backward compatibility.
+  const prefix = prefixOverride
+    ? normalizeModernClientPrefix(prefixOverride)
+    : normalizeModernClientPrefix(process.env.APP_MODERN_CLIENT_PREFIX);
   return `${publicPath.replace(/\/$/, '')}/${prefix}/`;
 }
 

@@ -141,6 +141,6 @@ describe('WorkflowTasksTopbarActionModel', () => {
     fireEvent.click(button);
 
     expect(holder.reload).toHaveBeenCalled();
-    expect(holder.navigate).toHaveBeenCalledWith('/admin/workflow/tasks');
+    expect(holder.navigate).toHaveBeenCalledWith('/app/workflow/tasks');
   });
 });

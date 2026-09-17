@@ -212,7 +212,7 @@ export const PublicFormsSettingsDetailView = observer((props: PublicFormsSetting
         <Breadcrumb
           items={[
             {
-              title: <Link to="/admin/settings/public-forms">{t('Public forms')}</Link>,
+              title: <Link to="/app/settings/public-forms">{t('Public forms')}</Link>,
             },
             {
               title: record.title,

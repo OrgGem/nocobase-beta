@@ -16,7 +16,7 @@ const holder = vi.hoisted(() => ({
   basename: '/v',
   collectionFilterProps: [] as Array<Record<string, unknown>>,
   filterCollection: { name: 'workflowManualTasks' },
-  location: { pathname: '/v/admin/workflow/tasks/manual/pending', search: '', hash: '' },
+  location: { pathname: '/v/app/workflow/tasks/manual/pending', search: '', hash: '' },
   navigate: vi.fn(),
   record: null as Record<string, unknown> | null,
 }));
@@ -108,12 +108,12 @@ afterEach(() => {
   vi.clearAllMocks();
   holder.basename = '/v';
   holder.collectionFilterProps = [];
-  holder.location = { pathname: '/v/admin/workflow/tasks/manual/pending', search: '', hash: '' };
+  holder.location = { pathname: '/v/app/workflow/tasks/manual/pending', search: '', hash: '' };
   holder.navigate = vi.fn();
   holder.record = null;
   delete (window as Window & { __nocobase_public_path__?: string }).__nocobase_public_path__;
   delete (window as Window & { __nocobase_modern_client_prefix__?: string }).__nocobase_modern_client_prefix__;
-  window.history.replaceState(null, '', '/v/admin/workflow/tasks/manual/pending');
+  window.history.replaceState(null, '', '/v/app/workflow/tasks/manual/pending');
 });
 
 describe('workflow-manual v2 task type', () => {
@@ -134,7 +134,7 @@ describe('workflow-manual v2 task type', () => {
   it('merges user filters with the mandatory task status filter', () => {
     const taskFilter = { title: { $includes: 'demo' } };
     const search = new URLSearchParams({ workflowManualTasksFilter: JSON.stringify(taskFilter) }).toString();
-    window.history.replaceState(null, '', `/v/admin/workflow/tasks/manual/pending?${search}`);
+    window.history.replaceState(null, '', `/v/app/workflow/tasks/manual/pending?${search}`);
 
     expect(useManualTaskActionParams('pending')).toEqual(
       expect.objectContaining({
@@ -212,32 +212,32 @@ describe('workflow-manual v2 task type', () => {
     {
       basename: '/v',
       publicPath: '/v/',
-      currentPath: '/v/admin/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
-      expectedPath: '/admin/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
+      currentPath: '/v/app/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
+      expectedPath: '/app/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
     },
     {
       basename: '/v/apps/demo',
       publicPath: '/v/',
-      currentPath: '/v/apps/demo/admin/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
-      expectedPath: '/apps/demo/admin/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
+      currentPath: '/v/apps/demo/app/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
+      expectedPath: '/apps/demo/app/workflow/tasks/manual/pending/9?foo=bar#manual-detail',
     },
     {
       basename: '/nocobase/v/apps/demo',
       publicPath: '/nocobase/v/',
-      currentPath: '/nocobase/v/apps/demo/admin/workflow/tasks/manual/completed/9',
-      expectedPath: '/nocobase/apps/demo/admin/workflow/tasks/manual/completed/9',
+      currentPath: '/nocobase/v/apps/demo/app/workflow/tasks/manual/completed/9',
+      expectedPath: '/nocobase/apps/demo/app/workflow/tasks/manual/completed/9',
     },
     {
       basename: '/v',
       publicPath: '/v/',
-      currentPath: '/v/admin/custom-page?foo=bar#host-page',
-      expectedPath: '/admin/workflow/tasks/manual/pending/9',
+      currentPath: '/v/app/custom-page?foo=bar#host-page',
+      expectedPath: '/app/workflow/tasks/manual/pending/9',
     },
     {
       basename: '/v',
       publicPath: '/v/',
-      currentPath: '/v/admin/workflow/tasks/manual/pending/99?foo=bar#other-task',
-      expectedPath: '/admin/workflow/tasks/manual/pending/9',
+      currentPath: '/v/app/workflow/tasks/manual/pending/99?foo=bar#other-task',
+      expectedPath: '/app/workflow/tasks/manual/pending/9',
     },
   ])(
     'shows the legacy-page notice and links to $expectedPath',

@@ -64,7 +64,7 @@ export class PluginBlockStepsFormClient extends Plugin {
     );
 
     this.app.router.add('admin.block-form-schema', {
-      path: '/admin/block-form-schema',
+      path: '/app/block-form-schema',
       Component: () => {
         const s = getStepsFormSchema({
           collection: 'users',

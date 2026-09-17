@@ -8,7 +8,7 @@
  */
 
 import { observer } from '@nocobase/flow-engine';
-import { MobileTabBarItem } from '@nocobase/plugin-mobile/client';
+import { MobileTabBarItem } from '../../mobileFallback';
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { unreadMsgsCountObs } from '../../observables';

@@ -35,7 +35,7 @@ export const PluginManagerLink = () => {
         icon={<ApiOutlined style={{ color: token.colorTextHeaderMenu }} />}
         title={t('Plugin manager')}
         onClick={() => {
-          navigate('/admin/pm/list');
+          navigate('/app/pm/list');
         }}
       />
     </Tooltip>
@@ -80,7 +80,7 @@ export const SettingsCenterDropdown = () => {
       snippets.includes('pm') && {
         key: 'plugin-manager',
         icon: <ApiOutlined />,
-        label: <Link to={'/admin/settings/plugin-manager'}>{t('Plugin manager')}</Link>,
+        label: <Link to={'/app/settings/plugin-manager'}>{t('Plugin manager')}</Link>,
       },
       snippets.includes('pm') && {
         type: 'divider',

@@ -148,17 +148,17 @@ describe('Application', () => {
     });
 
     it('custom', () => {
-      const app = new Application({ publicPath: '/admin' });
-      expect(app.getPublicPath()).toBe('/admin/');
-      expect(app.getRouteUrl('/test')).toBe('/admin/test');
-      expect(app.getRouteUrl('test')).toBe('/admin/test');
+      const app = new Application({ publicPath: '/app' });
+      expect(app.getPublicPath()).toBe('/app/');
+      expect(app.getRouteUrl('/test')).toBe('/app/test');
+      expect(app.getRouteUrl('test')).toBe('/app/test');
     });
 
     it('custom end with /', () => {
-      const app = new Application({ publicPath: '/admin/' });
-      expect(app.getPublicPath()).toBe('/admin/');
-      expect(app.getRouteUrl('/test/foo')).toBe('/admin/test/foo');
-      expect(app.getRouteUrl('test/foo/')).toBe('/admin/test/foo/');
+      const app = new Application({ publicPath: '/app/' });
+      expect(app.getPublicPath()).toBe('/app/');
+      expect(app.getRouteUrl('/test/foo')).toBe('/app/test/foo');
+      expect(app.getRouteUrl('test/foo/')).toBe('/app/test/foo/');
     });
   });
 
@@ -532,7 +532,7 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'test',
-            label: '测试变量',
+            label: 'æµ‹è¯•å˜é‡',
           },
           visible: true,
         }),
@@ -550,7 +550,7 @@ describe('Application', () => {
       const optionResult = variables[0].useOption();
       expect(optionResult.option).toEqual({
         value: 'test',
-        label: '测试变量',
+        label: 'æµ‹è¯•å˜é‡',
       });
       expect(optionResult.visible).toBe(true);
 
@@ -570,7 +570,7 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'test',
-            label: '测试变量',
+            label: 'æµ‹è¯•å˜é‡',
           },
         }),
         useCtx: () => ({ value: 'test-value' }),
@@ -581,7 +581,7 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'test-duplicate',
-            label: '重复测试变量',
+            label: 'é‡å¤æµ‹è¯•å˜é‡',
           },
         }),
         useCtx: () => ({ value: 'different-value' }),
@@ -591,7 +591,7 @@ describe('Application', () => {
 
       expect(variables).toHaveLength(1);
       const optionResult = variables[0].useOption();
-      expect(optionResult.option.label).toBe('测试变量');
+      expect(optionResult.option.label).toBe('æµ‹è¯•å˜é‡');
       expect(fn).toHaveBeenCalledWith('Variable test already registered');
 
       console.warn = originalConsoleWarn;
@@ -605,7 +605,7 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'var1',
-            label: '变量1选项',
+            label: 'å˜é‡1é€‰é¡¹',
           },
         }),
         useCtx: () => ({ value: 'var1-value' }),
@@ -616,7 +616,7 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'var2',
-            label: '变量2选项',
+            label: 'å˜é‡2é€‰é¡¹',
           },
           visible: true,
         }),
@@ -646,7 +646,7 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'async-var',
-            label: '异步变量选项',
+            label: 'å¼‚æ­¥å˜é‡é€‰é¡¹',
           },
         }),
         useCtx: () => asyncCtx,
@@ -670,15 +670,15 @@ describe('Application', () => {
         useOption: () => ({
           option: {
             value: 'parent',
-            label: '父选项',
+            label: 'çˆ¶é€‰é¡¹',
             children: [
               {
                 value: 'child1',
-                label: '子选项1',
+                label: 'å­é€‰é¡¹1',
               },
               {
                 value: 'child2',
-                label: '子选项2',
+                label: 'å­é€‰é¡¹2',
                 disabled: true,
               },
             ],
@@ -701,3 +701,4 @@ describe('Application', () => {
     });
   });
 });
+
