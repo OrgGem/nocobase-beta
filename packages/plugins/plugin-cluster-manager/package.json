@@ -2,8 +2,8 @@
   "name": "plugin-cluster-manager",
   "displayName": "Cluster Manager",
   "displayName.zh-CN": "Cluster Manager",
-  "description": "Cluster node tracking, task orchestration, worker management, and package distribution",
-  "version": "1.3.3",
+  "description": "HA extensions for NocoBase: cluster node tracking, task orchestration, worker management, and package distribution on top of core HA primitives",
+  "version": "1.4.0",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

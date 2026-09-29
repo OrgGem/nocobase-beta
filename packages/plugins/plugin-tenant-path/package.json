@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "displayName": "Tenant Path",
+  "displayName.vi-VN": "Đường dẫn tenant",
+  "displayName.zh-CN": "租户路径",
+  "description": "Per-tenant route sub-path: map each tenant to a custom URL segment and its own app/database",
+  "description.vi-VN": "Đường dẫn con theo tenant: ánh xạ mỗi tenant sang một segment URL tùy chỉnh và app/cơ sở dữ liệu riêng",
+  "description.zh-CN": "按租户路由子路径：将每个租户映射到自定义 URL 段及其独立的应用/数据库",
+  "nocobase": {
+    "supportedVersions": ["2.x"],
+    "editionLevel": 0
+  },
+  "name": "plugin-tenant-path",
+  "keywords": ["System management"],
+  "main": "dist/server/index.js",
+  "peerDependencies": {
+    "@nocobase/server": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "react": "^18.0.0"
+  },
+  "files": [
+    "dist",
+    "src",
+    "client-v2.js",
+    "server.js",
+    "client-v2.d.ts",
+    "server.d.ts"
+  ]
+}

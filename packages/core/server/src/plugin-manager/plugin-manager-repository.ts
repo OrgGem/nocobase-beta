@@ -105,12 +105,12 @@ export class PluginManagerRepository extends Repository {
     name = lodash.cloneDeep(name);
 
     const pluginNames = lodash.castArray(name);
-    console.log(`disable ${name}, ${pluginNames}`);
+    this.pm.app.log.info(`disable ${name}, ${pluginNames}`);
     const filter = {
       name,
     };
 
-    console.log(JSON.stringify(filter, null, 2));
+    this.pm.app.log.debug(JSON.stringify(filter, null, 2));
     await this.update({
       filter,
       values: {

@@ -6,7 +6,7 @@
   "description": "Coordinates NocoBase cron jobs across active-passive HA nodes using the configured distributed lock adapter.",
   "description.zh-CN": "使用已配置的分布式锁适配器，在 active-passive HA 节点之间协调 NocoBase cron 任务。",
   "description.vi-VN": "Điều phối cron job NocoBase giữa các node HA active-passive bằng distributed lock adapter đã cấu hình.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

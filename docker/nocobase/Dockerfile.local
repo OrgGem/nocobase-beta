@@ -1,0 +1,198 @@
+# docker/nocobase/Dockerfile.local
+# NocoBase source-based build with Verdaccio-cached base image.
+#
+# Architecture (target ~1.4-1.5GB, matching official ~1.43GB):
+#
+#   Stage base-deps : standalone install of @nocobase/* from local Verdaccio
+#                     -> node_modules as REAL dirs (no workspace symlinks) + pre-built
+#                        lib/ + dist/client for every @nocobase package.
+#   Stage builder   : full source + devDeps + build. Rebuilds the client bundle
+#                     (because we modified client-v2 core) + server lib + plugin dists.
+#   Stage runtime   : FROM base-deps. Overlay source-built artifacts onto the npm
+#                     base so our core changes take effect; everything else stays
+#                     from the clean base.
+
+# ============================================================
+# Stage 0: base-deps ? standalone install via local Verdaccio
+# ============================================================
+FROM node:22-bookworm-slim AS base-deps
+
+WORKDIR /app/nocobase
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ENV YARN_REGISTRY_URL="http://host.docker.internal:4873/"
+
+COPY <<-"EOF" /app/nocobase/package.json
+{
+  "name": "my-nocobase-app",
+  "private": true,
+  "version": "2.2.10",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "nocobase": "nocobase-v1",
+    "start": "nocobase-v1 start",
+    "postinstall": "nocobase-v1 postinstall",
+    "build": "nocobase-v1 build"
+  },
+  "resolutions": {
+    "cytoscape": "3.28.0",
+    "async": "^3.2.6",
+    "semver": "^7.7.1"
+  },
+  "dependencies": {
+    "pm2": "^6.0.5",
+    "mysql2": "^3.14.0",
+    "mariadb": "^2.5.6",
+    "pg": "^8.14.1",
+    "pg-hstore": "^2.3.4",
+    "@nocobase/app": "2.2.10"
+  }
+}
+EOF
+
+RUN printf 'registry=%s\n' "http://host.docker.internal:4873/" > /app/nocobase/.npmrc && \
+    cat /app/nocobase/.npmrc
+
+RUN --mount=type=cache,target=/root/.cache/yarn/v6 \
+    yarn config set cache-folder /root/.cache/yarn/v6 && \
+    for attempt in 1 2 3; do \
+      echo "base install attempt $attempt/3"; \
+      if yarn install --production --ignore-scripts --network-timeout 1800000 --network-concurrency 8 \
+          --registry "$YARN_REGISTRY_URL"; then \
+        echo "base install succeeded"; break; \
+      fi; \
+      echo "base install failed, retrying..."; sleep $((attempt*10)); \
+    done ; \
+    # Remove the yarn global default cache snapshot if yarn still wrote there \
+    rm -rf /usr/local/share/.cache/yarn 2>/dev/null || true
+
+# Drop build-tool node_modules in base-deps (runtime only needs prod deps)
+RUN rm -rf /usr/local/share/.cache 2>/dev/null || true
+
+# ============================================================
+# Stage 1: builder ? full source + build (rebuilds client + server)
+# ============================================================
+FROM node:22-bookworm-slim AS builder
+
+WORKDIR /app/src
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN corepack enable && corepack prepare yarn@1.22.22 --activate
+
+COPY . .
+
+RUN find packages docker node_modules -type f \( -name '*.js' -o -name '*.sh' -o -name '*.json' \) \
+      -exec sed -i 's/\r$//' {} + 2>/dev/null || true
+
+RUN --mount=type=cache,target=/root/.cache/yarn/v6 \
+    yarn config set cache-folder /root/.cache/yarn/v6 && \
+    for attempt in 1 2 3; do \
+      echo "builder install attempt $attempt/3"; \
+      if yarn install --ignore-scripts --network-timeout 1800000 --network-concurrency 8 \
+          --registry "http://host.docker.internal:4873/"; then \
+        echo "builder install succeeded"; break; \
+      fi; \
+      echo "builder install failed, retrying..."; sleep $((attempt*10)); \
+    done ; \
+    rm -rf /usr/local/share/.cache/yarn 2>/dev/null || true
+
+COPY <<-"EOF" /app/relink-bins.js
+const fs = require('fs'), path = require('path');
+const root = '/app/src/packages';
+const binDir = '/app/src/node_modules/.bin';
+function walk(d) {
+  for (const e of fs.readdirSync(d, {withFileTypes:true})) {
+    if (e.name === 'node_modules') continue;
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) walk(p);
+    else if (e.name === 'package.json') {
+      try {
+        const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+        if (!j.bin || typeof j.bin !== 'object') continue;
+        const pkgDir = path.dirname(p);
+        for (const [name, rel] of Object.entries(j.bin)) {
+          const target = path.join(binDir, name);
+          const linkTarget = path.relative(binDir, path.join(pkgDir, rel)).replace(/\\/g, '/');
+          try { fs.symlinkSync(linkTarget, target); } catch(e) {}
+        }
+      } catch(e) {}
+    }
+  }
+}
+walk(root);
+console.log('Relinked workspace .bin entries.');
+EOF
+RUN node /app/relink-bins.js && \
+    ls node_modules/.bin/ | grep -E 'nocobase|nb|tsc' | head -20
+
+ENV NODE_ENV=production APP_ENV=production
+RUN yarn build --no-dts
+
+RUN rm -rf node_modules/@umijs node_modules/umi \
+      node_modules/@rspack node_modules/@rsbuild \
+      node_modules/@svgr  node_modules/@napi-rs \
+      node_modules/@vercel node_modules/vite \
+      node_modules/esbuild node_modules/tsup \
+      node_modules/typescript node_modules/bundle-require \
+      node_modules/esbuild-register node_modules/javascript-obfuscator 2>/dev/null; \
+    find node_modules/@babel -mindepth 1 -maxdepth 1 ! -name runtime -exec rm -rf {} + 2>/dev/null; true
+
+# ============================================================
+# Stage 2: runtime ? FROM base-deps, overlay source-built artifacts
+# ============================================================
+FROM base-deps AS runtime
+
+WORKDIR /app/nocobase
+
+ENV NOCOBASE_RUNNING_IN_DOCKER=true \
+    NB_SKIP_STARTUP_UPDATE=1 \
+    APP_ENV=production \
+    API_BASE_PATH=/api/ \
+    PLUGIN_PACKAGE_PREFIX=@nocobase/plugin-,@nocobase/plugin-sample-,@nocobase/preset- \
+    NODE_OPTIONS=--preserve-symlinks \
+    NODE_MODULES_PATH=/app/nocobase/node_modules \
+    NODE_PATH=/app/nocobase/node_modules \
+    WS_PATH=/ws \
+    CACHE_DEFAULT_STORE=memory \
+    CACHE_MEMORY_MAX=2000 \
+    APP_PUBLIC_PATH=/ \
+    APP_MODERN_CLIENT_PREFIX=v \
+    APP_CLIENT_ENTRY_MODE=legacy-default \
+    PLUGIN_STATICS_PATH=/static/plugins/ \
+    STORAGE_PATH=/app/nocobase/storage \
+    LOCAL_STORAGE_DEST=/app/nocobase/storage/uploads \
+    PLUGIN_STORAGE_PATH=/app/nocobase/storage/plugins \
+    APP_PACKAGE_ROOT=/app/nocobase/node_modules/@nocobase/app \
+    CDN_BASE_URL="" \
+    APP_LAUNCH_MODE=node
+
+# Bring the clean standalone base tree.
+COPY --from=builder /app/src/.env.e2e.example ./.env.e2e.example
+
+# --- Overlay source-built artifacts (our core changes): only modified packages ---
+#  1. server core   ? gateway subpath routing (core/server/src/gateway)
+#  2. client-v2 core ? admin-subpath routing (rebuild app client bundle)
+#  3. preset         ? we removed plugin-mobile from builtIn/dependencies
+#  4. workflow + notification-in-app-message ? mobile fallback changes
+# Everything else stays as the clean pre-built npm base (fast + small).
+#  1. server core   ? gateway subpath routing (core/server/src/gateway)
+#  2. client-v2 core ? admin-subpath routing (bundled into app client)
+#  3. preset         ? we removed plugin-mobile from builtIn/dependencies
+#  4. workflow + notification-in-app-message ? mobile fallback changes
+# Everything else stays as the clean pre-built npm base (fast + small).
+COPY --from=builder /app/src/packages/core/server/lib ./node_modules/@nocobase/server/lib
+COPY --from=builder /app/src/packages/core/server/package.json ./node_modules/@nocobase/server/package.json
+COPY --from=builder /app/src/packages/core/app/dist/client ./node_modules/@nocobase/app/dist/client
+COPY --from=builder /app/src/packages/presets/nocobase/lib ./node_modules/@nocobase/preset-nocobase/lib
+COPY --from=builder /app/src/packages/presets/nocobase/package.json ./node_modules/@nocobase/preset-nocobase/package.json
+COPY --from=builder /app/src/packages/plugins/@nocobase/plugin-workflow/dist ./node_modules/@nocobase/plugin-workflow/dist
+COPY --from=builder /app/src/packages/plugins/@nocobase/plugin-workflow/package.json ./node_modules/@nocobase/plugin-workflow/package.json
+COPY --from=builder /app/src/packages/plugins/@nocobase/plugin-notification-in-app-message/dist ./node_modules/@nocobase/plugin-notification-in-app-message/dist
+COPY --from=builder /app/src/packages/plugins/@nocobase/plugin-notification-in-app-message/package.json ./node_modules/@nocobase/plugin-notification-in-app-message/package.json
+
+COPY docker/nocobase/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
+RUN echo "local-build" > /app/commit_hash.txt
+
+EXPOSE 13000
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["node", "node_modules/@nocobase/app/lib/index.js", "start"]

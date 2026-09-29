@@ -1,0 +1,38 @@
+[
+  {
+    "province": "Thành phố Hồ Chí Minh",
+    "province_code": "79",
+    "commune": "Phường Bến Nghé",
+    "commune_code": "27031"
+  },
+  {
+    "province": "Thành phố Hồ Chí Minh",
+    "province_code": "79",
+    "commune": "Phường Bến Thành",
+    "commune_code": "27034"
+  },
+  {
+    "province": "Thành phố Hồ Chí Minh",
+    "province_code": "79",
+    "commune": "Xã Bình Khánh",
+    "commune_code": "27043"
+  },
+  {
+    "province": "Hà Nội",
+    "province_code": "01",
+    "commune": "Phường Chương Dương",
+    "commune_code": "00418"
+  },
+  {
+    "province": "Hà Nội",
+    "province_code": "01",
+    "commune": "Phường Trung Liệt",
+    "commune_code": "00610"
+  },
+  {
+    "province": "Đà Nẵng",
+    "province_code": "48",
+    "commune": "Phường Hải Châu",
+    "commune_code": "20010"
+  }
+]

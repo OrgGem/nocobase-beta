@@ -1,0 +1,53 @@
+﻿# Verdaccio config for NocoBase local build cache.
+# Caches npm tarballs locally so docker builds never hit the public registry twice.
+
+storage: /verdaccio/storage
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+    algorithm: bcrypt
+    max_users: 1000
+
+# Multiple uplinks: npmmirror is much faster from VN, npmjs is the stable fallback.
+# Verdaccio caches every tarball it proxies, so a cold build warms the cache and
+# all later builds are served from local disk.
+uplinks:
+  npmmirror:
+    url: https://registry.npmmirror.com/
+    cache: true
+    timeout: 120s
+    maxage: 2h
+    max_fails: 5
+    fail_timeout: 1m
+    # npmmirror returns rewritten tarball URLs; Verdaccio follows them.
+  npmjs:
+    url: https://registry.npmjs.org/
+    cache: true
+    timeout: 120s
+    maxage: 2h
+    max_fails: 3
+    fail_timeout: 5m
+
+packages:
+  '@*/*':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: npmmirror npmjs
+
+  '**':
+    access: $all
+    publish: $authenticated
+    unpublish: $authenticated
+    proxy: npmmirror npmjs
+
+server:
+  keepAliveTimeout: 120
+
+middlewares:
+  audit:
+    enabled: false
+
+# Cache tuning: keep tarballs long, metadata short.
+log:
+  - { type: stdout, format: pretty, level: warn }

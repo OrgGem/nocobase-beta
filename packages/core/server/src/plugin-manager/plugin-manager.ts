@@ -752,7 +752,7 @@ export class PluginManager {
           const dir = resolve(process.env.NODE_MODULES_PATH, plugin.packageName);
           try {
             const realDir = await fs.realpath(dir);
-            console.log('realDir', realDir);
+            this.app.log.debug('realDir', realDir);
             this.app.log.debug(`rm -rf ${realDir}`);
             return fs.rm(realDir, { force: true, recursive: true });
           } catch (error) {

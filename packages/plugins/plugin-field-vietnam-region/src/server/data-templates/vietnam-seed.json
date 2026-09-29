@@ -1,0 +1,41 @@
+[
+  {
+    "code": "79",
+    "name": "Thành phố Hồ Chí Minh",
+    "level": 1
+  },
+  {
+    "code": "27031",
+    "name": "Phường Bến Nghé",
+    "level": 2,
+    "parentCode": "79"
+  },
+  {
+    "code": "27034",
+    "name": "Phường Bến Thành",
+    "level": 2,
+    "parentCode": "79"
+  },
+  {
+    "code": "01",
+    "name": "Hà Nội",
+    "level": 1
+  },
+  {
+    "code": "00418",
+    "name": "Phường Chương Dương",
+    "level": 2,
+    "parentCode": "01"
+  },
+  {
+    "code": "48",
+    "name": "Đà Nẵng",
+    "level": 1
+  },
+  {
+    "code": "20010",
+    "name": "Phường Hải Châu",
+    "level": 2,
+    "parentCode": "48"
+  }
+]

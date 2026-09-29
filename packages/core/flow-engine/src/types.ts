@@ -157,11 +157,19 @@ export enum ActionScene {
 export interface ActionDefinition<TModel extends FlowModel = FlowModel, TCtx extends FlowContext = FlowContext> {
   name: string; // Unique identifier for the action
   title?: string;
-  handler: (ctx: TCtx, params: any) => Promise<any> | any;
+  handler: (ctx: TCtx, params: ParamObject) => Promise<unknown> | unknown;
   uiSchema?: Record<string, ISchema> | ((ctx: TCtx) => Record<string, ISchema> | Promise<Record<string, ISchema>>);
   defaultParams?: Record<string, any> | ((ctx: TCtx) => Record<string, any> | Promise<Record<string, any>>);
-  beforeParamsSave?: (ctx: FlowSettingsContext<TModel>, params: any, previousParams: any) => void | Promise<void>;
-  afterParamsSave?: (ctx: FlowSettingsContext<TModel>, params: any, previousParams: any) => void | Promise<void>;
+  beforeParamsSave?: (
+    ctx: FlowSettingsContext<TModel>,
+    params: ParamObject,
+    previousParams: ParamObject,
+  ) => void | Promise<void>;
+  afterParamsSave?: (
+    ctx: FlowSettingsContext<TModel>,
+    params: ParamObject,
+    previousParams: ParamObject,
+  ) => void | Promise<void>;
   useRawParams?: boolean | ((ctx: TCtx) => boolean | Promise<boolean>);
   uiMode?: StepUIMode | ((ctx: FlowRuntimeContext<TModel>) => StepUIMode | Promise<StepUIMode>);
   scene?: ActionScene | ActionScene[];
@@ -346,7 +354,7 @@ export interface ActionOptions<TModel extends FlowModel = FlowModel, P = any, R 
 
 type StepParam = {
   [stepKey: string]: {
-    [paramKey: string]: any;
+    [paramKey: string]: unknown;
   };
 };
 
@@ -523,7 +531,7 @@ export type ParentFlowModel<Structure> = Structure extends { parent: infer P } ?
 /**
  * Options for FlowModel constructor
  */
-export interface FlowModelOptions<Structure extends { parent?: FlowModel; subModels?: any } = DefaultStructure> {
+export interface FlowModelOptions<Structure extends { parent?: FlowModel; subModels?: unknown } = DefaultStructure> {
   uid?: string;
   use?: string;
   async?: boolean; // 是否异步加载模型
@@ -607,7 +615,7 @@ export interface ToolbarItemConfig {
   /** 项目的唯一标识 */
   key: string;
   /** 项目组件，接收 model 作为 props，内部处理所有逻辑 */
-  component: React.ComponentType<{ model: FlowModel; [key: string]: any }>;
+  component: React.ComponentType<{ model: FlowModel; [key: string]: unknown }>;
   /** 是否显示项目的条件函数 */
   visible?: (model: FlowModel) => boolean;
   /** 排序权重，数字越小越靠右（先添加的在右边） */
@@ -630,9 +638,9 @@ export interface DynamicFlowSourceProvider {
 
 export interface ApplyFlowCacheEntry {
   status: 'pending' | 'resolved' | 'rejected';
-  promise: Promise<any>;
-  data?: any;
-  error?: any;
+  promise: Promise<unknown>;
+  data?: unknown;
+  error?: unknown;
 }
 
 export interface PersistOptions {

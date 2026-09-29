@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { createSystemLogger, getLoggerFilePath, SystemLogger } from '@nocobase/logger';
+import { createConsoleLogger, createSystemLogger, getLoggerFilePath, SystemLogger } from '@nocobase/logger';
 import { Registry, storagePathJoin, Toposort, ToposortOptions, uid } from '@nocobase/utils';
 import { lockdownSes } from '@nocobase/utils';
 import { syncPluginSymlinks } from '@nocobase/utils/plugin-symlink';
@@ -114,6 +114,7 @@ function getSocketPath() {
 
 export class Gateway extends EventEmitter {
   private static instance: Gateway;
+  private static logger = createConsoleLogger({ defaultMeta: { module: 'gateway' } });
   middlewares: Toposort<GatewayMiddleware>;
   /**
    * use main app as default app to handle request
@@ -185,7 +186,7 @@ export class Gateway extends EventEmitter {
 
       await supervisor.destroy();
     } catch (error) {
-      console.error('Failed to shutdown applications gracefully', error);
+      Gateway.logger.error('Failed to shutdown applications gracefully', error);
     } finally {
       this.destroy();
     }
@@ -827,7 +828,7 @@ export class Gateway extends EventEmitter {
     }
 
     if (this.port === null) {
-      console.log('gateway port is not set, http server will not start');
+      Gateway.logger.warn('gateway port is not set, http server will not start');
       return;
     }
 
@@ -840,7 +841,7 @@ export class Gateway extends EventEmitter {
             return;
           }
         } catch (error) {
-          console.error('gateway request handler error:', error);
+          Gateway.logger.error('gateway request handler error:', error);
         }
       }
       this.getCallback()(req, res);
@@ -871,7 +872,7 @@ export class Gateway extends EventEmitter {
     });
 
     this.server.listen(this.port, this.host, () => {
-      console.log(`Gateway HTTP Server running at http://${this.host}:${this.port}/`);
+      Gateway.logger.info(`Gateway HTTP Server running at http://${this.host}:${this.port}/`);
       if (options?.callback) {
         options.callback(this.server);
       }

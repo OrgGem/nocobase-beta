@@ -1595,44 +1595,52 @@ export class FlowEngine {
       ...userOptions,
     } as CreateModelOptions;
 
-    // 暂停父模型的事件触发,
-    // TODO: find a better way to do this
+    // 暂停父模型的事件触发，避免在销毁/重建期间向订阅者暴露中间状态。
+    // 使用 try/finally 确保任何异常路径都会恢复事件触发，避免替换失败后 emitter 永久暂停。
     if (currentParent) {
       currentParent.emitter.setPaused(true);
     }
+    try {
+      // 4. 销毁当前模型（这会处理所有清理工作：持久化删除、内存清理、父模型引用等）
+      await oldModel.destroy();
 
-    // 4. 销毁当前模型（这会处理所有清理工作：持久化删除、内存清理、父模型引用等）
-    await oldModel.destroy();
+      // 5. 使用createModel创建新的模型实例
+      const newModel = this.createModel<T>(newOptions);
 
-    // 5. 使用createModel创建新的模型实例
-    const newModel = this.createModel<T>(newOptions);
+      // 6. 如果有父模型，将新模型添加到父模型的subModels中
+      if (currentParent && currentSubKey) {
+        if (currentSubType === 'array') {
+          // 对于数组类型，使用addSubModel方法
+          currentParent.addSubModel(currentSubKey, newModel);
+        } else {
+          // 对于对象类型，使用setSubModel方法
+          currentParent.setSubModel(currentSubKey, newModel);
+        }
+      }
 
-    // 6. 如果有父模型，将新模型添加到父模型的subModels中
-    if (currentParent && currentSubKey) {
-      if (currentSubType === 'array') {
-        // 对于数组类型，使用addSubModel方法
-        currentParent.addSubModel(currentSubKey, newModel);
-      } else {
-        // 对于对象类型，使用setSubModel方法
-        currentParent.setSubModel(currentSubKey, newModel);
+      // 7. Notify subscribers that the model has been replaced.
+      // Keep emitter paused through invalidateFlowCache/rerender so intermediate work does not
+      // leak events; unpause only for the final replacement event itself.
+      if (currentParent) {
+        currentParent.parent.invalidateFlowCache('beforeRender', true);
+        currentParent.parent?.rerender();
+        currentParent.emitter.setPaused(false);
+        currentParent.emitter.emit('onSubModelReplaced', { oldModel, newModel });
+        this.emitter?.emit('model:subModel:replaced', {
+          parentUid: currentParent.uid,
+          parent: currentParent,
+          oldModel,
+          newModel,
+        });
+      }
+      await newModel.save();
+      return newModel;
+    } finally {
+      // 解除本次暂停，确保事件触发恢复正常
+      if (currentParent) {
+        currentParent.emitter.setPaused(false);
       }
     }
-
-    // 7. 触发事件以通知其他部分模型已替换
-    if (currentParent) {
-      currentParent.emitter.setPaused(false);
-      currentParent.parent.invalidateFlowCache('beforeRender', true);
-      currentParent.parent?.rerender();
-      currentParent.emitter.emit('onSubModelReplaced', { oldModel, newModel });
-      this.emitter?.emit('model:subModel:replaced', {
-        parentUid: currentParent.uid,
-        parent: currentParent,
-        oldModel,
-        newModel,
-      });
-    }
-    await newModel.save();
-    return newModel;
   }
 
   /**

@@ -1,0 +1,22 @@
+services:
+  verdaccio:
+    image: verdaccio/verdaccio:5
+    container_name: verdaccio-registry
+    restart: always
+    ports:
+      - "4873:4873"
+    environment:
+      - VERDACCIO_PORT=4873
+    volumes:
+      - ./conf/config.yaml:/verdaccio/conf/config.yaml:ro
+      - verdaccio_storage:/verdaccio/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:4873/-/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  verdaccio_storage:
+    name: verdaccio_storage

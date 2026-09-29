@@ -51,6 +51,8 @@ import { FlowModel } from '../models';
 import { ToolbarItemConfig } from '../types';
 import { FlowErrorFallback } from './FlowErrorFallback';
 import { FlowsContextMenu } from './settings/wrappers/contextual/FlowsContextMenu';
+import { FlowsModalWrapper } from './settings/wrappers/contextual/FlowsModalWrapper';
+import { FlowsDrawerWrapper } from './settings/wrappers/contextual/FlowsDrawerWrapper';
 import { FlowsFloatContextMenu } from './settings/wrappers/contextual/FlowsFloatContextMenu';
 import { observer } from '../reactive';
 
@@ -284,14 +286,26 @@ const FlowModelRendererCore: React.FC<{
         );
 
       case 'modal':
-        // TODO: 实现 modal 模式的流程设置
-        console.warn('FlowModelRenderer: modal variant is not implemented yet');
-        return wrapWithErrorBoundary(<ContentOrError />);
+        return (
+          <FlowsModalWrapper model={model} showDeleteButton={!hideRemoveInSettings}>
+            {wrapWithErrorBoundary(
+              <div key={contentKey}>
+                <ContentOrError />
+              </div>,
+            )}
+          </FlowsModalWrapper>
+        );
 
       case 'drawer':
-        // TODO: 实现 drawer 模式的流程设置
-        console.warn('FlowModelRenderer: drawer variant is not implemented yet');
-        return wrapWithErrorBoundary(<ContentOrError />);
+        return (
+          <FlowsDrawerWrapper model={model} showDeleteButton={!hideRemoveInSettings}>
+            {wrapWithErrorBoundary(
+              <div key={contentKey}>
+                <ContentOrError />
+              </div>,
+            )}
+          </FlowsDrawerWrapper>
+        );
 
       default:
         console.warn(

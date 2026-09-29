@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import { get as httpGet } from 'http';
 import { get as httpsGet } from 'https';
 import { RedisNodeRegistry } from '../adapters/redis-node-registry';
-import { RedisLockAdapter } from '../adapters/redis-lock-adapter';
+import { RedisLockAdapter } from '@nocobase/server';
 import { getRedis } from '../utils/redis';
 import { getLocalNodeId, getNodeRoleFrom, isWorkerMode } from '../utils/node';
 import { packagesFromConfig, type CustomPackageMap, type WorkerPackageMap } from '../../shared/packages';

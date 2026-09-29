@@ -13,3 +13,6 @@ export * from './StepSettingsDialog';
 export * from './StepSettingsDrawer';
 export * from './StepSettings';
 export * from './StepRequiredSettingsDialog';
+
+export { FlowsModalWrapper } from './FlowsModalWrapper';
+export { FlowsDrawerWrapper } from './FlowsDrawerWrapper';

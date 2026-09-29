@@ -24,19 +24,28 @@ async function callHideFunction(
   return hide;
 }
 
+function resolveRegisteredName(M: ModelConstructor, ctx: FlowModelContext): string {
+  const matched = ctx?.engine?.findModelClass?.((name, ModelClass) => ModelClass === M);
+  if (matched) {
+    return matched[0];
+  }
+  return M.name;
+}
+
 export async function buildSubModelItem(
   M: ModelConstructor,
   ctx: FlowModelContext,
   skipHide = false,
 ): Promise<SubModelItem | undefined> {
   const meta: FlowModelMeta = (M.meta ?? {}) as FlowModelMeta;
+  const registeredName = resolveRegisteredName(M, ctx);
   if ((await callHideFunction(meta.hide, ctx)) && !skipHide) {
     return;
   }
   // 判断是否为 CollectionBlockModel 的子类（用于集合选择层开启搜索）
   const item: SubModelItem = {
-    key: M.name,
-    label: meta.label || M.name,
+    key: registeredName,
+    label: meta.label || registeredName,
     // 子菜单级搜索：仅尊重模型 meta 显式配置，避免在工具层做类型耦合判断
     searchable: !!meta.searchable,
     searchPlaceholder: meta.searchPlaceholder,
@@ -46,12 +55,12 @@ export async function buildSubModelItem(
     toggleable: meta.toggleable,
     // Use the model class name for toggle detection (engine.getModelClass)
     // This is required by AddSubModelButton to locate existing instances
-    useModel: M.name,
+    useModel: registeredName,
     sort: meta.sort || 1000,
     children: buildSubModelChildren(M, ctx),
   };
   item['createModelOptions'] = meta.createModelOptions || {
-    use: M.name, //TODO: this is wrong after code minized, we need to fix this
+    use: registeredName,
   };
   return item;
 }

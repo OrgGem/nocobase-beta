@@ -1,0 +1,44 @@
+networks:
+  nocobase:
+    driver: bridge
+services:
+  app:
+    build:
+      context: ../../
+      dockerfile: docker/nocobase/Dockerfile.local
+    image: nocobase-local:latest
+    networks:
+      - nocobase
+    environment:
+      - APP_KEY=test-key
+      - ENCRYPTION_FIELD_KEY=test-key
+      - DB_DIALECT=postgres
+      - DB_HOST=postgres
+      - DB_DATABASE=nocobase
+      - DB_USER=nocobase
+      - DB_PASSWORD=nocobase
+      - APP_PORT=13000
+      - APP_PACKAGE_ROOT=/app/nocobase/packages/core/app
+      - CDN_BASE_URL=
+      - APP_LAUNCH_MODE=node
+      - INIT_ROOT_EMAIL=admin@nocobase.com
+      - INIT_ROOT_PASSWORD=admin123
+      - INIT_ROOT_USERNAME=nocobase
+    volumes:
+      - ./storage:/app/nocobase/storage
+    ports:
+      - "13000:13000"
+    depends_on:
+      - postgres
+    init: true
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: nocobase
+      POSTGRES_DB: nocobase
+      POSTGRES_PASSWORD: nocobase
+    volumes:
+      - ./storage/db/postgres:/var/lib/postgresql/data
+    networks:
+      - nocobase

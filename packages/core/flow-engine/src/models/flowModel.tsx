@@ -35,7 +35,6 @@ import { IModelComponentProps, ReadonlyModelProps } from '../types';
 import { isInheritedFrom, setupRuntimeContextSteps } from '../utils';
 // import { FlowExitAllException } from '../utils/exceptions';
 import { Typography } from 'antd';
-import type { MenuProps } from 'antd';
 import { observer } from '..';
 import { ModelActionRegistry } from '../action-registry/ModelActionRegistry';
 import { buildSubModelItem } from '../components/subModel/utils';
@@ -46,6 +45,28 @@ import { FlowSettingsOpenOptions } from '../flowSettings';
 import type { ScheduleOptions } from '../scheduler/ModelOperationScheduler';
 import type { DispatchEventOptions, EventDefinition } from '../types';
 import { ForkFlowModel } from './forkFlowModel';
+import { serializeModel } from './flowModel.serialization';
+import { getModelStepParams, getModelProps, setModelStepParams } from './flowModel.props';
+import {
+  saveModel as saveModelFn,
+  saveStepParams as saveStepParamsFn,
+  destroyModel as destroyModelFn,
+} from './flowModel.persistence';
+import {
+  ModelRenderMode,
+  SortableModelLike,
+  getStableSortIndex,
+  sortByStableSortIndex,
+  FlowModelExtraMenuItem,
+  FlowModelExtraMenuItemInput,
+  ExtraMenuItemEntry,
+  sortExtraMenuItems,
+  isFlowModelExtraMenuItem,
+  normalizeExtraMenuItem,
+} from './flowModel.types';
+
+// Preserve public API surface: these names were historically exported from this module.
+export { ModelRenderMode, FlowModelExtraMenuItem, SortableModelLike } from './flowModel.types';
 
 // 使用 WeakMap 为每个类缓存一个 ModelActionRegistry 实例
 const classActionRegistries = new WeakMap<typeof FlowModel, ModelActionRegistry>();
@@ -56,110 +77,10 @@ const classEventRegistries = new WeakMap<typeof FlowModel, ModelEventRegistry>()
 // 使用WeakMap存储每个类的meta
 const modelMetas = new WeakMap<typeof FlowModel, FlowModelMeta>();
 
-type SortableModelLike = {
-  sortIndex?: number | null;
-};
-
-function getStableSortIndex(item: SortableModelLike, fallbackIndex: number) {
-  return typeof item?.sortIndex === 'number' && Number.isFinite(item.sortIndex) ? item.sortIndex : fallbackIndex + 1;
-}
-
-function sortByStableSortIndex<T extends SortableModelLike>(items: T[]) {
-  return items
-    .map((item, index) => ({
-      item,
-      index,
-      sortIndex: getStableSortIndex(item, index),
-    }))
-    .sort((a, b) => a.sortIndex - b.sortIndex || a.index - b.index)
-    .map(({ item }) => item);
-}
-
 // 使用WeakMap存储每个类的 GlobalFlowRegistry
 const modelGlobalRegistries = new WeakMap<typeof FlowModel, GlobalFlowRegistry>();
 
-type BaseMenuItem = NonNullable<MenuProps['items']>[number];
-type MenuBaseItem = Omit<Exclude<BaseMenuItem, null>, 'key' | 'children'>;
-
-export type FlowModelExtraMenuItem = MenuBaseItem & {
-  key: React.Key;
-  group?: string;
-  sort?: number;
-  label?: React.ReactNode;
-  disabled?: boolean;
-  onClick?: () => void;
-  children?: FlowModelExtraMenuItem[];
-};
-
-type FlowModelExtraMenuItemInput = Omit<FlowModelExtraMenuItem, 'key' | 'children'> & {
-  key?: React.Key;
-  children?: FlowModelExtraMenuItemInput[];
-};
-
-type ExtraMenuItemEntry = {
-  group?: string;
-  sort?: number;
-  matcher?: (model: FlowModel) => boolean;
-  keyPrefix?: string;
-  items:
-    | FlowModelExtraMenuItemInput[]
-    | ((
-        model: FlowModel,
-        t: (k: string, opt?: any) => string,
-      ) => FlowModelExtraMenuItemInput[] | Promise<FlowModelExtraMenuItemInput[]>);
-};
-
 const classMenuExtensions = new WeakMap<typeof FlowModel, Set<ExtraMenuItemEntry>>();
-
-const sortExtraMenuItems = (items: FlowModelExtraMenuItem[]) => {
-  return [...items].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0));
-};
-
-const isFlowModelExtraMenuItem = (item: FlowModelExtraMenuItem | null): item is FlowModelExtraMenuItem => {
-  return item !== null;
-};
-
-const normalizeExtraMenuItem = (
-  item: FlowModelExtraMenuItemInput,
-  {
-    group,
-    sort,
-    prefix,
-    path,
-  }: {
-    group: string;
-    sort: number;
-    prefix: string;
-    path: string;
-  },
-): FlowModelExtraMenuItem | null => {
-  if (!item) {
-    return null;
-  }
-
-  const normalizedGroup = item.group || group;
-  const normalizedSort = typeof item.sort === 'number' ? item.sort : sort;
-  const normalizedChildren = sortExtraMenuItems(
-    (item.children || [])
-      .map((child, index) =>
-        normalizeExtraMenuItem(child, {
-          group: normalizedGroup,
-          sort: normalizedSort,
-          prefix,
-          path: `${path}-${index}`,
-        }),
-      )
-      .filter(isFlowModelExtraMenuItem),
-  );
-
-  return {
-    ...item,
-    key: item.key ?? `${prefix}-${normalizedGroup}-${path}`,
-    group: normalizedGroup,
-    sort: normalizedSort,
-    children: normalizedChildren.length ? normalizedChildren : undefined,
-  };
-};
 
 async function loadOpenStepSettingsDialog() {
   const mod = await import('../components/settings/wrappers/contextual/StepSettingsDialog');
@@ -169,11 +90,6 @@ async function loadOpenStepSettingsDialog() {
 async function loadOpenRequiredParamsStepFormDialog() {
   const mod = await import('../components/settings/wrappers/contextual/StepRequiredSettingsDialog');
   return mod.openRequiredParamsStepFormDialog;
-}
-
-export enum ModelRenderMode {
-  ReactElement = 'reactElement',
-  RenderFunction = 'renderFunction',
 }
 
 export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
@@ -772,8 +688,8 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
   }
 
   setProps(props: IModelComponentProps): void;
-  setProps(key: string, value: any): void;
-  setProps(props: IModelComponentProps | string, value?: any): void {
+  setProps(key: string, value: unknown): void;
+  setProps(props: IModelComponentProps | string, value?: unknown): void {
     if (typeof props === 'string') {
       this.props[props] = value;
     } else {
@@ -784,7 +700,7 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
   }
 
   getProps(): ReadonlyModelProps {
-    return this.props as ReadonlyModelProps;
+    return getModelProps(this);
   }
 
   setStepParams(flowKey: string, stepKey: string, params: ParamObject): void;
@@ -795,58 +711,17 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
     stepKeyOrStepsParams?: string | Record<string, ParamObject>,
     params?: ParamObject,
   ): void {
-    let hasChanged = false;
-
-    if (typeof flowKeyOrAllParams === 'string') {
-      const flowKey = flowKeyOrAllParams;
-      if (typeof stepKeyOrStepsParams === 'string' && params !== undefined) {
-        const currentStepParams = this.stepParams[flowKey]?.[stepKeyOrStepsParams] || {};
-        const nextStepParams = { ...currentStepParams, ...params };
-        if (!_.isEqual(currentStepParams, nextStepParams)) {
-          if (!this.stepParams[flowKey]) {
-            this.stepParams[flowKey] = {};
-          }
-          this.stepParams[flowKey][stepKeyOrStepsParams] = nextStepParams;
-          hasChanged = true;
-        }
-      } else if (typeof stepKeyOrStepsParams === 'object' && stepKeyOrStepsParams !== null) {
-        const currentFlowParams = this.stepParams[flowKey] || {};
-        const nextFlowParams = { ...currentFlowParams, ...stepKeyOrStepsParams };
-        if (!_.isEqual(currentFlowParams, nextFlowParams)) {
-          this.stepParams[flowKey] = nextFlowParams;
-          hasChanged = true;
-        }
-      }
-    } else if (typeof flowKeyOrAllParams === 'object' && flowKeyOrAllParams !== null) {
-      for (const fk in flowKeyOrAllParams) {
-        if (Object.prototype.hasOwnProperty.call(flowKeyOrAllParams, fk)) {
-          const currentFlowParams = this.stepParams[fk] || {};
-          const nextFlowParams = { ...currentFlowParams, ...flowKeyOrAllParams[fk] };
-          if (!_.isEqual(currentFlowParams, nextFlowParams)) {
-            this.stepParams[fk] = nextFlowParams;
-            hasChanged = true;
-          }
-        }
-      }
-    }
-    if (!hasChanged) {
-      return;
-    }
-    // 发起配置修改事件
-    this.emitter.emit('onStepParamsChanged');
+    setModelStepParams(this, flowKeyOrAllParams, stepKeyOrStepsParams, params);
   }
 
-  getStepParams(flowKey: string, stepKey: string): any | undefined;
-  getStepParams(flowKey: string): Record<string, any> | undefined;
+  getStepParams(flowKey: string, stepKey: string): ParamObject | undefined;
+  getStepParams(flowKey: string): Record<string, ParamObject> | undefined;
   getStepParams(): StepParams;
-  getStepParams(flowKey?: string, stepKey?: string): any {
-    if (flowKey && stepKey) {
-      return this.stepParams[flowKey]?.[stepKey];
-    }
-    if (flowKey) {
-      return this.stepParams[flowKey];
-    }
-    return this.stepParams;
+  getStepParams(
+    flowKey?: string,
+    stepKey?: string,
+  ): ParamObject | Record<string, ParamObject> | StepParams | undefined {
+    return getModelStepParams(this, flowKey, stepKey);
   }
 
   async applyFlow(flowKey: string, inputArgs?: Record<string, any>, runId?: string): Promise<any> {
@@ -1177,7 +1052,7 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
    *
    * @returns {React.ReactNode} 有权限时的渲染结果
    */
-  public render(): any {
+  public render(): React.ReactNode | (() => React.ReactNode) | Promise<React.ReactNode> {
     return <div {...this.props}></div>;
   }
 
@@ -1449,14 +1324,11 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
   }
 
   async save() {
-    if (!this.flowEngine) {
-      throw new Error('FlowEngine is not set on this model. Please set flowEngine before saving.');
-    }
-    return this.flowEngine.saveModel(this);
+    return saveModelFn(this);
   }
 
   async saveStepParams() {
-    return this.flowEngine.saveModel(this, { onlyStepParams: true });
+    return saveStepParamsFn(this);
   }
 
   async destroy() {
@@ -1533,40 +1405,41 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
     stepKey?: string;
     preset?: boolean;
     uiMode?: 'drawer' | 'dialog';
-  }) {}
+  }) {
+    const { flowKey, stepKey, uiMode = 'dialog' } = options;
+    if (!flowKey || !stepKey) {
+      console.error('openFlowStepSettingsDialog requires flowKey and stepKey');
+      return;
+    }
+
+    const flow = this.getFlow(flowKey);
+    const step = flow?.steps?.[stepKey];
+
+    if (!flow || !step) {
+      console.error(`Flow ${flowKey} or step ${stepKey} not found`);
+      return;
+    }
+
+    const ctx = new FlowRuntimeContext(this, flowKey, 'settings');
+    setupRuntimeContextSteps(ctx, flow.steps, this, flowKey);
+    ctx.defineProperty('currentStep', { value: step });
+
+    const openStepSettingsDialog = await loadOpenStepSettingsDialog();
+    return openStepSettingsDialog({
+      model: this,
+      flowKey,
+      stepKey,
+      ctx,
+      mode: uiMode,
+    });
+  }
 
   get translate() {
     return this.flowEngine.translate.bind(this.flowEngine);
   }
 
-  // TODO: 不完整，需要考虑 sub-model 的情况
   serialize(): Record<string, any> {
-    const data = {
-      uid: this.uid,
-      ..._.omit(this._options, ['flowEngine']),
-      props: { ...this.props },
-      stepParams: this.stepParams,
-      sortIndex: this.sortIndex,
-      flowRegistry: {},
-    };
-    const subModels = this.subModels as {
-      [key: string]: FlowModel | FlowModel[];
-    };
-    for (const subModelKey in subModels) {
-      data.subModels = data.subModels || {};
-      if (Array.isArray(subModels[subModelKey])) {
-        (data.subModels as any)[subModelKey] = (subModels[subModelKey] as FlowModel[]).map((model, index) => ({
-          ...model.serialize(),
-          sortIndex: index,
-        }));
-      } else if (subModels[subModelKey] instanceof FlowModel) {
-        (data.subModels as any)[subModelKey] = (subModels[subModelKey] as FlowModel).serialize();
-      }
-    }
-    for (const [key, flow] of this.flowRegistry.getFlows()) {
-      data.flowRegistry[key] = flow.toData();
-    }
-    return data;
+    return serializeModel(this);
   }
 
   /**
@@ -1668,7 +1541,7 @@ export class FlowModel<Structure extends DefaultStructure = DefaultStructure> {
       | ExtraMenuItemEntry
       | ((
           model: FlowModel,
-          t: (k: string, opt?: any) => string,
+          t: (k: string, opt?: Record<string, unknown>) => string,
         ) => FlowModelExtraMenuItemInput[] | Promise<FlowModelExtraMenuItemInput[]>),
   ): () => void {
     const ModelClass = this as typeof FlowModel;

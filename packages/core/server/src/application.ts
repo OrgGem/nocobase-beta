@@ -79,6 +79,7 @@ import { AuditManager } from './audit-manager';
 import { Environment } from './environment';
 import { EventQueue, EventQueueOptions } from './event-queue';
 import { RedisConfig, RedisConnectionManager } from './redis-connection-manager';
+import { RedisLockAdapter } from './redis-lock-adapter';
 import { ServiceContainer } from './service-container';
 import { setupSnowflakeIdField } from './snowflake-id-field';
 import { WorkerIdAllocator } from './worker-id-allocator';
@@ -602,6 +603,14 @@ export class Application<StateT = DefaultState, ContextT = DefaultContext> exten
   }
 
   private async disposeServices() {
+    // Close the lock manager before the shared Redis connection. When the redis
+    // lock adapter owns its own client (a url was configured) close() quits it;
+    // when it reuses redisConnectionManager's pooled connection close() is a
+    // no-op for that client, so the pool is still torn down exactly once below.
+    if (this.lockManager) {
+      await this.lockManager.close();
+    }
+
     if (this.redisConnectionManager) {
       await this.redisConnectionManager.close();
     }
@@ -1277,6 +1286,17 @@ export class Application<StateT = DefaultState, ContextT = DefaultContext> exten
     this.lockManager = new LockManager({
       defaultAdapter: process.env.LOCK_ADAPTER_DEFAULT,
       ...options.lockManager,
+    });
+    // Register the Redis lock adapter up front. The adapter name is selected by
+    // LOCK_ADAPTER_DEFAULT while this manager is constructed, i.e. before any
+    // plugin has a chance to register an adapter, so a plugin-provided
+    // registration would always arrive too late.
+    this.lockManager.registerAdapter('redis', {
+      Adapter: RedisLockAdapter,
+      options: {
+        app: this,
+        url: process.env.LOCK_ADAPTER_REDIS_URL || process.env.REDIS_URL,
+      },
     });
     this.context.db = this.db;
 

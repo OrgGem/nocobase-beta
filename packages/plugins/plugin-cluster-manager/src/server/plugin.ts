@@ -14,7 +14,7 @@ import { cacheMonitorActions } from './actions/cache-monitor';
 import { RedisPubSubAdapter } from './adapters/redis-pubsub-adapter';
 import { RedisEventQueueAdapter } from './adapters/redis-event-queue-adapter';
 import { RedisNodeRegistry } from './adapters/redis-node-registry';
-import { RedisLockAdapter } from './adapters/redis-lock-adapter';
+import { RedisLockAdapter } from '@nocobase/server';
 import { orchestratorActions } from './actions/orchestrator';
 import { pluginOperationsActions } from './actions/plugin-operations';
 import { queueMappingsActions } from './actions/queue-mappings';
@@ -32,12 +32,24 @@ import { healthActions } from './actions/health';
 import { createIdempotencyMiddleware } from './middlewares/idempotencyMiddleware';
 import { workerTemplateVariableActions } from './actions/worker-template-variables';
 import { WORKER_TEMPLATE_DEFAULTS } from './orchestrator/worker-template';
+import {
+  ensureRedisEventQueueAdapter,
+  ensureRedisLockAdapter,
+  ensureRedisPubSubAdapter,
+  ensureRedisWorkerIdAllocator,
+  isRedisEventQueueEnabled,
+  resolveHaRedisUrls,
+  summarizeHaIntegration,
+  type HaIntegrationResult,
+} from './ha/core-ha-integration';
+import { ensureAttachmentsCreatedByField } from './ha/core-compat';
 
 export class PluginClusterManagerServer extends Plugin {
   public nodeRegistry: RedisNodeRegistry;
   public orchestrator: IOrchestratorAdapter | null = null;
   public leaderElection: LeaderElection | null = null;
   public workerIdAllocator: RedisWorkerIdAllocator | null = null;
+  public haIntegration: HaIntegrationResult[] = [];
 
   async install() {
     const variables = this.db.getRepository('workerTemplateVariables');
@@ -50,21 +62,20 @@ export class PluginClusterManagerServer extends Plugin {
   }
 
   async afterAdd() {
-    // NocoBase asks workerIdAllocator for the Snowflake worker ID immediately
-    // after the application-level beforeLoad event. Registering here guarantees
-    // the Redis adapter exists before that allocation happens on every node.
-    const workerRedisUrl = process.env.WORKER_ID_REDIS_URL || process.env.REDIS_URL;
-    const allocatorState = this.app.workerIdAllocator as unknown as { adapter?: unknown };
-    if (allocatorState.adapter) {
-      this.app.logger.info('[ClusterManager] Worker ID allocator already registered; keeping the existing adapter.');
-    } else if (workerRedisUrl) {
-      this.workerIdAllocator = new RedisWorkerIdAllocator(workerRedisUrl, this.app.name, this.app.logger);
-      this.app.workerIdAllocator.setAdapter(this.workerIdAllocator);
-    } else {
-      this.app.logger.warn(
-        '[ClusterManager] WORKER_ID_REDIS_URL/REDIS_URL is missing; HA worker ID allocation is unavailable.',
-      );
-    }
+    // Core allocates the Snowflake worker ID inside Application.load(), which runs after every
+    // plugin's afterAdd(). Registering here is the earliest safe point and guarantees the Redis
+    // lease adapter exists before that allocation happens on every node.
+    this.haIntegration.push(
+      ensureRedisWorkerIdAllocator({
+        allocator: this.app.workerIdAllocator as never,
+        url: resolveHaRedisUrls().workerId,
+        logger: this.app.logger,
+        createAdapter: (url) => {
+          this.workerIdAllocator = new RedisWorkerIdAllocator(url, this.app.name, this.app.logger);
+          return this.workerIdAllocator;
+        },
+      }),
+    );
   }
 
   async beforeLoad() {
@@ -72,20 +83,9 @@ export class PluginClusterManagerServer extends Plugin {
   }
 
   async load() {
-    // Fix NocoBase core strategy resource permission check crash:
-    // Attachments collection has "createdBy: true" options but lacks explicit 'createdById' metadata field registration.
-    // When non-root roles upload attachments, core ACL merges 'own' filters (createdById) and calls checkFilterParams,
-    // which throws a NoPermissionError because getField('createdById') returns undefined.
-    // Registering 'createdById' explicitly as a metadata field on the attachments collection prevents this check from crashing.
-    this.db.extendCollection({
-      name: 'attachments',
-      fields: [
-        {
-          type: 'bigInt',
-          name: 'createdById',
-        },
-      ],
-    });
+    // Upstream compatibility shims (see ./ha/core-compat.ts). Kept out of the
+    // feature wiring so they stay easy to audit and remove once core fixes them.
+    ensureAttachmentsCreatedByField(this.db as never);
 
     this.nodeRegistry = new RedisNodeRegistry(this.app);
 
@@ -170,22 +170,9 @@ export class PluginClusterManagerServer extends Plugin {
       }
     });
 
-    // Register Redis PubSub adapter if URL is configured and no adapter already set
-    this.registerPubSubAdapter();
-    await this.registerEventQueueAdapter();
-
-    // Register missing Redis Lock adapter if running bare open-source core
-    const lockMgr = this.app.lockManager as any;
-    if (lockMgr && lockMgr.registry && !lockMgr.registry.get('redis') && !lockMgr.adapters.get('redis')) {
-      lockMgr.registerAdapter('redis', {
-        Adapter: RedisLockAdapter,
-        options: {
-          app: this.app,
-          url: process.env.LOCK_ADAPTER_REDIS_URL || process.env.REDIS_URL,
-        },
-      });
-      this.app.logger.info('[ClusterManager] Polyfilled RedisLockAdapter as an active distributed lock provider');
-    }
+    // Bind core's HA building blocks to Redis. Core owns these objects; the cluster manager only
+    // fills in an adapter when the deployment asks for one and nothing is registered yet.
+    await this.ensureCoreHaAdapters();
 
     // Listen to remote restart commands and log requests
     const pubSub = (this.app as any).pubSubManager;
@@ -440,57 +427,48 @@ export class PluginClusterManagerServer extends Plugin {
     await this.initOrchestrator();
   }
 
-  private registerPubSubAdapter() {
-    const url = process.env.PUBSUB_ADAPTER_REDIS_URL || process.env.REDIS_URL;
-    if (!url) {
-      this.app.logger.info(
-        '[cluster-manager] PUBSUB_ADAPTER_REDIS_URL/REDIS_URL not set, skipping Redis PubSub adapter',
-      );
-      return;
-    }
+  /**
+   * Bind core's HA infrastructure to Redis.
+   *
+   * Each helper is additive: when core or another plugin already registered an
+   * adapter, it is preserved and the cluster manager only records the outcome.
+   */
+  private async ensureCoreHaAdapters() {
+    const urls = resolveHaRedisUrls();
+    const app = this.app as any;
 
-    // Don't override if another plugin already set an adapter
-    const existingAdapter = (this.app.pubSubManager as any).adapter;
-    if (existingAdapter) {
-      this.app.logger.info('[cluster-manager] PubSub adapter already registered, skipping');
-      return;
-    }
+    const pubSubResult = ensureRedisPubSubAdapter({
+      pubSubManager: app.pubSubManager,
+      url: urls.pubSub,
+      logger: app.logger,
+      createAdapter: (url) => new RedisPubSubAdapter(url, app.logger),
+    });
 
-    const adapter = new RedisPubSubAdapter(url, this.app.logger);
-    this.app.pubSubManager.setAdapter(adapter);
-    this.app.logger.info('[cluster-manager] Redis PubSub adapter registered');
-  }
+    const eventQueueResult = await ensureRedisEventQueueAdapter({
+      eventQueue: app.eventQueue,
+      enabled: isRedisEventQueueEnabled(),
+      url: urls.eventQueue,
+      logger: app.logger,
+      createAdapter: (url) => new RedisEventQueueAdapter({ app, url }),
+    });
 
-  private async registerEventQueueAdapter() {
-    const enabled = process.env.QUEUE_ADAPTER === 'redis' || Boolean(process.env.QUEUE_ADAPTER_REDIS_URL);
-    if (!enabled) {
-      return;
-    }
+    const lockResult = ensureRedisLockAdapter({
+      lockManager: app.lockManager,
+      url: urls.lock,
+      logger: app.logger,
+      adapterConfig: {
+        Adapter: RedisLockAdapter,
+        options: { app },
+      },
+    });
 
-    const url = process.env.QUEUE_ADAPTER_REDIS_URL || process.env.REDIS_URL;
-    if (!url) {
-      this.app.logger.warn('[cluster-manager] QUEUE_ADAPTER=redis but QUEUE_ADAPTER_REDIS_URL/REDIS_URL is not set');
-      return;
+    this.haIntegration.push(pubSubResult, eventQueueResult, lockResult);
+    for (const result of this.haIntegration) {
+      if (result.outcome === 'installed' || result.outcome === 'already-registered') {
+        app.logger.info(result.message);
+      }
     }
-
-    const eventQueue = this.app.eventQueue as any;
-    const existingAdapter = eventQueue?.adapter;
-    const existingName = existingAdapter?.constructor?.name;
-    if (existingAdapter && existingName !== 'MemoryEventQueueAdapter') {
-      this.app.logger.info(`[cluster-manager] EventQueue adapter already registered (${existingName}), skipping`);
-      return;
-    }
-
-    const adapter = new RedisEventQueueAdapter({ app: this.app, url });
-    const wasConnected = Boolean(eventQueue?.isConnected?.());
-    if (wasConnected) {
-      await eventQueue.close();
-    }
-    eventQueue.setAdapter(adapter);
-    if (wasConnected) {
-      await eventQueue.connect();
-    }
-    this.app.logger.info('[cluster-manager] Redis EventQueue adapter registered');
+    app.logger.info(`[ClusterManager] Core HA adapters: ${summarizeHaIntegration(this.haIntegration)}`);
   }
 
   /**

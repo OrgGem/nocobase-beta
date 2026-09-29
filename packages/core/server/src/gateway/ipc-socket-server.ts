@@ -12,11 +12,14 @@ import fs from 'fs';
 import net from 'net';
 import path from 'path';
 import xpipe from 'xpipe';
+import { createConsoleLogger } from '@nocobase/logger';
 import { AppSupervisor } from '../app-supervisor';
 import { writeJSON } from './ipc-socket-client';
 
 export class IPCSocketServer {
   socketServer: net.Server;
+
+  static logger = createConsoleLogger({ defaultMeta: { module: 'ipc-socket-server' } });
 
   constructor(server: net.Server) {
     this.socketServer = server;
@@ -35,10 +38,10 @@ export class IPCSocketServer {
     }
 
     const socketServer = net.createServer((c) => {
-      console.log('client connected');
+      IPCSocketServer.logger.debug('client connected');
 
       c.on('end', () => {
-        console.log('client disconnected');
+        IPCSocketServer.logger.debug('client disconnected');
       });
 
       c.on('data', (data) => {
@@ -75,7 +78,7 @@ export class IPCSocketServer {
     });
 
     socketServer.listen(xpipe.eq(socketPath), () => {
-      console.log(`Gateway IPC Server running at ${socketPath}`);
+      IPCSocketServer.logger.info(`Gateway IPC Server running at ${socketPath}`);
     });
 
     return new IPCSocketServer(socketServer);
@@ -98,7 +101,7 @@ export class IPCSocketServer {
           }
         }, 500);
       });
-      console.log('status', status);
+      IPCSocketServer.logger.debug('status', status);
       return status;
     }
     // console.log(`cli received message ${type}`);

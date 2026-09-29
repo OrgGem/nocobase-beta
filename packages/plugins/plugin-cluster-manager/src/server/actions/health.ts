@@ -62,6 +62,18 @@ export const healthActions = {
       await lock.release();
     });
 
+    // Report a lock misconfiguration as a separate, explicit check: without the
+    // adapter every node would silently skip its scheduled work instead of
+    // coordinating, which is worse than being marked not-ready.
+    checks.lockAdapter = await runCheck(async () => {
+      if ((process.env.LOCK_ADAPTER_DEFAULT || '').toLowerCase() !== 'redis') {
+        return;
+      }
+      const registry = (ctx.app.lockManager as unknown as { registry?: { get?: (name: string) => unknown } })?.registry;
+      if (registry?.get && !registry.get('redis')) {
+        throw new Error('LOCK_ADAPTER_DEFAULT=redis but the redis lock adapter is not registered');
+      }
+    });
     checks.workerId = await runCheck(async () => {
       const status = plugin?.workerIdAllocator?.getStatus();
       if (status) {
