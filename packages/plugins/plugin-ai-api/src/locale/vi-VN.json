@@ -171,8 +171,6 @@
   "Select a fallback model": "Chọn model dự phòng",
   "Name": "Tên",
   "Rate limit/min": "Giới hạn/phút",
-
-
   "unavailable": "(không khả dụng)",
   "via": "qua",
   "Complexity keywords": "Từ khóa phức tạp",
@@ -182,5 +180,23 @@
   "Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).": "Request có tổng độ dài nội dung đạt ngưỡng này sẽ được coi là phức tạp. Để trống để dùng mặc định (500).",
   "Complexity classifier model": "Mô hình phân loại độ phức tạp",
   "Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.": "Tùy chọn. Khi phát hiện từ khóa/độ dài cho rằng request đơn giản, mô hình giá rẻ này sẽ được gọi để kiểm tra lại. Để trống để tắt.",
-  "Optional — a cheap model used to double-check simple requests": "Tùy chọn — mô hình giá rẻ dùng để kiểm tra lại các request đơn giản"
+  "Optional — a cheap model used to double-check simple requests": "Tùy chọn — mô hình giá rẻ dùng để kiểm tra lại các request đơn giản",
+  "Supports structured output": "Hỗ trợ đầu ra có cấu trúc",
+  "Supports reasoning parameters": "Hỗ trợ tham số suy luận",
+  "Unknown capabilities are not assumed. Reasoning tier or routing lists can declare reasoning support.": "Không mặc định khả năng chưa xác nhận. Nhóm suy luận hoặc danh sách routing có thể khai báo hỗ trợ suy luận.",
+  "Unknown": "Chưa xác nhận",
+  "Supported": "Có hỗ trợ",
+  "Not supported": "Không hỗ trợ",
+  "Vision candidates must also support requested tools, output format and reasoning parameters.": "Model hình ảnh cũng phải hỗ trợ tools, định dạng đầu ra và tham số suy luận được yêu cầu.",
+  "Simple tool requests use this list. Complex tasks prefer reasoning models that also support tools.": "Tác vụ tools đơn giản dùng danh sách này. Tác vụ phức tạp ưu tiên model suy luận có hỗ trợ tools.",
+  "Complex tasks or positive reasoning effort prefer this list, while all requested capabilities remain required.": "Tác vụ phức tạp hoặc yêu cầu suy luận ưu tiên danh sách này, đồng thời vẫn yêu cầu đủ các khả năng khác.",
+  "Keywords apply to the current user task, not generic system prompts or old tasks. A configured classifier can correct the heuristic.": "Từ khóa áp dụng cho tác vụ hiện tại, không áp dụng cho system prompt chung hay tác vụ cũ. Classifier có thể điều chỉnh kết quả.",
+  "Current task length is a complexity hint. A configured classifier can recognize simple extraction from long input. Default: 500.": "Độ dài tác vụ hiện tại là tín hiệu độ phức tạp. Classifier có thể nhận ra trích xuất đơn giản từ đầu vào dài. Mặc định: 500.",
+  "Optional. This permitted model checks current task complexity in either direction. Failure preserves the heuristic. Leave empty to disable.": "Tùy chọn. Model được cấp quyền này có thể tăng hoặc giảm đánh giá độ phức tạp. Khi lỗi, giữ kết quả heuristic. Để trống để tắt.",
+  "Optional — a cheap model used to classify the current task": "Tùy chọn — model tiết kiệm để phân loại tác vụ hiện tại",
+  "Fallback must satisfy the same permissions, capabilities and context requirements as other candidates.": "Model dự phòng phải đáp ứng cùng yêu cầu về quyền, khả năng và context như các ứng viên khác.",
+  "No permitted model supports all requested capabilities. Check model metadata and routing lists.": "Không có model được cấp quyền hỗ trợ đầy đủ yêu cầu. Hãy kiểm tra metadata và danh sách routing.",
+  "The provider completed without text, reasoning or tool calls.": "Provider đã kết thúc nhưng không trả về văn bản, suy luận hay tool calls.",
+  "Opaque reasoning requires the original concrete model or a stored previous response.": "Dữ liệu suy luận riêng của provider yêu cầu model gốc cụ thể hoặc response trước đã được lưu.",
+  "Opaque reasoning cannot be continued on a different model.": "Không thể tiếp tục dữ liệu suy luận riêng của provider bằng model khác."
 }

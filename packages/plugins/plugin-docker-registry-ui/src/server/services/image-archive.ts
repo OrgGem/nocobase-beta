@@ -128,7 +128,7 @@ async function collectImageGraph(
     if (abortSignal?.aborted) {
       throw new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED');
     }
-    
+
     const document = await client.getManifestDocument(repository, manifestReference);
     const digest = document.digest.startsWith('sha256:') ? document.digest : sha256(document.body);
     if (candidate?.digest && candidate.digest !== digest && candidate.digest !== sha256(document.body)) {
@@ -184,22 +184,22 @@ async function streamTarEntry(
   abortSignal?: AbortSignal,
 ): Promise<void> {
   let transferred = 0;
-  
+
   // Check abort signal before streaming
   if (abortSignal?.aborted) {
     throw new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED');
   }
-  
+
   const counter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       transferred += chunk.length;
-      
+
       // Check abort signal during streaming
       if (abortSignal?.aborted) {
         callback(new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED'));
         return;
       }
-      
+
       callback(null, chunk);
     },
   });
@@ -211,8 +211,12 @@ async function streamTarEntry(
 }
 
 export function dockerArchiveRepoTag(publicRegistryHost: string, repository: string, reference: string): string {
-  const prefix = publicRegistryHost ? `${publicRegistryHost.replace(/\/$/, '')}/` : '';
-  return `${prefix}${repository}:${reference}`;
+  const host = publicRegistryHost
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '');
+  const prefix = host ? `${host}/` : '';
+  return `${prefix}${repository}${reference.includes(':') ? '@' : ':'}${reference}`;
 }
 
 function preferredImage(graph: ImageGraph): GraphEntry | undefined {
@@ -234,9 +238,9 @@ export async function createImageArchiveStream(options: {
   abortSignal?: AbortSignal;
 }): Promise<{ stream: PassThrough; filename: string; totalBytes: number }> {
   const graph = await collectImageGraph(
-    options.client, 
-    options.repository, 
-    options.reference, 
+    options.client,
+    options.repository,
+    options.reference,
     options.maxBytes,
     options.abortSignal,
   );
@@ -247,12 +251,17 @@ export async function createImageArchiveStream(options: {
 
   // Listen for abort signal to destroy the output stream
   if (options.abortSignal) {
-    options.abortSignal.addEventListener('abort', () => {
-      output.destroy(new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED'));
-    }, { once: true });
+    options.abortSignal.addEventListener(
+      'abort',
+      () => {
+        output.destroy(new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED'));
+      },
+      { once: true },
+    );
   }
 
   const write = async () => {
+    const imageReference = dockerArchiveRepoTag(options.publicRegistryHost, options.repository, options.reference);
     const rootIndex = Buffer.from(
       JSON.stringify({
         schemaVersion: 2,
@@ -263,7 +272,8 @@ export async function createImageArchiveStream(options: {
             digest: graph.root.digest,
             size: graph.root.size,
             annotations: {
-              [OCI_REFERENCE_NAME_ANNOTATION]: options.reference,
+              [OCI_REFERENCE_NAME_ANNOTATION]: imageReference,
+              'io.containerd.image.name': imageReference,
               [NCOBASE_REPOSITORY_ANNOTATION]: options.repository,
             },
           },
@@ -287,7 +297,7 @@ export async function createImageArchiveStream(options: {
         JSON.stringify([
           {
             Config: digestPath(image.manifest.config.digest),
-            RepoTags: [dockerArchiveRepoTag(options.publicRegistryHost, options.repository, options.reference)],
+            RepoTags: options.reference.includes(':') ? [] : [imageReference],
             Layers: image.manifest.layers.map((layer) => digestPath(layer.digest)),
           },
         ]),
@@ -300,7 +310,7 @@ export async function createImageArchiveStream(options: {
       if (options.abortSignal?.aborted) {
         throw new RegistryRequestError('Download aborted', 499, 'TRANSFER_ABORTED');
       }
-      
+
       const name = digestPath(entry.digest);
       if (entry.body) {
         await tarEntry(archive, { name, size: entry.body.length, mode: 0o644 }, entry.body);
@@ -667,4 +677,3 @@ export function archiveFormat(value: string | undefined): RegistryArchiveFormat 
 export function contentDispositionFilename(filename: string): string {
   return basename(filename).replace(/[^a-zA-Z0-9_.-]/g, '-');
 }
-

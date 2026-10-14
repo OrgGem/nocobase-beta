@@ -16,6 +16,7 @@ import { markAiApiFirstProviderOutput } from '../utils/app-observability';
 import {
   DirectLlmContextError,
   prepareDirectLlmContext,
+  recordPreparedContext,
   type ContextOverflowBehavior,
   type OpenAIMessage,
 } from '../utils/direct-llm-context';
@@ -33,6 +34,7 @@ import {
   extractResponseIncompleteReason,
   extractResponseOutputText,
   extractResponseServiceTier,
+  hasOpaqueReasoning,
   findUnsupportedResponseInput,
   findUnsupportedResponseParameter,
   findResponseInputProblem,
@@ -60,6 +62,8 @@ import { enforceModelAccess } from '../utils/user-permissions';
 import { resolveVirtualModel, respondVirtualModelUnavailable } from '../utils/virtual-models';
 import {
   applyProviderRequestParameters,
+  assertCompletionOutput,
+  EmptyCompletionError,
   bindRequestTools,
   extractFinishReason,
   findContentBlockProblem,
@@ -392,31 +396,62 @@ export async function handleResponses(ctx: Context, plugin: PluginAiApiServer): 
       return;
     }
     messages = [...previousMessages, ...messages];
+    if (hasOpaqueReasoning(messages)) {
+      const previous = await getResponseRecord(ctx, body.previous_response_id, userId);
+      if (previous) ctx.state.aiApiContinuationModel = previous.model;
+    }
   }
 
-  const virtual = await resolveVirtualModel(ctx, body.model as string, chatBody, 'chat');
-  if (virtual?.status === 'unavailable') {
-    respondVirtualModelUnavailable(ctx, virtual);
-    return;
-  }
-  if (virtual?.status === 'resolved') {
-    ctx.state.aiApiVirtualModel = virtual.virtualModel;
-    ctx.state.aiApiRoutingReason = virtual.reason;
-  }
-  const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model as string));
-  if (!resolved) {
-    ctx.status = 404;
-    ctx.body = toOpenAIError(
-      404,
-      `Could not resolve model '${body.model}'. Format: 'serviceName/modelId'. Use GET /v1/models to see available models.`,
-      'invalid_request_error',
-      'model_not_found',
-    );
-    return;
-  }
-
-  const { service, modelId } = resolved;
   try {
+    messages = await Promise.all(
+      messages.map(async (message) => ({
+        ...message,
+        content: await processMessageContentFileBlocks(message.content, ctx, plugin),
+      })),
+    );
+    const virtual = await resolveVirtualModel(
+      ctx,
+      body.model as string,
+      { ...chatBody, messages },
+      'chat',
+      responseOverflowBehavior(body),
+    );
+    if (virtual?.status === 'unavailable') {
+      respondVirtualModelUnavailable(ctx, virtual);
+      return;
+    }
+    if (virtual?.status === 'resolved') {
+      ctx.state.aiApiVirtualModel = virtual.virtualModel;
+      ctx.state.aiApiRoutingReason = virtual.reason;
+    }
+    const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model as string));
+    if (!resolved) {
+      ctx.status = 404;
+      ctx.body = toOpenAIError(
+        404,
+        `Could not resolve model '${body.model}'. Format: 'serviceName/modelId'. Use GET /v1/models to see available models.`,
+        'invalid_request_error',
+        'model_not_found',
+      );
+      return;
+    }
+
+    const { service, modelId } = resolved;
+    if (
+      ctx.state.aiApiContinuationModel &&
+      hasOpaqueReasoning(messages) &&
+      `${service.get('name')}/${modelId}` !== ctx.state.aiApiContinuationModel
+    ) {
+      const message = 'Opaque reasoning cannot be continued on a different model.';
+      ctx.status = 400;
+      ctx.body = toOpenAIError(
+        400,
+        ctx.t?.(message, { ns: 'plugin-ai-api' }) ?? message,
+        'invalid_request_error',
+        'opaque_reasoning_model_mismatch',
+      );
+      return;
+    }
     const aiPlugin = ctx.app.pm.get('ai') as
       | { aiManager?: { llmProviders?: Map<string, LlmProviderMetadata> } }
       | undefined;
@@ -441,20 +476,16 @@ export async function handleResponses(ctx: Context, plugin: PluginAiApiServer): 
       return;
     }
 
-    messages = await Promise.all(
-      messages.map(async (message) => ({
-        ...message,
-        content: await processMessageContentFileBlocks(message.content, ctx, plugin),
-      })),
-    );
     const prepared = await prepareDirectLlmContext(ctx, {
       serviceName: service.get('name') as string,
       modelId,
       messages,
       tools: chatBody.tools,
+      responseFormat: chatBody.response_format,
       maxCompletionTokens: chatBody.max_completion_tokens,
       overflowBehavior: responseOverflowBehavior(body),
     });
+    recordPreparedContext(ctx, prepared);
     await prepareLlmBilling(ctx, resolved);
 
     const modelOptions: Record<string, unknown> = {
@@ -463,7 +494,7 @@ export async function handleResponses(ctx: Context, plugin: PluginAiApiServer): 
     };
     if (chatBody.temperature !== undefined) modelOptions.temperature = chatBody.temperature;
     if (chatBody.top_p !== undefined) modelOptions.topP = chatBody.top_p;
-    if (chatBody.max_completion_tokens !== undefined) modelOptions.maxTokens = chatBody.max_completion_tokens;
+    modelOptions.maxTokens = chatBody.max_completion_tokens ?? prepared.reservedOutputTokens;
     if (chatBody.reasoning !== undefined) modelOptions.reasoning = chatBody.reasoning;
     if (chatBody.service_tier !== undefined) modelOptions.service_tier = chatBody.service_tier;
     if (chatBody.promptCacheKey !== undefined) modelOptions.promptCacheKey = chatBody.promptCacheKey;
@@ -514,13 +545,13 @@ export async function handleResponses(ctx: Context, plugin: PluginAiApiServer): 
     if (!ctx.res?.headersSent) {
       const quotaError = error instanceof AiApiQuotaError;
       const requestError = error instanceof DirectLlmContextError || error instanceof FileProcessorError;
-      ctx.status = quotaError ? 429 : requestError ? 400 : 500;
+      ctx.status = quotaError ? 429 : requestError ? 400 : error instanceof EmptyCompletionError ? 502 : 500;
       if (quotaError) ctx.set('X-RateLimit-Reason', error.code);
       ctx.body = toOpenAIError(
         ctx.status,
         getErrorMessage(error, 'Internal server error'),
         quotaError ? 'quota_error' : requestError ? 'invalid_request_error' : 'server_error',
-        quotaError || requestError ? error.code : undefined,
+        quotaError || requestError || error instanceof EmptyCompletionError ? error.code : undefined,
       );
     }
   }
@@ -555,6 +586,13 @@ async function handleNonStreamingResponse(
     serviceTier: extractResponseServiceTier(result),
     requestBody: body,
   });
+  assertCompletionOutput(
+    content,
+    !!response.output.some((item) => item.type === 'function_call'),
+    extractReasoningText(result),
+    extractFinishReason(result) ?? extractResponseIncompleteReason(result),
+    ctx,
+  );
   if (body.store !== false && userId !== undefined) await storeResponseRecord(ctx, response, body, userId);
   ctx.status = 200;
   ctx.body = response;
@@ -600,6 +638,13 @@ async function handleStreamingResponse(
       providerRequestId = providerRequestId ?? extractProviderRequestId(chunk);
     }
 
+    assertCompletionOutput(
+      state.textItem?.text ?? '',
+      state.toolCalls.size > 0 || !!state.completeToolCalls?.length,
+      state.reasoningItem?.text,
+      state.finishReason,
+      ctx,
+    );
     const finalEvents = finalizeResponseStream(state) as Array<Record<string, unknown>>;
     const response = findCompletedResponse(finalEvents);
     if (response && body.store !== false && userId !== undefined) {
@@ -622,7 +667,7 @@ async function handleStreamingResponse(
     if (!ctx.res.destroyed && !ctx.res.writableEnded) {
       const streamError = {
         message: getErrorMessage(error, 'Streaming error'),
-        code: cancelled ? 'client_disconnected' : 'server_error',
+        code: cancelled ? 'client_disconnected' : error instanceof EmptyCompletionError ? error.code : 'server_error',
       };
       await writeResponse(ctx, formatSSE(createResponseErrorEvent(state, streamError)));
       await writeResponse(ctx, formatSSE(createResponseFailedEvent(state, streamError)));
@@ -631,7 +676,11 @@ async function handleStreamingResponse(
     ctx.state.aiApiStreamResult = {
       succeeded: false,
       id: responseId,
-      errorCode: cancelled ? 'client_disconnected' : 'stream_error',
+      errorCode: cancelled
+        ? 'client_disconnected'
+        : error instanceof EmptyCompletionError
+          ? error.code
+          : 'stream_error',
     };
   } finally {
     requestAbort.dispose();

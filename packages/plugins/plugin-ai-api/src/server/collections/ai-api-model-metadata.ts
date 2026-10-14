@@ -77,6 +77,18 @@ export default defineCollection({
       comment: 'Whether the model accepts tools / tool_choice. Used by virtual-model routing.',
     },
     {
+      name: 'supportsStructuredOutput',
+      type: 'boolean',
+      allowNull: true,
+      comment: 'Confirmed support for JSON object/schema response formats. Null means unknown.',
+    },
+    {
+      name: 'supportsReasoning',
+      type: 'boolean',
+      allowNull: true,
+      comment: 'Confirmed support for reasoning parameters. Null uses reasoning-tier/list declarations.',
+    },
+    {
       name: 'reasoningTier',
       type: 'string',
       defaultValue: 'general',

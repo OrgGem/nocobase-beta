@@ -53,9 +53,19 @@ describe('Docker Registry image archives', () => {
     expect(dockerArchiveRepoTag('registry.example.com', 'demo/alpine', 'latest')).toBe(
       'registry.example.com/demo/alpine:latest',
     );
+    expect(dockerArchiveRepoTag(' https://registry.example.com:5000/ ', 'team/backend', '1.4.2')).toBe(
+      'registry.example.com:5000/team/backend:1.4.2',
+    );
+    expect(dockerArchiveRepoTag('', 'team/backend', 'sha256:abc')).toBe('team/backend@sha256:abc');
   });
 
-  it('exports a Docker-load-compatible hybrid tar without buffering remote blobs', async () => {
+  it.each([
+    ['docker', 'localhost:15000', 'latest'],
+    ['docker', '', '1.4.2'],
+    ['oci', '', '1.4.2'],
+    ['oci', 'https://registry.example.com:5000/', '1.4.2'],
+    ['docker', '', `sha256:${'a'.repeat(64)}`],
+  ] as const)('preserves the image name in %s exports from %s at %s', async (format, publicRegistryHost, reference) => {
     const config = Buffer.from('{"architecture":"amd64","os":"linux"}');
     const layer = Buffer.from('compressed-layer');
     const configDescriptor: Descriptor = { digest: digest(config), size: config.length };
@@ -86,33 +96,38 @@ describe('Docker Registry image archives', () => {
         body: manifest,
       })),
       openBlob,
-      uploadBlob: vi.fn(),
-      putManifest: vi.fn(),
+      uploadBlob: vi.fn(async () => 'uploaded' as const),
+      putManifest: vi.fn(async (_repository: string, _reference: string, body: Buffer) => digest(body)),
     };
 
     const archive = await createImageArchiveStream({
       client,
       repository: 'demo/alpine',
-      reference: 'latest',
-      format: 'docker',
-      publicRegistryHost: 'localhost:15000',
+      reference,
+      format,
+      publicRegistryHost,
       maxBytes: 1024 * 1024,
     });
-    const files = await untar(await collect(archive.stream));
+    const archiveBody = await collect(archive.stream);
+    const files = await untar(archiveBody);
 
-    expect(JSON.parse(files.get('manifest.json')?.toString('utf8') ?? '[]')).toEqual([
-      {
-        Config: `blobs/sha256/${configDescriptor.digest.slice(7)}`,
-        RepoTags: ['localhost:15000/demo/alpine:latest'],
-        Layers: [`blobs/sha256/${layerDescriptor.digest.slice(7)}`],
-      },
-    ]);
+    const imageReference = dockerArchiveRepoTag(publicRegistryHost, 'demo/alpine', reference);
+    if (format === 'docker')
+      expect(JSON.parse(files.get('manifest.json')?.toString('utf8') ?? '[]')).toEqual([
+        {
+          Config: `blobs/sha256/${configDescriptor.digest.slice(7)}`,
+          RepoTags: reference.includes(':') ? [] : [imageReference],
+          Layers: [`blobs/sha256/${layerDescriptor.digest.slice(7)}`],
+        },
+      ]);
+    else expect(files.has('manifest.json')).toBe(false);
     expect(JSON.parse(files.get('index.json')?.toString('utf8') ?? '{}')).toMatchObject({
       manifests: [
         {
           annotations: {
             [NCOBASE_REPOSITORY_ANNOTATION]: 'demo/alpine',
-            [OCI_REFERENCE_NAME_ANNOTATION]: 'latest',
+            [OCI_REFERENCE_NAME_ANNOTATION]: imageReference,
+            'io.containerd.image.name': imageReference,
           },
         },
       ],
@@ -120,6 +135,18 @@ describe('Docker Registry image archives', () => {
     expect(files.get(`blobs/sha256/${configDescriptor.digest.slice(7)}`)).toEqual(config);
     expect(files.get(`blobs/sha256/${layerDescriptor.digest.slice(7)}`)).toEqual(layer);
     expect(openBlob).toHaveBeenCalledTimes(2);
+    if (!reference.includes(':')) {
+      const imported = await uploadImageArchive({
+        input: Readable.from(archiveBody) as IncomingMessage,
+        client,
+        format,
+        maxBytes: 1024 * 1024,
+        chunkSize: 1024,
+        timeoutMs: 10000,
+      });
+      expect(imported).toMatchObject({ repository: 'demo/alpine', tag: reference, format });
+      if (format === 'oci') expect(imported.digest).toBe(manifestDigest);
+    }
   });
 
   it('imports an OCI image-layout tar and pushes blobs before the tagged manifest', async () => {

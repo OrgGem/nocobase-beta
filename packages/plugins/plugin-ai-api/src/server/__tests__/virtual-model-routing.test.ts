@@ -14,7 +14,13 @@ import type PluginAiApiServer from '../plugin';
 import { handleChatCompletions } from '../routes/chat-completions';
 import { handleEmbeddings } from '../routes/embeddings';
 import { resolveModelReference, resolveModelString } from '../utils/resolve-service';
-import { detectRequestSignals, listAccessibleVirtualModels } from '../utils/virtual-models';
+import {
+  detectRequestSignals,
+  listAccessibleVirtualModels,
+  resolveVirtualModel,
+  collectRelevantText,
+} from '../utils/virtual-models';
+import { classifyComplexity } from '../utils/complexity-classifier';
 import { invalidateGroupAccessCache } from '../utils/user-permissions';
 
 vi.mock('../utils/resolve-service', () => ({
@@ -23,7 +29,7 @@ vi.mock('../utils/resolve-service', () => ({
 }));
 
 vi.mock('../utils/complexity-classifier', () => ({
-  classifyComplexity: vi.fn().mockResolvedValue(false),
+  classifyComplexity: vi.fn().mockResolvedValue(undefined),
 }));
 
 interface ModelResult {
@@ -148,6 +154,7 @@ const VIRTUAL_MODEL_ROW_WITH_CLASSIFIER = {
 describe('AI API virtual model routing (llm mode)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(classifyComplexity).mockReset().mockResolvedValue(undefined);
     invalidateGroupAccessCache();
     // Default: every concrete model resolves successfully.
     const resolveAny = async (_ctx: unknown, modelString: unknown) => {
@@ -611,7 +618,7 @@ describe('AI API virtual model routing (llm mode)', () => {
 
   // ─── Content-complexity detection tests ───
 
-  it('routes a complex content request with tools to the tools bucket (structural signals first)', async () => {
+  it('routes a complex task to reasoning while preserving tool support', async () => {
     const { ctx } = createContext(
       { content: 'ok' },
       {
@@ -633,9 +640,9 @@ describe('AI API virtual model routing (llm mode)', () => {
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
     expect(ctx.status).toBe(200);
-    expect(ctx.state.aiApiRoutingReason).toBe('tools');
+    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
     expect(ctx.state.aiApiLlmBilling).toMatchObject({
-      resolution: { service: 'tool-svc', model: 'tool-model' },
+      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
     });
   });
 
@@ -673,7 +680,6 @@ describe('AI API virtual model routing (llm mode)', () => {
         model: 'auto',
         messages: [{ role: 'user', content: 'Hello' }],
         tools: [{ type: 'function', function: { name: 'x' } }],
-        reasoning_effort: 'high',
         stream: false,
       },
       { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
@@ -812,7 +818,7 @@ describe('AI API virtual model routing (llm mode)', () => {
 
   // ─── Complexity classifier integration tests ───
 
-  it('routes to tools when the classifier confirms complex but tools are present (structural first)', async () => {
+  it('routes to reasoning when the classifier confirms complex with tools', async () => {
     const { classifyComplexity } = await import('../utils/complexity-classifier');
     vi.mocked(classifyComplexity).mockResolvedValue(true);
 
@@ -830,9 +836,9 @@ describe('AI API virtual model routing (llm mode)', () => {
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
     expect(ctx.status).toBe(200);
-    expect(ctx.state.aiApiRoutingReason).toBe('tools');
+    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
     expect(ctx.state.aiApiLlmBilling).toMatchObject({
-      resolution: { service: 'tool-svc', model: 'tool-model' },
+      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
     });
     expect(classifyComplexity).toHaveBeenCalledTimes(1);
   });
@@ -861,7 +867,7 @@ describe('AI API virtual model routing (llm mode)', () => {
     expect(classifyComplexity).toHaveBeenCalledTimes(1);
   });
 
-  it('does not call the classifier when keyword detection already says complex', async () => {
+  it('lets the classifier correct a keyword false positive', async () => {
     const { classifyComplexity } = await import('../utils/complexity-classifier');
     vi.mocked(classifyComplexity).mockResolvedValue(false);
 
@@ -883,8 +889,8 @@ describe('AI API virtual model routing (llm mode)', () => {
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
     expect(ctx.status).toBe(200);
-    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
-    expect(classifyComplexity).not.toHaveBeenCalled();
+    expect(ctx.state.aiApiRoutingReason).toBe('general');
+    expect(classifyComplexity).toHaveBeenCalledTimes(1);
   });
 
   it('falls back to normal routing when the classifier is not configured', async () => {
@@ -907,5 +913,309 @@ describe('AI API virtual model routing (llm mode)', () => {
     expect(ctx.status).toBe(200);
     expect(ctx.state.aiApiRoutingReason).toBe('tools');
     expect(classifyComplexity).not.toHaveBeenCalled();
+  });
+
+  it.each([{ reasoning_effort: 'high' }, { reasoning: { effort: 'medium' } }])(
+    'honors positive reasoning effort with tools: %j',
+    async (effort) => {
+      const { ctx } = createContext(
+        { content: 'answer' },
+        {
+          model: 'auto',
+          messages: [{ role: 'user', content: 'Hello' }],
+          tools: [{ type: 'function' }],
+          stream: false,
+          ...effort,
+        },
+        { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+      );
+      await handleChatCompletions(ctx, {} as PluginAiApiServer);
+      expect(ctx.status).toBe(200);
+      expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    },
+  );
+
+  it.each([{ reasoning_effort: 'none' }, { reasoning: { effort: 'none' } }, { reasoning: {} }])(
+    'does not treat disabled or unspecified effort as a reasoning request: %j',
+    (effort) => {
+      expect(detectRequestSignals({ messages: [{ role: 'user', content: 'Hello' }], ...effort }).wantsReasoning).toBe(
+        false,
+      );
+    },
+  );
+
+  it('ignores system prompts and old tasks when a new user task is simple', () => {
+    const body = {
+      messages: [
+        { role: 'system', content: 'Plan, analyze and review '.repeat(100) },
+        { role: 'user', content: 'Plan an architecture migration' },
+        { role: 'assistant', content: 'Done' },
+        { role: 'human', content: 'Hello' },
+      ],
+    };
+    expect(detectRequestSignals(body).hasComplexContent).toBe(false);
+    expect(collectRelevantText(body)).toBe('Hello');
+  });
+
+  it('retains the task for tool continuations and explicit continue messages', () => {
+    const messages = [
+      { role: 'user', content: 'Phân tích kiến trúc hệ thống' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'call-1' }] },
+      { role: 'tool', content: '{"value": 1}', tool_call_id: 'call-1' },
+    ];
+    expect(detectRequestSignals({ messages }).hasComplexContent).toBe(true);
+    expect(detectRequestSignals({ messages }).phase).toBe('execution');
+    expect(
+      detectRequestSignals({ messages: [...messages, { role: 'user', content: 'tiếp tục' }] }).hasComplexContent,
+    ).toBe(true);
+  });
+
+  it('escalates repeated structured tool failures, but not arbitrary error words', () => {
+    const messages = [
+      { role: 'user', content: 'Fetch status' },
+      { role: 'tool', content: '{"success":false}' },
+      { role: 'tool', content: '{"error":"timeout"}' },
+    ];
+    expect(detectRequestSignals({ messages })).toMatchObject({ phase: 'recovery', hasComplexContent: true });
+    expect(
+      detectRequestSignals({
+        messages: [
+          { role: 'user', content: 'Fetch status' },
+          { role: 'tool', content: 'A long article about error handling' },
+        ],
+      }).hasComplexContent,
+    ).toBe(false);
+  });
+
+  it('does not prioritize tooling when tool_choice is none', async () => {
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Hello' }],
+        tools: [{ type: 'function' }],
+        tool_choice: 'none',
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+    );
+    const result = await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat');
+    expect(result).toMatchObject({ status: 'resolved', reason: 'general' });
+  });
+
+  it.each([
+    { key: 'supportsToolCalling', request: { tools: [{ type: 'function' }] } },
+    { key: 'supportsVision', request: { messages: [{ role: 'user', content: [{ type: 'image_url' }] }] } },
+    { key: 'supportsStructuredOutput', request: { response_format: { type: 'json_schema' } } },
+    { key: 'supportsReasoning', request: { reasoning_effort: 'high' } },
+    { key: 'enabled', request: {} },
+  ])(
+    'rejects explicitly unsupported capability or disabled metadata including fallback: $key',
+    async ({ key, request }) => {
+      const { ctx, model } = createContext(
+        { content: 'answer' },
+        {
+          model: 'auto',
+          messages: [{ role: 'user', content: 'Hello' }],
+          stream: false,
+          ...request,
+        },
+        { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+        (name) =>
+          name === key ? false : name === 'contextWindow' ? 128000 : name === 'maxCompletionTokens' ? 8192 : true,
+      );
+      const result = await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat');
+      expect(result).toMatchObject({ status: 'unavailable', reason: 'no_compatible_model' });
+      expect(model.invoke).not.toHaveBeenCalled();
+    },
+  );
+
+  it('filters all capabilities together for reasoning with images, tools and schema', async () => {
+    const metadata = (model: string) => ({
+      get: (key: string) =>
+        ({
+          enabled: true,
+          supportsVision: true,
+          supportsToolCalling: model !== 'bad',
+          supportsStructuredOutput: true,
+          supportsReasoning: true,
+          contextWindow: 128000,
+          maxCompletionTokens: 8192,
+        })[key],
+    });
+    const vm = {
+      ...VIRTUAL_MODEL_ROW,
+      get: (key: string) =>
+        key === 'reasoningModels' ? ['reasoning-svc/bad', 'reasoning-svc/good'] : VIRTUAL_MODEL_ROW.get(key),
+    };
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'Analyze this chart' }, { type: 'image_url' }] }],
+        tools: [{ type: 'function' }],
+        response_format: { type: 'json_schema' },
+        reasoning_effort: 'high',
+      },
+      {
+        aiApiVirtualModels: { findOne: () => vm },
+        aiApiModelMetadata: {
+          findOne: (options?: { filter?: { model?: string } }) => metadata(options?.filter?.model ?? ''),
+        },
+      },
+    );
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'reasoning',
+      resolved: { modelId: 'good' },
+    });
+    expect(ctx.state.aiApiRoutingDiagnostics).toMatchObject({
+      rejected: [{ model: 'reasoning-svc/bad', reason: 'missing_capability' }],
+    });
+  });
+
+  it('prefers a larger context candidate before truncating the preferred model', async () => {
+    const vm = {
+      get: (key: string) => (key === 'reasoningModels' ? ['svc/small', 'svc/large'] : VIRTUAL_MODEL_ROW.get(key)),
+    };
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        messages: [{ role: 'user', content: 'Plan '.repeat(150) }],
+      },
+      {
+        aiApiVirtualModels: { findOne: () => vm },
+        aiApiModelMetadata: {
+          findOne: (options?: { filter?: { model?: string } }) => ({
+            get: (key: string) =>
+              key === 'contextWindow'
+                ? options?.filter?.model === 'small'
+                  ? 120
+                  : 4096
+                : key === 'maxCompletionTokens'
+                  ? 40
+                  : true,
+          }),
+        },
+      },
+    );
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat', 'truncate')).toMatchObject({
+      resolved: { modelId: 'large' },
+    });
+    expect(ctx.state.aiApiRoutingDiagnostics).toMatchObject({
+      rejected: [{ model: 'svc/small', reason: 'context_length_exceeded' }],
+    });
+  });
+
+  it('truncates only after every compatible candidate fails full context, preserving tool pairs', async () => {
+    const vm = {
+      get: (key: string) =>
+        key === 'fallbackModel'
+          ? 'svc/small'
+          : key === 'generalModels'
+            ? ['svc/small']
+            : key === 'reasoningModels'
+              ? ['svc/small']
+              : VIRTUAL_MODEL_ROW.get(key),
+    };
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        messages: [
+          { role: 'user', content: 'old '.repeat(200) },
+          { role: 'assistant', content: 'old answer' },
+          { role: 'user', content: 'Plan next' },
+          {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
+          },
+          { role: 'tool', tool_call_id: 'call_1', content: 'result' },
+        ],
+      },
+      {
+        aiApiVirtualModels: { findOne: () => vm },
+        aiApiModelMetadata: {
+          findOne: () => ({
+            get: (key: string) => (key === 'contextWindow' ? 240 : key === 'maxCompletionTokens' ? 40 : true),
+          }),
+        },
+      },
+    );
+    const result = await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat', 'truncate');
+    expect(result).toMatchObject({ status: 'resolved', resolved: { modelId: 'small' } });
+    expect(ctx.state.aiApiRoutingDiagnostics).toMatchObject({ truncated: true });
+    await expect(resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat', 'reject')).rejects.toMatchObject({
+      code: 'context_length_exceeded',
+    });
+  });
+
+  it('returns a context error when the newest turn cannot fit even with truncate', async () => {
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { messages: [{ role: 'user', content: 'x'.repeat(1000) }] },
+      {
+        aiApiVirtualModels: { findOne: () => VIRTUAL_MODEL_ROW },
+      },
+      (key) => (key === 'contextWindow' ? 120 : key === 'maxCompletionTokens' ? 40 : true),
+    );
+    await expect(resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat', 'truncate')).rejects.toMatchObject({
+      code: 'context_length_exceeded',
+    });
+  });
+
+  it('does not call a classifier outside the caller service scope', async () => {
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { messages: [{ role: 'user', content: 'Fetch current status please' }] },
+      {
+        aiApiVirtualModels: { findOne: () => VIRTUAL_MODEL_ROW_WITH_CLASSIFIER },
+        aiApiUsageGroups: {
+          findOne: () => ({
+            id: 20,
+            name: 'Scoped',
+            isDefault: true,
+            allowedLlmServices: ['general-svc'],
+            allowAllModels: true,
+          }),
+        },
+      },
+    );
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'general',
+    });
+    expect(classifyComplexity).not.toHaveBeenCalled();
+  });
+
+  it('preserves heuristic complexity when the classifier fails', async () => {
+    vi.mocked(classifyComplexity).mockResolvedValue(undefined);
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { messages: [{ role: 'user', content: 'Plan the migration' }] },
+      {
+        aiApiVirtualModels: { findOne: () => VIRTUAL_MODEL_ROW_WITH_CLASSIFIER },
+      },
+    );
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({ reason: 'reasoning' });
+  });
+
+  it('pins opaque reasoning continuations to the previous model and rejects unknown provenance', async () => {
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        messages: [
+          { role: 'user', content: 'Plan next' },
+          { role: 'assistant', content: '', additional_kwargs: { reasoning: { encrypted_content: 'opaque' } } },
+        ],
+      },
+      { aiApiVirtualModels: { findOne: () => VIRTUAL_MODEL_ROW } },
+    );
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'unavailable',
+      reason: 'opaque_reasoning_model_required',
+    });
+    ctx.state.aiApiContinuationModel = 'general-svc/general-model';
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      resolved: { modelId: 'general-model' },
+    });
   });
 });

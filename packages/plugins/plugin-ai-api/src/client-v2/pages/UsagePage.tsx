@@ -17,7 +17,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
 
@@ -76,7 +76,7 @@ const emptySummary: UsageSummary = {
 };
 
 export default function UsagePage() {
-  const ctx = useFlowContext();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm<UsageFilters>();
   const [rows, setRows] = useState<UsageRecord[]>([]);
@@ -107,12 +107,12 @@ export default function UsagePage() {
       setLoading(true);
       try {
         const [recordsResponse, summaryResponse] = await Promise.all([
-          ctx.api.request({
+          api.request({
             url: 'aiApiUsageRecords:list',
             method: 'get',
             params: { pageSize: 100, sort: '-startedAt', filter: { $and: conditions } },
           }),
-          ctx.api.request({ url: 'aiApiUsageMonitor:summary', method: 'get', params: summaryParams }),
+          api.request({ url: 'aiApiUsageMonitor:summary', method: 'get', params: summaryParams }),
         ]);
         setRows(unwrapData<UsageRecord[]>(recordsResponse, []));
         setSummary(unwrapData<UsageSummary>(summaryResponse, emptySummary));
@@ -122,18 +122,18 @@ export default function UsagePage() {
         setLoading(false);
       }
     },
-    [ctx.api, form],
+    [api, form],
   );
 
   useEffect(() => {
     const range = initialRange();
     form.setFieldsValue({ range });
     load({ range });
-    ctx.api
+    api
       .request({ url: 'ai:listLLMServices', method: 'get' })
       .then((response) => setServices(unwrapData<LlmService[]>(response, [])))
       .catch((error: unknown) => message.error(errorMessage(error)));
-  }, [ctx.api, form, load]);
+  }, [api, form, load]);
 
   const reset = () => {
     const range = initialRange();

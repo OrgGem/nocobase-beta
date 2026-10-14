@@ -150,6 +150,8 @@ describe('direct LLM context preparation', () => {
     const prepared = await prepareDirectLlmContext(context({ behavior: 'truncate' }), request(messages));
 
     expect(prepared.truncated).toBe(true);
+    expect(prepared).toMatchObject({ droppedMessages: 2, droppedTurns: 1 });
+    expect(prepared.originalEstimatedInputTokens).toBeGreaterThan(prepared.estimatedInputTokens);
     expect(prepared.messages).toEqual([messages[0], messages[3]]);
     expect(messages).toHaveLength(4);
   });
@@ -171,6 +173,41 @@ describe('direct LLM context preparation', () => {
     await expect(
       prepareDirectLlmContext(context({ behavior: 'truncate' }), request([{ role: 'user', content: 'x'.repeat(400) }])),
     ).rejects.toMatchObject<Partial<DirectLlmContextError>>({ code: 'context_length_exceeded' });
+  });
+
+  it('counts tool arguments alongside array content in the context budget', async () => {
+    await expect(
+      prepareDirectLlmContext(
+        context(),
+        request([
+          {
+            role: 'assistant',
+            content: [{ type: 'text', text: '' }],
+            tool_calls: [{ id: 'call_1', function: { name: 'lookup', arguments: 'x'.repeat(400) } }],
+          },
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: 'context_length_exceeded' });
+  });
+
+  it('counts structured output schemas in the fixed context overhead', async () => {
+    await expect(
+      prepareDirectLlmContext(context(), {
+        ...request([{ role: 'user', content: 'Hello' }]),
+        responseFormat: { type: 'json_schema', json_schema: { description: 'x'.repeat(400) } },
+      }),
+    ).rejects.toMatchObject({ code: 'context_length_exceeded' });
+  });
+
+  it('treats human aliases as complete turns during truncation', async () => {
+    const messages = [
+      { role: 'human', content: 'old '.repeat(100) },
+      { role: 'assistant', content: 'old answer' },
+      { role: 'human', content: 'Hello' },
+    ];
+    const prepared = await prepareDirectLlmContext(context({ behavior: 'truncate' }), request(messages));
+    expect(prepared.messages).toEqual([messages[2]]);
+    expect(prepared.droppedTurns).toBe(1);
   });
 
   it('estimates vision tokens for a base64 image_url and allows small payloads', async () => {

@@ -13,7 +13,7 @@ export class PluginUipathOrchestratorClient extends Plugin<Record<string, never>
       menuKey: 'uipath-orchestrator',
       key: 'index',
       title: this.t('UiPath Orchestrator'),
-
+      aclSnippet: 'pm.plugin-uipath-orchestrator',
       componentLoader: () => import('./components/UiPathSettingsPage').then((m) => ({ default: m.UiPathSettingsPage })),
     });
   }

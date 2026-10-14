@@ -38,6 +38,10 @@ Nút **Test connection** kiểm tra chính các giá trị chưa lưu trong form
 
 Luồng thông thường: tìm repository, mở danh sách tag, xem digest/size/platform/layers, rồi mở image detail để xem config, history, raw manifest và OCI referrers nếu Registry hỗ trợ.
 
+Trong client v2, các tab Images, Settings và Guide có thể nhúng qua `plugin-block-embed-settings`. Tab Images giữ điều hướng repository/image và nút Back trong từng block, không sử dụng query của trang chứa block và không chuyển sang Admin Settings khi mở image.
+
+File tar tải về ghi đầy đủ tên image trong Docker `RepoTags` và các annotation OCI/containerd, ví dụ `team/backend:1.4.2` hoặc `registry.example.com:5000/team/backend:1.4.2` khi cấu hình public host. Khi tải theo digest, tên OCI dùng `repository@sha256:...` và Docker không tạo tag giả từ digest. Để nhập qua chức năng import image của Portainer/Docker, chọn **Docker save tar**. Các file tải trước bản sửa vẫn có metadata cũ; cần tải lại.
+
 ## Phân quyền
 
 - `pm.docker-registry-ui.read`: xem Registry, repository, tag và image detail.

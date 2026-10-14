@@ -32,7 +32,13 @@ import { getAiApiConfig } from '../utils/request-cache';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
-import { DirectLlmContextError, prepareDirectLlmContext, type OpenAIMessage } from '../utils/direct-llm-context';
+import {
+  DirectLlmContextError,
+  prepareDirectLlmContext,
+  recordPreparedContext,
+  type OpenAIMessage,
+} from '../utils/direct-llm-context';
+import { extractResponseOutputText, extractReasoningText, responseIncompleteReason } from '../utils/responses-format';
 import { markAiApiFirstProviderOutput } from '../utils/app-observability';
 import { FileContentBlock, FileProcessorError } from '../services/file-processor';
 
@@ -97,31 +103,37 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
 
   const stream = isStreamingRequested(body.stream);
 
-  // ─── Resolve model string against DB (virtual alias first, then concrete) ───
-  const virtual = await resolveVirtualModel(ctx, body.model, body, 'chat');
-  if (virtual?.status === 'unavailable') {
-    respondVirtualModelUnavailable(ctx, virtual);
-    return;
-  }
-  if (virtual?.status === 'resolved') {
-    ctx.state.aiApiVirtualModel = virtual.virtualModel;
-    ctx.state.aiApiRoutingReason = virtual.reason;
-  }
-  const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model));
-  if (!resolved) {
-    ctx.status = 404;
-    ctx.body = toOpenAIError(
-      404,
-      `Could not resolve model '${body.model}'. Format: 'serviceName/modelId'. Use GET /v1/models to see available models.`,
-      'invalid_request_error',
-      'model_not_found',
-    );
-    return;
-  }
-
-  const { service, modelId } = resolved;
-
   try {
+    // Resolve capabilities and context against processed attachments, not file placeholders.
+    let messages: OpenAIMessage[] = await Promise.all(
+      (body.messages as OpenAIMessage[]).map(async (msg) => ({
+        ...msg,
+        content: await processMessageContentFileBlocks(msg.content, ctx, plugin),
+      })),
+    );
+    const virtual = await resolveVirtualModel(ctx, body.model, { ...body, messages }, 'chat');
+    if (virtual?.status === 'unavailable') {
+      respondVirtualModelUnavailable(ctx, virtual);
+      return;
+    }
+    if (virtual?.status === 'resolved') {
+      ctx.state.aiApiVirtualModel = virtual.virtualModel;
+      ctx.state.aiApiRoutingReason = virtual.reason;
+    }
+    const resolved = virtual?.resolved ?? (await resolveModelString(ctx, body.model));
+    if (!resolved) {
+      ctx.status = 404;
+      ctx.body = toOpenAIError(
+        404,
+        `Could not resolve model '${body.model}'. Format: 'serviceName/modelId'. Use GET /v1/models to see available models.`,
+        'invalid_request_error',
+        'model_not_found',
+      );
+      return;
+    }
+
+    const { service, modelId } = resolved;
+
     const aiPlugin = ctx.app.pm.get('ai') as any;
     if (!aiPlugin) {
       ctx.status = 500;
@@ -179,25 +191,20 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     // Direct LLM mode ignores the default AI Employee: its prompt belongs to agent
     // mode only. The model metadata system prompt is still applied later by
     // prepareDirectLlmContext.
-    let messages: OpenAIMessage[] = [...body.messages];
-
-    // ─── Process file / file_url blocks through the file processor service ───
-    messages = await Promise.all(
-      messages.map(async (msg) => ({
-        ...msg,
-        content: await processMessageContentFileBlocks(msg.content, ctx, plugin),
-      })),
-    );
-
     const preparedContext = await prepareDirectLlmContext(ctx, {
       serviceName: service.name,
       modelId,
       messages,
       tools: body.tools,
+      responseFormat: body.response_format,
       maxCompletionTokens: body.max_completion_tokens,
       maxTokens: body.max_tokens,
     });
     messages = preparedContext.messages;
+    recordPreparedContext(ctx, preparedContext);
+    if (body.max_completion_tokens === undefined && body.max_tokens === undefined) {
+      modelOptions.maxTokens = preparedContext.reservedOutputTokens;
+    }
 
     await prepareLlmBilling(ctx, resolved);
 
@@ -216,7 +223,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
     // format: [{type:'text'}, {type:'image_url', image_url:{url:'data:...'}}]).
     // Arrays must be forwarded structurally — stringifying them would turn an
     // image into literal JSON text and the model would never see the picture.
-    const langchainMessages = messages.map((msg: any) => {
+    const langchainMessages = messages.map((msg) => {
       const role = msg.role === 'assistant' ? 'ai' : msg.role;
       const content = normalizeMessageContent(msg.content);
       if (msg.role === 'assistant' && msg.tool_calls) {
@@ -224,11 +231,22 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
           role,
           content,
           tool_calls: msg.tool_calls,
-          additional_kwargs: { tool_calls: msg.tool_calls },
+          additional_kwargs: {
+            ...(isRecord(msg.additional_kwargs) ? msg.additional_kwargs : {}),
+            tool_calls: msg.tool_calls,
+          },
         };
       }
       if (msg.role === 'tool') {
         return { role: 'tool', content, tool_call_id: msg.tool_call_id, name: msg.name };
+      }
+      if (msg.role === 'assistant' && msg.additional_kwargs) {
+        return {
+          role,
+          content,
+          additional_kwargs: msg.additional_kwargs,
+          ...(isRecord(msg.response_metadata) ? { response_metadata: msg.response_metadata } : {}),
+        };
       }
       return [role, content] as [string, MessageContent];
     });
@@ -266,13 +284,19 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
       const isQuotaError = err instanceof AiApiQuotaError;
       const isContextError = err instanceof DirectLlmContextError;
       const isFileError = err instanceof FileProcessorError;
-      ctx.status = isQuotaError ? 429 : isContextError || isFileError ? 400 : 500;
+      ctx.status = isQuotaError
+        ? 429
+        : isContextError || isFileError
+          ? 400
+          : err instanceof EmptyCompletionError
+            ? 502
+            : 500;
       if (isQuotaError) ctx.set('X-RateLimit-Reason', err.code);
       ctx.body = toOpenAIError(
         ctx.status,
         getErrorMessage(err, 'Internal server error'),
         isQuotaError ? 'quota_error' : isContextError || isFileError ? 'invalid_request_error' : 'server_error',
-        isQuotaError || isContextError || isFileError ? err.code : undefined,
+        isQuotaError || isContextError || isFileError || err instanceof EmptyCompletionError ? err.code : undefined,
       );
     }
   }
@@ -290,14 +314,8 @@ async function handleNonStreamingCompletion(
 ) {
   const result = await chatModel.invoke(messages, providerRequestParameters);
 
-  let content = '';
-  if (typeof result.content === 'string') {
-    content = result.content;
-  } else if (Array.isArray(result.content)) {
-    // Handle array content (e.g. OpenAI responses API)
-    const textPart = result.content.find((c: any) => c.type === 'text');
-    content = textPart?.text || JSON.stringify(result.content);
-  }
+  const content = extractResponseOutputText(result);
+  const reasoningContent = extractReasoningText(result);
 
   // Extract usage if available
   const usage = setAiApiUsageResult(
@@ -313,10 +331,12 @@ async function handleNonStreamingCompletion(
   ctx.status = 200;
   const toolCalls = normalizeToolCalls(result.tool_calls);
   const providerFinishReason = extractFinishReason(result);
+  assertCompletionOutput(content, !!toolCalls?.length, reasoningContent, providerFinishReason, ctx);
   ctx.body = toOpenAIResponse({
     id: completionId,
     model: modelName,
     content,
+    reasoningContent,
     usage: usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     toolCalls,
     ...(providerFinishReason ? { finishReason: providerFinishReason } : {}),
@@ -360,20 +380,32 @@ async function handleStreamingCompletion(
   let providerRequestId: string | undefined;
   let providerFinishReason: string | undefined;
   let sawToolCalls = false;
+  let sawContent = false;
+  let sawReasoning = false;
+  let completeToolCalls: OpenAIToolCall[] | undefined;
   try {
     const stream = await chatModel.stream(messages, { ...providerRequestParameters, signal: requestAbort.signal });
 
     for await (const chunk of stream) {
       if (requestAbort.signal.aborted) throw requestAbort.signal.reason;
-      let content = '';
-      if (typeof chunk.content === 'string') {
-        content = chunk.content;
-      } else if (Array.isArray(chunk.content)) {
-        const textPart = chunk.content.find((c: any) => c.type === 'text');
-        content = textPart?.text || '';
+      const content = extractResponseOutputText(chunk);
+      const reasoningContent = extractReasoningText(chunk);
+      if (reasoningContent) {
+        sawReasoning ||= reasoningContent.trim().length > 0;
+        markAiApiFirstProviderOutput(ctx);
+        await writeResponse(
+          ctx,
+          formatSSE(
+            toOpenAIStreamChunk({
+              id: completionId,
+              model: modelName,
+              delta: { reasoning_content: reasoningContent },
+            }),
+          ),
+        );
       }
-
       if (content) {
+        sawContent ||= content.trim().length > 0;
         markAiApiFirstProviderOutput(ctx);
         await writeResponse(
           ctx,
@@ -388,6 +420,7 @@ async function handleStreamingCompletion(
       }
 
       const toolCallChunks = normalizeToolCallChunks(chunk.tool_call_chunks);
+      completeToolCalls = normalizeToolCalls(chunk.tool_calls) ?? completeToolCalls;
       if (toolCallChunks.length) {
         markAiApiFirstProviderOutput(ctx);
         sawToolCalls = true;
@@ -414,6 +447,28 @@ async function handleStreamingCompletion(
       providerRequestId = providerRequestId ?? extractProviderRequestId(chunk);
     }
 
+    // Some adapters return complete tool_calls instead of incremental tool_call_chunks.
+    if (!sawToolCalls && completeToolCalls?.length) {
+      sawToolCalls = true;
+      markAiApiFirstProviderOutput(ctx);
+      await writeResponse(
+        ctx,
+        formatSSE(
+          toOpenAIStreamChunk({
+            id: completionId,
+            model: modelName,
+            delta: { tool_calls: normalizeToolCallChunks(completeToolCalls) },
+          }),
+        ),
+      );
+    }
+    assertCompletionOutput(
+      sawContent ? 'text' : '',
+      sawToolCalls,
+      sawReasoning ? 'reasoning' : undefined,
+      providerFinishReason,
+      ctx,
+    );
     // Send finish chunk
     await writeResponse(
       ctx,
@@ -455,6 +510,7 @@ async function handleStreamingCompletion(
           error: {
             message: getErrorMessage(err, 'Streaming error'),
             type: 'server_error',
+            code: err instanceof EmptyCompletionError ? err.code : 'stream_error',
           },
         }),
       );
@@ -463,11 +519,39 @@ async function handleStreamingCompletion(
     ctx.state.aiApiStreamResult = {
       succeeded: false,
       id: completionId,
-      errorCode: cancelled ? 'client_disconnected' : 'stream_error',
+      errorCode: cancelled ? 'client_disconnected' : err instanceof EmptyCompletionError ? err.code : 'stream_error',
     };
   } finally {
     requestAbort.dispose();
     if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end();
+  }
+}
+
+export class EmptyCompletionError extends Error {
+  readonly code = 'empty_completion';
+  constructor(ctx?: Context) {
+    const message = 'The provider completed without text, reasoning or tool calls.';
+    super(ctx?.t?.(message, { ns: 'plugin-ai-api' }) ?? message);
+    this.name = 'EmptyCompletionError';
+  }
+}
+
+export function assertCompletionOutput(
+  content: string,
+  hasTools: boolean,
+  reasoning?: string,
+  finishReason?: string,
+  ctx?: Context,
+): void {
+  if (ctx)
+    ctx.state.aiApiCompletionOutput = {
+      hasText: !!content.trim(),
+      hasTools,
+      hasReasoning: !!reasoning?.trim(),
+      finishReason,
+    };
+  if (!content.trim() && !hasTools && !reasoning?.trim() && !responseIncompleteReason(finishReason)) {
+    throw new EmptyCompletionError(ctx);
   }
 }
 
@@ -891,28 +975,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function normalizeToolCalls(value: unknown): OpenAIToolCall[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined;
-  return value.map((call: any) => ({
-    id: String(call.id || ''),
-    type: 'function',
-    function: {
-      name: String(call.name || call.function?.name || ''),
-      arguments: serializeToolArguments(call.args ?? call.function?.arguments),
-    },
-  }));
+  return value.filter(isRecord).map((call) => {
+    const fn = isRecord(call.function) ? call.function : {};
+    return {
+      id: String(call.id || ''),
+      type: 'function' as const,
+      function: {
+        name: String(call.name || fn.name || ''),
+        arguments: serializeToolArguments(call.args ?? fn.arguments),
+      },
+    };
+  });
 }
 
 export function normalizeToolCallChunks(value: unknown): OpenAIToolCallChunk[] {
   if (!Array.isArray(value)) return [];
-  return value.map((call: any, fallbackIndex) => ({
-    index: typeof call.index === 'number' ? call.index : fallbackIndex,
-    ...(call.id ? { id: String(call.id), type: 'function' as const } : {}),
-    function: {
-      ...(call.name ? { name: String(call.name) } : {}),
-      ...(call.args !== undefined || call.function?.arguments !== undefined
-        ? { arguments: serializeToolArguments(call.args ?? call.function?.arguments) }
-        : {}),
-    },
-  }));
+  return value.filter(isRecord).map((call, fallbackIndex) => {
+    const fn = isRecord(call.function) ? call.function : {};
+    const name = call.name ?? fn.name;
+    return {
+      index: typeof call.index === 'number' ? call.index : fallbackIndex,
+      ...(call.id ? { id: String(call.id), type: 'function' as const } : {}),
+      function: {
+        ...(name ? { name: String(name) } : {}),
+        ...(call.args !== undefined || fn.arguments !== undefined
+          ? { arguments: serializeToolArguments(call.args ?? fn.arguments) }
+          : {}),
+      },
+    };
+  });
 }
 
 function serializeToolArguments(value: unknown) {

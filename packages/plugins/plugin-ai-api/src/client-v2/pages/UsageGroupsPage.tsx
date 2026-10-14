@@ -18,7 +18,7 @@ import {
   Col,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
 
@@ -64,7 +64,7 @@ interface GroupMember {
 }
 
 export default function UsageGroupsPage() {
-  const ctx = useFlowContext();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm<Partial<UsageGroup>>();
   const [memberForm] = Form.useForm<{ userId: string | number }>();
@@ -85,7 +85,7 @@ export default function UsageGroupsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await ctx.api.request({
+      const response = await api.request({
         url: 'aiApiUsageGroups:list',
         method: 'get',
         params: { pageSize: 200, sort: '-updatedAt' },
@@ -97,19 +97,19 @@ export default function UsageGroupsPage() {
       setLoading(false);
     }
     try {
-      const servicesResponse = await ctx.api.request({ url: 'ai:listAllEnabledModels', method: 'get' });
+      const servicesResponse = await api.request({ url: 'ai:listAllEnabledModels', method: 'get' });
       setServices(unwrapData<EnabledLlmService[]>(servicesResponse, []));
     } catch (error) {
       setServices([]);
       message.error(`${t('Failed to load models')}: ${errorMessage(error)}`);
     }
-  }, [ctx.api, t]);
+  }, [api, t]);
 
   const loadMembers = useCallback(
     async (groupId: string | number) => {
       setMembersLoading(true);
       try {
-        const response = await ctx.api.request({
+        const response = await api.request({
           url: 'aiApiGroupMembers:list',
           method: 'get',
           params: { filter: { groupId }, pageSize: 1000, appends: ['user'] },
@@ -121,7 +121,7 @@ export default function UsageGroupsPage() {
         setMembersLoading(false);
       }
     },
-    [ctx.api],
+    [api],
   );
 
   const loadUnassignedUsers = useCallback(
@@ -129,7 +129,7 @@ export default function UsageGroupsPage() {
       try {
         // Plain collection reads on the main data source, so core ACL enforces
         // aiApiGroupMembers:list and users:list. No custom server action needed.
-        const memberResponse = await ctx.api.request({
+        const memberResponse = await api.request({
           url: 'aiApiGroupMembers:list',
           method: 'get',
           params: { fields: ['userId'], paginate: false, pageSize: 10000 },
@@ -150,7 +150,7 @@ export default function UsageGroupsPage() {
         if (assignedIds.size > 0) {
           conditions.push({ id: { $notIn: [...assignedIds] } });
         }
-        const response = await ctx.api.request({
+        const response = await api.request({
           url: 'users:list',
           method: 'get',
           params: {
@@ -164,7 +164,7 @@ export default function UsageGroupsPage() {
         message.error(errorMessage(error));
       }
     },
-    [ctx.api],
+    [api],
   );
 
   useEffect(() => {
@@ -208,7 +208,7 @@ export default function UsageGroupsPage() {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      await ctx.api.request({
+      await api.request({
         url: editing ? `aiApiUsageGroups:update/${editing.id}` : 'aiApiUsageGroups:create',
         method: 'post',
         data: values,
@@ -225,7 +225,7 @@ export default function UsageGroupsPage() {
 
   const remove = async (record: UsageGroup) => {
     try {
-      await ctx.api.request({
+      await api.request({
         url: `aiApiUsageGroups:destroy/${record.id}`,
         method: 'post',
       });
@@ -242,7 +242,7 @@ export default function UsageGroupsPage() {
     try {
       // Plain create on aiApiGroupMembers; the server beforeSave hook enforces the
       // one-group-per-user and no-default-group-membership rules.
-      await ctx.api.request({
+      await api.request({
         url: 'aiApiGroupMembers:create',
         method: 'post',
         data: { groupId: editing.id, userId: values.userId },
@@ -258,7 +258,7 @@ export default function UsageGroupsPage() {
 
   const removeMember = async (member: GroupMember) => {
     try {
-      await ctx.api.request({
+      await api.request({
         url: `aiApiGroupMembers:destroy/${member.id}`,
         method: 'post',
       });
@@ -275,7 +275,7 @@ export default function UsageGroupsPage() {
   const searchGroupByUser = async () => {
     if (!searchUserKeyword.trim()) return;
     try {
-      const userResponse = await ctx.api.request({
+      const userResponse = await api.request({
         url: 'users:list',
         method: 'get',
         params: {
@@ -297,7 +297,7 @@ export default function UsageGroupsPage() {
         return;
       }
       // Look up the membership row; a user with no row falls back to the default group.
-      const memberResponse = await ctx.api.request({
+      const memberResponse = await api.request({
         url: 'aiApiGroupMembers:list',
         method: 'get',
         params: { filter: { userId: users[0].id }, appends: ['group'], pageSize: 1 },
@@ -307,7 +307,7 @@ export default function UsageGroupsPage() {
         setSearchedGroup(memberRows[0].group);
         return;
       }
-      const defaultResponse = await ctx.api.request({
+      const defaultResponse = await api.request({
         url: 'aiApiUsageGroups:list',
         method: 'get',
         params: { filter: { isDefault: true }, pageSize: 1 },

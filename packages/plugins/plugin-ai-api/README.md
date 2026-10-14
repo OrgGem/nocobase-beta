@@ -44,6 +44,9 @@ Conversation state is opt-in through stored response records. `store` defaults t
 
 Supported request features include text/image/file input, function tools, function-call output, reasoning-item round trips, structured text format, prompt-cache parameters, and `truncation`. OpenAI-hosted built-in tools, `file_id`, background mode, conversations, reusable prompts, include expansions, and stream retrieval are rejected explicitly because the gateway does not currently implement those services.
 
+Automatic model routing combines task complexity with capability, permission and context eligibility. See
+[Model routing implementation](docs/model-routing.md) for the task breakdown, selection policy, configuration rollout and regression coverage.
+
 The legacy `/completions` and `/chat/completions` endpoints remain independent; `previous_response_id` is only available on `/responses`.
 
 ## Configuration

@@ -15,7 +15,7 @@ import {
   type MenuProps,
   type UploadFile,
 } from 'antd';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useFlowEngineContext } from '@nocobase/flow-engine';
 import {
   archiveReferenceLabel,
   suggestArchiveDestination,
@@ -48,7 +48,7 @@ function nonEmptyString(value: string | undefined): value is string {
 }
 
 export function UploadImageButton({ initialRepository = '', maxTransferSizeMb, onUploaded }: UploadImageButtonProps) {
-  const ctx = useFlowContext();
+  const ctx = useFlowEngineContext();
   const t = useT();
   const [form] = Form.useForm<UploadFormValues>();
   const watchedRepository = Form.useWatch('repository', form);
@@ -262,7 +262,7 @@ interface DownloadImageButtonProps {
 }
 
 export function DownloadImageButton({ repository, reference }: DownloadImageButtonProps) {
-  const ctx = useFlowContext();
+  const ctx = useFlowEngineContext();
   const t = useT();
   const [format, setFormat] = useState<RegistryArchiveFormat>();
 

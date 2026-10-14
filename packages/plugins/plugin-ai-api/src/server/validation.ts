@@ -70,6 +70,8 @@ export function validateModelMetadata(model: Model): void {
   }
   requireBooleanOrNull(model.get('supportsVision'), 'supportsVision');
   requireBooleanOrNull(model.get('supportsToolCalling'), 'supportsToolCalling');
+  requireBooleanOrNull(model.get('supportsStructuredOutput'), 'supportsStructuredOutput');
+  requireBooleanOrNull(model.get('supportsReasoning'), 'supportsReasoning');
   requireBooleanOrNull(model.get('enabled'), 'enabled');
   const reasoningTier = model.get('reasoningTier');
   if (

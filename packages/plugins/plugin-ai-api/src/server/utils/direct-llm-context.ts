@@ -17,11 +17,12 @@ interface ModelMetadata {
   systemPrompt?: string;
 }
 
-interface ContextPreparationOptions {
+export interface ContextPreparationOptions {
   serviceName: string;
   modelId: string;
   messages: OpenAIMessage[];
   tools?: unknown;
+  responseFormat?: unknown;
   maxCompletionTokens?: unknown;
   maxTokens?: unknown;
   overflowBehavior?: ContextOverflowBehavior;
@@ -33,6 +34,9 @@ export interface PreparedDirectLlmContext {
   inputTokenBudget: number;
   reservedOutputTokens: number;
   truncated: boolean;
+  originalEstimatedInputTokens: number;
+  droppedMessages: number;
+  droppedTurns: number;
 }
 
 export class DirectLlmContextError extends Error {
@@ -258,7 +262,11 @@ function estimateContentBlockTokens(block: unknown): number {
 
 function estimateMessageTokens(message: OpenAIMessage): number {
   if (Array.isArray(message.content)) {
-    return message.content.reduce((total, block) => total + estimateContentBlockTokens(block), 4);
+    const { content, ...envelope } = message;
+    return content.reduce(
+      (total, block) => total + estimateContentBlockTokens(block),
+      estimateValueTokens(envelope) + 4,
+    );
   }
   return estimateValueTokens(message) + 4;
 }
@@ -281,7 +289,7 @@ function splitTurns(messages: OpenAIMessage[]): { fixed: OpenAIMessage[]; turns:
       fixed.push(message);
       continue;
     }
-    if (message.role === 'user' || !currentTurn) {
+    if (message.role === 'user' || message.role === 'human' || !currentTurn) {
       currentTurn = [message];
       turns.push(currentTurn);
       continue;
@@ -360,7 +368,10 @@ export async function prepareDirectLlmContext(
     );
   }
 
-  const fixedOverheadTokens = estimateValueTokens(options.tools) + (options.tools === undefined ? 0 : 4);
+  const fixedOverheadTokens =
+    estimateValueTokens(options.tools) +
+    (options.tools === undefined ? 0 : 4) +
+    estimateValueTokens(options.responseFormat);
   // The initial system prompt from model metadata is prepended before every
   // client message — including the client's own system prompt, which is kept.
   // Being a system message, it is a fixed instruction that truncation never
@@ -376,6 +387,9 @@ export async function prepareDirectLlmContext(
       inputTokenBudget,
       reservedOutputTokens,
       truncated: false,
+      originalEstimatedInputTokens: originalEstimate,
+      droppedMessages: 0,
+      droppedTurns: 0,
     };
   }
 
@@ -410,5 +424,14 @@ export async function prepareDirectLlmContext(
     inputTokenBudget,
     reservedOutputTokens,
     truncated: messages.length !== baseMessages.length,
+    originalEstimatedInputTokens: originalEstimate,
+    droppedMessages: baseMessages.length - messages.length,
+    droppedTurns: turns.length - remainingTurns.length,
   };
+}
+
+export function recordPreparedContext(ctx: Context, prepared: PreparedDirectLlmContext): void {
+  const { messages, ...metrics } = prepared;
+  ctx.state.aiApiPreparedContext = metrics;
+  ctx.log.info?.('[ai-api] Prepared model context', metrics);
 }

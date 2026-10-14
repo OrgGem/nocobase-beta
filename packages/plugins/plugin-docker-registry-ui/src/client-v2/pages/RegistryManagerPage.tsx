@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import type { DockerRegistryPageProps } from '../permissions';
 import ImageDetailsPage from './ImageDetailsPage';
@@ -20,15 +20,23 @@ export function resolveRegistryManagerView(search: string): RegistryManagerView 
   return { page: 'images' };
 }
 
-export default function RegistryManagerPage({ permissions }: DockerRegistryPageProps) {
+export default function RegistryManagerPage({ permissions, embedded }: DockerRegistryPageProps) {
   const location = useLocation();
-  const view = resolveRegistryManagerView(location.search);
+  const [embeddedSearch, setEmbeddedSearch] = useState('');
+  const search = embedded ? embeddedSearch : location.search;
+  const view = resolveRegistryManagerView(search);
+  const pageProps: DockerRegistryPageProps = {
+    permissions,
+    embedded,
+    search,
+    onNavigate: embedded ? (path) => setEmbeddedSearch(new URL(path, window.location.origin).search) : undefined,
+  };
 
   if (view.page === 'image') {
-    return <ImageDetailsPage permissions={permissions} />;
+    return <ImageDetailsPage {...pageProps} />;
   }
   if (view.page === 'repository') {
-    return <RepositoryPage permissions={permissions} />;
+    return <RepositoryPage {...pageProps} />;
   }
-  return <RegistryBrowserPage permissions={permissions} />;
+  return <RegistryBrowserPage {...pageProps} />;
 }

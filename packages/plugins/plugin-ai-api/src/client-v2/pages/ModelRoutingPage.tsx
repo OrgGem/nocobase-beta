@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Card, Form, Input, InputNumber, Select, Space, Switch, Typography, message } from 'antd';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
 
@@ -36,7 +36,7 @@ interface ModelOption {
 const DEFAULT_ALIAS = 'auto';
 
 export default function ModelRoutingPage() {
-  const ctx = useFlowContext();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm<Partial<VirtualModel>>();
   const [loading, setLoading] = useState(true);
@@ -48,7 +48,7 @@ export default function ModelRoutingPage() {
     setLoading(true);
     try {
       const [vmRes, servicesRes] = await Promise.all([
-        ctx.api.request({
+        api.request({
           url: 'aiApiVirtualModels:list',
           method: 'get',
           params: { filter: { name: DEFAULT_ALIAS }, pageSize: 1 },
@@ -56,7 +56,7 @@ export default function ModelRoutingPage() {
         // Use the normalized catalog so recommended/provider/custom modes all surface their
         // actual runtime models. The raw llmServices endpoint can return an empty enabledModels
         // array for recommended-mode services, which would leave this page with no choices.
-        ctx.api.request({ url: 'ai:listAllEnabledModels', method: 'get' }),
+        api.request({ url: 'ai:listAllEnabledModels', method: 'get' }),
       ]);
 
       // Build the shared option list: every enabled model of every service, as "service/model".
@@ -132,7 +132,7 @@ export default function ModelRoutingPage() {
     } finally {
       setLoading(false);
     }
-  }, [ctx.api, form, t]);
+  }, [api, form, t]);
 
   useEffect(() => {
     load();
@@ -143,9 +143,9 @@ export default function ModelRoutingPage() {
     setSaving(true);
     try {
       if (recordId) {
-        await ctx.api.request({ url: `aiApiVirtualModels:update/${recordId}`, method: 'post', data: values });
+        await api.request({ url: `aiApiVirtualModels:update/${recordId}`, method: 'post', data: values });
       } else {
-        const res = await ctx.api.request({ url: 'aiApiVirtualModels:create', method: 'post', data: values });
+        const res = await api.request({ url: 'aiApiVirtualModels:create', method: 'post', data: values });
         const created = unwrapData<VirtualModel | undefined>(res, undefined);
         if (created?.id) setRecordId(created.id);
       }
@@ -190,7 +190,7 @@ export default function ModelRoutingPage() {
           label={t('Fallback model')}
           rules={[{ required: true, message: t('A fallback model is required') }]}
           tooltip={t(
-            'Used when no capability bucket candidate is usable and the fallback is permitted for the caller.',
+            'Fallback must satisfy the same permissions, capabilities and context requirements as other candidates.',
           )}
         >
           <Select
@@ -205,17 +205,19 @@ export default function ModelRoutingPage() {
         {listField(
           'visionModels',
           t('Vision models (in order)'),
-          t('Requests with an image or file block use the first permitted model here.'),
+          t('Vision candidates must also support requested tools, output format and reasoning parameters.'),
         )}
         {listField(
           'toolModels',
           t('Tool-calling models (in order)'),
-          t('Requests with tools/tool_choice use the first permitted model here.'),
+          t('Simple tool requests use this list. Complex tasks prefer reasoning models that also support tools.'),
         )}
         {listField(
           'reasoningModels',
           t('Reasoning models (in order)'),
-          t('Requests with an explicit reasoning or reasoning_effort parameter use the first permitted model here.'),
+          t(
+            'Complex tasks or positive reasoning effort prefer this list, while all requested capabilities remain required.',
+          ),
         )}
         {listField(
           'cheapModels',
@@ -234,7 +236,7 @@ export default function ModelRoutingPage() {
           name="complexityKeywords"
           label={t('Complexity keywords')}
           tooltip={t(
-            'Requests whose messages contain any of these keywords are treated as complex and routed to the reasoning bucket. Matching is case-insensitive at word boundaries. Leave empty to use the built-in defaults.',
+            'Keywords apply to the current user task, not generic system prompts or old tasks. A configured classifier can correct the heuristic.',
           )}
         >
           <Select mode="tags" placeholder={t('Type a keyword and press Enter')} tokenSeparators={[',']} options={[]} />
@@ -244,7 +246,7 @@ export default function ModelRoutingPage() {
           name="complexityMinLength"
           label={t('Complexity min length')}
           tooltip={t(
-            'Requests whose total message length reaches this threshold are treated as complex. Leave empty to use the default (500).',
+            'Current task length is a complexity hint. A configured classifier can recognize simple extraction from long input. Default: 500.',
           )}
         >
           <InputNumber min={1} step={100} placeholder="500" style={{ width: 200 }} />
@@ -254,12 +256,12 @@ export default function ModelRoutingPage() {
           name="complexityClassifierModel"
           label={t('Complexity classifier model')}
           tooltip={t(
-            'Optional. When keyword/length detection says a request is simple, this cheap model is asked to double-check. Leave empty to disable.',
+            'Optional. This permitted model checks current task complexity in either direction. Failure preserves the heuristic. Leave empty to disable.',
           )}
         >
           <Select
             allowClear
-            placeholder={t('Optional — a cheap model used to double-check simple requests')}
+            placeholder={t('Optional — a cheap model used to classify the current task')}
             options={options}
             optionFilterProp="label"
             showSearch

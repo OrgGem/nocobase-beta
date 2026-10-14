@@ -1,5 +1,4 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
 
 export class PluginKnowledgeBaseClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -7,6 +6,7 @@ export class PluginKnowledgeBaseClient extends Plugin<Record<string, never>, App
       key: 'ai-knowledge-base',
       title: this.t('Knowledge Base'),
       icon: 'BookOutlined',
+      aclSnippet: 'pm.plugin-knowledge-base.knowledge-base',
     });
 
     this.pluginSettingsManager.addPageTabItem({

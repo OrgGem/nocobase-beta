@@ -15,7 +15,7 @@ import {
   message,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
 
@@ -25,6 +25,8 @@ interface ModelMetadata {
   model: string;
   supportsVision?: boolean;
   supportsToolCalling?: boolean;
+  supportsStructuredOutput?: boolean | null;
+  supportsReasoning?: boolean | null;
   reasoningTier?: string;
   sortOrder?: number;
   contextWindow?: number | null;
@@ -49,7 +51,7 @@ interface LlmModel {
 }
 
 export default function ModelMetadataPage() {
-  const ctx = useFlowContext();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm<MetadataFormValues>();
   const selectedService = Form.useWatch('llmService', form);
@@ -66,12 +68,12 @@ export default function ModelMetadataPage() {
     setLoading(true);
     try {
       const [metadataResponse, servicesResponse] = await Promise.all([
-        ctx.api.request({
+        api.request({
           url: 'aiApiModelMetadata:list',
           method: 'get',
           params: { pageSize: 200, sort: 'llmService' },
         }),
-        ctx.api.request({ url: 'ai:listLLMServices', method: 'get' }),
+        api.request({ url: 'ai:listLLMServices', method: 'get' }),
       ]);
       setRows(unwrapData<ModelMetadata[]>(metadataResponse, []));
       setServices(unwrapData<LlmService[]>(servicesResponse, []));
@@ -80,7 +82,7 @@ export default function ModelMetadataPage() {
     } finally {
       setLoading(false);
     }
-  }, [ctx.api]);
+  }, [api]);
 
   useEffect(() => {
     load();
@@ -90,7 +92,7 @@ export default function ModelMetadataPage() {
     async (llmService: string, currentModel?: string) => {
       setModelsLoading(true);
       try {
-        const response = await ctx.api.request({
+        const response = await api.request({
           url: 'ai:listModels',
           method: 'get',
           params: { llmService },
@@ -108,7 +110,7 @@ export default function ModelMetadataPage() {
         setModelsLoading(false);
       }
     },
-    [ctx.api, t],
+    [api, t],
   );
 
   const showCreate = () => {
@@ -144,12 +146,14 @@ export default function ModelMetadataPage() {
       systemPrompt: values.systemPrompt?.trim() || null,
       supportsVision: !!values.supportsVision,
       supportsToolCalling: values.supportsToolCalling !== false,
+      supportsStructuredOutput: values.supportsStructuredOutput ?? null,
+      supportsReasoning: values.supportsReasoning ?? null,
       reasoningTier: values.reasoningTier || 'general',
       sortOrder: values.sortOrder ?? 0,
     };
     setSaving(true);
     try {
-      await ctx.api.request({
+      await api.request({
         url: editing ? `aiApiModelMetadata:update/${editing.id}` : 'aiApiModelMetadata:create',
         method: 'post',
         data,
@@ -166,7 +170,7 @@ export default function ModelMetadataPage() {
 
   const remove = async (id: string | number) => {
     try {
-      await ctx.api.request({ url: `aiApiModelMetadata:destroy/${id}`, method: 'post' });
+      await api.request({ url: `aiApiModelMetadata:destroy/${id}`, method: 'post' });
       message.success(t('Deleted successfully'));
       await load();
     } catch (error) {
@@ -326,6 +330,30 @@ export default function ModelMetadataPage() {
               ]}
             />
           </Form.Item>
+          {(['supportsStructuredOutput', 'supportsReasoning'] as const).map((name) => (
+            <Form.Item
+              key={name}
+              name={name}
+              label={t(
+                name === 'supportsStructuredOutput' ? 'Supports structured output' : 'Supports reasoning parameters',
+              )}
+              tooltip={t(
+                'Unknown capabilities are not assumed. Reasoning tier or routing lists can declare reasoning support.',
+              )}
+              getValueProps={(value: boolean | null | undefined) => ({
+                value: value === true ? 'yes' : value === false ? 'no' : 'unknown',
+              })}
+              getValueFromEvent={(value: string) => (value === 'yes' ? true : value === 'no' ? false : null)}
+            >
+              <Select
+                options={[
+                  { value: 'unknown', label: t('Unknown') },
+                  { value: 'yes', label: t('Supported') },
+                  { value: 'no', label: t('Not supported') },
+                ]}
+              />
+            </Form.Item>
+          ))}
           <Form.Item
             name="sortOrder"
             label={t('Routing priority')}

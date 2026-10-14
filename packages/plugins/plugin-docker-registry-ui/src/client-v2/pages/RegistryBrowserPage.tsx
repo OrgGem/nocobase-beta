@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Badge, Button, Card, Empty, Input, List, Space, Spin, Tag, Typography } from 'antd';
 import { ReloadOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useFlowEngineContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import { registryApi, type RegistryHealth } from '../api';
 import { useT } from '../locale';
@@ -9,8 +9,9 @@ import { type DockerRegistryPageProps, useDockerRegistryPermissions } from '../p
 import { UploadImageButton } from '../components/ImageTransferControls';
 import { DOCKER_REGISTRY_IMAGES_PATH, DOCKER_REGISTRY_SETTINGS_ROOT_PATH } from '../../shared/routes';
 
-export default function RegistryBrowserPage({ permissions }: DockerRegistryPageProps) {
-  const ctx = useFlowContext();
+export default function RegistryBrowserPage({ permissions, embedded, onNavigate }: DockerRegistryPageProps) {
+  const ctx = useFlowEngineContext();
+  const navigate = onNavigate ?? ((path: string) => ctx.router.navigate(path));
   const t = useT();
   const aclPermissions = useDockerRegistryPermissions();
   const { canConfigure, canRead, canUpload } = permissions ?? aclPermissions;
@@ -48,7 +49,7 @@ export default function RegistryBrowserPage({ permissions }: DockerRegistryPageP
   }, [load, settings?.autoRefreshSeconds]);
 
   const openRepository = (repository: string) => {
-    ctx.router.navigate(`${DOCKER_REGISTRY_IMAGES_PATH}?name=${encodeURIComponent(repository)}`);
+    navigate(`${DOCKER_REGISTRY_IMAGES_PATH}?name=${encodeURIComponent(repository)}`);
   };
 
   if (!canRead) {
@@ -56,7 +57,11 @@ export default function RegistryBrowserPage({ permissions }: DockerRegistryPageP
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ display: 'flex', maxWidth: 1200, margin: '0 auto', padding: 24 }}>
+    <Space
+      direction="vertical"
+      size="large"
+      style={{ display: 'flex', maxWidth: 1200, margin: '0 auto', padding: embedded ? 0 : 24 }}
+    >
       <Card>
         <Space direction="vertical" size="middle" style={{ display: 'flex' }}>
           <Space style={{ display: 'flex', justifyContent: 'space-between' }} wrap>
@@ -69,7 +74,7 @@ export default function RegistryBrowserPage({ permissions }: DockerRegistryPageP
               </Typography.Text>
             </div>
             <Space>
-              {canConfigure && (
+              {canConfigure && !embedded && (
                 <Button
                   icon={<SettingOutlined />}
                   onClick={() => ctx.router.navigate(DOCKER_REGISTRY_SETTINGS_ROOT_PATH)}

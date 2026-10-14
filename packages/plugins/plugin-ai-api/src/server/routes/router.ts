@@ -526,5 +526,11 @@ function logRequest(ctx: Context, requestId: string, model: string, status: stri
   ctx.app.logger?.info(
     `[ai-api] ${ctx.method} ${ctx.path} requestId=${requestId} userId=${userId} ` +
       `model=${model} status=${status} duration=${durationMs}ms`,
+    {
+      routing: ctx.state.aiApiRoutingDiagnostics,
+      context: ctx.state.aiApiPreparedContext,
+      stream: ctx.state.aiApiStreamResult,
+      output: ctx.state.aiApiCompletionOutput,
+    },
   );
 }

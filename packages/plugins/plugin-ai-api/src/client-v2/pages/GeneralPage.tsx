@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Form, InputNumber, Select, Space, Switch, Typography, message } from 'antd';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
 
@@ -36,7 +36,7 @@ const defaults: GeneralSettings = {
 const MAX_REQUEST_BODY_MB = 100;
 
 export default function GeneralPage() {
-  const ctx = useFlowContext();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm<GeneralSettings>();
   const mode = Form.useWatch('mode', form);
@@ -51,9 +51,9 @@ export default function GeneralPage() {
     setLoadError(undefined);
     try {
       const [configResponse, servicesResponse, employeesResponse] = await Promise.all([
-        ctx.api.request({ url: 'aiApiConfig:get', method: 'get' }),
-        ctx.api.request({ url: 'ai:listLLMServices', method: 'get' }),
-        ctx.api.request({ url: 'aiEmployees:list', method: 'get', params: { paginate: false } }),
+        api.request({ url: 'aiApiConfig:get', method: 'get' }),
+        api.request({ url: 'ai:listLLMServices', method: 'get' }),
+        api.request({ url: 'aiEmployees:list', method: 'get', params: { paginate: false } }),
       ]);
       form.setFieldsValue({ ...defaults, ...unwrapData<Partial<GeneralSettings>>(configResponse, {}) });
       setServices(unwrapData<LlmService[]>(servicesResponse, []));
@@ -63,7 +63,7 @@ export default function GeneralPage() {
     } finally {
       setLoading(false);
     }
-  }, [ctx.api, form]);
+  }, [api, form]);
 
   useEffect(() => {
     load();
@@ -73,7 +73,7 @@ export default function GeneralPage() {
     const values = await form.validateFields();
     setSaving(true);
     try {
-      await ctx.api.request({ url: 'aiApiConfig:save', method: 'post', data: values });
+      await api.request({ url: 'aiApiConfig:save', method: 'post', data: values });
       message.success(t('Configuration saved'));
     } catch (error) {
       message.error(`${t('Failed to save configuration')}: ${errorMessage(error)}`);

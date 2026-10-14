@@ -17,7 +17,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import dayjs, { type Dayjs } from 'dayjs';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useApp } from '@nocobase/client-v2';
 import { useT } from '../locale';
 import { errorMessage, unwrapData } from './api';
 
@@ -53,7 +53,7 @@ interface LlmModel {
 }
 
 export default function ModelPricingPage() {
-  const ctx = useFlowContext();
+  const api = useApp().apiClient;
   const t = useT();
   const [form] = Form.useForm<PriceFormValues>();
   const selectedService = Form.useWatch('llmService', form);
@@ -70,12 +70,12 @@ export default function ModelPricingPage() {
     setLoading(true);
     try {
       const [pricesResponse, servicesResponse] = await Promise.all([
-        ctx.api.request({
+        api.request({
           url: 'aiApiModelPrices:list',
           method: 'get',
           params: { pageSize: 200, sort: '-effectiveFrom' },
         }),
-        ctx.api.request({ url: 'ai:listLLMServices', method: 'get' }),
+        api.request({ url: 'ai:listLLMServices', method: 'get' }),
       ]);
       setRows(unwrapData<ModelPrice[]>(pricesResponse, []));
       setServices(unwrapData<LlmService[]>(servicesResponse, []));
@@ -84,7 +84,7 @@ export default function ModelPricingPage() {
     } finally {
       setLoading(false);
     }
-  }, [ctx.api]);
+  }, [api]);
 
   useEffect(() => {
     load();
@@ -119,7 +119,7 @@ export default function ModelPricingPage() {
   const loadModels = async (llmService: string, currentModel?: string) => {
     setModelsLoading(true);
     try {
-      const response = await ctx.api.request({
+      const response = await api.request({
         url: 'ai:listModels',
         method: 'get',
         params: { llmService },
@@ -155,7 +155,7 @@ export default function ModelPricingPage() {
     };
     setSaving(true);
     try {
-      await ctx.api.request({
+      await api.request({
         url: editing ? `aiApiModelPrices:update/${editing.id}` : 'aiApiModelPrices:create',
         method: 'post',
         data,
@@ -172,7 +172,7 @@ export default function ModelPricingPage() {
 
   const remove = async (id: string | number) => {
     try {
-      await ctx.api.request({ url: `aiApiModelPrices:destroy/${id}`, method: 'post' });
+      await api.request({ url: `aiApiModelPrices:destroy/${id}`, method: 'post' });
       message.success(t('Deleted successfully'));
       await load();
     } catch (error) {

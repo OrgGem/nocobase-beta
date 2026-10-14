@@ -57,6 +57,7 @@ export function toOpenAIResponse(options: {
   id: string;
   model: string;
   content: string;
+  reasoningContent?: string;
   finishReason?: string;
   usage?: {
     prompt_tokens?: number | null;
@@ -86,6 +87,7 @@ export function toOpenAIResponse(options: {
         message: {
           role: 'assistant',
           content,
+          ...(options.reasoningContent ? { reasoning_content: options.reasoningContent } : {}),
           ...(toolCalls?.length ? { tool_calls: toolCalls } : {}),
         },
         logprobs: null,
@@ -125,7 +127,7 @@ export type OpenAIStreamObject = 'chat.completion.chunk' | 'text_completion';
 export function toOpenAIStreamChunk(options: {
   id: string;
   model: string;
-  delta: { role?: string; content?: string; tool_calls?: OpenAIToolCallChunk[] };
+  delta: { role?: string; content?: string; reasoning_content?: string; tool_calls?: OpenAIToolCallChunk[] };
   finishReason?: string | null;
 }) {
   const { id, model, delta, finishReason = null } = options;

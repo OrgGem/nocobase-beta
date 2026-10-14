@@ -126,6 +126,54 @@ function eventPayloads(writes: string[]): Array<Record<string, unknown>> {
 }
 
 describe('Responses API streaming handler', () => {
+  it('preserves complete tool calls from adapters without incremental chunks', async () => {
+    const { ctx, writes } = createStreamingContext({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'lookup', args: { city: 'Hanoi' } }],
+          response_metadata: { finish_reason: 'tool_calls' },
+        };
+      },
+    });
+    await handleResponses(ctx, {} as PluginAiApiServer);
+    expect(eventPayloads(writes).at(-1)).toMatchObject({
+      type: 'response.completed',
+      response: {
+        output: [{ type: 'function_call', call_id: 'call_1', name: 'lookup', arguments: '{"city":"Hanoi"}' }],
+      },
+    });
+  });
+
+  it('fails an empty provider stream instead of emitting response.completed', async () => {
+    const { ctx, writes } = createStreamingContext({
+      async *[Symbol.asyncIterator]() {
+        yield { content: '', response_metadata: { finish_reason: 'stop' } };
+      },
+    });
+    await handleResponses(ctx, {} as PluginAiApiServer);
+    const payloads = eventPayloads(writes);
+    expect(payloads.some((payload) => payload.type === 'response.completed')).toBe(false);
+    expect(payloads.at(-1)).toMatchObject({
+      type: 'response.failed',
+      response: { error: { code: 'empty_completion' } },
+    });
+    expect(ctx.state.aiApiStreamResult).toMatchObject({ succeeded: false, errorCode: 'empty_completion' });
+  });
+
+  it('retains incomplete status when output budget is exhausted without text', async () => {
+    const { ctx, writes } = createStreamingContext({
+      async *[Symbol.asyncIterator]() {
+        yield { content: '', response_metadata: { finish_reason: 'length' } };
+      },
+    });
+    await handleResponses(ctx, {} as PluginAiApiServer);
+    expect(eventPayloads(writes).at(-1)).toMatchObject({
+      type: 'response.incomplete',
+      response: { incomplete_details: { reason: 'max_output_tokens' } },
+    });
+  });
+
   it('writes OpenAI Responses SSE lifecycle events and terminates with [DONE]', async () => {
     const { ctx, writes } = createStreamingContext({
       async *[Symbol.asyncIterator]() {

@@ -47,6 +47,7 @@ export interface ResponseStreamState {
   textItem?: { outputIndex: number; item: ResponseOutputMessage; text: string };
   reasoningItem?: { outputIndex: number; item: ResponseReasoningItem; text: string };
   toolCalls: Map<number, ToolCallState>;
+  completeToolCalls?: Record<string, unknown>[];
   usage?: OpenAIUsage;
   finishReason?: string;
   serviceTier?: ResponseObject['service_tier'];
@@ -279,6 +280,9 @@ export function appendResponseStreamChunk(state: ResponseStreamState, chunk: unk
   }
 
   events.push(...appendToolCallChunks(state, chunk.tool_call_chunks));
+  if (Array.isArray(chunk.tool_calls) && chunk.tool_calls.length) {
+    state.completeToolCalls = chunk.tool_calls.filter(isRecord);
+  }
   const finishReason = [chunk.response_metadata, chunk.additional_kwargs]
     .filter(isRecord)
     .map((metadata) => metadata.finish_reason)
@@ -295,6 +299,9 @@ export function setResponseStreamUsage(state: ResponseStreamState, usage: OpenAI
 
 export function finalizeResponseStream(state: ResponseStreamState): ResponseStreamEvent[] {
   const events: ResponseStreamEvent[] = [];
+  if (state.toolCalls.size === 0 && state.completeToolCalls?.length) {
+    events.push(...appendToolCallChunks(state, state.completeToolCalls));
+  }
   const incompleteReason = responseIncompleteReason(state.finishReason);
   if (state.reasoningItem) {
     const { item, outputIndex, text } = state.reasoningItem;

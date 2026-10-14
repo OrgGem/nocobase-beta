@@ -14,7 +14,7 @@ import {
   Typography,
 } from 'antd';
 import { ApiOutlined, SaveOutlined } from '@ant-design/icons';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useFlowEngineContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import type { RegistrySettingsInput } from '../../shared/types';
 import { registryApi } from '../api';
@@ -61,7 +61,7 @@ interface RegistrySettingsFormValues {
 }
 
 export default function RegistrySettingsPage({ permissions }: DockerRegistryPageProps) {
-  const ctx = useFlowContext();
+  const ctx = useFlowEngineContext();
   const t = useT();
   const aclPermissions = useDockerRegistryPermissions();
   const { canConfigure } = permissions ?? aclPermissions;

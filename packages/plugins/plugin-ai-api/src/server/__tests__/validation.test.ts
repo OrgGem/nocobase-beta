@@ -69,6 +69,8 @@ describe('AI API model metadata validation', () => {
     [{ ...validMetadata, reasoningTier: 'fast' }, 'reasoningTier must be cheap, general, or reasoning.'],
     [{ ...validMetadata, sortOrder: 1.5 }, 'sortOrder must be an integer.'],
     [{ ...validMetadata, supportsVision: 'yes' }, 'supportsVision must be a boolean.'],
+    [{ ...validMetadata, supportsStructuredOutput: 'yes' }, 'supportsStructuredOutput must be a boolean.'],
+    [{ ...validMetadata, supportsReasoning: 1 }, 'supportsReasoning must be a boolean.'],
   ])('rejects invalid routing metadata', (values, message) => {
     expect(() => validateModelMetadata(record(values))).toThrow(message);
   });

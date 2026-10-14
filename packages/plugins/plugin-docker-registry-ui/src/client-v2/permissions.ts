@@ -42,6 +42,9 @@ export interface DockerRegistryPermissions {
 
 export interface DockerRegistryPageProps {
   permissions?: DockerRegistryPermissions;
+  embedded?: boolean;
+  search?: string;
+  onNavigate?: (path: string) => void;
 }
 
 export function resolveDockerRegistryPermissions(allow: AclSnippetAllow): DockerRegistryPermissions {

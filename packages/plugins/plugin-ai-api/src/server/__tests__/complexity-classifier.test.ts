@@ -81,58 +81,58 @@ describe('classifyComplexity', () => {
     await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(true);
   });
 
-  it('returns false for an unparseable response', async () => {
+  it('returns undefined for an unparseable response', async () => {
     const ctx = createContext(() => ({ content: 'I cannot classify this.' }));
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false when the provider invoke throws', async () => {
+  it('returns undefined when the provider invoke throws', async () => {
     const ctx = createContext(() => {
       throw new Error('provider down');
     });
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false when the invoke rejects', async () => {
+  it('returns undefined when the invoke rejects', async () => {
     const ctx = createContext(() => Promise.reject(new Error('timeout')));
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false for text below the minimum length', async () => {
+  it('returns undefined for text below the minimum length', async () => {
     const ctx = createContext(() => ({ content: '{"complex": true}' }));
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', 'Hello')).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', 'Hello')).resolves.toBeUndefined();
     expect(mockResolveModelReference).not.toHaveBeenCalled();
   });
 
-  it('returns false for an empty reference', async () => {
+  it('returns undefined for an empty reference', async () => {
     const ctx = createContext(() => ({ content: '{"complex": true}' }));
-    await expect(classifyComplexity(ctx, '   ', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, '   ', LONG_TEXT)).resolves.toBeUndefined();
     expect(mockResolveModelReference).not.toHaveBeenCalled();
   });
 
-  it('returns false when the reference cannot be resolved', async () => {
+  it('returns undefined when the reference cannot be resolved', async () => {
     mockResolveModelReference.mockResolvedValue(null);
     const ctx = createContext(() => ({ content: '{"complex": true}' }));
-    await expect(classifyComplexity(ctx, 'missing-svc/model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'missing-svc/model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false when the classifier service is disabled', async () => {
+  it('returns undefined when the classifier service is disabled', async () => {
     mockResolveModelReference.mockResolvedValue({
       service: serviceModel({ name: 'classifier-svc', provider: 'test-provider', enabled: false, options: {} }),
       modelId: 'classifier-model',
     });
     const ctx = createContext(() => ({ content: '{"complex": true}' }));
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false when plugin-ai is not loaded', async () => {
+  it('returns undefined when plugin-ai is not loaded', async () => {
     const ctx = {
       app: { pm: { get: vi.fn().mockReturnValue(undefined) } },
     } as unknown as Context;
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false when the provider is not registered', async () => {
+  it('returns undefined when the provider is not registered', async () => {
     const ctx = {
       app: {
         pm: {
@@ -140,10 +140,10 @@ describe('classifyComplexity', () => {
         },
       },
     } as unknown as Context;
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
-  it('returns false when the created model has no invoke method', async () => {
+  it('returns undefined when the created model has no invoke method', async () => {
     class NoInvokeProvider {
       createModel() {
         return {};
@@ -158,7 +158,7 @@ describe('classifyComplexity', () => {
         },
       },
     } as unknown as Context;
-    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBe(false);
+    await expect(classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT)).resolves.toBeUndefined();
   });
 
   it('passes the classifier prompt and a temperature-0 model option', async () => {
@@ -171,5 +171,30 @@ describe('classifyComplexity', () => {
     expect(messages[1][0]).toBe('human');
     expect(messages[1][1]).toBe(LONG_TEXT);
     expect(params.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('keeps both the task beginning and latest evidence within the classifier limit', async () => {
+    const invoke = vi.fn(() => ({ content: '{"complex":false}' }));
+    await classifyComplexity(
+      createContext(invoke),
+      'classifier-svc/classifier-model',
+      `BEGIN${'x'.repeat(10000)}LATEST`,
+    );
+    const text = String(invoke.mock.calls[0][0][1][1]);
+    expect(text.startsWith('BEGIN')).toBe(true);
+    expect(text.endsWith('LATEST')).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(4000);
+  });
+
+  it('times out even when the provider ignores abort signals', async () => {
+    vi.useFakeTimers();
+    try {
+      const ctx = createContext(() => new Promise<unknown>(() => {}));
+      const request = classifyComplexity(ctx, 'classifier-svc/classifier-model', LONG_TEXT);
+      await vi.advanceTimersByTimeAsync(5001);
+      await expect(request).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

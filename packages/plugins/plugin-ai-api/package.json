@@ -6,7 +6,7 @@
   "description": "OpenAI-compatible AI gateway for NocoBase with LLM routing, virtual models, user quotas, model pricing, and usage tracking.",
   "description.zh-CN": "适用于 NocoBase 的 OpenAI 兼容 AI 网关，支持 LLM 路由、虚拟模型、用户配额、模型定价和用量追踪。",
   "description.vi-VN": "Cổng AI API tương thích OpenAI cho NocoBase với định tuyến LLM, mô hình ảo, hạn ngạch người dùng, định giá và theo dõi sử dụng.",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

@@ -6,11 +6,12 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
       key: 'ai-orchestrator',
       title: this.t('Agent Orchestrator'),
       icon: 'ApartmentOutlined',
-      aclSnippet: 'pm.ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
     });
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'index',
       title: this.t('Native Monitor'),
       componentLoader: () => import('./pages/RulesPage'),
@@ -19,6 +20,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'tracing',
       title: this.t('Execution Tracing'),
       componentLoader: () => import('./pages/TracingPage'),
@@ -26,6 +28,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'harness-profiles',
       title: this.t('Policy Profiles'),
       componentLoader: () => import('./pages/HarnessProfilesPage'),
@@ -33,6 +36,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'approvals',
       title: this.t('Approvals'),
       componentLoader: () => import('./pages/ApprovalsPage'),
@@ -40,6 +44,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'agent-bindings',
       title: this.t('Agent Bindings'),
       componentLoader: () => import('./pages/AgentBindingsPage'),
@@ -47,6 +52,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'knowledge-access',
       title: this.t('Knowledge Access'),
       componentLoader: () => import('./pages/KnowledgeAccessPage'),
@@ -54,6 +60,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'retrieval-trace',
       title: this.t('Retrieval Trace'),
       componentLoader: () => import('./pages/RetrievalTracePage'),
@@ -61,6 +68,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'memory-inspector',
       title: this.t('Memory Inspector'),
       componentLoader: () => import('./pages/MemoryInspectorPage'),
@@ -68,6 +76,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'skill-definitions',
       title: this.t('Skill Hub Definitions'),
       componentLoader: () => import('./pages/SkillDefinitionsPage'),
@@ -75,6 +84,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'skill-executions',
       title: this.t('Execution History'),
       componentLoader: () => import('./pages/ExecutionHistoryPage'),
@@ -82,6 +92,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'skill-loop-settings',
       title: this.t('Skill Review Settings'),
       componentLoader: () => import('./pages/LoopSettingsPage'),
@@ -89,6 +100,7 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
       key: 'skill-metrics',
       title: this.t('Metrics'),
       componentLoader: () => import('./pages/SkillMetricsPage'),

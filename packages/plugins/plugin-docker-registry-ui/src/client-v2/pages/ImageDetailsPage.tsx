@@ -1,7 +1,7 @@
 import React from 'react';
 import { Alert, Button, Card, Descriptions, Space, Table, Tag, Typography, type TableColumnsType } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useFlowEngineContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import { useLocation } from 'react-router-dom';
 import type { Descriptor } from '../../shared/types';
@@ -68,13 +68,14 @@ interface HistoryRow {
   command: string;
 }
 
-export default function ImageDetailsPage({ permissions }: DockerRegistryPageProps) {
-  const ctx = useFlowContext();
+export default function ImageDetailsPage({ permissions, embedded, search, onNavigate }: DockerRegistryPageProps) {
+  const ctx = useFlowEngineContext();
   const location = useLocation();
+  const navigate = onNavigate ?? ((path: string) => ctx.router.navigate(path));
   const t = useT();
   const aclPermissions = useDockerRegistryPermissions();
   const { canRead } = permissions ?? aclPermissions;
-  const params = new URLSearchParams(location.search);
+  const params = new URLSearchParams(search ?? location.search);
   const repository = params.get('name') ?? '';
   const reference = params.get('tag') ?? '';
   const { data: settings } = useRequest(() => registryApi.getPublicSettings(ctx), { ready: canRead });
@@ -84,6 +85,7 @@ export default function ImageDetailsPage({ permissions }: DockerRegistryPageProp
     error,
   } = useRequest(() => registryApi.getImageDetails(ctx, repository, reference), {
     ready: Boolean(canRead && repository && reference),
+    refreshDeps: [repository, reference],
   });
   const imageReference = externalImageReference(settings?.publicRegistryHost, repository, reference);
   const config =
@@ -148,7 +150,7 @@ export default function ImageDetailsPage({ permissions }: DockerRegistryPageProp
         <Button
           type="link"
           onClick={() =>
-            ctx.router.navigate(
+            navigate(
               `${DOCKER_REGISTRY_IMAGES_PATH}?name=${encodeURIComponent(repository)}&tag=${encodeURIComponent(
                 item.digest,
               )}`,
@@ -192,11 +194,15 @@ export default function ImageDetailsPage({ permissions }: DockerRegistryPageProp
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ display: 'flex', maxWidth: 1200, margin: '0 auto', padding: 24 }}>
+    <Space
+      direction="vertical"
+      size="large"
+      style={{ display: 'flex', maxWidth: 1200, margin: '0 auto', padding: embedded ? 0 : 24 }}
+    >
       <Space>
         <Button
           icon={<ArrowLeftOutlined />}
-          onClick={() => ctx.router.navigate(`${DOCKER_REGISTRY_IMAGES_PATH}?name=${encodeURIComponent(repository)}`)}
+          onClick={() => navigate(`${DOCKER_REGISTRY_IMAGES_PATH}?name=${encodeURIComponent(repository)}`)}
         >
           {t('Back')}
         </Button>

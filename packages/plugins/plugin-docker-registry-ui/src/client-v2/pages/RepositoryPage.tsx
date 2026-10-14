@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Input, Modal, Space, Table, Tag, Typography, type TableColumnsType } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useFlowEngineContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import { useLocation } from 'react-router-dom';
 import { registryApi } from '../api';
@@ -26,14 +26,20 @@ function formatBytes(bytes: number | undefined): string {
   return `${(bytes / 1024 ** index).toFixed(2)} ${units[index]}`;
 }
 
-export default function RepositoryPage({ permissions }: DockerRegistryPageProps) {
-  const ctx = useFlowContext();
+export default function RepositoryPage({
+  permissions,
+  embedded,
+  search: navigationSearch,
+  onNavigate,
+}: DockerRegistryPageProps) {
+  const ctx = useFlowEngineContext();
   const location = useLocation();
+  const navigate = onNavigate ?? ((path: string) => ctx.router.navigate(path));
   const t = useT();
   const aclPermissions = useDockerRegistryPermissions();
   const { canDelete, canDownload, canRead, canUpload } = permissions ?? aclPermissions;
   const [modal, modalContextHolder] = Modal.useModal();
-  const repository = new URLSearchParams(location.search).get('name') ?? '';
+  const repository = new URLSearchParams(navigationSearch ?? location.search).get('name') ?? '';
   const [search, setSearch] = useState('');
   const [rows, setRows] = useState<TagRow[]>([]);
   const [nextCursor, setNextCursor] = useState<string>();
@@ -146,7 +152,7 @@ export default function RepositoryPage({ permissions }: DockerRegistryPageProps)
         }),
       );
       setRepositoryDeleteOpen(false);
-      ctx.router.navigate(DOCKER_REGISTRY_IMAGES_PATH);
+      navigate(DOCKER_REGISTRY_IMAGES_PATH);
     } catch (deleteError) {
       ctx.message.error(deleteError instanceof Error ? deleteError.message : t('Unable to delete repository contents'));
     } finally {
@@ -189,7 +195,7 @@ export default function RepositoryPage({ permissions }: DockerRegistryPageProps)
           <Button
             type="link"
             onClick={() =>
-              ctx.router.navigate(
+              navigate(
                 `${DOCKER_REGISTRY_IMAGES_PATH}?name=${encodeURIComponent(repository)}&tag=${encodeURIComponent(
                   row.tag,
                 )}`,
@@ -220,7 +226,11 @@ export default function RepositoryPage({ permissions }: DockerRegistryPageProps)
   }
 
   return (
-    <Space direction="vertical" size="large" style={{ display: 'flex', maxWidth: 1200, margin: '0 auto', padding: 24 }}>
+    <Space
+      direction="vertical"
+      size="large"
+      style={{ display: 'flex', maxWidth: 1200, margin: '0 auto', padding: embedded ? 0 : 24 }}
+    >
       {modalContextHolder}
       <Modal
         open={repositoryDeleteOpen}
@@ -274,7 +284,7 @@ export default function RepositoryPage({ permissions }: DockerRegistryPageProps)
         )}
       </Modal>
       <Space>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => ctx.router.navigate(DOCKER_REGISTRY_IMAGES_PATH)}>
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(DOCKER_REGISTRY_IMAGES_PATH)}>
           {t('Back')}
         </Button>
         <div>

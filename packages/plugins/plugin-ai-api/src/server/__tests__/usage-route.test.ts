@@ -11,7 +11,9 @@ vi.mock('../utils/resolve-service', () => ({
 }));
 
 interface ModelResult {
-  content: string;
+  content: unknown;
+  additional_kwargs?: Record<string, unknown>;
+  tool_calls?: unknown[];
   response_metadata?: Record<string, unknown>;
   usage_metadata?: Record<string, unknown>;
 }
@@ -127,11 +129,8 @@ function createStreamingContext(
     res.writableEnded = true;
   });
 
-  const contentChunks = (typeof result.content === 'string' ? [result.content] : []).filter(Boolean);
-  const chunks = [
-    ...contentChunks.map((content) => ({ content })),
-    { content: '', usage_metadata: result.usage_metadata, response_metadata: result.response_metadata },
-  ];
+  const contentChunks = [result.content].filter(Boolean);
+  const chunks = [...contentChunks.map((content) => ({ content })), { ...result, content: '' }];
 
   const model = {
     invoke: vi.fn().mockResolvedValue({
@@ -228,6 +227,84 @@ describe('AI API chat usage collection', () => {
       },
       modelId: 'test-model',
     });
+  });
+
+  it('joins all text and output_text blocks without leaking raw JSON', async () => {
+    const { ctx } = createContext({
+      content: [
+        { type: 'text', text: 'First ' },
+        { type: 'output_text', text: 'second' },
+      ],
+    });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    expect(ctx.body).toMatchObject({ choices: [{ message: { content: 'First second' } }] });
+  });
+
+  it('forwards output_text and reasoning deltas in streaming mode', async () => {
+    const { ctx, writes } = createStreamingContext({
+      content: [
+        { type: 'text', text: 'First ' },
+        { type: 'output_text', text: 'second' },
+      ],
+      additional_kwargs: { reasoning_content: 'Reasoning summary' },
+    });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    const frames = writes.filter((line) => !line.includes('[DONE]')).map((line) => JSON.parse(line.slice(6)));
+    expect(frames.some((frame) => frame.choices?.[0]?.delta?.content === 'First second')).toBe(true);
+    expect(frames.some((frame) => frame.choices?.[0]?.delta?.reasoning_content === 'Reasoning summary')).toBe(true);
+    expect(ctx.state.aiApiStreamResult).toMatchObject({ succeeded: true });
+  });
+
+  it('returns 502 for an empty non-streaming provider completion', async () => {
+    const { ctx } = createContext({ content: '' });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    expect(ctx.status).toBe(502);
+    expect(ctx.body).toMatchObject({ error: { code: 'empty_completion' } });
+  });
+
+  it('preserves a provider refusal explanation as meaningful output', async () => {
+    const { ctx } = createContext({ content: '', additional_kwargs: { refusal: 'Unable to fulfill this request.' } });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    expect(ctx.status).toBe(200);
+    expect(ctx.body).toMatchObject({ choices: [{ message: { content: 'Unable to fulfill this request.' } }] });
+  });
+
+  it('does not accept a whitespace-only provider stream as meaningful output', async () => {
+    const { ctx, writes } = createStreamingContext({ content: '   ' });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    expect(writes.some((line) => line.includes('empty_completion'))).toBe(true);
+    expect(ctx.state.aiApiStreamResult).toMatchObject({ succeeded: false });
+  });
+
+  it('emits a recognizable streaming error for empty output without stop or DONE', async () => {
+    const { ctx, writes } = createStreamingContext({ content: '', response_metadata: { finish_reason: 'stop' } });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    expect(writes.some((line) => line.includes('empty_completion'))).toBe(true);
+    expect(writes.some((line) => line.includes('[DONE]'))).toBe(false);
+    expect(ctx.state.aiApiStreamResult).toMatchObject({ succeeded: false, errorCode: 'empty_completion' });
+  });
+
+  it('preserves valid tool-only and reasoning-only non-streaming completions', async () => {
+    const tool = createContext({ content: '', tool_calls: [{ id: 'call_1', name: 'lookup', args: {} }] });
+    await handleChatCompletions(tool.ctx, {} as PluginAiApiServer);
+    expect(tool.ctx.body).toMatchObject({
+      choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ id: 'call_1' }] } }],
+    });
+    const reasoning = createContext({ content: '', additional_kwargs: { reasoning_content: 'Reasoning summary' } });
+    await handleChatCompletions(reasoning.ctx, {} as PluginAiApiServer);
+    expect(reasoning.ctx.body).toMatchObject({ choices: [{ message: { reasoning_content: 'Reasoning summary' } }] });
+  });
+
+  it('streams complete tool_calls when the adapter has no incremental tool_call_chunks', async () => {
+    const { ctx, writes } = createStreamingContext({
+      content: '',
+      tool_calls: [{ id: 'call_1', name: 'lookup', args: { city: 'Hanoi' } }],
+      response_metadata: { finish_reason: 'tool_calls' },
+    });
+    await handleChatCompletions(ctx, {} as PluginAiApiServer);
+    const frames = writes.filter((line) => !line.includes('[DONE]')).map((line) => JSON.parse(line.slice(6)));
+    expect(frames.some((frame) => frame.choices?.[0]?.delta?.tool_calls?.[0]?.function?.name === 'lookup')).toBe(true);
+    expect(ctx.state.aiApiStreamResult).toMatchObject({ succeeded: true });
   });
 
   it('keeps the public zero fallback but marks missing provider usage as unavailable internally', async () => {

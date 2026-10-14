@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert, Card, Descriptions, Divider, Space, Typography } from 'antd';
-import { useFlowContext } from '@nocobase/flow-engine';
+import { useFlowEngineContext } from '@nocobase/flow-engine';
 import { useRequest } from 'ahooks';
 import { DockerCommand } from '../components/DockerCommand';
 import { registryApi } from '../api';
@@ -9,7 +9,7 @@ import { type DockerRegistryPageProps, useDockerRegistryPermissions } from '../p
 import { externalImageReference } from '../registry-access';
 
 export default function RegistryGuidePage({ permissions }: DockerRegistryPageProps) {
-  const ctx = useFlowContext();
+  const ctx = useFlowEngineContext();
   const t = useT();
   const aclPermissions = useDockerRegistryPermissions();
   const { canRead } = permissions ?? aclPermissions;

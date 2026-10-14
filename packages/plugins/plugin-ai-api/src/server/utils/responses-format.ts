@@ -149,13 +149,21 @@ export interface ResponseObject {
   safety_identifier?: string;
   service_tier: ResponseServiceTier;
   temperature: number | null;
-  text?: {
-    format?:
-      | { type: 'text' }
-      | { type: 'json_object' }
-      | { type: 'json_schema'; name: string; schema: Record<string, unknown>; description?: string; strict?: boolean | null };
-    verbosity?: 'low' | 'medium' | 'high';
-  } | undefined;
+  text?:
+    | {
+        format?:
+          | { type: 'text' }
+          | { type: 'json_object' }
+          | {
+              type: 'json_schema';
+              name: string;
+              schema: Record<string, unknown>;
+              description?: string;
+              strict?: boolean | null;
+            };
+        verbosity?: 'low' | 'medium' | 'high';
+      }
+    | undefined;
   tool_choice:
     | 'none'
     | 'auto'
@@ -179,15 +187,35 @@ export interface ResponseObject {
           | 'mcp';
       };
   tools: Array<
-    | { type: 'function'; name: string; parameters: Record<string, unknown> | null; strict: boolean | null; description?: string }
+    | {
+        type: 'function';
+        name: string;
+        parameters: Record<string, unknown> | null;
+        strict: boolean | null;
+        description?: string;
+      }
     | { type: 'file_search'; vector_store_ids: string[]; max_num_results?: number }
     | {
         type: 'web_search_preview';
-        user_location?: { type: 'approximate'; city?: string | null; country?: string | null; region?: string | null; timezone?: string | null } | null;
+        user_location?: {
+          type: 'approximate';
+          city?: string | null;
+          country?: string | null;
+          region?: string | null;
+          timezone?: string | null;
+        } | null;
         search_context_size?: 'low' | 'medium' | 'high';
       }
-    | { type: 'computer_use_preview'; display_width: number; display_height: number; environment: 'windows' | 'mac' | 'linux' | 'ubuntu' | 'browser' }
-    | { type: 'code_interpreter'; container: string | { type: 'auto'; file_ids?: string[]; memory_limit?: '1g' | '4g' | '16g' | '64g' | null } }
+    | {
+        type: 'computer_use_preview';
+        display_width: number;
+        display_height: number;
+        environment: 'windows' | 'mac' | 'linux' | 'ubuntu' | 'browser';
+      }
+    | {
+        type: 'code_interpreter';
+        container: string | { type: 'auto'; file_ids?: string[]; memory_limit?: '1g' | '4g' | '16g' | '64g' | null };
+      }
     | { type: 'mcp'; server_label: string; server_url?: string }
     | {
         type: 'image_generation';
@@ -197,7 +225,13 @@ export interface ResponseObject {
         action?: 'generate' | 'edit' | 'auto';
         background?: 'transparent' | 'opaque' | 'auto';
       }
-    | { type: 'custom'; name: string; description?: string; format?: { type: 'text' } | { type: 'grammar'; definition: string; syntax: 'lark' | 'regex' }; defer_loading?: boolean }
+    | {
+        type: 'custom';
+        name: string;
+        description?: string;
+        format?: { type: 'text' } | { type: 'grammar'; definition: string; syntax: 'lark' | 'regex' };
+        defer_loading?: boolean;
+      }
     | { type: 'shell' }
     | { type: 'apply_patch' }
   >;
@@ -313,7 +347,9 @@ function appendFunctionCall(messages: OpenAIMessage[], item: Record<string, unkn
   const message = functionCallToChatMessage(item);
   if (!message) return false;
   const previous = messages.at(-1);
-  const previousAdditional = isRecord(previous?.additional_kwargs) ? (previous as OpenAIMessage).additional_kwargs as Record<string, unknown> : {} as Record<string, unknown>;
+  const previousAdditional = isRecord(previous?.additional_kwargs)
+    ? ((previous as OpenAIMessage).additional_kwargs as Record<string, unknown>)
+    : ({} as Record<string, unknown>);
   const hasReasoning =
     typeof previousAdditional.reasoning_content === 'string' || isRecord(previousAdditional.reasoning);
   if (
@@ -503,15 +539,42 @@ export function createResponseOutputMessage(
 
 export function extractResponseOutputText(value: unknown): string {
   if (!isRecord(value)) return '';
-  if (typeof value.content === 'string') return value.content;
-  if (!Array.isArray(value.content)) return '';
-  return value.content
+  if (typeof value.content === 'string' && value.content) return value.content;
+  const blocks = Array.isArray(value.content) ? value.content : [];
+  const text = blocks
     .filter(
       (block): block is Record<string, unknown> =>
         isRecord(block) && (block.type === 'text' || block.type === 'output_text'),
     )
     .map((block) => (typeof block.text === 'string' ? block.text : ''))
     .join('');
+  if (text) return text;
+  // A provider refusal is meaningful output, not an empty completion. Surface its explanation as text.
+  const refusal =
+    typeof value.refusal === 'string'
+      ? value.refusal
+      : isRecord(value.additional_kwargs)
+        ? value.additional_kwargs.refusal
+        : undefined;
+  if (typeof refusal === 'string') return refusal;
+  return blocks
+    .filter(isRecord)
+    .filter((block) => block.type === 'refusal')
+    .map((block) => (typeof block.refusal === 'string' ? block.refusal : ''))
+    .join('');
+}
+
+export function hasOpaqueReasoning(messages: unknown[]): boolean {
+  return messages.some((message) => {
+    if (!isRecord(message)) return false;
+    const additional = isRecord(message.additional_kwargs) ? message.additional_kwargs : {};
+    const reasoning = isRecord(additional.reasoning) ? additional.reasoning : {};
+    if (reasoning.encrypted_content || reasoning.signature) return true;
+    return (
+      Array.isArray(message.content) &&
+      message.content.some((block) => isRecord(block) && (block.encrypted_content || block.signature))
+    );
+  });
 }
 
 function toolCallToResponseFunctionCall(call: OpenAIToolCall): ResponseFunctionToolCall {
@@ -607,7 +670,9 @@ export function chatResultToResponse(
     safety_identifier: typeof requestBody.safety_identifier === 'string' ? requestBody.safety_identifier : undefined,
     service_tier: serviceTier ?? (isResponseServiceTier(requestBody.service_tier) ? requestBody.service_tier : 'auto'),
     temperature: numberOrNull(requestBody.temperature),
-    ...(requestBody.text === undefined ? {} : { text: isRecord(requestBody.text) ? (requestBody.text as ResponseObject['text']) : undefined }),
+    ...(requestBody.text === undefined
+      ? {}
+      : { text: isRecord(requestBody.text) ? (requestBody.text as ResponseObject['text']) : undefined }),
     tool_choice: (requestBody.tool_choice as ResponseObject['tool_choice']) ?? 'auto',
     tools: Array.isArray(requestBody.tools) ? requestBody.tools : [],
     top_p: numberOrNull(requestBody.top_p),

@@ -24,6 +24,7 @@ import {
   storeResponseRecord,
 } from '../utils/response-store';
 import { prepareDirectLlmContext } from '../utils/direct-llm-context';
+import { resolveVirtualModel } from '../utils/virtual-models';
 
 vi.mock('../utils/resolve-service', () => ({ resolveModelString: vi.fn(), resolveModelReference: vi.fn() }));
 vi.mock('../utils/virtual-models', () => ({ resolveVirtualModel: vi.fn().mockResolvedValue(null) }));
@@ -126,6 +127,63 @@ beforeEach(() => {
 });
 
 describe('handleResponses', () => {
+  it('routes using the complete previous response history and current tool output', async () => {
+    const history = [
+      { role: 'user', content: 'Plan an architecture migration' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'search', arguments: '{}' } }],
+      },
+    ];
+    vi.mocked(loadConversationChain).mockResolvedValueOnce(history);
+    const { ctx } = createContext({
+      model: 'auto',
+      previous_response_id: 'resp_previous',
+      input: [{ type: 'function_call_output', call_id: 'call_1', output: 'Found three options' }],
+    });
+    await handleResponses(ctx, {} as PluginAiApiServer);
+    expect(ctx.status).toBe(200);
+    expect(resolveVirtualModel).toHaveBeenCalledWith(
+      ctx,
+      'auto',
+      expect.objectContaining({
+        messages: [...history, { role: 'tool', tool_call_id: 'call_1', content: 'Found three options' }],
+      }),
+      'chat',
+      'reject',
+    );
+  });
+
+  it('returns a recognizable error instead of a completed empty response', async () => {
+    const { ctx, model } = createContext({ model: 'test-service/test-model', input: 'Hello' });
+    model.invoke.mockResolvedValueOnce({ content: '' });
+    await handleResponses(ctx, {} as PluginAiApiServer);
+    expect(ctx.status).toBe(502);
+    expect(ctx.body).toMatchObject({ error: { code: 'empty_completion' } });
+    expect(storeResponseRecord).not.toHaveBeenCalled();
+  });
+
+  it('records the originating model for stored opaque reasoning and rejects explicit model changes', async () => {
+    vi.mocked(loadConversationChain).mockResolvedValueOnce([
+      { role: 'user', content: 'Plan next' },
+      { role: 'assistant', content: '', additional_kwargs: { reasoning: { encrypted_content: 'opaque' } } },
+    ]);
+    vi.mocked(getResponseRecord).mockResolvedValueOnce({ model: 'original-service/original-model' } as Awaited<
+      ReturnType<typeof getResponseRecord>
+    >);
+    const { ctx, model } = createContext({
+      model: 'test-service/test-model',
+      previous_response_id: 'resp_previous',
+      input: 'Continue',
+    });
+    await handleResponses(ctx, {} as PluginAiApiServer);
+    expect(ctx.state.aiApiContinuationModel).toBe('original-service/original-model');
+    expect(ctx.status).toBe(400);
+    expect(ctx.body).toMatchObject({ error: { code: 'opaque_reasoning_model_mismatch' } });
+    expect(model.invoke).not.toHaveBeenCalled();
+  });
+
   it('returns an OpenAI Responses object and stores it by default', async () => {
     const { ctx } = createContext({ model: 'test-service/test-model', input: 'Hello' });
 
