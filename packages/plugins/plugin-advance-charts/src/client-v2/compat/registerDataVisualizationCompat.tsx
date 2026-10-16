@@ -18,6 +18,26 @@ import {
 } from '@nocobase/plugin-data-visualization/src/client-v2/flow/utils';
 import { useDataVisualizationT } from './utils';
 
+// `@nocobase/plugin-ai`'s chat box runtime is a global store keyed by `@nocobase/plugin-ai/chat-box-runtime`,
+// so it can be read without importing the plugin (its barrel pulls in node-only modules the
+// browser build rejects). The runtime keeps the AI editor's "is it attached to this block?" state,
+// which is all the dialog needs to close it on cancel.
+type ChatBoxRuntime = {
+  chatBoxModel?: { open?: boolean; setOpen?: (open: boolean) => void };
+  chatMessageModel?: { currentEditorRefUid?: string };
+};
+
+type GlobalWithPluginAIStores = typeof globalThis & {
+  __nocobasePluginAIStores?: Record<string, ChatBoxRuntime | undefined>;
+};
+
+const CHAT_BOX_RUNTIME_STORE_KEY = '@nocobase/plugin-ai/chat-box-runtime';
+
+const getChatBoxRuntime = (): ChatBoxRuntime | undefined => {
+  const stores = (globalThis as GlobalWithPluginAIStores).__nocobasePluginAIStores;
+  return stores?.[CHAT_BOX_RUNTIME_STORE_KEY];
+};
+
 type QueryItem = {
   field?: string | string[];
   alias?: string;
@@ -141,6 +161,17 @@ const ChartComponentHost = ({
   return Component ? <Component {...option} /> : null;
 };
 
+// Mirrors upstream `closeAssociatedAIChatBox`: it only closes the AI editor when it is attached to
+// this block, and stays a no-op when the AI plugin is not installed.
+const closeAssociatedAIChatBox = (modelUid: string) => {
+  const runtime = getChatBoxRuntime();
+  const chatBoxModel = runtime?.chatBoxModel;
+  const chatMessageModel = runtime?.chatMessageModel;
+  if (chatBoxModel?.open && chatMessageModel?.currentEditorRefUid === modelUid) {
+    chatBoxModel.setOpen?.(false);
+  }
+};
+
 const PreviewButton = () => {
   const t = useDataVisualizationT();
   const ctx = useFlowContext();
@@ -166,6 +197,7 @@ const CancelButton = () => {
       type="default"
       onClick={() => {
         ctx.model.cancelPreview();
+        closeAssociatedAIChatBox(ctx.model.uid);
         ctx.view.close();
       }}
     >
@@ -377,9 +409,12 @@ export async function patchDataVisualizationChartBlock(flowEngine: {
     steps: {
       configure: {
         title: tExpr('Configure chart', { ns: 'data-visualization' }),
-        uiMode: {
+        uiMode: (ctx: { model: { uid: string } }) => ({
           type: 'embed',
           props: {
+            onClose: () => {
+              closeAssociatedAIChatBox(ctx.model.uid);
+            },
             footer: (_originNode: React.ReactNode, { OkBtn }: { OkBtn: React.FC }) => (
               <Space>
                 <CancelButton />
@@ -388,7 +423,7 @@ export async function patchDataVisualizationChartBlock(flowEngine: {
               </Space>
             ),
           },
-        },
+        }),
         uiSchema: {
           configuration: {
             type: 'void',

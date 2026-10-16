@@ -16,6 +16,7 @@ import { RateLimiter } from './utils/rate-limiter';
 import { invalidateRolePermissionCache } from './middleware/role-permission';
 import { blockResponseRecordResource } from './middleware/response-record-resource';
 import { invalidateGroupAccessCache } from './utils/user-permissions';
+import { invalidateClassificationCache } from './utils/complexity-classifier';
 import { cleanupExpiredResponseRecords } from './utils/response-store';
 import { validateModelPrice, validateModelMetadata, validateQuotaPolicy, validateVirtualModel } from './validation';
 import { AI_API_ACL_SNIPPET } from '../constants';
@@ -182,6 +183,15 @@ export class PluginAiApiServer extends Plugin {
     });
     this.app.db.on('aiApiUsageGroups.afterDestroy', (model, options) => {
       this.invalidateGroupAccess(model.get('id'), options?.transaction);
+    });
+
+    // Editing an alias changes its complexity keywords, classifier model or bucket lists, so
+    // cached classification verdicts no longer describe the configured policy.
+    this.app.db.on('aiApiVirtualModels.afterSave', () => {
+      invalidateClassificationCache();
+    });
+    this.app.db.on('aiApiVirtualModels.afterDestroy', () => {
+      invalidateClassificationCache();
     });
 
     // 3. Set ACL permissions for admin config + role permissions management

@@ -210,25 +210,27 @@ export default function ModelRoutingPage() {
         {listField(
           'toolModels',
           t('Tool-calling models (in order)'),
-          t('Simple tool requests use this list. Complex tasks prefer reasoning models that also support tools.'),
+          t('A request carrying tools uses this list, whether the task is simple or complex.'),
         )}
         {listField(
           'reasoningModels',
           t('Reasoning models (in order)'),
           t(
-            'Complex tasks or positive reasoning effort prefer this list, while all requested capabilities remain required.',
+            'Fallback for tasks the complexity classifier marks as complex (planning, review, analysis), when no capability list applies or its candidates cannot serve the request.',
           ),
         )}
         {listField(
           'cheapModels',
           t('Cheap models (in order)'),
-          t('Optional. When set, cheap-eligible requests use the first permitted model here.'),
+          t(
+            'Light mechanical tasks. When no other list applies and general is left empty, a cheap bucket is derived from model metadata.',
+          ),
         )}
         {listField(
           'generalModels',
           t('General models (in order)'),
           t(
-            'Default bucket when no capability rule matched. Leave empty to derive from all enabled models ordered by Model metadata sortOrder.',
+            'Default bucket when no capability rule matched. Leave empty to derive from enabled non-reasoning models ordered by Model metadata sortOrder.',
           ),
         )}
 

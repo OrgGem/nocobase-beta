@@ -17,12 +17,24 @@ export function toNumber(value: unknown, fallback = 0) {
   return fallback;
 }
 
-export function formatNumber(value: unknown, precision?: number) {
+const NUMBER_LOCALE = 'en-US';
+
+export function formatNumber(value: unknown, precision?: number, compact = false) {
   const numeric = toNumber(value);
-  if (typeof precision === 'number' && Number.isFinite(precision)) {
-    return numeric.toFixed(precision);
+  const options: Intl.NumberFormatOptions =
+    typeof precision === 'number' && Number.isFinite(precision)
+      ? { minimumFractionDigits: precision, maximumFractionDigits: precision }
+      : { maximumFractionDigits: 2 };
+  if (compact) {
+    options.notation = 'compact';
+    options.maximumFractionDigits = Math.min(options.maximumFractionDigits ?? 2, 2);
+    options.minimumFractionDigits = Math.min(options.minimumFractionDigits ?? 0, 2);
   }
-  return numeric;
+  try {
+    return new Intl.NumberFormat(NUMBER_LOCALE, options).format(numeric);
+  } catch {
+    return String(numeric);
+  }
 }
 
 export function getFirstField(fields: FieldOption[] = []) {
@@ -154,6 +166,35 @@ export const booleanConfig = (name: string, title: string, defaultValue = false)
   },
 });
 
+const FALLBACK_PLOT_COLOR = '#30bf78';
+const HEX_COLOR = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const RGB_COLOR = /^rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(,\s*[\d.]+\s*)?\)$/i;
+const NAMED_COLOR = /^[a-z]+$/i;
+
+// Color values come from the user-facing chart options, so anything that is not a plain
+// color string must never reach a G2/antd-plots config: it would break the whole mark.
+export function isValidPlotColor(value: unknown): value is string {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const color = value.trim();
+  return HEX_COLOR.test(color) || RGB_COLOR.test(color) || NAMED_COLOR.test(color);
+}
+
+export function resolvePlotColor(value: unknown, fallback: string = FALLBACK_PLOT_COLOR) {
+  return isValidPlotColor(value) ? value.trim() : fallback;
+}
+
+// `link` is rendered as `<a href>`, so anything that can execute script (e.g. `javascript:`) must be
+// dropped before it reaches the DOM.
+export function isSafeLink(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) {
+    return false;
+  }
+  const link = value.trim();
+  return !/^(javascript|data|vbscript):/i.test(link);
+}
+
 type PlotComponents = Record<string, Record<string, React.ComponentType<unknown>>>;
 
 let cachedPlots: PlotComponents | null = null;
@@ -163,20 +204,30 @@ export function usePlotComponent<TProps>(name: string) {
   const [plots, setPlots] = useState<PlotComponents | null>(cachedPlots);
 
   useEffect(() => {
-    if (cachedPlots) return;
+    if (cachedPlots) {
+      // Another mount may have resolved the module between this render and this effect.
+      setPlots(cachedPlots);
+      return;
+    }
     let cancelled = false;
     if (!loadingPromise) {
       loadingPromise = import('@ant-design/plots').then((module) => module as unknown as PlotComponents);
     }
-    loadingPromise
+    const pending = loadingPromise;
+    pending
       .then((module) => {
-        if (!cancelled) {
-          cachedPlots = module;
-          setPlots(module);
-        }
+        if (cancelled) return;
+        cachedPlots = module;
+        setPlots(module);
       })
       .catch(() => {
-        loadingPromise = null;
+        // A rejected module keeps its promise forever, so drop it and let the next mount retry.
+        if (loadingPromise === pending) {
+          loadingPromise = null;
+        }
+        if (!cancelled) {
+          setPlots(null);
+        }
       });
     return () => {
       cancelled = true;

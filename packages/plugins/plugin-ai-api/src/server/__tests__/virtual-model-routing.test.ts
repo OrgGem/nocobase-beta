@@ -20,7 +20,7 @@ import {
   resolveVirtualModel,
   collectRelevantText,
 } from '../utils/virtual-models';
-import { classifyComplexity } from '../utils/complexity-classifier';
+import { classifyComplexity, invalidateClassificationCache } from '../utils/complexity-classifier';
 import { invalidateGroupAccessCache } from '../utils/user-permissions';
 
 vi.mock('../utils/resolve-service', () => ({
@@ -28,9 +28,13 @@ vi.mock('../utils/resolve-service', () => ({
   resolveModelReference: vi.fn(),
 }));
 
-vi.mock('../utils/complexity-classifier', () => ({
-  classifyComplexity: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('../utils/complexity-classifier', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/complexity-classifier')>();
+  return {
+    ...actual,
+    classifyComplexity: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 interface ModelResult {
   content: string;
@@ -155,6 +159,7 @@ describe('AI API virtual model routing (llm mode)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(classifyComplexity).mockReset().mockResolvedValue(undefined);
+    invalidateClassificationCache();
     invalidateGroupAccessCache();
     // Default: every concrete model resolves successfully.
     const resolveAny = async (_ctx: unknown, modelString: unknown) => {
@@ -317,11 +322,10 @@ describe('AI API virtual model routing (llm mode)', () => {
     expect(resolveModelReference).toHaveBeenCalledWith(ctx, 'missing-svc/typo-model');
   });
 
-  it('derives the general bucket from every metadata tier ordered by sortOrder when no bucket is configured', async () => {
-    // Characterization: empty generalModels/cheapModels means the general bucket is derived
-    // from model metadata across ALL reasoningTiers, ordered by sortOrder. A plain request
-    // (no capability signals) is served by the lowest-sortOrder row even if that row is a
-    // reasoning-tier model — the general bucket is a catch-all, not a tier filter.
+  it('derives the general bucket from non-reasoning metadata tiers ordered by sortOrder', async () => {
+    // Empty generalModels/cheapModels means the general bucket is derived from model metadata.
+    // The reasoning tier is deliberately excluded so a plain request (no capability signal) can
+    // not inherit a reasoning model: those are reserved for classified complex tasks.
     const { resolveVirtualModel } = await import('../utils/virtual-models');
     const metadataRow = (llmService: string, model: string, reasoningTier: string, sortOrder: number) => ({
       get: (key: string) => ({ llmService, model, reasoningTier, sortOrder })[key],
@@ -349,11 +353,12 @@ describe('AI API virtual model routing (llm mode)', () => {
         aiApiVirtualModels: { findOne: () => Promise.resolve(row), find: () => Promise.resolve([row]) },
         aiApiModelMetadata: {
           findOne: () => Promise.resolve(null),
-          find: () =>
-            Promise.resolve([
-              metadataRow('svc', 'reasoning-a', 'reasoning', 1),
-              metadataRow('svc', 'general-b', 'general', 2),
-            ]),
+          find: (options?: { filter?: { reasoningTier?: unknown } }) => {
+            const tier = options?.filter?.reasoningTier;
+            if (tier === 'cheap') return Promise.resolve([]);
+            if (tier === 'reasoning') return Promise.resolve([metadataRow('svc', 'reasoning-a', 'reasoning', 1)]);
+            return Promise.resolve([metadataRow('svc', 'general-b', 'general', 2)]);
+          },
         },
       },
     );
@@ -362,7 +367,7 @@ describe('AI API virtual model routing (llm mode)', () => {
 
     expect(result?.status).toBe('resolved');
     expect(result?.reason).toBe('general');
-    expect((result as { resolved?: { modelId: string } }).resolved?.modelId).toBe('reasoning-a');
+    expect((result as { resolved?: { modelId: string } }).resolved?.modelId).toBe('general-b');
   });
 
   it('routes a vision request to the first permitted vision candidate', async () => {
@@ -430,7 +435,7 @@ describe('AI API virtual model routing (llm mode)', () => {
     ).toMatchObject({ hasImage: true });
   });
 
-  it('routes an explicit reasoning request to the reasoning bucket', async () => {
+  it('routes an explicit reasoning request to the general bucket', async () => {
     const { ctx } = createContext(
       { content: 'reasoned answer' },
       {
@@ -445,9 +450,12 @@ describe('AI API virtual model routing (llm mode)', () => {
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
     expect(ctx.status).toBe(200);
-    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    // A positive reasoning effort is a thinking level, not a bucket selector: the simple text has
+    // no capability signal, so it is served by the configured general list. The effort parameter
+    // still reaches the provider with the request.
+    expect(ctx.state.aiApiRoutingReason).toBe('general');
     expect(ctx.state.aiApiLlmBilling).toMatchObject({
-      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
+      resolution: { service: 'general-svc', model: 'general-model' },
     });
   });
 
@@ -640,9 +648,11 @@ describe('AI API virtual model routing (llm mode)', () => {
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
     expect(ctx.status).toBe(200);
-    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    // Hard rules first: a request carrying tools is served by the tool bucket, even when the
+    // task is complex. Reasoning stays a fallback behind it.
+    expect(ctx.state.aiApiRoutingReason).toBe('tools');
     expect(ctx.state.aiApiLlmBilling).toMatchObject({
-      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
+      resolution: { service: 'tool-svc', model: 'tool-model' },
     });
   });
 
@@ -818,7 +828,7 @@ describe('AI API virtual model routing (llm mode)', () => {
 
   // ─── Complexity classifier integration tests ───
 
-  it('routes to reasoning when the classifier confirms complex with tools', async () => {
+  it('routes to the tool bucket when the classifier confirms complex with tools', async () => {
     const { classifyComplexity } = await import('../utils/complexity-classifier');
     vi.mocked(classifyComplexity).mockResolvedValue(true);
 
@@ -836,9 +846,10 @@ describe('AI API virtual model routing (llm mode)', () => {
     await handleChatCompletions(ctx, {} as PluginAiApiServer);
 
     expect(ctx.status).toBe(200);
-    expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+    // Tools are a hard rule, so they win over the complex verdict; reasoning is only a fallback.
+    expect(ctx.state.aiApiRoutingReason).toBe('tools');
     expect(ctx.state.aiApiLlmBilling).toMatchObject({
-      resolution: { service: 'reasoning-svc', model: 'reasoning-model' },
+      resolution: { service: 'tool-svc', model: 'tool-model' },
     });
     expect(classifyComplexity).toHaveBeenCalledTimes(1);
   });
@@ -916,7 +927,7 @@ describe('AI API virtual model routing (llm mode)', () => {
   });
 
   it.each([{ reasoning_effort: 'high' }, { reasoning: { effort: 'medium' } }])(
-    'honors positive reasoning effort with tools: %j',
+    'keeps a positive reasoning effort on the tool bucket: %j',
     async (effort) => {
       const { ctx } = createContext(
         { content: 'answer' },
@@ -931,7 +942,7 @@ describe('AI API virtual model routing (llm mode)', () => {
       );
       await handleChatCompletions(ctx, {} as PluginAiApiServer);
       expect(ctx.status).toBe(200);
-      expect(ctx.state.aiApiRoutingReason).toBe('reasoning');
+      expect(ctx.state.aiApiRoutingReason).toBe('tools');
     },
   );
 
@@ -1029,7 +1040,7 @@ describe('AI API virtual model routing (llm mode)', () => {
     },
   );
 
-  it('filters all capabilities together for reasoning with images, tools and schema', async () => {
+  it('filters all capabilities together for a vision request with tools and schema', async () => {
     const metadata = (model: string) => ({
       get: (key: string) =>
         ({
@@ -1045,7 +1056,7 @@ describe('AI API virtual model routing (llm mode)', () => {
     const vm = {
       ...VIRTUAL_MODEL_ROW,
       get: (key: string) =>
-        key === 'reasoningModels' ? ['reasoning-svc/bad', 'reasoning-svc/good'] : VIRTUAL_MODEL_ROW.get(key),
+        key === 'visionModels' ? ['reasoning-svc/bad', 'reasoning-svc/good'] : VIRTUAL_MODEL_ROW.get(key),
     };
     const { ctx } = createContext(
       { content: 'answer' },
@@ -1064,7 +1075,7 @@ describe('AI API virtual model routing (llm mode)', () => {
     );
     expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
       status: 'resolved',
-      reason: 'reasoning',
+      reason: 'vision',
       resolved: { modelId: 'good' },
     });
     expect(ctx.state.aiApiRoutingDiagnostics).toMatchObject({
@@ -1217,5 +1228,382 @@ describe('AI API virtual model routing (llm mode)', () => {
     expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
       resolved: { modelId: 'general-model' },
     });
+  });
+
+  // ─── Hard rules before classification, cache-aware ranking ───
+
+  it('keeps the tool bucket primary for a complex task and tries reasoning only when tools fail', async () => {
+    vi.mocked(resolveModelReference).mockImplementation(async (_ctx, modelString) => {
+      const reference = String(modelString);
+      if (reference === 'tool-svc/tool-model') return null;
+      const [service, modelId] = reference.split('/');
+      if (!service || !modelId) return null;
+      return {
+        service: { enabled: true, name: service, options: {}, provider: 'test-provider' } as unknown as Model,
+        modelId,
+      };
+    });
+    const { ctx } = createContext(
+      { content: 'reasoned answer' },
+      {
+        model: 'auto',
+        messages: [{ role: 'user', content: 'Plan the migration for our monolith to microservices' }],
+        tools: [{ type: 'function', function: { name: 'run_plan' } }],
+        stream: false,
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW) } },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'reasoning',
+      resolved: { modelId: 'reasoning-model' },
+    });
+  });
+
+  it('routes a plain request to a derived cheap bucket when every list is empty', async () => {
+    const emptyRow = {
+      get: (key: string) =>
+        (
+          ({
+            name: 'auto',
+            mode: 'chat',
+            enabled: true,
+            fallbackModel: 'svc/fallback',
+            visionModels: [],
+            toolModels: [],
+            reasoningModels: [],
+            cheapModels: [],
+            generalModels: [],
+          }) as Record<string, unknown>
+        )[key],
+    };
+    const cheapRow = (llmService: string, model: string) => ({
+      get: (key: string) => ({ llmService, model, reasoningTier: 'cheap', sortOrder: 1 })[key],
+    });
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { model: 'auto', messages: [{ role: 'user', content: 'Hello' }] },
+      {
+        aiApiVirtualModels: { findOne: () => Promise.resolve(emptyRow) },
+        aiApiModelMetadata: {
+          findOne: () => Promise.resolve(null),
+          find: () => Promise.resolve([cheapRow('svc', 'cheap-a')]),
+        },
+      },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'cheap',
+      resolved: { modelId: 'cheap-a' },
+    });
+  });
+
+  it('honors an explicit general list instead of deriving a cheap bucket', async () => {
+    const row = {
+      get: (key: string) =>
+        (
+          ({
+            name: 'auto',
+            mode: 'chat',
+            enabled: true,
+            fallbackModel: 'svc/fallback',
+            visionModels: [],
+            toolModels: [],
+            reasoningModels: [],
+            cheapModels: [],
+            generalModels: ['svc/general-a'],
+          }) as Record<string, unknown>
+        )[key],
+    };
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { model: 'auto', messages: [{ role: 'user', content: 'Hello' }] },
+      {
+        aiApiVirtualModels: { findOne: () => Promise.resolve(row) },
+        aiApiModelMetadata: { findOne: () => Promise.resolve(null), find: vi.fn().mockResolvedValue([]) },
+      },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'general',
+      resolved: { modelId: 'general-a' },
+    });
+  });
+
+  it('derives the general bucket without reasoning-tier rows', async () => {
+    const emptyRow = {
+      get: (key: string) =>
+        (
+          ({
+            name: 'auto',
+            mode: 'chat',
+            enabled: true,
+            fallbackModel: 'svc/fallback',
+            visionModels: [],
+            toolModels: [],
+            reasoningModels: [],
+            cheapModels: [],
+            generalModels: [],
+          }) as Record<string, unknown>
+        )[key],
+    };
+    const metadataRow = (llmService: string, model: string, reasoningTier: string, sortOrder: number) => ({
+      get: (key: string) => ({ llmService, model, reasoningTier, sortOrder })[key],
+    });
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { model: 'auto', messages: [{ role: 'user', content: 'Hello' }] },
+      {
+        aiApiVirtualModels: { findOne: () => Promise.resolve(emptyRow) },
+        aiApiModelMetadata: {
+          findOne: () => Promise.resolve(null),
+          find: (options?: { filter?: { reasoningTier?: unknown } }) => {
+            const tier = options?.filter?.reasoningTier as { $in?: string[] } | string | undefined;
+            // The reasoning tier must never be part of the derived general bucket.
+            expect(tier).not.toBe('reasoning');
+            if (tier === 'cheap') return Promise.resolve([]);
+            return Promise.resolve([metadataRow('svc', 'general-a', 'general', 1)]);
+          },
+        },
+      },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'general',
+      resolved: { modelId: 'general-a' },
+    });
+  });
+
+  it('ranks same-bucket candidates by ascending prompt-cache price', async () => {
+    const row = {
+      get: (key: string) =>
+        (
+          ({
+            name: 'auto',
+            mode: 'chat',
+            enabled: true,
+            fallbackModel: 'svc/fallback',
+            visionModels: [],
+            toolModels: [],
+            reasoningModels: ['svc/pricier', 'svc/cheaper'],
+            cheapModels: [],
+            generalModels: ['svc/general-a'],
+          }) as Record<string, unknown>
+        )[key],
+    };
+    const priceRow = (model: string, cacheInputPricePerMillionTokens: number) => ({
+      get: (key: string) =>
+        ({
+          llmService: 'svc',
+          model,
+          enabled: true,
+          cacheInputPricePerMillionTokens,
+          effectiveFrom: new Date('2026-01-01'),
+          effectiveTo: null,
+        })[key],
+    });
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { model: 'auto', messages: [{ role: 'user', content: 'Plan the migration' }] },
+      {
+        aiApiVirtualModels: { findOne: () => Promise.resolve(row) },
+        aiApiModelPrices: {
+          find: () => Promise.resolve([priceRow('pricier', 5), priceRow('cheaper', 0.5)]),
+        },
+      },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'reasoning',
+      resolved: { modelId: 'cheaper' },
+    });
+  });
+
+  it('never promotes a cheap general candidate above the reasoning group', async () => {
+    const row = {
+      get: (key: string) =>
+        (
+          ({
+            name: 'auto',
+            mode: 'chat',
+            enabled: true,
+            fallbackModel: 'svc/fallback',
+            visionModels: [],
+            toolModels: [],
+            reasoningModels: ['svc/reasoning-a'],
+            cheapModels: [],
+            generalModels: ['svc/general-a'],
+          }) as Record<string, unknown>
+        )[key],
+    };
+    const priceRow = (model: string, cacheInputPricePerMillionTokens: number) => ({
+      get: (key: string) =>
+        ({
+          llmService: 'svc',
+          model,
+          enabled: true,
+          cacheInputPricePerMillionTokens,
+          effectiveFrom: new Date('2026-01-01'),
+          effectiveTo: null,
+        })[key],
+    });
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { model: 'auto', messages: [{ role: 'user', content: 'Plan the migration' }] },
+      {
+        aiApiVirtualModels: { findOne: () => Promise.resolve(row) },
+        // The general model is dramatically cheaper on prompt cache — it must still lose to the
+        // reasoning group for a task the complexity rules classified as complex.
+        aiApiModelPrices: {
+          find: () => Promise.resolve([priceRow('reasoning-a', 10), priceRow('general-a', 0.01)]),
+        },
+      },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'reasoning',
+      resolved: { modelId: 'reasoning-a' },
+    });
+  });
+
+  it('still serves candidates with no configured cache price', async () => {
+    const row = {
+      get: (key: string) =>
+        (
+          ({
+            name: 'auto',
+            mode: 'chat',
+            enabled: true,
+            fallbackModel: 'svc/fallback',
+            visionModels: [],
+            toolModels: [],
+            reasoningModels: ['svc/unknown-a', 'svc/known-cheap'],
+            cheapModels: [],
+            generalModels: [],
+          }) as Record<string, unknown>
+        )[key],
+    };
+    const priceRow = (model: string) => ({
+      get: (key: string) =>
+        ({
+          llmService: 'svc',
+          model,
+          enabled: true,
+          cacheInputPricePerMillionTokens: 0.5,
+          effectiveFrom: new Date('2026-01-01'),
+          effectiveTo: null,
+        })[key],
+    });
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { model: 'auto', messages: [{ role: 'user', content: 'Plan the migration' }] },
+      {
+        aiApiVirtualModels: { findOne: () => Promise.resolve(row) },
+        aiApiModelPrices: { find: () => Promise.resolve([priceRow('known-cheap')]) },
+      },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      resolved: { modelId: 'known-cheap' },
+    });
+  });
+
+  it('reuses one classification verdict for an identical repeated task and re-queries after invalidation', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(true);
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { messages: [{ role: 'user', content: 'Phân tích kiến trúc hệ thống và đề xuất giải pháp' }] },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+    const body = ctx.request.body;
+
+    expect(await resolveVirtualModel(ctx, 'auto', body, 'chat')).toMatchObject({ reason: 'reasoning' });
+    expect(await resolveVirtualModel(ctx, 'auto', body, 'chat')).toMatchObject({ reason: 'reasoning' });
+    expect(classifyComplexity).toHaveBeenCalledTimes(1);
+
+    invalidateClassificationCache();
+    expect(await resolveVirtualModel(ctx, 'auto', body, 'chat')).toMatchObject({ reason: 'reasoning' });
+    expect(classifyComplexity).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cache an inconclusive classification result', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(undefined);
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { messages: [{ role: 'user', content: 'Phân tích kiến trúc hệ thống và đề xuất giải pháp' }] },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+    const body = ctx.request.body;
+
+    await resolveVirtualModel(ctx, 'auto', body, 'chat');
+    await resolveVirtualModel(ctx, 'auto', body, 'chat');
+
+    expect(classifyComplexity).toHaveBeenCalledTimes(2);
+  });
+
+  it('bypasses the classification cache during recovery so failures always escalate', async () => {
+    const { classifyComplexity } = await import('../utils/complexity-classifier');
+    vi.mocked(classifyComplexity).mockResolvedValue(false);
+    const { ctx } = createContext(
+      { content: 'answer' },
+      { messages: [{ role: 'user', content: 'Phân tích kiến trúc' }] },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+    // Two structured tool failures mark the phase as recovery, which must override a "simple"
+    // verdict even when the classifier would have said so.
+    const body = {
+      ...ctx.request.body,
+      messages: [
+        ...(ctx.request.body as { messages: unknown[] }).messages,
+        { role: 'tool', content: '{"success":false}' },
+        { role: 'tool', content: '{"success":false}' },
+      ],
+    };
+    ctx.request.body = body;
+
+    expect(await resolveVirtualModel(ctx, 'auto', body, 'chat')).toMatchObject({ reason: 'reasoning' });
+  });
+
+  it('does not escalate to reasoning or call the classifier when effort is none', async () => {
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        messages: [{ role: 'user', content: 'Plan the migration for our monolith to microservices' }],
+        reasoning_effort: 'none',
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'general',
+    });
+    expect(classifyComplexity).not.toHaveBeenCalled();
+  });
+
+  it('still runs the classifier when a positive reasoning effort is requested', async () => {
+    const { ctx } = createContext(
+      { content: 'answer' },
+      {
+        messages: [{ role: 'user', content: 'Hello' }],
+        reasoning_effort: 'high',
+      },
+      { aiApiVirtualModels: { findOne: () => Promise.resolve(VIRTUAL_MODEL_ROW_WITH_CLASSIFIER) } },
+    );
+
+    expect(await resolveVirtualModel(ctx, 'auto', ctx.request.body, 'chat')).toMatchObject({
+      status: 'resolved',
+      reason: 'general',
+    });
+    expect(classifyComplexity).toHaveBeenCalledTimes(1);
   });
 });

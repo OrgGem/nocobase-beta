@@ -16,3 +16,5 @@ Included chart types:
 - Timeline
 - Sparkline Card
 - Gauge
+- Heatmap
+- Radar

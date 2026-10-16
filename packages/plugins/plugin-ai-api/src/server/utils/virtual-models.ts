@@ -7,9 +7,10 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { createHash } from 'crypto';
 import { Context } from '@nocobase/actions';
 import type { Model } from '@nocobase/database';
-import { classifyComplexity } from './complexity-classifier';
+import { classifyComplexity, getCachedClassification, setCachedClassification } from './complexity-classifier';
 import { toOpenAIError } from './openai-format';
 import { resolveModelReference } from './resolve-service';
 import { AiApiAccessScope, isModelAllowed, isServiceAllowed, resolveUserAccessScope } from './user-permissions';
@@ -25,8 +26,12 @@ import {
 /**
  * Virtual-model routing ("auto" and admin-defined aliases).
  *
- * Task complexity ranks candidates; capabilities, permissions and context fit
- * independently determine eligibility. Fallbacks obey the same constraints.
+ * Hard capability rules (vision, tools, structured output) outrank task complexity. Only when
+ * no capability rule matched does complexity matter, and only then to place the reasoning
+ * bucket as a fallback behind the capability group that was selected first. A positive
+ * reasoning effort is a thinking-level request forwarded to the provider, never a bucket
+ * selector; capabilities, permissions and context fit independently determine eligibility.
+ * Fallbacks obey the same constraints.
  *
  * Security invariant: a candidate is only returned when it passes the caller's
  * usage-group scope (isServiceAllowed + isModelAllowed), so an alias can never
@@ -298,16 +303,20 @@ async function loadVirtualModel(ctx: Context, name: string): Promise<VirtualMode
  * Derive an ordered bucket from aiApiModelMetadata when the admin left the
  * explicit list empty: enabled rows matching the capability, ascending sortOrder.
  */
-async function deriveBucket(ctx: Context, capability: 'vision' | 'tool' | 'reasoning' | 'general'): Promise<string[]> {
+async function deriveBucket(
+  ctx: Context,
+  capability: 'vision' | 'tool' | 'reasoning' | 'cheap' | 'general',
+): Promise<string[]> {
   const repo = ctx.db.getRepository('aiApiModelMetadata');
   const filter: Record<string, unknown> = { enabled: true };
   if (capability === 'vision') filter.supportsVision = true;
   else if (capability === 'tool') filter.supportsToolCalling = true;
   else if (capability === 'reasoning') filter.reasoningTier = 'reasoning';
-  // The general bucket is a catch-all for requests with no capability signal. It intentionally
-  // includes every enabled model (any reasoningTier) so a general request can be served by
-  // whatever the admin ranked first via sortOrder.
-  else filter.reasoningTier = { $in: ['general', 'cheap', 'reasoning'] };
+  else if (capability === 'cheap') filter.reasoningTier = 'cheap';
+  // The general bucket is the default for requests with no capability signal. It deliberately
+  // excludes the reasoning tier: reasoning is reserved for tasks the complexity classifier
+  // marked as complex, so a plain request must not silently inherit a reasoning model.
+  else filter.reasoningTier = { $in: ['general', 'cheap'] };
 
   const rows = await repo.find({ filter, sort: 'sortOrder', pageSize: 200 });
   const list = (rows as unknown[]).map((row) => {
@@ -318,15 +327,54 @@ async function deriveBucket(ctx: Context, capability: 'vision' | 'tool' | 'reaso
   return list.filter(Boolean);
 }
 
+/** Prompt-cache input price per million tokens, keyed by "service/model". */
+async function loadCacheInputPrices(ctx: Context, references: string[]): Promise<Map<string, number>> {
+  const prices = new Map<string, number>();
+  const pairs = new Map<string, { llmService: string; model: string }>();
+  for (const reference of references) {
+    const separator = reference.indexOf('/');
+    if (separator <= 0) continue;
+    const llmService = reference.slice(0, separator);
+    const model = reference.slice(separator + 1);
+    if (!llmService || !model) continue;
+    pairs.set(reference, { llmService, model });
+  }
+  if (pairs.size === 0) return prices;
+
+  const all = [...pairs.values()];
+  const now = new Date();
+  // One query for every candidate of every group. Same effective-period filter as findPrice in
+  // billing.ts: validateModelPrice guarantees no two enabled rows for a model overlap, so the
+  // first match per reference is the current price.
+  const rows = await ctx.db.getRepository('aiApiModelPrices').find({
+    filter: {
+      llmService: { $in: [...new Set(all.map((pair) => pair.llmService))] },
+      model: { $in: [...new Set(all.map((pair) => pair.model))] },
+      enabled: true,
+      effectiveFrom: { $lte: now },
+      $or: [{ effectiveTo: null }, { effectiveTo: { $gt: now } }],
+    },
+    pageSize: 1000,
+  });
+  for (const row of rows as unknown[]) {
+    const llmService = valueOf<string>(row, 'llmService');
+    const model = valueOf<string>(row, 'model');
+    const price = Number(valueOf<unknown>(row, 'cacheInputPricePerMillionTokens'));
+    if (!llmService || !model || !Number.isFinite(price) || price <= 0) continue;
+    const reference = `${llmService}/${model}`;
+    if (pairs.has(reference) && !prices.has(reference)) prices.set(reference, price);
+  }
+  return prices;
+}
+
 async function bucketFor(
   ctx: Context,
   vm: VirtualModel,
   signals: RequestSignals,
 ): Promise<{ reason: VirtualResolution['reason']; candidates: string[] }> {
   const explicit = (list: string[] | undefined) => (list && list.length ? list : null);
-  if (signals.wantsReasoning || (signals.hasComplexContent && !signals.disablesReasoning)) {
-    return { reason: 'reasoning', candidates: explicit(vm.reasoningModels) ?? (await deriveBucket(ctx, 'reasoning')) };
-  }
+  // Hard capability rules first: a payload that carries an image, tools or a response schema is
+  // served by the candidate that actually implements it.
   if (signals.hasImage) {
     return { reason: 'vision', candidates: explicit(vm.visionModels) ?? (await deriveBucket(ctx, 'vision')) };
   }
@@ -339,9 +387,20 @@ async function bucketFor(
       candidates: explicit(vm.generalModels) ?? (await deriveBucket(ctx, 'general')),
     };
   }
-  // Default to the cheapest bucket the admin configured; fall back to general.
+  // Only now does complexity matter. A positive reasoning effort is a thinking-level request
+  // that reaches the provider unchanged, so it does not select the bucket on its own.
+  if (signals.hasComplexContent && !signals.disablesReasoning) {
+    return { reason: 'reasoning', candidates: explicit(vm.reasoningModels) ?? (await deriveBucket(ctx, 'reasoning')) };
+  }
+  // Light mechanical work prefers the cheapest configured bucket.
   const cheap = explicit(vm.cheapModels);
   if (cheap) return { reason: 'cheap', candidates: cheap };
+  // Derive a cheap bucket only when the admin expressed no general preference at all. An
+  // explicit generalModels list is a deliberate choice and must not be silently replaced.
+  if (!explicit(vm.generalModels)) {
+    const derivedCheap = await deriveBucket(ctx, 'cheap');
+    if (derivedCheap.length) return { reason: 'cheap', candidates: derivedCheap };
+  }
   return { reason: 'general', candidates: explicit(vm.generalModels) ?? (await deriveBucket(ctx, 'general')) };
 }
 
@@ -405,9 +464,11 @@ export async function resolveVirtualModel(
     };
   }
   const signals = detectRequestSignals(body, vm);
-  // A configured classifier can correct both heuristic false positives and false negatives.
-  // Explicit effort wins; classifiers are never allowed to widen the caller's access scope.
-  if (!signals.wantsReasoning && !signals.disablesReasoning && vm.complexityClassifierModel) {
+  // A configured classifier can correct both heuristic false positives and false negatives, and
+  // it always runs — a positive reasoning effort is a thinking-level request, not a verdict on
+  // which model class may serve the task. Only an explicit "none" vetoes reasoning entirely.
+  // Classifiers are never allowed to widen the caller's access scope.
+  if (!signals.disablesReasoning && vm.complexityClassifierModel) {
     const messages = Array.isArray(body.messages) ? body.messages.filter(isRecord) : [];
     const recentTools = messages
       .slice(-3)
@@ -428,8 +489,25 @@ export async function resolveVirtualModel(
       usable(classifier.service, classifier.modelId) &&
       valueOf<boolean>(classifierMetadata, 'enabled') !== false
     ) {
-      const classified = await classifyComplexity(ctx, vm.complexityClassifierModel, text);
-      if (classified !== undefined && signals.phase !== 'recovery') signals.hasComplexContent = classified;
+      // Repeated tool turns reuse the same user task, so identical text must not pay for the
+      // same classification twice. The key carries alias/classifier/user so a change to any of
+      // them can not poison another caller's verdict, and only explicit boolean verdicts are
+      // cached — a failure (undefined) is retried on the next request.
+      const classificationKey = createHash('sha1')
+        .update(
+          `${alias}\n${vm.complexityClassifierModel}\n${valueOf<unknown>(ctx.state.currentUser, 'id') ?? ''}\n${text}`,
+        )
+        .digest('hex');
+      // Recovery must always escalate, so it never inherits a cached "simple" verdict.
+      const classified =
+        signals.phase === 'recovery'
+          ? await classifyComplexity(ctx, vm.complexityClassifierModel, text)
+          : getCachedClassification(classificationKey) ??
+            (await classifyComplexity(ctx, vm.complexityClassifierModel, text));
+      if (classified !== undefined && signals.phase !== 'recovery') {
+        setCachedClassification(classificationKey, classified);
+        signals.hasComplexContent = classified;
+      }
     }
   }
   const primary = await bucketFor(ctx, vm, signals);
@@ -446,17 +524,14 @@ export async function resolveVirtualModel(
   }
   const groups: Array<{ reason: VirtualResolution['reason']; candidates: string[] }> =
     opaque && continuationModel ? [{ reason: 'continuation', candidates: [continuationModel] }] : [primary];
-  if (primary.reason === 'reasoning') {
-    if (signals.hasImage)
-      groups.push({
-        reason: 'vision',
-        candidates: vm.visionModels?.length ? vm.visionModels : await deriveBucket(ctx, 'vision'),
-      });
-    if (signals.hasTools)
-      groups.push({
-        reason: 'tools',
-        candidates: vm.toolModels?.length ? vm.toolModels : await deriveBucket(ctx, 'tool'),
-      });
+  // Classifier runs after the hard rules, so for a complex task the capability group that won
+  // stays primary and reasoning joins right behind it, ahead of general. Planning and review
+  // work still reaches the reasoning tier when the capability candidates cannot serve it.
+  if (signals.hasComplexContent && !signals.disablesReasoning && primary.reason !== 'reasoning') {
+    groups.push({
+      reason: 'reasoning',
+      candidates: vm.reasoningModels?.length ? vm.reasoningModels : await deriveBucket(ctx, 'reasoning'),
+    });
   }
   if (primary.reason !== 'general' && primary.reason !== 'structured_output') {
     groups.push({
@@ -465,6 +540,10 @@ export async function resolveVirtualModel(
     });
   }
   groups.push({ reason: 'fallback', candidates: [vm.fallbackModel] });
+  // Cost tie-break: order each group's candidates by their current prompt-cache price so a
+  // repeated prefix is served by the model with the cheapest cache reads. Never crosses groups.
+  // Opaque continuations pin one concrete model, so there is nothing to rank.
+  if (!opaque) await rankGroupsByCachePrice(ctx, groups);
   const rejected: Array<{ model: string; reason: string }> = [];
   const visited = new Set<string>();
   const overflowCandidates: VirtualResolution[] = [];
@@ -568,6 +647,32 @@ export async function resolveVirtualModel(
     configuredMode: vm.mode,
     requestedMode,
   };
+}
+
+/**
+ * Prompt-cache tie-break: order every routing group by its models' current cache-read price.
+ * Groups keep their own order, so this only ever reorders candidates inside the group the hard
+ * rules and the classifier already selected — it can not promote one group over another.
+ */
+async function rankGroupsByCachePrice(
+  ctx: Context,
+  groups: Array<{ reason: VirtualResolution['reason']; candidates: string[] }>,
+) {
+  const prices = await loadCacheInputPrices(
+    ctx,
+    groups.flatMap((group) => group.candidates),
+  );
+  for (const group of groups) {
+    if (group.candidates.length < 2) continue;
+    group.candidates = group.candidates
+      .map((candidate, index) => ({ candidate, index, price: prices.get(candidate) }))
+      .sort((left, right) => {
+        const leftRank = left.price === undefined ? Number.MAX_SAFE_INTEGER : left.price;
+        const rightRank = right.price === undefined ? Number.MAX_SAFE_INTEGER : right.price;
+        return leftRank !== rightRank ? leftRank - rightRank : left.index - right.index;
+      })
+      .map((entry) => entry.candidate);
+  }
 }
 
 /** Return aliases whose required fallback model is accessible to the caller. */

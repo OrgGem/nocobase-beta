@@ -16,10 +16,7 @@ declare global {
 export class PluginAdvanceChartsClient extends Plugin {
   private getDataVisualizationPlugin() {
     try {
-      return (
-        this.app.pm.get('@nocobase/plugin-data-visualization') ||
-        this.app.pm.get('data-visualization')
-      );
+      return this.app.pm.get('@nocobase/plugin-data-visualization') || this.app.pm.get('data-visualization');
     } catch {
       return null;
     }

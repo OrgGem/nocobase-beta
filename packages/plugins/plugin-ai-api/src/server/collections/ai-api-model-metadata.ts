@@ -107,6 +107,14 @@ export default defineCollection({
       index: true,
       comment: 'When false, the model is hidden from /v1/models and reported as active:false.',
     },
+    {
+      name: 'hidden',
+      type: 'boolean',
+      defaultValue: false,
+      index: true,
+      comment:
+        'When true, the model is omitted from GET /v1/models while staying usable: virtual-model routing (e.g. "auto") still resolves to it when a routing rule selects it.',
+    },
   ],
   indexes: [
     {

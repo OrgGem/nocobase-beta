@@ -25,6 +25,48 @@ export const CLASSIFIER_MIN_TEXT_LENGTH = 20;
 export const CLASSIFIER_MAX_TEXT_LENGTH = 4000;
 export const CLASSIFIER_TIMEOUT_MS = 5000;
 
+/**
+ * Verdicts are cached per caller, alias, classifier model and task text. A tool loop replays the
+ * same user task on every turn, so without this the routing policy would pay for an LLM call
+ * each iteration. Only explicit boolean verdicts are stored — every failure returns undefined
+ * and stays uncached so a transient provider error is retried instead of pinned.
+ */
+const CLASSIFICATION_CACHE_TTL_MS = 10 * 60 * 1000;
+const CLASSIFICATION_CACHE_MAX_ENTRIES = 500;
+
+const classificationCache = new Map<string, { value: boolean; expiresAt: number }>();
+
+export function getCachedClassification(key: string): boolean | undefined {
+  const entry = classificationCache.get(key);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= Date.now()) {
+    classificationCache.delete(key);
+    return undefined;
+  }
+  return entry.value;
+}
+
+export function setCachedClassification(key: string, value: boolean): void {
+  // Drop expired entries first; only fall back to FIFO eviction when the map is still full.
+  if (classificationCache.size >= CLASSIFICATION_CACHE_MAX_ENTRIES) {
+    const now = Date.now();
+    for (const [cachedKey, entry] of classificationCache) {
+      if (entry.expiresAt <= now) classificationCache.delete(cachedKey);
+    }
+    while (classificationCache.size >= CLASSIFICATION_CACHE_MAX_ENTRIES) {
+      const oldest = classificationCache.keys().next();
+      if (oldest.done) break;
+      classificationCache.delete(oldest.value);
+    }
+  }
+  classificationCache.set(key, { value, expiresAt: Date.now() + CLASSIFICATION_CACHE_TTL_MS });
+}
+
+/** Called when a virtual alias is saved or removed: its classification policy changed. */
+export function invalidateClassificationCache(): void {
+  classificationCache.clear();
+}
+
 const CLASSIFIER_SYSTEM_PROMPT =
   'You classify whether a user task requires a strong reasoning model (complex planning, orchestration, analysis, ' +
   'synthesis, code architecture, migration, evaluation, or long multi-step work) or can be handled by a simple model. ' +

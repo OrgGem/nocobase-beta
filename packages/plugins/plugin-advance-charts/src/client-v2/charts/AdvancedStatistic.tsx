@@ -4,7 +4,7 @@ import { Chart, ChartType, RenderProps } from '@nocobase/plugin-data-visualizati
 import { Card, Statistic, Typography } from 'antd';
 
 import { tExpr } from '../locale';
-import { fieldConfig, fieldLabel, formatNumber, getMeasureField, inputConfig } from './utils';
+import { fieldConfig, fieldLabel, formatNumber, getMeasureField, inputConfig, isSafeLink } from './utils';
 
 const { Text } = Typography;
 
@@ -14,6 +14,7 @@ type AdvancedStatisticProps = {
   prefix?: string;
   suffix?: string;
   precision?: number;
+  compact?: boolean;
   color?: string;
   link?: string;
   secondaryText?: string;
@@ -25,6 +26,7 @@ const AdvancedStatisticComponent: React.FC<AdvancedStatisticProps> = ({
   prefix,
   suffix,
   precision,
+  compact,
   color,
   link,
   secondaryText,
@@ -33,7 +35,7 @@ const AdvancedStatisticComponent: React.FC<AdvancedStatisticProps> = ({
     <Card size="small" bordered={false} styles={{ body: { padding: 0 } }}>
       <Statistic
         title={title}
-        value={formatNumber(value, precision)}
+        value={formatNumber(value, precision, compact)}
         prefix={prefix}
         suffix={suffix}
         valueStyle={color ? { color } : undefined}
@@ -81,17 +83,29 @@ export class AdvancedStatistic extends Chart {
             },
           },
         },
+        {
+          compact: {
+            title: tExpr('Compact format'),
+            type: 'boolean',
+            'x-decorator': 'FormItem',
+            'x-component': 'Checkbox',
+            default: false,
+          },
+        },
       ],
     });
   }
 
   init: ChartType['init'] = (fields, { measures }) => {
+    // `field` is a chart-field config, so it is validated against the query and can be pruned; the
+    // title is only a fallback shown above the value, so it must not shadow the real field label.
     const field = getMeasureField(fields, measures);
     return {
       general: {
         field,
-        title: field,
+        title: '',
         precision: 0,
+        compact: false,
       },
     };
   };
@@ -103,6 +117,7 @@ export class AdvancedStatistic extends Chart {
       ...general,
       title: general?.title || fieldLabel(fieldProps, field),
       value: row[field],
+      link: isSafeLink(general?.link) ? general.link.trim() : undefined,
     };
   }
 }

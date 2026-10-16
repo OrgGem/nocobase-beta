@@ -9,6 +9,7 @@ import {
   getDimensionField,
   getMeasureField,
   inputConfig,
+  resolvePlotColor,
   selectConfig,
   toNumber,
   usePlotComponent,
@@ -42,6 +43,13 @@ const SparklineCardComponent: React.FC<SparklineCardProps> = ({
   );
 };
 
+const PLOT_OPTIONS = [
+  { label: 'Line', value: 'Tiny.Line' },
+  { label: 'Area', value: 'Tiny.Area' },
+  { label: 'Column', value: 'Tiny.Column' },
+  { label: 'Ring', value: 'Tiny.Ring' },
+];
+
 export class SparklineCard extends Chart {
   constructor() {
     super({
@@ -51,19 +59,11 @@ export class SparklineCard extends Chart {
       config: [
         fieldConfig('xField', 'Date field'),
         fieldConfig('yField', 'Value field'),
+        fieldConfig('extraField', 'Extra field', false),
         inputConfig('title', 'Title'),
         inputConfig('prefix', 'Prefix'),
         inputConfig('suffix', 'Suffix'),
-        selectConfig(
-          'shape',
-          'Sparkline type',
-          [
-            { label: 'Line', value: 'Tiny.Line' },
-            { label: 'Area', value: 'Tiny.Area' },
-            { label: 'Column', value: 'Tiny.Column' },
-          ],
-          'Tiny.Line',
-        ),
+        selectConfig('shape', 'Sparkline type', PLOT_OPTIONS, 'Tiny.Line'),
         inputConfig('color', 'Color'),
       ],
     });
@@ -80,6 +80,7 @@ export class SparklineCard extends Chart {
   getProps({ data, general, fieldProps }: RenderProps) {
     const xField = general?.xField;
     const yField = general?.yField;
+    const extraField = general?.extraField;
     const sortedData = xField
       ? [...data].sort((a, b) => {
           const left = new Date(String(a[xField] ?? '')).valueOf();
@@ -91,17 +92,36 @@ export class SparklineCard extends Chart {
         })
       : data;
     const values = sortedData.map((row) => toNumber(row[yField]));
+    const color = resolvePlotColor(general?.color);
+    const plotType = general?.shape || 'Tiny.Line';
+
+    // Tiny.Ring only reads `percent` (0..1), while the line/area/column marks need real series data.
+    const plotConfig: Record<string, unknown> =
+      plotType === 'Tiny.Ring'
+        ? { percent: values[values.length - 1] ?? 0, color: [color] }
+        : {
+            // plots v2 needs the y-axis fields plus per-row {y: ...} values; a plain number array
+            // never reaches the mark, so the chart would render empty without them.
+            xField: xField || 'y',
+            yField: 'y',
+            shape: 'smooth',
+            style: { stroke: color, fill: color },
+            data: extraField
+              ? sortedData.flatMap((row, index) => [
+                  { y: values[index], series: 'primary' },
+                  { y: toNumber(row[extraField]), series: 'extra' },
+                ])
+              : sortedData.map((row, index) => ({ y: values[index] })),
+            seriesField: extraField ? 'series' : undefined,
+            scale: { color: { range: extraField ? [color, `${color}55`] : undefined } },
+          };
+
     return {
       ...general,
       title: general?.title || fieldProps[yField]?.label || yField,
       value: values[values.length - 1] ?? 0,
-      plotType: general?.shape || 'Tiny.Line',
-      plotConfig: {
-        data: values,
-        smooth: true,
-        color: general?.color,
-        annotations: [],
-      },
+      plotType,
+      plotConfig,
     };
   }
 }

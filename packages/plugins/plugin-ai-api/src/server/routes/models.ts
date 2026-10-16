@@ -25,6 +25,10 @@ import type PluginAiApiServer from '../plugin';
  * The catalog is scoped to the caller: it starts from the global whitelist and is
  * narrowed by the caller's usage group settings (allowedLlmServices / allowedModels).
  *
+ * A model whose metadata override sets `hidden` is omitted here, but remains usable:
+ * a virtual alias (e.g. "auto") may still route to it. Use `enabled: false` instead
+ * to take a model out of routing entirely.
+ *
  * Backward compatibility: resolveModelString() in resolve-service.ts still
  * accepts bare model IDs via its 3-tier fallback (defaultLlmService / single service).
  */
@@ -72,6 +76,9 @@ export async function handleListModels(ctx: Context, plugin: PluginAiApiServer) 
         const meta = metadataMap.get(fullId);
         // An override row with enabled=false hides the model from the catalog.
         if (meta && meta.enabled === false) continue;
+        // A hidden override removes the model from the catalog but leaves it usable:
+        // virtual-model routing (e.g. "auto") may still resolve to it.
+        if (meta && meta.hidden === true) continue;
         models.push(buildModelObject(fullId, now, serviceLabel, meta));
       }
     }
@@ -142,6 +149,8 @@ export async function handleGetModel(ctx: Context, modelId: string, plugin: Plug
           const meta = metadataMap.get(fullId);
           // A disabled override hides the model — treat as not found.
           if (meta && meta.enabled === false) continue;
+          // A hidden override is also invisible to direct catalog lookup.
+          if (meta && meta.hidden === true) continue;
           found = buildModelObject(fullId, now, serviceLabel, meta);
           break;
         }
@@ -193,6 +202,7 @@ export interface ModelMetadataOverride {
   displayName?: string | null;
   description?: string | null;
   enabled?: boolean;
+  hidden?: boolean;
 }
 
 /**
@@ -214,6 +224,7 @@ async function loadModelMetadata(ctx: Context): Promise<Map<string, ModelMetadat
         displayName: row.get('displayName'),
         description: row.get('description'),
         enabled: row.get('enabled'),
+        hidden: row.get('hidden'),
       });
     }
   } catch (err) {

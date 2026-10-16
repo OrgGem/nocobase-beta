@@ -12,23 +12,51 @@
 
 ## Selection policy
 
-Positive explicit reasoning effort takes precedence over tools and vision. Otherwise the current task's complexity
-determines whether reasoning candidates are preferred. An explicit `none` prevents heuristic reasoning escalation;
-an empty reasoning object is not a request for stronger reasoning.
+Hard capability rules come first. A request carrying an image is served by the vision list, a
+request carrying tools (unless `tool_choice=none`) by the tools list, and a request requiring
+structured output by the general list. Only when none of those apply does complexity decide, and
+only then to place the reasoning bucket as a fallback behind the selected capability group.
 
-Simple image requests start with the vision list. Simple tool requests start with the tools list unless
-`tool_choice=none`. The presence of tools still requires tool-capable candidates because the payload is forwarded.
-Structured output uses general candidates with confirmed structured-output support. Other simple requests use
-the configured cheap list, then general candidates.
+A positive reasoning effort is a thinking-level request, not a bucket selector: it is forwarded to
+the provider with the model call. An explicit `none` prevents heuristic reasoning escalation; an
+empty reasoning object is not a request for stronger reasoning.
 
-Complex requests start with reasoning candidates and can try applicable vision/tool lists, general candidates,
-then the configured fallback. Every list remains ordered by the administrator. Derived lists preserve metadata
-sortOrder. No eligible model means an explicit error, never silent removal of a capability or permission bypass.
+Light mechanical work uses the configured cheap list. When the admin expressed no general
+preference, a cheap bucket is derived from metadata, otherwise general is used. General excludes the
+reasoning tier by design, so a plain request can not silently inherit a reasoning model.
+
+Complex requests start with reasoning candidates, or with the applicable capability group that
+outranked them, and can then try reasoning, general candidates, and finally the configured
+fallback. Every list remains ordered by the administrator. Derived lists preserve metadata
+sortOrder. No eligible model means an explicit error, never silent removal of a capability or
+permission bypass.
 
 Explicit capability `false` always excludes a candidate for requests requiring that capability. Unknown tools,
 vision or reasoning-parameter support may be declared by membership in the respective administrator list.
 Reasoning-tier metadata can also declare reasoning-parameter support unless explicitly disabled. Structured-output
 support must be explicitly confirmed in metadata; it is not inferred from a model name or general-list membership.
+
+Hidden models stay routable. A metadata override with **Hidden from model list** set is omitted from
+`GET /v1/models` and `GET /v1/models/:model`, but remains a candidate for virtual aliases when a routing rule
+selects it — unlike `enabled: false`, which also removes the model from routing. Use `enabled: false` to retire a
+model, and `hidden` to keep it reachable only through automatic routing.
+
+## Prompt-cache cost optimization
+
+Routing also optimizes cost without changing the tier decision. Candidates inside the selected
+group are ranked by `aiApiModelPrices.cacheInputPricePerMillionTokens` from the currently effective
+price row, cheapest first, so a repeated prefix is served by the model with the cheapest cache
+reads. Ranking never crosses groups: a cheap general model cannot displace reasoning for a
+classified complex task. Candidates without a configured cache price stay usable and keep their
+configured order at the end of the list. Prices are read in one query per request and skipped
+entirely when no group holds more than one candidate.
+
+Classification results are cached for 10 minutes under a key of alias, classifier model, caller and
+task text. Repeated turns of a tool loop replay the same task, so this avoids paying for the same
+classification repeatedly. Only explicit boolean verdicts are cached — every classifier failure
+returns undefined and is retried on the next request. Recovery always escalates and bypasses the
+cache. Saving or deleting a virtual alias clears the cache. The cache is per process and is not
+synchronized between nodes.
 
 ## Task evidence
 
@@ -38,10 +66,11 @@ reuses the preceding task. Repeated structured tool failures escalate recovery; 
 "error" in tool data does not. Phase detection is heuristic, not a persistent agent state machine.
 
 The optional classifier can correct both false positives and false negatives. It sees the task and bounded recent
-tool evidence, with the beginning and end retained for long input. Explicit reasoning effort wins. Timeout,
-unparseable output and provider failures retain the heuristic. The classifier must be accessible to the caller and
-cannot use disabled metadata. Classifier invocations still incur provider cost; gateway completion usage continues
-to describe the main completion, not the optional classification call.
+tool evidence, with the beginning and end retained for long input. It runs regardless of any reasoning effort,
+because an effort expresses a thinking level rather than a verdict on model class; only an explicit `none` skips it.
+Timeout, unparseable output and provider failures retain the heuristic. The classifier must be accessible to the
+caller and cannot use disabled metadata. Classifier invocations still incur provider cost; gateway completion
+usage continues to describe the main completion, not the optional classification call.
 
 Responses requests route using processed attachments and the full `previous_response_id` history. Provider-specific
 encrypted/signed reasoning cannot be transferred freely: automatic continuation stays on the previous concrete model

@@ -73,6 +73,7 @@ export function validateModelMetadata(model: Model): void {
   requireBooleanOrNull(model.get('supportsStructuredOutput'), 'supportsStructuredOutput');
   requireBooleanOrNull(model.get('supportsReasoning'), 'supportsReasoning');
   requireBooleanOrNull(model.get('enabled'), 'enabled');
+  requireBooleanOrNull(model.get('hidden'), 'hidden');
   const reasoningTier = model.get('reasoningTier');
   if (
     reasoningTier !== null &&

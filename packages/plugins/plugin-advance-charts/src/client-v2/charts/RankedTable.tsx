@@ -12,23 +12,28 @@ import {
   numberConfig,
   selectConfig,
   sortRows,
+  toNumber,
 } from './utils';
 
 type RankedTableProps = {
   rows: Record<string, unknown>[];
   columns: React.ComponentProps<typeof Table>['columns'];
   compact?: boolean;
+  height?: number;
 };
 
-const RankedTableComponent: React.FC<RankedTableProps> = ({ rows, columns, compact }) => (
+const RankedTableComponent: React.FC<RankedTableProps> = ({ rows, columns, compact, height }) => (
   <Table
     rowKey={(record, index) => String(record.__rank || index)}
     size={compact ? 'small' : 'middle'}
     pagination={false}
     columns={columns}
     dataSource={rows}
+    scroll={height ? { y: height } : undefined}
   />
 );
+
+const RANK_COLORS = ['gold', 'silver', '#cd7f32'];
 
 export class RankedTable extends Chart {
   constructor() {
@@ -77,7 +82,8 @@ export class RankedTable extends Chart {
             title: '#',
             dataIndex: '__rank',
             width: 56,
-            render: (value: number) => <Tag color={value <= 3 ? 'blue' : undefined}>{value}</Tag>,
+            align: 'center',
+            render: (value: number) => <Tag color={RANK_COLORS[value - 1]}>{value}</Tag>,
           }
         : null,
       {
@@ -88,6 +94,8 @@ export class RankedTable extends Chart {
         title: fieldProps[general?.valueField]?.label || general?.valueField,
         dataIndex: general?.valueField,
         align: 'right',
+        sorter: (a: Record<string, unknown>, b: Record<string, unknown>) =>
+          toNumber(a[general?.valueField]) - toNumber(b[general?.valueField]),
       },
       general?.extraField
         ? {
@@ -100,6 +108,7 @@ export class RankedTable extends Chart {
       ...general,
       rows,
       columns,
+      height: 320,
     };
   }
 }

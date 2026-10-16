@@ -8,14 +8,18 @@ import {
   booleanConfig,
   fieldConfig,
   fieldLabel,
+  formatNumber,
   getMeasureField,
   inputConfig,
+  isValidPlotColor,
   numberConfig,
   selectConfig,
   toNumber,
 } from './utils';
 
 const { Text } = Typography;
+
+type ProgressStatus = 'success' | 'exception' | 'active' | 'normal';
 
 type ProgressKpiProps = {
   title?: string;
@@ -24,9 +28,18 @@ type ProgressKpiProps = {
   target?: number;
   showTarget?: boolean;
   type?: 'line' | 'circle' | 'dashboard';
-  status?: 'success' | 'exception' | 'active' | 'normal';
+  status?: ProgressStatus;
   strokeColor?: string;
   showInfo?: boolean;
+};
+
+const DEFAULT_TARGET = 100;
+
+const resolveStatus = (status?: ProgressStatus, percent: number): ProgressStatus | undefined => {
+  if (status) return status;
+  if (percent >= 100) return 'success';
+  if (percent >= 50) return 'active';
+  return undefined;
 };
 
 const ProgressKpiComponent: React.FC<ProgressKpiProps> = ({
@@ -46,13 +59,13 @@ const ProgressKpiComponent: React.FC<ProgressKpiProps> = ({
       <Progress
         type={type}
         percent={percent}
-        status={status || undefined}
+        status={resolveStatus(status, percent)}
         strokeColor={strokeColor || undefined}
         showInfo={showInfo}
       />
       {showTarget ? (
         <Text type="secondary">
-          {value} / {target}
+          {formatNumber(value)} / {formatNumber(target)}
         </Text>
       ) : null}
     </Space>
@@ -70,7 +83,7 @@ export class ProgressKpi extends Chart {
         fieldConfig('valueField', 'Value field'),
         fieldConfig('targetField', 'Target field', false),
         inputConfig('title', 'Title'),
-        numberConfig('maxValue', 'Max value', 100),
+        numberConfig('maxValue', 'Max value', DEFAULT_TARGET),
         selectConfig(
           'type',
           'Progress type',
@@ -103,8 +116,8 @@ export class ProgressKpi extends Chart {
     return {
       general: {
         valueField,
-        title: fieldLabel({}, valueField),
-        maxValue: 100,
+        title: '',
+        maxValue: DEFAULT_TARGET,
         type: 'line',
         showInfo: true,
       },
@@ -114,13 +127,17 @@ export class ProgressKpi extends Chart {
   getProps({ data, general, fieldProps }: RenderProps) {
     const row = data[0] || {};
     const value = toNumber(row[general?.valueField]);
-    const target = general?.targetField ? toNumber(row[general.targetField]) : toNumber(general?.maxValue, 100);
+    const target = general?.targetField
+      ? toNumber(row[general.targetField])
+      : toNumber(general?.maxValue, DEFAULT_TARGET);
     const percent = target > 0 ? Math.min(100, Math.max(0, Number(((value / target) * 100).toFixed(2)))) : 0;
+    const strokeColor = isValidPlotColor(general?.strokeColor) ? general.strokeColor.trim() : undefined;
     return {
       ...general,
       title: general?.title || fieldLabel(fieldProps, general?.valueField),
       value,
       target,
+      strokeColor,
       showTarget: Boolean(general?.targetField),
       percent,
     };

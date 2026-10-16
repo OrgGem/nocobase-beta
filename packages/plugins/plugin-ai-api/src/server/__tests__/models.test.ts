@@ -34,6 +34,56 @@ function permissionLookupFailureContext() {
   return ctx;
 }
 
+interface FixtureRow {
+  [key: string]: unknown;
+}
+
+/** A model row whose shape matches Sequelize's get(key) accessor (get() with no key returns all). */
+function rowOf(data: FixtureRow) {
+  return { get: (key?: string) => (key === undefined ? data : data[key]) };
+}
+
+/** A service row: plain properties for resolveEnabledModels, get() for permission checks. */
+function serviceRow(data: FixtureRow) {
+  return { ...data, get: (key?: string) => (key === undefined ? data : data[key]) };
+}
+
+/**
+ * Build a ctx exposing a given list of models for one enabled service.
+ * The caller's scope is the open default group (allowAllModels), so catalog
+ * membership is decided only by metadata flags and the service permission filter.
+ */
+function catalogContext(services: FixtureRow[], metadataRows: FixtureRow[]) {
+  const defaultGroup = {
+    id: 1,
+    name: 'Default',
+    isDefault: true,
+    enabled: false,
+    allowAllModels: true,
+    allowedModels: [],
+    allowedLlmServices: [],
+  };
+  const ctx = {
+    app: { name: 'main', pm: { get: () => ({}) } },
+    state: { currentUser: { id: 1 } },
+    db: {
+      getRepository: (name: string) => {
+        if (name === 'aiApiConfig') return { findOne: vi.fn(async () => null) };
+        if (name === 'llmServices') return { find: vi.fn(async () => services.map(serviceRow)) };
+        if (name === 'aiApiModelMetadata') return { find: vi.fn(async () => metadataRows.map(rowOf)) };
+        if (name === 'aiApiGroupMembers') return { findOne: vi.fn(async () => null) };
+        if (name === 'aiApiUsageGroups') return { findOne: vi.fn(async () => rowOf(defaultGroup)) };
+        if (name === 'aiApiVirtualModels') return { find: vi.fn(async () => []) };
+        return { find: vi.fn(async () => []) };
+      },
+    },
+    log: { error: vi.fn(), warn: vi.fn() },
+    status: 0,
+    body: undefined,
+  } as unknown as Context;
+  return ctx;
+}
+
 describe('buildModelObject', () => {
   it('returns the base OpenAI model shape with no override', () => {
     const model = buildModelObject('svc/gpt-4o', CREATED, 'My Service');
@@ -132,5 +182,120 @@ describe('model catalog permission lookup failures', () => {
 
     expect(ctx.status).toBe(503);
     expect(ctx.body).toMatchObject({ error: { code: 'permission_check_failed' } });
+  });
+});
+
+describe('hidden models', () => {
+  const services: FixtureRow[] = [
+    {
+      id: 1,
+      name: 'svc',
+      title: 'Test Service',
+      enabled: true,
+      enabledModels: ['visible', 'hidden'],
+    },
+  ];
+
+  const metadata: FixtureRow[] = [{ llmService: 'svc', model: 'hidden', enabled: true, hidden: true, sortOrder: 0 }];
+
+  it('omits a hidden model from the model list', async () => {
+    const ctx = catalogContext(services, metadata);
+
+    await handleListModels(ctx, undefined as never);
+
+    expect(ctx.status).toBe(200);
+    const ids = (ctx.body as { data: Array<{ id: string }> }).data.map((model) => model.id);
+    expect(ids).toEqual(['svc/visible']);
+  });
+
+  it('answers 404 for a hidden model on the single-model endpoint', async () => {
+    const ctx = catalogContext(services, metadata);
+
+    await handleGetModel(ctx, 'svc/hidden', undefined as never);
+
+    expect(ctx.status).toBe(404);
+    expect(ctx.body).toMatchObject({ error: { code: 'model_not_found' } });
+  });
+
+  it('still serves a visible model alongside a hidden one', async () => {
+    const ctx = catalogContext(services, metadata);
+
+    await handleGetModel(ctx, 'svc/visible', undefined as never);
+
+    expect(ctx.status).toBe(200);
+    expect(ctx.body).toMatchObject({ id: 'svc/visible' });
+  });
+
+  it('keeps models without an override row visible', async () => {
+    const ctx = catalogContext(services, []);
+
+    await handleListModels(ctx, undefined as never);
+
+    const ids = (ctx.body as { data: Array<{ id: string }> }).data.map((model) => model.id);
+    expect(ids).toEqual(['svc/visible', 'svc/hidden']);
+  });
+});
+
+describe('hidden models stay routable via virtual aliases', () => {
+  it('resolves a virtual alias to a hidden model selected by a routing rule', async () => {
+    const defaultGroup = {
+      id: 1,
+      name: 'Default',
+      isDefault: true,
+      enabled: false,
+      allowAllModels: true,
+      allowedModels: [],
+      allowedLlmServices: [],
+    };
+    const ctx = {
+      app: { name: 'hidden-routing', pm: { get: () => ({}) } },
+      state: { currentUser: { id: 1 } },
+      db: {
+        getRepository: (name: string) => {
+          if (name === 'aiApiConfig') return { findOne: vi.fn(async () => null) };
+          if (name === 'aiApiVirtualModels') {
+            return {
+              findOne: vi.fn(async () =>
+                rowOf({
+                  name: 'auto',
+                  mode: 'chat',
+                  fallbackModel: 'svc/hidden',
+                  cheapModels: ['svc/hidden'],
+                  enabled: true,
+                }),
+              ),
+            };
+          }
+          if (name === 'llmServices') {
+            return {
+              findOne: vi.fn(async () =>
+                rowOf({ name: 'svc', title: 'Test Service', enabled: true, provider: 'openai' }),
+              ),
+              find: vi.fn(async () => []),
+            };
+          }
+          if (name === 'aiApiModelMetadata') {
+            return {
+              find: vi.fn(async () => []),
+              findOne: vi.fn(async () => rowOf({ enabled: true, hidden: true })),
+            };
+          }
+          if (name === 'aiApiGroupMembers') return { findOne: vi.fn(async () => null) };
+          if (name === 'aiApiUsageGroups') return { findOne: vi.fn(async () => rowOf(defaultGroup)) };
+          return { find: vi.fn(async () => []) };
+        },
+      },
+      log: { error: vi.fn(), warn: vi.fn() },
+      status: 0,
+      body: undefined,
+    } as unknown as Context;
+
+    const { resolveVirtualModel } = await import('../utils/virtual-models');
+    const result = await resolveVirtualModel(ctx, 'auto', { messages: [{ role: 'user', content: 'hi' }] }, 'chat');
+
+    expect(result).toMatchObject({
+      status: 'resolved',
+      resolved: expect.objectContaining({ modelId: 'hidden' }),
+    });
   });
 });

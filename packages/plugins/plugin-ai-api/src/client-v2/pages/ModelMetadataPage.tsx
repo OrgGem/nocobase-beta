@@ -36,6 +36,7 @@ interface ModelMetadata {
   description?: string | null;
   systemPrompt?: string | null;
   enabled: boolean;
+  hidden?: boolean;
 }
 
 type MetadataFormValues = Omit<ModelMetadata, 'id'>;
@@ -117,7 +118,7 @@ export default function ModelMetadataPage() {
     setEditing(undefined);
     setModels([]);
     form.resetFields();
-    form.setFieldsValue({ enabled: true } as MetadataFormValues);
+    form.setFieldsValue({ enabled: true, hidden: false } as MetadataFormValues);
     setOpen(true);
   };
 
@@ -150,6 +151,7 @@ export default function ModelMetadataPage() {
       supportsReasoning: values.supportsReasoning ?? null,
       reasoningTier: values.reasoningTier || 'general',
       sortOrder: values.sortOrder ?? 0,
+      hidden: !!values.hidden,
     };
     setSaving(true);
     try {
@@ -203,6 +205,13 @@ export default function ModelMetadataPage() {
       ),
     },
     {
+      title: t('Hidden'),
+      dataIndex: 'hidden',
+      key: 'hidden',
+      width: 100,
+      render: (hidden: boolean) => (hidden ? <Tag color="orange">{t('Hidden')}</Tag> : <Tag>{t('Visible')}</Tag>),
+    },
+    {
       title: t('Actions'),
       key: 'actions',
       fixed: 'right',
@@ -231,7 +240,7 @@ export default function ModelMetadataPage() {
         </Button>
       }
     >
-      <Table rowKey="id" columns={columns} dataSource={rows} loading={loading} scroll={{ x: 1450 }} />
+      <Table rowKey="id" columns={columns} dataSource={rows} loading={loading} scroll={{ x: 1550 }} />
       <Modal
         title={editing ? t('Edit override') : t('Add override')}
         open={open}
@@ -362,6 +371,16 @@ export default function ModelMetadataPage() {
             <InputNumber precision={0} style={{ width: '100%' }} placeholder="0" />
           </Form.Item>
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="hidden"
+            label={t('Hidden from model list')}
+            valuePropName="checked"
+            tooltip={t(
+              'The model is removed from GET /v1/models, but still works when reached through virtual-model routing (e.g. "auto").',
+            )}
+          >
             <Switch />
           </Form.Item>
         </Form>
