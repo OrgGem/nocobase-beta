@@ -1,8 +1,14 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
+import type PluginAclClientV2 from '@nocobase/plugin-acl/client-v2';
 
 export class PluginExternalStorageManagerClient extends Plugin<Record<string, never>, Application> {
   async load() {
+    this.app.pm.get<PluginAclClientV2>('acl')?.settingsUI.addPermissionsTab({
+      key: 'external-storage',
+      label: this.t('External Storage'),
+      sort: 25,
+      componentLoader: () => import('./components/ExternalStoragePermissions'),
+    });
     this.pluginSettingsManager.addMenuItem({
       key: 'external-storage-manager',
       title: this.t('External Storage'),
