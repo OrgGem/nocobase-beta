@@ -38,7 +38,7 @@
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/server": "2.x",
-    "plugin-cluster-manager": "2.x",
+    "plugin-cluster-manager": "^1.3.3",
     "plugin-document-parser": "1.x"
   },
   "dependencies": {}
