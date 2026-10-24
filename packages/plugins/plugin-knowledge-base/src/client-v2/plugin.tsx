@@ -1,7 +1,10 @@
 import { Plugin, Application } from '@nocobase/client-v2';
+import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
+import { KnowledgeBaseContext } from './KnowledgeBaseContext';
 
 export class PluginKnowledgeBaseClient extends Plugin<Record<string, never>, Application> {
   async load() {
+    this.app.pm.get<PluginAIClientV2>('ai')?.aiManager.registerWorkContext('knowledge-base', KnowledgeBaseContext);
     this.pluginSettingsManager.addMenuItem({
       key: 'ai-knowledge-base',
       title: this.t('Knowledge Base'),
