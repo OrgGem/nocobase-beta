@@ -288,5 +288,8 @@
   "Target after": "Nhánh đích sau đó",
   "Execution mode": "Chế độ thực thi",
   "App process": "App process",
-  "Credential-bearing URLs are not allowed": "URL không được chứa tên người dùng hoặc thông tin xác thực"
+  "Credential-bearing URLs are not allowed": "URL không được chứa tên người dùng hoặc thông tin xác thực",
+  "Git Repository": "Kho Git",
+  "Git Merge Request": "Yêu cầu hợp nhất Git",
+  "Git Commit": "Commit Git"
 }
