@@ -6,7 +6,6 @@
   "Monitoring": "监控",
   "Cache": "缓存",
   "Coming in {{phase}}": "将在 {{phase}} 阶段实现",
-
   "Endpoint": "服务地址",
   "API token": "API 令牌",
   "A token is already saved. Leave blank to keep it.": "已保存令牌，留空表示不修改。",
@@ -29,7 +28,6 @@
   "Settings saved": "设置已保存",
   "Connected to Carbone successfully": "已成功连接 Carbone",
   "Connection failed": "连接失败",
-
   "New template": "新建模板",
   "Upload new version of \"{{name}}\"": "为 \"{{name}}\" 上传新版本",
   "Drop a template file here or click to browse": "拖入模板文件或点击选择",
@@ -73,7 +71,6 @@
   "Current": "当前",
   "(no note)": "(无备注)",
   "Show schema": "查看 schema",
-
   "Render": "渲染",
   "Render template": "渲染模板",
   "Cache hit": "命中缓存",
@@ -95,7 +92,6 @@
   "Invalidate all cache for this template?": "清除该模板的全部缓存？",
   "Cache invalidated": "缓存已清除",
   "{{n}} cache row(s) removed": "已清除 {{n}} 条缓存",
-
   "Result": "结果",
   "Generate sample data": "生成示例数据",
   "Run a render to see the result": "执行渲染以查看结果",
@@ -103,7 +99,6 @@
   "Invalid JSON": "JSON 格式无效",
   "Invalidate template": "清除该模板缓存",
   "This format cannot be previewed inline — use Download to inspect.": "该格式无法在线预览 — 请点击下载查看。",
-
   "Last hour": "最近 1 小时",
   "Last 24 hours": "最近 24 小时",
   "Last 7 days": "最近 7 天",
@@ -122,12 +117,10 @@
   "When": "时间",
   "Action": "操作",
   "Template": "模板",
-  "Cache": "缓存",
   "User": "用户",
   "Status": "状态",
   "Inspect": "查看",
   "Input data was not retained for this log": "该日志未保留输入数据",
-
   "Render Carbone document": "渲染 Carbone 文档",
   "Render a managed Carbone template with data from upstream nodes. Returns the attachment id and URL.": "使用上游节点的数据渲染已托管的 Carbone 模板，返回附件 id 与 URL。",
   "Bind to an object variable, or compose JSON inline. Carbone expects { d: ..., c: ... }.": "绑定到对象变量，或在此处编写 JSON。Carbone 需要 { d: ..., c: ... }。",
@@ -137,5 +130,6 @@
   "Ignore failed render and continue workflow": "渲染失败时忽略并继续工作流",
   "Attachment id": "附件 id",
   "Attachment URL": "附件 URL",
-  "Enabled": "启用"
+  "Enabled": "启用",
+  "Disabled": "已禁用"
 }

@@ -6,7 +6,6 @@
   "Monitoring": "Monitoring",
   "Cache": "Cache",
   "Coming in {{phase}}": "Coming in {{phase}}",
-
   "Endpoint": "Endpoint",
   "API token": "API token",
   "A token is already saved. Leave blank to keep it.": "A token is already saved. Leave blank to keep it.",
@@ -29,7 +28,6 @@
   "Settings saved": "Settings saved",
   "Connected to Carbone successfully": "Connected to Carbone successfully",
   "Connection failed": "Connection failed",
-
   "New template": "New template",
   "Upload new version of \"{{name}}\"": "Upload new version of \"{{name}}\"",
   "Drop a template file here or click to browse": "Drop a template file here or click to browse",
@@ -73,7 +71,6 @@
   "Current": "Current",
   "(no note)": "(no note)",
   "Show schema": "Show schema",
-
   "Render": "Render",
   "Render template": "Render template",
   "Cache hit": "Cache hit",
@@ -95,7 +92,6 @@
   "Invalidate all cache for this template?": "Invalidate all cache for this template?",
   "Cache invalidated": "Cache invalidated",
   "{{n}} cache row(s) removed": "{{n}} cache row(s) removed",
-
   "Result": "Result",
   "Generate sample data": "Generate sample data",
   "Run a render to see the result": "Run a render to see the result",
@@ -103,7 +99,6 @@
   "Invalid JSON": "Invalid JSON",
   "Invalidate template": "Invalidate template",
   "This format cannot be previewed inline — use Download to inspect.": "This format cannot be previewed inline — use Download to inspect.",
-
   "Last hour": "Last hour",
   "Last 24 hours": "Last 24 hours",
   "Last 7 days": "Last 7 days",
@@ -122,12 +117,10 @@
   "When": "When",
   "Action": "Action",
   "Template": "Template",
-  "Cache": "Cache",
   "User": "User",
   "Status": "Status",
   "Inspect": "Inspect",
   "Input data was not retained for this log": "Input data was not retained for this log",
-
   "Render Carbone document": "Render Carbone document",
   "Render a managed Carbone template with data from upstream nodes. Returns the attachment id and URL.": "Render a managed Carbone template with data from upstream nodes. Returns the attachment id and URL.",
   "Bind to an object variable, or compose JSON inline. Carbone expects { d: ..., c: ... }.": "Bind to an object variable, or compose JSON inline. Carbone expects { d: ..., c: ... }.",
@@ -137,5 +130,6 @@
   "Ignore failed render and continue workflow": "Ignore failed render and continue workflow",
   "Attachment id": "Attachment id",
   "Attachment URL": "Attachment URL",
-  "Enabled": "Enabled"
+  "Enabled": "Enabled",
+  "Disabled": "Disabled"
 }
