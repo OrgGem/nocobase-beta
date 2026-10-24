@@ -19,5 +19,19 @@
   "Edit mapping": "Edit mapping",
   "Expand JSON keys": "Expand JSON keys",
   "No data": "No data",
-  "Loading...": "Loading..."
+  "Loading...": "Loading...",
+  "Cross Join settings": "Cross Join settings",
+  "Total {{count}} rows": "Total {{count}} rows",
+  "Join #{{number}}": "Join #{{number}}",
+  "Remove join": "Remove join",
+  "Select datasource": "Select datasource",
+  "Select collection": "Select collection",
+  "Left Field (primary)": "Left Field (primary)",
+  "Right Field (join)": "Right Field (join)",
+  "Field from primary": "Field from primary",
+  "Field from join table": "Field from join table",
+  "Include": "Include",
+  "Auto-populate from sources": "Auto-populate from sources",
+  "Auto-populate fields from the configured sources, or leave empty to detect columns at runtime.": "Auto-populate fields from the configured sources, or leave empty to detect columns at runtime.",
+  "Operation failed": "Operation failed"
 }
