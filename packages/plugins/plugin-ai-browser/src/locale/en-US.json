@@ -40,5 +40,18 @@
   "Element Fingerprints": "Element Fingerprints",
   "Driver": "Driver",
   "Profile": "Profile",
-  "Configuration": "Configuration"
+  "Configuration": "Configuration",
+  "AI Browser block settings": "AI Browser block settings",
+  "Configure AI Browser block": "Configure AI Browser block",
+  "Select an active browser session...": "Select an active browser session...",
+  "Session {{id}}": "Session {{id}}",
+  "Failed to load browser preview": "Failed to load browser preview",
+  "Failed to load browser sessions": "Failed to load browser sessions",
+  "Navigating to {{url}}": "Navigating to {{url}}",
+  "Browser live view is not ready yet": "Browser live view is not ready yet",
+  "Failed to open browser session": "Failed to open browser session",
+  "User declined opening a browser session.": "User declined opening a browser session.",
+  "Operation failed": "Operation failed",
+  "Add": "Add",
+  "Remove": "Remove"
 }

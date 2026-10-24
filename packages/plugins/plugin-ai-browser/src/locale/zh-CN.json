@@ -40,5 +40,18 @@
   "Element Fingerprints": "元素指纹",
   "Driver": "驱动",
   "Profile": "配置",
-  "Configuration": "配置"
+  "Configuration": "配置",
+  "AI Browser block settings": "AI 浏览器区块设置",
+  "Configure AI Browser block": "配置 AI 浏览器区块",
+  "Select an active browser session...": "选择活动浏览器会话...",
+  "Session {{id}}": "会话 {{id}}",
+  "Failed to load browser preview": "加载浏览器预览失败",
+  "Failed to load browser sessions": "加载浏览器会话失败",
+  "Navigating to {{url}}": "正在访问 {{url}}",
+  "Browser live view is not ready yet": "浏览器实时预览尚未就绪",
+  "Failed to open browser session": "打开浏览器会话失败",
+  "User declined opening a browser session.": "用户拒绝打开浏览器会话。",
+  "Operation failed": "操作失败",
+  "Add": "添加",
+  "Remove": "移除"
 }
