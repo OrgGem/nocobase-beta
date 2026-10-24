@@ -1,23 +1,24 @@
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
+import { NAMESPACE } from '../shared/constants';
+import { OcrVerifyBlockModel } from './block/OcrVerifyBlockModel';
 
 export class PluginOcrVerifyBlockClient extends Plugin<Record<string, never>, Application> {
   async load() {
+    this.flowEngine.registerModels({ OcrVerifyBlockModel });
     this.pluginSettingsManager.addMenuItem({
       key: 'ocr-verify-block',
       title: this.t('OCR Verify Block'),
       icon: 'FileSearchOutlined',
-      aclSnippet: 'pm.ocr-verify-block.settings',
+      aclSnippet: `pm.${NAMESPACE}.settings`,
     });
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'ocr-verify-block',
       key: 'index',
       title: this.t('OCR Verify Block'),
-      
-      componentLoader: () => import('../client/components/SettingsPage').then(m => ({ default: m.SettingsPage })),
-    });
 
+      componentLoader: () => import('./pages/SettingsPage'),
+    });
   }
 }
 
