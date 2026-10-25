@@ -8,18 +8,13 @@
  */
 
 import { Model, MultipleRelationRepository, Transaction } from '@nocobase/database';
-import PluginLocalizationServer from '@nocobase/plugin-localization';
 import { Plugin } from '@nocobase/server';
 import { tval } from '@nocobase/utils';
 import _ from 'lodash';
 import { resolve } from 'path';
+import { projectHubRoutes, type ProjectedRoute } from './projectRoutes';
 
-type RoutePlainObject = Record<string, any> & {
-  id?: string | number;
-  schemaUid?: string;
-  children?: RoutePlainObject[];
-  nextAppRouteId?: string | number;
-};
+type RoutePlainObject = ProjectedRoute;
 
 const toPlainRoute = (route: Model | RoutePlainObject): RoutePlainObject => {
   if (typeof (route as Model).get === 'function') {
@@ -38,19 +33,6 @@ const flattenSchemaUids = (routes: RoutePlainObject[], schemaUids = new Set<stri
     }
   }
   return schemaUids;
-};
-
-const indexRoutesBySchemaUid = (routes: RoutePlainObject[], map = new Map<string, RoutePlainObject>()) => {
-  for (const route of routes) {
-    const plain = toPlainRoute(route);
-    if (plain.schemaUid && !map.has(plain.schemaUid)) {
-      map.set(plain.schemaUid, plain);
-    }
-    if (Array.isArray(plain.children)) {
-      indexRoutesBySchemaUid(plain.children, map);
-    }
-  }
-  return map;
 };
 
 export class PluginNextAppServer extends Plugin {
@@ -98,6 +80,10 @@ export class PluginNextAppServer extends Plugin {
       name: `pm.nextApp`,
       actions: [
         'nextAppRoutes:list',
+        'nextAppRoutes:create',
+        'nextAppRoutes:update',
+        'nextAppRoutes:move',
+        'nextAppRoutes:destroy',
         'roles.nextAppRoutes:*',
         'nextAppConfig:list',
         'nextAppConfig:create',
@@ -127,6 +113,9 @@ export class PluginNextAppServer extends Plugin {
       const schemaUid = instance.get('schemaUid');
       if (!schemaUid) return;
 
+      // A Hub menu may reference a Desktop page; removing the menu must preserve that shared page.
+      if (await this.db.getRepository('desktopRoutes').findOne({ filter: { schemaUid }, transaction })) return;
+
       // Clean up flowModels
       const r = this.db.getRepository('flowModels');
       if (r) {
@@ -153,7 +142,10 @@ export class PluginNextAppServer extends Plugin {
       const schemaUid = instance.get('schemaUid');
 
       // Only create flowModel for routes with a schema (page/flowPage/tabs)
-      if (schemaUid) {
+      if (
+        schemaUid &&
+        !(await this.db.getRepository('desktopRoutes').findOne({ filter: { schemaUid }, transaction }))
+      ) {
         const r = this.db.getRepository('flowModels');
         if (r) {
           await r.create({
@@ -270,32 +262,8 @@ export class PluginNextAppServer extends Plugin {
       const nextAppPlainRoutes = nextAppRoutes.map(toPlainRoute);
       const schemaUids = Array.from(flattenSchemaUids(nextAppPlainRoutes));
 
-      if (!schemaUids.length) {
-        return nextAppPlainRoutes;
-      }
-
-      const desktopRoutes = await getDesktopAccessibleRoutes(ctx);
-      const desktopRouteBySchemaUid = indexRoutesBySchemaUid(desktopRoutes.map(toPlainRoute));
-
-      const projectRoute = (nextAppRoute: RoutePlainObject): RoutePlainObject | null => {
-        const desktopRoute = nextAppRoute.schemaUid ? desktopRouteBySchemaUid.get(nextAppRoute.schemaUid) : null;
-
-        if (!desktopRoute) {
-          return null;
-        }
-
-        return {
-          ...desktopRoute,
-          title: nextAppRoute.title || desktopRoute.title,
-          tooltip: nextAppRoute.tooltip || desktopRoute.tooltip,
-          icon: nextAppRoute.icon || desktopRoute.icon,
-          sort: nextAppRoute.sort ?? desktopRoute.sort,
-          hideInMenu: nextAppRoute.hideInMenu ?? desktopRoute.hideInMenu,
-          nextAppRouteId: nextAppRoute.id,
-        };
-      };
-
-      return nextAppPlainRoutes.map(projectRoute).filter(Boolean);
+      const desktopRoutes = schemaUids.length ? await getDesktopAccessibleRoutes(ctx) : [];
+      return projectHubRoutes(nextAppPlainRoutes, desktopRoutes.map(toPlainRoute));
     };
 
     this.app.resourceManager.registerActionHandler('nextAppRoutes:listAccessible', async (ctx, next) => {
@@ -427,17 +395,13 @@ export class PluginNextAppServer extends Plugin {
   }
 
   registerLocalizationSource() {
-    const localizationPlugin = this.app.pm.get('localization') as PluginLocalizationServer;
-    if (!localizationPlugin) {
-      return;
-    }
-    localizationPlugin.sourceManager.registerSource('next-app-routes', {
+    this.app.localeManager.registerSource('next-app-routes', {
       title: tval('Next App routes'),
       sync: async (ctx) => {
         const nextAppRoutes = await ctx.db.getRepository('nextAppRoutes').find({
           raw: true,
         });
-        const resources = {};
+        const resources: Record<string, string> = {};
         nextAppRoutes.forEach((route: { title?: string }) => {
           if (route.title) {
             resources[route.title] = '';
