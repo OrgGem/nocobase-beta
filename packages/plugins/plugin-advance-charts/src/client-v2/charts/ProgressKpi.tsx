@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 
 import { Chart, ChartType, RenderProps } from '@nocobase/plugin-data-visualization/client-v2';
@@ -35,7 +44,7 @@ type ProgressKpiProps = {
 
 const DEFAULT_TARGET = 100;
 
-const resolveStatus = (status?: ProgressStatus, percent: number): ProgressStatus | undefined => {
+const resolveStatus = (status: ProgressStatus | undefined, percent: number): ProgressStatus | undefined => {
   if (status) return status;
   if (percent >= 100) return 'success';
   if (percent >= 50) return 'active';

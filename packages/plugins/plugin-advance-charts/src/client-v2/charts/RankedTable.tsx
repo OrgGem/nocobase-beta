@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 
 import { Chart, ChartType, RenderProps } from '@nocobase/plugin-data-visualization/client-v2';
@@ -24,7 +33,7 @@ type RankedTableProps = {
 
 const RankedTableComponent: React.FC<RankedTableProps> = ({ rows, columns, compact, height }) => (
   <Table
-    rowKey={(record, index) => String(record.__rank || index)}
+    rowKey={(record: Record<string, unknown>, index) => String(record.__rank || index)}
     size={compact ? 'small' : 'middle'}
     pagination={false}
     columns={columns}
