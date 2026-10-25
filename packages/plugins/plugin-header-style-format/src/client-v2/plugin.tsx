@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin, TableColumnModel } from '@nocobase/client-v2';
 import { ColorPicker } from 'antd';
 import React from 'react';
@@ -16,11 +25,23 @@ type HeaderColorPickerProps = {
   onChange?: (value?: string) => void;
 };
 
-function HeaderColorPicker({ value, onChange }: HeaderColorPickerProps) {
-  return <ColorPicker allowClear showText value={value} onChange={(color) => onChange?.(color?.toHexString())} />;
+export function HeaderColorPicker({ value, onChange }: HeaderColorPickerProps) {
+  return (
+    <ColorPicker
+      allowClear
+      showText
+      value={value || undefined}
+      onChange={(color) => onChange?.(color?.toHexString())}
+      onClear={() => onChange?.(undefined)}
+    />
+  );
 }
 
+type HeaderCellProps = React.HTMLAttributes<HTMLTableCellElement> & Record<string, unknown>;
+type HeaderCellHandler = (column: unknown) => HeaderCellProps | undefined;
+
 type TableColumnModelLike = TableColumnModel & {
+  props: { onHeaderCell?: HeaderCellHandler };
   setProps: (keyOrProps: string | Record<string, unknown>, value?: unknown) => void;
 };
 
@@ -28,10 +49,11 @@ const FLOW_KEY = 'headerStyleFormatSettings';
 const STEP_KEY = 'headerStyleFormat';
 const HEADER_CLASS_NAME = 'nb-header-style-format-header';
 const STYLE_ELEMENT_ID = 'nb-header-style-format-style';
+const headerHandlers = new WeakMap<object, { original?: HeaderCellHandler; applied: HeaderCellHandler }>();
 
 function normalizeColor(value: unknown): string | undefined {
-  if (typeof value === 'string' && value.length > 0) {
-    return value;
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
   }
   return undefined;
 }
@@ -52,17 +74,21 @@ function hasActiveFormat(params: HeaderStyleFormatParams): boolean {
   return !!params.headerColor || !!params.headerWrap || !!params.headerAlign;
 }
 
-function applyHeaderStyleFormat(model: TableColumnModelLike, params?: HeaderStyleFormatParams): void {
+export function applyHeaderStyleFormat(model: TableColumnModelLike, params?: HeaderStyleFormatParams): void {
   const normalized = normalizeHeaderStyleFormatParams(params);
+  const previous = headerHandlers.get(model);
+  const current = model.props.onHeaderCell;
+  const original = previous && current === previous.applied ? previous.original : current;
 
   if (!hasActiveFormat(normalized)) {
-    model.setProps('onHeaderCell', undefined);
+    if (previous && current === previous.applied) model.setProps('onHeaderCell', original);
+    headerHandlers.delete(model);
     return;
   }
 
-  model.setProps('onHeaderCell', () => {
-    const style: React.CSSProperties = {};
-    let className: string | undefined;
+  const applied: HeaderCellHandler = (column) => {
+    const cell = original?.(column);
+    const style: React.CSSProperties = { ...cell?.style };
 
     if (normalized.headerColor) {
       style.color = normalized.headerColor;
@@ -74,11 +100,17 @@ function applyHeaderStyleFormat(model: TableColumnModelLike, params?: HeaderStyl
 
     if (normalized.headerWrap) {
       style.whiteSpace = 'normal';
-      className = HEADER_CLASS_NAME;
     }
 
-    return { style, className };
-  });
+    return {
+      ...cell,
+      style,
+      className:
+        [cell?.className, normalized.headerWrap ? HEADER_CLASS_NAME : undefined].filter(Boolean).join(' ') || undefined,
+    };
+  };
+  headerHandlers.set(model, { original, applied });
+  model.setProps('onHeaderCell', applied);
 }
 
 export function ensureHeaderStyleFormatStyleElement(): void {
