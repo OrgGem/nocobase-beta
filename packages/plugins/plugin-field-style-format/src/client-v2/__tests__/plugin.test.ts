@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { TableColumnModel } from '@nocobase/client-v2';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import PluginFieldStyleFormatClientV2, {
@@ -146,5 +155,21 @@ describe('PluginFieldStyleFormatClientV2', () => {
       horizontalAlign: undefined,
       verticalAlign: undefined,
     });
+  });
+
+  it('keeps later onCell extensions and restores the latest callback when formatting is cleared', () => {
+    const model = new TestTableColumnModel();
+    const step = TableColumnModel.globalFlowRegistry.getFlow('fieldStyleFormatSettings')?.steps
+      .cellStyleFormat as TestStep;
+    const original = vi.fn(() => ({ style: { color: 'red' } }));
+    const later = vi.fn(() => ({ title: 'Later extension', style: { color: 'blue' } }));
+    model.props.onCell = original;
+    step.handler({ model }, { padding: 4 });
+    model.props.onCell = later;
+    step.handler({ model }, { padding: 8 });
+    expect(model.props.onCell({}, 0)).toMatchObject({ title: 'Later extension', style: { color: 'blue', padding: 8 } });
+    step.handler({ model }, {});
+    expect(model.props.onCell).toBe(later);
+    expect(original).not.toHaveBeenCalled();
   });
 });

@@ -21,5 +21,8 @@
   "Actions": "操作",
   "Edit embed settings": "编辑嵌入设置",
   "Select tabs": "选择标签页",
-  "Embed Settings Block": "嵌入设置区块"
+  "Embed Settings Block": "嵌入设置区块",
+  "Unable to render embedded settings": "无法渲染嵌入设置",
+  "Open the full settings page to use this feature": "请打开完整设置页面以使用此功能",
+  "Retry": "重试"
 }

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { getDisplayNumber, Icon } from '@nocobase/client-v2';
 import { Tag } from 'antd';
 import React from 'react';
@@ -21,7 +30,15 @@ type TableColumnModelLike = {
     t?: (key: string, options?: Record<string, unknown>) => string;
   };
   fieldPath?: string;
-  props?: Record<string, any>;
+  props?: Record<string, unknown> & {
+    className?: string;
+    style?: React.CSSProperties;
+    dataIndex?: string;
+    prefix?: React.ReactNode;
+    suffix?: React.ReactNode;
+    addonBefore?: React.ReactNode;
+    addonAfter?: React.ReactNode;
+  };
   subModels?: {
     field?: {
       use?: string;
@@ -229,7 +246,14 @@ export function renderFastCell(model: TableColumnModelLike, record: Record<strin
   return null;
 }
 
-export function patchTableColumnFastRender(TableColumnModel: any) {
+type CellRenderer = (value: unknown, record: Record<string, unknown>, index: number) => React.ReactNode;
+type ColumnPrototype = {
+  renderItem: () => CellRenderer;
+  [FAST_RENDER_PATCHED]?: boolean;
+  [FAST_RENDER_ORIGINAL]?: () => CellRenderer;
+};
+
+export function patchTableColumnFastRender(TableColumnModel: { prototype: ColumnPrototype }) {
   const proto = TableColumnModel?.prototype;
   if (!proto || proto[FAST_RENDER_PATCHED]) {
     return;

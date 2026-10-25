@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin, TableColumnModel } from '@nocobase/client-v2';
 import type React from 'react';
 import { tExpr } from './locale';
@@ -31,7 +40,7 @@ const FLOW_KEY = 'fieldStyleFormatSettings';
 const STEP_KEY = 'cellStyleFormat';
 const CELL_CLASS_NAME = 'nb-field-style-format-cell';
 const STYLE_ELEMENT_ID = 'nb-field-style-format-style';
-const originalOnCellHandlers = new WeakMap<object, OnCellHandler | undefined>();
+const cellHandlers = new WeakMap<object, { original?: OnCellHandler; applied: OnCellHandler }>();
 
 function normalizeSpacing(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -139,26 +148,24 @@ export function applyFieldStyleFormatToCellProps(
   };
 }
 
-function getOriginalOnCell(model: TableColumnModelLike) {
-  if (!originalOnCellHandlers.has(model)) {
-    originalOnCellHandlers.set(model, model.props.onCell);
-  }
-  return originalOnCellHandlers.get(model);
-}
-
 function applyFieldStyleFormat(model: TableColumnModelLike, params?: FieldStyleFormatParams) {
   const normalized = normalizeFieldStyleFormatParams(params);
-  const originalOnCell = getOriginalOnCell(model);
+  const previous = cellHandlers.get(model);
+  const current = model.props.onCell;
+  const originalOnCell = previous && current === previous.applied ? previous.original : current;
 
   if (!hasActiveFormat(normalized)) {
-    model.setProps('onCell', originalOnCell);
+    if (previous && current === previous.applied) model.setProps('onCell', originalOnCell);
+    cellHandlers.delete(model);
     return;
   }
 
-  model.setProps('onCell', (record: unknown, recordIndex?: number) => {
+  const applied: OnCellHandler = (record: unknown, recordIndex?: number) => {
     const originalCellProps = originalOnCell?.(record, recordIndex);
     return applyFieldStyleFormatToCellProps(originalCellProps, normalized);
-  });
+  };
+  cellHandlers.set(model, { original: originalOnCell, applied });
+  model.setProps('onCell', applied);
 }
 
 export function ensureFieldStyleFormatStyleElement() {
