@@ -1,56 +1,51 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin, Application } from '@nocobase/client-v2';
 import React from 'react';
+import { namespace } from './locale';
+import type { DashboardTabKey, VisualizationTemplatesManagerProps } from './work-monitor/VisualizationTemplatesManager';
+import '../client/work-monitor/templates';
 
+const pages: Array<{ key: DashboardTabKey; title: string }> = [
+  { key: 'executive', title: 'Executive' },
+  { key: 'monitor', title: 'Monitor' },
+  { key: 'visualize', title: 'Visualize' },
+  { key: 'tasks', title: 'Tasks' },
+  { key: 'settings', title: 'Settings' },
+];
 export class PluginVisualizationTemplatesClient extends Plugin<Record<string, never>, Application> {
   async load() {
+    const aclSnippet = 'pm.' + namespace;
     this.pluginSettingsManager.addMenuItem({
-      key: 'plugin-visualization-templates',
+      key: namespace,
       title: this.t('Work dashboard'),
       icon: 'DashboardOutlined',
-      
+      aclSnippet,
+      embedSettings: { requiresCollection: true },
     });
-
-    this.pluginSettingsManager.addPageTabItem({
-      menuKey: 'plugin-visualization-templates',
-      key: 'executive',
-      title: this.t('Executive'),
-      
-      componentLoader: () => import('../client/work-monitor/VisualizationTemplatesManager').then(m => ({ default: (props: any) => React.createElement(m.VisualizationTemplatesManager, { ...props, initialTab: "executive", visibleTabKeys: ["executive"] }) })),
-    });
-
-    this.pluginSettingsManager.addPageTabItem({
-      menuKey: 'plugin-visualization-templates',
-      key: 'monitor',
-      title: this.t('Monitor'),
-      
-      componentLoader: () => import('../client/work-monitor/VisualizationTemplatesManager').then(m => ({ default: (props: any) => React.createElement(m.VisualizationTemplatesManager, { ...props, initialTab: "monitor", visibleTabKeys: ["monitor"] }) })),
-    });
-
-    this.pluginSettingsManager.addPageTabItem({
-      menuKey: 'plugin-visualization-templates',
-      key: 'visualize',
-      title: this.t('Visualize'),
-      
-      componentLoader: () => import('../client/work-monitor/VisualizationTemplatesManager').then(m => ({ default: (props: any) => React.createElement(m.VisualizationTemplatesManager, { ...props, initialTab: "visualize", visibleTabKeys: ["visualize"] }) })),
-    });
-
-    this.pluginSettingsManager.addPageTabItem({
-      menuKey: 'plugin-visualization-templates',
-      key: 'tasks',
-      title: this.t('Tasks'),
-      
-      componentLoader: () => import('../client/work-monitor/VisualizationTemplatesManager').then(m => ({ default: (props: any) => React.createElement(m.VisualizationTemplatesManager, { ...props, initialTab: "tasks", visibleTabKeys: ["tasks"] }) })),
-    });
-
-    this.pluginSettingsManager.addPageTabItem({
-      menuKey: 'plugin-visualization-templates',
-      key: 'settings',
-      title: this.t('Settings'),
-      
-      componentLoader: () => import('../client/work-monitor/VisualizationTemplatesManager').then(m => ({ default: (props: any) => React.createElement(m.VisualizationTemplatesManager, { ...props, initialTab: "settings", visibleTabKeys: ["settings"] }) })),
-    });
-
+    pages.forEach((page, index) =>
+      this.pluginSettingsManager.addPageTabItem({
+        menuKey: namespace,
+        key: page.key,
+        title: this.t(page.title),
+        aclSnippet,
+        sort: index + 1,
+        embedSettings: { requiresCollection: true },
+        componentLoader: () =>
+          import('./work-monitor/VisualizationTemplatesManager').then(({ VisualizationTemplatesManager }) => ({
+            default: (props: VisualizationTemplatesManagerProps) => (
+              <VisualizationTemplatesManager {...props} initialTab={page.key} visibleTabKeys={[page.key]} />
+            ),
+          })),
+      }),
+    );
   }
 }
-
 export default PluginVisualizationTemplatesClient;
