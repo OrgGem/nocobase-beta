@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useEffect, useState } from 'react';
 import { Alert, Button, Card, Input, Modal, Space, Table, Tag, Typography, type TableColumnsType } from 'antd';
 import { ArrowLeftOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
@@ -246,7 +255,7 @@ export default function RepositoryPage({
         confirmLoading={deletingRepository}
         onOk={deleteRepositoryContents}
         onCancel={() => setRepositoryDeleteOpen(false)}
-        destroyOnHidden
+        destroyOnClose
       >
         {repositoryDeleteImpact && (
           <Space direction="vertical" style={{ display: 'flex' }}>

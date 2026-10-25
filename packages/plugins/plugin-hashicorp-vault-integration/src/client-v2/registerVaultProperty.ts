@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { FlowContext, PropertyMeta } from '@nocobase/flow-engine';
 
 /**
@@ -38,6 +47,7 @@ async function fetchValues(apiClient: VaultApiClient): Promise<Record<string, st
 
 export function registerVaultProperty(context: FlowContext, apiClient: VaultApiClient, t: Translate): void {
   context.defineProperty(VAULT_ROOT, {
+    cache: false,
     get: async () => fetchValues(apiClient),
     meta: {
       type: 'object',

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useState } from 'react';
 import {
   Button,
@@ -345,7 +354,7 @@ export default function CatalogPage() {
               ? {
                   selectedRowKeys: selectedCandidateIds,
                   onChange: (keys, rows) => {
-                    setSelectedCandidateIds(keys);
+                    setSelectedCandidateIds(keys.map((key) => (typeof key === 'bigint' ? key.toString() : key)));
                     setSelectedCandidates(rows);
                   },
                   getCheckboxProps: (record) => ({ disabled: !['ready', 'published'].includes(record.state) }),

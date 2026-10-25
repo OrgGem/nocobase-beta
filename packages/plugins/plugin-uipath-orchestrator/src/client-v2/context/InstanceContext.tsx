@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import { useRequest } from 'ahooks';
 import { useApp } from '@nocobase/client-v2';
@@ -6,7 +15,7 @@ import type { DateRangeValue } from '../utils/odataFilters';
 import { selectInitialFolder } from '../utils/folderSelection';
 
 interface UiPathInstanceRecord {
-  id: number;
+  id: string | number;
   isDefault?: boolean;
   defaultFolderId?: number | null;
   defaultFolderKey?: string | null;
@@ -22,8 +31,8 @@ interface UiPathFolderRecord {
 }
 
 interface InstanceContextType {
-  instanceId: number | null;
-  setInstanceId: (id: number | null) => void;
+  instanceId: string | number | null;
+  setInstanceId: (id: string | number | null) => void;
   instances: UiPathInstanceRecord[];
   loading: boolean;
   refreshInstances: () => void;
@@ -68,12 +77,12 @@ const InstanceContext = createContext<InstanceContextType>({
 export const useCurrentInstance = () => useContext(InstanceContext);
 
 export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [instanceId, setInstanceId] = useState<number | null>(null);
+  const [instanceId, setInstanceId] = useState<string | number | null>(null);
   const [folderId, setFolderId] = useState<number | null>(null);
   const [folderKey, setFolderKey] = useState<string | null>(null);
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [folderReady, setFolderReady] = useState(false);
-  const syncAttemptedForInstance = useRef<number | null>(null);
+  const syncAttemptedForInstance = useRef<string | number | null>(null);
   const [dateRange, setDateRange] = useState<DateRangeValue>(null);
   const [processFilter, setProcessFilter] = useState('');
   const [queueFilter, setQueueFilter] = useState('');
@@ -85,7 +94,7 @@ export const InstanceProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     data: instData,
     loading,
     refresh: refreshInstances,
-  } = useRequest<any>(() => api.resource('uipathInstances').list({ pageSize: 100, filter: { enabled: true } }));
+  } = useRequest(() => api.resource('uipathInstances').list({ pageSize: 100, filter: { enabled: true } }));
   const instances = useMemo(() => getListRows<UiPathInstanceRecord>(instData), [instData]);
 
   // Auto-select default instance

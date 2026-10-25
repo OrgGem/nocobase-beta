@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useCallback, useEffect, useState } from 'react';
 import { App, Button, Input, Modal, Space, Table, Tag } from 'antd';
 import { EditOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -6,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import type { ColumnsType } from 'antd/es/table';
 
 interface RouteRecord {
-  id: number;
+  id: string | number;
   title?: string;
   type?: string;
   schemaUid?: string;
@@ -150,6 +159,7 @@ export function RouterConfigManagerView({ api }: RouterConfigManagerViewProps) {
       width: 120,
       render: (_: unknown, record: RouteRecord) => {
         const isTab = record.type === 'tabs';
+        const isModernPage = record.type === 'flowPage';
         if (!isTab && !RENAMABLE_TYPES.has(record.type || '')) {
           return null;
         }
@@ -159,8 +169,10 @@ export function RouterConfigManagerView({ api }: RouterConfigManagerViewProps) {
             size="small"
             icon={<EditOutlined />}
             onClick={() => handleOpenRename(record)}
-            disabled={isTab || !record.schemaUid}
-            title={isTab ? t('Tab paths cannot be renamed') : undefined}
+            disabled={isTab || isModernPage || !record.schemaUid}
+            title={
+              isTab ? t('Tab paths cannot be renamed') : isModernPage ? t('V2 page paths cannot be renamed') : undefined
+            }
           >
             {t('Rename Path')}
           </Button>

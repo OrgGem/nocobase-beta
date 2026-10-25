@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { Plugin, Application } from '@nocobase/client-v2';
 import { AI_API_ACL_SNIPPET } from '../constants';
@@ -80,7 +89,7 @@ export class PluginAiApiClient extends Plugin<Record<string, never>, Application
     const aclPlugin = this.app.pm.get('@nocobase/plugin-acl') as AclPluginV2Compat | undefined;
     aclPlugin?.settingsUI?.addPermissionsTab?.({
       key: 'aiApi',
-      label: this.t('AI API'),
+      label: String(this.t('AI API')),
       sort: 25,
       componentLoader: () => import('./pages/RolePermissionsTab'),
     });

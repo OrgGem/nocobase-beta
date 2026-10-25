@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
 
 export class PluginRouterConfigurationServer extends Plugin {
@@ -8,10 +17,8 @@ export class PluginRouterConfigurationServer extends Plugin {
   async load() {
     this.app.acl.registerSnippet({
       name: 'pm.router-configuration',
-      actions: ['desktopRoutes:renamePath'],
+      actions: ['desktopRoutes:list', 'desktopRoutes:renamePath'],
     });
-
-    this.app.acl.allow('desktopRoutes', 'renamePath', 'loggedIn');
 
     this.registerRenameAction();
   }
@@ -43,7 +50,7 @@ export class PluginRouterConfigurationServer extends Plugin {
         ctx.throw(400, 'Missing required parameter: id');
       }
       if (!newSchemaUid || typeof newSchemaUid !== 'string') {
-        ctx.throw(400, 'Missing required parameter: schemaUid (new path)');
+        return ctx.throw(400, 'Missing required parameter: schemaUid (new path)');
       }
 
       // Validate path format: lowercase letters, numbers, hyphens
@@ -73,6 +80,9 @@ export class PluginRouterConfigurationServer extends Plugin {
 
       if (route.get('type') === 'tabs') {
         ctx.throw(400, 'Tab route paths cannot be renamed.');
+      }
+      if (route.get('type') === 'flowPage') {
+        ctx.throw(409, 'V2 page paths cannot be renamed.');
       }
 
       const oldSchemaUid = route.get('schemaUid');

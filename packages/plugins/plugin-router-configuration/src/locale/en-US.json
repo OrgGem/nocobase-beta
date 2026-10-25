@@ -22,5 +22,6 @@
   "Please enter a new path": "Please enter a new path",
   "Invalid path format. Use lowercase letters, numbers, and hyphens only.": "Invalid path format. Use lowercase letters, numbers, and hyphens only.",
   "Use lowercase letters, numbers, and hyphens. Example: my-page, sales-report": "Use lowercase letters, numbers, and hyphens. Example: my-page, sales-report",
-  "Tab paths cannot be renamed": "Tab paths cannot be renamed"
+  "Tab paths cannot be renamed": "Tab paths cannot be renamed",
+  "V2 page paths cannot be renamed": "V2 page paths cannot be renamed"
 }

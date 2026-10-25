@@ -1,4 +1,13 @@
 /**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+/**
  * Alert Manager — CRUD alert rules
  */
 
@@ -30,7 +39,7 @@ export const AlertManager: React.FC = () => {
   const [editingRule, setEditingRule] = useState<any>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>(
+  const { data, loading, refresh } = useRequest(
     () => api.resource('uipathAlertRules').list({ pageSize: 100, filter: { instanceId } }),
     { ready: !!instanceId, refreshDeps: [instanceId] },
   );
