@@ -33,7 +33,7 @@ export function wrapWithMxFile(xml: string) {
   for (const [id, parent] of [
     ['0', undefined],
     ['1', '0'],
-  ]) {
+  ] as const) {
     if (!Array.from(root.querySelectorAll('mxCell')).some((cell) => cell.getAttribute('id') === id)) {
       const cell = document.createElement('mxCell');
       cell.setAttribute('id', id);
@@ -57,6 +57,7 @@ export function isMxCellXmlComplete(xml: string) {
 export function applyDiagramOperations(xml: string, operations: DiagramOperation[]) {
   const document = parse(wrapWithMxFile(xml));
   const root = document.querySelector('mxGraphModel > root');
+  if (!root) throw new Error('Only uncompressed draw.io XML is supported');
   const errors: { type: string; cellId: string; message: string }[] = [];
   for (const operation of operations) {
     try {
@@ -65,7 +66,7 @@ export function applyDiagramOperations(xml: string, operations: DiagramOperation
       const existing = cells.find((cell) => cell.getAttribute('id') === operation.cell_id);
       if (operation.operation === 'delete') {
         if (!existing) throw new Error('Cell not found');
-        const removed = new Set([operation.cell_id]);
+        const removed = new Set<string | null>([operation.cell_id]);
         let previous = -1;
         while (previous !== removed.size) {
           previous = removed.size;
