@@ -5,6 +5,55 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v2.2.35](https://github.com/nocobase/nocobase/compare/v2.2.34...v2.2.35) - 2026-10-28
+
+### 🐛 Bug Fixes
+
+- **[Authentication]** Fixed authenticator options being rendered before their auth type plugin finished loading, which made LDAP sign-in fail with "must either provide a buffer via raw or some value" after an application reload ([#11182](https://github.com/nocobase/nocobase/pull/11182)) by @hongboji
+
+## [v2.2.34](https://github.com/nocobase/nocobase/compare/v2.2.33...v2.2.34) - 2026-10-27
+
+### 🚀 Improvements
+
+- **[DingTalk]** Fix DingTalk Stream mode failing on file-based plugin installs; cut full-sync API calls ~90%; show DingTalk quota reset time on sync failure by @chenzhizdt
+
+### 🐛 Bug Fixes
+
+- **[AI employees]** Added an optional stateless request mode for OpenAI Responses services to avoid response-item errors when a gateway routes requests across Azure OpenAI resources. ([#11183](https://github.com/nocobase/nocobase/pull/11183)) by @cgyrock
+
+- **[Feishu / Lark]** Fix Feishu OAuth callback URLs missing the `APP_PUBLIC_PATH` prefix; fix automatic login not triggering and landing on a 404 in the v2 client by @chenzhizdt
+
+## [v2.2.33](https://github.com/nocobase/nocobase/compare/v2.2.32...v2.2.33) - 2026-10-25
+
+### 🐛 Bug Fixes
+
+- **[Workflow: CC]** Restrict workflow task reads to assigned users and supported associations. ([#11097](https://github.com/nocobase/nocobase/pull/11097)) by @mytharcher
+
+## [v2.2.32](https://github.com/nocobase/nocobase/compare/v2.2.31...v2.2.32) - 2026-10-25
+
+### 🚀 Improvements
+
+- **[DingTalk]** Add configurable Max QPS throttling for DingTalk API calls and retry flow-control errors with backoff by @chenzhizdt
+
+### 🐛 Bug Fixes
+
+- **[client-v2]** Fixed V2 field assignment so multiple select fields use multiple mode and submit arrays, including submit, update record and bulk update actions ([#11112](https://github.com/nocobase/nocobase/pull/11112)) by @hongboji
+
+## [v2.2.31](https://github.com/nocobase/nocobase/compare/v2.2.30...v2.2.31) - 2026-10-23
+
+### 🚀 Improvements
+
+- **[server]** Allow the snowflake worker id to be rebound while the application is running. ([#11076](https://github.com/nocobase/nocobase/pull/11076)) by @2013xile
+
+- **[Workflow]** Improved workflow execution detail performance by loading only the latest job per node and loading node history on demand with cursor pagination and lightweight fields. ([#11094](https://github.com/nocobase/nocobase/pull/11094)) by @mytharcher
+
+### 🐛 Bug Fixes
+
+- **[AI employees]**
+  - Fixed embedding response encoding compatibility with Qwen/DashScope endpoints to prevent document and query vector dimension mismatches. Previously affected knowledge bases require re-vectorization. ([#11074](https://github.com/nocobase/nocobase/pull/11074)) by @cgyrock
+
+  - Fixed the page freeze when opening the UI Editor while an AI employee button is hidden by a linkage rule ([#11100](https://github.com/nocobase/nocobase/pull/11100)) by @hongboji
+
 ## [v2.2.30](https://github.com/nocobase/nocobase/compare/v2.2.29...v2.2.30) - 2026-10-22
 
 ### 🐛 Bug Fixes
