@@ -222,5 +222,8 @@
   "Metrics by Skill (Recent)": "按技能统计（近期）",
   "Total Executions (Recent)": "总执行次数（近期）",
   "Succeeded": "成功",
-  "Timeout/Canceled": "超时/已取消"
+  "Timeout/Canceled": "超时/已取消",
+  "Choice": "选项",
+  "Review this Skill Hub tool call before execution.": "执行前请审核此 Skill Hub 工具调用。",
+  "Failed to submit skill decision": "提交技能审核结果失败"
 }

@@ -1,9 +1,17 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Application, Plugin } from '@nocobase/client-v2';
 import PluginDataVisualizationClient from '@nocobase/plugin-data-visualization/client-v2';
 
 import { createAdvancedCharts } from './charts';
 import { getDataVisualizationPlugin } from './compat/dataVisualizationPlugin';
-import { patchDataVisualizationChartBlock } from './compat/registerDataVisualizationCompat';
 
 type DataVisualizationPluginLike = PluginDataVisualizationClient & {
   charts?: PluginDataVisualizationClient['charts'];
@@ -40,7 +48,7 @@ export class PluginAdvanceChartsClientV2 extends Plugin<unknown, Application> {
 
     if (!dataVisualization.charts.getChart('advanced-charts.advanced-statistic')) {
       dataVisualization.charts.addGroup('advanced-charts', {
-        title: this.t('Advanced Charts'),
+        title: String(this.t('Advanced Charts')),
         charts: createAdvancedCharts(),
         sort: -0.5,
       });
@@ -48,15 +56,10 @@ export class PluginAdvanceChartsClientV2 extends Plugin<unknown, Application> {
     return true;
   }
 
-  private async ensureChartBlockModelLoaded() {
-    await patchDataVisualizationChartBlock(this.flowEngine);
-  }
-
   private async register() {
     if (!this.registerAdvancedCharts()) {
       return false;
     }
-    await this.ensureChartBlockModelLoaded();
     return true;
   }
 

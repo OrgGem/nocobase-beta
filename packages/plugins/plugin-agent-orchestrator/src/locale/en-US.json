@@ -222,5 +222,8 @@
   "Metrics by Skill (Recent)": "Metrics by Skill (Recent)",
   "Total Executions (Recent)": "Total Executions (Recent)",
   "Succeeded": "Succeeded",
-  "Timeout/Canceled": "Timeout/Canceled"
+  "Timeout/Canceled": "Timeout/Canceled",
+  "Choice": "Choice",
+  "Review this Skill Hub tool call before execution.": "Review this Skill Hub tool call before execution.",
+  "Failed to submit skill decision": "Failed to submit skill decision"
 }

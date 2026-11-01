@@ -1,5 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { DownloadOutlined } from '@ant-design/icons';
 import type { Application } from '@nocobase/client-v2';
+import { FlowEngineProvider } from '@nocobase/flow-engine';
 import { getGlobalChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
 import { Alert, Button, Modal, Space, message } from 'antd';
@@ -392,6 +402,8 @@ function DetachedPreviewModal(props: { file: PreviewFile; onDestroy: () => void 
 }
 
 const mountPreview = (file: PreviewFile) => {
+  const app = appRef;
+  if (!app) return;
   const container = document.createElement('div');
   document.body.appendChild(container);
   let root: Root | null = createRoot(container);
@@ -400,7 +412,11 @@ const mountPreview = (file: PreviewFile) => {
     root = null;
     container.remove();
   };
-  root.render(<DetachedPreviewModal file={file} onDestroy={destroy} />);
+  root.render(
+    <FlowEngineProvider engine={app.flowEngine}>
+      <DetachedPreviewModal file={file} onDestroy={destroy} />
+    </FlowEngineProvider>,
+  );
 };
 
 const rememberBrowserFiles = (files?: FileList | File[] | null) => {

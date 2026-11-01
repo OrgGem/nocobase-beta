@@ -32,5 +32,15 @@
   "Themes": "Themes",
   "Updated successfully": "Updated successfully",
   "User selectable": "User selectable",
-  "edit Theme Config": "edit Theme Config"
+  "edit Theme Config": "edit Theme Config",
+  "Antd Style Theme": "Antd Style Theme",
+  "Search icons": "Search icons",
+  "Select icon": "Select icon",
+  "Clear icon": "Clear icon",
+  "No icons": "No icons",
+  "Outlined": "Outlined",
+  "Filled": "Filled",
+  "Two tone": "Two tone",
+  "Material": "Material",
+  "Bootstrap": "Bootstrap"
 }

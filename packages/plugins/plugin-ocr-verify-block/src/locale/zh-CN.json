@@ -109,5 +109,16 @@
   "Reject": "拒绝",
   "No OCR items": "没有 OCR 条目",
   "PDF attachment is missing": "缺少 PDF 附件",
-  "PDF.js render failed": "PDF.js 渲染失败"
+  "PDF.js render failed": "PDF.js 渲染失败",
+  "OCR Verify block settings": "OCR 校验区块设置",
+  "OCR verification supports the main data source only": "OCR 校验仅支持主数据源",
+  "Page {{number}}": "第 {{number}} 页",
+  "Canvas context is unavailable": "画布上下文不可用",
+  "Clear stored callback API key": "清除已保存的回调 API 密钥",
+  "Failed to load categories": "加载分类失败",
+  "Failed to load settings": "加载设置失败",
+  "Delete category?": "删除该分类？",
+  "Operation failed": "操作失败",
+  "Yes": "是",
+  "No": "否"
 }

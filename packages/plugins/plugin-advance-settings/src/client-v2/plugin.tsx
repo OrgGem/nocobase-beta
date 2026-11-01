@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { Plugin, Application } from '@nocobase/client-v2';
 import { HelpVisibilityProviderV2 } from './HelpVisibilityProvider';
@@ -11,7 +20,7 @@ export class PluginAdvanceSettingsClient extends Plugin<Record<string, never>, A
       key: 'advance-settings',
       title: this.t('Advance Settings'),
       icon: 'SettingOutlined',
-      aclSnippet: 'pm.plugin-advance-settings',
+      aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
       sort: 1000,
     });
 
@@ -20,7 +29,7 @@ export class PluginAdvanceSettingsClient extends Plugin<Record<string, never>, A
       key: 'help',
       title: this.t('Help'),
       componentLoader: () => import('./HelpSettingsPage').then((m) => ({ default: m.HelpSettingsPage })),
-      aclSnippet: 'pm.plugin-advance-settings',
+      aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
     });
 
     // In v2, the search box is injected separately (see client/ component setup)

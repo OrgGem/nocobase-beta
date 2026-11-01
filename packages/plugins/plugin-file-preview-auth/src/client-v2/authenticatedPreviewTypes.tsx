@@ -3,6 +3,7 @@ import type { Application } from '@nocobase/client-v2';
 import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
 import { Alert, Button, Modal, Space, Spin, message } from 'antd';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import AIFilePreviewAction from './AIFilePreviewAction';
 
 type UnknownRecord = Record<string, unknown>;
 type I18nLike = {
@@ -742,6 +743,7 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<FilePreviewer
         onCancel={handleClose}
         footer={
           <Space>
+            <AIFilePreviewAction file={normalizeFileInput(file)} />
             <Button icon={<DownloadOutlined />} loading={downloading} onClick={() => authOnDownload(file)}>
               {t('Download')}
             </Button>

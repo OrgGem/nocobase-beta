@@ -1,10 +1,19 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 
 import { Chart, ChartType, RenderProps } from '@nocobase/plugin-data-visualization/client-v2';
 import { Card, Spin } from 'antd';
 
 import { tExpr } from '../locale';
-import { fieldConfig, getDimensionField, getMeasureField, inputConfig, selectConfig } from './utils';
+import { fieldConfig, getDimensionField, getMeasureField, inputConfig, selectConfig, usePlotComponent } from './utils';
 
 type RadarChartProps = {
   title?: string;

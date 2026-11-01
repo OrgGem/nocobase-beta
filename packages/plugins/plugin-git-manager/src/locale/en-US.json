@@ -293,5 +293,8 @@
   "Target after": "Target after",
   "Execution mode": "Execution mode",
   "App process": "App process",
-  "Credential-bearing URLs are not allowed": "Credential-bearing URLs are not allowed"
+  "Credential-bearing URLs are not allowed": "Credential-bearing URLs are not allowed",
+  "Git Repository": "Git Repository",
+  "Git Merge Request": "Git Merge Request",
+  "Git Commit": "Git Commit"
 }

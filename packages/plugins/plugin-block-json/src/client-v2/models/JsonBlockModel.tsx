@@ -1,10 +1,19 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useEffect, useMemo, useState } from 'react';
 import type { Key } from 'react';
 import { Alert, Button, Empty, Segmented, Space, Tree } from 'antd';
 import type { TreeDataNode } from 'antd';
 import { css } from '@emotion/css';
 import { observer, SingleRecordResource } from '@nocobase/flow-engine';
-import type { Collection, CollectionField, FlowModelContext } from '@nocobase/flow-engine';
+import type { Collection, CollectionField } from '@nocobase/flow-engine';
 import { BlockSceneEnum, CollectionBlockModel } from '@nocobase/client-v2';
 import { tExpr, useT } from '../locale';
 
@@ -315,7 +324,7 @@ const JsonPreview = observer(
   { displayName: 'JsonPreview' },
 );
 
-export class JsonBlockModel extends CollectionBlockModel<JsonBlockProps> {
+export class JsonBlockModel extends CollectionBlockModel {
   static scene = BlockSceneEnum.one;
 
   static filterCollection(collection: Collection) {
@@ -343,7 +352,7 @@ JsonBlockModel.registerFlow({
     configure: {
       title: tExpr('Configure JSON preview'),
       paramsRequired: true,
-      uiSchema(ctx: FlowModelContext) {
+      uiSchema(ctx) {
         return {
           fieldPath: {
             type: 'string',

@@ -16,6 +16,7 @@ export default defineCollection({
   createdBy: true,
   updatedBy: true,
   fields: [
+    { type: 'json', name: 'v2Config' },
     {
       type: 'uid',
       name: 'key',

@@ -109,5 +109,16 @@
   "Reject": "Reject",
   "No OCR items": "No OCR items",
   "PDF attachment is missing": "PDF attachment is missing",
-  "PDF.js render failed": "PDF.js render failed"
+  "PDF.js render failed": "PDF.js render failed",
+  "OCR Verify block settings": "OCR Verify block settings",
+  "OCR verification supports the main data source only": "OCR verification supports the main data source only",
+  "Page {{number}}": "Page {{number}}",
+  "Canvas context is unavailable": "Canvas context is unavailable",
+  "Clear stored callback API key": "Clear stored callback API key",
+  "Failed to load categories": "Failed to load categories",
+  "Failed to load settings": "Failed to load settings",
+  "Delete category?": "Delete category?",
+  "Operation failed": "Operation failed",
+  "Yes": "Yes",
+  "No": "No"
 }

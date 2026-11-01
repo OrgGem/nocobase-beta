@@ -19,5 +19,19 @@
   "Edit mapping": "编辑映射",
   "Expand JSON keys": "展开JSON键",
   "No data": "暂无数据",
-  "Loading...": "加载中..."
+  "Loading...": "加载中...",
+  "Cross Join settings": "跨源联合设置",
+  "Total {{count}} rows": "共 {{count}} 行",
+  "Join #{{number}}": "联合 #{{number}}",
+  "Remove join": "删除联合",
+  "Select datasource": "选择数据源",
+  "Select collection": "选择数据表",
+  "Left Field (primary)": "左字段（主表）",
+  "Right Field (join)": "右字段（联合表）",
+  "Field from primary": "主表字段",
+  "Field from join table": "联合表字段",
+  "Include": "包含",
+  "Auto-populate from sources": "从数据源填充字段",
+  "Auto-populate fields from the configured sources, or leave empty to detect columns at runtime.": "从已配置的数据源填充字段，留空则在运行时自动检测列。",
+  "Operation failed": "操作失败"
 }

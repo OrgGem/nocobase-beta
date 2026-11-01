@@ -1,24 +1,33 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin, Application } from '@nocobase/client-v2';
-import React from 'react';
+import { setupClientSafeCache } from './utils/clientSafeCache';
+import { setupRequestDedupAndCache } from './utils/requestDedupInterceptor';
 
 export class PluginClusterManagerClient extends Plugin<Record<string, never>, Application> {
   async load() {
+    setupClientSafeCache(this.app.apiClient, this.app.eventBus);
+    setupRequestDedupAndCache(this.app.apiClient);
     this.pluginSettingsManager.addMenuItem({
       key: 'plugin-cluster-manager',
       title: this.t('Cluster Manager'),
       icon: 'DashboardOutlined',
+      aclSnippet: `pm.${this.options.name || 'plugin-cluster-manager'}`,
     });
 
-    // All screens (including Worker template) live in the shared
-    // ClusterManagerLayout so the v1 and v2 runtimes stay functionally in
-    // sync. Intentional exception to the "v2 never imports the client dir"
-    // rule: the shared components are runtime-agnostic and none of them
-    // import the @nocobase/client package, so nothing v1-specific leaks
-    // into the v2 bundle.
+    // The shared settings screens already consume V2 hooks.
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'plugin-cluster-manager',
       key: 'index',
       title: this.t('Cluster Manager'),
+      aclSnippet: `pm.${this.options.name || 'plugin-cluster-manager'}`,
 
       componentLoader: () =>
         import('../client/ClusterManagerLayout').then((m) => ({ default: m.ClusterManagerLayout })),

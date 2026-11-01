@@ -2,6 +2,10 @@ node_modules/
 lib/
 !packages/**/src/lib/
 !packages/**/src/lib/**
+!packages/plugins/plugin-ai-drawio/src/client/lib/
+packages/plugins/plugin-ai-drawio/src/client/lib/*
+!packages/plugins/plugin-ai-drawio/src/client/lib/drawioBridge.ts
+!packages/plugins/plugin-ai-drawio/src/client/lib/xml-utils.ts
 esm/
 es/
 !docs/docs/es

@@ -1,5 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin, Application } from '@nocobase/client-v2';
-import { drawioClientTools } from '../client/tools';
+import { drawioClientTools } from './tools';
 
 export class PluginAiDrawioClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -14,7 +23,8 @@ export class PluginAiDrawioClient extends Plugin<Record<string, never>, Applicat
       menuKey: 'ai-drawio',
       key: 'index',
       title: this.t('AI Drawio'),
-      componentLoader: () => import('../client/DrawioManager').then((module) => ({ default: module.DrawioManager })),
+      aclSnippet: 'pm.ai-drawio',
+      componentLoader: () => import('./DrawioManager').then((module) => ({ default: module.DrawioManager })),
     });
 
     for (const [name, options] of drawioClientTools) {

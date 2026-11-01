@@ -32,5 +32,15 @@
   "Themes": "主题",
   "Updated successfully": "更新成功",
   "User selectable": "可被用户选择",
-  "edit Theme Config": "编辑主题配置"
+  "edit Theme Config": "编辑主题配置",
+  "Antd Style Theme": "Antd 组件样式主题",
+  "Search icons": "搜索图标",
+  "Select icon": "选择图标",
+  "Clear icon": "清除图标",
+  "No icons": "暂无图标",
+  "Outlined": "线框",
+  "Filled": "填充",
+  "Two tone": "双色",
+  "Material": "Material",
+  "Bootstrap": "Bootstrap"
 }

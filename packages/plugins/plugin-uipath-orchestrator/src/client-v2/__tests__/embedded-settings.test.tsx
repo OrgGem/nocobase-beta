@@ -1,9 +1,18 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { cleanup, render, waitFor } from '@testing-library/react';
 import * as ClientV2 from '@nocobase/client-v2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AxiosHeaders } from 'axios';
-import { collectEmbeddablePluginTabs } from '../../../../plugin-block-embed-settings/src/client/EmbedSettingsPluginSelect';
+import { collectEmbeddablePluginTabs } from '../../../../plugin-block-embed-settings/src/client-v2/EmbedSettingsPluginSelect';
 import AgentPlugin from '../../../../plugin-agent-orchestrator/src/client-v2/plugin';
 import KnowledgePlugin from '../../../../plugin-knowledge-base/src/client-v2/plugin';
 import UiPathPlugin from '../plugin';
@@ -79,7 +88,7 @@ describe.each(cases)('%s embedded settings', (_label, Plugin, menuKey, snippet, 
       expect(loader).toBeTypeOf('function');
       if (!loader) throw new Error('Missing settings page loader');
       const module = await loader();
-      const Page = module.default;
+      const Page = (module as { default: React.ComponentType<{ embedded?: boolean }> }).default;
       const view = render(<Page embedded />);
       await waitFor(() => expect(request).toHaveBeenCalled());
       expect(view.container.childElementCount, tab.value).toBeGreaterThan(0);

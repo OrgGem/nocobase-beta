@@ -13,7 +13,7 @@ export class PluginBlockTimelineClientV2 extends Plugin {
   async load() {
     this.flowEngine.registerModelLoaders({
       TimelineBlockModel: {
-        loader: () => import('../models/TimelineBlockModel'),
+        loader: () => import('./models/TimelineBlockModel'),
       },
     });
   }

@@ -7,23 +7,35 @@ import { SkillEditor } from './SkillEditor';
 import { SkillTestPanel } from './SkillTestPanel';
 import { GitSkillImport } from './GitSkillImport';
 
+interface SkillSummary {
+  id: string | number;
+  name: string;
+  title: string;
+  enabled: boolean;
+  language?: string;
+  description?: string;
+  storageType?: string;
+}
+
 export const SkillManager: React.FC = () => {
   const api = useAPIClient();
   const t = useT();
-  const [skills, setSkills] = useState<any[]>([]);
+  const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [editorVisible, setEditorVisible] = useState(false);
   const [testVisible, setTestVisible] = useState(false);
-  const [editingSkill, setEditingSkill] = useState<any>(null);
-  const [testingSkill, setTestingSkill] = useState<any>(null);
+  const [editingSkill, setEditingSkill] = useState<SkillSummary | null>(null);
+  const [testingSkill, setTestingSkill] = useState<SkillSummary | null>(null);
   const [gitImportVisible, setGitImportVisible] = useState(false);
 
   const fetchSkills = useCallback(async () => {
     setLoading(true);
     try {
-      const { data } = await api.request({ url: 'skillDefinitions:list', params: { pageSize: 100 } });
-      const rawData = data?.data?.data ?? data?.data ?? [];
-      setSkills(Array.isArray(rawData) ? rawData : []);
+      const { data } = await api.request<{ data: SkillSummary[] }>({
+        url: 'skillDefinitions:list',
+        params: { pageSize: 100 },
+      });
+      setSkills(data.data || []);
     } catch {
       message.error(t('Failed to load skills'));
     } finally {
@@ -40,27 +52,32 @@ export const SkillManager: React.FC = () => {
     setEditorVisible(true);
   };
 
-  const handleEdit = (record: any) => {
+  const refreshAfterChange = () => {
+    window.dispatchEvent(new Event('skill-hub-loop-settings-changed'));
+    fetchSkills();
+  };
+
+  const handleEdit = (record: SkillSummary) => {
     setEditingSkill(record);
     setEditorVisible(true);
   };
 
-  const handleTest = (record: any) => {
+  const handleTest = (record: SkillSummary) => {
     setTestingSkill(record);
     setTestVisible(true);
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string | number) => {
     try {
       await api.request({ url: 'skillDefinitions:destroy', method: 'POST', params: { filterByTk: id } });
       message.success(t('Deleted'));
-      fetchSkills();
+      refreshAfterChange();
     } catch {
       message.error(t('Failed to delete'));
     }
   };
 
-  const handleToggleEnabled = async (record: any) => {
+  const handleToggleEnabled = async (record: SkillSummary) => {
     try {
       await api.request({
         url: 'skillDefinitions:update',
@@ -68,7 +85,7 @@ export const SkillManager: React.FC = () => {
         params: { filterByTk: record.id },
         data: { enabled: !record.enabled },
       });
-      fetchSkills();
+      refreshAfterChange();
     } catch {
       message.error(t('Failed to update'));
     }
@@ -77,7 +94,7 @@ export const SkillManager: React.FC = () => {
   const handleEditorClose = (saved?: boolean) => {
     setEditorVisible(false);
     setEditingSkill(null);
-    if (saved) fetchSkills();
+    if (saved) refreshAfterChange();
   };
 
   return (
@@ -166,7 +183,7 @@ export const SkillManager: React.FC = () => {
         open={gitImportVisible}
         onClose={(synced) => {
           setGitImportVisible(false);
-          if (synced) fetchSkills();
+          if (synced) refreshAfterChange();
         }}
       />
     </Card>

@@ -15,5 +15,6 @@
   "Automatically drop objects that depend on the collection (such as views), and in turn all objects that depend on those objects": "Automatically drop objects that depend on the collection (such as views), and in turn all objects that depend on those objects",
   "Collection name is missing": "Collection name is missing",
   "Collection deleted successfully": "Collection deleted successfully",
-  "Failed to delete collection": "Failed to delete collection"
+  "Failed to delete collection": "Failed to delete collection",
+  "Unable to load collections": "Unable to load collections"
 }

@@ -1,4 +1,13 @@
 /**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+/**
  * Instance Manager — CRUD for UiPath Orchestrator instances
  */
 
@@ -26,7 +35,7 @@ export const InstanceManager: React.FC = () => {
   const [testing, setTesting] = useState<number | null>(null);
   const [form] = Form.useForm();
 
-  const { data, loading, refresh } = useRequest<any>(() => api.resource('uipathInstances').list({ pageSize: 100 }));
+  const { data, loading, refresh } = useRequest(() => api.resource('uipathInstances').list({ pageSize: 100 }));
 
   const instances = getListRows<Record<string, unknown>>(data);
   const isMaskedSecret = (value: any) =>

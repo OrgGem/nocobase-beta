@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useEffect, useState } from 'react';
 import { DownloadOutlined, InboxOutlined, UploadOutlined } from '@ant-design/icons';
 import {
@@ -156,7 +165,7 @@ export function UploadImageButton({ initialRepository = '', maxTransferSizeMb, o
         closable={!uploading && !inspecting}
         onCancel={() => setOpen(false)}
         onOk={handleUpload}
-        destroyOnHidden
+        destroyOnClose
       >
         <Form form={form} layout="vertical" requiredMark="optional">
           <Form.Item
