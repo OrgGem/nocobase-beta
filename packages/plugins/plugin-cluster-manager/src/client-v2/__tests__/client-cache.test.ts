@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { APIClient, Application } from '@nocobase/client-v2';
 import { setupClientSafeCache } from '../utils/clientSafeCache';
 import { setupRequestDedupAndCache } from '../utils/requestDedupInterceptor';
@@ -63,6 +72,80 @@ describe('V2 cluster metadata cache', () => {
     auth.role = 'viewer';
     await client.request({ url: 'collections:listMeta' });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it('isolates datasource headers, clients, and tokens sharing the same suffix', async () => {
+    const first = createClient();
+    const second = createClient();
+    first.auth.token = 'prefix-a:shared-token-suffix';
+    second.auth.token = 'prefix-a:shared-token-suffix';
+    setupRequestDedupAndCache(first.client);
+    setupRequestDedupAndCache(second.client);
+    const config = { url: 'collections:listMeta', headers: { 'x-data-source': 'main' } };
+    await first.client.request(config);
+    await first.client.request({ ...config, headers: { 'x-data-source': 'remote' } });
+    await second.client.request(config);
+    first.auth.token = 'prefix-b:shared-token-suffix';
+    await first.client.request(config);
+    expect(first.request).toHaveBeenCalledTimes(3);
+    expect(second.request).toHaveBeenCalledTimes(1);
+    expect(Array.from({ length: sessionStorage.length }, (_, i) => sessionStorage.key(i)).join()).not.toContain(
+      'token',
+    );
+  });
+
+  it('does not reuse pending metadata after auth invalidation or successful writes', async () => {
+    const { client, request } = createClient();
+    const listeners = new Map<string, () => void>();
+    setupClientSafeCache(client, {
+      addEventListener: (name: string, callback: () => void) => listeners.set(name, callback),
+    } as unknown as Application['eventBus']);
+    setupRequestDedupAndCache(client);
+    let finish: (value: unknown) => void;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const pending = client.request({ url: 'collections:listMeta' });
+    listeners.get('auth:tokenChanged')?.();
+    await client.request({ url: 'collections:listMeta' });
+    finish({ status: 200, data: { data: ['stale'] } });
+    await pending;
+    const response = await client.request({ url: 'collections:listMeta' });
+    expect(response.data.data).toEqual(['metadata']);
+    expect(request).toHaveBeenCalledTimes(2);
+    await client.request({ url: 'collections:update', method: 'post' });
+    await client.request({ url: 'collections:listMeta' });
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps complete Axios responses in memory without persisting credentials', async () => {
+    const { client, request } = createClient();
+    const response = {
+      status: 200,
+      data: { data: ['metadata'] },
+      config: { headers: { Authorization: 'private-token' } },
+    };
+    const circularResponse = { ...response, request: {} as { response?: unknown } };
+    circularResponse.request.response = circularResponse;
+    request.mockResolvedValue(circularResponse);
+    setupRequestDedupAndCache(client);
+    await client.request({ url: 'collections:listMeta' });
+    expect(await client.request({ url: 'collections:listMeta' })).toBe(circularResponse);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it('keeps cancellation per caller and does not match unrelated URL substrings', async () => {
+    const { client, request } = createClient();
+    setupRequestDedupAndCache(client);
+    const config = { url: 'collections:listMeta', signal: new AbortController().signal };
+    await Promise.all([client.request(config), client.request(config)]);
+    await client.request({ url: 'custom:run?name=collections:listMeta' });
+    await client.request({ url: 'custom:run?name=collections:listMeta' });
+    expect(request).toHaveBeenCalledTimes(4);
   });
 
   it('clears cached metadata on auth events and tolerates disabled browser storage', () => {
