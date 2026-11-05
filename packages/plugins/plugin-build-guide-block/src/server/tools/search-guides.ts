@@ -1,4 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
+import type { Context } from '@nocobase/actions';
+import { NoPermissionError } from '@nocobase/acl';
 
 interface RecordReader {
   get?: (key: string) => unknown;
@@ -10,20 +21,6 @@ interface SearchBuildGuidesArgs {
   query?: string;
   pageId?: string;
   spaceId?: string;
-}
-
-interface SearchBuildGuidesContext {
-  app: {
-    db: {
-      getRepository: (name: string) => {
-        find: (options: Record<string, unknown>) => Promise<RecordReader[]>;
-        findById: (id: string, options?: Record<string, unknown>) => Promise<RecordReader | null>;
-      };
-    };
-    logger: {
-      error: (message: string, error?: unknown) => void;
-    };
-  };
 }
 
 type QueryFilter = Record<string, unknown>;
@@ -61,29 +58,29 @@ function getSearchTokens(query?: string) {
   return Array.from(new Set(normalized.split(' ').filter((token) => token.length >= 2))).slice(0, 8);
 }
 
-function createMetadataSearchConditions(query: string) {
+function createMetadataSearchConditions(query: string, operator: '$iLike' | '$like') {
   const normalizedQuery = normalizeSearchText(query);
   const tokens = getSearchTokens(query);
   const conditions: Record<string, unknown>[] = [
-    { title: { $iLike: `%${query}%` } },
-    { goal: { $iLike: `%${query}%` } },
+    { title: { [operator]: `%${query}%` } },
+    { goal: { [operator]: `%${query}%` } },
   ];
 
   if (normalizedQuery) {
-    conditions.push({ searchText: { $iLike: `%${normalizedQuery}%` } });
+    conditions.push({ searchText: { [operator]: `%${normalizedQuery}%` } });
   }
   for (const token of tokens) {
-    conditions.push({ searchText: { $iLike: `%${token}%` } });
+    conditions.push({ searchText: { [operator]: `%${token}%` } });
   }
 
   return conditions;
 }
 
-function createFallbackSearchConditions(query: string) {
+function createFallbackSearchConditions(query: string, operator: '$iLike' | '$like') {
   return [
-    { title: { $iLike: `%${query}%` } },
-    { goal: { $iLike: `%${query}%` } },
-    { generatedMarkdown: { $iLike: `%${query}%` } },
+    { title: { [operator]: `%${query}%` } },
+    { goal: { [operator]: `%${query}%` } },
+    { generatedMarkdown: { [operator]: `%${query}%` } },
   ];
 }
 
@@ -172,6 +169,31 @@ function scorePage(page: RecordReader, query?: string) {
   return score;
 }
 
+async function readPermission(ctx: Context, resourceName: string, actionName: 'list' | 'get', fields: string[]) {
+  const dataSource = ctx.app.dataSourceManager.get('main');
+  const mainContext = Object.create(ctx);
+  Object.defineProperties(mainContext, {
+    dataSource: { value: dataSource },
+    db: { value: ctx.app.db },
+    database: { value: ctx.app.db },
+  });
+  const resolved = await dataSource.acl.resolveActionParams(mainContext, {
+    resourceName,
+    actionName,
+    params: {},
+  });
+  const allowed: string[] | undefined = resolved.parsedParams?.fields;
+  const except: string[] = resolved.parsedParams?.except || [];
+  if (!resolved.can || fields.some((field) => (allowed && !allowed.includes(field)) || except.includes(field))) {
+    throw new NoPermissionError('Guide access denied.');
+  }
+  return resolved.mergedParams;
+}
+
+function scopedFilter(scope: QueryFilter | undefined, filter: QueryFilter): QueryFilter {
+  return scope ? { $and: [scope, filter] } : filter;
+}
+
 export default {
   groupName: 'plugin-build-guide',
   tool: {
@@ -190,116 +212,144 @@ export default {
       spaceId: z.string().optional().describe('Optional guide space ID to limit search_pages to one guide book.'),
       pageId: z.string().optional().describe('The ID of the page to read. Required for read_page.'),
     }),
-    invoke: async (ctx: SearchBuildGuidesContext, args: SearchBuildGuidesArgs) => {
+    invoke: async (ctx: Context, args: SearchBuildGuidesArgs) => {
       const { action, pageId, spaceId } = args;
       const query = normalizeQuery(args.query);
-      const { db } = ctx.app;
-
+      const db = ctx.app.db;
+      const operator = db.sequelize.getDialect() === 'postgres' ? '$iLike' : '$like';
       const spaceRepo = db.getRepository('aiBuildGuideSpaces');
       const pageRepo = db.getRepository('aiBuildGuidePages');
-
+      const t = (key: string) => ctx.t(key, { ns: 'plugin-build-guide-block' });
       try {
+        if (!ctx.state?.currentUser?.id && !ctx.auth?.user?.id) throw new NoPermissionError('Guide access denied.');
         if (action === 'list_spaces') {
+          const fields = ['id', 'title', 'chapterGuidance', 'pageCount'];
+          const permission = await readPermission(ctx, 'aiBuildGuideSpaces', 'list', fields);
           const filter: QueryFilter = { status: 'completed' };
-          if (query) {
-            filter.title = { $iLike: `%${query}%` };
-          }
+          if (query) filter.title = { [operator]: `%${query}%` };
           const spaces = await spaceRepo.find({
-            filter,
-            fields: ['id', 'title', 'chapterGuidance', 'pageCount'],
+            ...permission,
+            filter: scopedFilter(permission.filter, filter),
+            fields,
+            appends: [],
             limit: 20,
           });
           return {
             status: 'success',
-            content: spaces.map((s) => ({
-              id: getValue(s, 'id'),
-              title: getValue(s, 'title'),
-              description: getValue(s, 'chapterGuidance'),
-              pageCount: getValue(s, 'pageCount'),
+            content: spaces.map((space) => ({
+              id: space.get('id'),
+              title: space.get('title'),
+              description: space.get('chapterGuidance'),
+              pageCount: space.get('pageCount'),
             })),
           };
         }
 
-        if (action === 'search_pages') {
-          const filter: QueryFilter = { status: 'completed' };
-          if (spaceId) {
-            filter.spaceId = spaceId;
+        if (action === 'search_pages' || action === 'read_page') {
+          const readAction = action === 'read_page' ? 'get' : 'list';
+          const fields = [
+            'id',
+            'title',
+            'slug',
+            'goal',
+            'spaceId',
+            'generatedMarkdown',
+            'searchMetadata',
+            'searchText',
+          ];
+          const permission = await readPermission(ctx, 'aiBuildGuidePages', readAction, fields);
+          const spacePermission = await readPermission(ctx, 'aiBuildGuideSpaces', readAction, ['id', 'title']);
+          const filter: QueryFilter = { status: 'completed', ...(spaceId ? { spaceId } : {}) };
+          if (action === 'read_page') {
+            if (!pageId) return { status: 'error', content: t('Page ID is required.') };
+            const page = await pageRepo.findOne({
+              ...permission,
+              filterByTk: pageId,
+              filter: scopedFilter(permission.filter, filter),
+              fields,
+              appends: [],
+            });
+            const space =
+              page?.get('spaceId') &&
+              (await spaceRepo.findOne({
+                ...spacePermission,
+                filterByTk: page.get('spaceId'),
+                filter: scopedFilter(spacePermission.filter, { status: 'completed' }),
+                fields: ['id', 'title'],
+                appends: [],
+              }));
+            if (!page || !space) return { status: 'error', content: t('User Guide not found') };
+            return {
+              status: 'success',
+              content: {
+                id: page.get('id'),
+                title: page.get('title'),
+                slug: page.get('slug'),
+                spaceId: page.get('spaceId'),
+                spaceName: space.get('title'),
+                goal: page.get('goal'),
+                metadata: page.get('searchMetadata'),
+                markdown: page.get('generatedMarkdown'),
+              },
+            };
           }
-          if (query) {
-            filter.$or = createMetadataSearchConditions(query);
-          }
+          if (query) filter.$or = createMetadataSearchConditions(query, operator);
           let pages = await pageRepo.find({
-            filter,
-            fields: ['id', 'title', 'slug', 'goal', 'spaceId', 'generatedMarkdown', 'searchMetadata', 'searchText'],
+            ...permission,
+            filter: scopedFilter(permission.filter, filter),
+            fields,
+            appends: [],
             limit: 30,
-            appends: ['space(id,title,status)'],
           });
           if (query && pages.length === 0) {
-            const fallbackFilter: QueryFilter = { status: 'completed' };
-            if (spaceId) {
-              fallbackFilter.spaceId = spaceId;
-            }
-            fallbackFilter.$or = createFallbackSearchConditions(query);
             pages = await pageRepo.find({
-              filter: fallbackFilter,
-              fields: ['id', 'title', 'slug', 'goal', 'spaceId', 'generatedMarkdown', 'searchMetadata', 'searchText'],
+              ...permission,
+              filter: scopedFilter(permission.filter, {
+                ...filter,
+                $or: createFallbackSearchConditions(query, operator),
+              }),
+              fields,
+              appends: [],
               limit: 30,
-              appends: ['space(id,title,status)'],
             });
           }
+          const spaces = pages.length
+            ? await spaceRepo.find({
+                ...spacePermission,
+                filter: scopedFilter(spacePermission.filter, {
+                  status: 'completed',
+                  id: { $in: pages.map((page) => page.get('spaceId')) },
+                }),
+                fields: ['id', 'title'],
+                appends: [],
+                pagination: false,
+              })
+            : [];
+          const visibleSpaces = new Map(spaces.map((space) => [String(space.get('id')), space.get('title')]));
           return {
             status: 'success',
             content: pages
-              .filter((p) => getValue(getValue(p, 'space'), 'status') === 'completed')
+              .filter((page) => visibleSpaces.has(String(page.get('spaceId'))))
               .sort((a, b) => scorePage(b, query) - scorePage(a, query))
               .slice(0, 10)
-              .map((p) => ({
-                id: getValue(p, 'id'),
-                title: getValue(p, 'title'),
-                slug: getValue(p, 'slug'),
-                goal: getValue(p, 'goal'),
-                spaceId: getValue(p, 'spaceId'),
-                spaceName: getValue(getValue(p, 'space'), 'title'),
-                matchedFields: getMatchedFields(p, query),
-                metadata: getValue(p, 'searchMetadata'),
-                snippet: createSnippet(getValue(p, 'generatedMarkdown'), query, getValue(p, 'searchMetadata')),
+              .map((page) => ({
+                id: page.get('id'),
+                title: page.get('title'),
+                slug: page.get('slug'),
+                goal: page.get('goal'),
+                spaceId: page.get('spaceId'),
+                spaceName: visibleSpaces.get(String(page.get('spaceId'))),
+                matchedFields: getMatchedFields(page, query),
+                metadata: page.get('searchMetadata'),
+                snippet: createSnippet(page.get('generatedMarkdown'), query, page.get('searchMetadata')),
               })),
           };
         }
-
-        if (action === 'read_page') {
-          if (!pageId) {
-            return { status: 'error', content: 'pageId is required for read_page action' };
-          }
-          const page = await pageRepo.findById(pageId, {
-            appends: ['space(id,title,status)'],
-          });
-          if (!page) {
-            return { status: 'error', content: `Page with ID ${pageId} not found.` };
-          }
-          if (getValue(page, 'status') !== 'completed' || getValue(getValue(page, 'space'), 'status') !== 'completed') {
-            return { status: 'error', content: `Page with ID ${pageId} is not completed.` };
-          }
-          return {
-            status: 'success',
-            content: {
-              id: getValue(page, 'id'),
-              title: getValue(page, 'title'),
-              slug: getValue(page, 'slug'),
-              spaceId: getValue(page, 'spaceId'),
-              spaceName: getValue(getValue(page, 'space'), 'title'),
-              goal: getValue(page, 'goal'),
-              metadata: getValue(page, 'searchMetadata'),
-              markdown: getValue(page, 'generatedMarkdown'),
-            },
-          };
-        }
-
-        return { status: 'error', content: 'Invalid action specified' };
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        ctx.app.logger.error(`[search_build_guides] Error: ${message}`, err);
-        return { status: 'error', content: `Tool execution failed: ${message}` };
+        return { status: 'error', content: t('Invalid guide action.') };
+      } catch (error: unknown) {
+        if (error instanceof NoPermissionError) return { status: 'error', content: t('Guide access denied.') };
+        ctx.app.logger.error('[search_build_guides] Tool execution failed', error);
+        return { status: 'error', content: t('Guide search failed.') };
       }
     },
   },

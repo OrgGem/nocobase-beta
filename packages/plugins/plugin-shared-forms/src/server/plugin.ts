@@ -7,10 +7,18 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+import { NoPermissionError } from '@nocobase/acl';
 import { UiSchemaRepository } from '@nocobase/plugin-ui-schema-storage';
 import { Plugin } from '@nocobase/server';
 import { parseAssociationNames } from './hook';
-import { collectionBinding, configuredFields, isObject, parseConfig, type FormModelSchema } from '../shared/v2Config';
+import {
+  collectionBinding,
+  configuredFields,
+  isObject,
+  legacyFields,
+  parseConfig,
+  type FormModelSchema,
+} from '../shared/v2Config';
 
 class AccessDeniedError extends Error {}
 
@@ -84,16 +92,15 @@ export class PluginSharedFormsServer extends Plugin {
     );
   }
 
-  async getMetaByTk(filterByTk: string, currentUser: { id: string | number }) {
+  async getMetaByTk(filterByTk: string, currentUser: { id: string | number }, filter?: Record<string, unknown>) {
     const sharedForms = this.db.getRepository('sharedForms');
     const uiSchema = this.db.getRepository<UiSchemaRepository>('uiSchemas');
     const instance = await sharedForms.findOne({
-      filter: {
-        key: filterByTk,
-      },
+      filterByTk,
+      filter,
     });
     if (!instance) {
-      throw new Error('The form is not found');
+      throw new AccessDeniedError('The form is not found');
     }
     if (!instance.get('enabled')) {
       return null;
@@ -212,7 +219,7 @@ export class PluginSharedFormsServer extends Plugin {
     const key = filterByTk || resourceIndex;
     const currentUser = ctx.state.currentUser;
     try {
-      ctx.body = await this.getMetaByTk(key, currentUser);
+      ctx.body = await this.getMetaByTk(key, currentUser, ctx.action.params.filter);
     } catch (error) {
       if (error instanceof AccessDeniedError) {
         ctx.throw(403, error.message);
@@ -275,6 +282,25 @@ export class PluginSharedFormsServer extends Plugin {
         (ctx.get('X-Data-Source') || 'main') !== binding.dataSourceKey)
     )
       ctx.throw(403, 'Form collection does not match');
+    const mainContext = Object.create(ctx);
+    Object.defineProperty(mainContext, 'db', { value: this.db });
+    Object.defineProperty(mainContext, 'database', { value: this.db });
+    Object.defineProperty(mainContext, 'dataSource', { value: this.app.dataSourceManager.dataSources.get('main') });
+    const permission = await this.app.acl
+      .resolveActionParams(mainContext, {
+        resourceName: 'sharedForms',
+        actionName: 'view',
+        params: { filterByTk: formKey },
+      })
+      .catch((error: unknown) => {
+        if (error instanceof NoPermissionError) ctx.throw(403, error.message);
+        throw error;
+      });
+    if (!permission.can) ctx.throw(403, 'Access denied');
+    const permitted = await this.db
+      .getRepository('sharedForms')
+      .findOne({ filterByTk: formKey, filter: permission.mergedParams?.filter });
+    if (!permitted) ctx.throw(403, 'Access denied');
     let hasLegacySchema = false;
     if (instance.get('v2Config') && ctx.get('X-Shared-Form-Version') !== '2') {
       try {
@@ -286,20 +312,6 @@ export class PluginSharedFormsServer extends Plugin {
     }
     let targetCollections: string[] = [];
     if (ctx.get('X-Shared-Form-Version') === '2' || (instance.get('v2Config') && !hasLegacySchema)) {
-      const mainContext = Object.create(ctx);
-      Object.defineProperty(mainContext, 'db', { value: this.db });
-      Object.defineProperty(mainContext, 'database', { value: this.db });
-      Object.defineProperty(mainContext, 'dataSource', { value: this.app.dataSourceManager.dataSources.get('main') });
-      const permission = await this.app.acl.resolveActionParams(mainContext, {
-        resourceName: 'sharedForms',
-        actionName: 'view',
-        params: { filterByTk: formKey },
-      });
-      if (!permission.can) ctx.throw(403, 'Access denied');
-      const permitted = await this.db
-        .getRepository('sharedForms')
-        .findOne({ filterByTk: formKey, filter: permission.mergedParams?.filter });
-      if (!permitted) ctx.throw(403, 'Access denied');
       let config;
       try {
         config = parseConfig(instance.get('v2Config'), String(instance.get('collection')));
@@ -315,6 +327,41 @@ export class PluginSharedFormsServer extends Plugin {
         ctx.action.params.whitelist = fields;
         ctx.action.params.updateAssociationValues = [];
       }
+    } else if (isSubmission) {
+      const schema: unknown = await this.db.getRepository<UiSchemaRepository>('uiSchemas').getJsonSchema(formKey);
+      const form = isObject(schema) && isObject(schema.properties) ? schema.properties.form : undefined;
+      const fields = legacyFields(form, binding.collectionName).filter(
+        (field) => !['__proto__', 'constructor', 'prototype'].includes(field),
+      );
+      const values: unknown = ctx.action.params.values;
+      if (!isObject(form) || !isObject(values) || Object.keys(values).some((key) => !fields.includes(key))) {
+        return ctx.throw(400, ctx.t('Submitted fields do not match the form', { ns: 'plugin-shared-forms' }));
+      }
+      // Shared submission may link existing records, but cannot create or mutate records in another collection.
+      const collection = this.app.dataSourceManager.dataSources
+        .get(binding.dataSourceKey)
+        ?.collectionManager.getCollection(binding.collectionName);
+      const submitted = { ...values };
+      for (const key of Object.keys(submitted)) {
+        const field = collection?.getField(key);
+        if (!['hasOne', 'hasMany', 'belongsTo', 'belongsToMany', 'belongsToArray'].includes(field?.options.type))
+          continue;
+        const target = this.app.dataSourceManager.dataSources
+          .get(binding.dataSourceKey)
+          ?.collectionManager.getCollection(field.options.target);
+        const targetKey = field.options.targetKey || target?.filterTargetKey;
+        const reference = (value: unknown) => {
+          if (value === null || typeof value === 'string' || typeof value === 'number') return value;
+          const id = isObject(value) && typeof targetKey === 'string' ? value[targetKey] : undefined;
+          if (typeof id === 'string' || typeof id === 'number') return id;
+          ctx.throw(400, ctx.t('Select an existing related record', { ns: 'plugin-shared-forms' }));
+        };
+        const value = submitted[key];
+        submitted[key] = Array.isArray(value) ? value.map(reference) : reference(value);
+      }
+      ctx.action.params.values = submitted;
+      ctx.action.params.whitelist = fields;
+      ctx.action.params.updateAssociationValues = [];
     }
 
     // Query through table directly to avoid association join issues

@@ -38,5 +38,9 @@
   "Build completed": "Build completed",
   "Failed to load guide content": "Failed to load guide content",
   "User Guide not found": "User Guide not found",
-  "User Guide is not ready yet": "User Guide is not ready yet"
+  "User Guide is not ready yet": "User Guide is not ready yet",
+  "Guide access denied.": "Guide access denied.",
+  "Page ID is required.": "Page ID is required.",
+  "Invalid guide action.": "Invalid guide action.",
+  "Guide search failed.": "Guide search failed."
 }

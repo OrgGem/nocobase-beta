@@ -1,16 +1,38 @@
-import { createMockServer } from '@nocobase/test';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { createMockServer, type MockServer } from '@nocobase/test';
 import PluginDocumentUnderstandingServer from '../plugin';
 
 describe('Document Understanding plugin smoke', () => {
-  let app;
-  let agent;
+  let app: MockServer;
+  let agent: ReturnType<MockServer['agent']>;
+  let plugin: PluginDocumentUnderstandingServer;
 
   beforeEach(async () => {
     app = await createMockServer({
-      plugins: ['nocobase', PluginDocumentUnderstandingServer],
+      plugins: [
+        'field-sort',
+        'system-settings',
+        'users',
+        'auth',
+        'acl',
+        'data-source-manager',
+        'data-source-main',
+        'error-handler',
+      ],
       acl: false,
     });
-    await app.install();
+    plugin = new PluginDocumentUnderstandingServer(app, { name: 'plugin-document-understanding' });
+    await plugin.beforeLoad();
+    await plugin.load();
+    await app.db.sync();
 
     const adminUser = await app.db.getRepository('users').findOne();
     agent = app.agent();
@@ -20,6 +42,7 @@ describe('Document Understanding plugin smoke', () => {
   });
 
   afterEach(async () => {
+    await plugin?.beforeStop();
     await app?.destroy();
   });
 

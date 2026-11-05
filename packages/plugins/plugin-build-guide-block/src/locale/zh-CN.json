@@ -38,5 +38,9 @@
   "Build completed": "构建完成",
   "Failed to load guide content": "加载指南内容失败",
   "User Guide not found": "用户指南不存在",
-  "User Guide is not ready yet": "用户指南尚未就绪"
+  "User Guide is not ready yet": "用户指南尚未就绪",
+  "Guide access denied.": "无权访问指南。",
+  "Page ID is required.": "必须提供页面 ID。",
+  "Invalid guide action.": "无效的指南操作。",
+  "Guide search failed.": "指南搜索失败。"
 }

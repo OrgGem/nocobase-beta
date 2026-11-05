@@ -49,5 +49,8 @@
   "Page": "Page",
   "Snippet": "Snippet",
   "Scan sources": "Scan sources",
-  "Scan queued {{count}} documents": "Scan queued {{count}} documents"
+  "Scan queued {{count}} documents": "Scan queued {{count}} documents",
+  "Authentication required.": "Authentication required.",
+  "Invalid file search input.": "Invalid file search input.",
+  "File search AI tool is disabled.": "File search AI tool is disabled."
 }

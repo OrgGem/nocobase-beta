@@ -1,6 +1,6 @@
 {
   "name": "plugin-shared-forms",
-  "version": "2.0.20",
+  "version": "2.0.21",
   "main": "dist/server/index.js",
   "displayName": "Shared forms",
   "displayName.vi-VN": "Biểu mẫu chia sẻ",
@@ -19,7 +19,8 @@
     "@nocobase/client-v2": "2.x",
     "@nocobase/flow-engine": "2.x",
     "@nocobase/database": "2.x",
-    "@nocobase/utils": "2.x"
+    "@nocobase/utils": "2.x",
+    "@nocobase/acl": "2.x"
   },
   "nocobase": {
     "supportedVersions": [

@@ -1,5 +1,7 @@
 # Review vòng 2 — custom plugins
 
+> **Cập nhật sau sửa ngày 2026-11-06:** RR-01–RR-05 đã được sửa và kiểm chứng bằng regression; xem [kết quả sửa vòng 2](custom-plugins-round2-fix-status.md). Các chữ OPEN và số liệu bên dưới giữ snapshot lúc phát hiện, không phải trạng thái hiện tại.
+
 Ngày chốt: 2026-11-06. Repository `OrgGem/nocobase-beta`, nhánh `main`, baseline `070854510da07be27c0ebb1e06aa7dad43fa4efc`, NocoBase `2.2.37`.
 
 ## Kết luận

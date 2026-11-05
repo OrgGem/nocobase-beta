@@ -1,6 +1,6 @@
 # Review và kế hoạch hoàn thiện client v2 (NocoBase 2.2.37) cho 59 custom plugin
 
-> **Cập nhật 2026-11-06:** snapshot này được đưa vào đợt commit/push theo yêu cầu. Xem [review vòng 2](custom-plugins-review-round2.md) để biết 5 finding mới còn OPEN, coverage 59 plugin và kiểm chứng trước commit. Các trạng thái working tree/build/test bên dưới mô tả thời điểm của lượt cũ.
+> **Cập nhật 2026-11-06:** snapshot này được đưa vào đợt commit/push theo yêu cầu. Xem [review vòng 2](custom-plugins-review-round2.md) để biết 5 finding mới của lượt review và coverage 59 plugin; các finding này đã được sửa tiếp trong [kết quả sửa vòng 2](custom-plugins-round2-fix-status.md). Các trạng thái working tree/build/test bên dưới mô tả thời điểm của lượt cũ.
 
 > **Cập nhật 2026-11-05:** hai lỗi HIGH về Cross Join tự mở configurator và Pagination không unwrap settings đã được sửa (FR-07, FR-08), có regression FlowEngine/component. Cùng lượt này sửa thêm các issue bảo mật/server/OCR trong [báo cáo follow-up](custom-plugins-followup-fix-status.md). Những mục bên dưới vẫn là snapshot kế hoạch gốc; các kết quả này chưa chứng nhận hoàn thành feature parity hay browser E2E.
 

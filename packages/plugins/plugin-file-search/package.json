@@ -6,7 +6,7 @@
   "description": "Search accessible uploaded files with PageIndex-powered retrieval.",
   "description.vi-VN": "Tìm kiếm các tệp được phép truy cập bằng PageIndex.",
   "description.zh-CN": "使用 PageIndex 检索可访问的已上传文件。",
-  "version": "2.1.19",
+  "version": "2.1.20",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
@@ -39,7 +39,9 @@
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/server": "2.x",
     "plugin-cluster-manager": "^1.3.3",
-    "plugin-document-parser": "1.x"
+    "plugin-document-parser": "1.x",
+    "@nocobase/ai": "2.x",
+    "zod": "^3.22.4"
   },
   "dependencies": {}
 }

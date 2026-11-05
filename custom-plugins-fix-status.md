@@ -1,6 +1,6 @@
 # Trạng thái sửa lỗi custom plugins
 
-> **Cập nhật 2026-11-06:** snapshot này được đưa vào đợt commit/push theo yêu cầu. Xem [review vòng 2](custom-plugins-review-round2.md) để biết 5 finding mới còn OPEN, coverage 59 plugin và kiểm chứng trước commit. Các trạng thái working tree/build/test bên dưới mô tả thời điểm của lượt cũ.
+> **Cập nhật 2026-11-06:** snapshot này được đưa vào đợt commit/push theo yêu cầu. Xem [review vòng 2](custom-plugins-review-round2.md) để biết 5 finding mới của lượt review và coverage 59 plugin; các finding này đã được sửa tiếp trong [kết quả sửa vòng 2](custom-plugins-round2-fix-status.md). Các trạng thái working tree/build/test bên dưới mô tả thời điểm của lượt cũ.
 
 > **Cập nhật 2026-11-05:** đã sửa thêm 9 finding FR-01–FR-09 trong 6 plugin. Xem [kết quả sửa tiếp theo](custom-plugins-followup-fix-status.md), gồm regression, migration, build/pack và giới hạn xác nhận. Phần dưới giữ bằng chứng của lượt IR ngày 2026-11-04.
 

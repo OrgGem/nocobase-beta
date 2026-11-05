@@ -60,6 +60,7 @@ function fixture(
     titleField: 'title',
     getFields: () => [{ options: { name: 'title', type: 'string', interface: 'input' } }],
     getField: (name: string) => ({
+      isAssociationField: () => ['customer', 'attachment'].includes(name),
       options:
         name === 'customer'
           ? { type: 'belongsTo', target: 'customers' }
@@ -77,7 +78,13 @@ function fixture(
     sharedForms: { findOne, collection: { name: 'sharedForms' } },
     sharedFormsRoles: { find: vi.fn(async () => (options.allowedRoles || []).map((role) => ({ get: () => role }))) },
     rolesUsers: { find: vi.fn(async () => (options.userRoles || ['member']).map((role) => ({ get: () => role }))) },
-    uiSchemas: { getJsonSchema: vi.fn(async () => (options.legacy ? { properties: { form: {} } } : null)) },
+    uiSchemas: {
+      getJsonSchema: vi.fn(async () =>
+        options.legacy
+          ? { properties: { form: { properties: { title: { 'x-collection-field': 'orders.title' } } } } }
+          : null,
+      ),
+    },
   };
   const db = {
     getRepository: (name: keyof typeof repositories) => repositories[name],

@@ -49,5 +49,8 @@
   "Page": "页码",
   "Snippet": "片段",
   "Scan sources": "扫描来源",
-  "Scan queued {{count}} documents": "已入队 {{count}} 个文档"
+  "Scan queued {{count}} documents": "已入队 {{count}} 个文档",
+  "Authentication required.": "需要身份验证。",
+  "Invalid file search input.": "无效的文件搜索输入。",
+  "File search AI tool is disabled.": "文件搜索 AI 工具已禁用。"
 }

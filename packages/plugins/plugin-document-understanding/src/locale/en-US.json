@@ -178,5 +178,7 @@
   "Task ID Extract Path": "Task ID Extract Path",
   "Sync Query Param": "Sync Query Param",
   "Discriminator Field": "Discriminator Field",
-  "Gateway / Discriminator": "Gateway / Discriminator"
+  "Gateway / Discriminator": "Gateway / Discriminator",
+  "Invalid document upload.": "Invalid document upload.",
+  "Invalid pipeline input.": "Invalid pipeline input."
 }

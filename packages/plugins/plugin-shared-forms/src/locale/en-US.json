@@ -55,5 +55,6 @@
   "No": "No",
   "Allow this role to access shared forms (view form schema and submit)": "Allow this role to access shared forms (view form schema and submit)",
   "Allow access to shared forms": "Allow access to shared forms",
-  "Preview cannot submit records": "Preview cannot submit records"
+  "Preview cannot submit records": "Preview cannot submit records",
+  "Select an existing related record": "Select an existing related record"
 }

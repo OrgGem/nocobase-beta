@@ -55,5 +55,6 @@
   "No": "否",
   "Allow this role to access shared forms (view form schema and submit)": "允许此角色访问共享表单（查看表单和提交）",
   "Allow access to shared forms": "允许访问共享表单",
-  "Preview cannot submit records": "预览模式不能提交记录"
+  "Preview cannot submit records": "预览模式不能提交记录",
+  "Select an existing related record": "请选择已有的关联记录"
 }

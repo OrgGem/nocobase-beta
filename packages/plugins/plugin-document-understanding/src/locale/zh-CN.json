@@ -178,5 +178,7 @@
   "Discriminator Field": "判别字段",
   "Gateway / Discriminator": "网关 / 判别字段",
   "When set, the request appends ?<param>=true to ask for a synchronous response (e.g. sync).": "设置后请求会附加 ?<param>=true 以请求同步响应（如 sync）。",
-  "Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.": "选择 API 子类型的表单字段（如 mode/type/task/action/process）。自动发送。"
+  "Form field that selects the API sub-case (e.g. mode/type/task/action/process). Sent automatically.": "选择 API 子类型的表单字段（如 mode/type/task/action/process）。自动发送。",
+  "Invalid document upload.": "无效的文档上传。",
+  "Invalid pipeline input.": "无效的流水线输入。"
 }

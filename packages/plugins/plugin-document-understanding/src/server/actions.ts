@@ -1,5 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Context } from '@nocobase/actions';
-import { existsSync, readFileSync } from 'fs';
+import { koaMulter } from '@nocobase/utils';
 import { DocumentUnderstandingService } from './services/DocumentUnderstandingService';
 import { FileInput } from './services/ExternalApiClient';
 
@@ -14,21 +23,14 @@ interface DocumentUnderstandingPluginLike {
   };
 }
 
-interface UploadedFileLike {
-  path?: string;
-  filepath?: string;
-  name?: string;
-  originalFilename?: string;
-  type?: string;
-  mimetype?: string;
-}
+// Parse uploads after resource ACL. Memory storage never accepts or opens a client-supplied local path.
+const uploadDocuments = koaMulter({
+  storage: koaMulter.memoryStorage(),
+  limits: { files: 5, fileSize: 20 * 1024 * 1024, fields: 2, fieldSize: 1024 * 1024, parts: 8 },
+}).any();
 
-interface RequestWithFiles {
-  files?: Record<string, UploadedFileLike | UploadedFileLike[]>;
-  body?: {
-    files?: Record<string, UploadedFileLike | UploadedFileLike[]>;
-  };
-  headers: Context['request']['headers'];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export const defineActions = (plugin: DocumentUnderstandingPluginLike) => {
@@ -98,47 +100,47 @@ export const defineActions = (plugin: DocumentUnderstandingPluginLike) => {
     },
 
     async executePipeline(ctx: Context, next: () => Promise<any>) {
-      const { values } = ctx.action.params;
-      const pipelineId = values?.pipelineId;
-      const input = values?.input || {};
-      const userId = ctx.state?.currentUser?.id;
-
+      let values: unknown = ctx.action.params.values;
       const multipartFiles: FileInput[] = [];
-      const request = ctx.request as RequestWithFiles;
-      const filesObj = request.files || request.body?.files;
-      if (filesObj) {
-        const addFile = (key: string, file: UploadedFileLike) => {
-          const filePath = file.path || file.filepath;
-          const fileName = file.name || file.originalFilename || 'file';
-          const mimeType = file.type || file.mimetype || 'application/octet-stream';
-          if (filePath && existsSync(filePath)) {
-            try {
-              multipartFiles.push({
-                fieldName: key,
-                buffer: readFileSync(filePath),
-                filename: fileName,
-                mimeType,
-              });
-            } catch (err) {
-              plugin.app.logger.warn('Failed to read uploaded multipart file', err);
+      if (ctx.request.is('multipart/form-data')) {
+        try {
+          await uploadDocuments(ctx, async () => undefined);
+        } catch (error: unknown) {
+          const limited = isRecord(error) && typeof error.code === 'string' && error.code.startsWith('LIMIT_');
+          ctx.throw(limited ? 413 : 400, ctx.t('Invalid document upload.', { ns: 'plugin-document-understanding' }));
+        }
+        values = ctx.request.body;
+        const files: unknown = (ctx.request as typeof ctx.request & { files?: unknown }).files;
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            if (!isRecord(file) || !Buffer.isBuffer(file.buffer)) {
+              ctx.throw(400, ctx.t('Invalid document upload.', { ns: 'plugin-document-understanding' }));
             }
-          }
-        };
-
-        if (typeof filesObj === 'object') {
-          for (const [key, value] of Object.entries(filesObj)) {
-            if (Array.isArray(value)) {
-              for (const f of value) {
-                addFile(key, f);
-              }
-            } else {
-              addFile(key, value);
-            }
+            multipartFiles.push({
+              fieldName: String(file.fieldname),
+              buffer: file.buffer,
+              filename: String(file.originalname),
+              mimeType: String(file.mimetype),
+            });
           }
         }
       }
-
-      ctx.body = await service.executePipeline(pipelineId, input, multipartFiles, userId);
+      if (!isRecord(values) || Object.prototype.hasOwnProperty.call(values, 'files')) {
+        ctx.throw(400, ctx.t('Invalid pipeline input.', { ns: 'plugin-document-understanding' }));
+      }
+      const pipelineId = Number(values.pipelineId);
+      let input: unknown = values.input ?? {};
+      if (ctx.request.is('multipart/form-data') && typeof input === 'string') {
+        try {
+          input = JSON.parse(input);
+        } catch {
+          ctx.throw(400, ctx.t('Invalid pipeline input.', { ns: 'plugin-document-understanding' }));
+        }
+      }
+      if (!Number.isSafeInteger(pipelineId) || pipelineId <= 0 || !isRecord(input)) {
+        ctx.throw(400, ctx.t('Invalid pipeline input.', { ns: 'plugin-document-understanding' }));
+      }
+      ctx.body = await service.executePipeline(pipelineId, input, multipartFiles, ctx.state?.currentUser?.id);
       await next();
     },
 
