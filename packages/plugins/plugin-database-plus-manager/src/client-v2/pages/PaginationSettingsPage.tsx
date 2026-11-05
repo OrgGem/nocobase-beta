@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { useFlowContext } from '@nocobase/flow-engine';
 import { Alert, Button, Card, Form, Select, message } from 'antd';
 import React, { useEffect, useState } from 'react';
@@ -17,7 +26,7 @@ export default function PaginationSettingsPage() {
     async function loadSettings() {
       try {
         const response = await ctx.api.request({ url: 'databasePlusManager:getSettings', method: 'get' });
-        form.setFieldsValue(response?.data ?? response);
+        form.setFieldsValue(response.data.data);
       } catch (reason: unknown) {
         setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
@@ -52,7 +61,7 @@ export default function PaginationSettingsPage() {
             ]}
           />
         </Form.Item>
-        <Button type="primary" loading={saving} onClick={save}>
+        <Button type="primary" loading={saving} disabled={loading || Boolean(error)} onClick={save}>
           {t('Save')}
         </Button>
       </Form>

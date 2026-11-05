@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { Alert, Card, Descriptions, Divider, Space, Typography } from 'antd';
 import { useFlowEngineContext } from '@nocobase/flow-engine';
@@ -113,8 +122,9 @@ export default function RegistryGuidePage({ permissions }: DockerRegistryPagePro
             )}
           </Typography.Paragraph>
           <Typography.Paragraph code>
-            pm.docker-registry-ui.read · pm.docker-registry-ui.download · pm.docker-registry-ui.upload ·
-            pm.docker-registry-ui.delete · pm.docker-registry-ui.settings · pm.docker-registry-ui.manage
+            pm.plugin-docker-registry-ui.read · pm.plugin-docker-registry-ui.download ·
+            pm.plugin-docker-registry-ui.upload · pm.plugin-docker-registry-ui.delete ·
+            pm.plugin-docker-registry-ui.settings · pm.plugin-docker-registry-ui.manage
           </Typography.Paragraph>
         </section>
         <section>

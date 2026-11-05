@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
 import { readdir, unlink } from 'fs/promises';
 import { resolve } from 'path';
@@ -166,11 +175,30 @@ export class PluginCarboneTemplateManagerServer extends Plugin {
     this.app.acl.registerSnippet({
       name: `pm.${ns}.settings`,
       actions: [
-        `pm.${ns}.connection`,
-        `pm.${ns}.templates`,
-        `pm.${ns}.render`,
-        `pm.${ns}.versions`,
-        `pm.${ns}.monitoring`,
+        `${COLLECTION.settings}:get`,
+        `${COLLECTION.settings}:save`,
+        `${COLLECTION.settings}:testConnection`,
+        `${COLLECTION.templates}:list`,
+        `${COLLECTION.templates}:get`,
+        `${COLLECTION.templates}:create`,
+        `${COLLECTION.templates}:update`,
+        `${COLLECTION.templates}:destroy`,
+        `${COLLECTION.templates}:upload`,
+        `${COLLECTION.templates}:parsePlaceholders`,
+        `${COLLECTION.templates}:download`,
+        `${COLLECTION.templates}:test`,
+        `${COLLECTION.templates}:render`,
+        `${COLLECTION.templates}:renderById`,
+        `${COLLECTION.templates}:renderDirect`,
+        `${COLLECTION.versions}:*`,
+        `${COLLECTION.renderLogs}:list`,
+        `${COLLECTION.renderLogs}:get`,
+        `${COLLECTION.renderLogs}:destroy`,
+        `${COLLECTION.renderLogs}:summary`,
+        `${COLLECTION.renderCache}:list`,
+        `${COLLECTION.renderCache}:get`,
+        `${COLLECTION.renderCache}:destroy`,
+        `${COLLECTION.renderCache}:invalidate`,
       ],
     });
     this.app.acl.registerSnippet({

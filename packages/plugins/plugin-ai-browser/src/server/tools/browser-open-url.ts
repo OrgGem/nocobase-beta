@@ -1,9 +1,20 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
+import { publicLiveUrl } from '../public-live-url';
 import {
   buildReadResult,
   getAIBrowserPlugin,
   getConversationId,
   getCurrentUserId,
+  getBrowserAccess,
   logBrowserAction,
   normalizeToolCall,
   touchSessionActivity,
@@ -28,7 +39,6 @@ const browserOpenTool = {
       const { ctx, params } = normalizeToolCall(first, second);
       const toolCallId = third;
       const startedAt = Date.now();
-      console.log('>>> [DEBUG] EXECUTE BROWSER_OPEN_URL:', params.url);
       try {
         const plugin = getAIBrowserPlugin(ctx);
         const conversationId = await getConversationId(ctx, params, toolCallId);
@@ -37,14 +47,23 @@ const browserOpenTool = {
         }
 
         // Get or create session
-        let session = await plugin.sessionService.getActiveSessionForConversation(conversationId);
+        const access = getBrowserAccess(ctx);
+        const conversation = await ctx.db.getRepository('aiConversations').findOne({
+          filter: { sessionId: conversationId, userId: access.userId },
+        });
+        if (!conversation) {
+          throw new Error(ctx.t('AI conversation not found or access denied.', { ns: 'plugin-ai-browser' }));
+        }
+        let session = await plugin.sessionService.getActiveSessionForConversation(conversationId, access);
         let externalId: string | undefined;
         if (session) {
           externalId = session.get('externalSessionId');
           const metadata = session.get('metadata') || {};
           const driverStatus = externalId
-            ? await (plugin.driver.ensureSession?.(externalId, metadata.driver || {}) ||
-                plugin.driver.getSessionStatus(externalId)).catch(() => null)
+            ? await (
+                plugin.driver.ensureSession?.(externalId, metadata.driver || {}) ||
+                plugin.driver.getSessionStatus(externalId)
+              ).catch(() => null)
             : null;
           if (!driverStatus || driverStatus.status !== 'running') {
             await plugin.sessionService.expireSession(session.get('id')).catch(() => {});
@@ -52,7 +71,7 @@ const browserOpenTool = {
             externalId = undefined;
           }
         }
-        
+
         if (!session) {
           session = await plugin.sessionService.createSession({
             title: `AI Browser for ${params.url}`,
@@ -96,13 +115,13 @@ const browserOpenTool = {
           metadata: { tool: 'browser_open_url' },
         });
         touchSessionActivity(plugin, session.get('id'));
-        
+
         return {
           status: 'success',
           content:
             `URL loaded: ${params.url}\n` +
             `Session ID: ${session.get('id')}\n` +
-            `Live Viewer: ${session.get('liveUrl') || 'not available'}\n` +
+            `Live Viewer: ${publicLiveUrl(session.get('liveUrl')) || 'not available'}\n` +
             `Current URL: ${read.currentUrl || params.url}\n\n` +
             `Page loaded successfully. If you need to read the content or HTML, use the 'browser_read_page' or 'browser_extract' tools.`,
         };

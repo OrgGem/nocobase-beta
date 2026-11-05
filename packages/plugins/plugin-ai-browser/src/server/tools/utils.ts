@@ -1,4 +1,16 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import PluginAIBrowserServer from '../plugin';
+import type { Context } from '@nocobase/actions';
+import { getBrowserAccess } from '../access';
+export { getBrowserAccess, browserOwnerFilter } from '../access';
 
 export function normalizeToolCall(first: any, second: any) {
   if (first?.app || first?.db || first?.state) {
@@ -9,7 +21,7 @@ export function normalizeToolCall(first: any, second: any) {
 }
 
 export async function getConversationId(ctx: any, params?: any, toolCallId?: string): Promise<string | undefined> {
-  let id = (
+  const id =
     params?.conversationId ||
     params?.sessionId ||
     ctx?.state?.conversationId ||
@@ -19,8 +31,7 @@ export async function getConversationId(ctx: any, params?: any, toolCallId?: str
     ctx?.action?.params?.sessionId ||
     ctx?.action?.params?.filterByTk ||
     ctx?.action?.params?.values?.conversationId ||
-    ctx?.action?.params?.values?.sessionId
-  );
+    ctx?.action?.params?.values?.sessionId;
   if (id) return id;
 
   if (toolCallId) {
@@ -41,7 +52,7 @@ export async function getConversationId(ctx: any, params?: any, toolCallId?: str
 }
 
 export function getCurrentUserId(ctx: any): number {
-  return Number(ctx?.state?.currentUser?.id || ctx?.currentUser?.id || 0);
+  return getBrowserAccess(ctx).userId;
 }
 
 export function getAIBrowserPlugin(ctx?: any) {
@@ -56,11 +67,11 @@ export function getAIBrowserPlugin(ctx?: any) {
   return plugin;
 }
 
-export async function getActiveBrowserSession(plugin: any, conversationId?: string) {
+export async function getActiveBrowserSession(plugin: PluginAIBrowserServer, ctx: Context, conversationId?: string) {
   if (!conversationId) {
     throw new Error('conversationId is missing in tool context.');
   }
-  const session = await plugin.sessionService.getActiveSessionForConversation(conversationId);
+  const session = await plugin.sessionService.getActiveSessionForConversation(conversationId, getBrowserAccess(ctx));
   if (!session) {
     throw new Error('No active browser session found. Use browser_open_url first.');
   }
@@ -70,7 +81,11 @@ export async function getActiveBrowserSession(plugin: any, conversationId?: stri
     const metadata = session.get('metadata') || {};
     const restored = await plugin.driver.ensureSession(externalId, metadata.driver || {});
     if (!restored) {
-      throw new Error(`Browser session ${session.get('id')} is no longer attached to Browserless. Use browser_open_url to open a new session.`);
+      throw new Error(
+        `Browser session ${session.get(
+          'id',
+        )} is no longer attached to Browserless. Use browser_open_url to open a new session.`,
+      );
     }
   }
 

@@ -1,5 +1,20 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { TesseractRunner } from './tesseract-runner';
 import path from 'path';
+import os from 'os';
+import fs from 'fs/promises';
+import { createWriteStream } from 'fs';
+import { pipeline } from 'stream/promises';
+import type { Application } from '@nocobase/server';
+import type { PluginFileManagerServer, AttachmentModel } from '@nocobase/plugin-file-manager';
 
 export const WORKER_JOB_FILE_PREVIEW_OCR_PROCESS = 'file-preview-auth:ocr';
 export const FILE_PREVIEW_OCR_QUEUE_REDIS_KEY = 'file-preview-auth.ocr.queue';
@@ -37,9 +52,9 @@ interface LockManagerLike {
 }
 
 export class TesseractWorker {
-  private app: any;
-  private db: any;
-  private log: any;
+  private app: Application;
+  private db: Application['db'];
+  private log: Application['logger'];
   private runner: TesseractRunner;
   private isRunning = false;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -47,10 +62,10 @@ export class TesseractWorker {
   private isProcessing = false;
   private redisKey = FILE_PREVIEW_OCR_QUEUE_REDIS_KEY;
 
-  constructor(app: any) {
+  constructor(app: Application) {
     this.app = app;
     this.db = app.db;
-    this.log = app.log || console;
+    this.log = app.logger;
     this.runner = new TesseractRunner(app);
   }
 
@@ -244,11 +259,12 @@ export class TesseractWorker {
       this.log.warn(`[TesseractWorker] Attachment ${attachmentId} not found in DB.`);
       await this.updateOcrResult(attachmentId, {
         status: 'failed',
-        error: 'Attachment not found',
+        error: this.app.i18n.t('Attachment not found', { ns: 'plugin-file-preview-auth' }),
       }).catch(() => {});
       return;
     }
 
+    let tempDir: string | undefined;
     try {
       const ocrRecord = await ocrRepo.findOne({ filter: { attachmentId } });
       if (ocrRecord && ocrRecord.get('status') !== 'pending-ocr') {
@@ -258,20 +274,15 @@ export class TesseractWorker {
         return;
       }
 
-      // Lấy đường dẫn file vật lý trên server (NocoBase lưu trữ)
-      const fileManager = this.app.pm.get('@nocobase/plugin-file-manager') as any;
-      if (!fileManager) {
-        throw new Error('File manager plugin is not active.');
-      }
-
-      // Lấy file path tuyệt đối
-      const storageModel = getStorageFromCache(fileManager.storagesCache, attachment.storageId);
-      if (!storageModel || storageModel.type !== 'local') {
-        // Hỗ trợ local storage trước. Nếu là S3, runner sẽ tự động lấy stream từ fileManager.
-        this.log.info(`[TesseractWorker] Non-local storage detected or virtual file. Using fallback.`);
-      }
-
-      const filePath = path.resolve(process.cwd(), attachment.path || '');
+      const fileManager = this.app.pm.get<PluginFileManagerServer>('file-manager');
+      if (!fileManager?.getFileStream) throw new Error('File manager streaming is unavailable');
+      // Let the storage adapter resolve its document root, path, filename and remote credentials.
+      // A generated local filename avoids interpreting attachment paths as shell arguments or filesystem paths.
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'nocobase-ocr-input-'));
+      const extension = path.extname(String(attachment.get('filename') || '')).toLowerCase();
+      const filePath = path.join(tempDir, `input${extension === '.pdf' ? '.pdf' : '.image'}`);
+      const { stream } = await fileManager.getFileStream(attachment as AttachmentModel);
+      await pipeline(stream, createWriteStream(filePath));
 
       // Chạy Tesseract trích xuất văn bản cấp độ từ
       const result = await this.runner.runOcr(filePath, attachmentId);
@@ -289,20 +300,23 @@ export class TesseractWorker {
       });
 
       this.log.info(`[TesseractWorker] Successfully processed OCR for attachment ${attachmentId}`);
-    } catch (err: any) {
-      this.log.error(
-        `[TesseractWorker] Failed to process OCR for attachment ${attachmentId}: ${err.stack || err.message}`,
-      );
+    } catch (err: unknown) {
+      this.log.error(`[TesseractWorker] Failed to process OCR for attachment ${attachmentId}: ${getErrorMessage(err)}`);
 
-      // Chuyển trạng thái sang 'no-ocr' để người dùng có thể chạy lại
+      // Mark the job failed so the user can retry.
       await this.updateOcrResult(attachmentId, {
         status: 'failed',
-        error: err?.message || String(err),
+        data: null,
+        error: this.app.i18n.t('OCR processing failed. Check the server logs and retry.', {
+          ns: 'plugin-file-preview-auth',
+        }),
       }).catch(() => {});
+    } finally {
+      if (tempDir) await fs.rm(tempDir, { recursive: true, force: true });
     }
   }
 
-  private async updateOcrResult(attachmentId: number | string, values: Record<string, any>) {
+  private async updateOcrResult(attachmentId: number | string, values: Record<string, unknown>) {
     const repo = this.db.getRepository('attachmentOcrResults');
     if (!repo) return null;
 
@@ -328,26 +342,6 @@ export class TesseractWorker {
       values: nextValues,
     });
   }
-}
-
-function getStorageFromCache(cache: Map<any, any>, storageId: any) {
-  if (storageId === undefined || storageId === null) return undefined;
-  let res = cache.get(storageId);
-  if (res) return res;
-  const strId = String(storageId);
-  res = cache.get(strId);
-  if (res) return res;
-  const numId = Number(storageId);
-  if (!isNaN(numId)) {
-    res = cache.get(numId);
-    if (res) return res;
-  }
-  for (const [k, v] of cache.entries()) {
-    if (String(k) === strId) {
-      return v;
-    }
-  }
-  return undefined;
 }
 
 function parseAttachmentId(value: unknown): number | string | null {

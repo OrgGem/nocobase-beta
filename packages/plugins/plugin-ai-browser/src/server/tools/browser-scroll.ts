@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 import {
   buildReadResult,
@@ -26,7 +35,7 @@ const browserScrollTool = {
       try {
         const plugin = getAIBrowserPlugin(ctx);
         const conversationId = await getConversationId(ctx, params, toolCallId);
-        const session = await getActiveBrowserSession(plugin, conversationId);
+        const session = await getActiveBrowserSession(plugin, ctx, conversationId);
 
         const externalId = session.get('externalSessionId');
         await plugin.driver.scroll(externalId, params.direction);
@@ -43,7 +52,9 @@ const browserScrollTool = {
 
         return {
           status: 'success',
-          content: `Scrolled ${params.direction}.\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${read.dom}`,
+          content: `Scrolled ${params.direction}.\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${
+            read.dom
+          }`,
         };
       } catch (err: any) {
         return { status: 'error', content: `Failed to scroll: ${err.message}` };

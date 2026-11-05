@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 import { createActions } from './actions';
@@ -6,7 +15,6 @@ import { startFileSearchQueue, stopFileSearchQueue } from './queue';
 
 export class PluginFileSearchServer extends Plugin {
   declare app: any;
-  declare db: any;
 
   async afterAdd() {}
 
@@ -31,6 +39,7 @@ export class PluginFileSearchServer extends Plugin {
       'fileSearch:search': actions.fileSearch.search,
       'fileSearch:overview': actions.fileSearch.overview,
     });
+    this.app.resourceManager.define({ name: 'fileSearch' });
 
     this.app.acl.registerSnippet({
       name: `pm.${this.name}.manage`,

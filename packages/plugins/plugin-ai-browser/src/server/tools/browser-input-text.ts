@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 import {
   buildReadResult,
@@ -29,7 +38,7 @@ Provide a valid CSS/Playwright selector and the text to type.`,
       try {
         const plugin = getAIBrowserPlugin(ctx);
         const conversationId = await getConversationId(ctx, params, toolCallId);
-        const session = await getActiveBrowserSession(plugin, conversationId);
+        const session = await getActiveBrowserSession(plugin, ctx, conversationId);
 
         const externalId = session.get('externalSessionId');
         await plugin.driver.type(externalId, params.selector, params.text);
@@ -48,7 +57,9 @@ Provide a valid CSS/Playwright selector and the text to type.`,
 
         return {
           status: 'success',
-          content: `Typed text into: ${params.selector}\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${read.dom}`,
+          content: `Typed text into: ${params.selector}\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${
+            read.dom
+          }`,
         };
       } catch (err: any) {
         return { status: 'error', content: `Failed to input text: ${err.message}` };

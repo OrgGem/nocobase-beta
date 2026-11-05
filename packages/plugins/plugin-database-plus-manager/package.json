@@ -33,6 +33,7 @@
     "client-v2.d.ts"
   ],
   "peerDependencies": {
+    "@nocobase/acl": "2.x",
     "@nocobase/client-v2": "2.x",
     "@nocobase/database": "2.x",
     "@nocobase/flow-engine": "2.x",

@@ -1,4 +1,8 @@
 {
+  "Delete": "删除",
+  "Delete collection": "删除数据表",
+  "Are you sure you want to delete it?": "确定要删除吗？",
+  "Failed to delete collection": "删除数据表失败",
   "Elasticsearch": "Elasticsearch",
   "Elasticsearch Nodes": "Elasticsearch 节点",
   "Comma-separated list of Elasticsearch node URLs": "以逗号分隔的 Elasticsearch 节点 URL 列表",

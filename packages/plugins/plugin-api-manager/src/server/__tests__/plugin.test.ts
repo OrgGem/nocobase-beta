@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { randomBytes } from 'crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
@@ -253,7 +262,7 @@ describe('plugin-api-manager (smoke)', () => {
         targetUrl: 'http://127.0.0.1:9/echo',
         encryptionMode: 'aes-256-gcm',
       }),
-    ).rejects.toThrow(/aesSecret or aesSecretEnvVar/);
+    ).rejects.toThrow(/require a shared secret: set aesKeyName, aesSecret, or aesSecretEnvVar/);
   });
 
   it('rejects a PGP route without encrypt and decrypt keys', async () => {

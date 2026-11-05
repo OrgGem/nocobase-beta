@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createMockServer, type MockServer } from '@nocobase/test';
 
 import PluginSelectorRegistryServer from '../plugin';
@@ -28,14 +37,14 @@ describe('Selector Registry plugin integration', () => {
         'data-source-manager',
         'data-source-main',
         'error-handler',
-        [PluginSelectorRegistryServer, { name: 'selector-registry' }],
+        [PluginSelectorRegistryServer, { name: 'plugin-selector-registry' }],
       ],
     });
     await app.db.getRepository('roles').create({
       values: {
         name: 'bot-client',
         title: 'Bot client',
-        snippets: ['pm.selector-registry.client'],
+        snippets: ['pm.plugin-selector-registry.client'],
       },
     });
     const botUser = await app.db.getRepository('users').create({

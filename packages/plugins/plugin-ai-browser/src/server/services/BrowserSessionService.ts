@@ -1,4 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Application } from '@nocobase/server';
+import { BrowserAccess, browserOwnerFilter } from '../access';
 import type { IBrowserDriver, BrowserDriverSession, BrowserDriverSessionOptions, BrowserPolicy } from '../drivers';
 
 /**
@@ -19,7 +29,7 @@ export class BrowserSessionService {
   private idleTimeoutMs: number;
 
   constructor(app: Application, driver: IBrowserDriver) {
-    (this as any).app = app;
+    this.app = app;
     this.driver = driver;
     this.idleTimeoutMs = Number(process.env.AI_BROWSER_IDLE_TIMEOUT_SECONDS || 120) * 1000; // default 2 min
     this.startZombieSweeper();
@@ -63,9 +73,11 @@ export class BrowserSessionService {
           const lastActivity = this.lastActivityMap.get(sessionId);
           const policy = metadata.policy || {};
           const sessionIdleTimeoutMs = Number(policy.idleTimeoutSeconds || this.idleTimeoutMs / 1000) * 1000;
-          if (lastActivity && (now - lastActivity) > sessionIdleTimeoutMs) {
+          if (lastActivity && now - lastActivity > sessionIdleTimeoutMs) {
             (this as any).app.logger.info(
-              `[ai-browser] Session ${sessionId} idle for ${Math.round((now - lastActivity) / 1000)}s (limit ${sessionIdleTimeoutMs / 1000}s), expiring`,
+              `[ai-browser] Session ${sessionId} idle for ${Math.round((now - lastActivity) / 1000)}s (limit ${
+                sessionIdleTimeoutMs / 1000
+              }s), expiring`,
             );
             this.lastActivityMap.delete(sessionId);
             await this.expireSession(sessionId);
@@ -75,7 +87,7 @@ export class BrowserSessionService {
       } catch (err) {
         // Suppress errors when tables have not been created yet (e.g. fresh install before sync)
         const msg = (err as any).message || String(err);
-        if (!msg.includes("does not exist") && !msg.includes("relation") && !msg.includes("ER_NO_SUCH_TABLE")) {
+        if (!msg.includes('does not exist') && !msg.includes('relation') && !msg.includes('ER_NO_SUCH_TABLE')) {
           (this as any).app.logger.error(`[ai-browser] Zombie sweeper error: ${msg}`);
         }
       }
@@ -99,7 +111,7 @@ export class BrowserSessionService {
     metadata?: Record<string, any>;
   }): Promise<any> {
     const repo = (this as any).app.db.getRepository('aiBrowserSessions');
-    const profileRepo = (this as any).app.db.getRepository('aiBrowserProfiles');
+    const profileRepo = this.app.db.getRepository('aiBrowserProfiles');
 
     // Load the explicitly requested profile, or the latest enabled owner profile.
     // This keeps chat-created sessions on the admin's per-user policy by default.
@@ -119,12 +131,19 @@ export class BrowserSessionService {
     let launchOptions: Record<string, any> = {};
     let mergedPolicy = params.policy || {};
     if (profileId) {
-      const profile = await profileRepo.findById(profileId);
-      if (profile) {
-        launchOptions = profile.get('launchOptions') || {};
-        const profilePolicy = profile.get('defaultPolicy') || {};
-        mergedPolicy = { ...profilePolicy, ...mergedPolicy };
+      const profile = await profileRepo.findOne({
+        filterByTk: profileId,
+        filter: { ownerId: params.ownerId, enabled: true },
+      });
+      if (!profile) {
+        throw Object.assign(
+          new Error(this.app.i18n.t('Browser profile not found or access denied.', { ns: 'plugin-ai-browser' })),
+          { status: 403 },
+        );
       }
+      launchOptions = profile.get('launchOptions') || {};
+      const profilePolicy = profile.get('defaultPolicy') || {};
+      mergedPolicy = { ...profilePolicy, ...mergedPolicy };
     }
 
     // Load default policy from config
@@ -172,7 +191,9 @@ export class BrowserSessionService {
     });
 
     const sessionId = session.get('id');
-    (this as any).app.logger.info(`[ai-browser] Session created: ${sessionId} (external: ${driverSession.externalSessionId})`);
+    (this as any).app.logger.info(
+      `[ai-browser] Session created: ${sessionId} (external: ${driverSession.externalSessionId})`,
+    );
 
     // Mark initial activity so idle timer starts from creation
     this.touchSession(sessionId);
@@ -186,10 +207,9 @@ export class BrowserSessionService {
   /**
    * Stop a session.
    */
-  async stopSession(sessionId: string, userId?: number): Promise<void> {
-    const repo = (this as any).app.db.getRepository('aiBrowserSessions');
-    const session = await repo.findById(sessionId);
-    if (!session) throw new Error(`Session ${sessionId} not found`);
+  async stopSession(sessionId: string, access: BrowserAccess): Promise<void> {
+    const repo = this.app.db.getRepository('aiBrowserSessions');
+    const session = await this.getSession(sessionId, access);
 
     const externalId = session.get('externalSessionId');
     if (externalId) {
@@ -213,23 +233,30 @@ export class BrowserSessionService {
   /**
    * Get session details.
    */
-  async getSession(sessionId: string): Promise<any> {
-    const repo = (this as any).app.db.getRepository('aiBrowserSessions');
-    return repo.findOne({
+  async getSession(sessionId: string, access: BrowserAccess) {
+    const repo = this.app.db.getRepository('aiBrowserSessions');
+    const session = await repo.findOne({
       filterByTk: sessionId,
-      appends: ['tasks', 'profile'],
+      filter: browserOwnerFilter(access),
     });
+    if (!session) {
+      throw Object.assign(new Error(this.app.i18n.t('Browser session access denied.', { ns: 'plugin-ai-browser' })), {
+        status: 403,
+      });
+    }
+    return session;
   }
 
   /**
    * Get the active session for a specific conversation.
    */
-  async getActiveSessionForConversation(conversationId: string): Promise<any> {
-    const repo = (this as any).app.db.getRepository('aiBrowserSessions');
+  async getActiveSessionForConversation(conversationId: string, access: BrowserAccess) {
+    const repo = this.app.db.getRepository('aiBrowserSessions');
     return repo.findOne({
       filter: {
         conversationId,
         status: 'running',
+        ...browserOwnerFilter(access),
       },
       sort: ['-createdAt'],
     });
@@ -238,14 +265,9 @@ export class BrowserSessionService {
   /**
    * List sessions with optional filters.
    */
-  async listSessions(filters?: {
-    ownerId?: number;
-    status?: string;
-    limit?: number;
-  }): Promise<any[]> {
-    const repo = (this as any).app.db.getRepository('aiBrowserSessions');
-    const where: any = {};
-    if (filters?.ownerId) where.ownerId = filters.ownerId;
+  async listSessions(access: BrowserAccess, filters?: { status?: string; limit?: number }) {
+    const repo = this.app.db.getRepository('aiBrowserSessions');
+    const where: { ownerId?: number; status?: string } = browserOwnerFilter(access);
     if (filters?.status) where.status = filters.status;
 
     return repo.find({
@@ -307,7 +329,9 @@ export class BrowserSessionService {
       if (row) {
         return JSON.parse(row.get('value') as string);
       }
-    } catch {}
+    } catch {
+      // Use the built-in defaults when configuration is absent or not valid JSON.
+    }
     return {
       allowedDomains: [],
       deniedDomains: [],
@@ -321,4 +345,3 @@ export class BrowserSessionService {
     };
   }
 }
-

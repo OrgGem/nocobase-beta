@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
 import { cursorPaginationAction, default as resource } from './resources/database-plus-manager';
 import settings from './collections/database-plus-manager-settings';
@@ -8,9 +17,15 @@ function isCursorMode(value: unknown): value is 'keyset' | 'cursor' {
   return value === 'keyset' || value === 'cursor';
 }
 
-async function listPaginationOverride(ctx, next) {
+export async function listPaginationOverride(ctx, next) {
   const params = ctx.action?.params || {};
-  if (params.paginate === false || params.paginate === 'false' || !isCursorMode(params.paginationMode)) {
+  if (
+    params.paginate === false ||
+    params.paginate === 'false' ||
+    !isCursorMode(params.paginationMode) ||
+    ctx.action.resourceName.includes('.') ||
+    ctx.action.sourceId != null
+  ) {
     await next();
     return;
   }
@@ -19,10 +34,6 @@ async function listPaginationOverride(ctx, next) {
 
 export class PluginDatabasePlusManagerServer extends Plugin {
   async load() {
-    this.app.db.addMigrations({
-      name: 'database-plus-manager',
-      migrations: [],
-    });
     this.app.resourceManager.define(resource);
     this.app.acl.registerSnippet({
       name: PAGINATION_ACL_SNIPPET,
@@ -52,5 +63,3 @@ export class PluginDatabasePlusManagerServer extends Plugin {
 }
 
 export default PluginDatabasePlusManagerServer;
-
-

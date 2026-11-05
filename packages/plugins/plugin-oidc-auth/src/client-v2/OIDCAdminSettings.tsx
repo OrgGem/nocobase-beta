@@ -1,6 +1,19 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Checkbox, Form, Input, Select, Tabs } from 'antd';
 import React from 'react';
 import { useT } from './locale';
+
+function PreservedOptions() {
+  return null;
+}
 
 export default function OIDCAdminSettings() {
   const t = useT();
@@ -13,6 +26,10 @@ export default function OIDCAdminSettings() {
           forceRender: true,
           children: (
             <>
+              {/* Register the complete options object so the host form's shallow merge preserves unrendered keys. */}
+              <Form.Item name="options" hidden>
+                <PreservedOptions />
+              </Form.Item>
               <Form.Item name={['options', 'oidc', 'issuer']} label={t('Issuer')} rules={[{ required: true }]}>
                 <Input placeholder="https://idp.example.com" />
               </Form.Item>

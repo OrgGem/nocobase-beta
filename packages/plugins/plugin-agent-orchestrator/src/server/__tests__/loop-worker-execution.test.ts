@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database } from '@nocobase/database';
 import type { Application } from '@nocobase/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -64,6 +73,10 @@ class MemoryRepository {
   async findOne(options: Row) {
     if (options.filterByTk !== undefined) return this.rows.find((row) => row.id === options.filterByTk) || null;
     return (await this.find(options))[0] || null;
+  }
+
+  async count(options: Row = {}) {
+    return (await this.find(options)).length;
   }
 
   async create(options: Row) {

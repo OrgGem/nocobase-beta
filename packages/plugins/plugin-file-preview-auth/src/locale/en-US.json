@@ -10,5 +10,7 @@
   "Please help me analyze the file currently open in preview.": "Please help me analyze the file currently open in preview.",
   "Failed to open AI chat": "Failed to open AI chat",
   "This file type cannot be previewed. Click Download to save the file.": "This file type cannot be previewed. Click Download to save the file.",
-  "This file type cannot be previewed. ": "This file type cannot be previewed. "
+  "This file type cannot be previewed. ": "This file type cannot be previewed. ",
+  "OCR processing failed. Check the server logs and retry.": "OCR processing failed. Check the server logs and retry.",
+  "Attachment not found": "Attachment not found"
 }

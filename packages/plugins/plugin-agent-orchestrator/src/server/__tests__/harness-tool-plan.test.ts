@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Application } from '@nocobase/server';
 import { describe, expect, it } from 'vitest';
 import { compileHarness } from '../services/HarnessCompiler';
@@ -138,6 +147,7 @@ describe('planHarnessTools', () => {
     expect(plan.filter).toEqual(['readFile']);
     expect(plan.blockedSystemTools).toEqual([
       'aiEmployeeWorkflowTaskOutput',
+      'getSkill',
       'knowledge-base-retrieve',
       'subAgentWebSearch',
     ]);

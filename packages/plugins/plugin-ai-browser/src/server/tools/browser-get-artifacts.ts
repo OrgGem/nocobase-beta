@@ -1,5 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
-import { normalizeToolCall } from './utils';
+import { getAIBrowserPlugin, getBrowserAccess, normalizeToolCall } from './utils';
 type ToolRegisterOptions = any;
 
 const browserGetArtifactsTool: ToolRegisterOptions = {
@@ -16,6 +25,8 @@ const browserGetArtifactsTool: ToolRegisterOptions = {
     invoke: async (first: any, second: any) => {
       const { ctx, params } = normalizeToolCall(first, second);
       try {
+        const plugin = getAIBrowserPlugin(ctx);
+        await plugin.sessionService.getSession(params.sessionId, getBrowserAccess(ctx));
         const eventRepo = ctx.db.getRepository('aiBrowserActionEvents');
         const events = await eventRepo.find({
           filter: { sessionId: params.sessionId },

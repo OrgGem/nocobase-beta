@@ -90,7 +90,7 @@ export class CrossJoinBlockModel extends BlockModel {
   }
 
   async handleConfigSubmit(config: CrossJoinConfig) {
-    this.setStepParams('crossJoinSettings', { config });
+    this.setStepParams('crossJoinSettings', { config: { ...config } });
     await this.save();
     this._configuratorOpen = false;
     this._page = 1;
@@ -209,20 +209,22 @@ CrossJoinBlockModel.define({
   },
 });
 
-// Only register the custom edit-mapping step.
+// Mapping opens from an explicit settings menu action, never from beforeRender.
 // Title, description, block height, linkage rules, and remove are all inherited
 // from BlockModel.registerFlow('cardSettings') automatically.
 CrossJoinBlockModel.registerFlow({
   key: 'crossJoinSettings',
   title: tExpr('Cross Join settings', { ns: 'plugin-block-cross-join' }),
   sort: -100,
-  steps: {
-    editMapping: {
-      title: tExpr('Edit mapping', { ns: 'plugin-block-cross-join' }),
-      useRawParams: true,
-      handler(ctx) {
-        (ctx.model as CrossJoinBlockModel).openConfigurator();
-      },
-    },
-  },
+  manual: true,
+  steps: {},
 });
+
+CrossJoinBlockModel.registerExtraMenuItems((model, t) => [
+  {
+    key: 'cross-join-edit-mapping',
+    label: t('Edit mapping', { ns: 'plugin-block-cross-join' }),
+    sort: -100,
+    onClick: () => (model as CrossJoinBlockModel).openConfigurator(),
+  },
+]);

@@ -1,9 +1,18 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Application } from '@nocobase/server';
 import { Database } from '@nocobase/database';
 
 export class CloneEngineService {
   app: Application;
-  concurrencyLimit: number = 3;
+  concurrencyLimit = 3;
 
   constructor(app: Application) {
     this.app = app;
@@ -37,11 +46,12 @@ export class CloneEngineService {
       const pendingTables = await taskTablesRepo.find({
         filter: {
           task_id: taskId,
-          status: { $in: ['pending', 'running', 'paused'] },
+          status: { $in: ['pending', 'running', 'paused', 'error'] },
         },
       });
 
-      const runWorker = async (iterator: IterableIterator<any>) => {
+      let hasErrors = false;
+      const runWorker = async (iterator: IterableIterator<(typeof pendingTables)[number]>) => {
         for (const table of iterator) {
           const currentStatus = await this.getCache().get(`CloneTask:${taskId}:status`);
           if (currentStatus === 'paused') break;
@@ -51,13 +61,17 @@ export class CloneEngineService {
 
             const endStatus = await this.getCache().get(`CloneTask:${taskId}:status`);
             if (endStatus !== 'paused') {
-              await taskTablesRepo.update({ filterByTk: table.id, values: { status: 'completed' } });
+              await taskTablesRepo.update({
+                filterByTk: table.id,
+                values: { status: 'completed', error_message: null },
+              });
             }
           } catch (error) {
+            hasErrors = true;
             this.app.logger.error(`Sync table ${table.table_name} failed:`, error);
             await taskTablesRepo.update({
               filterByTk: table.id,
-              values: { status: 'error', error_message: error.message },
+              values: { status: 'error', error_message: error instanceof Error ? error.message : String(error) },
             });
           }
         }
@@ -66,7 +80,8 @@ export class CloneEngineService {
       const iterator = pendingTables[Symbol.iterator]();
       const workers = new Array(this.concurrencyLimit).fill(iterator).map(runWorker);
 
-      await Promise.allSettled(workers);
+      const results = await Promise.allSettled(workers);
+      hasErrors ||= results.some((result) => result.status === 'rejected');
 
       const finalStatus = await this.getCache().get(`CloneTask:${taskId}:status`);
       if (finalStatus === 'paused') {
@@ -76,7 +91,7 @@ export class CloneEngineService {
           values: { status: 'paused' },
         });
       } else {
-        await this.updateTaskStatus(taskId, 'completed');
+        await this.updateTaskStatus(taskId, hasErrors ? 'error' : 'completed');
       }
     } catch (error) {
       this.app.logger.error(`Task ${taskId} failed with unhandled error:`, error);
@@ -99,7 +114,7 @@ export class CloneEngineService {
     chunkSize: number,
     hasFilter: boolean,
   ): string {
-    const filterSql = hasFilter ? `WHERE ${quotedColumn} > ?` : '';
+    const filterSql = hasFilter ? `WHERE ${quotedColumn} > $1` : '';
 
     if (dialect === 'mssql') {
       return `SELECT TOP ${chunkSize} * FROM ${quotedTable} ${filterSql} ORDER BY ${quotedColumn} ASC`;
@@ -122,7 +137,7 @@ export class CloneEngineService {
       values: { status: 'running' },
     });
 
-    let last_sync_value = (await cache.get(cacheKey)) || tableInfo.last_sync_value;
+    let last_sync_value = (await cache.get(cacheKey)) ?? tableInfo.last_sync_value;
     let cloned_records = tableInfo.cloned_records || 0;
     const { sort_column, table_name } = tableInfo;
 
@@ -135,12 +150,13 @@ export class CloneEngineService {
     const targetQi = targetDb.sequelize.getQueryInterface();
     const targetQuotedTable = targetQi.quoteIdentifier(table_name);
 
-    while (true) {
+    for (;;) {
       const status = await cache.get(`CloneTask:${taskId}:status`);
       if (status === 'paused') break;
 
-      const lastSyncParams = last_sync_value ? [last_sync_value] : [];
-      const query = this.buildSelectQuery(dialect, quotedTable, quotedColumn, chunkSize, !!last_sync_value);
+      const hasCheckpoint = last_sync_value != null;
+      const lastSyncParams = hasCheckpoint ? [last_sync_value] : [];
+      const query = this.buildSelectQuery(dialect, quotedTable, quotedColumn, chunkSize, hasCheckpoint);
 
       const [rows] = await sourceDb.sequelize.query(query, { bind: lastSyncParams });
 

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { IBrowserDriver, BrowserDriverSession, BrowserTaskResult, BrowserDriverSessionOptions } from './IBrowserDriver';
 type Browser = import('playwright-core').Browser;
 type BrowserContext = import('playwright-core').BrowserContext;
@@ -30,20 +39,8 @@ export class PlaywrightDriver implements IBrowserDriver {
 
   constructor() {
     this.cdpUrl = process.env.AI_BROWSER_CDP_URL || 'ws://browser:3000';
-    this.liveUrl = this.normalizeConfiguredLiveUrl(process.env.AI_BROWSER_LIVE_URL || this.deriveLiveUrl(this.cdpUrl));
+    this.liveUrl = this.normalizeConfiguredLiveUrl(process.env.AI_BROWSER_LIVE_URL || '/ai-browser-live/');
     this.sessionsUrl = process.env.AI_BROWSER_SESSIONS_URL || this.deriveSessionsUrl(this.cdpUrl);
-  }
-
-  private deriveLiveUrl(cdpUrl: string) {
-    try {
-      const parsed = new URL(cdpUrl);
-      if (['browser', 'browserless'].includes(parsed.hostname)) {
-        return '/ai-browser-live/';
-      }
-    } catch {
-      // Fall through to simple scheme conversion for legacy values.
-    }
-    return cdpUrl.replace(/^ws:\/\//, 'http://').replace(/^wss:\/\//, 'https://');
   }
 
   private normalizeConfiguredLiveUrl(url: string) {
@@ -172,7 +169,7 @@ export class PlaywrightDriver implements IBrowserDriver {
 
     try {
       const targetId = targetInfo?.targetId || (await this.getTargetId(page));
-      
+
       if (targetId) {
         return `/ai-browser-live/devtools/inspector.html?ws=__AI_BROWSER_HOST__/devtools/page/${targetId}`;
       }
@@ -200,10 +197,10 @@ export class PlaywrightDriver implements IBrowserDriver {
 
   async createSession(options: BrowserDriverSessionOptions): Promise<BrowserDriverSession> {
     const externalSessionId = randomUUID();
-    
+
     // Connect to browserless via CDP
     const browser = await getChromium().connectOverCDP(this.withTrackingId(this.cdpUrl, externalSessionId));
-    
+
     // Create isolated context for this session
     const contextOptions: any = {
       viewport: { width: 1920, height: 1080 },
@@ -211,7 +208,7 @@ export class PlaywrightDriver implements IBrowserDriver {
       locale: 'en-US',
       colorScheme: 'light',
     };
-    
+
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
 
@@ -225,7 +222,8 @@ export class PlaywrightDriver implements IBrowserDriver {
 
     const targetInfo = await this.getBrowserlessTargetInfo(externalSessionId, page);
     const sessionLiveUrl =
-      (await this.getSessionLiveUrl(externalSessionId, page, targetInfo)) || this.withTrackingId(this.liveUrl, externalSessionId);
+      (await this.getSessionLiveUrl(externalSessionId, page, targetInfo)) ||
+      this.withTrackingId(this.liveUrl, externalSessionId);
 
     const sessionData: BrowserDriverSession = {
       externalSessionId,
@@ -264,14 +262,14 @@ export class PlaywrightDriver implements IBrowserDriver {
   async getSessionStatus(externalSessionId: string): Promise<BrowserDriverSession | null> {
     const session = this.activeSessions.get(externalSessionId);
     if (!session) return null;
-    
+
     // Verify if the browser is actually still connected
     if (!session.browser.isConnected()) {
       session.sessionData.status = 'stopped';
       this.activeSessions.delete(externalSessionId);
       return null;
     }
-    
+
     return session.sessionData;
   }
 
@@ -350,7 +348,9 @@ export class PlaywrightDriver implements IBrowserDriver {
       const sessionData: BrowserDriverSession = {
         externalSessionId,
         status: 'running',
-        liveUrl: (await this.getSessionLiveUrl(externalSessionId, page, targetInfo)) || this.withTrackingId(this.liveUrl, externalSessionId),
+        liveUrl:
+          (await this.getSessionLiveUrl(externalSessionId, page, targetInfo)) ||
+          this.withTrackingId(this.liveUrl, externalSessionId),
         debugUrl: targetInfo.browserWSEndpoint || reconnectUrl,
         ...(targetInfo as any),
       };
@@ -528,7 +528,7 @@ export class PlaywrightDriver implements IBrowserDriver {
     });
   }
 
-  async waitFor(externalSessionId: string, selector: string, timeoutMs: number = 10000): Promise<boolean> {
+  async waitFor(externalSessionId: string, selector: string, timeoutMs = 10000): Promise<boolean> {
     const page = this.getPage(externalSessionId);
     try {
       await this.locator(page, selector).waitFor({ state: 'visible', timeout: timeoutMs });

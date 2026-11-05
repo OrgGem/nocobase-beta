@@ -1,4 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { ResourceOptions } from '@nocobase/resourcer';
+import { NoPermissionError } from '@nocobase/acl';
 import { createCursor, parseCursor } from '../utils/cursor';
 import { buildSeekFilter } from '../utils/keyset';
 import { hashFilter, normalizeSort } from '../utils/sort';
@@ -30,16 +40,33 @@ function getSecret(ctx: { app?: { secret?: unknown } }): string {
 }
 
 export async function cursorPaginationAction(ctx, next) {
-  const requestedMode = mode(ctx.action.params.paginationMode);
+  const standalone = ctx.action.resourceName === 'databasePlusManager';
+  const collection = standalone ? String(ctx.action.params.collection || '') : ctx.action.resourceName;
+  let params = ctx.action.params;
+  if (standalone) {
+    if (!collection || collection.includes('.')) ctx.throw(403);
+    const acl = ctx.dataSource?.acl || ctx.app.acl;
+    const resolved = await acl
+      .resolveActionParams(ctx, {
+        resourceName: collection,
+        actionName: 'list',
+        params,
+      })
+      .catch((error: unknown) => {
+        if (error instanceof NoPermissionError) ctx.throw(403);
+        throw error;
+      });
+    params = resolved.mergedParams;
+  }
+  const requestedMode = mode(params.paginationMode);
   if (requestedMode === 'offset') throw new Error('Use the built-in list action for offset pagination');
-  const limitValue = Number(ctx.action.params.limit ?? DEFAULT_LIMIT);
+  const limitValue = Number(params.limit ?? DEFAULT_LIMIT);
   if (!Number.isSafeInteger(limitValue) || limitValue < 1 || limitValue > MAX_LIMIT) throw new Error('Invalid limit');
-  const sort = normalizeSort(ctx.action.params.sort);
-  const collection = String(ctx.action.params.collection || ctx.action.resourceName);
-  const filter = (ctx.action.params.filter ?? {}) as Record<string, unknown>;
+  const sort = normalizeSort(params.sort);
+  const filter = (params.filter ?? {}) as Record<string, unknown>;
   const secret = getSecret(ctx);
   let values: unknown[] = [];
-  const token = ctx.action.params.cursor;
+  const token = params.cursor;
   if (token) {
     const payload = parseCursor(String(token), secret);
     if (
@@ -51,13 +78,15 @@ export async function cursorPaginationAction(ctx, next) {
     }
     values = payload.values;
   }
-  const repository = ctx.db.getRepository(collection);
+  const repository = standalone
+    ? (ctx.dataSource?.collectionManager || ctx.db).getRepository(collection)
+    : ctx.getCurrentRepository();
   const rows = await repository.find({
     context: ctx,
     filter: buildSeekFilter(filter, sort, values),
-    fields: ctx.action.params.fields,
-    appends: ctx.action.params.appends,
-    except: ctx.action.params.except,
+    fields: params.fields,
+    appends: params.appends,
+    except: params.except,
     sort,
     limit: limitValue + 1,
   });

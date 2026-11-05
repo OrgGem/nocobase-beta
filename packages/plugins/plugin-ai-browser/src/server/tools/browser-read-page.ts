@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 import {
   buildReadResult,
@@ -27,7 +36,7 @@ Use this to understand the current state of the page before deciding on the next
       try {
         const plugin = getAIBrowserPlugin(ctx);
         const conversationId = await getConversationId(ctx, params, toolCallId);
-        const session = await getActiveBrowserSession(plugin, conversationId);
+        const session = await getActiveBrowserSession(plugin, ctx, conversationId);
 
         const externalId = session.get('externalSessionId');
         const read = await buildReadResult(plugin, externalId, params.maxDomChars || 10000);

@@ -1,5 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
-import { getAIBrowserPlugin, normalizeToolCall, touchSessionActivity } from './utils';
+import { publicLiveUrl } from '../public-live-url';
+import { getAIBrowserPlugin, getBrowserAccess, normalizeToolCall, touchSessionActivity } from './utils';
 type ToolRegisterOptions = any;
 
 const browserGetSessionTool: ToolRegisterOptions = {
@@ -16,7 +26,7 @@ const browserGetSessionTool: ToolRegisterOptions = {
       const { ctx, params } = normalizeToolCall(first, second);
       try {
         const plugin = getAIBrowserPlugin(ctx);
-        const session = await plugin.sessionService.getSession(params.sessionId);
+        const session = await plugin.sessionService.getSession(params.sessionId, getBrowserAccess(ctx));
         if (!session) return { status: 'error', content: `Session ${params.sessionId} not found.` };
         touchSessionActivity(plugin, params.sessionId);
         return {
@@ -25,7 +35,7 @@ const browserGetSessionTool: ToolRegisterOptions = {
             id: session.get('id'),
             title: session.get('title'),
             status: session.get('status'),
-            liveUrl: session.get('liveUrl'),
+            liveUrl: publicLiveUrl(session.get('liveUrl')),
             currentUrl: session.get('currentUrl'),
             driver: session.get('driver'),
             startedAt: session.get('startedAt'),

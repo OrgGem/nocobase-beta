@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { QuickEditFormModel, SelectFieldModel, TableColumnModel, TableSelectModel } from '@nocobase/client-v2';
 import { FlowEngine, FlowModel } from '@nocobase/flow-engine';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -203,8 +212,12 @@ describe('PluginFieldSelectionFilterClient', () => {
     expect(dispatchEvent).toHaveBeenCalledWith('beforeRender', undefined, { useCache: false });
   });
 
-  it('loads the same flow registrations from the client-v2 entry', () => {
-    expect(PluginFieldSelectionFilterClientV2).toBe(PluginFieldSelectionFilterClient);
+  it('loads the flow registrations from the native client-v2 entry', async () => {
+    const registerActions = vi.fn();
+    await PluginFieldSelectionFilterClientV2.prototype.load.call({
+      flowEngine: { registerActions },
+    } as unknown as PluginFieldSelectionFilterClientV2);
+    expect(registerActions).toHaveBeenCalled();
     expect(QuickEditFormModel.globalFlowRegistry.getFlow('fieldSelectionFilterSettings')).toBeDefined();
     expect(TableSelectModel.globalFlowRegistry.getFlow('fieldSelectionFilterSettings')).toBeDefined();
   });

@@ -1,4 +1,13 @@
 /**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+/**
  * Browser Driver Interface
  *
  * Adapter pattern: all browser engines implement this interface.
@@ -74,6 +83,11 @@ export interface BrowserStepEvent {
 }
 
 export interface IBrowserDriver {
+  ensureSession?(
+    externalSessionId: string,
+    options?: { debugUrl?: string; targetId?: string; browserWSEndpoint?: string },
+  ): Promise<BrowserDriverSession | null>;
+
   /** Driver name identifier */
   readonly name: string;
 
@@ -120,7 +134,7 @@ export interface IBrowserDriver {
   // ==========================================================================
   // Granular Browser Actions (for AI Employee-Driven mode)
   // ==========================================================================
-  
+
   navigate(externalSessionId: string, url: string): Promise<void>;
   click(externalSessionId: string, selector: string): Promise<void>;
   type(externalSessionId: string, selector: string, text: string): Promise<void>;

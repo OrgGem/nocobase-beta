@@ -53,5 +53,8 @@
   "User declined opening a browser session.": "User declined opening a browser session.",
   "Operation failed": "Operation failed",
   "Add": "Add",
-  "Remove": "Remove"
+  "Remove": "Remove",
+  "Browser profile not found or access denied.": "Browser profile not found or access denied.",
+  "Browser session access denied.": "Browser session access denied.",
+  "AI conversation not found or access denied.": "AI conversation not found or access denied."
 }

@@ -1,5 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import http from 'http';
 import type { AddressInfo } from 'net';
+import type { Response } from 'superagent';
 import { generateKeyPairSync } from 'crypto';
 import { createMockServer, type MockServer } from '@nocobase/test';
 import { generateApiKey } from '../services/key-manager';
@@ -288,7 +298,7 @@ export async function createRsaKeyFixture(
 }
 
 /** supertest binary response parser: makes res.body a Buffer. */
-export function binaryParser(res: http.IncomingMessage, callback: (err: Error | null, body: Buffer) => void) {
+export function binaryParser(res: Response, callback: (err: Error | null, body: Buffer) => void) {
   res.setEncoding('binary');
   let data = '';
   res.on('data', (chunk) => {

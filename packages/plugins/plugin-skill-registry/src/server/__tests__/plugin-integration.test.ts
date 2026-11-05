@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -31,14 +40,14 @@ describe('Skill Registry plugin integration', () => {
         'data-source-manager',
         'data-source-main',
         'error-handler',
-        [PluginSkillRegistryServer, { name: 'skill-registry' }],
+        [PluginSkillRegistryServer, { name: 'plugin-skill-registry' }],
       ],
     });
     await app.db.getRepository('roles').create({
       values: {
         name: 'registry-syncer',
         title: 'Registry syncer',
-        snippets: ['pm.skill-registry.sync'],
+        snippets: ['pm.plugin-skill-registry.sync'],
       },
     });
     const syncUser = await app.db.getRepository('users').create({

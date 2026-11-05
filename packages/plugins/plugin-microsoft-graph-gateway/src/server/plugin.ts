@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Context, Next } from '@nocobase/actions';
 import type { Model } from '@nocobase/database';
@@ -99,7 +108,7 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
   async load() {
     this.stopping = false;
     const action =
-      (operation: string, handler: (ctx: Context) => Promise<void>) => async (ctx: Context, next: Next) => {
+      (operation: string, handler: (ctx: Context) => Promise<void> | void) => async (ctx: Context, next: Next) => {
         const startedAt = new Date();
         const requestId = String(ctx.request.headers['x-request-id'] ?? randomUUID()).slice(0, 128);
         ctx.set('X-Request-ID', requestId);
@@ -221,22 +230,6 @@ export class PluginMicrosoftGraphGatewayServer extends Plugin {
       'retryJob',
     ];
     this.app.acl.allow('msGraphGateway', external, 'public');
-    this.app.acl.allow(
-      'msGraphGateway',
-      [
-        'getSettings',
-        'saveSettings',
-        'testConnection',
-        'createApiKey',
-        'listApiKeys',
-        'revokeApiKey',
-        'dashboard',
-        'listJobs',
-        'listAuditLogs',
-        'openapi',
-      ],
-      'loggedIn',
-    );
     this.app.acl.registerSnippet({ name: 'pm.microsoft-graph-gateway', actions: ['msGraphGateway:*'] });
 
     this.app.on('afterStart', async () => this.startWorker());

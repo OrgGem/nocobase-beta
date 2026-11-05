@@ -53,5 +53,8 @@
   "User declined opening a browser session.": "用户拒绝打开浏览器会话。",
   "Operation failed": "操作失败",
   "Add": "添加",
-  "Remove": "移除"
+  "Remove": "移除",
+  "Browser profile not found or access denied.": "浏览器配置不存在或无权访问。",
+  "Browser session access denied.": "浏览器会话访问被拒绝。",
+  "AI conversation not found or access denied.": "AI 对话不存在或无权访问。"
 }

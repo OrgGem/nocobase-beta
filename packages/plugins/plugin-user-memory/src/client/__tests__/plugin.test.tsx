@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Application } from '@nocobase/client';
 import { createMockClient } from '@nocobase/client-v2';
 
@@ -15,7 +24,7 @@ describe('PluginUserMemoryClient', () => {
     expect(app.pluginSettingsManager.get('plugin-user-memory')).toMatchObject({
       key: 'plugin-user-memory',
       title: 'User Memory',
-      aclSnippet: 'pm.user-memory.admin',
+      aclSnippet: 'pm.plugin-user-memory.admin',
       path: '/admin/settings/plugin-user-memory',
     });
   });
@@ -30,13 +39,13 @@ describe('PluginUserMemoryClient', () => {
     expect(app.pluginSettingsManager.get('plugin-user-memory')).toMatchObject({
       key: 'plugin-user-memory',
       title: 'User Memory',
-      aclSnippet: 'pm.user-memory.admin',
+      aclSnippet: 'pm.plugin-user-memory.admin',
     });
     expect(app.pluginSettingsManager.get('plugin-user-memory.index')).toMatchObject({
       menuKey: 'plugin-user-memory',
       pageKey: 'index',
       title: 'User Memory',
-      aclSnippet: 'pm.user-memory.admin',
+      aclSnippet: 'pm.plugin-user-memory.admin',
       componentLoader: expect.any(Function),
     });
   });

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createMockClient } from '@nocobase/client-v2';
 import { describe, expect, it } from 'vitest';
 import {
@@ -9,7 +18,7 @@ import PluginDockerRegistryUiClientV2 from '../plugin';
 
 describe('Docker Registry client permissions', () => {
   it('keeps read, transfer and delete permissions separate', () => {
-    const permissions = resolveDockerRegistryPermissions((snippet) => snippet === 'pm.docker-registry-ui.read');
+    const permissions = resolveDockerRegistryPermissions((snippet) => snippet === 'pm.plugin-docker-registry-ui.read');
     expect(permissions).toEqual({
       canRead: true,
       canDelete: false,
@@ -21,12 +30,16 @@ describe('Docker Registry client permissions', () => {
   });
 
   it('grants upload and download independently', () => {
-    expect(resolveDockerRegistryPermissions((snippet) => snippet === 'pm.docker-registry-ui.download')).toMatchObject({
+    expect(
+      resolveDockerRegistryPermissions((snippet) => snippet === 'pm.plugin-docker-registry-ui.download'),
+    ).toMatchObject({
       canDownload: true,
       canUpload: false,
       canDelete: false,
     });
-    expect(resolveDockerRegistryPermissions((snippet) => snippet === 'pm.docker-registry-ui.upload')).toMatchObject({
+    expect(
+      resolveDockerRegistryPermissions((snippet) => snippet === 'pm.plugin-docker-registry-ui.upload'),
+    ).toMatchObject({
       canDownload: false,
       canUpload: true,
       canDelete: false,
@@ -45,7 +58,9 @@ describe('Docker Registry client permissions', () => {
   });
 
   it('treats manage as the explicit superset', () => {
-    const permissions = resolveDockerRegistryPermissions((snippet) => snippet === 'pm.docker-registry-ui.manage');
+    const permissions = resolveDockerRegistryPermissions(
+      (snippet) => snippet === 'pm.plugin-docker-registry-ui.manage',
+    );
     expect(permissions).toEqual({
       canRead: true,
       canDelete: true,

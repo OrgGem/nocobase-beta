@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createHash } from 'crypto';
 import { createReadStream, statSync } from 'fs';
 import { copyFile, mkdir, rename, unlink, writeFile } from 'fs/promises';
@@ -81,11 +90,13 @@ export function createPackageRegistryRouter(plugin: RegistryPlugin) {
       if (subPath.includes(tarballMarker)) {
         const [rawPackageName, rawFilename] = subPath.split(tarballMarker);
         const route = parsePackageRoute(rawPackageName, ctx.query?.registry);
+        await assertRegistryReadAccess(plugin, ctx, route.registryName);
         await sendTarball(plugin, ctx, route.registryName, route.packageName, normalizeTarballName(rawFilename));
         return;
       }
 
       const route = parsePackageRoute(subPath, ctx.query?.registry);
+      await assertRegistryReadAccess(plugin, ctx, route.registryName);
       ctx.body = await getNpmMetadata(plugin, route.packageName, route.registryName);
     } catch (error) {
       const status = error?.status || 500;
@@ -93,6 +104,22 @@ export function createPackageRegistryRouter(plugin: RegistryPlugin) {
       ctx.body = { error: error instanceof Error ? error.message : String(error) };
     }
   };
+}
+
+async function assertRegistryReadAccess(plugin: RegistryPlugin, ctx: AnyContext, registryName: string) {
+  const registry = await findRegistry(plugin, normalizeRegistryName(registryName));
+  if (!registry) throw notFound(`Registry not found: ${registryName}`);
+  if (!getValue(registry, 'authRequired')) return;
+
+  // The npm router runs before resourcer; run the normal authenticator explicitly for private registries.
+  const authContext = Object.create(ctx);
+  Object.defineProperties(authContext, {
+    action: { value: { resourceName: 'packageRegistry', actionName: 'metadata', params: {} } },
+    dataSource: { value: plugin.app.dataSourceManager.get('main') },
+    skipAuthCheck: { value: false },
+  });
+  await plugin.app.authManager.middleware()(authContext, async () => undefined);
+  if (!authContext.state.currentUser) ctx.throw(401);
 }
 
 async function publishPackage(plugin: RegistryPlugin, values: PublishValues) {
@@ -103,7 +130,12 @@ async function publishPackage(plugin: RegistryPlugin, values: PublishValues) {
   const metadata = values.metadata || {};
 
   const registry = await findOrCreateRegistry(plugin, registryName);
-  const pkg = await findOrCreatePackage(plugin, registry, packageName, values.description || metadata.description || '');
+  const pkg = await findOrCreatePackage(
+    plugin,
+    registry,
+    packageName,
+    values.description || metadata.description || '',
+  );
 
   const storagePath = getTarballStoragePath(registryName, packageName, version, filename);
   await mkdir(path.dirname(storagePath), { recursive: true });
@@ -384,7 +416,9 @@ async function cacheTarballFromUpstream(
 
     const metadata = getValue(versionRecord, 'metadata') || {};
     const upstream = normalizeUpstreamUrl(getValue(registry, 'upstreamUrl'));
-    const tarballUrl = normalizeTarballUrl(metadata.dist?.tarball || buildUpstreamTarballUrl(upstream, packageName, version));
+    const tarballUrl = normalizeTarballUrl(
+      metadata.dist?.tarball || buildUpstreamTarballUrl(upstream, packageName, version),
+    );
     const storagePath = getTarballStoragePath(getValue(registry, 'name'), packageName, version, filename);
     await mkdir(path.dirname(storagePath), { recursive: true });
     await downloadToFile(tarballUrl, storagePath);
@@ -468,7 +502,9 @@ function isRegistryPath(pathname: string) {
 }
 
 function parsePackageRoute(rawPath: string, registryQuery?: unknown) {
-  const cleanedPath = String(rawPath || '').replace(/^\/+/, '').replace(/\/+$/, '');
+  const cleanedPath = String(rawPath || '')
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '');
   const segments = cleanedPath.split('/').filter(Boolean);
 
   if (segments.length >= 2 && !segments[0].startsWith('@')) {

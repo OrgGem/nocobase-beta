@@ -1,5 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
-import { getAIBrowserPlugin, getCurrentUserId, normalizeToolCall } from './utils';
+import { getAIBrowserPlugin, getBrowserAccess, normalizeToolCall } from './utils';
 type ToolRegisterOptions = any;
 
 const browserListSessionsTool: ToolRegisterOptions = {
@@ -17,14 +26,16 @@ const browserListSessionsTool: ToolRegisterOptions = {
       const { ctx, params } = normalizeToolCall(first, second);
       try {
         const plugin = getAIBrowserPlugin(ctx);
-        const sessions = await plugin.sessionService.listSessions({
-          ownerId: getCurrentUserId(ctx),
+        const sessions = await plugin.sessionService.listSessions(getBrowserAccess(ctx), {
           status: params.status,
           limit: params.limit,
         });
         const list = sessions.map((s: any) => ({
-          id: s.get('id'), title: s.get('title'), status: s.get('status'),
-          driver: s.get('driver'), currentUrl: s.get('currentUrl'),
+          id: s.get('id'),
+          title: s.get('title'),
+          status: s.get('status'),
+          driver: s.get('driver'),
+          currentUrl: s.get('currentUrl'),
           startedAt: s.get('startedAt'),
         }));
         return { status: 'success', content: JSON.stringify(list) };

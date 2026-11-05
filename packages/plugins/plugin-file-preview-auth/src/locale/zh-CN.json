@@ -10,5 +10,7 @@
   "Please help me analyze the file currently open in preview.": "请帮我分析当前正在预览的文件。",
   "Failed to open AI chat": "无法打开 AI 聊天",
   "This file type cannot be previewed. Click Download to save the file.": "此文件类型不支持预览。请点击下载以保存文件。",
-  "This file type cannot be previewed. ": "此文件类型不支持预览。"
+  "This file type cannot be previewed. ": "此文件类型不支持预览。",
+  "OCR processing failed. Check the server logs and retry.": "OCR 处理失败。请检查服务器日志后重试。",
+  "Attachment not found": "附件不存在"
 }

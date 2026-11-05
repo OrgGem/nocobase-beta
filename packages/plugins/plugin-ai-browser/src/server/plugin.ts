@@ -1,5 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { InstallOptions, Plugin } from '@nocobase/server';
 import { resolve } from 'path';
+import { scopeBrowserReads } from './read-scope';
 import {
   getConfig,
   setConfig,
@@ -60,7 +70,10 @@ export class PluginAIBrowserServer extends Plugin {
       },
     });
 
-    // ACL — logged-in users can read; admin snippet for writes
+    // Generic reads always apply owner scope after authentication/ACL.
+    for (const action of ['list', 'get']) {
+      this.app.resourceManager.registerPreActionHandler(action, scopeBrowserReads, { after: 'acl' });
+    }
     (this as any).app.acl.allow('aiBrowserSessions', ['list', 'get'], 'loggedIn');
     (this as any).app.acl.allow('aiBrowserTasks', ['list', 'get'], 'loggedIn');
     (this as any).app.acl.allow('aiBrowserProfiles', ['list', 'get'], 'loggedIn');
@@ -152,5 +165,3 @@ export class PluginAIBrowserServer extends Plugin {
 }
 
 export default PluginAIBrowserServer;
-
-

@@ -1,14 +1,23 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { useAclSnippets } from '@nocobase/client-v2';
 
 export const DOCKER_REGISTRY_SNIPPETS = {
-  access: 'pm.docker-registry-ui.access',
-  read: 'pm.docker-registry-ui.read',
-  delete: 'pm.docker-registry-ui.delete',
-  download: 'pm.docker-registry-ui.download',
-  upload: 'pm.docker-registry-ui.upload',
-  settings: 'pm.docker-registry-ui.settings',
-  manage: 'pm.docker-registry-ui.manage',
-  legacyManage: 'pm.docker-registry-ui',
+  access: 'pm.plugin-docker-registry-ui.access',
+  read: 'pm.plugin-docker-registry-ui.read',
+  delete: 'pm.plugin-docker-registry-ui.delete',
+  download: 'pm.plugin-docker-registry-ui.download',
+  upload: 'pm.plugin-docker-registry-ui.upload',
+  settings: 'pm.plugin-docker-registry-ui.settings',
+  manage: 'pm.plugin-docker-registry-ui.manage',
+  legacyManage: 'pm.plugin-docker-registry-ui',
 } as const;
 
 export const DOCKER_REGISTRY_PERMISSION_ITEMS = [

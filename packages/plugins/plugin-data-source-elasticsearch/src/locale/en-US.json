@@ -1,4 +1,8 @@
 {
+  "Delete": "Delete",
+  "Delete collection": "Delete collection",
+  "Are you sure you want to delete it?": "Are you sure you want to delete it?",
+  "Failed to delete collection": "Failed to delete collection",
   "Elasticsearch": "Elasticsearch",
   "Elasticsearch Nodes": "Elasticsearch Nodes",
   "Comma-separated list of Elasticsearch node URLs": "Comma-separated list of Elasticsearch node URLs",

@@ -1,4 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createHash } from 'crypto';
+import { getBrowserAccess } from '../access';
+import { publicLiveUrl } from '../public-live-url';
 
 /**
  * Server actions for aiBrowser resource.
@@ -72,7 +83,13 @@ async function assertConversationOwner(ctx: any, conversationId: string) {
 }
 
 function serializeSession(session: any) {
-  return typeof session?.toJSON === 'function' ? session.toJSON() : session;
+  const result = typeof session?.toJSON === 'function' ? session.toJSON() : { ...session };
+  result.liveUrl = publicLiveUrl(result.liveUrl);
+  if (result?.metadata) {
+    result.metadata = { ...result.metadata };
+    delete result.metadata.driver;
+  }
+  return result;
 }
 
 export async function getConfig(ctx: any, next: any) {
@@ -97,7 +114,7 @@ export async function setConfig(ctx: any, next: any) {
   const serialized = typeof value === 'string' ? value : JSON.stringify(value);
   const existing = await repo.findOne({ filter: { key } });
   if (existing) {
-    await repo.update({ filterByTk: key, values: { value: serialized } });
+    await repo.update({ filter: { key }, values: { value: serialized } });
   } else {
     await repo.create({ values: { key, value: serialized } });
   }
@@ -116,8 +133,6 @@ export async function getDriverStatus(ctx: any, next: any) {
   ctx.body = {
     available: healthy,
     driver: plugin.driver.name,
-    cdpUrl: process.env.AI_BROWSER_CDP_URL || 'ws://browser:3000',
-    liveUrl: process.env.AI_BROWSER_LIVE_URL || null,
   };
   await next();
 }
@@ -135,14 +150,17 @@ export async function prepareSession(ctx: any, next: any) {
     ctx.throw(500, 'AI Browser plugin is not initialized.');
   }
 
-  let session = await plugin.sessionService.getActiveSessionForConversation(conversationId);
+  let session = await plugin.sessionService.getActiveSessionForConversation(conversationId, getBrowserAccess(ctx));
   if (session) {
     const externalId = session.get('externalSessionId');
     const metadata = session.get('metadata') || {};
-    const driverStatus = externalId
-      ? await (plugin.driver?.ensureSession?.(externalId, metadata.driver || {}) ||
-          plugin.driver?.getSessionStatus(externalId)).catch(() => null)
-      : null;
+    const driverStatus =
+      externalId && plugin.driver
+        ? await (
+            plugin.driver.ensureSession?.(externalId, metadata.driver || {}) ||
+            plugin.driver.getSessionStatus(externalId)
+          ).catch(() => null)
+        : null;
     if (!driverStatus || driverStatus.status !== 'running') {
       await plugin.sessionService.expireSession(session.get('id')).catch(() => {});
       session = null;
@@ -253,13 +271,16 @@ export async function stopSession(ctx: any, next: any) {
   }
 
   const plugin = getAIBrowserPlugin(ctx) as any;
-  await plugin.sessionService.stopSession(sessionId, userId);
+  await plugin.sessionService.stopSession(sessionId, getBrowserAccess(ctx));
   ctx.body = { ok: true };
   await next();
 }
 
 function hashText(value: string) {
-  return createHash('sha1').update(value || '').digest('hex').slice(0, 16);
+  return createHash('sha1')
+    .update(value || '')
+    .digest('hex')
+    .slice(0, 16);
 }
 
 function normalizeUrlPattern(url?: string) {

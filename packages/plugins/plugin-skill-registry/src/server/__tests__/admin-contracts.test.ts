@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createAdminActions } from '../actions';
 
 describe('skill registry admin contracts', () => {
@@ -6,6 +15,8 @@ describe('skill registry admin contracts', () => {
       publish: vi.fn().mockResolvedValue({ get: (key: string) => ({ id: 'v1', version: '1.0.0' })[key] }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: publish as never,
       database: {} as never,
@@ -30,8 +41,10 @@ describe('skill registry admin contracts', () => {
   });
 
   it('accepts publish values from the HTTP request body', async () => {
-    const publish = { publish: vi.fn().mockResolvedValue({ get: () => '1.0.0' }) };
+    const publish = { publish: vi.fn().mockResolvedValue({ get: (key: string) => ({ version: '1.0.0' })[key] }) };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: publish as never,
       database: {} as never,
@@ -50,8 +63,10 @@ describe('skill registry admin contracts', () => {
   });
 
   it('accepts a numeric source item ID when publishing an auto-increment record', async () => {
-    const publish = { publish: vi.fn().mockResolvedValue({ get: () => '1.0.1' }) };
+    const publish = { publish: vi.fn().mockResolvedValue({ get: (key: string) => ({ version: '1.0.1' })[key] }) };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: publish as never,
       database: {} as never,
@@ -81,6 +96,8 @@ describe('skill registry admin contracts', () => {
       sync: vi.fn().mockResolvedValue({ get: (key: string) => ({ id: 'run-1', status: 'succeeded' })[key] }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: sync as never,
       publish: {} as never,
       database: {} as never,
@@ -109,6 +126,8 @@ describe('skill registry admin contracts', () => {
         .mockRejectedValueOnce(new Error('provider failed')),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: publish as never,
       database: {} as never,
@@ -133,6 +152,8 @@ describe('skill registry admin contracts', () => {
         .mockRejectedValueOnce(new Error('database failed')),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: publish as never,
       database: {} as never,
@@ -154,6 +175,8 @@ describe('skill registry admin contracts', () => {
       unpublishSourceItem: vi.fn().mockResolvedValue({ sourceItemId: '12', state: 'ready', yanked: 2 }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: publish as never,
       database: {} as never,
@@ -171,6 +194,8 @@ describe('skill registry admin contracts', () => {
       discover: vi.fn().mockResolvedValue({ sourceId: '1', candidates: [] }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: sync as never,
       publish: {} as never,
       database: {} as never,
@@ -196,6 +221,8 @@ describe('skill registry admin contracts', () => {
       }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: {} as never,
       database: {} as never,
@@ -222,6 +249,8 @@ describe('skill registry admin contracts', () => {
       installationStates: vi.fn().mockResolvedValue([{ registryVersionId: 'version-1', status: 'installed' }]),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: {} as never,
       database: {} as never,
@@ -253,6 +282,8 @@ describe('skill registry admin contracts', () => {
       }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: {} as never,
       database: { getRepository: (name: string) => (name === 'skillRegistryVersions' ? versions : packages) } as never,
@@ -281,6 +312,8 @@ describe('skill registry admin contracts', () => {
       }),
     };
     const actions = createAdminActions({
+      markdownSkill: {} as never,
+      catalogSkillDetail: {} as never,
       sync: {} as never,
       publish: {} as never,
       database: {} as never,

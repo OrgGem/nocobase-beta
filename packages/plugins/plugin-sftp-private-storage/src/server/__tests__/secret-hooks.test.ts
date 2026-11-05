@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { vi } from 'vitest';
 import { PluginSftpPrivateStorageServer } from '../plugin';
 import { encryptSecret, isEncrypted } from '../secret-box';
@@ -62,7 +71,12 @@ describe('sftpStorageConfigs secret encryption hooks', () => {
     expect(beforeSaveHandlers).toHaveLength(1);
 
     const model = {
-      data: { password: 'my-secret', passphrase: 'my-passphrase', privateKey: '-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----', username: 'u' },
+      data: {
+        password: 'my-secret',
+        passphrase: 'my-passphrase',
+        privateKey: '-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----',
+        username: 'u',
+      },
       get(key: string) {
         return this.data[key];
       },
@@ -132,6 +146,7 @@ describe('sftpStorageConfigs secret encryption hooks', () => {
   });
 
   it('warns when only an ephemeral key is available', async () => {
+    vi.stubEnv('APP_KEY', '');
     delete process.env.SFTP_STORAGE_SECRET_KEY;
     // Simulate an environment without a persisted JWT secret file so key
     // resolution falls through to the ephemeral path.
@@ -143,6 +158,7 @@ describe('sftpStorageConfigs secret encryption hooks', () => {
       expect(childLog.warn).toHaveBeenCalledWith(expect.stringContaining('ephemeral encryption key'));
     } finally {
       existsSpy.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 });

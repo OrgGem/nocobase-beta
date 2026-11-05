@@ -7,7 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { Plugin } from '@nocobase/server';
+import { Plugin, type Application } from '@nocobase/server';
+import type { ResourcerActionContext } from '@nocobase/resourcer';
 import path from 'path';
 import {
   ElasticsearchDataSource,
@@ -26,7 +27,7 @@ type DataSourceValues = {
   addAllCollections?: boolean;
 };
 
-type ActionContext = {
+type ActionContext = ResourcerActionContext & {
   action?: {
     actionName?: string;
     resourceName?: string;
@@ -48,9 +49,7 @@ type ActionContext = {
       destroy: (options: { filter: Record<string, unknown> }) => Promise<unknown>;
     };
   };
-  logger?: {
-    error: (...args: unknown[]) => void;
-  };
+  logger?: Application['logger'];
   throw: (status: number, message: string) => void;
 };
 
@@ -88,7 +87,8 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
     this.app.resourceManager.define({
       name: 'external-elasticsearch',
       actions: {
-        testConnection: async (ctx: ActionContext, next: () => Promise<void>) => {
+        testConnection: async (resourceContext, next) => {
+          const ctx = resourceContext as ActionContext;
           const payload = (ctx.action?.params?.values || ctx.request.body || {}) as ElasticsearchDataSourceOptions;
           const connectionOptions = getElasticsearchConnectionOptions(payload);
 
@@ -101,7 +101,8 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
 
           await next();
         },
-        readIndices: async (ctx: ActionContext, next: () => Promise<void>) => {
+        readIndices: async (resourceContext, next) => {
+          const ctx = resourceContext as ActionContext;
           const payload = (ctx.action?.params?.values || ctx.request.body || {}) as ElasticsearchDataSourceOptions;
           const connectionOptions = getElasticsearchConnectionOptions(payload);
 
@@ -117,7 +118,8 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
       only: ['testConnection', 'readIndices'],
     });
 
-    this.app.resourceManager.use(async (ctx: ActionContext, next: () => Promise<void>) => {
+    this.app.resourceManager.use(async (resourceContext, next) => {
+      const ctx = resourceContext as ActionContext;
       const { actionName, resourceName, params } = ctx.action || {};
 
       if (resourceName !== 'dataSources' || !['create', 'update'].includes(actionName || '')) {
@@ -151,7 +153,9 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
         ...options,
       }) as ElasticsearchDataSource;
 
-      tempDs.setLogger(ctx.logger || this.app.logger);
+      tempDs.setLogger(
+        (ctx.logger || this.app.logger) as unknown as Parameters<ElasticsearchDataSource['setLogger']>[0],
+      );
 
       try {
         if (options.addAllCollections === false) {
@@ -178,7 +182,8 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
       await next();
     });
 
-    this.app.resourceManager.use(async (ctx: ActionContext, next: () => Promise<void>) => {
+    this.app.resourceManager.use(async (resourceContext, next) => {
+      const ctx = resourceContext as ActionContext;
       const resourceName = ctx.action?.resourceName || ctx.action?.params?.resourceName;
       const actionName = ctx.action?.actionName || ctx.action?.params?.actionName;
       const dataSourceKey = ctx.action?.params?.associatedIndex;
@@ -223,8 +228,6 @@ export class PluginDataSourceElasticsearchServer extends Plugin {
       name: 'pm.data-source-manager.elasticsearch',
       actions: ['external-elasticsearch:*'],
     });
-
-    this.app.acl.allow('external-elasticsearch', ['testConnection', 'readIndices'], 'loggedIn');
   }
 
   private async isElasticsearchDataSource(ctx: ActionContext, filterByTk?: string): Promise<boolean> {

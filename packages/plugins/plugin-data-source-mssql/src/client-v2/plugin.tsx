@@ -10,6 +10,7 @@
 import { Plugin, Application } from '@nocobase/client-v2';
 import PluginDataSourceManagerClientV2 from '@nocobase/plugin-data-source-manager/client-v2';
 import React from 'react';
+import { MssqlDeleteCollection } from './MssqlDeleteCollection';
 
 export class PluginDataSourceMssqlClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -21,6 +22,8 @@ export class PluginDataSourceMssqlClient extends Plugin<Record<string, never>, A
           import('./components/MssqlConfigForm').then((m) => ({ default: m.MssqlConfigForm })),
         ),
         disableTestConnection: false,
+        allowCollectionDeletion: true,
+        DeleteCollection: MssqlDeleteCollection,
         disableAddFields: false,
         normalizeValues: (values) => ({
           ...values,

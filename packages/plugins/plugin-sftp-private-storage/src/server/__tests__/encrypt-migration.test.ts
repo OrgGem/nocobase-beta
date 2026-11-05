@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { describe, it, expect, vi } from 'vitest';
 import { encryptSecret, isEncrypted, __resetSecretKeyCacheForTest } from '../secret-box';
 import EncryptSftpSecrets from '../migrations/20260821000000-encrypt-sftp-secrets';
@@ -30,12 +39,17 @@ function createMigrationCtx(ephemeral: boolean) {
 }
 
 describe('encrypt-sftp-secrets migration (privateKey at rest)', () => {
-  beforeEach(() => { __resetSecretKeyCacheForTest(); });
-  afterEach(() => { delete process.env.SFTP_STORAGE_SECRET_KEY; __resetSecretKeyCacheForTest(); });
+  beforeEach(() => {
+    __resetSecretKeyCacheForTest();
+  });
+  afterEach(() => {
+    delete process.env.SFTP_STORAGE_SECRET_KEY;
+    __resetSecretKeyCacheForTest();
+  });
 
   it('encrypts plaintext privateKey and skips empty values', async () => {
     const { mock, repository, updates } = createMigrationCtx(false);
-    const migration = new EncryptSftpSecrets();
+    const migration = new EncryptSftpSecrets(mock as never);
     await (migration as any).up.call(mock);
     expect(repository.update).toHaveBeenCalledTimes(1);
     expect(isEncrypted(updates[0].privateKey as string)).toBe(true);
@@ -43,16 +57,18 @@ describe('encrypt-sftp-secrets migration (privateKey at rest)', () => {
   });
 
   it('skips encryption entirely when the key is ephemeral', async () => {
+    vi.stubEnv('APP_KEY', '');
     const fs = await import('fs');
     const existsSpy = vi.spyOn(fs.default ?? fs, 'existsSync').mockReturnValue(false);
     try {
       const { mock, repository } = createMigrationCtx(true);
-      const migration = new EncryptSftpSecrets();
+      const migration = new EncryptSftpSecrets(mock as never);
       await (migration as any).up.call(mock);
       expect(repository.update).not.toHaveBeenCalled();
       expect(mock.log.warn).toHaveBeenCalledWith(expect.stringContaining('ephemeral'));
     } finally {
       existsSpy.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 });

@@ -1,6 +1,19 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { RegistrySkillCandidateV1, RegistrySourceDescriptor, RegistrySourceProvider } from '../contracts/types';
 import { candidateDigest } from '../services/canonical-json';
-import { validateDiscoveredExternalKeys, validateProviderCandidate } from '../services/candidate-validator';
+import {
+  SOURCE_INGESTION_LIMITS,
+  validateDiscoveredExternalKeys,
+  validateProviderCandidate,
+} from '../services/candidate-validator';
 
 const source: RegistrySourceDescriptor = {
   id: 'source-1',
@@ -73,7 +86,9 @@ describe('provider candidate validation', () => {
       expect.objectContaining({ code: 'INVALID_SOURCE_CANDIDATE' }),
     );
     expect(() =>
-      validateDiscoveredExternalKeys(Array.from({ length: 1001 }, (_, index) => `skillDefinitions:${index}`)),
+      validateDiscoveredExternalKeys(
+        Array.from({ length: SOURCE_INGESTION_LIMITS.maxItems + 1 }, (_, index) => `skillDefinitions:${index}`),
+      ),
     ).toThrow(expect.objectContaining({ code: 'SOURCE_ITEM_LIMIT_EXCEEDED' }));
   });
 });

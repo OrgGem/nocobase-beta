@@ -252,7 +252,17 @@ export class PluginSftpPrivateStorageServer extends Plugin {
         resource: fileCollectionName,
         action: 'view',
       });
-      return !!canView;
+      if (!canView || !ctx) return false;
+      const { mergedParams } = await this.app.acl.resolveActionParams(ctx, {
+        resourceName: fileCollectionName,
+        actionName: 'view',
+        params: { filterByTk: attachmentId },
+      });
+      const attachment = await this.db.getRepository(fileCollectionName).findOne({
+        ...mergedParams,
+        context: ctx,
+      });
+      return Boolean(attachment);
     }
 
     for (const parent of parents) {

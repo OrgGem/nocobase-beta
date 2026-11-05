@@ -1,9 +1,20 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 import {
   buildReadResult,
   getAIBrowserPlugin,
   getActiveBrowserSession,
   getConversationId,
+  getBrowserAccess,
+  browserOwnerFilter,
   logBrowserAction,
   normalizeToolCall,
   touchSessionActivity,
@@ -25,12 +36,13 @@ function hostnameMatches(currentUrl: string | null, domain: string) {
 
 async function findWorkflowCache(ctx: any, params: any, currentUrl: string | null) {
   const cacheRepo = ctx.db.getRepository('aiBrowserWorkflowCaches');
+  const filter = { enabled: true, ...browserOwnerFilter(getBrowserAccess(ctx)) };
   if (params.cacheId) {
-    return cacheRepo.findById(params.cacheId);
+    return cacheRepo.findOne({ filterByTk: params.cacheId, filter });
   }
 
   const rows = await cacheRepo.find({
-    filter: { enabled: true },
+    filter,
     sort: ['-confidence', '-updatedAt'],
     limit: 25,
   });
@@ -38,7 +50,9 @@ async function findWorkflowCache(ctx: any, params: any, currentUrl: string | nul
   return rows.find((row: any) => {
     const domain = getValue(row, 'domain');
     const taskIntent = String(getValue(row, 'taskIntent') || getValue(row, 'name') || '').toLowerCase();
-    return hostnameMatches(currentUrl, domain) && (!intent || taskIntent.includes(intent) || intent.includes(taskIntent));
+    return (
+      hostnameMatches(currentUrl, domain) && (!intent || taskIntent.includes(intent) || intent.includes(taskIntent))
+    );
   });
 }
 
@@ -53,7 +67,10 @@ Use this before manually reasoning through a repeated task on the same site/page
     schema: z.object({
       cacheId: z.string().optional().describe('Specific workflow cache ID to run'),
       intent: z.string().optional().describe('Task intent to match when cacheId is not provided'),
-      input: z.record(z.string()).optional().describe('Values for cached type steps, keyed by stepKey, targetKey, or selector'),
+      input: z
+        .record(z.string())
+        .optional()
+        .describe('Values for cached type steps, keyed by stepKey, targetKey, or selector'),
     }),
     invoke: async (first: any, second: any, third?: any) => {
       const { ctx, params } = normalizeToolCall(first, second);
@@ -63,7 +80,7 @@ Use this before manually reasoning through a repeated task on the same site/page
       try {
         const plugin = getAIBrowserPlugin(ctx);
         const conversationId = await getConversationId(ctx, params, toolCallId);
-        const session = await getActiveBrowserSession(plugin, conversationId);
+        const session = await getActiveBrowserSession(plugin, ctx, conversationId);
         const externalId = session.get('externalSessionId');
         const currentUrl = await plugin.driver.getCurrentUrl(externalId).catch(() => session.get('currentUrl'));
         cache = await findWorkflowCache(ctx, params, currentUrl);
@@ -141,7 +158,9 @@ Use this before manually reasoning through a repeated task on the same site/page
 
         return {
           status: 'success',
-          content: `Cached workflow executed: ${getValue(cache, 'name')}\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${read.dom}`,
+          content: `Cached workflow executed: ${getValue(cache, 'name')}\nCurrent URL: ${
+            read.currentUrl || ''
+          }\n\nPage snapshot:\n${read.dom}`,
         };
       } catch (err: any) {
         if (cache) {

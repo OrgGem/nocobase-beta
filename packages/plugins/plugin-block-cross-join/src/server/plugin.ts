@@ -26,6 +26,11 @@ export class PluginBlockCrossJoinServer extends Plugin {
     });
 
     this.app.acl.allow('crossJoin', 'query', 'loggedIn');
+    // This action accepts join configuration, not the SQL query schema used by the generic query guard.
+    // crossJoinQuery resolves collection, row and field permissions for every source itself.
+    this.app.resourcer.registerPreActionHandler('crossJoin:query', async (_ctx, next) => {
+      await next();
+    });
     this.app.acl.registerSnippet({
       name: 'ui.crossJoin',
       actions: ['crossJoin:*'],

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 import {
   buildReadResult,
@@ -27,7 +36,7 @@ You must provide a valid CSS selector or Playwright text selector (e.g. "text=Lo
       try {
         const plugin = getAIBrowserPlugin(ctx);
         const conversationId = await getConversationId(ctx, params, toolCallId);
-        const session = await getActiveBrowserSession(plugin, conversationId);
+        const session = await getActiveBrowserSession(plugin, ctx, conversationId);
 
         const externalId = session.get('externalSessionId');
         await plugin.driver.click(externalId, params.selector);
@@ -46,7 +55,9 @@ You must provide a valid CSS selector or Playwright text selector (e.g. "text=Lo
 
         return {
           status: 'success',
-          content: `Clicked element: ${params.selector}\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${read.dom}`,
+          content: `Clicked element: ${params.selector}\nCurrent URL: ${read.currentUrl || ''}\n\nPage snapshot:\n${
+            read.dom
+          }`,
         };
       } catch (err: any) {
         return { status: 'error', content: `Failed to click element: ${err.message}` };

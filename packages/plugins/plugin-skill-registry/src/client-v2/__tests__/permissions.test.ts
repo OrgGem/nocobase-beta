@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createAclSnippetAllow, createMockClient } from '@nocobase/client-v2';
 
 import {
@@ -10,12 +19,12 @@ import PluginSkillRegistryClientV2 from '../plugin';
 describe('Skill Registry client ACL', () => {
   it('uses the snippet namespace registered by the server plugin', () => {
     expect(SKILL_REGISTRY_SNIPPETS).toEqual({
-      read: 'pm.skill-registry.read',
-      sync: 'pm.skill-registry.sync',
-      publish: 'pm.skill-registry.publish',
-      install: 'pm.skill-registry.install',
-      markdown: 'pm.skill-registry.markdown',
-      manage: 'pm.skill-registry.manage',
+      read: 'pm.plugin-skill-registry.read',
+      sync: 'pm.plugin-skill-registry.sync',
+      publish: 'pm.plugin-skill-registry.publish',
+      install: 'pm.plugin-skill-registry.install',
+      markdown: 'pm.plugin-skill-registry.markdown',
+      manage: 'pm.plugin-skill-registry.manage',
     });
   });
 

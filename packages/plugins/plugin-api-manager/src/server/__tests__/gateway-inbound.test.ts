@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { randomBytes } from 'crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockServer } from '@nocobase/test';
@@ -182,12 +191,12 @@ describe('gateway inbound', () => {
     expect(res.status).toBe(404);
   });
 
-
   it('normalizes a trailing slash on the inbound path', async () => {
     const key = await createTestApiKey(app, { scopes: ['inbound'] });
     const res = await request.post(`${INBOUND_PREFIX}plain/`).set('X-API-Key', key).send('{}');
     expect(res.status).toBe(200);
-    expect(res.text).toBe('plain-ok');
+    expect(res.text).toBe('{}');
+    expect(upstream.lastRequest?.body.toString('utf8')).toBe('{}');
   });
 
   it('normalizes multiple trailing slashes on the inbound path', async () => {

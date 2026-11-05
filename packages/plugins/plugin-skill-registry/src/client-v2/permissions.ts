@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createContext, useContext } from 'react';
 import { useAclSnippets } from '@nocobase/client-v2';
 
@@ -10,12 +19,12 @@ import { useAclSnippets } from '@nocobase/client-v2';
  * does not grant read/list actions to a sync-only role.
  */
 export const SKILL_REGISTRY_SNIPPETS = {
-  read: 'pm.skill-registry.read',
-  sync: 'pm.skill-registry.sync',
-  publish: 'pm.skill-registry.publish',
-  install: 'pm.skill-registry.install',
-  markdown: 'pm.skill-registry.markdown',
-  manage: 'pm.skill-registry.manage',
+  read: 'pm.plugin-skill-registry.read',
+  sync: 'pm.plugin-skill-registry.sync',
+  publish: 'pm.plugin-skill-registry.publish',
+  install: 'pm.plugin-skill-registry.install',
+  markdown: 'pm.plugin-skill-registry.markdown',
+  manage: 'pm.plugin-skill-registry.manage',
 } as const;
 
 export type SkillRegistryCapability = keyof typeof SKILL_REGISTRY_SNIPPETS;

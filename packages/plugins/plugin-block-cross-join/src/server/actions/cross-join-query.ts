@@ -8,6 +8,7 @@
  */
 
 import { Context } from '@nocobase/actions';
+import { NoPermissionError } from '@nocobase/acl';
 
 interface JoinConfig {
   dataSource: string;
@@ -28,34 +29,33 @@ interface CrossJoinConfig {
   primarySource: {
     dataSource: string;
     collection: string;
-    filter?: Record<string, any>;
+    filter?: Record<string, unknown>;
   };
   joins: JoinConfig[];
   columns: ColumnConfig[];
   defaultSort?: string[];
 }
 
-function toPlainObject(row: any): Record<string, any> {
+function toPlainObject(row: Record<string, unknown>): Record<string, unknown> {
   if (row && typeof row.toJSON === 'function') {
     return row.toJSON();
   }
   return row;
 }
 
-function buildJoinMap(rows: Record<string, any>[], keyField: string): Map<string, Record<string, any>[]> {
-  const map = new Map<string, Record<string, any>[]>();
+function buildJoinMap(rows: Record<string, unknown>[], keyField: string): Map<string, Record<string, unknown>[]> {
+  const map = new Map<string, Record<string, unknown>[]>();
   for (const row of rows) {
     const key = String(row[keyField] ?? '');
-    if (!map.has(key)) {
-      map.set(key, []);
-    }
-    map.get(key)!.push(row);
+    const matches = map.get(key) || [];
+    matches.push(row);
+    map.set(key, matches);
   }
   return map;
 }
 
-function prefixRow(row: Record<string, any>, prefix: string): Record<string, any> {
-  const result: Record<string, any> = {};
+function prefixRow(row: Record<string, unknown>, prefix: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(row)) {
     result[`${prefix}.${k}`] = v;
   }
@@ -63,14 +63,14 @@ function prefixRow(row: Record<string, any>, prefix: string): Record<string, any
 }
 
 function applyJoin(
-  leftRows: Record<string, any>[],
-  rightRows: Record<string, any>[],
+  leftRows: Record<string, unknown>[],
+  rightRows: Record<string, unknown>[],
   joinConfig: JoinConfig,
   joinIndex: number,
-): Record<string, any>[] {
+): Record<string, unknown>[] {
   const rightMap = buildJoinMap(rightRows, joinConfig.rightField);
   const rightPrefix = `join${joinIndex}`;
-  const result: Record<string, any>[] = [];
+  const result: Record<string, unknown>[] = [];
 
   for (const leftRow of leftRows) {
     const key = String(leftRow[`primary.${joinConfig.leftField}`] ?? leftRow[joinConfig.leftField] ?? '');
@@ -89,9 +89,9 @@ function applyJoin(
   return result;
 }
 
-function applyColumnMapping(rows: Record<string, any>[], columns: ColumnConfig[]): Record<string, any>[] {
+function applyColumnMapping(rows: Record<string, unknown>[], columns: ColumnConfig[]): Record<string, unknown>[] {
   return rows.map((row) => {
-    const mapped: Record<string, any> = {};
+    const mapped: Record<string, unknown> = {};
 
     for (const col of columns) {
       const prefix = col.source === 0 ? 'primary' : `join${col.source - 1}`;
@@ -143,18 +143,65 @@ export async function crossJoinQuery(ctx: Context, next: () => Promise<void>) {
     ctx.throw(400, `Collection "${primarySource.collection}" not found in datasource "${primarySource.dataSource}"`);
   }
 
+  // Resolve every source before querying, including joins whose input might be empty.
+  const sources = [primarySource, ...joins];
+  const permissions = await Promise.all(
+    sources.map(async (source, index) => {
+      const dataSource = dsManager.get(source.dataSource);
+      if (!dataSource?.acl) ctx.throw(403);
+      const permissionContext = Object.create(ctx);
+      Object.defineProperties(permissionContext, {
+        dataSource: { value: dataSource },
+        database: { value: dataSource.collectionManager.db },
+      });
+      const resolved = await dataSource.acl
+        .resolveActionParams(permissionContext, {
+          resourceName: source.collection,
+          actionName: 'list',
+          params: index === 0 ? { filter: primarySource.filter || {}, sort: sort || config.defaultSort } : {},
+        })
+        .catch((error: unknown) => {
+          if (error instanceof NoPermissionError) ctx.throw(403);
+          throw error;
+        });
+      const fields: string[] | undefined = resolved.parsedParams?.fields;
+      const except: string[] = resolved.parsedParams?.except || [];
+      const assertField = (field: string) => {
+        const name = field.replace(/^[+-]/, '').split('.')[0];
+        if ((fields && !fields.includes(name)) || except.includes(name)) ctx.throw(403);
+      };
+      columns.filter((column) => column.source === index).forEach((column) => assertField(column.field));
+      if (index === 0) {
+        joins.forEach((join) => assertField(join.leftField));
+        const requestedSort = sort || config.defaultSort || [];
+        (Array.isArray(requestedSort) ? requestedSort : [requestedSort]).forEach(assertField);
+        const checkFilter = (filter: unknown) => {
+          if (!filter || typeof filter !== 'object') return;
+          for (const [key, value] of Object.entries(filter)) {
+            if (key.startsWith('$') || Array.isArray(filter)) checkFilter(value);
+            else assertField(key);
+          }
+        };
+        checkFilter(primarySource.filter);
+      } else {
+        assertField(joins[index - 1].rightField);
+      }
+      return resolved.mergedParams;
+    }),
+  );
+
   // 2. Determine if we need full-fetch (INNER join) or can paginate primary
   const hasInnerJoin = joins.some((j) => j.joinType === 'inner');
 
-  let primaryRows: Record<string, any>[];
+  let primaryRows: Record<string, unknown>[];
   let totalPrimaryCount: number;
 
   if (hasInnerJoin) {
     // Full fetch with cap for INNER joins
     const MAX_ROWS = 10000;
     const rawRows = await primaryRepo.find({
-      filter: primarySource.filter || {},
-      sort: sort || config.defaultSort,
+      ...permissions[0],
+      context: ctx,
       limit: MAX_ROWS,
     });
     primaryRows = rawRows.map(toPlainObject);
@@ -163,13 +210,14 @@ export async function crossJoinQuery(ctx: Context, next: () => Promise<void>) {
     // Paginate at primary level for LEFT-only joins
     const [rawRows, count] = await Promise.all([
       primaryRepo.find({
-        filter: primarySource.filter || {},
-        sort: sort || config.defaultSort,
+        ...permissions[0],
+        context: ctx,
         limit: Number(pageSize),
         offset: (Number(page) - 1) * Number(pageSize),
       }),
       primaryRepo.count({
-        filter: primarySource.filter || {},
+        filter: permissions[0].filter,
+        context: ctx,
       }),
     ]);
     primaryRows = rawRows.map(toPlainObject);
@@ -177,7 +225,7 @@ export async function crossJoinQuery(ctx: Context, next: () => Promise<void>) {
   }
 
   // 3. Prefix primary rows
-  let joinedRows: Record<string, any>[] = primaryRows.map((row) => prefixRow(row, 'primary'));
+  let joinedRows: Record<string, unknown>[] = primaryRows.map((row) => prefixRow(row, 'primary'));
 
   // 4. Process each join
   for (let i = 0; i < joins.length; i++) {
@@ -206,8 +254,10 @@ export async function crossJoinQuery(ctx: Context, next: () => Promise<void>) {
 
     // Batch fetch from join table
     const joinRawRows = await joinRepo.find({
+      ...permissions[i + 1],
+      context: ctx,
       filter: {
-        [joinDef.rightField]: { $in: distinctKeys.map(String) },
+        $and: [permissions[i + 1].filter || {}, { [joinDef.rightField]: { $in: distinctKeys.map(String) } }],
       },
       limit: 10000,
     });
@@ -219,7 +269,7 @@ export async function crossJoinQuery(ctx: Context, next: () => Promise<void>) {
 
   // 5. Paginate if we did full-fetch (INNER join case)
   let totalCount: number;
-  let paginatedRows: Record<string, any>[];
+  let paginatedRows: Record<string, unknown>[];
 
   if (hasInnerJoin) {
     totalCount = joinedRows.length;
@@ -234,12 +284,10 @@ export async function crossJoinQuery(ctx: Context, next: () => Promise<void>) {
   const finalRows = columns.length > 0 ? applyColumnMapping(paginatedRows, columns) : paginatedRows;
 
   ctx.body = {
-    data: finalRows,
-    meta: {
-      page: Number(page),
-      pageSize: Number(pageSize),
-      count: totalCount,
-    },
+    rows: finalRows,
+    page: Number(page),
+    pageSize: Number(pageSize),
+    count: totalCount,
   };
 
   await next();

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createContext, useContext } from 'react';
 import { useAclSnippets } from '@nocobase/client-v2';
 
@@ -10,9 +19,9 @@ import { useAclSnippets } from '@nocobase/client-v2';
  * server snippet action expansion.
  */
 export const SELECTOR_REGISTRY_SNIPPETS = {
-  client: 'pm.selector-registry.client',
-  read: 'pm.selector-registry.read',
-  manage: 'pm.selector-registry.manage',
+  client: 'pm.plugin-selector-registry.client',
+  read: 'pm.plugin-selector-registry.read',
+  manage: 'pm.plugin-selector-registry.manage',
 } as const;
 
 export type SelectorRegistryCapability = keyof typeof SELECTOR_REGISTRY_SNIPPETS;

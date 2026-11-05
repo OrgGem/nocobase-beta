@@ -1,4 +1,13 @@
-﻿import { PluginS3PrivateStorageServer } from '../plugin';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { PluginS3PrivateStorageServer } from '../plugin';
 
 /**
  * Minimal ACL mock that can answer can() queries.
@@ -193,7 +202,7 @@ describe('checkParentCollectionAccess', () => {
     expect(result).toBe(false);
   });
 
-  it('falls back to attachments view permission when no parent collection exists', async () => {
+  it('fails closed without request context even when an attachment grant exists', async () => {
     const app: any = {
       pm: { get: () => ({ registerStorageType: () => {} }) },
       resourceManager: { registerActionHandler: () => {}, getResource: () => null },
@@ -217,6 +226,6 @@ describe('checkParentCollectionAccess', () => {
 
     const result = await (plugin as any).checkParentCollectionAccess('1', 'attachments', ['member']);
 
-    expect(result).toBe(true);
+    expect(result).toBe(false);
   });
 });

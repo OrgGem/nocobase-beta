@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 // Structured, single-source-of-truth catalog of every HTTP endpoint exposed by
 // the Selector Registry plugin. The ApiDocsPage renders this catalog, and the
 // README mirrors the same content. Prose fields are i18n keys (English text);
@@ -48,7 +57,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Returns the trusted selector for an element, and repairs it when a failure is reported.',
         description:
           'This is the main endpoint. Call it before an action to get the selector to use (lookup path), and call it again after a failure with the page HTML to trigger self-healing (heal path). Without "failureType" it looks up or bootstraps the entry. With a healable "failureType" plus a "domSnippet", it runs the repair pipeline (heuristics, then LLM) and returns a corrected selector together with fallbacks and a signature. Send "idempotencyKey" so duplicate retries do not double-heal.',
-        auth: 'Requires the "client" capability (snippet pm.selector-registry.client). Typically an automation bot authenticated by API key.',
+        auth: 'Requires the "client" capability (snippet pm.plugin-selector-registry.client). Typically an automation bot authenticated by API key.',
         requestFields: [
           {
             name: 'app',
@@ -160,7 +169,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Reports whether the selector worked, so the registry can learn and stabilise.',
         description:
           'Call this after every action with the outcome. This feedback loop is required for the system to stabilise: successes raise confidence and promote "probation" entries to "active"; failures lower confidence and can degrade, quarantine, or auto-rollback to the last proven selector. Without reporting, healed selectors stay on probation and the registry cannot learn.',
-        auth: 'Requires the "client" capability (snippet pm.selector-registry.client).',
+        auth: 'Requires the "client" capability (snippet pm.plugin-selector-registry.client).',
         requestFields: [
           { name: 'app', type: 'string', required: true, description: 'Registered application name.' },
           {
@@ -217,7 +226,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Syncs a local cache efficiently: send what you have, receive only what changed.',
         description:
           'Use this at the start of a run to refresh a local cache that covers many steps at once, instead of calling resolve per step. Send the elementKeys and versions currently cached; the registry replies with the entries that changed ("updates"), the keys it does not know ("unknown"), and a count of entries that are unchanged. Apply "updates" to your local cache and keep your own value for "unknown".',
-        auth: 'Requires the "client" capability (snippet pm.selector-registry.client).',
+        auth: 'Requires the "client" capability (snippet pm.plugin-selector-registry.client).',
         requestFields: [
           { name: 'app', type: 'string', required: true, description: 'Registered application name.' },
           {
@@ -267,7 +276,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Returns the current registry settings.',
         description:
           'Returns the effective settings object, including defaults for any value that has not been overridden. Use it to populate a settings form.',
-        auth: 'Requires the "read" capability (snippet pm.selector-registry.read).',
+        auth: 'Requires the "read" capability (snippet pm.plugin-selector-registry.read).',
         requestFields: [],
         responseNote:
           'Returns the full settings object (enabled, llmService, llmModel, thresholds, circuit breaker, retention, etc.).',
@@ -290,7 +299,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Updates registry settings.',
         description:
           'Send only the fields to change; unspecified fields keep their current value. Numeric fields must be finite and non-negative. The full list of settings and their meaning is documented on the Settings tab of this plugin.',
-        auth: 'Requires the "manage" capability (snippet pm.selector-registry.manage).',
+        auth: 'Requires the "manage" capability (snippet pm.plugin-selector-registry.manage).',
         requestFields: [
           {
             name: 'enabled',
@@ -337,7 +346,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Aggregate counts and recent activity for the dashboard.',
         description:
           'Returns totals by status, app count, recent resolve path distribution with cache-hit rate, recent feedback outcomes, and the top failing entries. This powers the Dashboard tab.',
-        auth: 'Requires the "read" capability (snippet pm.selector-registry.read).',
+        auth: 'Requires the "read" capability (snippet pm.plugin-selector-registry.read).',
         requestFields: [],
         responseNote: 'Returns { entries, apps, recentResolves, recentFeedback, topFailing }.',
         exampleResponse: pretty({
@@ -362,7 +371,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Previews what self-healing would do for one entry, without changing live state.',
         description:
           'Re-runs the healing pipeline for a single entry in forced dry-run mode. It never mutates the entry, never consumes circuit-breaker budget, and never degrades. Use it to judge whether a heal is safe before applying it. The computed candidate is returned in "dryRunCandidate". Provide a fresh "domSnippet" for the best preview.',
-        auth: 'Requires the "manage" capability (snippet pm.selector-registry.manage).',
+        auth: 'Requires the "manage" capability (snippet pm.plugin-selector-registry.manage).',
         requestFields: [
           {
             name: 'entryId',
@@ -398,7 +407,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Manually promotes a historical selector version to active.',
         description:
           'Promotes any historical version of an entry to be the current selector. The previously active version is marked superseded, the entry status becomes "active" with full confidence, and "resolvedBy" is set to "manual". Use it when automatic healing chose poorly and you know a previous version was correct.',
-        auth: 'Requires the "manage" capability (snippet pm.selector-registry.manage).',
+        auth: 'Requires the "manage" capability (snippet pm.plugin-selector-registry.manage).',
         requestFields: [
           { name: 'entryId', type: 'number', required: true, description: 'The id of the selector entry.' },
           {
@@ -428,7 +437,7 @@ export const API_DOC_SECTIONS: ApiDocSection[] = [
         summary: 'Deletes resolve logs and feedback older than the retention window.',
         description:
           'Removes selectorResolveLogs and selectorFeedbacks older than the configured "logRetentionDays". A scheduled job also runs this automatically; this endpoint triggers it on demand. If retention is 0 or unset, nothing is removed.',
-        auth: 'Requires the "manage" capability (snippet pm.selector-registry.manage).',
+        auth: 'Requires the "manage" capability (snippet pm.plugin-selector-registry.manage).',
         requestFields: [],
         responseNote: 'Returns { removedResolveLogs, removedFeedbacks }.',
         exampleResponse: pretty({ removedResolveLogs: 1240, removedFeedbacks: 380 }),

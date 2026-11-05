@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { AuthConfig, BaseAuth } from '@nocobase/auth';
 import type { Model } from '@nocobase/database';
 import { AuthModel } from '@nocobase/plugin-auth';
@@ -15,7 +24,7 @@ import {
   randomState,
 } from 'openid-client';
 import type { Configuration } from 'openid-client';
-import { logoutCookieName } from '../constants';
+import { logoutCookieName, namespace } from '../constants';
 import {
   createRoutedState,
   isSecureRequest,
@@ -59,7 +68,8 @@ const PROTECTED_USER_FIELDS = new Set([
 ]);
 
 function stringClaim(claims: Claims, key: string) {
-  return typeof claims[key] === 'string' ? claims[key] : undefined;
+  const value = claims[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
 function scalarClaim(value: unknown): string | number | boolean | null | undefined {
@@ -80,6 +90,9 @@ export function validateEmailClaims(claims: Claims, options: OidcOptions) {
   const domain = email.split('@').pop()?.toLowerCase();
   if (trustedDomains.length && (!domain || !trustedDomains.includes(domain))) {
     throw new Error('The email domain is not allowed');
+  }
+  if (options.requireVerifiedEmail === true && claims.email_verified !== true) {
+    throw new Error('The identity provider did not verify this email address');
   }
 }
 
@@ -189,7 +202,7 @@ export class OIDCAuth extends BaseAuth {
   }
 
   private translatedError(message: string) {
-    return new Error(this.ctx.t(message, { ns: 'plugin-oidc-plus' }));
+    return new Error(this.ctx.t(message, { ns: namespace }));
   }
 
   private buildUserFields(claims: Claims) {
@@ -250,6 +263,10 @@ export class OIDCAuth extends BaseAuth {
     if (email) {
       const emailUser = await this.userRepository.findOne({ filter: { email } });
       if (emailUser) {
+        // Signup policy cannot authorize linking a new issuer/subject to an existing account.
+        if (claims.email_verified !== true) {
+          throw this.translatedError('The identity provider did not verify this email address.');
+        }
         if (this.getOptions().bindExistingUserByEmail === false || userBindField !== 'email') {
           throw this.translatedError(
             'A NocoBase account already uses this email, but automatic verified-email linking is disabled.',
