@@ -1,0 +1,240 @@
+name: Build and release custom plugins
+
+on:
+  push:
+    branches: [main]
+    paths: ['packages/plugins/plugin-*/**']
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Custom plugin directory name, or all'
+        required: true
+        default: all
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    if: github.repository == 'OrgGem/nocobase-beta' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      count: ${{ steps.select.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select custom plugins and immutable versions
+        id: select
+        shell: python
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SOURCE_SHA: ${{ github.sha }}
+          REQUESTED_PLUGIN: ${{ inputs.plugin }}
+        run: |
+          import json, os, re, subprocess
+          from pathlib import Path
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+
+          root = Path('packages/plugins')
+          available = {p.name: p for p in root.glob('plugin-*') if p.is_dir() and (p / 'package.json').is_file()}
+          if os.environ['EVENT_NAME'] == 'workflow_dispatch':
+              requested = os.environ['REQUESTED_PLUGIN'].strip()
+              if requested != 'all' and requested not in available:
+                  raise ValueError('Unknown custom plugin: ' + requested)
+              names = sorted(available) if requested == 'all' else [requested]
+          else:
+              before = os.environ['BEFORE']
+              if not before or set(before) == {'0'}:
+                  names = sorted(available)
+              else:
+                  changed = subprocess.check_output([
+                      'git', 'diff', '--no-renames', '--name-only', '-z', before, os.environ['SOURCE_SHA'], '--', 'packages/plugins'
+                  ]).decode().split('\0')
+                  names = sorted({p.split('/')[2] for p in changed if p.startswith('packages/plugins/') and len(p.split('/')) > 3} & available.keys())
+
+          entries = []
+          for name in names:
+              manifest = json.loads((available[name] / 'package.json').read_text(encoding='utf-8'))
+              version = manifest.get('version', '')
+              if not re.fullmatch(r'plugin-[a-z0-9][a-z0-9._-]*', name) or manifest.get('name') != name:
+                  raise ValueError('Invalid custom plugin package name: ' + name)
+              match = re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?', version)
+              if not match or any(x.isdigit() and len(x) > 1 and x[0] == '0' for x in (match.group(4) or '').split('.')):
+                  raise ValueError('Invalid plugin version: ' + name + ' ' + version)
+              tag = name + '@' + version
+              ref = os.environ['SOURCE_SHA']
+              existing = subprocess.run(['git', 'rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'], capture_output=True, text=True)
+              if existing.returncode == 0:
+                  ref = existing.stdout.strip()
+                  delta = subprocess.run(['git', 'diff', '--quiet', ref, os.environ['SOURCE_SHA'], '--', str(available[name])])
+                  if delta.returncode != 0:
+                      raise ValueError(tag + ' already exists with different plugin source. Bump this plugin version.')
+              entries.append({'plugin': name, 'version': version, 'tag': tag, 'ref': ref})
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('matrix=' + json.dumps({'include': entries}, separators=(',', ':')) + '\n')
+              output.write('count=' + str(len(entries)) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('Selected custom plugins\n\n' + '\n'.join('- ' + entry['tag'] + ' at ' + entry['ref'] for entry in entries) + '\n')
+
+  build:
+    needs: select
+    if: needs.select.outputs.count != '0'
+    name: ${{ matrix.plugin }} @ ${{ matrix.version }}
+    runs-on: windows-2022
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    concurrency:
+      group: custom-plugin-${{ matrix.tag }}
+      cancel-in-progress: false
+    env:
+      PLUGIN: ${{ matrix.plugin }}
+      PLUGIN_VERSION: ${{ matrix.version }}
+      PLUGIN_TAG: ${{ matrix.tag }}
+      BUILD_SHA: ${{ matrix.ref }}
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - name: Check existing release
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({...context.repo, tag: process.env.PLUGIN_TAG})).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (release && !release.draft) {
+              const archive = `${process.env.PLUGIN}-${process.env.PLUGIN_VERSION}.tgz`;
+              for (const name of [archive, `${archive}.sha256`]) {
+                if (!release.assets.some(asset => asset.name === name && asset.size > 0)) {
+                  throw new Error(`Published release is missing ${name}. Repair this release before retrying.`);
+                }
+              }
+              await core.summary.addRaw(`Already published: ${process.env.PLUGIN_TAG}`).write();
+              core.setOutput('build', 'false');
+            } else {
+              core.setOutput('build', 'true');
+            }
+      - uses: actions/setup-node@v4
+        if: steps.release.outputs.build == 'true'
+        with:
+          node-version: '22'
+      - name: Install workspace dependencies
+        if: steps.release.outputs.build == 'true'
+        shell: pwsh
+        run: |
+          npm install --global yarn@1.22.22
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          yarn install --frozen-lockfile --network-timeout 600000
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and pack this plugin
+        if: steps.release.outputs.build == 'true'
+        shell: pwsh
+        run: |
+          $manifest = Get-Content "packages/plugins/$env:PLUGIN/package.json" -Raw | ConvertFrom-Json
+          if ($manifest.name -ne $env:PLUGIN -or $manifest.version -ne $env:PLUGIN_VERSION) { throw 'Manifest does not match selected plugin/version' }
+          yarn nocobase build $env:PLUGIN --no-dts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pluginDir = Join-Path $env:GITHUB_WORKSPACE "packages/plugins/$env:PLUGIN"
+          $required = @('dist/server/index.js', 'dist/externalVersion.js')
+          foreach ($lane in @('client', 'client-v2')) {
+            if (Test-Path "$pluginDir/src/$lane") { $required += "dist/$lane/index.js" }
+          }
+          foreach ($locale in @('en-US', 'zh-CN')) {
+            if (Test-Path "$pluginDir/src/locale/$locale.json") { $required += "dist/locale/$locale.json" }
+          }
+          foreach ($file in $required) {
+            if (!(Test-Path "$pluginDir/$file" -PathType Leaf)) { throw "Missing build output $file" }
+          }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'plugin-artifact'
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Push-Location $pluginDir
+          try {
+            $packed = npm pack --json --pack-destination $out
+            if ($LASTEXITCODE -ne 0) { throw 'npm pack failed' }
+            $pack = @($packed | ConvertFrom-Json)[0]
+          } finally { Pop-Location }
+          if ($pack.name -ne $env:PLUGIN -or $pack.version -ne $env:PLUGIN_VERSION) { throw 'Archive package/version mismatch' }
+          if ($pack.filename -ne "$env:PLUGIN-$env:PLUGIN_VERSION.tgz") { throw 'Unexpected archive filename' }
+          foreach ($file in $required) {
+            if ($pack.files.path -notcontains $file) { throw "Archive missing $file" }
+          }
+          $archive = Join-Path $out $pack.filename
+          $digest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest  $($pack.filename)" | Set-Content "$archive.sha256" -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        if: steps.release.outputs.build == 'true'
+        with:
+          name: ${{ matrix.tag }}
+          path: plugin-artifact/*
+          if-no-files-found: error
+      - name: Publish versioned plugin release
+        if: steps.release.outputs.build == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const tag = process.env.PLUGIN_TAG;
+            // Check the tag immediately before publication to avoid releasing a raced or moved ref.
+            let ref;
+            try {
+              ref = (await github.rest.git.getRef({...context.repo, ref: `tags/${tag}`})).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (ref) {
+              let object = ref.object;
+              while (object.type === 'tag') {
+                object = (await github.rest.git.getTag({...context.repo, tag_sha: object.sha})).data.object;
+              }
+              if (object.type !== 'commit' || object.sha !== process.env.BUILD_SHA) throw new Error('Plugin tag target changed');
+            } else {
+              await github.rest.git.createRef({...context.repo, ref: `refs/tags/${tag}`, sha: process.env.BUILD_SHA});
+            }
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({...context.repo, tag})).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            if (release && !release.draft) throw new Error('Release was published concurrently');
+            if (!release) {
+              release = (await github.rest.repos.createRelease({
+                ...context.repo, tag_name: tag, name: tag, draft: true,
+                prerelease: process.env.PLUGIN_VERSION.includes('-'),
+                body: `Plugin ${process.env.PLUGIN}\nVersion ${process.env.PLUGIN_VERSION}\nSource ${process.env.BUILD_SHA}\nBuilt with Node 22 and the NocoBase workspace.`,
+              })).data;
+            }
+            // A retry can replace partial assets while the release is still a draft.
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {...context.repo, release_id: release.id});
+            for (const name of fs.readdirSync('plugin-artifact')) {
+              const previous = assets.find(asset => asset.name === name);
+              if (previous) await github.rest.repos.deleteReleaseAsset({...context.repo, asset_id: previous.id});
+              await github.rest.repos.uploadReleaseAsset({
+                ...context.repo, release_id: release.id, name,
+                data: fs.readFileSync(path.join('plugin-artifact', name)),
+              });
+            }
+            await github.rest.repos.updateRelease({
+              ...context.repo, release_id: release.id, draft: false, make_latest: 'false',
+            });
+            await core.summary.addLink(tag, release.html_url).write();
