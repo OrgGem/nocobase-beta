@@ -273,7 +273,7 @@ jobs:
     if: always() && needs.select.result == 'success' && needs.select.outputs.count != '0'
     name: npm ${{ matrix.plugin }} @ ${{ matrix.version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
@@ -403,15 +403,15 @@ jobs:
           provenance=true
           if [[ "$BUILD_SHA" != "$GITHUB_SHA" ]]; then provenance=false; fi
           npm publish "$archive" --access public --provenance="$provenance" --ignore-scripts --tag "$NPM_DIST_TAG" --registry https://registry.npmjs.org/
-          # Newly published packages may take a few minutes to appear in registry reads.
+          # npm publish-time scanning can delay availability by 15 minutes or more.
           verified=false
-          for attempt in {1..30}; do
+          for attempt in {1..120}; do
             if published_version="$(npm view "${PLUGIN}@${PLUGIN_VERSION}" version --prefer-online --registry https://registry.npmjs.org/ 2>/dev/null)" && [[ "$published_version" == "$PLUGIN_VERSION" ]]; then
               verified=true
               break
             fi
-            if [[ "$attempt" -lt 30 ]]; then
-              echo "Waiting for npm registry visibility ($attempt/30)"
+            if [[ "$attempt" -lt 120 ]]; then
+              echo "Waiting for npm registry visibility ($attempt/120)"
               sleep 10
             fi
           done
