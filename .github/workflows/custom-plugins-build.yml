@@ -385,7 +385,7 @@ jobs:
           NPM_DIST_TAG: ${{ steps.npm.outputs.dist-tag }}
         run: |
           set -euo pipefail
-          archive="npm-publication/${PLUGIN}-${PLUGIN_VERSION}.tgz"
+          archive="./npm-publication/${PLUGIN}-${PLUGIN_VERSION}.tgz"
           if [[ "$DRY_RUN" == 'true' ]]; then
             npm publish "$archive" --dry-run --access public --ignore-scripts --tag "$NPM_DIST_TAG" --registry https://registry.npmjs.org/
             exit 0
