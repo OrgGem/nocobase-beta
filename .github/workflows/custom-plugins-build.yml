@@ -140,6 +140,8 @@ jobs:
         if: steps.release.outputs.build == 'true'
         with:
           node-version: '22'
+          cache: yarn
+          cache-dependency-path: yarn.lock
       - name: Install workspace dependencies
         if: steps.release.outputs.build == 'true'
         shell: pwsh
@@ -193,6 +195,7 @@ jobs:
         if: steps.release.outputs.build == 'true'
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.CUSTOM_PLUGINS_RELEASE_TOKEN || github.token }}
           script: |
             const fs = require('fs');
             const path = require('path');
@@ -211,7 +214,14 @@ jobs:
               }
               if (object.type !== 'commit' || object.sha !== process.env.BUILD_SHA) throw new Error('Plugin tag target changed');
             } else {
-              await github.rest.git.createRef({...context.repo, ref: `refs/tags/${tag}`, sha: process.env.BUILD_SHA});
+              try {
+                await github.rest.git.createRef({...context.repo, ref: `refs/tags/${tag}`, sha: process.env.BUILD_SHA});
+              } catch (error) {
+                if (error.status === 403) {
+                  throw new Error('Tag creation needs workflow permission for this historical commit. Start a fresh manual run from main, or set CUSTOM_PLUGINS_RELEASE_TOKEN with Contents and Workflows write permissions.');
+                }
+                throw error;
+              }
             }
             let release;
             try {
