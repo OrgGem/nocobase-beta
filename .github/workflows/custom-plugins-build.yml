@@ -1,4 +1,4 @@
-name: Build and release custom plugins
+name: Build and publish custom plugins
 
 on:
   push:
@@ -11,6 +11,12 @@ on:
         required: true
         default: all
         type: string
+
+      dry_run:
+        description: 'Validate npm publication without publishing versions or creating releases'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -86,7 +92,7 @@ jobs:
 
   build:
     needs: select
-    if: needs.select.outputs.count != '0'
+    if: needs.select.outputs.count != '0' && inputs.dry_run != true
     name: ${{ matrix.plugin }} @ ${{ matrix.version }}
     runs-on: windows-2022
     timeout-minutes: 60
@@ -156,6 +162,12 @@ jobs:
         run: |
           $manifest = Get-Content "packages/plugins/$env:PLUGIN/package.json" -Raw | ConvertFrom-Json
           if ($manifest.name -ne $env:PLUGIN -or $manifest.version -ne $env:PLUGIN_VERSION) { throw 'Manifest does not match selected plugin/version' }
+          # Stamp publication metadata into the package built by CI.
+          $manifest | Add-Member repository ([pscustomobject]@{
+            type = 'git'; url = 'git+https://github.com/OrgGem/nocobase-beta.git'
+            directory = "packages/plugins/$env:PLUGIN"
+          }) -Force
+          $manifest | ConvertTo-Json -Depth 100 | Set-Content "packages/plugins/$env:PLUGIN/package.json" -Encoding utf8NoBOM
           yarn nocobase build $env:PLUGIN --no-dts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pluginDir = Join-Path $env:GITHUB_WORKSPACE "packages/plugins/$env:PLUGIN"
@@ -251,3 +263,141 @@ jobs:
               ...context.repo, release_id: release.id, draft: false, make_latest: 'false',
             });
             await core.summary.addLink(tag, release.html_url).write();
+
+  npm:
+    needs: [select, build]
+    if: always() && needs.select.result == 'success' && needs.select.outputs.count != '0'
+    name: npm ${{ matrix.plugin }} @ ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    concurrency:
+      group: custom-plugin-npm-${{ matrix.tag }}
+      cancel-in-progress: false
+    env:
+      PLUGIN: ${{ matrix.plugin }}
+      PLUGIN_VERSION: ${{ matrix.version }}
+      PLUGIN_TAG: ${{ matrix.tag }}
+      BUILD_SHA: ${{ matrix.ref }}
+      VERSION_CONFLICT: ${{ matrix.error }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+    steps:
+      - name: Check npm version
+        id: npm
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (process.env.VERSION_CONFLICT) throw new Error(process.env.VERSION_CONFLICT);
+            const name = process.env.PLUGIN;
+            const version = process.env.PLUGIN_VERSION;
+            const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
+            if (!response.ok && response.status !== 404) throw new Error(`npm registry returned ${response.status}`);
+            const metadata = response.ok ? await response.json() : {};
+            const exists = Boolean(metadata.versions?.[version]);
+            let distTag = version.includes('-') ? 'next' : 'latest';
+            const latest = metadata['dist-tags']?.latest;
+            if (distTag === 'latest' && latest) {
+              const current = version.split('+')[0].split('.').map(BigInt);
+              const previous = latest.split(/[+-]/)[0].split('.').map(BigInt);
+              const diff = current.map((value, i) => value - previous[i]).find(value => value !== 0n);
+              if (!diff || diff < 0n) distTag = 'backfill';
+            }
+            core.setOutput('publish', String(!exists));
+            core.setOutput('dist-tag', distTag);
+            await core.summary.addRaw(exists
+              ? `npm ${name}@${version} already exists. Publication skipped.\n`
+              : `npm ${name}@${version} will use dist-tag ${distTag}.\n`).write();
+      - name: Fetch verified plugin archive
+        if: steps.npm.outputs.publish == 'true'
+        id: archive
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({...context.repo, tag: process.env.PLUGIN_TAG})).data;
+            } catch (error) {
+              if (error.status !== 404 || process.env.DRY_RUN !== 'true') throw error;
+              await core.summary.addRaw('Dry run plan: build and create this plugin release before npm publication.\n').write();
+              core.setOutput('available', 'false');
+              return;
+            }
+            if (release.draft) throw new Error('The plugin release has not finished uploading');
+            let ref = (await github.rest.git.getRef({...context.repo, ref: `tags/${process.env.PLUGIN_TAG}`})).data.object;
+            while (ref.type === 'tag') ref = (await github.rest.git.getTag({...context.repo, tag_sha: ref.sha})).data.object;
+            if (ref.type !== 'commit' || ref.sha !== process.env.BUILD_SHA) throw new Error('Plugin tag target changed');
+            const filename = `${process.env.PLUGIN}-${process.env.PLUGIN_VERSION}.tgz`;
+            async function download(name) {
+              const asset = release.assets.find(item => item.name === name && item.size > 0);
+              if (!asset) throw new Error(`Missing release asset ${name}`);
+              const response = await fetch(asset.browser_download_url);
+              if (!response.ok) throw new Error(`Asset download failed: ${response.status}`);
+              return Buffer.from(await response.arrayBuffer());
+            }
+            const archive = await download(filename);
+            const checksum = (await download(`${filename}.sha256`)).toString('utf8').trim().split(/\s+/)[0];
+            if (crypto.createHash('sha256').update(archive).digest('hex') !== checksum) throw new Error('Archive checksum mismatch');
+            fs.mkdirSync('npm-artifact', {recursive: true});
+            fs.writeFileSync(`npm-artifact/${filename}`, archive);
+            core.setOutput('available', 'true');
+      - uses: actions/setup-node@v4
+        if: steps.archive.outputs.available == 'true'
+        with:
+          node-version: '24'
+      - name: Prepare public npm package
+        if: steps.archive.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11
+          python3 - <<'PY'
+          import os, json, tarfile
+          from pathlib import Path
+          filename = os.environ['PLUGIN'] + '-' + os.environ['PLUGIN_VERSION'] + '.tgz'
+          with tarfile.open(Path('npm-artifact') / filename) as archive:
+              archive.extractall('npm-unpacked', filter='data')
+          path = Path('npm-unpacked/package/package.json')
+          manifest = json.loads(path.read_text(encoding='utf-8-sig'))
+          if manifest.get('name') != os.environ['PLUGIN'] or manifest.get('version') != os.environ['PLUGIN_VERSION'] or manifest.get('private'):
+              raise ValueError('Invalid package identity or private package')
+          manifest['gitHead'] = os.environ['BUILD_SHA']
+          manifest['repository'] = {'type': 'git', 'url': 'git+https://github.com/OrgGem/nocobase-beta.git', 'directory': 'packages/plugins/' + manifest['name']}
+          manifest['publishConfig'] = {**manifest.get('publishConfig', {}), 'access': 'public', 'registry': 'https://registry.npmjs.org/'}
+          path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+          PY
+          mkdir npm-publication
+          cd npm-unpacked/package
+          # Release archives already contain built dependencies and have completed prepack.
+          npm pack --ignore-scripts --pack-destination ../../npm-publication
+      - name: Publish public version to npm
+        if: steps.archive.outputs.available == 'true'
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ steps.npm.outputs.dist-tag }}
+        run: |
+          set -euo pipefail
+          archive="npm-publication/${PLUGIN}-${PLUGIN_VERSION}.tgz"
+          if [[ "$DRY_RUN" == 'true' ]]; then
+            npm publish "$archive" --dry-run --access public --ignore-scripts --tag "$NPM_DIST_TAG" --registry https://registry.npmjs.org/
+            exit 0
+          fi
+          if [[ -n "${NODE_AUTH_TOKEN:-}" ]]; then
+            export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/custom-plugins-publish.npmrc"
+            printf '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}\n' > "$NPM_CONFIG_USERCONFIG"
+            trap 'rm -f "$NPM_CONFIG_USERCONFIG"' EXIT
+          fi
+          # npm provenance records GITHUB_SHA. Historical release recovery retains its original gitHead.
+          provenance=true
+          if [[ "$BUILD_SHA" != "$GITHUB_SHA" ]]; then provenance=false; fi
+          npm publish "$archive" --access public --provenance="$provenance" --ignore-scripts --tag "$NPM_DIST_TAG" --registry https://registry.npmjs.org/
+          npm view "${PLUGIN}@${PLUGIN_VERSION}" version --registry https://registry.npmjs.org/
+          echo "Published https://www.npmjs.com/package/${PLUGIN}/v/${PLUGIN_VERSION}" >> "$GITHUB_STEP_SUMMARY"
