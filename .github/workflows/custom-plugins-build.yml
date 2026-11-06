@@ -185,18 +185,22 @@ jobs:
           New-Item -ItemType Directory -Force $out | Out-Null
           Push-Location $pluginDir
           try {
-            $packed = npm pack --json --pack-destination $out
+            npm pack --pack-destination $out
             if ($LASTEXITCODE -ne 0) { throw 'npm pack failed' }
-            $pack = @($packed | ConvertFrom-Json)[0]
           } finally { Pop-Location }
+          # Inspect the archive directly; prepack scripts may write logs to npm's stdout.
+          $archive = Join-Path $out "$env:PLUGIN-$env:PLUGIN_VERSION.tgz"
+          $packedManifest = tar -xOf $archive package/package.json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read archive manifest' }
+          $pack = $packedManifest | ConvertFrom-Json
           if ($pack.name -ne $env:PLUGIN -or $pack.version -ne $env:PLUGIN_VERSION) { throw 'Archive package/version mismatch' }
-          if ($pack.filename -ne "$env:PLUGIN-$env:PLUGIN_VERSION.tgz") { throw 'Unexpected archive filename' }
+          $files = @(tar -tf $archive)
+          if ($LASTEXITCODE -ne 0) { throw 'Could not list archive files' }
           foreach ($file in $required) {
-            if ($pack.files.path -notcontains $file) { throw "Archive missing $file" }
+            if ($files -notcontains "package/$file") { throw "Archive missing $file" }
           }
-          $archive = Join-Path $out $pack.filename
           $digest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$digest  $($pack.filename)" | Set-Content "$archive.sha256" -Encoding ascii
+          "$digest  $env:PLUGIN-$env:PLUGIN_VERSION.tgz" | Set-Content "$archive.sha256" -Encoding ascii
       - uses: actions/upload-artifact@v4
         if: steps.release.outputs.build == 'true'
         with:
