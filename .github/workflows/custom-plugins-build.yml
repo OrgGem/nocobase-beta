@@ -399,5 +399,20 @@ jobs:
           provenance=true
           if [[ "$BUILD_SHA" != "$GITHUB_SHA" ]]; then provenance=false; fi
           npm publish "$archive" --access public --provenance="$provenance" --ignore-scripts --tag "$NPM_DIST_TAG" --registry https://registry.npmjs.org/
-          npm view "${PLUGIN}@${PLUGIN_VERSION}" version --registry https://registry.npmjs.org/
+          # Newly published packages may take a few minutes to appear in registry reads.
+          verified=false
+          for attempt in {1..30}; do
+            if published_version="$(npm view "${PLUGIN}@${PLUGIN_VERSION}" version --prefer-online --registry https://registry.npmjs.org/ 2>/dev/null)" && [[ "$published_version" == "$PLUGIN_VERSION" ]]; then
+              verified=true
+              break
+            fi
+            if [[ "$attempt" -lt 30 ]]; then
+              echo "Waiting for npm registry visibility ($attempt/30)"
+              sleep 10
+            fi
+          done
+          if [[ "$verified" != true ]]; then
+            echo "::error::npm accepted the publication, but the version is not visible after registry retries. Check npm before retrying publication."
+            exit 1
+          fi
           echo "Published https://www.npmjs.com/package/${PLUGIN}/v/${PLUGIN_VERSION}" >> "$GITHUB_STEP_SUMMARY"
