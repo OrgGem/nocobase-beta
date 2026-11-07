@@ -11,6 +11,7 @@ import { createAclSnippetAllow, createMockClient } from '@nocobase/client-v2';
 
 import {
   canUseSkillRegistryCapability,
+  permissionsForRole,
   resolveSkillRegistryPermissions,
   SKILL_REGISTRY_SNIPPETS,
 } from '../permissions';
@@ -62,10 +63,20 @@ describe('Skill Registry client ACL', () => {
     });
   });
 
-  it('accepts the legacy root grants returned as pm or pm.*', () => {
-    const permissions = resolveSkillRegistryPermissions((snippet) => snippet === 'pm.*' || snippet === 'pm');
+  it('keeps the core plugin-manager grant separate from registry actions', () => {
+    const permissions = resolveSkillRegistryPermissions(createAclSnippetAllow(['pm']));
+    expect(Object.values(permissions)).not.toContain(true);
+    const restricted = resolveSkillRegistryPermissions(
+      createAclSnippetAllow(['pm.*', '!pm.plugin-skill-registry.manage', '!pm.plugin-skill-registry.publish']),
+    );
+    expect(restricted.canRead).toBe(true);
+    expect(restricted.canManage).toBe(false);
+    expect(restricted.canPublish).toBe(false);
+  });
 
-    expect(permissions.canManage).toBe(true);
+  it('honors an explicit rejection even before a wildcard grant', () => {
+    const role = { snippets: ['!pm.plugin-skill-registry.manage', '!pm.plugin-skill-registry.publish', 'pm.*'] };
+    expect(permissionsForRole(role)).toMatchObject({ canRead: true, canPublish: false, canManage: false });
   });
 
   it('uses read to gate every page that loads registry collection data', async () => {

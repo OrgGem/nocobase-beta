@@ -1,4 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/client';
+import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
 import React from 'react';
 import { GitRepositoryWorkContext, GitMergeRequestWorkContext, GitCommitWorkContext } from './ai-context';
 
@@ -18,7 +28,7 @@ const GitAccounts = React.lazy(() =>
 // Reuse the v2 subtree UI here so the feature is available in both runtimes.
 const SubtreeSplits = React.lazy(() => import('../client-v2/components/SubtreeSplits'));
 
-import PluginACLClient from "@nocobase/plugin-acl";
+import type PluginACLClient from '@nocobase/plugin-acl/client';
 import { RepositoryPermissions } from './components/RepositoryPermissions';
 
 export class PluginGitManagerClient extends Plugin {
@@ -56,14 +66,14 @@ export class PluginGitManagerClient extends Plugin {
       aclSnippet: `pm.plugin-git-manager.manage`,
     });
 
-    const aiManager = ((this as any).app as any).aiManager;
+    const aiManager = this.app.pm.get<PluginAIClientV2>('ai')?.aiManager;
     if (aiManager?.registerWorkContext) {
       aiManager.registerWorkContext('git-repository', GitRepositoryWorkContext);
       aiManager.registerWorkContext('git-merge-request', GitMergeRequestWorkContext);
       aiManager.registerWorkContext('git-commit', GitCommitWorkContext);
     }
 
-    const aclPlugin = this.app.pm.get(PluginACLClient);
+    const aclPlugin = this.app.pm.get<PluginACLClient>('acl');
     if (aclPlugin) {
       aclPlugin.settingsUI.addPermissionsTab(({ t, TabLayout, activeRole }) => ({
         key: 'git-manager',
@@ -80,4 +90,3 @@ export class PluginGitManagerClient extends Plugin {
 }
 
 export default PluginGitManagerClient;
-

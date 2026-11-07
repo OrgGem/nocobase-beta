@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
 import type { Database } from '@nocobase/database';
 import { resolve } from 'path';
@@ -10,6 +19,7 @@ import * as rolePermissionsActions from './actions/role-permissions';
 import * as subtreeActions from './actions/subtree';
 import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
+import { enforceGitRequestMethod } from './request-method-policy';
 import { startPoller, stopPoller } from './poller';
 import { RegistryGitContentService, SkillHubGitContentService } from './services/registry-content-service';
 import { enforceRepositoryAccess, enforceRepositoryCollectionAccess } from './repository-access';
@@ -99,6 +109,7 @@ export class PluginGitManagerServer extends Plugin {
       },
     });
 
+    this.app.resourceManager.use(enforceGitRequestMethod);
     (this as any).app.resourceManager.use(enforceRepositoryAccess);
     (this as any).app.resourceManager.use(enforceRepositoryCollectionAccess);
 
@@ -139,11 +150,11 @@ export class PluginGitManagerServer extends Plugin {
     });
     (this as any).app.on('beforeStop', () => {
       unregisterReviewQueue((this as any).app);
-      stopPoller();
+      stopPoller(this.app);
     });
     (this as any).app.on('beforeDestroy', () => {
       unregisterReviewQueue((this as any).app);
-      stopPoller();
+      stopPoller(this.app);
     });
 
     // Read-only operations available to all plugin users
@@ -323,12 +334,12 @@ export class PluginGitManagerServer extends Plugin {
 
   async beforeDisable() {
     unregisterReviewQueue((this as any).app);
-    stopPoller();
+    stopPoller(this.app);
   }
 
   async beforeUnload() {
     unregisterReviewQueue((this as any).app);
-    stopPoller();
+    stopPoller(this.app);
   }
 }
 

@@ -1,10 +1,25 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, Tag, Alert } from 'antd';
 import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import * as aiClient from "@nocobase/plugin-ai";
+import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
 import { REVIEW_PROMPT_TEMPLATES } from '../promptTemplates';
 import { useT } from '../locale';
+
+interface ExistingReview {
+  status: string;
+  headSha?: string;
+  latestSha?: string;
+}
 
 interface ReviewFlow {
   id: number;
@@ -29,7 +44,7 @@ type Target =
  * Button that lets the user kick off a code review for a given target.
  * Two paths:
  *  - "Run review" → POST gitManager:triggerReview (server-side, async)
- *  - "Open chat" → call (aiClient as any).useChatBoxActions?.() || {}.triggerTask if plugin-ai is loaded,
+ *  - "Open chat" → call the enabled AI plugin manager,
  *    so the user can chat with the AI employee using the same context.
  */
 export const RunReviewButton: React.FC<{
@@ -39,20 +54,20 @@ export const RunReviewButton: React.FC<{
   onTriggered?: (reviewId: number) => void;
 }> = ({ target, size = 'small', type = 'default', onTriggered }) => {
   const t = useT();
-  const api = useApp().apiClient;
-  const aiConfigRepository = (aiClient as any).useAIConfigRepository?.() || {};
-  const { triggerTask } = (aiClient as any).useChatBoxActions?.() || {};
+  const app = useApp();
+  const api = app.apiClient;
+  const aiManager = app.pm.get<PluginAIClientV2>('ai')?.aiManager;
   const [open, setOpen] = useState(false);
   const [flows, setFlows] = useState<ReviewFlow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [asking, setAsking] = useState(false);
-  const [existingReview, setExistingReview] = useState<any | null>(null);
+  const [existingReview, setExistingReview] = useState<ExistingReview | null>(null);
   const [templateKey, setTemplateKey] = useState<string | undefined>();
   const [form] = Form.useForm();
 
   const loadExistingReview = useCallback(() => {
     let cancelled = false;
-    const filter: any = {
+    const filter: Record<string, unknown> = {
       repositoryId: target.repositoryId,
       targetType: target.type,
     };
@@ -132,7 +147,7 @@ export const RunReviewButton: React.FC<{
     try {
       const values = await form.validateFields();
       setSubmitting(true);
-      const params: any = {
+      const params: Record<string, unknown> = {
         repositoryId: target.repositoryId,
         targetType: target.type,
         flowId: values.flowId,
@@ -156,9 +171,14 @@ export const RunReviewButton: React.FC<{
       form.resetFields();
       loadExistingReview();
       onTriggered?.(reviewId);
-    } catch (err: any) {
-      if (err?.errorFields) return; // validation error
-      message.error(err?.response?.data?.errors?.[0]?.message || err?.message || t('Failed to trigger review'));
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'errorFields' in err) return;
+      const responseError = err as { response?: { data?: { errors?: Array<{ message?: string }> } } } | null;
+      message.error(
+        responseError?.response?.data?.errors?.[0]?.message ||
+          (err instanceof Error && err.message) ||
+          t('Failed to trigger review'),
+      );
     } finally {
       setSubmitting(false);
     }
@@ -235,7 +255,7 @@ export const RunReviewButton: React.FC<{
   };
 
   const handleOpenChat = async () => {
-    if (!triggerTask || !aiConfigRepository?.getAIEmployees) {
+    if (!aiManager?.triggerTask) {
       message.warning(t('AI plugin is not available'));
       return;
     }
@@ -247,16 +267,8 @@ export const RunReviewButton: React.FC<{
         message.warning(t('No matching flow available'));
         return;
       }
-      const employees: any[] = aiConfigRepository.aiEmployees?.length
-        ? aiConfigRepository.aiEmployees
-        : await aiConfigRepository.getAIEmployees();
-      const aiEmployee = employees.find((item) => item.username === flow.aiEmployeeUsername);
-      if (!aiEmployee) {
-        message.warning(t('AI employee not found'));
-        return;
-      }
-      await triggerTask({
-        aiEmployee,
+      aiManager.triggerTask({
+        aiEmployee: flow.aiEmployeeUsername,
         tasks: [
           {
             title: `${flow.name}: ${buildContextHint()}`,
@@ -270,8 +282,8 @@ export const RunReviewButton: React.FC<{
           },
         ],
       });
-    } catch (err: any) {
-      message.error(err?.message || t('Failed to open AI chat'));
+    } catch (err: unknown) {
+      message.error((err instanceof Error && err.message) || t('Failed to open AI chat'));
     } finally {
       setAsking(false);
     }
@@ -298,36 +310,33 @@ export const RunReviewButton: React.FC<{
     : t('Code Review');
   const ButtonIcon = isReReview ? ReloadOutlined : RobotOutlined;
 
-  const items = useMemo(
-    () => [
-      {
-        key: 'run',
-        icon: <ThunderboltOutlined />,
-        label: isReReview ? t('Re-run automated review') : t('Run automated review'),
-        onClick: () => setOpen(true),
-      },
-      ...(existingReview
-        ? [
-            {
-              key: 'view',
-              icon: <RobotOutlined />,
-              label: t(`Status: ${existingReview.status}`) + ' - ' + t('View in Review History tab'),
-              onClick: () => {
-                message.info(t('Please switch to the "Review History" tab to see the details.'));
-              },
+  const items = [
+    {
+      key: 'run',
+      icon: <ThunderboltOutlined />,
+      label: isReReview ? t('Re-run automated review') : t('Run automated review'),
+      onClick: () => setOpen(true),
+    },
+    ...(existingReview
+      ? [
+          {
+            key: 'view',
+            icon: <RobotOutlined />,
+            label: t(`Status: ${existingReview.status}`) + ' - ' + t('View in Review History tab'),
+            onClick: () => {
+              message.info(t('Please switch to the "Review History" tab to see the details.'));
             },
-          ]
-        : []),
-      {
-        key: 'chat',
-        icon: <MessageOutlined />,
-        label: t('Ask AI Employee'),
-        onClick: handleOpenChat,
-        disabled: asking,
-      },
-    ],
-    [isReReview, existingReview, asking, handleOpenChat, t],
-  );
+          },
+        ]
+      : []),
+    {
+      key: 'chat',
+      icon: <MessageOutlined />,
+      label: t('Ask AI Employee'),
+      onClick: handleOpenChat,
+      disabled: asking || !aiManager?.triggerTask,
+    },
+  ];
 
   return (
     <>
@@ -434,4 +443,3 @@ export const RunReviewButton: React.FC<{
     </>
   );
 };
-

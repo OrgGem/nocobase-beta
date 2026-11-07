@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { spawn } from 'child_process';
 import { existsSync } from 'fs';
 import type { Readable } from 'stream';
@@ -26,8 +35,7 @@ export interface RegistryGitContentLimits {
   maxTreeOutputBytes: number;
 }
 
-// Getter-based limits re-read env vars on every access, so runtime settings
-// applied via Skill Registry's applyRuntimeOverrides() take effect without restart.
+// Deployment ceilings are read from the environment.
 const DEFAULT_REGISTRY_GIT_CONTENT_LIMITS: RegistryGitContentLimits = {
   get maxFileBytes() {
     return positiveLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES, 100 * 1024 * 1024);
@@ -59,6 +67,7 @@ export const REGISTRY_GIT_CONTENT_CONTRACT_VERSION = 2;
 export const REGISTRY_GIT_CONTENT_CAPABILITIES = [
   'registry-content-with-actor',
   'registry-content-authorize-source',
+  'registry-content-tree-limits',
 ] as const;
 export const SKILL_HUB_GIT_CONTENT_CONTRACT_VERSION = 2;
 export const SKILL_HUB_GIT_CONTENT_CAPABILITIES = ['skill-hub-content-with-actor'] as const;
@@ -316,6 +325,8 @@ class GitContentService {
       commitSha: string;
       rootPath: string;
       recursive: boolean;
+      maxTreeEntries?: number;
+      maxTreeOutputBytes?: number;
     },
     access?: RegistryGitAccessContext,
   ): Promise<RegistryGitTreeEntry[]> {
@@ -330,11 +341,11 @@ class GitContentService {
     const output = await runGitBuffer(
       localPath,
       ['ls-tree', '-l', ...(input.recursive ? ['-r'] : []), target],
-      this.limits.maxTreeOutputBytes,
+      boundedPositive(input.maxTreeOutputBytes, this.limits.maxTreeOutputBytes, this.limits.maxTreeOutputBytes),
       DEFAULT_GIT_TIMEOUT_MS,
     );
     const lines = output.toString('utf8').trim().split('\n').filter(Boolean);
-    if (lines.length > this.limits.maxTreeEntries) {
+    if (lines.length > boundedPositive(input.maxTreeEntries, this.limits.maxTreeEntries, this.limits.maxTreeEntries)) {
       throw new RegistryContentLimitError('Git tree contains too many entries for registry export.');
     }
     return lines

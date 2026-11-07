@@ -14,6 +14,10 @@ import { join } from 'path';
 import { createMockServer, type MockServer } from '@nocobase/test';
 
 import PluginSkillRegistryServer from '../plugin';
+import { GitManagerSourceProvider } from '../providers/git-manager-provider';
+import { RegistrySettingsService } from '../services/registry-settings-service';
+import { ARTIFACT_LIMITS } from '../services/artifact-builder';
+import type { RegistryDatabase } from '../services/repository-types';
 
 describe('Skill Registry plugin integration', () => {
   let app: MockServer | undefined;
@@ -180,6 +184,90 @@ describe('Skill Registry plugin integration', () => {
       values: { name: 'bypass', namespace: 'acme', providerType: 'skill-hub', providerConfig: {} },
     });
     expect(sourceUpsert.status).toBe(405);
+  });
+
+  it('rejects GET deletes before mutation and accepts the authorized POST', async () => {
+    const server = requireApp();
+    const owner = await server.db.getRepository('users').findOne();
+    const agent = await server.agent().login(owner);
+    const repo = server.db.getRepository('skillRegistryMarkdownSkills');
+    const skill = await repo.create({
+      values: {
+        ownerId: owner.id,
+        namespace: 'tests',
+        slug: 'method-guard',
+        displayName: 'Example',
+        content: '# Example',
+        status: 'draft',
+      },
+    });
+    const target = { markdownSkillId: skill.id };
+    expect((await agent.get('/skillRegistryAdmin:deleteMarkdown').query(target)).status).toBe(405);
+    expect(await repo.findOne({ filterByTk: skill.id })).toBeTruthy();
+    expect((await agent.post('/skillRegistryAdmin:deleteMarkdown').send(target)).status).toBe(200);
+    expect(await repo.findOne({ filterByTk: skill.id })).toBeFalsy();
+  });
+
+  it('leaves core plugin discovery available with unrelated query parameters', async () => {
+    const response = await requireApp()
+      .agent()
+      .get('/pm:listEnabled')
+      .query({ targetCollection: 'skillRegistryVersions', associatedName: 'skillRegistryPackages' });
+    expect(response.status).toBe(200);
+  });
+
+  it('isolates overlapping operation limits and restores the deployment default after reset', async () => {
+    const service = new RegistrySettingsService(requireApp().db as unknown as RegistryDatabase);
+    const baseline = ARTIFACT_LIMITS.maxFiles;
+    const envBefore = process.env.SKILL_REGISTRY_MAX_FILES;
+    await service.update({ maxFiles: 2 });
+    await service.withRuntimeOverrides(async () => {
+      expect(ARTIFACT_LIMITS.maxFiles).toBe(2);
+      await service.update({ maxFiles: 7 });
+      await service.withRuntimeOverrides(async () => {
+        expect(ARTIFACT_LIMITS.maxFiles).toBe(7);
+      });
+      expect(ARTIFACT_LIMITS.maxFiles).toBe(2);
+    });
+    await service.update({});
+    await service.withRuntimeOverrides(async () => {
+      expect(ARTIFACT_LIMITS.maxFiles).toBe(baseline);
+    });
+    expect(process.env.SKILL_REGISTRY_MAX_FILES).toBe(envBefore);
+  });
+
+  it('passes tree limits to Git Manager and fails closed when the provider cannot enforce them', async () => {
+    const settings = new RegistrySettingsService(requireApp().db as unknown as RegistryDatabase);
+    const git = {
+      capabilities: ['registry-content-tree-limits'],
+      resolveCommit: vi.fn().mockResolvedValue('a'.repeat(40)),
+      readFile: vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error('Missing manifest'), { code: 'REGISTRY_GIT_FILE_NOT_FOUND' })),
+      listTree: vi.fn().mockResolvedValue([]),
+    };
+    const provider = new GitManagerSourceProvider({ get: () => ({ registryContentService: git }) });
+    const source = {
+      id: 'tree-limits',
+      namespace: 'tests',
+      providerType: 'git-manager' as const,
+      providerConfig: { repositoryId: 1, ref: 'main', rootPath: 'skills' },
+    };
+    await settings.update({ maxSourceTreeEntries: 10, maxSourceTreeOutputBytes: 2048 });
+    try {
+      await settings.withRuntimeOverrides(() => provider.discover(source));
+      expect(git.listTree).toHaveBeenCalledWith(
+        expect.objectContaining({ maxTreeEntries: 10, maxTreeOutputBytes: 2048 }),
+      );
+      git.listTree.mockClear();
+      git.capabilities = [];
+      await expect(settings.withRuntimeOverrides(() => provider.discover(source))).rejects.toMatchObject({
+        status: 424,
+      });
+      expect(git.listTree).not.toHaveBeenCalled();
+    } finally {
+      await settings.update({});
+    }
   });
 
   it('validates the complete source configuration on single-record updates', async () => {

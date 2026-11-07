@@ -1,4 +1,37 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 export const URL_USERINFO_NOT_ALLOWED = 'Credential-bearing URLs are not allowed';
+
+export function assertAccountRepositoryUrl(repoUrl: string, baseUrl: string | null, provider: string): void {
+  assertUrlHasNoUserInfo(repoUrl);
+  const trustedUrl = baseUrl || (provider === 'github' ? 'https://github.com' : 'https://gitlab.com');
+  assertUrlHasNoUserInfo(trustedUrl);
+  let repository: URL;
+  let account: URL;
+  try {
+    repository = new URL(repoUrl);
+    account = new URL(trustedUrl);
+  } catch {
+    throw new Error('Invalid repository or account URL');
+  }
+  if (repository.protocol !== 'https:' || account.protocol !== 'https:') {
+    throw new Error('Only HTTPS repository and account URLs are allowed');
+  }
+  if (repository.origin !== account.origin) {
+    throw new Error('Repository URL must match the Git account origin');
+  }
+  // This plugin currently implements the public GitHub API, not GitHub Enterprise endpoints.
+  if (provider === 'github' && repository.origin !== 'https://github.com') {
+    throw new Error('GitHub accounts currently require github.com');
+  }
+}
 
 function pathSegments(value: string): string[] {
   return value.split(/[.[\],:/()=\s'"]+/);

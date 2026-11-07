@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context } from '@nocobase/actions';
 import type { Application } from '@nocobase/server';
 import { getEffectiveActionParams } from '../repository-access';
@@ -114,7 +123,9 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
 
   if (!repositoryId) ctx.throw(400, 'repositoryId is required');
   if (!targetType) ctx.throw(400, 'targetType is required');
-  if (!['mr', 'commit', 'branch', 'folder'].includes(targetType)) ctx.throw(400, 'invalid targetType');
+  if (targetType !== 'mr' && targetType !== 'commit' && targetType !== 'branch' && targetType !== 'folder') {
+    ctx.throw(400, 'invalid targetType');
+  }
   if (targetType === 'mr' && !mrIid) ctx.throw(400, 'mrIid is required for MR review');
   if (targetType === 'commit' && !commitSha) ctx.throw(400, 'commitSha is required for commit review');
   if (targetType === 'branch' && !branch) ctx.throw(400, 'branch is required for branch review');
@@ -126,14 +137,14 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
   const userId = (ctx as any).state?.currentUser?.id;
   try {
     const reviewId = await triggerReviewInternal(ctx.app, {
-      flowId,
+      flowId: flowId != null ? Number(flowId) : null,
       repositoryId: Number(repositoryId),
       targetType,
       mrIid: mrIid != null ? Number(mrIid) : null,
-      commitSha: commitSha || null,
-      branch: branch || null,
-      folderPath: targetType === 'folder' ? folderPath : null,
-      extraInstructions,
+      commitSha: typeof commitSha === 'string' ? commitSha : null,
+      branch: typeof branch === 'string' ? branch : null,
+      folderPath: targetType === 'folder' && typeof folderPath === 'string' ? folderPath : null,
+      extraInstructions: typeof extraInstructions === 'string' ? extraInstructions : undefined,
       triggeredBy: 'manual',
       userId,
     });
@@ -693,7 +704,9 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
 export async function reviewApprovePost(ctx: Context, next: () => Promise<void>) {
   const params = getEffectiveActionParams(ctx);
   const { reviewId, editedMarkdown } = params;
-  if (!reviewId) ctx.throw(400, 'reviewId is required');
+  if (!reviewId || (typeof reviewId !== 'string' && typeof reviewId !== 'number')) {
+    ctx.throw(400, 'reviewId is required');
+  }
 
   const reviewsRepo = ctx.db.getRepository('gitCodeReviews');
   const review = await reviewsRepo.findOne({ filterByTk: reviewId });
@@ -734,7 +747,9 @@ export async function reviewApprovePost(ctx: Context, next: () => Promise<void>)
 export async function reviewReject(ctx: Context, next: () => Promise<void>) {
   const params = getEffectiveActionParams(ctx);
   const { reviewId, reason } = params;
-  if (!reviewId) ctx.throw(400, 'reviewId is required');
+  if (!reviewId || (typeof reviewId !== 'string' && typeof reviewId !== 'number')) {
+    ctx.throw(400, 'reviewId is required');
+  }
 
   const reviewsRepo = ctx.db.getRepository('gitCodeReviews');
   const review = await reviewsRepo.findOne({ filterByTk: reviewId });
@@ -1167,12 +1182,13 @@ async function fetchMrHeadSha(db: any, repo: any, mrIid: number): Promise<string
   const pat = account?.pat || '';
   if (!pat) return null;
   const repoUrl = repo.get('repoUrl') as string;
-  const isGitHub = account?.provider === 'github' || repoUrl.includes('github.com');
+  const isGitHub = account?.provider === 'github' || new URL(repoUrl).hostname === 'github.com';
 
   try {
     if (isGitHub) {
       const { projectPath } = parseGitLabProject(repoUrl);
       const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls/${mrIid}`, {
+        redirect: 'error',
         headers: { Authorization: `Bearer ${pat}`, Accept: 'application/vnd.github.v3+json' },
       });
       if (!response.ok) return null;
@@ -1181,6 +1197,7 @@ async function fetchMrHeadSha(db: any, repo: any, mrIid: number): Promise<string
     } else {
       const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
       const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests/${mrIid}`, {
+        redirect: 'error',
         headers: { 'PRIVATE-TOKEN': pat, Accept: 'application/json' },
       });
       if (!response.ok) return null;
@@ -1196,13 +1213,14 @@ async function postNoteToGitLab(db: any, repo: any, mrIid: number, body: string)
   const account = await getRepoAccount(db, repo);
   const pat = account?.pat || '';
   const repoUrl = repo.get('repoUrl') as string;
-  const isGitHub = account?.provider === 'github' || repoUrl.includes('github.com');
+  const isGitHub = account?.provider === 'github' || new URL(repoUrl).hostname === 'github.com';
 
   if (isGitHub) {
     if (!pat) throw new Error('Repository has no PAT configured');
     const { projectPath } = parseGitLabProject(repoUrl);
 
     const response = await fetch(`https://api.github.com/repos/${projectPath}/issues/${mrIid}/comments`, {
+      redirect: 'error',
       method: 'POST',
       headers: {
         Authorization: `Bearer ${pat}`,
@@ -1224,6 +1242,7 @@ async function postNoteToGitLab(db: any, repo: any, mrIid: number, body: string)
     const { apiBase, encodedProject } = parseGitLabProject(repoUrl);
 
     const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests/${mrIid}/notes`, {
+      redirect: 'error',
       method: 'POST',
       headers: {
         'PRIVATE-TOKEN': pat,

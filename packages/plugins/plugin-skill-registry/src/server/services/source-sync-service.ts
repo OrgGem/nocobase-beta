@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { registryLimit } from './registry-settings-service';
 import { randomUUID } from 'crypto';
 
 import type { RegistrySourceAccessContext, RegistrySourceDescriptor, RegistrySourceProvider } from '../contracts/types';
@@ -97,7 +107,7 @@ function lockTtlMs(): number {
 }
 
 function stuckRunAgeMs(): number {
-  return positiveInteger(process.env.SKILL_REGISTRY_STUCK_RUN_MINUTES, 60, 24 * 60) * 60 * 1000;
+  return positiveInteger(registryLimit('stuckRunMinutes', 'SKILL_REGISTRY_STUCK_RUN_MINUTES'), 60, 24 * 60) * 60 * 1000;
 }
 
 function isUniqueConstraintError(error: unknown): boolean {

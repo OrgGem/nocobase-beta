@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { registryLimit } from './registry-settings-service';
 import { randomUUID } from 'crypto';
 
 import { getString } from './model-values';
@@ -23,7 +33,13 @@ function asDate(value: unknown): Date | null {
 }
 
 function downloadRetentionMs(): number {
-  return positiveInteger(process.env.SKILL_REGISTRY_DOWNLOAD_RETENTION_DAYS, 90, 3650) * 24 * 60 * 60 * 1000;
+  return (
+    positiveInteger(registryLimit('downloadRetentionDays', 'SKILL_REGISTRY_DOWNLOAD_RETENTION_DAYS'), 90, 3650) *
+    24 *
+    60 *
+    60 *
+    1000
+  );
 }
 
 function orphanGraceMs(): number {

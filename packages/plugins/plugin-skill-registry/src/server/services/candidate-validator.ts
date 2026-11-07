@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { registryLimit } from './registry-settings-service';
 import { RegistryError } from '../contracts/errors';
 import {
   isRecord,
@@ -10,14 +20,16 @@ import { ARTIFACT_LIMITS, parseArtifactLimit } from './artifact-builder';
 import { candidateDigest, canonicalJson } from './canonical-json';
 import { containsControlCharacters, normalizeIdentity, normalizeRelativePath } from './validation';
 
-// Getter-based limits re-read env vars on every access, so runtime settings
-// applied via applyRuntimeOverrides() take effect without a server restart.
+// Limits follow the settings of the current registry operation.
 export const SOURCE_INGESTION_LIMITS = {
   get maxItems() {
-    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_ITEMS, 5000);
+    return parseArtifactLimit(registryLimit('maxSourceItems', 'SKILL_REGISTRY_MAX_SOURCE_ITEMS'), 5000);
   },
   get maxFileBytes() {
-    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES, 100 * 1024 * 1024);
+    return parseArtifactLimit(
+      registryLimit('maxSourceFileBytes', 'SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES'),
+      100 * 1024 * 1024,
+    );
   },
   maxExternalKeyLength: 500,
   maxPathLength: 500,

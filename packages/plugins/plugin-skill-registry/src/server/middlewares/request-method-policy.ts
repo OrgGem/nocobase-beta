@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Context } from '@nocobase/actions';
 
 import { RegistryError } from '../contracts/errors';
@@ -16,22 +25,14 @@ const PUBLIC_METHODS = new Map<string, readonly string[]>([
   ['metadata', ['GET', 'HEAD']],
 ]);
 
-const ADMIN_ACTIONS = new Set([
-  'discover',
-  'sync',
-  'retry',
-  'resolve',
-  'publish',
-  'publishBatch',
-  'yank',
-  'unpublish',
-  'unpublishBatch',
-  'verify',
-  'install',
-  'rollback',
-  'updateSettings',
+// Existing clients submit these read payloads through POST as well.
+const ADMIN_READ_WITH_BODY = new Set([
+  'getCatalogSkillDetail',
+  'getMarkdown',
+  'getMarkdownDetail',
+  'listMyMarkdownSkills',
+  'listMarkdownShares',
 ]);
-
 const ADMIN_READ_ACTIONS = new Set(['getSettings', 'installationStates', 'yankImpact']);
 
 function allowedMethods(ctx: Context): readonly string[] | null {
@@ -39,11 +40,10 @@ function allowedMethods(ctx: Context): readonly string[] | null {
   if (resourceName === 'skillRegistryPublic') {
     return PUBLIC_METHODS.get(actionName) || null;
   }
-  if (resourceName === 'skillRegistryAdmin' && ADMIN_ACTIONS.has(actionName)) {
+  if (resourceName === 'skillRegistryAdmin') {
+    if (ADMIN_READ_ACTIONS.has(actionName)) return ['GET', 'HEAD'];
+    if (ADMIN_READ_WITH_BODY.has(actionName)) return ['GET', 'HEAD', 'POST'];
     return ['POST'];
-  }
-  if (resourceName === 'skillRegistryAdmin' && ADMIN_READ_ACTIONS.has(actionName)) {
-    return ['GET', 'HEAD'];
   }
   if (resourceName === 'skillRegistryHealth' && actionName === 'readiness') {
     return ['GET', 'HEAD'];

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { execFileSync } from 'child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
@@ -59,6 +68,11 @@ describe('RegistryGitContentService', () => {
       }),
     } as unknown as Database;
     const service = new RegistryGitContentService(database);
+    const treeRequest = { repositoryId: 1, commitSha, rootPath: '', recursive: true };
+    await expect(service.listTree({ ...treeRequest, maxTreeOutputBytes: 1 }, scheduledSyncAccess)).rejects.toThrow(
+      /output limit/,
+    );
+    await expect(service.listTree(treeRequest, scheduledSyncAccess)).resolves.toHaveLength(1);
 
     await expect(
       service.readFile({ repositoryId: 1, commitSha, filePath: 'payload.bin' }, scheduledSyncAccess),

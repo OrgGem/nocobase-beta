@@ -5,6 +5,10 @@ mọi lần đọc repository đều mang theo danh tính người dùng. Điề
 một người có quyền quản lý Skill Registry đọc repository Git nằm ngoài scope
 `gitManager:fileContent` của họ.
 
+## Giới hạn theo app từ 0.2.11
+
+Khi đặt `maxSourceTreeEntries` hoặc `maxSourceTreeOutputBytes` trong Settings, hãy triển khai Git Manager 1.2.28 trước hoặc cùng lúc với Skill Registry 0.2.11. Git Manager áp dụng giới hạn cho từng lần đọc và giữ mức trần của deployment. Với Git Manager cũ, thao tác đọc cây có override trả `SOURCE_PROVIDER_UNAVAILABLE` (HTTP 424). Các Git source dùng giới hạn mặc định vẫn tương thích với phiên bản tối thiểu bên dưới.
+
 ## Nâng cấp phối hợp
 
 Khi dùng Git source hoặc nút Install vào Agent Orchestrator, hãy nâng cấp cùng

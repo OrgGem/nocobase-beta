@@ -5,12 +5,37 @@ Manage Git repositories with PAT authentication and run AI-powered code reviews 
 merge requests. Combines repository operations (clone/pull/push/diff) with a configurable
 review pipeline backed by AI Employees.
 
+## Upgrade to 1.2.28
+
+This release includes the Skill Registry tree-limit contract and the Git Manager security fixes.
+
+- Set each self-hosted GitLab account's **Base URL** to its HTTPS origin. A blank Base URL means
+  `https://gitlab.com` for GitLab and `https://github.com` for GitHub. Repository and account origins
+  must match, including the port. GitHub Enterprise API endpoints are not implemented.
+- Use the final repository URL. Authenticated Git and provider API requests reject redirects.
+- Use Git 2.31 or newer for process-scoped credential configuration. PATs are no longer written into
+  remote URLs or Git configuration. The plugin clears inherited Git command/config/trace overrides
+  for its Git subprocesses. `GIT_SSL_CAINFO` and `GIT_SSL_CAPATH` remain available for private CAs.
+- Repository paths must resolve strictly below `GIT_REPOS_BASE_PATH`. The base directory itself,
+  traversal paths, and symlinks/junctions escaping the base are rejected, including clone destinations
+  below a linked parent. Keep that storage directory writable only by trusted service operators.
+- Call mutation actions with **POST**, including `subtreeOptions` and `subtreePreview`, which fetch
+  remote refs. GET and HEAD return 405 before executing these actions. The bundled clients already use POST.
+- Poller timers, in-flight guards and status belong to each application. Stopping one application
+  does not stop another application's poller. A running cycle retains its guard until it finishes.
+- AI chat is optional in both clients. It uses the installed AI plugin manager and is disabled when
+  that plugin is absent. Standard Git screens can load without the AI module.
+
+The HTTP integration test loads the real plugin and checks resource registration, method enforcement,
+POST checkout and junction rejection. Additional tests cover credential origin matching, redirect
+policy, credential-free Git config, lock recovery, poller isolation and optional AI chat.
+
 ## Features
 
 ### Repository management
 - **Clone, fetch, pull, push** to external Git providers (GitHub, GitLab, etc.).
-- **PAT authentication** — Personal Access Tokens are stored encrypted and redacted
-  from API responses.
+- **PAT authentication** — Personal Access Tokens are held in Git accounts and redacted
+  from API responses. Git operations receive credentials through the child process environment.
 - **File & diff browser** — view commits, changed files, and inline diffs from the
   NocoBase UI.
 - **Merge Request integration** — list, filter, and inspect GitLab MRs (overview,

@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { registryLimit } from './registry-settings-service';
 import AdmZip from 'adm-zip';
 import { Buffer as NodeBuffer } from 'node:buffer';
 
@@ -19,17 +29,22 @@ export function parseArtifactLimit(
   return Number.isSafeInteger(parsed) && parsed <= maximum ? parsed : fallback;
 }
 
-// Getter-based limits re-read env vars on every access, so runtime settings
-// applied via applyRuntimeOverrides() take effect without a server restart.
+// Limits follow the settings of the current registry operation.
 export const ARTIFACT_LIMITS = {
   get maxFiles() {
-    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_FILES, 10000);
+    return parseArtifactLimit(registryLimit('maxFiles', 'SKILL_REGISTRY_MAX_FILES'), 10000);
   },
   get maxExpandedBytes() {
-    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_EXPANDED_BYTES, 1024 * 1024 * 1024);
+    return parseArtifactLimit(
+      registryLimit('maxExpandedBytes', 'SKILL_REGISTRY_MAX_EXPANDED_BYTES'),
+      1024 * 1024 * 1024,
+    );
   },
   get maxArtifactBytes() {
-    return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_ARTIFACT_BYTES, 500 * 1024 * 1024);
+    return parseArtifactLimit(
+      registryLimit('maxArtifactBytes', 'SKILL_REGISTRY_MAX_ARTIFACT_BYTES'),
+      500 * 1024 * 1024,
+    );
   },
   get maxManifestBytes() {
     return parseArtifactLimit(process.env.SKILL_REGISTRY_MAX_MANIFEST_BYTES, 50 * 1024 * 1024);

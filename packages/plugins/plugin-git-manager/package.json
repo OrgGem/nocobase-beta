@@ -3,7 +3,7 @@
   "displayName": "Git Manager",
   "displayName.zh-CN": "Git 管理器",
   "description": "Manage Git repositories with PAT authentication - pull, push, fetch, diff, file browsing",
-  "version": "1.2.27",
+  "version": "1.2.28",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "files": [
@@ -28,16 +28,24 @@
     "@nocobase/database": "2.x",
     "@nocobase/test": "2.x",
     "@nocobase/client-v2": "2.x",
-    "@nocobase/flow-engine": "2.x"
-  },
-  "optionalPeerDependencies": {
+    "@nocobase/flow-engine": "2.x",
     "@nocobase/ai": "2.x",
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/plugin-field-markdown-vditor": "2.x"
   },
   "dependencies": {
     "simple-git": "^3.27.0"
+  },
+  "keywords": "System management",
+  "peerDependenciesMeta": {
+    "@nocobase/ai": {
+      "optional": true
+    },
+    "@nocobase/plugin-ai": {
+      "optional": true
+    },
+    "@nocobase/plugin-field-markdown-vditor": {
+      "optional": true
+    }
   }
-,
-  "keywords": "System management"
 }

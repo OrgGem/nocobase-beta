@@ -1,10 +1,19 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import simpleGit, { SimpleGit } from 'simple-git';
 import { Context } from '@nocobase/actions';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawnSync } from 'child_process';
 import { getEffectiveActionParams } from '../repository-access';
-import { redactPat, redactError } from '../utils/redact';
+import { redactError } from '../utils/redact';
 import { getRepoAccount } from '../utils/get-repo-account';
 import { assertUrlHasNoUserInfo } from '../utils/url-security';
 
@@ -13,7 +22,7 @@ import { assertUrlHasNoUserInfo } from '../utils/url-security';
 const REF_PATTERN = /^(?!-)[a-zA-Z0-9._/-]+$/;
 
 // Per-repo mutex to prevent PAT race conditions in withAuth
-const repoLocks = new Map<string, Promise<any>>();
+const repoLocks = new Map<string, Promise<void>>();
 const GIT_BINARY = process.env.GIT_BINARY_PATH || process.env.GIT_EXECUTABLE || 'git';
 let gitAvailabilityChecked = false;
 
@@ -42,7 +51,13 @@ export function acquireLock(key: string): { promise: Promise<void>; release: () 
   });
   const promise = prev.then(() => {});
   repoLocks.set(key, next);
-  return { promise, release };
+  return {
+    promise,
+    release: () => {
+      release();
+      if (repoLocks.get(key) === next) repoLocks.delete(key);
+    },
+  };
 }
 
 export function validateRef(ref: string): string {
@@ -92,48 +107,68 @@ export async function withAuth<T>(
   username?: string,
   remoteName = 'origin',
 ): Promise<T> {
-  assertUrlHasNoUserInfo(repoUrl);
-  // Lock by local working tree — that's what `git.remote('set-url', ...)`
-  // mutates. Two repo records sharing a `repoUrl` but cloned to different
-  // paths can run in parallel safely; conversely, two repos pointed at the
-  // same `localPath` (config error) must NOT run concurrent set-url's.
-  const lockKey = localPath;
-  const lock = acquireLock(lockKey);
+  validateRepoUrl(repoUrl);
+  const lock = acquireLock(localPath);
   await lock.promise;
-  const authUrl = getAuthUrl(repoUrl, pat, username);
-  await git.remote(['set-url', remoteName, authUrl]);
   try {
+    git.env(credentialEnvironment(repoUrl, pat, username));
+    // Persist only the clean URL. Authentication is scoped to this URL in the child process environment.
+    await git.remote(['set-url', remoteName, repoUrl]);
     return await fn();
-  } catch (err) {
-    // simple-git often echoes the authenticated URL in stderr — scrub before re-throw
-    throw redactError(err);
+  } catch (error) {
+    throw redactGitCredentialError(error, pat, username);
   } finally {
-    // H-2 fix: guard PAT cleanup — if reset fails, the PAT-embedded URL persists on disk
     try {
-      await git.remote(['set-url', remoteName, repoUrl]);
-    } catch (cleanupErr) {
-      // Critical: PAT may be persisted in .git/config — attempt one more cleanup
-      try {
-        await git.remote(['set-url', remoteName, repoUrl]);
-      } catch {
-        // Log but don't throw — the original operation already completed
-        console.error(
-          `[plugin-git-manager] CRITICAL: failed to remove PAT from remote URL for ${redactPat(repoUrl)}. ` +
-            `Manual cleanup of .git/config may be required.`,
-          redactError(cleanupErr),
-        );
-      }
+      git.env(gitProcessEnvironment());
+    } finally {
+      lock.release();
     }
-    lock.release();
   }
 }
 
-function getAuthUrl(repoUrl: string, pat: string, username?: string): string {
-  assertUrlHasNoUserInfo(repoUrl);
-  const url = new URL(repoUrl.trim());
-  url.username = (username || 'oauth2').trim();
-  url.password = pat.trim();
-  return url.toString();
+function gitProcessEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    // Strip executable/config overrides and trace settings inherited from the server or test runner.
+    if (
+      (/^GIT_/i.test(key) && !/^GIT_SSL_CA(INFO|PATH)$/i.test(key)) ||
+      /^(EDITOR|PAGER|PREFIX|SSH_ASKPASS)$/i.test(key)
+    ) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+export function credentialEnvironment(repoUrl: string, pat: string, username?: string): NodeJS.ProcessEnv {
+  validateRepoUrl(repoUrl);
+  const authorization = Buffer.from(`${(username || 'oauth2').trim()}:${pat.trim()}`).toString('base64');
+  const settings = [
+    ['http.extraHeader', ''],
+    [`http.${new URL(repoUrl).toString()}.extraHeader`, `Authorization: Basic ${authorization}`],
+    ['http.followRedirects', 'false'],
+    ['credential.helper', ''],
+  ];
+  const env: NodeJS.ProcessEnv = {
+    ...gitProcessEnvironment(),
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: String(settings.length),
+  };
+  settings.forEach(([key, value], index) => {
+    env[`GIT_CONFIG_KEY_${index}`] = key;
+    env[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+  return env;
+}
+
+function redactGitCredentialError(error: unknown, pat: string, username?: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const authorization = Buffer.from(`${(username || 'oauth2').trim()}:${pat.trim()}`).toString('base64');
+  let safeMessage = message;
+  for (const secret of [authorization, pat.trim()]) {
+    if (secret) safeMessage = safeMessage.split(secret).join('***');
+  }
+  return redactError(new Error(safeMessage));
 }
 
 function getGitMissingMessage() {
@@ -150,13 +185,19 @@ function assertGitAvailable(ctx: Context) {
   gitAvailabilityChecked = true;
 }
 
-function isMissingGitError(error: any) {
-  const message = error?.message || String(error);
-  return error?.code === 'ENOENT' || /spawn .*git.*ENOENT/i.test(message);
+function isMissingGitError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (error as NodeJS.ErrnoException)?.code === 'ENOENT' || /spawn .*git.*ENOENT/i.test(message);
 }
 
 export function createGit(baseDir?: string): SimpleGit {
-  return simpleGit({ baseDir, binary: GIT_BINARY } as any);
+  // Only plugin-generated environment config and the empty credential helper reset are permitted.
+  // All config keys and values come from credentialEnvironment, never from request parameters.
+  return simpleGit({
+    baseDir,
+    binary: GIT_BINARY,
+    unsafe: { allowUnsafeConfigEnvCount: true, allowUnsafeCredentialHelper: true },
+  }).env(gitProcessEnvironment());
 }
 
 export function getGitBinaryPath(): string {
@@ -182,19 +223,39 @@ export async function getRepo(ctx: Context) {
   return repo;
 }
 
-// Validate localPath to prevent path traversal
-export function validateLocalPath(localPath: string): string {
-  const basePath = process.env.GIT_REPOS_BASE_PATH || path.join(process.cwd(), 'storage', 'git-repos');
-  const resolved = path.resolve(basePath, localPath);
-
-  // Ensure the resolved path is strictly inside the basePath.
-  // We add path.sep to prevent partial matches like /storage/git-repo-hack matching /storage/git-repo
-  const strictBasePath = path.resolve(basePath) + path.sep;
-
-  if (!resolved.startsWith(strictBasePath) && resolved !== path.resolve(basePath)) {
-    throw new Error('Invalid local path: path traversal detected or path is outside the allowed base directory');
+// Resolve existing ancestors too, so junctions and symlinks cannot escape through a new clone destination.
+function canonicalPath(value: string): string {
+  try {
+    return fs.realpathSync.native(value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    // A dangling link must not be treated as an ordinary missing directory.
+    try {
+      if (fs.lstatSync(value).isSymbolicLink()) throw new Error('Invalid local path');
+    } catch (statError) {
+      if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') throw statError;
+    }
+    const parent = path.dirname(value);
+    if (parent === value) throw error;
+    return path.join(canonicalPath(parent), path.basename(value));
   }
-  return resolved;
+}
+
+export function validateLocalPath(localPath: string): string {
+  const basePath = path.resolve(process.env.GIT_REPOS_BASE_PATH || path.join(process.cwd(), 'storage', 'git-repos'));
+  const resolved = path.resolve(basePath, localPath);
+  const base = canonicalPath(basePath);
+  const candidate = canonicalPath(resolved);
+  for (const [root, target] of [
+    [basePath, resolved],
+    [base, candidate],
+  ]) {
+    const relative = path.relative(root, target);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Invalid local path: path traversal detected or path is outside the allowed base directory');
+    }
+  }
+  return candidate;
 }
 
 export async function clone(ctx: Context, next: () => Promise<void>) {
@@ -220,12 +281,11 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
     fs.mkdirSync(path.dirname(localPath), { recursive: true });
   }
 
-  const authUrl = getAuthUrl(repoUrl, pat, username);
   assertGitAvailable(ctx);
   try {
-    await createGit().clone(authUrl, localPath, ['--branch', defaultBranch]);
-    // Remove PAT from the cloned repo's remote URL
-    await createGit(localPath).remote(['set-url', 'origin', repoUrl]);
+    await createGit()
+      .env(credentialEnvironment(repoUrl, pat, username))
+      .clone(repoUrl, localPath, ['--branch', defaultBranch]);
     await ctx.db.getRepository('gitRepositories').update({
       filterByTk: repo.get('id'),
       values: { status: 'connected' },
@@ -240,7 +300,7 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
     if (isMissingGitError(err)) {
       ctx.throw(503, getGitMissingMessage());
     }
-    throw redactError(err);
+    throw redactGitCredentialError(err, pat, username);
   }
   await next();
 }

@@ -296,5 +296,12 @@
   "Credential-bearing URLs are not allowed": "Credential-bearing URLs are not allowed",
   "Git Repository": "Git Repository",
   "Git Merge Request": "Git Merge Request",
-  "Git Commit": "Git Commit"
+  "Git Commit": "Git Commit",
+  "Method not allowed": "Method not allowed",
+  "Invalid repository or account URL": "Invalid repository or account URL",
+  "Only HTTPS repository and account URLs are allowed": "Only HTTPS repository and account URLs are allowed",
+  "Repository URL must match the Git account origin": "Repository URL must match the Git account origin",
+  "GitHub accounts currently require github.com": "GitHub accounts currently require github.com",
+  "Invalid local path": "Invalid local path",
+  "Invalid local path: path traversal detected or path is outside the allowed base directory": "Invalid local path: path traversal detected or path is outside the allowed base directory"
 }

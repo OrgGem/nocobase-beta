@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context } from '@nocobase/actions';
 import { pollAllRepos, pollOneRepo, getPollerStatus } from '../poller';
 import { getEffectiveActionParams } from '../repository-access';
@@ -9,7 +18,10 @@ import { getEffectiveActionParams } from '../repository-access';
  */
 export async function pollNow(ctx: Context, next: () => Promise<void>) {
   const { repositoryId } = getEffectiveActionParams(ctx);
-  if (repositoryId) {
+  if (repositoryId != null && typeof repositoryId !== 'string' && typeof repositoryId !== 'number') {
+    ctx.throw(400, 'repositoryId is required');
+  }
+  if (typeof repositoryId === 'string' || typeof repositoryId === 'number') {
     const repo = await ctx.db.getRepository('gitRepositories').findOne({ filterByTk: repositoryId });
     if (!repo) ctx.throw(404, 'Repository not found');
     const result = await pollOneRepo(ctx.app, repo);
@@ -22,6 +34,6 @@ export async function pollNow(ctx: Context, next: () => Promise<void>) {
 }
 
 export async function pollerStatus(ctx: Context, next: () => Promise<void>) {
-  ctx.body = { success: true, data: getPollerStatus() };
+  ctx.body = { success: true, data: getPollerStatus(ctx.app) };
   await next();
 }

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type {
   JsonValue,
   RegistrySkillCandidateV1,
@@ -8,6 +17,7 @@ import type {
 } from '../contracts/types';
 import { asJsonValue, isRecord } from '../contracts/types';
 import { RegistryError } from '../contracts/errors';
+import { currentRegistryOverride } from '../services/registry-settings-service';
 import { ARTIFACT_LIMITS } from '../services/artifact-builder';
 import { SOURCE_INGESTION_LIMITS, validateDiscoveredExternalKeys } from '../services/candidate-validator';
 import { candidateDigest } from '../services/canonical-json';
@@ -31,6 +41,8 @@ interface GitManagerContentService {
       commitSha: string;
       rootPath: string;
       recursive: boolean;
+      maxTreeEntries?: number;
+      maxTreeOutputBytes?: number;
     },
     access?: RegistrySourceAccessContext,
   ): Promise<GitTreeEntry[]>;
@@ -131,7 +143,16 @@ function listTree(
   input: { repositoryId: string | number; commitSha: string; rootPath: string; recursive: boolean },
   access?: RegistrySourceAccessContext,
 ): Promise<GitTreeEntry[]> {
-  return access ? service.listTree(input, access) : service.listTree(input);
+  const maxTreeEntries = currentRegistryOverride('maxSourceTreeEntries');
+  const maxTreeOutputBytes = currentRegistryOverride('maxSourceTreeOutputBytes');
+  if (maxTreeEntries === undefined && maxTreeOutputBytes === undefined) {
+    return access ? service.listTree(input, access) : service.listTree(input);
+  }
+  if (!service.capabilities?.includes('registry-content-tree-limits')) {
+    throw new RegistryError('SOURCE_PROVIDER_UNAVAILABLE', 424);
+  }
+  const request = { ...input, maxTreeEntries, maxTreeOutputBytes };
+  return access ? service.listTree(request, access) : service.listTree(request);
 }
 
 function readFile(

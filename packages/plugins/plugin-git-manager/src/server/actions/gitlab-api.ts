@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context } from '@nocobase/actions';
 import { getEffectiveActionParams } from '../repository-access';
 import { parseGitLabProject } from '../utils/gitlab-url';
@@ -14,6 +23,7 @@ async function gitlabFetch(apiBase: string, endpoint: string, pat: string, param
   }
 
   const response = await fetch(url.toString(), {
+    redirect: 'error',
     headers: {
       'PRIVATE-TOKEN': pat,
       Accept: 'application/json',
@@ -37,6 +47,7 @@ async function getRepoApiContext(ctx: Context) {
   // Fix for POST requests where data might be in ctx.request.body
   const params = getEffectiveActionParams(ctx);
   const { repositoryId } = params;
+  if (typeof repositoryId !== 'string' && typeof repositoryId !== 'number') ctx.throw(400, 'repositoryId is required');
 
   const repo = await ctx.db.getRepository('gitRepositories').findOne({
     filterByTk: repositoryId,
@@ -48,7 +59,7 @@ async function getRepoApiContext(ctx: Context) {
   const account = await getRepoAccount(ctx.db, repo);
   const pat = account?.pat || '';
   const repoUrl = ((repo.get('repoUrl') as string) || '').trim();
-  const isGitHub = account?.provider === 'github' || repoUrl.includes('github.com');
+  const isGitHub = account?.provider === 'github' || new URL(repoUrl).hostname === 'github.com';
   const { apiBase, encodedProject, projectPath } = parseGitLabProject(repoUrl);
   return { repo, pat, apiBase, encodedProject, projectPath, isGitHub };
 }
@@ -70,7 +81,7 @@ async function githubFetch(endpoint: string, pat: string, params?: Record<string
     headers['Authorization'] = `Bearer ${pat}`;
   }
 
-  const response = await fetch(url.toString(), { headers });
+  const response = await fetch(url.toString(), { headers, redirect: 'error' });
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');

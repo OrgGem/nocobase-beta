@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { registryLimit } from './registry-settings-service';
 import { createHmac } from 'crypto';
 
 import { RegistryError } from '../contracts/errors';
@@ -55,7 +65,7 @@ function positiveInteger(value: string | undefined, fallback: number, maximum: n
 
 function downloadLeaseSettings() {
   const responseTimeoutMs = positiveInteger(
-    process.env.SKILL_REGISTRY_DOWNLOAD_RESPONSE_TIMEOUT_MS,
+    registryLimit('downloadResponseTimeoutMs', 'SKILL_REGISTRY_DOWNLOAD_RESPONSE_TIMEOUT_MS'),
     5 * 60 * 1000,
     30 * 60 * 1000,
   );
@@ -64,8 +74,16 @@ function downloadLeaseSettings() {
     positiveInteger(process.env.SKILL_REGISTRY_DOWNLOAD_LEASE_TTL_MS, 10 * 60 * 1000, 60 * 60 * 1000),
   );
   return {
-    perIpLimit: positiveInteger(process.env.SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_PER_IP, 3, 20),
-    globalLimit: positiveInteger(process.env.SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_GLOBAL, 20, 200),
+    perIpLimit: positiveInteger(
+      registryLimit('downloadConcurrencyPerIp', 'SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_PER_IP'),
+      3,
+      20,
+    ),
+    globalLimit: positiveInteger(
+      registryLimit('downloadConcurrencyGlobal', 'SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_GLOBAL'),
+      20,
+      200,
+    ),
     responseTimeoutMs,
     leaseTtlMs,
   };

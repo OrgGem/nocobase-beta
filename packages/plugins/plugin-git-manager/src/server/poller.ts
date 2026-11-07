@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Application } from '@nocobase/server';
 import { triggerReviewInternal, branchMatches } from './actions/review';
 import { parseGitLabProject } from './utils/gitlab-url';
@@ -5,44 +14,44 @@ import { getRepoAccount } from './utils/get-repo-account';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const MR_PAGE_SIZE = 50;
-/**
- * Maximum duration a single poll cycle is allowed to hold the lock.
- * If a cycle exceeds this, the stale lock is forcibly released so future
- * ticks are not permanently blocked.
- */
-const STALE_POLL_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-
-let timer: NodeJS.Timeout | null = null;
-let isPolling = false;
-let pollStartedAt: number | null = null;
-let lastTickAt: Date | null = null;
-let lastError: string | null = null;
-
-/**
- * Start the background poller. Idempotent — calling twice is a no-op.
- * The poller scans repos with autoReview=true, lists their open MRs from GitLab,
- * and triggers a review if no record exists for the MR's current head SHA.
- */
-export function startPoller(app: Application) {
-  if (timer) return;
-  app.log?.info?.('plugin-git-manager: starting MR poller (interval 5min)');
-  // First tick after a short delay so app is fully ready
-  timer = setInterval(() => tick(app).catch((e) => app.log?.error?.('poller tick error', e)), POLL_INTERVAL_MS);
+interface PollerState {
+  timer: NodeJS.Timeout | null;
+  polling: boolean;
+  lastTickAt: Date | null;
+  lastError: string | null;
 }
 
-export function stopPoller() {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
+const pollers = new WeakMap<Application, PollerState>();
+
+function stateFor(app: Application): PollerState {
+  let state = pollers.get(app);
+  if (!state) {
+    state = { timer: null, polling: false, lastTickAt: null, lastError: null };
+    pollers.set(app, state);
   }
+  return state;
 }
 
-export function getPollerStatus() {
+export function startPoller(app: Application) {
+  const state = stateFor(app);
+  if (state.timer) return;
+  app.log?.info?.('plugin-git-manager: starting MR poller (interval 5min)');
+  state.timer = setInterval(() => tick(app).catch((e) => app.log?.error?.('poller tick error', e)), POLL_INTERVAL_MS);
+}
+
+export function stopPoller(app: Application) {
+  const state = stateFor(app);
+  if (state.timer) clearInterval(state.timer);
+  state.timer = null;
+}
+
+export function getPollerStatus(app: Application) {
+  const state = stateFor(app);
   return {
-    running: !!timer,
-    polling: isPolling,
-    lastTickAt: lastTickAt?.toISOString() ?? null,
-    lastError,
+    running: !!state.timer,
+    polling: state.polling,
+    lastTickAt: state.lastTickAt?.toISOString() ?? null,
+    lastError: state.lastError,
     intervalSec: POLL_INTERVAL_MS / 1000,
   };
 }
@@ -147,34 +156,18 @@ async function tryAcquirePollerLock(app: Application): Promise<PollerLockHandle 
  * gitManager:pollNow action can force a tick on demand.
  */
 export async function pollAllRepos(app: Application): Promise<{ scanned: number; triggered: number }> {
-  // M-4 fix: recover from stale isPolling flag
-  if (isPolling) {
-    if (pollStartedAt && Date.now() - pollStartedAt > STALE_POLL_TIMEOUT_MS) {
-      app.log?.warn?.('poller: stale isPolling flag detected — forcibly resetting');
-      isPolling = false;
-      pollStartedAt = null;
-    } else {
-      return { scanned: 0, triggered: 0 };
-    }
-  }
-
-  // C-1 fix: acquire distributed lock for HA — handle pins the connection
-  // so unlock runs on the same connection that acquired the lock.
-  const lock = await tryAcquirePollerLock(app);
-  if (!lock) {
-    app.log?.debug?.('poller: another node holds the advisory lock — skipping');
-    return { scanned: 0, triggered: 0 };
-  }
-
-  isPolling = true;
-  pollStartedAt = Date.now();
-  lastTickAt = new Date();
-  lastError = null;
-
+  const state = stateFor(app);
+  if (state.polling) return { scanned: 0, triggered: 0 };
+  // Claim the local guard before awaiting the distributed lock.
+  state.polling = true;
+  let lock: PollerLockHandle | null = null;
   let scanned = 0;
   let triggered = 0;
-
   try {
+    lock = await tryAcquirePollerLock(app);
+    if (!lock) return { scanned: 0, triggered: 0 };
+    state.lastTickAt = new Date();
+    state.lastError = null;
     const reposRepo = app.db.getRepository('gitRepositories');
     const repos = await reposRepo.find({ filter: { autoReview: true } });
     for (const repo of repos) {
@@ -187,12 +180,14 @@ export async function pollAllRepos(app: Application): Promise<{ scanned: number;
       }
     }
   } catch (err: any) {
-    lastError = err?.message || String(err);
+    state.lastError = err?.message || String(err);
     app.log?.error?.('poller: cycle failed', err);
   } finally {
-    isPolling = false;
-    pollStartedAt = null;
-    await lock.release();
+    try {
+      await lock?.release();
+    } finally {
+      state.polling = false;
+    }
   }
   return { scanned, triggered };
 }
@@ -289,7 +284,7 @@ export async function pollOneRepo(app: Application, repo: any): Promise<{ scanne
 
 async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | null): Promise<any[]> {
   const repoUrl = repo.get('repoUrl') as string;
-  const isGitHub = typeof repoUrl === 'string' && repoUrl.includes('github.com');
+  const isGitHub = typeof repoUrl === 'string' && new URL(repoUrl).hostname === 'github.com';
 
   if (isGitHub) {
     // GitHub PRs: list endpoint sorts by updated; GitHub has no `updated_after`,
@@ -304,7 +299,10 @@ async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | nu
     const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
     if (pat) headers['Authorization'] = `Bearer ${pat}`;
 
-    const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`, { headers });
+    const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`, {
+      headers,
+      redirect: 'error',
+    });
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       throw new Error(`GitHub API error ${response.status}: ${body}`);
@@ -342,6 +340,7 @@ async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | nu
   }
 
   const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests?${params.toString()}`, {
+    redirect: 'error',
     headers: { 'PRIVATE-TOKEN': pat, Accept: 'application/json' },
   });
   if (!response.ok) {

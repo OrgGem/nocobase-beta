@@ -1,4 +1,13 @@
-import { assertUrlHasNoUserInfo } from './url-security';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { assertAccountRepositoryUrl } from './url-security';
 
 export interface GitAccountCredentials {
   pat: string;
@@ -30,12 +39,13 @@ export async function getRepoAccount(
   if (!account) return null;
 
   const baseUrl = ((account.get('baseUrl') as string) || '').trim() || null;
-  if (baseUrl) assertUrlHasNoUserInfo(baseUrl);
+  const provider = ((account.get('provider') as string) || 'gitlab').trim();
+  assertAccountRepositoryUrl(String(repo.get('repoUrl') || ''), baseUrl, provider);
 
   return {
     pat: ((account.get('pat') as string) || '').trim(),
     username: ((account.get('username') as string) || '').trim(),
     baseUrl,
-    provider: ((account.get('provider') as string) || 'gitlab').trim(),
+    provider,
   };
 }

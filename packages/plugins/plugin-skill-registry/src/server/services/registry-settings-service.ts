@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { getJson } from './model-values';
 import type { RegistryDatabase } from './repository-types';
 
@@ -17,6 +27,16 @@ export interface RegistryRuntimeOverrides {
   downloadResponseTimeoutMs?: number;
   stuckRunMinutes?: number;
   downloadRetentionDays?: number;
+}
+
+const operationSettings = new AsyncLocalStorage<RegistryRuntimeOverrides>();
+
+export function currentRegistryOverride(key: keyof Omit<RegistryRuntimeOverrides, 'publicEnabled'>) {
+  return operationSettings.getStore()?.[key];
+}
+
+export function registryLimit(key: keyof Omit<RegistryRuntimeOverrides, 'publicEnabled'>, environmentName: string) {
+  return currentRegistryOverride(key)?.toString() ?? process.env[environmentName];
 }
 
 type EffectiveSetting<T> = { value: T; source: 'ui' | 'environment' | 'default' };
@@ -116,26 +136,8 @@ export class RegistrySettingsService {
     return (await this.effective()).effective.publicEnabled.value;
   }
 
-  async applyRuntimeOverrides(): Promise<void> {
-    const overrides = await this.overrides();
-    const environmentNames: Partial<Record<keyof RegistryRuntimeOverrides, string>> = {
-      maxSourceItems: 'SKILL_REGISTRY_MAX_SOURCE_ITEMS',
-      maxSourceFileBytes: 'SKILL_REGISTRY_MAX_SOURCE_FILE_BYTES',
-      maxSourceTreeEntries: 'SKILL_REGISTRY_MAX_SOURCE_TREE_ENTRIES',
-      maxSourceTreeOutputBytes: 'SKILL_REGISTRY_MAX_SOURCE_TREE_OUTPUT_BYTES',
-      maxFiles: 'SKILL_REGISTRY_MAX_FILES',
-      maxExpandedBytes: 'SKILL_REGISTRY_MAX_EXPANDED_BYTES',
-      maxArtifactBytes: 'SKILL_REGISTRY_MAX_ARTIFACT_BYTES',
-      downloadConcurrencyPerIp: 'SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_PER_IP',
-      downloadConcurrencyGlobal: 'SKILL_REGISTRY_DOWNLOAD_CONCURRENCY_GLOBAL',
-      downloadResponseTimeoutMs: 'SKILL_REGISTRY_DOWNLOAD_RESPONSE_TIMEOUT_MS',
-      stuckRunMinutes: 'SKILL_REGISTRY_STUCK_RUN_MINUTES',
-      downloadRetentionDays: 'SKILL_REGISTRY_DOWNLOAD_RETENTION_DAYS',
-    };
-    for (const [key, environmentName] of Object.entries(environmentNames)) {
-      const value = overrides[key as keyof RegistryRuntimeOverrides];
-      if (environmentName && typeof value === 'number') process.env[environmentName] = String(value);
-    }
+  async withRuntimeOverrides<T>(operation: () => Promise<T>): Promise<T> {
+    return operationSettings.run(await this.overrides(), operation);
   }
 
   async update(overrides: RegistryRuntimeOverrides): Promise<ReturnType<RegistrySettingsService['effective']>> {
@@ -146,7 +148,6 @@ export class RegistrySettingsService {
     } else {
       await repository.create({ values: { key: SETTINGS_KEY, overrides } });
     }
-    await this.applyRuntimeOverrides();
     return this.effective();
   }
 }

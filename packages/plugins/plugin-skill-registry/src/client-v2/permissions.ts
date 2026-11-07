@@ -8,7 +8,7 @@
  */
 
 import { createContext, useContext } from 'react';
-import { useAclSnippets } from '@nocobase/client-v2';
+import { createAclSnippetAllow, useACLRoleContext } from '@nocobase/client-v2';
 
 /**
  * ACL snippets registered by the server plugin.
@@ -49,12 +49,10 @@ export const SkillRegistryPermissionOverrideContext = createContext<SkillRegistr
  */
 export function canUseSkillRegistryCapability(allow: AclSnippetAllow, capability: SkillRegistryCapability): boolean {
   if (capability === 'manage') {
-    return allow(SKILL_REGISTRY_SNIPPETS.manage) || allow('pm.*') || allow('pm');
+    return allow(SKILL_REGISTRY_SNIPPETS.manage);
   }
 
-  return (
-    allow(SKILL_REGISTRY_SNIPPETS[capability]) || allow(SKILL_REGISTRY_SNIPPETS.manage) || allow('pm.*') || allow('pm')
-  );
+  return allow(SKILL_REGISTRY_SNIPPETS[capability]) || allow(SKILL_REGISTRY_SNIPPETS.manage);
 }
 
 export function resolveSkillRegistryPermissions(allow: AclSnippetAllow): SkillRegistryPermissions {
@@ -68,9 +66,17 @@ export function resolveSkillRegistryPermissions(allow: AclSnippetAllow): SkillRe
   };
 }
 
-export function useSkillRegistryPermissions(): SkillRegistryPermissions {
-  const { allow } = useAclSnippets();
-  const override = useContext(SkillRegistryPermissionOverrideContext);
+export function permissionsForRole({ snippets = [], allowAll = false }: { snippets?: string[]; allowAll?: boolean }) {
+  // Core ACL subtracts rejected snippets regardless of their order in the role.
+  const rules = [
+    ...snippets.filter((rule) => !rule.startsWith('!')),
+    ...snippets.filter((rule) => rule.startsWith('!')),
+  ];
+  return resolveSkillRegistryPermissions(createAclSnippetAllow(rules, allowAll));
+}
 
-  return override ?? resolveSkillRegistryPermissions(allow);
+export function useSkillRegistryPermissions(): SkillRegistryPermissions {
+  const role = useACLRoleContext();
+  const override = useContext(SkillRegistryPermissionOverrideContext);
+  return override ?? permissionsForRole(role);
 }

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { resolve } from 'path';
 
 import { Plugin } from '@nocobase/server';
@@ -103,15 +112,17 @@ export class PluginSkillRegistryServer extends Plugin {
         );
         return;
       }
-      const recoveredRuns = await this.sourceSyncService.recoverStuckRuns();
-      const scheduled = await this.sourceSyncService.syncDueSources();
-      await this.registryMaintenanceService.pruneDownloadAudit();
-      const removedArtifacts = await this.registryMaintenanceService.garbageCollectOrphanArtifacts();
-      if (recoveredRuns > 0 || scheduled.syncedCount > 0 || scheduled.errorCount > 0 || removedArtifacts > 0) {
-        this.app.logger.info(
-          `[skill-registry] maintenance recovered=${recoveredRuns} synced=${scheduled.syncedCount} errors=${scheduled.errorCount} orphanArtifacts=${removedArtifacts}`,
-        );
-      }
+      await this.registrySettingsService.withRuntimeOverrides(async () => {
+        const recoveredRuns = await this.sourceSyncService.recoverStuckRuns();
+        const scheduled = await this.sourceSyncService.syncDueSources();
+        await this.registryMaintenanceService.pruneDownloadAudit();
+        const removedArtifacts = await this.registryMaintenanceService.garbageCollectOrphanArtifacts();
+        if (recoveredRuns > 0 || scheduled.syncedCount > 0 || scheduled.errorCount > 0 || removedArtifacts > 0) {
+          this.app.logger.info(
+            `[skill-registry] maintenance recovered=${recoveredRuns} synced=${scheduled.syncedCount} errors=${scheduled.errorCount} orphanArtifacts=${removedArtifacts}`,
+          );
+        }
+      });
     } catch (error) {
       this.app.logger.error('[skill-registry] maintenance failed', error);
     }
@@ -235,9 +246,15 @@ export class PluginSkillRegistryServer extends Plugin {
 
     this.app.resourceManager.use(createRequestMethodPolicy());
     this.app.resourceManager.use(async (ctx, next) => {
-      if (ctx.action.resourceName.startsWith('skillRegistry'))
-        await this.registrySettingsService.applyRuntimeOverrides();
-      await next();
+      if (
+        managementResourceNames.has(ctx.action.resourceName) ||
+        ctx.action.resourceName === 'skillRegistryPublic' ||
+        resolveRegistryResourceName(ctx)
+      ) {
+        await this.registrySettingsService.withRuntimeOverrides(next);
+      } else {
+        await next();
+      }
     });
     this.app.resourceManager.use(
       createPublicRateLimitMiddleware(

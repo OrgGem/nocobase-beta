@@ -50,5 +50,12 @@
   "Credential-bearing URLs are not allowed": "URL 中不允许包含用户名或凭据",
   "Git Repository": "Git 仓库",
   "Git Merge Request": "Git 合并请求",
-  "Git Commit": "Git 提交"
+  "Git Commit": "Git 提交",
+  "Method not allowed": "不允许的请求方法",
+  "Invalid repository or account URL": "仓库或账号 URL 无效",
+  "Only HTTPS repository and account URLs are allowed": "仓库和账号 URL 只允许使用 HTTPS",
+  "Repository URL must match the Git account origin": "仓库 URL 必须与 Git 账号使用相同的协议、主机和端口",
+  "GitHub accounts currently require github.com": "GitHub 账号目前仅支持 github.com",
+  "Invalid local path": "本地路径无效",
+  "Invalid local path: path traversal detected or path is outside the allowed base directory": "本地路径无效：检测到路径穿越或路径位于允许的基础目录之外"
 }

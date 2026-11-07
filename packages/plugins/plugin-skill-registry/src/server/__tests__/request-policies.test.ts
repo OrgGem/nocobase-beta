@@ -1,3 +1,13 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import actions from '@nocobase/actions';
 import { createRequestMethodPolicy } from '../middlewares/request-method-policy';
 import { createResourceMutationPolicy, isProtectedGenericMutation } from '../middlewares/resource-mutation-policy';
 
@@ -16,6 +26,7 @@ function context(input: {
       resourceName: input.resourceName,
       actionName: input.actionName,
       params: input.params || {},
+      getHandler: () => actions[input.actionName as keyof typeof actions],
     },
     getCurrentRepository: input.targetCollection
       ? () => ({ targetCollection: { name: input.targetCollection } })
@@ -117,6 +128,12 @@ describe('skill registry request policies', () => {
 
     expect(isProtectedGenericMutation(direct as never)).toBe(true);
     expect(isProtectedGenericMutation(associated as never)).toBe(true);
+    const redirectedUpdate = context({
+      resourceName: 'skillRegistrySources',
+      actionName: 'update',
+      params: { filterByTk: 1, targetCollection: 'skillRegistryVersions' },
+    });
+    expect(isProtectedGenericMutation(redirectedUpdate as never)).toBe(true);
     expect(isProtectedGenericMutation(targeted as never)).toBe(true);
     expect(isProtectedGenericMutation(repositoryResolvedAssociation as never)).toBe(true);
 
