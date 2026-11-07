@@ -10,6 +10,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import { OIDCAuth, validateEmailClaims } from '../oidc-auth';
 
+describe('OIDC client authentication configuration', () => {
+  it.each([undefined, 'client_secret_basic', 'client_secret_post'])(
+    'preserves the confidential-client secret requirement for method %s',
+    async (method) => {
+      const auth = Object.create(OIDCAuth.prototype) as OIDCAuth;
+      Object.defineProperties(auth, {
+        options: {
+          value: { oidc: { issuer: 'https://idp.example.com', clientId: 'client', tokenEndpointAuthMethod: method } },
+        },
+        ctx: { value: { t: (key: string) => key } },
+      });
+      await expect(auth.createAuthorizationUrl('/admin')).rejects.toThrow('A client secret is required');
+    },
+  );
+});
+
 describe('OIDC email policy', () => {
   it('trusts the configured identity provider when email_verified is absent', () => {
     expect(() => validateEmailClaims({ email: 'user@example.com' }, {})).not.toThrow();

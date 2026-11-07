@@ -51,8 +51,8 @@
   "Failed to load OIDC applications": "加载 OIDC 应用失败",
   "OIDC application created": "OIDC 应用已创建",
   "OIDC application updated": "OIDC 应用已更新",
-  "OIDC application deleted": "OIDC 应用已删除"
-, "Integration guide": "集成指南",
+  "OIDC application deleted": "OIDC 应用已删除",
+  "Integration guide": "集成指南",
   "Overview": "概览",
   "Raw HTTP": "原始 HTTP",
   "Troubleshooting": "故障排查",
@@ -93,5 +93,8 @@
   "serviceUserId is required for client credentials": "Client Credentials 必须选择服务用户",
   "scopes must include api": "Scopes 必须包含 api",
   "Service user does not exist": "所选服务用户不存在",
-  "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists.": "Client Credentials 出现 invalid_client 时，还需确认客户端已启用且服务用户仍然存在。"
+  "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists.": "Client Credentials 出现 invalid_client 时，还需确认客户端已启用且服务用户仍然存在。",
+  "Send the API resource in authorization, code exchange and refresh requests.": "在授权、授权码交换和刷新请求中传递 API 资源参数。",
+  "Use the validated ID token for identity. API access tokens cannot call UserInfo.": "使用经过验证的 ID 令牌识别用户身份。API 访问令牌不能调用 UserInfo。",
+  "For sign-in, omit resource and use the access token with UserInfo.": "登录时省略 resource 参数，并使用访问令牌调用 UserInfo。"
 }

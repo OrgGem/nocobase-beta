@@ -19,6 +19,7 @@ import {
   ClientSecretPost,
   discovery,
   fetchUserInfo,
+  None,
   randomNonce,
   randomPKCECodeVerifier,
   randomState,
@@ -41,7 +42,7 @@ type OidcOptions = {
   scope?: string;
   redirectUri?: string;
   postLogoutRedirectUri?: string;
-  tokenEndpointAuthMethod?: 'client_secret_basic' | 'client_secret_post';
+  tokenEndpointAuthMethod?: 'none' | 'client_secret_basic' | 'client_secret_post';
   idTokenSignedResponseAlg?: string;
   fieldMap?: Array<{ source?: string; target?: string }>;
   userBindField?: 'email' | 'username' | 'none';
@@ -123,16 +124,26 @@ export class OIDCAuth extends BaseAuth {
 
   private async createConfiguration(): Promise<Configuration> {
     const { issuer, clientId, clientSecret, tokenEndpointAuthMethod, idTokenSignedResponseAlg } = this.getOptions();
-    if (!issuer || !clientId || !clientSecret) throw new Error('OIDC issuer, client ID and client secret are required');
+    if (!issuer || !clientId) throw this.translatedError('OIDC issuer and client ID are required.');
+    const method = tokenEndpointAuthMethod || 'client_secret_basic';
+    if (!['none', 'client_secret_basic', 'client_secret_post'].includes(method)) {
+      throw this.translatedError('Unsupported OIDC token endpoint authentication method.');
+    }
+    if (method !== 'none' && !clientSecret) {
+      throw this.translatedError('A client secret is required for confidential clients.');
+    }
     const clientAuth =
-      tokenEndpointAuthMethod === 'client_secret_post'
-        ? ClientSecretPost(clientSecret)
-        : ClientSecretBasic(clientSecret);
+      method === 'none'
+        ? None()
+        : method === 'client_secret_post'
+          ? ClientSecretPost(clientSecret)
+          : ClientSecretBasic(clientSecret);
     return discovery(
       new URL(issuer),
       clientId,
       {
-        client_secret: clientSecret,
+        ...(method === 'none' ? {} : { client_secret: clientSecret }),
+        token_endpoint_auth_method: method,
         redirect_uris: [this.getRedirectUri()],
         response_types: ['code'],
         id_token_signed_response_alg: idTokenSignedResponseAlg || 'RS256',

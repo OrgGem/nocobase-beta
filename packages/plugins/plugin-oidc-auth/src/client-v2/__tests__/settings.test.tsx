@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { Form, type FormInstance } from 'antd';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import OIDCAdminSettings from '../OIDCAdminSettings';
 
@@ -54,5 +54,47 @@ it('preserves advanced and future OIDC options through the host form save contra
       bindExistingUserByEmail: true,
     });
     expect(saved.public).toEqual(original.public);
+  });
+});
+
+it('requires a secret only for confidential clients and can switch authentication methods', async () => {
+  let form: FormInstance;
+  function Harness() {
+    [form] = Form.useForm();
+    return (
+      <Form
+        form={form}
+        initialValues={{
+          options: {
+            oidc: {
+              issuer: 'https://idp.example.com',
+              clientId: 'public-client',
+              tokenEndpointAuthMethod: 'none',
+            },
+          },
+        }}
+      >
+        <OIDCAdminSettings />
+      </Form>
+    );
+  }
+  render(<Harness />);
+  await waitFor(() => expect(screen.getByLabelText('Client Secret').closest('.ant-form-item-hidden')).not.toBeNull());
+  await act(async () => {
+    await expect(form.validateFields()).resolves.toMatchObject({
+      options: { oidc: { tokenEndpointAuthMethod: 'none' } },
+    });
+  });
+  for (const method of ['client_secret_basic', 'client_secret_post']) {
+    await act(async () => form.setFieldValue(['options', 'oidc', 'tokenEndpointAuthMethod'], method));
+    await act(async () => {
+      await expect(form.validateFields()).rejects.toMatchObject({
+        errorFields: [expect.objectContaining({ name: ['options', 'oidc', 'clientSecret'] })],
+      });
+    });
+  }
+  await act(async () => form.setFieldValue(['options', 'oidc', 'clientSecret'], 'test-secret'));
+  await act(async () => {
+    await expect(form.validateFields()).resolves.toBeDefined();
   });
 });

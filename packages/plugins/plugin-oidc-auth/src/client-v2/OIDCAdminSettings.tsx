@@ -17,6 +17,7 @@ function PreservedOptions() {
 
 export default function OIDCAdminSettings() {
   const t = useT();
+  const authMethod = Form.useWatch(['options', 'oidc', 'tokenEndpointAuthMethod']);
   return (
     <Tabs
       items={[
@@ -39,7 +40,8 @@ export default function OIDCAdminSettings() {
               <Form.Item
                 name={['options', 'oidc', 'clientSecret']}
                 label={t('Client Secret')}
-                rules={[{ required: true }]}
+                hidden={authMethod === 'none'}
+                rules={[{ required: authMethod !== 'none' }]}
               >
                 <Input.Password autoComplete="new-password" />
               </Form.Item>
@@ -49,7 +51,11 @@ export default function OIDCAdminSettings() {
                 initialValue="client_secret_basic"
               >
                 <Select
-                  options={['client_secret_basic', 'client_secret_post'].map((value) => ({ value, label: value }))}
+                  options={[
+                    { value: 'none', label: t('Public client (none, PKCE)') },
+                    { value: 'client_secret_basic', label: 'client_secret_basic' },
+                    { value: 'client_secret_post', label: 'client_secret_post' },
+                  ]}
                 />
               </Form.Item>
               <Form.Item name={['options', 'oidc', 'scope']} label={t('scope')} initialValue="openid profile email">

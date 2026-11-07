@@ -51,8 +51,8 @@
   "Failed to load OIDC applications": "Failed to load OIDC applications",
   "OIDC application created": "OIDC application created",
   "OIDC application updated": "OIDC application updated",
-  "OIDC application deleted": "OIDC application deleted"
-, "Integration guide": "Integration guide",
+  "OIDC application deleted": "OIDC application deleted",
+  "Integration guide": "Integration guide",
   "Overview": "Overview",
   "Raw HTTP": "Raw HTTP",
   "Troubleshooting": "Troubleshooting",
@@ -93,5 +93,8 @@
   "serviceUserId is required for client credentials": "Select a service user for Client Credentials",
   "scopes must include api": "Scopes must include api",
   "Service user does not exist": "The selected service user does not exist",
-  "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists.": "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists."
+  "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists.": "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists.",
+  "Send the API resource in authorization, code exchange and refresh requests.": "Send the API resource in authorization, code exchange and refresh requests.",
+  "Use the validated ID token for identity. API access tokens cannot call UserInfo.": "Use the validated ID token for identity. API access tokens cannot call UserInfo.",
+  "For sign-in, omit resource and use the access token with UserInfo.": "For sign-in, omit resource and use the access token with UserInfo."
 }

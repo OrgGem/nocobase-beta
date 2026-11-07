@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { Alert, Descriptions, Divider, Modal, Space, Tabs, Tag, Typography } from 'antd';
 import type { ClientRecord } from './OidcClientsPage';
@@ -94,6 +103,7 @@ function CodeBlock({ value }: { value: string }) {
 export function IntegrationGuide({ client, provider, t, onClose }: Props) {
   if (!client) return null;
   const values = buildIntegrationValues(client, provider);
+  const usesApi = client.scopes.includes('api');
   const tokenBody = [
     'grant_type=authorization_code',
     `client_id=${encodeURIComponent(client.clientId)}`,
@@ -108,8 +118,7 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
   discoveryUrl: '${values.discoveryUrl}',
   clientId: '${client.clientId}',
   redirectUri: '${values.redirectUri}',
-  scope: '${values.scope}',
-  resource: '${values.resource}',
+  scope: '${values.scope}',${usesApi ? `\n  resource: '${values.resource}',` : ''}
 };
 
 // For every login, generate new state, nonce, code_verifier and S256 code_challenge.
@@ -121,8 +130,28 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
     options.ResponseType = "code";
     options.UsePkce = true;
     options.SaveTokens = true;
+    options.GetClaimsFromUserInfoEndpoint = ${!usesApi};
     options.CallbackPath = "${callbackPath(values.redirectUri)}";
-    options.Scope.Clear();${client.scopes.map((scope) => `\n    options.Scope.Add("${scope}");`).join('')}
+    options.Scope.Clear();${client.scopes.map((scope) => `\n    options.Scope.Add("${scope}");`).join('')}${
+      usesApi || client.scopes.includes('offline_access')
+        ? `
+    options.Events.OnRedirectToIdentityProvider = context =>
+    {${usesApi ? `\n        context.ProtocolMessage.SetParameter("resource", "${values.resource}");` : ''}${
+      client.scopes.includes('offline_access') ? '\n        context.ProtocolMessage.Prompt = "consent";' : ''
+    }
+        return Task.CompletedTask;
+    };`
+        : ''
+    }${
+      usesApi
+        ? `
+    options.Events.OnAuthorizationCodeReceived = context =>
+    {
+        context.TokenEndpointRequest!.SetParameter("resource", "${values.resource}");
+        return Task.CompletedTask;
+    };`
+        : ''
+    }
 });`;
 
   return (
@@ -179,9 +208,16 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
                       {client.scopes.includes('offline_access') ? (
                         <li>{t('Send prompt=consent or offline_access will be removed.')}</li>
                       ) : null}
-                      {client.scopes.includes('api') ? (
-                        <li>{t('Send the resource parameter to receive a JWT access token for the NocoBase API.')}</li>
-                      ) : null}
+                      {usesApi ? (
+                        <>
+                          <li>{t('Send the API resource in authorization, code exchange and refresh requests.')}</li>
+                          <li>
+                            {t('Use the validated ID token for identity. API access tokens cannot call UserInfo.')}
+                          </li>
+                        </>
+                      ) : (
+                        <li>{t('For sign-in, omit resource and use the access token with UserInfo.')}</li>
+                      )}
                       <li>{t('Use access_token, not id_token, to call collection and model APIs.')}</li>
                     </ul>
                   }

@@ -55,5 +55,9 @@
   "Signup with an unverified email is disabled.": "使用未验证邮箱注册已禁用。",
   "A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually.": "已有 NocoBase 账户使用此邮箱。请先登录该账户，并让管理员手动关联 OIDC 身份。",
   "This OIDC identity cannot be linked because the identity provider did not verify its email address.": "身份提供商未验证此邮箱，因此无法关联该 OIDC 身份。",
-  "A NocoBase account already uses this email, but automatic verified-email linking is disabled.": "已有 NocoBase 账户使用此邮箱，但已禁用通过已验证邮箱自动关联。"
+  "A NocoBase account already uses this email, but automatic verified-email linking is disabled.": "已有 NocoBase 账户使用此邮箱，但已禁用通过已验证邮箱自动关联。",
+  "Public client (none, PKCE)": "公共客户端（none，PKCE）",
+  "OIDC issuer and client ID are required.": "必须提供 OIDC 签发方和客户端 ID。",
+  "A client secret is required for confidential clients.": "机密客户端必须提供客户端密钥。",
+  "Unsupported OIDC token endpoint authentication method.": "不支持的 OIDC 令牌端点认证方式。"
 }

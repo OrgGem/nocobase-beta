@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { CopyOutlined } from '@ant-design/icons';
 import { ArrayItems, FormTab } from '@formily/antd-v5';
 import { observer, useField } from '@formily/react';
@@ -57,6 +66,15 @@ const schema = {
                   'x-component': 'Input',
                   'x-decorator': 'FormItem',
                   required: true,
+                  'x-reactions': {
+                    dependencies: ['.tokenEndpointAuthMethod'],
+                    fulfill: {
+                      state: {
+                        required: '{{$deps[0] !== "none"}}',
+                        visible: '{{$deps[0] !== "none"}}',
+                      },
+                    },
+                  },
                 },
                 tokenEndpointAuthMethod: {
                   type: 'string',
@@ -65,6 +83,7 @@ const schema = {
                   'x-decorator': 'FormItem',
                   default: 'client_secret_basic',
                   enum: [
+                    { label: lang('Public client (none, PKCE)'), value: 'none' },
                     { label: 'client_secret_basic', value: 'client_secret_basic' },
                     { label: 'client_secret_post', value: 'client_secret_post' },
                   ],

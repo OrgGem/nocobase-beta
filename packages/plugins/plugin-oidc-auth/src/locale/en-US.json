@@ -57,15 +57,19 @@
   "This URI must be registered at the identity provider.": "This URI must be registered at the identity provider.",
   "Sign in with OIDC": "Sign in with OIDC",
   "The identity provider returned an invalid authorization URL.": "The identity provider returned an invalid authorization URL.",
-  "OIDC login failed.": "OIDC login failed."
-  ,"Allow signup with unverified email": "Allow signup with unverified email"
-  ,"Store unverified email in the user profile": "Store unverified email in the user profile"
-  ,"Unverified email is not an ownership proof and cannot link an existing account.": "Unverified email is not an ownership proof and cannot link an existing account."
-  ,"The identity provider did not verify this email address.": "The identity provider did not verify this email address."
-  ,"The email domain is not allowed.": "The email domain is not allowed."
-  ,"Automatic OIDC user signup is disabled.": "Automatic OIDC user signup is disabled."
-  ,"Signup with an unverified email is disabled.": "Signup with an unverified email is disabled."
-  ,"A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually.": "A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually."
-  ,"This OIDC identity cannot be linked because the identity provider did not verify its email address.": "This OIDC identity cannot be linked because the identity provider did not verify its email address."
-  ,"A NocoBase account already uses this email, but automatic verified-email linking is disabled.": "A NocoBase account already uses this email, but automatic verified-email linking is disabled."
+  "OIDC login failed.": "OIDC login failed.",
+  "Allow signup with unverified email": "Allow signup with unverified email",
+  "Store unverified email in the user profile": "Store unverified email in the user profile",
+  "Unverified email is not an ownership proof and cannot link an existing account.": "Unverified email is not an ownership proof and cannot link an existing account.",
+  "The identity provider did not verify this email address.": "The identity provider did not verify this email address.",
+  "The email domain is not allowed.": "The email domain is not allowed.",
+  "Automatic OIDC user signup is disabled.": "Automatic OIDC user signup is disabled.",
+  "Signup with an unverified email is disabled.": "Signup with an unverified email is disabled.",
+  "A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually.": "A NocoBase account already uses this email. Sign in to that account and ask an administrator to link the OIDC identity manually.",
+  "This OIDC identity cannot be linked because the identity provider did not verify its email address.": "This OIDC identity cannot be linked because the identity provider did not verify its email address.",
+  "A NocoBase account already uses this email, but automatic verified-email linking is disabled.": "A NocoBase account already uses this email, but automatic verified-email linking is disabled.",
+  "Public client (none, PKCE)": "Public client (none, PKCE)",
+  "OIDC issuer and client ID are required.": "OIDC issuer and client ID are required.",
+  "A client secret is required for confidential clients.": "A client secret is required for confidential clients.",
+  "Unsupported OIDC token endpoint authentication method.": "Unsupported OIDC token endpoint authentication method."
 }

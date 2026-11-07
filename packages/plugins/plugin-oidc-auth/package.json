@@ -3,7 +3,7 @@
   "displayName": "OIDC Authentication",
   "displayName.zh-CN": "OIDC 身份认证",
   "description": "Production-grade OpenID Connect login with PKCE, nonce, secure account provisioning and automatic redirect.",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
