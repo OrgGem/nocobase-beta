@@ -18,6 +18,7 @@ import {
   ClientSecretBasic,
   ClientSecretPost,
   discovery,
+  enableNonRepudiationChecks,
   fetchUserInfo,
   None,
   randomNonce,
@@ -36,6 +37,7 @@ import {
 import type { OidcTransaction } from './security';
 
 type OidcOptions = {
+  providerProfile?: 'standard' | 'nocobase';
   issuer?: string;
   clientId?: string;
   clientSecret?: string;
@@ -138,7 +140,7 @@ export class OIDCAuth extends BaseAuth {
         : method === 'client_secret_post'
           ? ClientSecretPost(clientSecret)
           : ClientSecretBasic(clientSecret);
-    return discovery(
+    const config = await discovery(
       new URL(issuer),
       clientId,
       {
@@ -150,6 +152,13 @@ export class OIDCAuth extends BaseAuth {
       },
       clientAuth,
     );
+    if (this.getOptions().providerProfile === 'nocobase') enableNonRepudiationChecks(config);
+    return config;
+  }
+
+  private resourceParameters(): Record<string, string> {
+    const { providerProfile, issuer } = this.getOptions();
+    return providerProfile === 'nocobase' && issuer ? { resource: `${issuer.replace(/\/+$/, '')}/` } : {};
   }
 
   async createAuthorizationUrl(returnTo: unknown) {
@@ -182,6 +191,7 @@ export class OIDCAuth extends BaseAuth {
       nonce,
       code_challenge: codeChallenge,
       code_challenge_method: 'S256',
+      ...this.resourceParameters(),
     }).toString();
   }
 
@@ -304,19 +314,27 @@ export class OIDCAuth extends BaseAuth {
     const transaction = this.transaction();
     if (!transaction) throw new Error('OIDC login transaction is missing');
     const config = await this.createConfiguration();
-    const tokens = await authorizationCodeGrant(config, this.callbackUrl(transaction), {
-      expectedState: transaction.state,
-      expectedNonce: transaction.nonce,
-      pkceCodeVerifier: transaction.codeVerifier,
-      idTokenExpected: true,
-    });
+    const tokens = await authorizationCodeGrant(
+      config,
+      this.callbackUrl(transaction),
+      {
+        expectedState: transaction.state,
+        expectedNonce: transaction.nonce,
+        pkceCodeVerifier: transaction.codeVerifier,
+        idTokenExpected: true,
+      },
+      this.resourceParameters(),
+    );
     const idTokenClaims = tokens.claims();
     if (!idTokenClaims?.sub) throw new Error('OIDC token response does not contain a subject');
     let claims: Claims = { ...idTokenClaims };
-    if (config.serverMetadata().userinfo_endpoint && tokens.access_token) {
+    const isNocobase = this.getOptions().providerProfile === 'nocobase';
+    if (!isNocobase && config.serverMetadata().userinfo_endpoint && tokens.access_token) {
       const userInfo = await fetchUserInfo(config, tokens.access_token, idTokenClaims.sub);
-      claims = { ...claims, ...userInfo };
+      claims = { ...claims, ...userInfo, iss: idTokenClaims.iss, sub: idTokenClaims.sub };
     }
+    // The stock NocoBase provider infers this claim from email presence, without verification evidence.
+    if (isNocobase) delete claims.email_verified;
     if (tokens.id_token) {
       this.ctx.cookies.set(logoutIdTokenCookieName(transaction.authenticator), tokens.id_token, {
         httpOnly: true,

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { describe, expect, it } from 'vitest';
 import { buildIntegrationValues } from '../IntegrationGuide';
 import type { ClientRecord } from '../OidcClientsPage';
@@ -41,12 +50,13 @@ describe('buildIntegrationValues', () => {
     expect(authorizationUrl.searchParams.get('scope')).toBe('openid offline_access api');
   });
 
-  it('does not add optional parameters when their scopes are absent', () => {
+  it('requests the API resource for identity without granting the api scope or offline consent', () => {
     const values = buildIntegrationValues(createClient(), provider);
     const authorizationUrl = new URL(values.authorizationUrl);
 
     expect(authorizationUrl.searchParams.has('prompt')).toBe(false);
-    expect(authorizationUrl.searchParams.has('resource')).toBe(false);
+    expect(authorizationUrl.searchParams.get('resource')).toBe('https://nocobase.example.com/');
+    expect(authorizationUrl.searchParams.get('scope')).toBe('openid profile');
   });
 
   it('uses provider-derived authorization and token endpoints', () => {

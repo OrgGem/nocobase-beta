@@ -31,6 +31,19 @@ export default function OIDCAdminSettings() {
               <Form.Item name="options" hidden>
                 <PreservedOptions />
               </Form.Item>
+              <Form.Item
+                name={['options', 'oidc', 'providerProfile']}
+                label={t('Identity provider profile')}
+                initialValue="standard"
+                extra={t('For NocoBase IdP, use signed ID-token claims and do not trust email verification claims.')}
+              >
+                <Select
+                  options={[
+                    { value: 'standard', label: t('Standard OpenID Connect') },
+                    { value: 'nocobase', label: t('NocoBase IdP') },
+                  ]}
+                />
+              </Form.Item>
               <Form.Item name={['options', 'oidc', 'issuer']} label={t('Issuer')} rules={[{ required: true }]}>
                 <Input placeholder="https://idp.example.com" />
               </Form.Item>

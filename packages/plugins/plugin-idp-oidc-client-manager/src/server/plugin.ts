@@ -1,6 +1,16 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { resolve } from 'node:path';
 import { Plugin } from '@nocobase/server';
 import type { IdpOauthService } from '@nocobase/plugin-idp-oauth';
+import { createManagedResourceGuard } from './resource-auth';
 import {
   type ClientInput,
   COLLECTION_NAME,
@@ -9,10 +19,10 @@ import {
   serializeClient,
 } from './client-service';
 
-type IdpOauthPlugin = { service: IdpOauthService };
+type IdpOauthPlugin = Plugin & { service: IdpOauthService };
 
-function valuesFromContext(ctx: { action: { params: { values?: unknown } } }) {
-  return ctx.action.params.values;
+function valuesFromContext(ctx: { action?: { params?: { values?: unknown } } }) {
+  return ctx.action?.params?.values;
 }
 
 export class PluginIdpOidcClientManagerServer extends Plugin {
@@ -34,6 +44,11 @@ export class PluginIdpOidcClientManagerServer extends Plugin {
       'oidc-client-manager',
       new DatabaseOidcClientResolver(this.db.getRepository(COLLECTION_NAME)),
     );
+
+    this.app.use(createManagedResourceGuard(this.idpService, this.db.getRepository(COLLECTION_NAME)), {
+      tag: 'oidc-client-manager-resource-auth',
+      before: 'idp-oauth-resource-auth',
+    });
 
     this.app.resourceManager.define({
       name: 'oidcClientManager',

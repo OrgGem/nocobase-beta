@@ -46,13 +46,15 @@ Validate `state`, `nonce`, the PKCE code verifier, ID-token signature, issuer, a
 
 ## Identity and API access
 
-For sign-in with `plugin-oidc-auth`, select **Public client (none, PKCE)** and use `openid profile email`. Leave the client secret empty. This flow omits `resource` and receives an access token usable at UserInfo. The identity key is the validated issuer and subject (`iss` + `sub`).
+For sign-in with `plugin-oidc-auth`, select **NocoBase IdP** as the identity provider profile, select **Public client (none, PKCE)** and use `openid profile email`. Leave the client secret empty. This profile sends the explicit API resource in authorization and code exchange, validates the ID-token signature using JWKS, and uses its issuer and subject (`iss` + `sub`) as the identity. It does not call UserInfo. Selecting a resource does not grant the `api` scope.
 
 For API access, also allow/request `api` and send the exact API resource shown in the integration guide in authorization, code exchange, and refresh requests. Use the validated ID token for identity and the API access token for API requests. API access tokens are audience-bound and cannot call UserInfo. API scopes do not replace the user's NocoBase ACL permissions.
 
-The provider does not claim that an email has been verified solely because it exists in the user profile. Automatic linking to an existing account by email requires an actual verified-email claim; existing issuer/subject links remain usable.
+The stock NocoBase provider infers `email_verified` from email presence. The **NocoBase IdP** profile in `plugin-oidc-auth` ignores that claim and rejects automatic linking to an existing account by email. Existing issuer/subject links remain usable; new accounts can be created if auto-signup is enabled. External applications must also avoid trusting this claim for account linking.
 
-These behaviors require the matching fixes in `@nocobase/plugin-idp-oauth` in the deployed NocoBase build. Installing only the custom plugin archives does not update the provider. Clients relying on implicit API resource selection must request the API resource explicitly and obtain new tokens.
+This plugin uses the unchanged `@nocobase/plugin-idp-oauth` APIs. Its own middleware runs before the provider's resource authentication and validates the signature, issuer, API audience, expiry, client status, and `api` scope for clients registered by this manager. The user's NocoBase ACL remains required. Clients and resources outside this manager retain upstream behavior; the plugin does not replace or patch provider methods.
+
+External clients should send the exact API resource even for sign-in, validate the ID token, and disable UserInfo retrieval. This works with the stock provider's resource selection regardless of whether MCP is also enabled. API access requires separately allowing and requesting `api`. Native NocoBase session tokens and OAuth access tokens are not application identity documents.
 
 Implicit flow, password grant, client credentials, confidential clients, and wildcard non-loopback callbacks are intentionally not supported.
 

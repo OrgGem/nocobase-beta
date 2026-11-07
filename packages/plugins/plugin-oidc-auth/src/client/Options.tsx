@@ -46,6 +46,22 @@ const schema = {
                 tab: lang('Basic configuration'),
               },
               properties: {
+                providerProfile: {
+                  type: 'string',
+                  title: lang('Identity provider profile'),
+                  'x-component': 'Select',
+                  'x-decorator': 'FormItem',
+                  'x-decorator-props': {
+                    tooltip: lang(
+                      'For NocoBase IdP, use signed ID-token claims and do not trust email verification claims.',
+                    ),
+                  },
+                  default: 'standard',
+                  enum: [
+                    { label: lang('Standard OpenID Connect'), value: 'standard' },
+                    { label: lang('NocoBase IdP'), value: 'nocobase' },
+                  ],
+                },
                 issuer: {
                   type: 'string',
                   title: '{{t("Issuer")}}',

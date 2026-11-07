@@ -77,7 +77,7 @@ export function buildIntegrationValues(client: ClientRecord, provider: GuideProv
     nonce: '<random-nonce>',
   });
   if (client.scopes.includes('offline_access')) params.set('prompt', 'consent');
-  if (client.scopes.includes('api')) params.set('resource', resource);
+  params.set('resource', resource);
   return {
     issuer,
     discoveryUrl,
@@ -103,14 +103,13 @@ function CodeBlock({ value }: { value: string }) {
 export function IntegrationGuide({ client, provider, t, onClose }: Props) {
   if (!client) return null;
   const values = buildIntegrationValues(client, provider);
-  const usesApi = client.scopes.includes('api');
   const tokenBody = [
     'grant_type=authorization_code',
     `client_id=${encodeURIComponent(client.clientId)}`,
     'code=<authorization-code>',
     `redirect_uri=${encodeURIComponent(values.redirectUri)}`,
     'code_verifier=<original-pkce-code-verifier>',
-    ...(client.scopes.includes('api') ? [`resource=${encodeURIComponent(values.resource)}`] : []),
+    `resource=${encodeURIComponent(values.resource)}`,
   ].join('&\n');
   const rawTokenRequest = `POST ${values.tokenEndpoint}\nContent-Type: application/x-www-form-urlencoded\n\n${tokenBody}`;
   const authorizationCodeNodeConfig = `const oidc = {
@@ -118,7 +117,8 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
   discoveryUrl: '${values.discoveryUrl}',
   clientId: '${client.clientId}',
   redirectUri: '${values.redirectUri}',
-  scope: '${values.scope}',${usesApi ? `\n  resource: '${values.resource}',` : ''}
+  scope: '${values.scope}',
+  resource: '${values.resource}',
 };
 
 // For every login, generate new state, nonce, code_verifier and S256 code_challenge.
@@ -130,28 +130,21 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
     options.ResponseType = "code";
     options.UsePkce = true;
     options.SaveTokens = true;
-    options.GetClaimsFromUserInfoEndpoint = ${!usesApi};
+    options.GetClaimsFromUserInfoEndpoint = false;
     options.CallbackPath = "${callbackPath(values.redirectUri)}";
-    options.Scope.Clear();${client.scopes.map((scope) => `\n    options.Scope.Add("${scope}");`).join('')}${
-      usesApi || client.scopes.includes('offline_access')
-        ? `
+    options.Scope.Clear();${client.scopes.map((scope) => `\n    options.Scope.Add("${scope}");`).join('')}
     options.Events.OnRedirectToIdentityProvider = context =>
-    {${usesApi ? `\n        context.ProtocolMessage.SetParameter("resource", "${values.resource}");` : ''}${
-      client.scopes.includes('offline_access') ? '\n        context.ProtocolMessage.Prompt = "consent";' : ''
-    }
+    {
+        context.ProtocolMessage.SetParameter("resource", "${values.resource}");${
+          client.scopes.includes('offline_access') ? '\n        context.ProtocolMessage.Prompt = "consent";' : ''
+        }
         return Task.CompletedTask;
-    };`
-        : ''
-    }${
-      usesApi
-        ? `
+    };
     options.Events.OnAuthorizationCodeReceived = context =>
     {
         context.TokenEndpointRequest!.SetParameter("resource", "${values.resource}");
         return Task.CompletedTask;
-    };`
-        : ''
-    }
+    };
 });`;
 
   return (
@@ -208,16 +201,10 @@ export function IntegrationGuide({ client, provider, t, onClose }: Props) {
                       {client.scopes.includes('offline_access') ? (
                         <li>{t('Send prompt=consent or offline_access will be removed.')}</li>
                       ) : null}
-                      {usesApi ? (
-                        <>
-                          <li>{t('Send the API resource in authorization, code exchange and refresh requests.')}</li>
-                          <li>
-                            {t('Use the validated ID token for identity. API access tokens cannot call UserInfo.')}
-                          </li>
-                        </>
-                      ) : (
-                        <li>{t('For sign-in, omit resource and use the access token with UserInfo.')}</li>
-                      )}
+                      <li>{t('Send the API resource in authorization, code exchange and refresh requests.')}</li>
+                      <li>{t('Use the validated ID token for identity. API access tokens cannot call UserInfo.')}</li>
+                      <li>{t('The api scope is required only when calling NocoBase APIs.')}</li>
+                      <li>{t('Do not use NocoBase email_verified claims to automatically link existing accounts.')}</li>
                       <li>{t('Use access_token, not id_token, to call collection and model APIs.')}</li>
                     </ul>
                   }

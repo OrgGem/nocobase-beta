@@ -168,6 +168,7 @@ it.runIf(process.env.OIDC_BROWSER_E2E === '1')(
           options: {
             public: { autoSignup: false },
             oidc: {
+              providerProfile: 'nocobase',
               issuer,
               clientId: 'browser-client',
               tokenEndpointAuthMethod: 'none',

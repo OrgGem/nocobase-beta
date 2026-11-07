@@ -30,6 +30,7 @@ it('uses conditional secret validation in the legacy settings form', async () =>
         issuer: 'https://idp.example.com',
         clientId: 'public-client',
         tokenEndpointAuthMethod: 'none',
+        providerProfile: 'nocobase',
       },
     },
   });
@@ -42,6 +43,7 @@ it('uses conditional secret validation in the legacy settings form', async () =>
   );
   await waitFor(() => expect(form.query('oidc.clientSecret').take()).toBeDefined());
   const secret = form.query('oidc.clientSecret').take() as Field;
+  expect(form.values.oidc.providerProfile).toBe('nocobase');
   expect(secret.required).toBe(false);
   await act(async () => {
     await expect(form.validate()).resolves.toBeUndefined();

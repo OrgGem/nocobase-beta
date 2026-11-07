@@ -22,6 +22,7 @@ import { IdpOauthService, type ProviderContext } from '../../../../@nocobase/plu
 import { OIDCAuth } from '../../../../plugin-oidc-auth/src/server/oidc-auth';
 import type { OidcTransaction } from '../../../../plugin-oidc-auth/src/server/security';
 import { DatabaseOidcClientResolver, normalizeClientInput } from '../client-service';
+import { createManagedResourceGuard } from '../resource-auth';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -34,7 +35,7 @@ const mcpResource = `${issuer}/mcp`;
 const redirectUri = 'https://client.example.test/callback';
 const verifier = 'original-pkce-verifier-with-at-least-forty-three-characters';
 
-async function fixture(withMcp = false) {
+async function fixture(withMcp = false, withApi = true) {
   const stores = new Map<string, Map<string, AdapterPayload>>();
   class MemoryAdapter {
     private store: Map<string, AdapterPayload>;
@@ -83,12 +84,13 @@ async function fixture(withMcp = false) {
     app as unknown as ConstructorParameters<typeof IdpOauthService>[0],
     { get: vi.fn(), set: vi.fn() } as unknown as ConstructorParameters<typeof IdpOauthService>[1],
   );
-  service.registerResourceServer('api', {
-    path: '/',
-    scope: 'api',
-    accessTokenFormat: 'jwt',
-    jwt: { sign: { alg: 'RS256' } },
-  });
+  if (withApi)
+    service.registerResourceServer('api', {
+      path: '/',
+      scope: 'api',
+      accessTokenFormat: 'jwt',
+      jwt: { sign: { alg: 'RS256' } },
+    });
   if (withMcp) {
     service.registerResourceServer('mcp', {
       path: '/mcp',
@@ -115,9 +117,12 @@ async function fixture(withMcp = false) {
     clientId: 'public-client',
     clientType: 'public',
     redirectUris: [redirectUri],
-    scopes: ['openid', 'profile', 'email', 'offline_access', 'api'],
+    scopes: ['openid', 'profile', 'email', 'offline_access', ...(withApi ? ['api'] : [])],
   });
   const resolver = new DatabaseOidcClientResolver({ findOne: async () => record } as unknown as Repository);
+  const guard = createManagedResourceGuard(service, {
+    findOne: async () => record,
+  } as unknown as Repository);
   const publicClient = await resolver.resolveClient(record.clientId);
   assert(publicClient);
   const provider = new Provider(issuer, {
@@ -201,25 +206,25 @@ async function fixture(withMcp = false) {
     expect(response.statusCode).toBe(200);
     return response.json<{ access_token: string; id_token: string; refresh_token: string }>();
   }
-  return { provider, service, config, request, authorizationCode, exchange, privateKey, user, tokenController };
+  return { provider, service, guard, config, request, authorizationCode, exchange, privateKey, user, tokenController };
 }
 
 describe('OIDC identity and resource tokens', () => {
-  it.each([false, true])('keeps UserInfo and refresh usable with multiple resources=%s', async (withMcp) => {
+  it.each([false, true])('uses ID-token claims with the stock provider and multiple resources=%s', async (withMcp) => {
     const f = await fixture(withMcp);
-    const tokens = await f.exchange('openid profile email offline_access');
+    const tokens = await f.exchange('openid profile email offline_access', apiResource);
     expect(decodeJwt(tokens.id_token)).toMatchObject({ iss: issuer, sub: '17', aud: 'public-client' });
     const info = await f.request('/idpOAuth/me', undefined, tokens.access_token);
-    expect(info.statusCode).toBe(200);
-    expect(info.json()).toMatchObject({ sub: '17', email: f.user.email });
-    expect(info.json()).not.toHaveProperty('email_verified');
+    expect(info.statusCode).toBe(401);
+    expect(decodeJwt(tokens.id_token)).toMatchObject({ sub: '17', email: f.user.email, email_verified: true });
     const refreshed = await f.request('/idpOAuth/token', {
       grant_type: 'refresh_token',
       client_id: 'public-client',
       refresh_token: tokens.refresh_token,
+      resource: apiResource,
     });
     expect(refreshed.statusCode).toBe(200);
-    expect((await f.request('/idpOAuth/me', undefined, refreshed.json().access_token)).statusCode).toBe(200);
+    expect(decodeJwt(refreshed.json().access_token)).toMatchObject({ aud: apiResource });
   });
 
   it('uses an explicit API resource for API tokens and retains claims in the ID token', async () => {
@@ -227,7 +232,7 @@ describe('OIDC identity and resource tokens', () => {
     const tokens = await f.exchange('openid profile email offline_access api', apiResource);
     expect(decodeJwt(tokens.access_token)).toMatchObject({ aud: apiResource, scope: 'api', sub: '17' });
     expect(decodeJwt(tokens.id_token)).toMatchObject({ sub: '17', email: f.user.email });
-    expect(decodeJwt(tokens.id_token)).not.toHaveProperty('email_verified');
+    expect(decodeJwt(tokens.id_token)).toHaveProperty('email_verified', true);
     expect((await f.request('/idpOAuth/me', undefined, tokens.access_token)).statusCode).toBe(401);
     const refreshed = await f.request('/idpOAuth/token', {
       grant_type: 'refresh_token',
@@ -239,7 +244,7 @@ describe('OIDC identity and resource tokens', () => {
     expect(decodeJwt(refreshed.json().access_token)).toMatchObject({ aud: apiResource, scope: 'api' });
   });
 
-  it('defaults an omitted resource only for MCP and preserves MCP code and refresh grants', async () => {
+  it('preserves the stock provider behavior for MCP code and refresh grants', async () => {
     const f = await fixture(true);
     const defaults = f.config.features?.resourceIndicators?.defaultResource;
     assert(defaults);
@@ -250,7 +255,7 @@ describe('OIDC identity and resource tokens', () => {
     });
     expect(await defaults(ctx('openid profile email') as never, client)).toBeUndefined();
     expect(await defaults(ctx('openid api') as never, client)).toBeUndefined();
-    expect(await defaults(ctx('openid mcp') as never, client)).toBe(mcpResource);
+    expect(await defaults(ctx('openid mcp') as never, client, [mcpResource])).toBe(mcpResource);
     const code = await f.authorizationCode('openid mcp offline_access', mcpResource);
     const response = await f.request('/idpOAuth/token', {
       grant_type: 'authorization_code',
@@ -270,96 +275,134 @@ describe('OIDC identity and resource tokens', () => {
     expect(decodeJwt(refreshed.json().access_token)).toMatchObject({ aud: mcpResource, scope: 'mcp' });
   });
 
-  it.each(['none', 'client_secret_basic', 'client_secret_post'] as const)(
-    'completes OIDCAuth validation using %s without trusting the unverified email',
-    async (method) => {
-      const f = await fixture();
-      const fetches: Array<{ path: string; hasSecret: boolean }> = [];
-      vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
-        const request = new Request(input, init);
-        const url = new URL(request.url);
-        if (url.origin !== new URL(issuer).origin) throw new Error('Unexpected test fetch origin');
-        const body = request.method === 'POST' ? await request.text() : undefined;
-        fetches.push({
-          path: url.pathname,
-          hasSecret: !!request.headers.get('authorization') || !!body?.includes('client_secret='),
-        });
-        const response = await inject(f.provider.callback(), {
-          method: request.method as 'GET' | 'POST',
-          url: url.pathname.replace(/^\/api/, '') + url.search,
-          headers: { ...Object.fromEntries(request.headers), host: url.host, 'x-forwarded-proto': 'https' },
-          payload: body,
-        });
-        return new Response(response.payload, {
-          status: response.statusCode,
-          headers: response.headers as HeadersInit,
-        });
+  it.each(
+    (['none', 'client_secret_basic', 'client_secret_post'] as const).flatMap((method) =>
+      (['standard', 'nocobase'] as const).map((profile) => ({ method, profile })),
+    ),
+  )('completes OIDCAuth validation using $method and $profile identity policy', async ({ method, profile }) => {
+    const isNocobase = profile === 'nocobase';
+    const f = await fixture(false, isNocobase);
+    let tamperIdToken = false;
+    const fetches: Array<{ path: string; hasSecret: boolean }> = [];
+    vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const request = new Request(input, init);
+      const url = new URL(request.url);
+      if (url.origin !== new URL(issuer).origin) throw new Error('Unexpected test fetch origin');
+      const body = request.method === 'POST' ? await request.text() : undefined;
+      fetches.push({
+        path: url.pathname,
+        hasSecret: !!request.headers.get('authorization') || !!body?.includes('client_secret='),
       });
-      let transaction: OidcTransaction | undefined;
-      const ctx = {
-        app: {
-          name: 'main',
-          cache: {
-            set: async (_key: string, value: OidcTransaction) => {
-              transaction = value;
-            },
+      const response = await inject(f.provider.callback(), {
+        method: request.method as 'GET' | 'POST',
+        url: url.pathname.replace(/^\/api/, '') + url.search,
+        headers: { ...Object.fromEntries(request.headers), host: url.host, 'x-forwarded-proto': 'https' },
+        payload: body,
+      });
+      let responseBody = response.payload;
+      if (tamperIdToken && url.pathname.endsWith('/token') && response.statusCode === 200) {
+        const tokens = response.json<{ id_token: string }>();
+        const parts = tokens.id_token.split('.');
+        parts[1] = Buffer.from(
+          JSON.stringify({ ...decodeJwt(tokens.id_token), email: 'tampered@example.test' }),
+        ).toString('base64url');
+        responseBody = JSON.stringify({ ...response.json(), id_token: parts.join('.') });
+      }
+      return new Response(responseBody, {
+        status: response.statusCode,
+        headers: response.headers as HeadersInit,
+      });
+    });
+    let transaction: OidcTransaction | undefined;
+    const ctx = {
+      app: {
+        name: 'main',
+        cache: {
+          set: async (_key: string, value: OidcTransaction) => {
+            transaction = value;
           },
         },
-        headers: { 'x-authenticator': 'oidc' },
-        protocol: 'https',
-        cookies: { set: vi.fn() },
-        state: {} as { oidcTransaction?: OidcTransaction },
-        action: { params: {} as Record<string, string> },
-        t: (key: string) => key,
-      };
-      const linkedUser = { get: () => 17 };
-      const authenticator = { findUser: vi.fn().mockResolvedValue(linkedUser), addUser: vi.fn() };
-      const auth = Object.create(OIDCAuth.prototype) as OIDCAuth;
-      Object.defineProperties(auth, {
-        options: {
-          value: {
-            oidc: {
-              issuer,
-              clientId: method === 'none' ? 'public-client' : method,
-              clientSecret: 'test-confidential-secret',
-              tokenEndpointAuthMethod: method,
-              redirectUri,
-            },
+      },
+      headers: { 'x-authenticator': 'oidc' },
+      protocol: 'https',
+      cookies: { set: vi.fn() },
+      state: {} as { oidcTransaction?: OidcTransaction },
+      action: { params: {} as Record<string, string> },
+      t: (key: string) => key,
+    };
+    const linkedUser = { get: () => 17 };
+    const authenticator = { findUser: vi.fn().mockResolvedValue(linkedUser), addUser: vi.fn() };
+    const userRepository = { update: vi.fn(), findOne: vi.fn().mockResolvedValue(linkedUser) };
+    const auth = Object.create(OIDCAuth.prototype) as OIDCAuth;
+    Object.defineProperties(auth, {
+      options: {
+        value: {
+          oidc: {
+            providerProfile: profile,
+            issuer,
+            clientId: method === 'none' ? 'public-client' : method,
+            clientSecret: 'test-confidential-secret',
+            tokenEndpointAuthMethod: method,
+            redirectUri,
           },
         },
-        ctx: { value: ctx },
-        authenticator: { value: authenticator },
-        userRepository: { value: { update: vi.fn(), findOne: vi.fn().mockResolvedValue(linkedUser) } },
+      },
+      ctx: { value: ctx },
+      authenticator: { value: authenticator },
+      userRepository: { value: userRepository },
+    });
+    const authorizeUrl = new URL(await auth.createAuthorizationUrl('/admin'));
+    expect(authorizeUrl.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(authorizeUrl.searchParams.get('resource')).toBe(isNocobase ? apiResource : null);
+    assert(transaction);
+    const clientId = authorizeUrl.searchParams.get('client_id');
+    const challenge = authorizeUrl.searchParams.get('code_challenge');
+    assert(clientId && challenge);
+    const code = await f.authorizationCode('openid email profile', isNocobase ? apiResource : undefined, {
+      clientId,
+      nonce: transaction.nonce,
+      challenge,
+    });
+    ctx.state.oidcTransaction = transaction;
+    ctx.action.params = { code, state: transaction.state, iss: issuer };
+    expect(await auth.validate()).toBe(linkedUser);
+    expect(authenticator.findUser).toHaveBeenCalledWith(`${issuer}|17`);
+    expect(fetches.find((entry) => entry.path.endsWith('/token'))?.hasSecret).toBe(method !== 'none');
+    expect(fetches.some((entry) => entry.path.endsWith('/me'))).toBe(!isNocobase);
+    if (isNocobase) {
+      expect(fetches.some((entry) => entry.path.endsWith('/jwks'))).toBe(true);
+      const originalUpdates = userRepository.update.mock.calls.length;
+      ctx.action.params.code = await f.authorizationCode('openid email profile', apiResource, {
+        clientId,
+        nonce: 'wrong-nonce',
+        challenge,
       });
-      const authorizeUrl = new URL(await auth.createAuthorizationUrl('/admin'));
-      expect(authorizeUrl.searchParams.get('code_challenge_method')).toBe('S256');
-      expect(authorizeUrl.searchParams.has('resource')).toBe(false);
-      assert(transaction);
-      const clientId = authorizeUrl.searchParams.get('client_id');
-      const challenge = authorizeUrl.searchParams.get('code_challenge');
-      assert(clientId && challenge);
-      const code = await f.authorizationCode('openid email profile', undefined, {
+      await expect(auth.validate()).rejects.toThrow();
+      tamperIdToken = true;
+      ctx.action.params.code = await f.authorizationCode('openid email profile', apiResource, {
         clientId,
         nonce: transaction.nonce,
         challenge,
       });
-      ctx.state.oidcTransaction = transaction;
-      ctx.action.params = { code, state: transaction.state, iss: issuer };
-      expect(await auth.validate()).toBe(linkedUser);
-      expect(authenticator.findUser).toHaveBeenCalledWith(`${issuer}|17`);
-      expect(fetches.find((entry) => entry.path.endsWith('/token'))?.hasSecret).toBe(method !== 'none');
-      expect(fetches.some((entry) => entry.path.endsWith('/me'))).toBe(true);
-      authenticator.findUser.mockResolvedValue(null);
-      const secondCode = await f.authorizationCode('openid email profile', undefined, {
-        clientId,
-        nonce: transaction.nonce,
-        challenge,
-      });
-      ctx.action.params.code = secondCode;
+      await expect(auth.validate()).rejects.toThrow();
+      tamperIdToken = false;
+      expect(userRepository.update.mock.calls.length).toBe(originalUpdates);
+    }
+    authenticator.findUser.mockResolvedValue(null);
+    const secondCode = await f.authorizationCode('openid email profile', isNocobase ? apiResource : undefined, {
+      clientId,
+      nonce: transaction.nonce,
+      challenge,
+    });
+    ctx.action.params.code = secondCode;
+    if (isNocobase) {
       await expect(auth.validate()).rejects.toThrow('did not verify this email');
       expect(authenticator.addUser).not.toHaveBeenCalled();
-    },
-  );
+    } else {
+      await expect(auth.validate()).resolves.toBe(linkedUser);
+      expect(authenticator.addUser).toHaveBeenCalled();
+    }
+  });
 });
 
 describe('OAuth scope enforcement through HTTP and NocoBase ACL', () => {
@@ -385,7 +428,9 @@ describe('OAuth scope enforcement through HTTP and NocoBase ACL', () => {
       ctx.t = (key: string) => key;
       if (ctx.cookies.get('existing-session')) ctx.state.currentUser = f.user;
       try {
-        await f.service.authenticateResourceRequest(ctx as unknown as Context);
+        await f.guard(ctx as unknown as Context, async () => {
+          await f.service.authenticateResourceRequest(ctx as unknown as Context);
+        });
         if (ctx.state.currentUser) ctx.state.currentRole = role;
         await next();
       } catch (error) {
@@ -424,7 +469,7 @@ describe('OAuth scope enforcement through HTTP and NocoBase ACL', () => {
     expect(f.tokenController.add).not.toHaveBeenCalled();
     expect((await get(await signed('api', mcpResource))).statusCode).toBe(401);
     expect((await get(await signed('api', apiResource, '-1m'))).statusCode).toBe(401);
-    expect((await get(await signed('offline_access', mcpResource), '/api/mcp')).statusCode).toBe(403);
+    expect((await get(await signed('offline_access', mcpResource), '/api/mcp')).statusCode).toBe(401);
     expect((await get(await signed('api'))).statusCode).toBe(200);
     role = 'no-permissions';
     expect((await get(await signed('api'))).statusCode).toBe(403);

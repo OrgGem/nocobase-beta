@@ -96,5 +96,9 @@
   "For Client Credentials invalid_client errors, also verify that the client is enabled and its service user still exists.": "Client Credentials 出现 invalid_client 时，还需确认客户端已启用且服务用户仍然存在。",
   "Send the API resource in authorization, code exchange and refresh requests.": "在授权、授权码交换和刷新请求中传递 API 资源参数。",
   "Use the validated ID token for identity. API access tokens cannot call UserInfo.": "使用经过验证的 ID 令牌识别用户身份。API 访问令牌不能调用 UserInfo。",
-  "For sign-in, omit resource and use the access token with UserInfo.": "登录时省略 resource 参数，并使用访问令牌调用 UserInfo。"
+  "OIDC signing keys are unavailable.": "OIDC 签名密钥不可用。",
+  "Invalid OAuth access token.": "无效的 OAuth 访问令牌。",
+  "OAuth access token has insufficient scope.": "OAuth 访问令牌的权限范围不足。",
+  "The api scope is required only when calling NocoBase APIs.": "仅在调用 NocoBase API 时才需要 api 权限范围。",
+  "Do not use NocoBase email_verified claims to automatically link existing accounts.": "不要使用 NocoBase 的 email_verified 声明自动关联现有账户。"
 }

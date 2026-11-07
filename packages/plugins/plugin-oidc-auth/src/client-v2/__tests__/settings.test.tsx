@@ -49,6 +49,7 @@ it('preserves advanced and future OIDC options through the host form save contra
       ...original.oidc,
       issuer: 'https://new-idp.example.com',
       tokenEndpointAuthMethod: 'client_secret_basic',
+      providerProfile: 'standard',
       scope: 'openid profile email',
       userBindField: 'email',
       bindExistingUserByEmail: true,
@@ -70,6 +71,7 @@ it('requires a secret only for confidential clients and can switch authenticatio
               issuer: 'https://idp.example.com',
               clientId: 'public-client',
               tokenEndpointAuthMethod: 'none',
+              providerProfile: 'nocobase',
             },
           },
         }}
@@ -82,7 +84,7 @@ it('requires a secret only for confidential clients and can switch authenticatio
   await waitFor(() => expect(screen.getByLabelText('Client Secret').closest('.ant-form-item-hidden')).not.toBeNull());
   await act(async () => {
     await expect(form.validateFields()).resolves.toMatchObject({
-      options: { oidc: { tokenEndpointAuthMethod: 'none' } },
+      options: { oidc: { tokenEndpointAuthMethod: 'none', providerProfile: 'nocobase' } },
     });
   });
   for (const method of ['client_secret_basic', 'client_secret_post']) {

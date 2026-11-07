@@ -22,6 +22,10 @@
     ],
     "editionLevel": 1
   },
+  "dependencies": {
+    "jose": "^6.2.1",
+    "light-my-request": "^6.6.0"
+  },
   "peerDependencies": {
     "@nocobase/client": "2.x",
     "@nocobase/client-v2": "2.x",

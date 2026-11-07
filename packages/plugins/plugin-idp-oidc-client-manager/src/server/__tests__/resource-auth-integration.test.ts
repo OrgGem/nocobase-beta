@@ -119,3 +119,26 @@ it('resolves the persisted public client and serves OIDC discovery through the a
   expect(response.status).toBe(200);
   expect(response.body.issuer).toBe(issuer);
 });
+
+it('denies already-issued API tokens after a managed client is disabled or loses the api scope', async () => {
+  const clients = app.db.getRepository('oidcClients');
+  const bearer = await token('api');
+  const request = () =>
+    app
+      .agent()
+      .get('/api/oidcProbe:read')
+      .set('Host', 'localhost')
+      .set('Authorization', `Bearer ${bearer}`)
+      .set('X-Role', 'oidc-reader');
+  try {
+    await clients.update({ filter: { clientId: 'integration-client' }, values: { enabled: false } });
+    expect((await request()).status).toBe(403);
+    await clients.update({ filter: { clientId: 'integration-client' }, values: { enabled: true, scopes: ['openid'] } });
+    expect((await request()).status).toBe(403);
+  } finally {
+    await clients.update({
+      filter: { clientId: 'integration-client' },
+      values: { enabled: true, scopes: ['openid', 'profile', 'email', 'api'] },
+    });
+  }
+});

@@ -42,11 +42,11 @@ describe.each([
     // Ant Design renders the modal in a portal outside the testing-library container.
     fireEvent.click(screen.getByRole('tab', { name: 'Node.js' }));
     const nodeExample = document.querySelector('.ant-tabs-tabpane-active pre')?.textContent || '';
-    expect(nodeExample.includes("resource: 'https://idp.example.com/api/'")).toBe(api);
+    expect(nodeExample).toContain("resource: 'https://idp.example.com/api/'");
     fireEvent.click(screen.getByRole('tab', { name: 'ASP.NET Core' }));
     const dotnetExample = document.querySelector('.ant-tabs-tabpane-active pre')?.textContent || '';
-    expect(dotnetExample).toContain(`GetClaimsFromUserInfoEndpoint = ${!api}`);
-    expect(dotnetExample.includes('TokenEndpointRequest!.SetParameter("resource"')).toBe(api);
-    expect(dotnetExample.includes('ProtocolMessage.SetParameter("resource"')).toBe(api);
+    expect(dotnetExample).toContain('GetClaimsFromUserInfoEndpoint = false');
+    expect(dotnetExample).toContain('TokenEndpointRequest!.SetParameter("resource"');
+    expect(dotnetExample).toContain('ProtocolMessage.SetParameter("resource"');
   });
 });

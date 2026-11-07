@@ -59,5 +59,9 @@
   "Public client (none, PKCE)": "公共客户端（none，PKCE）",
   "OIDC issuer and client ID are required.": "必须提供 OIDC 签发方和客户端 ID。",
   "A client secret is required for confidential clients.": "机密客户端必须提供客户端密钥。",
-  "Unsupported OIDC token endpoint authentication method.": "不支持的 OIDC 令牌端点认证方式。"
+  "Unsupported OIDC token endpoint authentication method.": "不支持的 OIDC 令牌端点认证方式。",
+  "Identity provider profile": "身份提供方配置",
+  "Standard OpenID Connect": "标准 OpenID Connect",
+  "NocoBase IdP": "NocoBase IdP",
+  "For NocoBase IdP, use signed ID-token claims and do not trust email verification claims.": "对于 NocoBase IdP，使用已验证签名的 ID 令牌声明，不信任电子邮箱验证声明。"
 }
