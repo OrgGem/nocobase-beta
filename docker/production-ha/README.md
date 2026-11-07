@@ -44,6 +44,76 @@ complete plugin build to a staging release directory and switch it atomically;
 do not overwrite files in place while either app is running. Restart the two
 nodes one at a time, waiting for readiness `200` before draining the other node.
 
+## Optional Startup Guardian app-only overlay
+
+`docker-compose.startup-guardian.yml` is an opt-in overlay for this two-app
+profile only. It leaves the regular app-only compose file and the legacy
+`docker-compose.yml` defaults unchanged. Do not enable it with the legacy stack
+or any topology that has separate Cluster Manager workers, sandboxes, or other
+processes sharing the application database. Guardian cannot prove that an
+unregistered worker does not exist.
+
+The overlay requires `STARTUP_GUARDIAN_IMAGE` to name an operator-built image
+that contains `@nocobase/server` exactly `2.2.40`, Startup Guardian `0.1.0`, and
+Cluster Manager `1.3.5` or later with recovery API version 1. This repository
+does not identify or verify a published NocoBase `2.2.40` image. The startup
+entrypoint checks the installed manifests and exported lock API before the app
+starts. Missing or incompatible packages fail before `yarn start`.
+
+First install both plugins into the app image and make them available to the
+NocoBase Package Manager. The overlay enables them through
+`APPEND_PRESET_LOCAL_PLUGINS`. Run the usual install/upgrade gate once with
+`STARTUP_GUARDIAN_CLUSTER_MODE` unset, then confirm the main node is healthy.
+Stop every app node after the migration gate has created Guardian's control
+collections. From the main host, initialize the shared roster while all app
+processes remain stopped:
+
+```sh
+docker compose --env-file .env.app-ha \
+  -f docker-compose.app-ha.yml -f docker-compose.startup-guardian.yml \
+  --profile node1 run --rm --no-deps --workdir /app/nocobase \
+  --entrypoint node app-node-1 \
+  ./node_modules/plugin-startup-guardian/bin/startup-guardian.cjs cluster init \
+  --app-id main --deployment-id production --members main,backup \
+  --all-app-nodes-stopped --app-only
+```
+
+Set the following values on both hosts. Keep the app, deployment, member roster,
+database and Redis values identical; set the node ID and predecessor URL per
+host. `NODE_REGISTRY_REDIS_URL` must point to the same Redis database Cluster
+Manager uses for its node registry. The no-workers setting is an operator
+acknowledgement after checking all processes with access to the shared DB; it is
+not discovered automatically.
+
+```env
+STARTUP_GUARDIAN_IMAGE=registry.example/nocobase-app:your-2.2.40-build
+STARTUP_GUARDIAN_CLUSTER_MODE=redis-postgres
+STARTUP_GUARDIAN_APP_ID=main
+STARTUP_GUARDIAN_DEPLOYMENT_ID=production
+STARTUP_GUARDIAN_CLUSTER_MEMBERS=main,backup
+STARTUP_GUARDIAN_CLUSTER_NO_WORKERS=true
+NODE_REGISTRY_REDIS_URL=redis://coordination-redis.internal:6379/4
+```
+
+Use `STARTUP_GUARDIAN_NODE_ID_MAIN=main` on server 1 and
+`STARTUP_GUARDIAN_NODE_ID_BACKUP=backup` on server 2. On server 2, set
+`APP_START_AFTER_URL` to server 1's `/api/app:getInfo` URL. The Guardian
+readiness middleware protects this resource, so the backup waits until the
+main's committed decision revision is applied. Start `app-node-1` on server 1,
+wait for the existing readiness check to return `200`, then start `app-node-2`
+on server 2 using both compose files.
+
+The mode is off when `STARTUP_GUARDIAN_CLUSTER_MODE` is empty. In that case the
+entrypoint retains the normal `yarn start` path. When enabled, it validates the
+app-only role and prerequisites, then makes Guardian the direct parent of the
+NocoBase child after the existing install/upgrade and predecessor-readiness
+gates. Docker's healthcheck remains a readiness check: an app held in
+`recovery-required` returns `503` and is removed from routing while its Guardian
+supervisor stays alive. Docker's `unless-stopped` restart policy does not restart
+a container solely because it is unhealthy. This repository change has only
+shell/Compose stub validation; the operator image, database, load balancer, and
+production failover have not been exercised.
+
 ## Architecture
 
 ```

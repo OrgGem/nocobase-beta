@@ -1,0 +1,46 @@
+# Optional, app-only Startup Guardian overlay for docker-compose.app-ha.yml.
+# The image is operator supplied because this repository does not verify that
+# an upstream 2.2.40 image contains the two required plugin packages.
+services:
+  app-node-1:
+    image: ${STARTUP_GUARDIAN_IMAGE:?Set STARTUP_GUARDIAN_IMAGE to a NocoBase 2.2.40 image with Guardian and Cluster Manager installed}
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
+    volumes:
+      - ./scripts/app-runtime-entrypoint.sh:/usr/local/bin/app-runtime-entrypoint.sh:ro
+    environment:
+      APP_ROLE: app
+      APP_NODE_ROLE: main
+      WORKER_MODE: ''
+      APP_NAME: ${APP_NAME:-main}
+      APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-plugin-cluster-manager},plugin-startup-guardian
+      NOCOBASE_VERSION: 2.2.40
+      NOCOBASE_IMAGE_VERSION: 2.2.40
+      STARTUP_GUARDIAN_CLUSTER_MODE: ${STARTUP_GUARDIAN_CLUSTER_MODE:-}
+      STARTUP_GUARDIAN_APP_ID: ${STARTUP_GUARDIAN_APP_ID:-}
+      STARTUP_GUARDIAN_DEPLOYMENT_ID: ${STARTUP_GUARDIAN_DEPLOYMENT_ID:-}
+      STARTUP_GUARDIAN_NODE_ID: ${STARTUP_GUARDIAN_NODE_ID_MAIN:-}
+      STARTUP_GUARDIAN_CLUSTER_MEMBERS: ${STARTUP_GUARDIAN_CLUSTER_MEMBERS:-}
+      STARTUP_GUARDIAN_CLUSTER_NO_WORKERS: ${STARTUP_GUARDIAN_CLUSTER_NO_WORKERS:-false}
+      NODE_REGISTRY_REDIS_URL: ${NODE_REGISTRY_REDIS_URL:-}
+
+  app-node-2:
+    image: ${STARTUP_GUARDIAN_IMAGE:?Set STARTUP_GUARDIAN_IMAGE to a NocoBase 2.2.40 image with Guardian and Cluster Manager installed}
+    command: ['/bin/sh', '/usr/local/bin/app-runtime-entrypoint.sh']
+    volumes:
+      - ./scripts/app-runtime-entrypoint.sh:/usr/local/bin/app-runtime-entrypoint.sh:ro
+    environment:
+      APP_ROLE: app
+      APP_NODE_ROLE: backup
+      APP_START_AFTER_URL: ${APP_START_AFTER_URL:-}
+      WORKER_MODE: ''
+      APP_NAME: ${APP_NAME:-main}
+      APPEND_PRESET_LOCAL_PLUGINS: ${APPEND_PRESET_LOCAL_PLUGINS:-plugin-cluster-manager},plugin-startup-guardian
+      NOCOBASE_VERSION: 2.2.40
+      NOCOBASE_IMAGE_VERSION: 2.2.40
+      STARTUP_GUARDIAN_CLUSTER_MODE: ${STARTUP_GUARDIAN_CLUSTER_MODE:-}
+      STARTUP_GUARDIAN_APP_ID: ${STARTUP_GUARDIAN_APP_ID:-}
+      STARTUP_GUARDIAN_DEPLOYMENT_ID: ${STARTUP_GUARDIAN_DEPLOYMENT_ID:-}
+      STARTUP_GUARDIAN_NODE_ID: ${STARTUP_GUARDIAN_NODE_ID_BACKUP:-}
+      STARTUP_GUARDIAN_CLUSTER_MEMBERS: ${STARTUP_GUARDIAN_CLUSTER_MEMBERS:-}
+      STARTUP_GUARDIAN_CLUSTER_NO_WORKERS: ${STARTUP_GUARDIAN_CLUSTER_NO_WORKERS:-false}
+      NODE_REGISTRY_REDIS_URL: ${NODE_REGISTRY_REDIS_URL:-}

@@ -1,12 +1,17 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { ILockAdapter, ILock, Releaser, LockAcquireError, LockAbortError } from '@nocobase/lock-manager';
 import { randomUUID } from 'crypto';
 import type { Application, Redis } from '@nocobase/server';
 import { createClient } from 'redis';
-
-const RELEASE_SCRIPT =
-  'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end';
-const RENEW_SCRIPT =
-  'if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end';
+import { releaseLockOwner, renewLockOwner, tryAcquireLock } from '../../../redis-lock-core';
 
 export class RedisLockAdapter implements ILockAdapter {
   private readonly client: Redis;
@@ -44,8 +49,7 @@ export class RedisLockAdapter implements ILockAdapter {
     const maxWaitMs = Math.min(Math.max(ttl, 1), 30_000);
 
     while (Date.now() - startedAt <= maxWaitMs) {
-      const result = await this.client.set(redisKey, token, { NX: true, PX: ttl });
-      if (result === 'OK') return this.createReleaser(redisKey, token);
+      if (await tryAcquireLock(this.client, redisKey, token, ttl)) return this.createReleaser(redisKey, token);
       await this.sleep(50);
     }
     throw new LockAcquireError(`Lock acquire timed out after ${maxWaitMs}ms for key ${key}`);
@@ -126,8 +130,7 @@ export class RedisLockAdapter implements ILockAdapter {
     const startedAt = Date.now();
     let acquiring = true;
     while (acquiring) {
-      const result = await this.client.set(redisKey, token, { NX: true, PX: ttl });
-      if (result === 'OK') {
+      if (await tryAcquireLock(this.client, redisKey, token, ttl)) {
         acquiring = false;
         continue;
       }
@@ -139,8 +142,9 @@ export class RedisLockAdapter implements ILockAdapter {
   }
 
   private async renew(redisKey: string, token: string, ttl: number): Promise<void> {
-    const result = await this.client.sendCommand(['EVAL', RENEW_SCRIPT, '1', redisKey, token, String(ttl)]);
-    if (Number(result) !== 1) throw new LockAbortError(`Lock ${redisKey} is no longer owned by this process`, {});
+    if (!(await renewLockOwner(this.client, redisKey, token, ttl))) {
+      throw new LockAbortError(`Lock ${redisKey} is no longer owned by this process`, {});
+    }
   }
 
   private createReleaser(redisKey: string, token: string): Releaser {
@@ -148,7 +152,7 @@ export class RedisLockAdapter implements ILockAdapter {
     return async () => {
       if (released) return;
       released = true;
-      await this.client.sendCommand(['EVAL', RELEASE_SCRIPT, '1', redisKey, token]);
+      await releaseLockOwner(this.client, redisKey, token);
     };
   }
 

@@ -140,8 +140,108 @@ run_full_upgrade() {
   return "${upgrade_status}"
 }
 
+assert_guardian_cluster_prerequisites() {
+  if [ "${STARTUP_GUARDIAN_CLUSTER_MODE:-}" != 'redis-postgres' ]; then
+    echo "[runtime] unsupported Startup Guardian cluster mode: ${STARTUP_GUARDIAN_CLUSTER_MODE}" >&2
+    exit 1
+  fi
+
+  case "${APP_NODE_ROLE:-}" in
+    main|backup) ;;
+    *)
+      echo '[runtime] Startup Guardian HA only supports enrolled app main/backup nodes' >&2
+      exit 1
+      ;;
+  esac
+
+  if [ "${APP_ROLE:-app}" != 'app' ] || [ "${SKILL_HUB_SANDBOX:-false}" = 'true' ]; then
+    echo '[runtime] Startup Guardian HA refuses non-app and sandbox processes' >&2
+    exit 1
+  fi
+  case "${WORKER_MODE:-}" in
+    ''|main|app|'!') ;;
+    *)
+      echo '[runtime] Startup Guardian HA refuses worker-enabled app processes' >&2
+      exit 1
+      ;;
+  esac
+
+  : "${STARTUP_GUARDIAN_APP_ID:?Set STARTUP_GUARDIAN_APP_ID for the enrolled app identity}"
+  : "${STARTUP_GUARDIAN_DEPLOYMENT_ID:?Set STARTUP_GUARDIAN_DEPLOYMENT_ID for the enrolled deployment}"
+  : "${STARTUP_GUARDIAN_NODE_ID:?Set the stable STARTUP_GUARDIAN_NODE_ID for this app node}"
+  : "${STARTUP_GUARDIAN_CLUSTER_MEMBERS:?Set the complete STARTUP_GUARDIAN_CLUSTER_MEMBERS roster}"
+  : "${NODE_REGISTRY_REDIS_URL:?Set NODE_REGISTRY_REDIS_URL to the Cluster Manager registry Redis}"
+  : "${LOCK_ADAPTER_REDIS_URL:?Set LOCK_ADAPTER_REDIS_URL to the shared recovery lock Redis}"
+  if [ "${STARTUP_GUARDIAN_CLUSTER_NO_WORKERS:-false}" != 'true' ]; then
+    echo '[runtime] set STARTUP_GUARDIAN_CLUSTER_NO_WORKERS=true only after confirming there are no shared-database workers' >&2
+    exit 1
+  fi
+  if [ "${DB_DIALECT:-}" != 'postgres' ]; then
+    echo '[runtime] Startup Guardian HA requires DB_DIALECT=postgres' >&2
+    exit 1
+  fi
+  if [ "${APP_NAME:-main}" != "${STARTUP_GUARDIAN_APP_ID}" ]; then
+    echo '[runtime] APP_NAME must match STARTUP_GUARDIAN_APP_ID for the enrolled app identity' >&2
+    exit 1
+  fi
+
+  node <<'NODE'
+const fs = require('fs');
+const path = require('path');
+const root = process.cwd();
+function readPackage(name) {
+  const manifest = path.join(root, 'node_modules', ...name.split('/'), 'package.json');
+  return JSON.parse(fs.readFileSync(manifest, 'utf8'));
+}
+function fail(message) {
+  process.stderr.write(`[runtime] ${message}\n`);
+  process.exit(1);
+}
+try {
+  const server = readPackage('@nocobase/server');
+  if (server.version !== '2.2.40') fail(`Startup Guardian HA requires @nocobase/server 2.2.40; found ${server.version || 'unknown'}`);
+  const guardian = readPackage('plugin-startup-guardian');
+  if (!guardian.bin || typeof guardian.bin['startup-guardian'] !== 'string') {
+    fail('Startup Guardian package does not declare its runner bin');
+  }
+  const guardianBin = path.resolve(root, 'node_modules/plugin-startup-guardian', guardian.bin['startup-guardian']);
+  if (!fs.existsSync(guardianBin)) fail('Startup Guardian runner bin is missing; install the complete plugin package first');
+  const childBin = path.join(path.dirname(guardianBin), 'nocobase-child.cjs');
+  if (!fs.existsSync(childBin)) fail('Startup Guardian child bootstrap is missing; install the complete plugin package first');
+  const clusterManager = readPackage('plugin-cluster-manager');
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(clusterManager.version || ''));
+  const version = match ? match.slice(1).map(Number) : [];
+  const isTooOld = version.length !== 3 || version[0] < 1 ||
+    (version[0] === 1 && (version[1] < 3 || (version[1] === 3 && version[2] < 5)));
+  if (isTooOld) {
+    fail(`Startup Guardian HA requires plugin-cluster-manager >=1.3.5; found ${clusterManager.version || 'unknown'}`);
+  }
+  const recovery = require('plugin-cluster-manager/recovery');
+  if (recovery.STARTUP_RECOVERY_LOCK_API_VERSION !== 1) {
+    fail('Cluster Manager recovery lock API version 1 is unavailable; install plugin-cluster-manager >=1.3.5');
+  }
+} catch (error) {
+  if (error && typeof error.message === 'string' && error.message.startsWith('[runtime]')) throw error;
+  fail('Startup Guardian HA prerequisites are unavailable; verify the installed Guardian, Cluster Manager, and core packages');
+}
+NODE
+}
+
+start_nocobase() {
+  if [ -z "${STARTUP_GUARDIAN_CLUSTER_MODE:-}" ]; then
+    exec yarn start
+  fi
+  exec node --preserve-symlinks "${APP_ROOT}/node_modules/plugin-startup-guardian/bin/startup-guardian.cjs" start \
+    --app-id "${STARTUP_GUARDIAN_APP_ID}" --deployment-id "${STARTUP_GUARDIAN_DEPLOYMENT_ID}" -- \
+    node --preserve-symlinks "${APP_ROOT}/node_modules/plugin-startup-guardian/bin/nocobase-child.cjs"
+}
+
 install_git_if_missing
 prepare_app_source
+cd "${APP_ROOT}"
+if [ -n "${STARTUP_GUARDIAN_CLUSTER_MODE:-}" ]; then
+  assert_guardian_cluster_prerequisites
+fi
 
 case "${APP_NODE_ROLE:-backup}" in
   main)
@@ -160,14 +260,14 @@ case "${APP_NODE_ROLE:-backup}" in
     # after the command above has returned successfully.
     rm -f "${STORAGE_ROOT}/.upgrading"
     echo '[runtime] app-main: migration gate complete; starting NocoBase'
-    exec yarn start
+    start_nocobase
     ;;
   backup)
     export READINESS_URL
     wait_for_predecessor 0 5
     cd "${APP_ROOT}"
     echo '[runtime] backup: starting NocoBase without quickstart/migration'
-    exec yarn start
+    start_nocobase
     ;;
   worker)
     export READINESS_URL
