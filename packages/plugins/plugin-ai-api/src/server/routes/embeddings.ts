@@ -83,7 +83,12 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
       );
       return;
     }
-    inputs = body.input as string[];
+    if (!body.input.every((input: unknown) => typeof input === 'string')) {
+      ctx.status = 400;
+      ctx.body = toOpenAIError(400, "'input' must be a string or array of strings", 'invalid_request_error');
+      return;
+    }
+    inputs = body.input;
   } else {
     ctx.status = 400;
     ctx.body = toOpenAIError(400, "'input' must be a string or array of strings", 'invalid_request_error');
@@ -135,7 +140,7 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
   } catch {
     // Config read failure: fail open on the global whitelist only.
   }
-  if (!(await enforceModelAccess(ctx, globalEnabledServices, service, modelId))) {
+  if (!(await enforceModelAccess(ctx, globalEnabledServices, { name: service.name, title: service.title }, modelId))) {
     return;
   }
 
@@ -172,7 +177,8 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
   // reserve/release round-trip on every rejected request.
 
   try {
-    await prepareLlmBilling(ctx, resolved);
+    const estimatedInputTokens = Math.ceil(inputs.reduce((sum, input) => sum + input.length, 0) / 4);
+    await prepareLlmBilling(ctx, resolved, { estimatedInputTokens, reservedOutputTokens: 0 });
     // ─── Instantiate and call the embedding provider ──────────────────────
     const EmbeddingClass = providerMeta.embedding;
     const embeddingProvider = new EmbeddingClass({
@@ -188,7 +194,6 @@ export async function handleEmbeddings(ctx: Context, plugin: PluginAiApiServer) 
     const vectors: number[][] = await embeddingModel.embedDocuments(inputs);
 
     // Estimate input tokens: average 4 chars per token (conservative).
-    const estimatedInputTokens = Math.ceil(inputs.reduce((sum, s) => sum + s.length, 0) / 4);
     const usage = {
       prompt_tokens: estimatedInputTokens,
       completion_tokens: 0,

@@ -154,7 +154,14 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
 
     // ─── Check whitelist (global config ∩ per-user grant) ───
     const config = await getAiApiConfig(ctx);
-    if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) {
+    if (
+      !(await enforceModelAccess(
+        ctx,
+        config?.enabledLlmServices,
+        { name: service.name, title: service.title },
+        modelId,
+      ))
+    ) {
       return;
     }
 
@@ -206,7 +213,7 @@ export async function handleChatCompletions(ctx: Context, plugin: PluginAiApiSer
       modelOptions.maxTokens = preparedContext.reservedOutputTokens;
     }
 
-    await prepareLlmBilling(ctx, resolved);
+    await prepareLlmBilling(ctx, resolved, preparedContext);
 
     const Provider = providerMeta.provider;
     const provider = new Provider({

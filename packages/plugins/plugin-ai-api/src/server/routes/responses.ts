@@ -283,7 +283,7 @@ function findCompletedResponse(events: Array<Record<string, unknown>>): Response
 }
 
 function findUnsupportedRetrieveParameter(ctx: Context): string | undefined {
-  const query = isRecord(ctx.query) ? ctx.query : {};
+  const query: Record<string, unknown> = isRecord(ctx.query) ? ctx.query : {};
   for (const name of ['include', 'include[]', 'include_obfuscation', 'starting_after']) {
     if (Object.hasOwn(query, name)) return name === 'include[]' ? 'include' : name;
   }
@@ -466,7 +466,15 @@ export async function handleResponses(ctx: Context, plugin: PluginAiApiServer): 
       return;
     }
     const config = await getAiApiConfig(ctx);
-    if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) return;
+    if (
+      !(await enforceModelAccess(
+        ctx,
+        config?.enabledLlmServices,
+        { name: service.get('name'), title: service.get('title') },
+        modelId,
+      ))
+    )
+      return;
 
     const providerName = service.get('provider') as string;
     const providerMeta = aiPlugin.aiManager.llmProviders.get(providerName);
@@ -486,7 +494,7 @@ export async function handleResponses(ctx: Context, plugin: PluginAiApiServer): 
       overflowBehavior: responseOverflowBehavior(body),
     });
     recordPreparedContext(ctx, prepared);
-    await prepareLlmBilling(ctx, resolved);
+    await prepareLlmBilling(ctx, resolved, prepared);
 
     const modelOptions: Record<string, unknown> = {
       model: modelId,

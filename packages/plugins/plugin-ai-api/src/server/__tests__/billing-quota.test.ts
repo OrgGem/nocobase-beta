@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Context } from '@nocobase/actions';
 import { createMockDatabase, type Database } from '@nocobase/database';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -132,12 +141,13 @@ describe('AI API group quota reservation', () => {
 
   it('reserves atomically and reconciles actual provider usage', async () => {
     const first = context();
-    await prepareLlmBilling(first, resolved);
+    const tokenBudget = { estimatedInputTokens: 10, reservedOutputTokens: 100 };
+    await prepareLlmBilling(first, resolved, tokenBudget);
 
     const competing = context();
-    await expect(prepareLlmBilling(competing, resolved)).rejects.toMatchObject<Partial<AiApiQuotaError>>({
+    await expect(prepareLlmBilling(competing, resolved, tokenBudget)).rejects.toMatchObject({
       code: 'request_quota_exceeded',
-    });
+    } satisfies Partial<AiApiQuotaError>);
 
     markLlmProviderAttempted(first);
     const finalized = await finalizeLlmBilling(

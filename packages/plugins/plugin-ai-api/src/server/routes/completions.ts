@@ -29,7 +29,12 @@ import { getAiApiConfig } from '../utils/request-cache';
 import { extractProviderRequestId, normalizeUsage, setAiApiUsageResult, type Usage } from '../usage';
 import type PluginAiApiServer from '../plugin';
 import { AiApiQuotaError, markLlmProviderAttempted, prepareLlmBilling } from '../billing';
-import { DirectLlmContextError, prepareDirectLlmContext, type OpenAIMessage } from '../utils/direct-llm-context';
+import {
+  DirectLlmContextError,
+  prepareDirectLlmContext,
+  recordPreparedContext,
+  type OpenAIMessage,
+} from '../utils/direct-llm-context';
 import { markAiApiFirstProviderOutput } from '../utils/app-observability';
 
 /**
@@ -115,7 +120,14 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
 
     // ─── Check whitelist (global config ∩ per-user grant) ───
     const config = await getAiApiConfig(ctx);
-    if (!(await enforceModelAccess(ctx, config?.enabledLlmServices, service, modelId))) {
+    if (
+      !(await enforceModelAccess(
+        ctx,
+        config?.enabledLlmServices,
+        { name: service.name, title: service.title },
+        modelId,
+      ))
+    ) {
       return;
     }
 
@@ -156,7 +168,11 @@ export async function handleCompletions(ctx: Context, plugin: PluginAiApiServer)
       maxCompletionTokens: body.max_completion_tokens,
       maxTokens: body.max_tokens,
     });
-    await prepareLlmBilling(ctx, resolved);
+    recordPreparedContext(ctx, preparedContext);
+    if (body.max_completion_tokens === undefined && body.max_tokens === undefined) {
+      modelOptions.maxTokens = preparedContext.reservedOutputTokens;
+    }
+    await prepareLlmBilling(ctx, resolved, preparedContext);
 
     const Provider = providerMeta.provider;
     const provider = new Provider({

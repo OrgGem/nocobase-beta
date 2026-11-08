@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context } from '@nocobase/actions';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
@@ -7,6 +16,7 @@ import type { Transaction } from 'sequelize';
 import type { Usage } from './usage';
 import { type QuotaMode } from './quota-groups';
 import { getAiApiConfig, resolveRequestUserGroup } from './utils/request-cache';
+import type { PreparedDirectLlmContext } from './utils/direct-llm-context';
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -147,17 +157,6 @@ export function calculateLlmCost(
   return formatUnits(calculateCostUnits(inputTokens, outputTokens, promptCacheTokens, price), COST_SCALE);
 }
 
-function normalizePositiveInteger(value: unknown, fallback: number): number {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function estimateInputTokens(ctx: Context): number {
-  const body = (ctx.request.body ?? {}) as Record<string, unknown>;
-  const input = body.messages ?? body.prompt ?? '';
-  return Math.max(1, Math.ceil(JSON.stringify(input).length / 4));
-}
-
 function getPeriodBounds(periodType: string, timezone: string): { start: Date; end: Date } {
   const unit = periodType === 'daily' ? 'day' : 'month';
   try {
@@ -208,7 +207,11 @@ async function findPrice(
   };
 }
 
-export async function prepareLlmBilling(ctx: Context, resolved: ResolvedLlmModel): Promise<void> {
+export async function prepareLlmBilling(
+  ctx: Context,
+  resolved: ResolvedLlmModel,
+  tokenBudget: Pick<PreparedDirectLlmContext, 'estimatedInputTokens' | 'reservedOutputTokens'>,
+): Promise<void> {
   const userId = stateOf(ctx).currentUser?.id;
   const serviceName = valueOf<string>(resolved.service, 'name');
   const provider = valueOf<string>(resolved.service, 'provider');
@@ -239,10 +242,8 @@ export async function prepareLlmBilling(ctx: Context, resolved: ResolvedLlmModel
     );
   }
 
-  const body = (ctx.request.body ?? {}) as Record<string, unknown>;
-  const estimatedInputTokens = estimateInputTokens(ctx);
-  const defaultOutput = normalizePositiveInteger(valueOf(config, 'defaultReservationOutputTokens'), 4096);
-  const estimatedOutputTokens = normalizePositiveInteger(body.max_completion_tokens ?? body.max_tokens, defaultOutput);
+  // Reserve the context actually sent upstream, including stored history, tools, system prompts and truncation.
+  const { estimatedInputTokens, reservedOutputTokens: estimatedOutputTokens } = tokenBudget;
   const reservedTokens = estimatedInputTokens + estimatedOutputTokens;
   const reservedCost = price ? calculateLlmCost(estimatedInputTokens, estimatedOutputTokens, price) : '0.00000000';
   const period = getPeriodBounds(group.periodType, group.timezone);

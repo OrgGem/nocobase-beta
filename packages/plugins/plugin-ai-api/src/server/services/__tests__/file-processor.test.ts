@@ -1,4 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import dns from 'dns';
+import { EventEmitter } from 'events';
+import { type IncomingMessage, type RequestOptions } from 'http';
+import https from 'https';
+import { Readable } from 'stream';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FileProcessorService,
   base64FileForwarder,
@@ -6,7 +20,12 @@ import {
   fetchFileAsBase64,
   pdfFileProcessor,
   type PdfToImageRenderer,
+  type FileProcessorContext,
 } from '../file-processor';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('FileProcessorService', () => {
   it('forwards file blocks with base64 data unchanged', async () => {
@@ -57,22 +76,23 @@ describe('FileProcessorService', () => {
 
 describe('httpFileUrlFetcher', () => {
   it('fetches a file from an http(s) URL and converts it to a file block', async () => {
-    const originalFetch = globalThis.fetch;
     const fileBuffer = Buffer.from('hello world');
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      headers: new Headers({
-        'content-type': 'text/plain',
-        'content-length': String(fileBuffer.length),
-      }),
-      arrayBuffer: () =>
-        Promise.resolve(fileBuffer.buffer.slice(fileBuffer.byteOffset, fileBuffer.byteOffset + fileBuffer.length)),
-    } as unknown as Response);
+    vi.spyOn(dns.promises, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as never);
+    const response = Readable.from([fileBuffer]) as IncomingMessage;
+    response.statusCode = 200;
+    response.headers = { 'content-type': 'text/plain', 'content-length': String(fileBuffer.length) };
+    vi.spyOn(https, 'get').mockImplementation(((
+      _url: URL,
+      _options: RequestOptions,
+      callback: (response: IncomingMessage) => void,
+    ) => {
+      queueMicrotask(() => callback(response));
+      return new EventEmitter();
+    }) as unknown as typeof https.get);
 
     const result = await httpFileUrlFetcher.process(
       { type: 'file_url', file_url: { url: 'https://example.com/hello.txt' } },
-      { ctx: {} as any },
+      { ctx: {} } as FileProcessorContext,
     );
 
     expect(result).toMatchObject({
@@ -83,8 +103,6 @@ describe('httpFileUrlFetcher', () => {
         filename: 'hello.txt',
       },
     });
-
-    globalThis.fetch = originalFetch;
   });
 
   it('rejects unsupported protocols', async () => {

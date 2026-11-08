@@ -1,4 +1,17 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import dns from 'dns';
+import { EventEmitter } from 'events';
+import http, { type IncomingMessage } from 'http';
+import https from 'https';
+import { Readable } from 'stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FileProcessorError,
@@ -20,25 +33,35 @@ function mockDnsLookup(...results: Array<Array<{ address: string; family: number
   return spy;
 }
 
-function mockFetch(...responses: Response[]) {
-  const fetchMock = vi.fn();
-  for (const response of responses) {
-    fetchMock.mockResolvedValueOnce(response);
-  }
-  fetchMock.mockRejectedValue(new Error('unexpected fetch'));
-  vi.stubGlobal('fetch', fetchMock);
-  return fetchMock;
+function mockFetch(...responses: IncomingMessage[]) {
+  const requestMock = vi.fn(
+    (_url: URL, _options: http.RequestOptions, callback: (response: IncomingMessage) => void) => {
+      const request = new EventEmitter();
+      queueMicrotask(() => {
+        const response = responses.shift();
+        if (response) callback(response);
+        else request.emit('error', new Error('unexpected request'));
+      });
+      return request;
+    },
+  );
+  vi.spyOn(http, 'get').mockImplementation(requestMock as unknown as typeof http.get);
+  vi.spyOn(https, 'get').mockImplementation(requestMock as unknown as typeof https.get);
+  return requestMock;
 }
 
 function okResponse(body: string, contentType = 'text/plain') {
-  return new Response(body, {
-    status: 200,
-    headers: { 'content-type': contentType, 'content-length': String(Buffer.byteLength(body)) },
-  });
+  const response = Readable.from([Buffer.from(body)]) as IncomingMessage;
+  response.statusCode = 200;
+  response.headers = { 'content-type': contentType, 'content-length': String(Buffer.byteLength(body)) };
+  return response;
 }
 
 function redirectResponse(location: string, status = 302) {
-  return new Response(null, { status, headers: { location } });
+  const response = Readable.from([]) as IncomingMessage;
+  response.statusCode = status;
+  response.headers = { location };
+  return response;
 }
 
 afterEach(() => {
@@ -134,8 +157,9 @@ describe('fetchFileAsBase64 SSRF protection', () => {
     const fetchMock = mockFetch(okResponse('hello world'));
     const result = await fetchFileAsBase64('https://example.com/doc.txt');
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/doc.txt',
-      expect.objectContaining({ redirect: 'manual' }),
+      new URL('https://example.com/doc.txt'),
+      expect.objectContaining({ agent: false, lookup: expect.any(Function) }),
+      expect.any(Function),
     );
     expect(result.mimeType).toBe('text/plain');
     expect(result.filename).toBe('doc.txt');
@@ -164,8 +188,9 @@ describe('fetchFileAsBase64 SSRF protection', () => {
     const fetchMock = mockFetch(redirectResponse('/moved/doc.txt'), okResponse('data'));
     await fetchFileAsBase64('https://example.com/doc.txt');
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'https://example.com/moved/doc.txt',
-      expect.objectContaining({ redirect: 'manual' }),
+      new URL('https://example.com/moved/doc.txt'),
+      expect.objectContaining({ agent: false, lookup: expect.any(Function) }),
+      expect.any(Function),
     );
   });
 
@@ -186,8 +211,7 @@ describe('fetchFileAsBase64 SSRF protection', () => {
   it('stops after the redirect limit', async () => {
     const lookupSpy = vi.spyOn(dns.promises, 'lookup');
     lookupSpy.mockResolvedValue([PUBLIC_ADDRESS] as never);
-    const fetchMock = vi.fn().mockResolvedValue(redirectResponse('https://example.com/loop'));
-    vi.stubGlobal('fetch', fetchMock);
+    const fetchMock = mockFetch(...Array.from({ length: 4 }, () => redirectResponse('https://example.com/loop')));
     await expect(fetchFileAsBase64('https://example.com/loop', { maxRedirects: 3 })).rejects.toMatchObject({
       code: 'too_many_redirects',
     });

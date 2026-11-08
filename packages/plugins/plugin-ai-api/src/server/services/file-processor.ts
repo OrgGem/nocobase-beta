@@ -1,7 +1,20 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Context } from '@nocobase/actions';
 import dns from 'dns';
+import http, { type IncomingMessage } from 'http';
+import https from 'https';
 import { isIP } from 'net';
 import { basename } from 'path';
+import { createBrotliDecompress, createGunzip, createInflate } from 'zlib';
+import type PluginAiApiServer from '../plugin';
 import { getAiApiConfig } from '../utils/request-cache';
 
 export interface FileContentBlock {
@@ -246,15 +259,16 @@ export function isBlockedAddress(ip: string): boolean {
   return true;
 }
 
-async function assertHostAllowed(hostname: string): Promise<void> {
-  if (isIP(hostname) !== 0) {
+async function resolveAllowedAddresses(hostname: string): Promise<dns.LookupAddress[]> {
+  const family = isIP(hostname);
+  if (family !== 0) {
     if (isBlockedAddress(hostname)) {
       throw new FileProcessorError('blocked_host', `Host '${hostname}' is a blocked address.`);
     }
-    return;
+    return [{ address: hostname, family }];
   }
 
-  let addresses: Array<{ address: string }>;
+  let addresses: dns.LookupAddress[];
   try {
     addresses = await dns.promises.lookup(hostname, { all: true });
   } catch (error) {
@@ -271,12 +285,13 @@ async function assertHostAllowed(hostname: string): Promise<void> {
       throw new FileProcessorError('blocked_host', `Host '${hostname}' resolves to blocked address '${address}'.`);
     }
   }
+  return addresses;
 }
 
 async function fetchWithSsrfGuard(
   initialUrl: string,
   options: { allowedProtocols: Set<string>; maxRedirects: number; signal: AbortSignal },
-): Promise<{ response: Response; finalUrl: string }> {
+): Promise<{ response: IncomingMessage; finalUrl: string }> {
   let currentUrl = initialUrl;
   for (let hop = 0; ; hop += 1) {
     let parsed: URL;
@@ -286,22 +301,40 @@ async function fetchWithSsrfGuard(
       throw new FileProcessorError('invalid_url', `File URL '${currentUrl}' is not a valid URL.`);
     }
 
-    if (!options.allowedProtocols.has(parsed.protocol)) {
+    if (!ALLOWED_PROTOCOLS.has(parsed.protocol) || !options.allowedProtocols.has(parsed.protocol)) {
       throw new FileProcessorError('unsupported_protocol', `File URL protocol '${parsed.protocol}' is not allowed.`);
     }
 
-    // SSRF guard: resolve and validate the host before connecting. A malicious DNS
-    // server could still rebind between this check and the fetch; closing that gap
-    // fully would require pinning the resolved address into the connection.
+    if (parsed.username || parsed.password) {
+      throw new FileProcessorError('invalid_url', `File URL '${currentUrl}' is not a valid URL.`);
+    }
+
     const hostname =
       parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']') ? parsed.hostname.slice(1, -1) : parsed.hostname;
-    await assertHostAllowed(hostname);
+    const addresses = await resolveAllowedAddresses(hostname);
+    options.signal.throwIfAborted();
 
-    const response = await fetch(currentUrl, { signal: options.signal, redirect: 'manual' });
-    if (!REDIRECT_STATUSES.has(response.status)) {
+    // Keep the original hostname for Host and TLS verification, but connect only to the validated DNS snapshot.
+    // A fresh agent prevents connection reuse across redirect hops; autoSelectFamily tries only these public addresses.
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const transport = parsed.protocol === 'https:' ? https : http;
+      // The installed Node typings omit this net.connect option from http.RequestOptions.
+      const requestOptions: http.RequestOptions & { autoSelectFamily: true } = {
+        agent: false,
+        autoSelectFamily: true,
+        lookup: (_hostname, _options, callback) => callback(null, addresses),
+        signal: options.signal,
+        headers: { 'accept-encoding': 'identity' },
+      };
+      const request = transport.get(parsed, requestOptions, resolve);
+      request.once('error', reject);
+    });
+    if (!REDIRECT_STATUSES.has(response.statusCode ?? 0)) {
       return { response, finalUrl: currentUrl };
     }
 
+    // Redirect bodies are not file data. Close them before validating and connecting to the next hop.
+    response.destroy();
     if (hop >= options.maxRedirects) {
       throw new FileProcessorError(
         'too_many_redirects',
@@ -309,7 +342,7 @@ async function fetchWithSsrfGuard(
       );
     }
 
-    const location = response.headers.get('location');
+    const location = response.headers.location;
     if (!location) {
       throw new FileProcessorError('fetch_failed', `Redirect from '${currentUrl}' is missing a Location header.`);
     }
@@ -336,27 +369,30 @@ export async function fetchFileAsBase64(
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: IncomingMessage | undefined;
 
   try {
-    const { response, finalUrl } = await fetchWithSsrfGuard(url, {
+    const fetched = await fetchWithSsrfGuard(url, {
       allowedProtocols,
       maxRedirects,
       signal: controller.signal,
     });
+    response = fetched.response;
+    const { finalUrl } = fetched;
 
-    if (!response.ok) {
+    if (!response.statusCode || response.statusCode < 200 || response.statusCode >= 300) {
       throw new FileProcessorError(
         'fetch_failed',
-        `Failed to fetch file from '${finalUrl}': ${response.status} ${response.statusText}`,
+        `Failed to fetch file from '${finalUrl}': ${response.statusCode} ${response.statusMessage}`,
       );
     }
 
-    const contentLength = response.headers.get('content-length');
+    const contentLength = response.headers['content-length'];
     if (contentLength && Number(contentLength) > maxSize) {
       throw new FileProcessorError('file_too_large', `File at '${finalUrl}' exceeds maximum allowed size.`);
     }
 
-    const contentType = response.headers.get('content-type') || undefined;
+    const contentType = response.headers['content-type'];
     if (
       options.allowedContentTypes &&
       contentType &&
@@ -365,13 +401,37 @@ export async function fetchFileAsBase64(
       throw new FileProcessorError('content_type_not_allowed', `File content type '${contentType}' is not allowed.`);
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > maxSize) {
-      throw new FileProcessorError('file_too_large', `File at '${finalUrl}' exceeds maximum allowed size.`);
+    // Preserve decoded file bytes if a server sends compression despite Accept-Encoding: identity.
+    const encoding = response.headers['content-encoding'];
+    const decoder =
+      encoding === 'gzip'
+        ? createGunzip()
+        : encoding === 'deflate'
+          ? createInflate()
+          : encoding === 'br'
+            ? createBrotliDecompress()
+            : undefined;
+    const body = decoder ? response.pipe(decoder) : response;
+    if (decoder) response.once('error', (error) => decoder.destroy(error));
+    const chunks: Buffer[] = [];
+    let size = 0;
+    try {
+      for await (const chunk of body) {
+        const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        size += bytes.length;
+        if (size > maxSize) {
+          controller.abort();
+          throw new FileProcessorError('file_too_large', `File at '${finalUrl}' exceeds maximum allowed size.`);
+        }
+        chunks.push(bytes);
+      }
+    } finally {
+      body.destroy();
     }
+    const buffer = Buffer.concat(chunks, size);
 
     const mimeType = contentType?.split(';')[0].trim() ?? 'application/octet-stream';
-    const contentDisposition = response.headers.get('content-disposition');
+    const contentDisposition = response.headers['content-disposition'] ?? null;
     const filename = extractFilename(finalUrl, contentDisposition) ?? 'file';
 
     return {
@@ -380,6 +440,8 @@ export async function fetchFileAsBase64(
       filename,
     };
   } finally {
+    response?.destroy();
+    controller.abort();
     clearTimeout(timeout);
   }
 }
@@ -462,9 +524,8 @@ function isPdfFileBlock(block: FileContentBlock): boolean {
   return false;
 }
 
-function getPluginFromContext(context: FileProcessorContext): any | undefined {
-  // @ts-expect-error app may not be typed on Context in test mocks.
-  return context.ctx.app?.pm?.get?.('plugin-ai-api');
+function getPluginFromContext(context: FileProcessorContext): PluginAiApiServer | undefined {
+  return context.ctx.app?.pm?.get?.('plugin-ai-api') as PluginAiApiServer | undefined;
 }
 
 /**
