@@ -1,7 +1,17 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 import type { Application } from '@nocobase/server';
 import * as gitlabApi from './actions/gitlab-api';
 import * as gitActions from './actions/git-actions';
+import { hasRepositoryAccess } from './repository-access';
 
 /**
  * Register AI tools that allow an AI employee to inspect git repositories,
@@ -25,9 +35,9 @@ export function registerGitReviewAiTools(app: Application) {
    * and read any repository's MRs / commits / file content regardless of the
    * caller's ACL.
    */
-  const enforceAcl = (ctx: any, resource: string, action: string, params: any) => {
+  const enforceAcl = async (ctx: any, resource: string, action: string, params: any) => {
     if (ctx.isBackgroundReview) {
-      if (params.repositoryId && params.repositoryId !== ctx.reviewTargetRepositoryId) {
+      if (String(params.repositoryId) !== String(ctx.reviewTargetRepositoryId)) {
         const err: any = new Error('Permission denied: AI cannot access other repositories');
         err.status = 403;
         throw err;
@@ -41,14 +51,19 @@ export function registerGitReviewAiTools(app: Application) {
       throw err;
     }
     const acl = ctx.app?.acl;
-    if (!acl?.can) return; // ACL not available — fail-open is acceptable for legacy contexts
-    const role = ctx?.state?.currentRole || (Array.isArray(user.roles) && user.roles[0]?.name) || null;
-    if (!role) {
+    const roles = Array.isArray(ctx?.state?.currentRoles)
+      ? ctx.state.currentRoles.filter((role: unknown): role is string => typeof role === 'string')
+      : typeof ctx?.state?.currentRole === 'string'
+        ? [ctx.state.currentRole]
+        : [];
+    if (!roles.length || !acl?.can) {
       const err: any = new Error('AI tool requires a resolvable role on the current user');
       err.status = 403;
       throw err;
     }
-    const allowed = acl.can({ role, resource, action });
+    const allowed =
+      resource === 'gitManager' &&
+      (await hasRepositoryAccess({ acl, roles, repositoryId: params.repositoryId, action }));
     if (!allowed) {
       const err: any = new Error(`Permission denied: ${resource}:${action}`);
       err.status = 403;
@@ -81,13 +96,13 @@ export function registerGitReviewAiTools(app: Application) {
     params: Record<string, any>,
     gate: { resource: string; action: string },
   ) => {
-    enforceAcl(ctx, gate.resource, gate.action, params);
+    await enforceAcl(ctx, gate.resource, gate.action, params);
     const synthCtx: any = {
       ...ctx,
       app: ctx.app,
       db: ctx.db,
       action: { params },
-      request: { ...(ctx.request || {}), body: ctx.request?.body || {} },
+      request: { ...(ctx.request || {}), body: {} },
       throw: (status: number, message: string) => {
         const err: any = new Error(message);
         err.status = status;

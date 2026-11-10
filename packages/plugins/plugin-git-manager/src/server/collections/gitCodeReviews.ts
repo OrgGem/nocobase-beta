@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { defineCollection } from '@nocobase/database';
 
 export default defineCollection({
@@ -103,6 +112,7 @@ export default defineCollection({
         'x-component': 'Select',
         enum: [
           { value: 'pending', label: 'Pending' },
+          { value: 'queued', label: 'Queued' },
           { value: 'running', label: 'Running' },
           { value: 'completed', label: 'Completed' },
           { value: 'failed', label: 'Failed' },
@@ -154,6 +164,15 @@ export default defineCollection({
       name: 'postedNoteId',
       interface: 'input',
     },
+    { type: 'string', name: 'legacyPostFingerprint' },
+    { type: 'string', name: 'legacyPostClaim' },
+    { type: 'string', name: 'legacyPostProjectKey' },
+    { type: 'json', name: 'legacyPostSource' },
+    { type: 'string', name: 'legacyBaseProvenance' },
+    { type: 'string', name: 'legacyBaseAcknowledgedBy' },
+    { type: 'date', name: 'legacyBaseAcknowledgedAt' },
+    { type: 'string', name: 'legacyHoldReleasedBy' },
+    { type: 'date', name: 'legacyHoldReleasedAt' },
     {
       type: 'string',
       name: 'approvedBy',

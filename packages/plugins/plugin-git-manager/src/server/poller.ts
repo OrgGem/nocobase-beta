@@ -172,7 +172,7 @@ export async function pollAllRepos(app: Application): Promise<{ scanned: number;
     const repos = await reposRepo.find({ filter: { autoReview: true } });
     for (const repo of repos) {
       try {
-        const result = await pollOneRepo(app, repo);
+        const result = await pollOneRepoUnlocked(app, repo);
         scanned += result.scanned;
         triggered += result.triggered;
       } catch (err: any) {
@@ -200,6 +200,24 @@ async function tick(app: Application) {
  * Poll a single repo for MR changes. Returns counts.
  */
 export async function pollOneRepo(app: Application, repo: any): Promise<{ scanned: number; triggered: number }> {
+  const state = stateFor(app);
+  if (state.polling) return { scanned: 0, triggered: 0 };
+  state.polling = true;
+  let lock: PollerLockHandle | null = null;
+  try {
+    lock = await tryAcquirePollerLock(app);
+    if (!lock) return { scanned: 0, triggered: 0 };
+    return await pollOneRepoUnlocked(app, repo);
+  } finally {
+    try {
+      await lock?.release();
+    } finally {
+      state.polling = false;
+    }
+  }
+}
+
+async function pollOneRepoUnlocked(app: Application, repo: any): Promise<{ scanned: number; triggered: number }> {
   const flowsRepo = app.db.getRepository('gitReviewFlows');
   const reviewsRepo = app.db.getRepository('gitCodeReviews');
   const reposRepo = app.db.getRepository('gitRepositories');
@@ -225,10 +243,11 @@ export async function pollOneRepo(app: Application, repo: any): Promise<{ scanne
   const pat = account?.pat || '';
   if (!pat) return { scanned: 0, triggered: 0 };
 
-  const lastPolledAt = repo.get('lastPolledAt') as Date | null;
-  const mrs = await listMergeRequests(repo, pat, lastPolledAt);
+  const pollStartedAt = new Date();
+  const mrs = await listMergeRequests(repo, pat);
 
   let triggered = 0;
+  let failed = false;
   for (const mr of mrs) {
     // Prefer the repository's configured primary auto-review flow, then fall
     // back to the first matching auto-trigger flow.
@@ -238,15 +257,14 @@ export async function pollOneRepo(app: Application, repo: any): Promise<{ scanne
         : flows.find((f: any) => branchMatches(f, mr.source_branch));
     if (!flow) continue;
 
-    // Auto-poll only triggers for MRs that have NEVER been reviewed.
-    // For existing reviews we just refresh latestSha so the UI can flag
-    // "new commits available" — re-review must be done manually by the user.
+    // Preserve the previous one-review-per-MR policy unless new-head reviews are explicitly enabled.
     const existing = await reviewsRepo.findOne({
       filter: {
         repositoryId: repo.get('id'),
         targetType: 'mr',
         mrIid: mr.iid,
       },
+      sort: ['-id'],
     });
     if (existing) {
       if (existing.get('latestSha') !== mr.sha) {
@@ -255,7 +273,7 @@ export async function pollOneRepo(app: Application, repo: any): Promise<{ scanne
           values: { latestSha: mr.sha },
         });
       }
-      continue;
+      if (!flow.get('reviewOnNewCommits') || existing.get('headSha') === mr.sha) continue;
     }
 
     try {
@@ -267,28 +285,29 @@ export async function pollOneRepo(app: Application, repo: any): Promise<{ scanne
         branch: mr.source_branch,
         headSha: mr.sha,
         triggeredBy: 'poll',
+        eventType: existing ? 'head_changed' : 'change_opened',
       });
       triggered++;
     } catch (err: any) {
+      failed = true;
       app.log?.error?.(`poller: triggerReviewInternal failed for MR !${mr.iid}: ${err?.message}`);
     }
   }
 
+  if (failed) throw new Error('One or more merge requests could not be queued');
   await reposRepo.update({
     filterByTk: repo.get('id'),
-    values: { lastPolledAt: new Date() },
+    values: { lastPolledAt: pollStartedAt },
   });
 
   return { scanned: mrs.length, triggered };
 }
 
-async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | null): Promise<any[]> {
+async function listMergeRequests(repo: any, pat: string): Promise<any[]> {
   const repoUrl = repo.get('repoUrl') as string;
   const isGitHub = typeof repoUrl === 'string' && new URL(repoUrl).hostname === 'github.com';
 
   if (isGitHub) {
-    // GitHub PRs: list endpoint sorts by updated; GitHub has no `updated_after`,
-    // so we filter client-side after fetching the most recently updated page.
     const { projectPath } = parseGitLabProject(repoUrl);
     const params = new URLSearchParams({
       state: 'open',
@@ -299,21 +318,18 @@ async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | nu
     const headers: Record<string, string> = { Accept: 'application/vnd.github.v3+json' };
     if (pat) headers['Authorization'] = `Bearer ${pat}`;
 
-    const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`, {
-      headers,
-      redirect: 'error',
-    });
-    if (!response.ok) {
-      const body = await response.text().catch(() => '');
-      throw new Error(`GitHub API error ${response.status}: ${body}`);
-    }
-    let prs = (await response.json()) as any[];
-    if (Array.isArray(prs) && updatedAfter) {
-      const cutoff = updatedAfter.getTime() - 1000;
-      prs = prs.filter((pr: any) => {
-        const t = pr?.updated_at ? new Date(pr.updated_at).getTime() : 0;
-        return t >= cutoff;
+    const prs: any[] = [];
+    for (let page = 1; ; page++) {
+      params.set('page', String(page));
+      const response = await fetch(`https://api.github.com/repos/${projectPath}/pulls?${params.toString()}`, {
+        headers,
+        redirect: 'error',
       });
+      if (!response.ok) throw new Error(`GitHub API error ${response.status}`);
+      const items = await response.json();
+      if (!Array.isArray(items)) throw new Error('Invalid GitHub pull request response');
+      prs.push(...items);
+      if (items.length < MR_PAGE_SIZE) break;
     }
     // Normalise to the GitLab MR shape that pollOneRepo consumes.
     return (prs || []).map((pr: any) => ({
@@ -332,20 +348,18 @@ async function listMergeRequests(repo: any, pat: string, updatedAfter: Date | nu
     order_by: 'updated_at',
     sort: 'desc',
   });
-  if (updatedAfter) {
-    // GitLab `updated_after` is exclusive; subtract 1s so MRs updated within
-    // the same second as the last poll aren't dropped.
-    const safeBound = new Date(updatedAfter.getTime() - 1000);
-    params.set('updated_after', safeBound.toISOString());
+  const mrs: any[] = [];
+  for (let page = 1; ; page++) {
+    params.set('page', String(page));
+    const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests?${params.toString()}`, {
+      redirect: 'error',
+      headers: { 'PRIVATE-TOKEN': pat, Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`GitLab API error ${response.status}`);
+    const items = await response.json();
+    if (!Array.isArray(items)) throw new Error('Invalid GitLab merge request response');
+    mrs.push(...items);
+    if (items.length < MR_PAGE_SIZE) break;
   }
-
-  const response = await fetch(`${apiBase}/projects/${encodedProject}/merge_requests?${params.toString()}`, {
-    redirect: 'error',
-    headers: { 'PRIVATE-TOKEN': pat, Accept: 'application/json' },
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`GitLab API error ${response.status}: ${body}`);
-  }
-  return response.json();
+  return mrs;
 }

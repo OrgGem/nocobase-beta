@@ -14,14 +14,18 @@ import { DataTypes } from 'sequelize';
 import * as gitActions from './actions/git-actions';
 import * as gitlabApi from './actions/gitlab-api';
 import * as reviewActions from './actions/review';
+import * as reviewCutoverActions from './actions/review-cutover';
 import * as pollerActions from './actions/poller';
 import * as rolePermissionsActions from './actions/role-permissions';
 import * as subtreeActions from './actions/subtree';
-import { recoverStuckReviews, registerReviewQueue, unregisterReviewQueue } from './actions/review';
+import { unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { enforceGitRequestMethod } from './request-method-policy';
 import { startPoller, stopPoller } from './poller';
 import { RegistryGitContentService, SkillHubGitContentService } from './services/registry-content-service';
+import { GitReviewService } from './services/review-service';
+import { LegacyPostService } from './services/legacy-post-service';
+import { enforceReviewControlAccess } from './review-control-access';
 import { enforceRepositoryAccess, enforceRepositoryCollectionAccess } from './repository-access';
 import { isGitManagerResourceResponse, redactCredentialFields } from './utils/redact';
 import { containsCredentialBearingUrlField, URL_USERINFO_NOT_ALLOWED } from './utils/url-security';
@@ -43,8 +47,12 @@ export class PluginGitManagerServer extends Plugin {
   declare db: any;
   registryContentService!: RegistryGitContentService;
   skillHubContentService!: SkillHubGitContentService;
+  reviewService!: GitReviewService;
+  legacyPostService!: LegacyPostService;
 
   async afterAdd() {
+    this.reviewService = new GitReviewService(this.app);
+    this.legacyPostService = new LegacyPostService(this.app);
     this.registryContentService = new RegistryGitContentService(
       (this as unknown as { db: Database }).db,
       undefined,
@@ -97,7 +105,17 @@ export class PluginGitManagerServer extends Plugin {
         mergeRequestNotes: gitlabApi.mergeRequestNotes,
         triggerReview: reviewActions.triggerReview,
         reviewApprovePost: reviewActions.reviewApprovePost,
+        reviewLegacyPostStatus: reviewActions.reviewLegacyPostStatus,
+        reviewLegacyRetryPost: reviewActions.reviewLegacyRetryPost,
+        reviewLegacyReleaseHold: reviewActions.reviewLegacyReleaseHold,
         reviewReject: reviewActions.reviewReject,
+        reviewWorkflowRetryPost: reviewActions.reviewWorkflowRetryPost,
+        reviewCutoverStatus: reviewCutoverActions.reviewCutoverStatus,
+        reviewConfirmCutover: reviewCutoverActions.reviewConfirmCutover,
+        reviewCancelLegacy: reviewCutoverActions.reviewCancelLegacy,
+        reviewRecover: reviewCutoverActions.reviewRecover,
+        reviewResetPostClaim: reviewCutoverActions.reviewResetPostClaim,
+        reviewCancelQueued: reviewCutoverActions.reviewCancelQueued,
         pollNow: pollerActions.pollNow,
         pollerStatus: pollerActions.pollerStatus,
         rolePermissions: rolePermissionsActions.rolePermissions,
@@ -109,7 +127,19 @@ export class PluginGitManagerServer extends Plugin {
       },
     });
 
+    const legacyApprovalAction = this.app.acl.getAvailableAction('reviewApprovePost');
+    const priorAliases = legacyApprovalAction?.options?.aliases;
+    this.app.acl.setAvailableAction('reviewApprovePost', {
+      ...legacyApprovalAction?.options,
+      aliases: [
+        ...(Array.isArray(priorAliases) ? priorAliases : priorAliases ? [priorAliases] : []),
+        'reviewLegacyPostStatus',
+        'reviewLegacyRetryPost',
+      ],
+    });
+
     this.app.resourceManager.use(enforceGitRequestMethod);
+    this.app.resourceManager.use(enforceReviewControlAccess);
     (this as any).app.resourceManager.use(enforceRepositoryAccess);
     (this as any).app.resourceManager.use(enforceRepositoryCollectionAccess);
 
@@ -132,17 +162,13 @@ export class PluginGitManagerServer extends Plugin {
       return next();
     });
 
-    registerReviewQueue((this as any).app);
     registerGitReviewAiTools((this as any).app);
 
     (this as any).app.on('afterStart', async () => {
       await ensureAutoReviewFlowSchema((this as any).app).catch(
         (err) => (this as any).app.log?.error?.('plugin-git-manager: ensure schema error', err),
       );
-      // Sweep any review left in `running` state from a previous process.
-      recoverStuckReviews((this as any).app).catch(
-        (err) => (this as any).app.log?.error?.('plugin-git-manager: recoverStuckReviews error', err),
-      );
+      this.reviewService.start();
       subtreeActions
         .recoverStuckSubtreeRuns((this as any).app)
         .catch((err) => (this as any).app.log?.error?.('plugin-git-manager: recover subtree runs error', err));
@@ -150,10 +176,12 @@ export class PluginGitManagerServer extends Plugin {
     });
     (this as any).app.on('beforeStop', () => {
       unregisterReviewQueue((this as any).app);
+      this.reviewService.stop();
       stopPoller(this.app);
     });
     (this as any).app.on('beforeDestroy', () => {
       unregisterReviewQueue((this as any).app);
+      this.reviewService.stop();
       stopPoller(this.app);
     });
 
@@ -209,7 +237,10 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:checkout',
         'gitManager:triggerReview',
         'gitManager:reviewApprovePost',
+        'gitManager:reviewLegacyPostStatus',
+        'gitManager:reviewLegacyRetryPost',
         'gitManager:reviewReject',
+        'gitManager:reviewWorkflowRetryPost',
         'gitManager:pollNow',
         'gitSubtreeConfigs:create',
         'gitSubtreeConfigs:update',
@@ -330,15 +361,21 @@ export class PluginGitManagerServer extends Plugin {
     await (this as any).app.db.getCollection('gitRepositories')?.sync();
     await (this as any).app.db.getCollection('gitSubtreeConfigs')?.sync();
     await (this as any).app.db.getCollection('gitSubtreeRuns')?.sync();
+    await (this as any).app.db.getCollection('gitReviewProjects')?.sync();
+    await (this as any).app.db.getCollection('gitReviewInbox')?.sync();
+    await (this as any).app.db.getCollection('gitReviewRequests')?.sync();
+    await (this as any).app.db.getCollection('gitReviewCutover')?.sync();
   }
 
   async beforeDisable() {
     unregisterReviewQueue((this as any).app);
+    this.reviewService.stop();
     stopPoller(this.app);
   }
 
   async beforeUnload() {
     unregisterReviewQueue((this as any).app);
+    this.reviewService.stop();
     stopPoller(this.app);
   }
 }

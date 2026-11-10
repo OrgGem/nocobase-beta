@@ -22,6 +22,7 @@ const READ_ACTIONS = new Set([
   'mergeRequestNotes',
   'pollerStatus',
   'rolePermissions',
+  'reviewCutoverStatus',
 ]);
 
 export async function enforceGitRequestMethod(ctx: Context, next: () => Promise<void>) {

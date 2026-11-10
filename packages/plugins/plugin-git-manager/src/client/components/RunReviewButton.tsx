@@ -9,9 +9,8 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button, Dropdown, Modal, Form, Select, Input, message, Space, Tooltip, Tag, Alert } from 'antd';
-import { RobotOutlined, MessageOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
+import { RobotOutlined, ThunderboltOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
 import { REVIEW_PROMPT_TEMPLATES } from '../promptTemplates';
 import { useT } from '../locale';
 
@@ -42,25 +41,20 @@ type Target =
 
 /**
  * Button that lets the user kick off a code review for a given target.
- * Two paths:
- *  - "Run review" → POST gitManager:triggerReview (server-side, async)
- *  - "Open chat" → call the enabled AI plugin manager,
- *    so the user can chat with the AI employee using the same context.
+ * Submits review requests through the project-scoped admission service.
  */
 export const RunReviewButton: React.FC<{
   target: Target;
+  label?: string;
   size?: 'small' | 'middle' | 'large';
   type?: 'default' | 'primary' | 'link';
   onTriggered?: (reviewId: number) => void;
-}> = ({ target, size = 'small', type = 'default', onTriggered }) => {
+}> = ({ target, label, size = 'small', type = 'default', onTriggered }) => {
   const t = useT();
-  const app = useApp();
-  const api = app.apiClient;
-  const aiManager = app.pm.get<PluginAIClientV2>('ai')?.aiManager;
+  const api = useApp().apiClient;
   const [open, setOpen] = useState(false);
   const [flows, setFlows] = useState<ReviewFlow[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [asking, setAsking] = useState(false);
   const [existingReview, setExistingReview] = useState<ExistingReview | null>(null);
   const [templateKey, setTemplateKey] = useState<string | undefined>();
   const [form] = Form.useForm();
@@ -166,7 +160,7 @@ export const RunReviewButton: React.FC<{
         data: params,
       });
       const reviewId = res?.data?.data?.reviewId;
-      message.success(t('Review started'));
+      message.success(t('Review queued'));
       setOpen(false);
       form.resetFields();
       loadExistingReview();
@@ -184,116 +178,11 @@ export const RunReviewButton: React.FC<{
     }
   };
 
-  const buildWorkContext = () => {
-    const title = target.title || buildContextHint();
-    if (target.type === 'mr') {
-      return {
-        type: 'git-merge-request',
-        uid: `${target.repositoryId}:${target.mrIid}`,
-        title,
-        content: {
-          repositoryId: target.repositoryId,
-          mrIid: target.mrIid,
-          title,
-        },
-      };
-    }
-    if (target.type === 'commit') {
-      return {
-        type: 'git-commit',
-        uid: `${target.repositoryId}:${target.commitSha}`,
-        title,
-        content: {
-          repositoryId: target.repositoryId,
-          commitSha: target.commitSha,
-          title,
-        },
-      };
-    }
-    if (target.type === 'folder') {
-      return {
-        type: 'git-repository',
-        uid: `${target.repositoryId}:folder:${target.folderPath}`,
-        title,
-        content: {
-          repositoryId: target.repositoryId,
-          folderPath: target.folderPath,
-          ref: target.ref,
-          title,
-        },
-      };
-    }
-    return {
-      type: 'git-repository',
-      uid: String(target.repositoryId),
-      title,
-      content: {
-        repositoryId: target.repositoryId,
-        branch: target.branch,
-        title,
-      },
-    };
-  };
-
-  const buildChatPrompt = () => {
-    if (target.type === 'mr') {
-      return `Please review merge request !${target.mrIid} (${
-        target.title || 'untitled'
-      }). Use the attached Git merge request context and the available git tools when you need more detail.`;
-    }
-    if (target.type === 'commit') {
-      return `Please review commit ${target.commitSha} (${
-        target.title || 'untitled'
-      }). Use the attached Git commit context and the available git tools when you need more detail.`;
-    }
-    if (target.type === 'folder') {
-      return `Please review the full code inside folder "${target.folderPath || '/'}" at ref ${
-        target.ref || 'HEAD'
-      }. Use git_list_files (recursive=true) to enumerate the files, then git_get_file_content to read them.`;
-    }
-    return `Please help me inspect branch ${target.branch}. Use the attached Git repository context and the available git tools when you need more detail.`;
-  };
-
-  const handleOpenChat = async () => {
-    if (!aiManager?.triggerTask) {
-      message.warning(t('AI plugin is not available'));
-      return;
-    }
-    setAsking(true);
-    try {
-      const list = flows.length ? flows : await loadFlows();
-      const flow = pickFlow(list);
-      if (!flow?.aiEmployeeUsername) {
-        message.warning(t('No matching flow available'));
-        return;
-      }
-      aiManager.triggerTask({
-        aiEmployee: flow.aiEmployeeUsername,
-        tasks: [
-          {
-            title: `${flow.name}: ${buildContextHint()}`,
-            message: {
-              user: buildChatPrompt(),
-              system: flow.instructions || undefined,
-              workContext: [buildWorkContext()],
-            },
-            model: flow.llmService && flow.model ? { llmService: flow.llmService, model: flow.model } : null,
-            autoSend: false,
-          },
-        ],
-      });
-    } catch (err: unknown) {
-      message.error((err instanceof Error && err.message) || t('Failed to open AI chat'));
-    } finally {
-      setAsking(false);
-    }
-  };
-
   const buildContextHint = () => {
     if (target.type === 'mr') return `MR !${target.mrIid}`;
     if (target.type === 'commit') return `Commit ${String(target.commitSha).slice(0, 7)}`;
     if (target.type === 'folder') return `${t('Folder')} ${target.folderPath || '/'}`;
-    return `Branch ${target.branch}`;
+    return `${t('Branch')} ${target.branch}`;
   };
 
   // Derive re-run state for MR targets
@@ -302,7 +191,7 @@ export const RunReviewButton: React.FC<{
     existingReview.headSha &&
     existingReview.latestSha &&
     existingReview.headSha !== existingReview.latestSha;
-  const isReReview = !!existingReview && existingReview.status !== 'pending';
+  const isReReview = !!existingReview;
   const buttonLabel = isReReview
     ? hasNewCommits
       ? t('Re-review (new commits)')
@@ -329,26 +218,13 @@ export const RunReviewButton: React.FC<{
           },
         ]
       : []),
-    {
-      key: 'chat',
-      icon: <MessageOutlined />,
-      label: t('Ask AI Employee'),
-      onClick: handleOpenChat,
-      disabled: asking || !aiManager?.triggerTask,
-    },
   ];
 
   return (
     <>
       <Dropdown menu={{ items }} placement="bottomRight" trigger={['click']}>
-        <Button
-          size={size}
-          type={hasNewCommits ? 'primary' : type}
-          icon={<ButtonIcon />}
-          danger={!!hasNewCommits}
-          loading={asking}
-        >
-          {buttonLabel}
+        <Button size={size} type={hasNewCommits ? 'primary' : type} icon={<ButtonIcon />} danger={!!hasNewCommits}>
+          {label ?? buttonLabel}
         </Button>
       </Dropdown>
       <Modal
@@ -373,8 +249,8 @@ export const RunReviewButton: React.FC<{
             style={{ marginBottom: 12 }}
             message={
               hasNewCommits
-                ? t('New commits detected since last review. Re-running will overwrite the existing review.')
-                : t('A review already exists for this target. Re-running will overwrite it.')
+                ? t('New commits detected. A new review will be queued.')
+                : t('A new review will be queued and existing history will be kept.')
             }
             description={
               <Space size={8} wrap style={{ fontSize: 12 }}>

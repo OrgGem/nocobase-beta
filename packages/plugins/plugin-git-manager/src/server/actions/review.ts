@@ -13,6 +13,7 @@ import { getEffectiveActionParams } from '../repository-access';
 import { parseGitLabProject } from '../utils/gitlab-url';
 import { redactPat } from '../utils/redact';
 import { getRepoAccount } from '../utils/get-repo-account';
+import type { LegacyPostService } from '../services/legacy-post-service';
 
 export const WORKER_JOB_GIT_REVIEW_PROCESS = 'git-review:process';
 const REVIEW_QUEUE_CHANNEL = 'plugin-git-manager.review';
@@ -44,7 +45,9 @@ interface TriggerArgs {
   headSha?: string | null;
   extraInstructions?: string;
   triggeredBy?: 'manual' | 'poll';
+  eventType?: 'change_opened' | 'head_changed';
   userId?: number | string | null;
+  actorRoles?: string[];
 }
 
 interface ReviewFlowSnapshot {
@@ -147,10 +150,20 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
       extraInstructions: typeof extraInstructions === 'string' ? extraInstructions : undefined,
       triggeredBy: 'manual',
       userId,
+      actorRoles: Array.isArray(ctx.state?.currentRoles)
+        ? ctx.state.currentRoles.filter((role: unknown): role is string => typeof role === 'string')
+        : [],
     });
     ctx.body = { success: true, data: { reviewId } };
   } catch (err: any) {
-    ctx.throw(err.status || 400, err.message || 'Failed to trigger review');
+    const errorMessage = err.message || 'Failed to trigger review';
+    const providerError = /^Git provider request failed \((\d+)\)$/.exec(errorMessage);
+    ctx.throw(
+      err.status || 400,
+      providerError
+        ? ctx.t('Git provider request failed ({{status}})', { ns: 'plugin-git-manager', status: providerError[1] })
+        : ctx.t(errorMessage, { ns: 'plugin-git-manager' }),
+    );
   }
   await next();
 }
@@ -160,7 +173,11 @@ export async function triggerReview(ctx: Context, next: () => Promise<void>) {
  * Returns the reviewId of the upserted record.
  */
 export async function triggerReviewInternal(app: Application, args: TriggerArgs): Promise<number> {
-  return withTriggerLock(app, targetKey(args), () => triggerReviewInternalLocked(app, args));
+  const plugin = (app.pm.get('plugin-git-manager') || app.pm.get('git-manager')) as unknown as {
+    reviewService?: { enqueue(input: TriggerArgs): Promise<number> };
+  };
+  if (!plugin?.reviewService) throw new Error('Git review workflow service is unavailable');
+  return plugin.reviewService.enqueue(args);
 }
 
 async function triggerReviewInternalLocked(app: Application, args: TriggerArgs): Promise<number> {
@@ -643,7 +660,7 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
       return;
     }
 
-    if (review.get('status') !== 'pending') {
+    if (review.get('status') !== 'pending' || review.get('metadata')?.workflowManaged) {
       app.log?.info?.(`git review queue: review ${message.reviewId} is ${review.get('status')}, skipping`);
       return;
     }
@@ -692,7 +709,9 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
         userId: actorUserId,
       });
     } catch (err) {
-      app.log?.error?.('git review queue: failed before review execution', err);
+      app.log?.error?.('git review queue: failed before review execution', {
+        error: redactPat(err instanceof Error ? err.message : String(err)),
+      });
       await failQueuedReview(app, message.reviewId, err);
     }
   });
@@ -701,43 +720,91 @@ async function processQueuedReview(app: Application, message: ReviewQueueMessage
 /**
  * Mark a review as approved and post its content to GitLab as an MR note.
  */
-export async function reviewApprovePost(ctx: Context, next: () => Promise<void>) {
-  const params = getEffectiveActionParams(ctx);
-  const { reviewId, editedMarkdown } = params;
-  if (!reviewId || (typeof reviewId !== 'string' && typeof reviewId !== 'number')) {
-    ctx.throw(400, 'reviewId is required');
+function legacyPostContext(ctx: Context): { service: LegacyPostService; actor: number | string; roles: string[] } {
+  const actor: unknown = ctx.state?.currentUser?.id;
+  const roles: unknown = ctx.state?.currentRoles;
+  if (
+    (typeof actor !== 'string' && typeof actor !== 'number') ||
+    !Array.isArray(roles) ||
+    !roles.every((role) => typeof role === 'string')
+  ) {
+    ctx.throw(403, 'Permission denied');
   }
+  const plugin = (ctx.app.pm.get('plugin-git-manager') || ctx.app.pm.get('git-manager')) as unknown as {
+    legacyPostService?: LegacyPostService;
+  };
+  if (!plugin?.legacyPostService) ctx.throw(503, 'Git review workflow service is unavailable');
+  return { service: plugin.legacyPostService, actor, roles };
+}
 
-  const reviewsRepo = ctx.db.getRepository('gitCodeReviews');
-  const review = await reviewsRepo.findOne({ filterByTk: reviewId });
-  if (!review) ctx.throw(404, 'Review not found');
-  if (review.get('status') !== 'completed') ctx.throw(400, 'Review is not completed');
-  if (review.get('targetType') !== 'mr') ctx.throw(400, 'Only MR reviews can be posted');
+async function legacyPostAction(ctx: Context, run: () => Promise<unknown>): Promise<void> {
+  try {
+    ctx.body = { success: true, data: await run() };
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : 400;
+    ctx.throw(
+      status,
+      ctx.t(error instanceof Error ? error.message : 'Failed to reconcile review publication', {
+        ns: 'plugin-git-manager',
+      }),
+    );
+  }
+}
 
-  const markdown = (editedMarkdown ?? review.get('reviewMarkdown')) as string;
-  if (!markdown) ctx.throw(400, 'No review content to post');
+export async function reviewApprovePost(ctx: Context, next: () => Promise<void>) {
+  const { reviewId, editedMarkdown, baseConfirmation } = getEffectiveActionParams(ctx);
+  if (typeof reviewId !== 'string' && typeof reviewId !== 'number') ctx.throw(400, 'reviewId is required');
+  const { service, actor, roles } = legacyPostContext(ctx);
+  await legacyPostAction(ctx, () => service.approve(reviewId, actor, roles, editedMarkdown, baseConfirmation));
+  await next();
+}
 
-  const repo = await ctx.db.getRepository('gitRepositories').findOne({
-    filterByTk: review.get('repositoryId'),
+export async function reviewLegacyPostStatus(ctx: Context, next: () => Promise<void>) {
+  const { reviewId } = getEffectiveActionParams(ctx);
+  if (typeof reviewId !== 'string' && typeof reviewId !== 'number') ctx.throw(400, 'reviewId is required');
+  const { service, actor, roles } = legacyPostContext(ctx);
+  await legacyPostAction(ctx, () => service.status(reviewId, actor, roles));
+  await next();
+}
+
+export async function reviewLegacyRetryPost(ctx: Context, next: () => Promise<void>) {
+  const params = getEffectiveActionParams(ctx);
+  const { reviewId, confirmation, expectedAttempt, baseConfirmation } = params;
+  if (typeof reviewId !== 'string' && typeof reviewId !== 'number') ctx.throw(400, 'reviewId is required');
+  if (Object.prototype.hasOwnProperty.call(params, 'editedMarkdown')) {
+    ctx.throw(400, ctx.t('Review content cannot change while publication is unresolved', { ns: 'plugin-git-manager' }));
+  }
+  if (confirmation !== 'OUTBOUND_POST_STOPPED')
+    ctx.throw(400, ctx.t('Outbound post stop confirmation is required', { ns: 'plugin-git-manager' }));
+  if (
+    !Object.prototype.hasOwnProperty.call(params, 'expectedAttempt') ||
+    (expectedAttempt !== null && typeof expectedAttempt !== 'string')
+  ) {
+    ctx.throw(400, ctx.t('Refresh publication status before recovery', { ns: 'plugin-git-manager' }));
+  }
+  const { service, actor, roles } = legacyPostContext(ctx);
+  await legacyPostAction(ctx, () => service.retry(reviewId, actor, roles, expectedAttempt, baseConfirmation));
+  await next();
+}
+
+export async function reviewLegacyReleaseHold(ctx: Context, next: () => Promise<void>) {
+  const params = getEffectiveActionParams(ctx);
+  const { reviewId, confirmation, expectedAttempt } = params;
+  if (typeof reviewId !== 'string' && typeof reviewId !== 'number') ctx.throw(400, 'reviewId is required');
+  if (confirmation !== 'OUTBOUND_POST_STOPPED')
+    ctx.throw(400, ctx.t('Outbound post stop confirmation is required', { ns: 'plugin-git-manager' }));
+  if (
+    !Object.prototype.hasOwnProperty.call(params, 'expectedAttempt') ||
+    (expectedAttempt !== null && typeof expectedAttempt !== 'string')
+  ) {
+    ctx.throw(400, ctx.t('Refresh publication status before recovery', { ns: 'plugin-git-manager' }));
+  }
+  const { service, actor, roles } = legacyPostContext(ctx);
+  await legacyPostAction(ctx, async () => {
+    await service.releaseHold(reviewId, actor, roles, expectedAttempt);
+    return { reviewId };
   });
-  if (!repo) ctx.throw(404, 'Repository not found');
-
-  const noteId = await postNoteToGitLab(ctx.db, repo, Number(review.get('mrIid')), markdown);
-
-  const userId = (ctx as any).state?.currentUser?.id;
-  await reviewsRepo.update({
-    filterByTk: reviewId,
-    values: {
-      reviewMarkdown: markdown,
-      postStatus: 'posted',
-      postedNoteId: String(noteId),
-      approvedBy: userId ? String(userId) : null,
-      approvedAt: new Date(),
-      error: null,
-    },
-  });
-
-  ctx.body = { success: true, data: { reviewId, postedNoteId: noteId } };
   await next();
 }
 
@@ -754,19 +821,62 @@ export async function reviewReject(ctx: Context, next: () => Promise<void>) {
   const reviewsRepo = ctx.db.getRepository('gitCodeReviews');
   const review = await reviewsRepo.findOne({ filterByTk: reviewId });
   if (!review) ctx.throw(404, 'Review not found');
+  if (
+    review.get('metadata')?.workflowManaged ||
+    (await ctx.db.getRepository('gitReviewInbox').findOne({ filter: { reviewId } }))
+  ) {
+    ctx.throw(409, ctx.t('Use the workflow approval task for this review', { ns: 'plugin-git-manager' }));
+  }
 
   const userId = (ctx as any).state?.currentUser?.id;
-  await reviewsRepo.update({
-    filterByTk: reviewId,
-    values: {
+  const [changed] = await ctx.db.getCollection('gitCodeReviews').model.update(
+    {
       postStatus: 'rejected',
       approvedBy: userId ? String(userId) : null,
       approvedAt: new Date(),
       error: reason ? `Rejected: ${reason}` : 'Rejected',
     },
-  });
+    { where: { id: reviewId, status: 'completed', targetType: 'mr', postStatus: 'pending_approval' } },
+  );
+  if (changed !== 1) ctx.throw(409, 'Review is not awaiting approval');
 
   ctx.body = { success: true, data: { reviewId } };
+  await next();
+}
+
+export async function reviewWorkflowRetryPost(ctx: Context, next: () => Promise<void>) {
+  const { reviewId, confirmation } = getEffectiveActionParams(ctx);
+  if (typeof reviewId !== 'string' && typeof reviewId !== 'number') ctx.throw(400, 'reviewId is required');
+  if (confirmation != null && confirmation !== 'OUTBOUND_POST_STOPPED')
+    ctx.throw(400, ctx.t('Invalid publication confirmation', { ns: 'plugin-git-manager' }));
+  const actor = ctx.state?.currentUser?.id;
+  const roles = ctx.state?.currentRoles;
+  if (!actor || !Array.isArray(roles) || !roles.every((role: unknown) => typeof role === 'string'))
+    ctx.throw(403, 'Permission denied');
+  const plugin = (ctx.app.pm.get('plugin-git-manager') || ctx.app.pm.get('git-manager')) as unknown as {
+    reviewService?: {
+      retryPost(id: number | string, user: number | string, roles: string[], allowResend: boolean): Promise<unknown>;
+    };
+  };
+  if (!plugin?.reviewService) ctx.throw(503, 'Git review workflow service is unavailable');
+  try {
+    const result = await plugin.reviewService.retryPost(
+      reviewId,
+      actor,
+      roles,
+      confirmation === 'OUTBOUND_POST_STOPPED',
+    );
+    ctx.body = { success: true, data: result };
+  } catch (error) {
+    const status =
+      error && typeof error === 'object' && 'status' in error && typeof error.status === 'number' ? error.status : 400;
+    ctx.throw(
+      status,
+      ctx.t(error instanceof Error ? error.message : 'Failed to reconcile review publication', {
+        ns: 'plugin-git-manager',
+      }),
+    );
+  }
   await next();
 }
 

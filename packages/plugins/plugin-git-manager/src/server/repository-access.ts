@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 const REPOSITORY_ID_ACTIONS = new Set([
   'clone',
   'pull',
@@ -20,7 +29,14 @@ const REPOSITORY_ID_ACTIONS = new Set([
 
 const SUBTREE_CONFIG_ACTIONS = new Set(['subtreePreview', 'subtreeRun', 'subtreeReplace']);
 
-const REVIEW_ID_ACTIONS = new Set(['reviewApprovePost', 'reviewReject']);
+const REVIEW_ID_ACTIONS = new Set([
+  'reviewApprovePost',
+  'reviewReject',
+  'reviewWorkflowRetryPost',
+  'reviewLegacyPostStatus',
+  'reviewLegacyRetryPost',
+  'reviewLegacyReleaseHold',
+]);
 
 type RepositoryId = number | string;
 
@@ -626,6 +642,21 @@ export async function enforceRepositoryCollectionAccess(
 
   rejectTargetCollectionOverride(ctx, collectionName);
 
+  const actionName = ctx.action?.actionName;
+  if (collectionName === 'gitCodeReviews' && actionName && ['create', 'update', 'destroy'].includes(actionName)) {
+    ctx.throw(403, 'Permission denied');
+  }
+  if (collectionName === 'gitReviewFlows' && actionName && ['create', 'update'].includes(actionName)) {
+    const bindingFields = new Set(['workflowId', 'workflowKey']);
+    if (
+      [ctx.action?.params, ctx.request?.body, ctx.query, ctx.request?.query].some((source) =>
+        containsMutationField(source, bindingFields),
+      )
+    ) {
+      ctx.throw(403, 'Permission denied');
+    }
+  }
+
   const roles = currentRoles(ctx);
   if (roles.includes('root')) {
     await next();
@@ -651,7 +682,6 @@ export async function enforceRepositoryCollectionAccess(
     return;
   }
 
-  const actionName = ctx.action?.actionName;
   if (!actionName || !STANDARD_COLLECTION_ACTIONS.has(actionName)) {
     ctx.throw(403, 'Permission denied');
   }

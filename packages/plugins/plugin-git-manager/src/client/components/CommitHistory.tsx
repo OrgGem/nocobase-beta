@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useEffect, useState, useCallback, memo } from 'react';
 import { Table, Empty, Spin, Typography, Tag, Drawer, List, Button, Space, Select, Input, theme } from 'antd';
 import {
@@ -29,7 +38,13 @@ export const CommitHistory: React.FC = () => {
   const t = useT();
   const { token } = useToken();
   const api = useApp().apiClient;
-  const { selectedRepo, branches: branchList, currentBranch } = useGitManager();
+  const { selectedRepo } = useGitManager();
+  const repositoryId = selectedRepo?.id;
+  const [branchSnapshot, setBranchSnapshot] = useState<{
+    repositoryId: number;
+    branch: string;
+    branches: string[];
+  } | null>(null);
   const [commits, setCommits] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedCommit, setSelectedCommit] = useState<any>(null);
@@ -38,6 +53,35 @@ export const CommitHistory: React.FC = () => {
   const [diffContent, setDiffContent] = useState<string | null>(null);
   const [diffFile, setDiffFile] = useState<string | null>(null);
   const [searchKeyword, setSearchKeyword] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const repositoryId = selectedRepo?.id;
+    setBranchSnapshot(null);
+    if (!repositoryId || selectedRepo.status !== 'connected')
+      return () => {
+        cancelled = true;
+      };
+    api
+      .request({ url: 'gitManager:branches', params: { repositoryId } })
+      .then(({ data }) => {
+        const result = data?.data?.data || data?.data;
+        if (
+          !cancelled &&
+          result?.detached === false &&
+          typeof result?.current === 'string' &&
+          result.current &&
+          Array.isArray(result.all) &&
+          result.all.includes(result.current)
+        ) {
+          setBranchSnapshot({ repositoryId, branch: result.current, branches: result.all });
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [api, selectedRepo?.id, selectedRepo?.status]);
 
   const loadHistory = useCallback(async () => {
     if (!selectedRepo) return;
@@ -63,7 +107,7 @@ export const CommitHistory: React.FC = () => {
     } else {
       setCommits([]);
     }
-  }, [selectedRepo]);
+  }, [selectedRepo, loadHistory]);
 
   const filteredCommits = commits.filter((commit) => {
     const keyword = searchKeyword.trim().toLowerCase();
@@ -74,6 +118,7 @@ export const CommitHistory: React.FC = () => {
   });
 
   const openCommitDetail = async (commit: any) => {
+    if (repositoryId == null) return;
     setSelectedCommit(commit);
     setDetailLoading(true);
     setDiffContent(null);
@@ -81,7 +126,7 @@ export const CommitHistory: React.FC = () => {
     try {
       const { data } = await api.request({
         url: 'gitManager:commitDetail',
-        params: { repositoryId: selectedRepo.id, commitHash: commit.hash },
+        params: { repositoryId, commitHash: commit.hash },
       });
       const responseData = data?.data?.data || data?.data;
       setCommitDetail(responseData);
@@ -93,11 +138,12 @@ export const CommitHistory: React.FC = () => {
   };
 
   const loadFileDiff = async (commitHash: string, file: string) => {
+    if (repositoryId == null) return;
     setDiffFile(file);
     try {
       const { data } = await api.request({
         url: 'gitManager:diff',
-        params: { repositoryId: selectedRepo.id, commitHash, file },
+        params: { repositoryId, commitHash, file },
       });
       const responseData = data?.data?.data || data?.data;
       setDiffContent(responseData || '');
@@ -112,6 +158,8 @@ export const CommitHistory: React.FC = () => {
   if (selectedRepo.status !== 'connected') {
     return <Empty description={t('Repository not cloned yet')} />;
   }
+
+  const currentBranch = branchSnapshot?.repositoryId === selectedRepo.id ? branchSnapshot : null;
 
   const columns = [
     {
@@ -184,10 +232,17 @@ export const CommitHistory: React.FC = () => {
         <Select
           size="small"
           style={{ width: 200 }}
-          value={currentBranch}
-          options={branchList.map((b) => ({ label: b, value: b }))}
+          value={currentBranch?.branch}
+          options={(currentBranch?.branches ?? []).map((branch) => ({ label: branch, value: branch }))}
           disabled
         />
+        {currentBranch && (
+          <RunReviewButton
+            label={t('Review branch')}
+            target={{ type: 'branch', repositoryId: selectedRepo.id, branch: currentBranch.branch }}
+            size="small"
+          />
+        )}
         <Input.Search
           allowClear
           size="small"

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Table,
@@ -30,12 +39,23 @@ import { useApp } from '@nocobase/client-v2';
 import { useGitManager } from '../context/GitManagerContext';
 import { MarkdownView } from './MarkdownView';
 import { useT } from '../locale';
+import { reviewApprovalHref, workflowHref } from '../workflowRoutes';
 
 const { Text, Title, Paragraph } = Typography;
 const { useToken } = theme;
+type LegacyPostStatus = {
+  reviewId: number;
+  status: 'posted' | 'unknown' | 'observed';
+  attemptId: string | null;
+  canRetry: boolean;
+  holdActive: boolean;
+  baseUnverified: boolean;
+  baseAcknowledged: boolean;
+};
 
 const STATUS_COLOR: Record<string, string> = {
   pending: 'default',
+  queued: 'default',
   running: 'blue',
   completed: 'green',
   failed: 'red',
@@ -46,6 +66,9 @@ const POST_STATUS_COLOR: Record<string, string> = {
   approved: 'cyan',
   posted: 'green',
   post_failed: 'red',
+  post_unknown: 'orange',
+  posting: 'blue',
+  retrying: 'blue',
   skipped: 'default',
   rejected: 'red',
 };
@@ -53,7 +76,8 @@ const POST_STATUS_COLOR: Record<string, string> = {
 export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval' }> = ({ initialFilter = 'all' }) => {
   const t = useT();
   const { token } = useToken();
-  const api = useApp().apiClient;
+  const app = useApp();
+  const api = app.apiClient;
   const { repos } = useGitManager();
   const [reviews, setReviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -64,6 +88,8 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
   const [triggerFilter, setTriggerFilter] = useState<string>('all');
   const [selected, setSelected] = useState<any | null>(null);
   const [editing, setEditing] = useState(false);
+  const [reconcilingPost, setReconcilingPost] = useState(false);
+  const [legacyPost, setLegacyPost] = useState<LegacyPostStatus | null>(null);
   const [editedMarkdown, setEditedMarkdown] = useState('');
 
   const reload = useCallback(async () => {
@@ -93,7 +119,7 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
 
   // Auto-refresh while there are running reviews
   useEffect(() => {
-    if (!reviews.some((r) => r.status === 'running' || r.status === 'pending')) return;
+    if (!reviews.some((r) => r.status === 'running' || r.status === 'pending' || r.status === 'queued')) return;
     const tid = setInterval(reload, 4000);
     return () => clearInterval(tid);
   }, [reviews, reload]);
@@ -113,12 +139,17 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
   const handleApprove = async (markdown: string) => {
     if (!selected) return;
     try {
-      await api.request({
+      const response = await api.request({
         url: 'gitManager:reviewApprovePost',
         method: 'post',
-        data: { reviewId: selected.id, editedMarkdown: markdown },
+        data: { reviewId: selected.id, editedMarkdown: markdown, baseConfirmation: 'LEGACY_BASE_UNVERIFIED' },
       });
-      message.success(t('Review posted to merge request'));
+      const payload = response?.data?.data;
+      const result = payload?.success ? payload.data : payload;
+      if (result?.status === 'posted') message.success(t('Review posted to merge request'));
+      else if (result?.status === 'observed')
+        message.warning(t('A matching comment was found, but its attempt cannot be confirmed'));
+      else message.warning(t('Publication outcome is still unknown'));
       setEditing(false);
       refreshOne(selected.id);
       reload();
@@ -140,6 +171,85 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
       reload();
     } catch (err: any) {
       message.error(err?.message || t('Failed to reject'));
+    }
+  };
+
+  const handleRetryPost = async (allowResend: boolean) => {
+    if (!selected) return;
+    setReconcilingPost(true);
+    try {
+      const response = await api.request({
+        url: 'gitManager:reviewWorkflowRetryPost',
+        method: 'post',
+        data: { reviewId: selected.id, ...(allowResend ? { confirmation: 'OUTBOUND_POST_STOPPED' } : {}) },
+      });
+      const result = response?.data?.data;
+      if (result?.status === 'posted') message.success(t('Review publication confirmed'));
+      else if (result?.status === 'observed')
+        message.info(t('Matching comment found; another publication attempt still owns the review'));
+      else if (result?.canResend)
+        message.warning(t('No matching comment found; confirm the previous post stopped before retrying'));
+      else
+        message.warning(t('A previous publication attempt may still be running; ask an administrator to recover it'));
+      await refreshOne(selected.id);
+      await reload();
+    } catch (error: unknown) {
+      const responseError = error as { response?: { data?: { errors?: Array<{ message?: string }> } } } | null;
+      message.error(
+        responseError?.response?.data?.errors?.[0]?.message ||
+          (error instanceof Error && error.message) ||
+          t('Failed to reconcile review publication'),
+      );
+    } finally {
+      setReconcilingPost(false);
+    }
+  };
+
+  const handleLegacyPost = async (action: 'check' | 'retry' | 'release') => {
+    if (!selected || (action !== 'check' && legacyPost?.reviewId !== selected.id)) return;
+    setReconcilingPost(true);
+    try {
+      const route =
+        action === 'check'
+          ? 'reviewLegacyPostStatus'
+          : action === 'retry'
+            ? 'reviewLegacyRetryPost'
+            : 'reviewLegacyReleaseHold';
+      const response = await api.request({
+        url: `gitManager:${route}`,
+        method: 'post',
+        data: {
+          reviewId: selected.id,
+          ...(action === 'check'
+            ? {}
+            : { confirmation: 'OUTBOUND_POST_STOPPED', expectedAttempt: legacyPost?.attemptId ?? null }),
+          ...(action === 'retry' && legacyPost?.baseUnverified && !legacyPost.baseAcknowledged
+            ? { baseConfirmation: 'LEGACY_BASE_UNVERIFIED' }
+            : {}),
+        },
+      });
+      const payload = response?.data?.data;
+      const result = payload?.success ? payload.data : payload;
+      if (action === 'check' && result) setLegacyPost({ ...result, reviewId: selected.id });
+      else setLegacyPost(null);
+      if (result?.status === 'posted') message.success(t('Review publication confirmed'));
+      else if (result?.status === 'observed' && result?.canRetry)
+        message.warning(t('A matching marked comment was found; confirm the previous attempt stopped to finalize it'));
+      else if (result?.status === 'observed')
+        message.warning(t('A matching comment was found, but its attempt cannot be confirmed'));
+      else if (action === 'release') message.success(t('Legacy publication hold released'));
+      else if (action === 'retry') message.warning(t('Publication outcome is still unknown'));
+      await refreshOne(selected.id);
+      await reload();
+    } catch (error: unknown) {
+      const responseError = error as { response?: { data?: { errors?: Array<{ message?: string }> } } } | null;
+      message.error(
+        responseError?.response?.data?.errors?.[0]?.message ||
+          (error instanceof Error && error.message) ||
+          t('Failed to reconcile review publication'),
+      );
+    } finally {
+      setReconcilingPost(false);
     }
   };
 
@@ -293,6 +403,7 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
           options={[
             { value: 'all', label: t('All statuses') },
             { value: 'pending', label: t('pending') },
+            { value: 'queued', label: t('queued') },
             { value: 'running', label: t('running') },
             { value: 'completed', label: t('completed') },
             { value: 'failed', label: t('failed') },
@@ -309,6 +420,8 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
             { value: 'approved', label: t('approved') },
             { value: 'posted', label: t('posted') },
             { value: 'post_failed', label: t('post_failed') },
+            { value: 'post_unknown', label: t('post_unknown') },
+            { value: 'posting', label: t('posting') },
             { value: 'skipped', label: t('skipped') },
             { value: 'rejected', label: t('rejected') },
           ]}
@@ -341,6 +454,7 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
           onClick: () => {
             setSelected(record);
             setEditing(false);
+            setLegacyPost(null);
             setEditedMarkdown(record.reviewMarkdown || '');
           },
         })}
@@ -403,6 +517,10 @@ export const ReviewHistory: React.FC<{ initialFilter?: 'all' | 'pending_approval
             onChangeMarkdown={setEditedMarkdown}
             onApprove={handleApprove}
             onReject={handleReject}
+            onRetryPost={handleRetryPost}
+            legacyPost={legacyPost?.reviewId === selected.id ? legacyPost : null}
+            onLegacyPost={handleLegacyPost}
+            reconcilingPost={reconcilingPost}
           />
         )}
       </Drawer>
@@ -419,19 +537,117 @@ const ReviewDetailView: React.FC<{
   onChangeMarkdown: (v: string) => void;
   onApprove: (markdown: string) => void;
   onReject: () => void;
-}> = ({ review, editing, editedMarkdown, onEdit, onCancelEdit, onChangeMarkdown, onApprove, onReject }) => {
+  onRetryPost: (allowResend: boolean) => void;
+  legacyPost: LegacyPostStatus | null;
+  onLegacyPost: (action: 'check' | 'retry' | 'release') => void;
+  reconcilingPost: boolean;
+}> = ({
+  review,
+  editing,
+  editedMarkdown,
+  onEdit,
+  onCancelEdit,
+  onChangeMarkdown,
+  onApprove,
+  onReject,
+  onRetryPost,
+  legacyPost,
+  onLegacyPost,
+  reconcilingPost,
+}) => {
   const t = useT();
   const { token } = useToken();
+  const app = useApp();
 
   const canApprove =
+    !review.metadata?.workflowManaged &&
     review.status === 'completed' &&
     review.targetType === 'mr' &&
-    (review.postStatus === 'pending_approval' ||
-      review.postStatus === 'approved' ||
-      review.postStatus === 'post_failed');
+    review.postStatus === 'pending_approval';
+  const canRetryPost =
+    review.metadata?.workflowManaged &&
+    review.status !== 'running' &&
+    review.targetType === 'mr' &&
+    ['posting', 'post_unknown', 'post_failed', 'retrying'].includes(review.postStatus);
+  const canCheckLegacy =
+    !review.metadata?.workflowManaged &&
+    review.targetType === 'mr' &&
+    ['posting', 'post_unknown', 'post_failed'].includes(review.postStatus);
 
   return (
     <div>
+      {review.metadata?.workflowManaged && review.postStatus === 'pending_approval' && (
+        <Alert
+          type="info"
+          showIcon
+          message={t('Use the workflow approval task for this review')}
+          action={<Button href={reviewApprovalHref(app)}>{t('Open workflow tasks')}</Button>}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+      {review.metadata?.workflowExecutionId && (
+        <Button
+          href={workflowHref(app, 'execution', review.metadata.workflowExecutionId)}
+          target="_blank"
+          rel="noreferrer"
+          style={{ marginBottom: 16 }}
+        >
+          {t('Open workflow execution')}
+        </Button>
+      )}
+      {canRetryPost && (
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Button loading={reconcilingPost} onClick={() => onRetryPost(false)}>
+            {t('Check publication')}
+          </Button>
+          <Popconfirm
+            title={t('Has the previous outbound post stopped and settled?')}
+            onConfirm={() => onRetryPost(true)}
+          >
+            <Button loading={reconcilingPost}>{t('Retry publication')}</Button>
+          </Popconfirm>
+        </Space>
+      )}
+      {canCheckLegacy && (
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Button loading={reconcilingPost} onClick={() => onLegacyPost('check')}>
+            {t('Check publication')}
+          </Button>
+          {legacyPost?.canRetry && (
+            <Popconfirm
+              title={t('Has the previous outbound post stopped and settled?')}
+              description={
+                legacyPost.baseUnverified && !legacyPost.baseAcknowledged
+                  ? t(
+                      'The original review base cannot be verified. Compare the review with the current merge request before continuing.',
+                    )
+                  : undefined
+              }
+              onConfirm={() => onLegacyPost('retry')}
+            >
+              <Button loading={reconcilingPost}>{t('Retry publication')}</Button>
+            </Popconfirm>
+          )}
+          {legacyPost?.holdActive && (
+            <Popconfirm
+              title={t('Has the previous outbound post stopped and settled?')}
+              onConfirm={() => onLegacyPost('release')}
+            >
+              <Button loading={reconcilingPost}>{t('Release legacy publication hold')}</Button>
+            </Popconfirm>
+          )}
+        </Space>
+      )}
+      {canApprove && (
+        <Alert
+          type="warning"
+          showIcon
+          message={t(
+            'The original review base cannot be verified. Compare the review with the current merge request before continuing.',
+          )}
+          style={{ marginBottom: 16 }}
+        />
+      )}
       {review.status === 'running' && (
         <Alert
           type="info"
@@ -465,9 +681,16 @@ const ReviewDetailView: React.FC<{
         <Space style={{ marginBottom: 16 }} wrap>
           {!editing ? (
             <>
-              <Button type="primary" icon={<CheckOutlined />} onClick={() => onApprove(review.reviewMarkdown)}>
-                {t('Approve & Post')}
-              </Button>
+              <Popconfirm
+                title={t(
+                  'The original review base cannot be verified. Compare the review with the current merge request before continuing.',
+                )}
+                onConfirm={() => onApprove(review.reviewMarkdown)}
+              >
+                <Button type="primary" icon={<CheckOutlined />}>
+                  {t('Approve & Post')}
+                </Button>
+              </Popconfirm>
               <Button icon={<EditOutlined />} onClick={onEdit}>
                 {t('Edit & Post')}
               </Button>
@@ -479,9 +702,16 @@ const ReviewDetailView: React.FC<{
             </>
           ) : (
             <>
-              <Button type="primary" icon={<CheckOutlined />} onClick={() => onApprove(editedMarkdown)}>
-                {t('Save & Post')}
-              </Button>
+              <Popconfirm
+                title={t(
+                  'The original review base cannot be verified. Compare the review with the current merge request before continuing.',
+                )}
+                onConfirm={() => onApprove(editedMarkdown)}
+              >
+                <Button type="primary" icon={<CheckOutlined />}>
+                  {t('Save & Post')}
+                </Button>
+              </Popconfirm>
               <Button onClick={onCancelEdit}>{t('Cancel')}</Button>
             </>
           )}

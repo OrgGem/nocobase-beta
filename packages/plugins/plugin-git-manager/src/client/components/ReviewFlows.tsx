@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Table,
@@ -13,6 +22,7 @@ import {
   message,
   Empty,
   Tooltip,
+  Alert,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BranchesOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
@@ -22,6 +32,7 @@ import { LLMServiceSelect } from './LLMServiceSelect';
 import { LLMModelSelect } from './LLMModelSelect';
 import { REVIEW_PROMPT_TEMPLATES } from '../promptTemplates';
 import { useT } from '../locale';
+import { workflowHref } from '../workflowRoutes';
 
 const TRIGGER_LABELS: Record<string, string> = {
   manual: 'Manual',
@@ -37,7 +48,8 @@ const POST_LABELS: Record<string, string> = {
 
 export const ReviewFlows: React.FC = () => {
   const t = useT();
-  const api = useApp().apiClient;
+  const app = useApp();
+  const api = app.apiClient;
   const { repos } = useGitManager();
   const [flows, setFlows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -216,6 +228,19 @@ export const ReviewFlows: React.FC = () => {
         destroyOnClose
       >
         <Form form={form} layout="vertical">
+          {editing?.workflowId && (
+            <Alert
+              type="info"
+              showIcon
+              message={t('Edit the AI employee, model and prompt in the bound workflow')}
+              action={
+                <Button href={workflowHref(app, 'workflow', editing.workflowId)} target="_blank" rel="noreferrer">
+                  {t('Open workflow')}
+                </Button>
+              }
+              style={{ marginBottom: 16 }}
+            />
+          )}
           <Form.Item name="name" label={t('Name')} rules={[{ required: true }]}>
             <Input placeholder={t('e.g. Default review flow')} />
           </Form.Item>
@@ -226,31 +251,38 @@ export const ReviewFlows: React.FC = () => {
               options={repos.map((r: any) => ({ value: r.id, label: r.name }))}
             />
           </Form.Item>
-          <Form.Item name="aiEmployeeUsername" label={t('AI Employee')} rules={[{ required: true }]}>
+          <Form.Item
+            name="aiEmployeeUsername"
+            label={t('AI Employee')}
+            rules={[{ required: true }]}
+            hidden={!!editing?.workflowId}
+          >
             <AIEmployeeSelect placeholder={t('Select an AI employee')} />
           </Form.Item>
-          <Space.Compact style={{ width: '100%' }}>
-            <Form.Item name="llmService" label={t('LLM Service (optional)')} style={{ flex: 1, marginRight: 8 }}>
-              <LLMServiceSelect placeholder={t('Override flow LLM service')} />
-            </Form.Item>
-            <Form.Item
-              noStyle
-              shouldUpdate={(prevValues, currentValues) => prevValues.llmService !== currentValues.llmService}
-            >
-              {({ getFieldValue }) => {
-                const llmService = getFieldValue('llmService');
-                return (
-                  <Form.Item name="model" label={t('Model (optional)')} style={{ flex: 1 }}>
-                    {llmService ? (
-                      <LLMModelSelect llmService={llmService} placeholder={t('Override LLM model')} />
-                    ) : (
-                      <Input placeholder={t('Select an LLM service first')} disabled />
-                    )}
-                  </Form.Item>
-                );
-              }}
-            </Form.Item>
-          </Space.Compact>
+          {!editing?.workflowId && (
+            <Space.Compact style={{ width: '100%' }}>
+              <Form.Item name="llmService" label={t('LLM Service (optional)')} style={{ flex: 1, marginRight: 8 }}>
+                <LLMServiceSelect placeholder={t('Override flow LLM service')} />
+              </Form.Item>
+              <Form.Item
+                noStyle
+                shouldUpdate={(prevValues, currentValues) => prevValues.llmService !== currentValues.llmService}
+              >
+                {({ getFieldValue }) => {
+                  const llmService = getFieldValue('llmService');
+                  return (
+                    <Form.Item name="model" label={t('Model (optional)')} style={{ flex: 1 }}>
+                      {llmService ? (
+                        <LLMModelSelect llmService={llmService} placeholder={t('Override LLM model')} />
+                      ) : (
+                        <Input placeholder={t('Select an LLM service first')} disabled />
+                      )}
+                    </Form.Item>
+                  );
+                }}
+              </Form.Item>
+            </Space.Compact>
+          )}
           <Form.Item
             name="triggerMode"
             label={t('Trigger Mode')}
@@ -265,7 +297,20 @@ export const ReviewFlows: React.FC = () => {
               ]}
             />
           </Form.Item>
-          <Form.Item name="postMode" label={t('Post Mode')} rules={[{ required: true }]}>
+          <Form.Item
+            name="reviewOnNewCommits"
+            label={t('Review new commits automatically')}
+            valuePropName="checked"
+            extra={t('Only applies to automatic merge request reviews')}
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            name="postMode"
+            label={t('Post Mode')}
+            rules={[{ required: true }]}
+            extra={editing?.workflowId ? t('Reconfigure the workflow after changing post mode') : undefined}
+          >
             <Select
               options={[
                 { value: 'auto', label: t('Auto post to MR') },
@@ -277,22 +322,26 @@ export const ReviewFlows: React.FC = () => {
           <Form.Item name="branchFilter" label={t('Branch Filter (regex, optional)')}>
             <Input placeholder="^(feature|hotfix)/.*$" />
           </Form.Item>
-          <Form.Item label={t('Prompt template')} extra={t('Selecting a template replaces the instructions text')}>
-            <Select
-              allowClear
-              value={templateKey}
-              placeholder={t('Load a default prompt by code type')}
-              options={REVIEW_PROMPT_TEMPLATES.map((tpl) => ({ value: tpl.key, label: t(tpl.label) }))}
-              onChange={(key) => {
-                setTemplateKey(key);
-                const tpl = REVIEW_PROMPT_TEMPLATES.find((item) => item.key === key);
-                if (tpl) form.setFieldsValue({ instructions: tpl.text });
-              }}
-            />
-          </Form.Item>
-          <Form.Item name="instructions" label={t('Additional Instructions (optional)')}>
-            <Input.TextArea rows={8} placeholder={t('Extra guidance appended to every review prompt')} />
-          </Form.Item>
+          {!editing?.workflowId && (
+            <Form.Item label={t('Prompt template')} extra={t('Selecting a template replaces the instructions text')}>
+              <Select
+                allowClear
+                value={templateKey}
+                placeholder={t('Load a default prompt by code type')}
+                options={REVIEW_PROMPT_TEMPLATES.map((tpl) => ({ value: tpl.key, label: t(tpl.label) }))}
+                onChange={(key) => {
+                  setTemplateKey(key);
+                  const tpl = REVIEW_PROMPT_TEMPLATES.find((item) => item.key === key);
+                  if (tpl) form.setFieldsValue({ instructions: tpl.text });
+                }}
+              />
+            </Form.Item>
+          )}
+          {!editing?.workflowId && (
+            <Form.Item name="instructions" label={t('Additional Instructions (optional)')}>
+              <Input.TextArea rows={8} placeholder={t('Extra guidance appended to every review prompt')} />
+            </Form.Item>
+          )}
           <Form.Item name="enabled" label={t('Enabled')} valuePropName="checked">
             <Switch />
           </Form.Item>

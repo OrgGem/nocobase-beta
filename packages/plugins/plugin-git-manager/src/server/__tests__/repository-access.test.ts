@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { enforceRepositoryAccess, enforceRepositoryCollectionAccess } from '../repository-access';
 import { vi } from 'vitest';
 
@@ -429,9 +438,8 @@ describe('Git Manager repository collection access', () => {
       filter: { $and: [{ id: { $in: [] } }] },
     });
 
-    await enforceRepositoryCollectionAccess(context, vi.fn());
-
-    expect(mergeParams).toHaveBeenCalledWith({ filter: { repositoryId: { $in: [] } } });
+    await expect(enforceRepositoryCollectionAccess(context, vi.fn())).rejects.toMatchObject({ status: 403 });
+    expect(mergeParams).not.toHaveBeenCalled();
   });
 
   it.each(['gitAccounts', 'gitCodeReviews'])(
