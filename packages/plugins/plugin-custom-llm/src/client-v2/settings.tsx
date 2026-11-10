@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { EnvVariableInput } from '@nocobase/client-v2';
 import { ModelSelect } from '@nocobase/plugin-ai/client-v2';
 import { Checkbox, Collapse, Form, Input, InputNumber, Select } from 'antd';
@@ -51,7 +60,17 @@ export function ProviderSettingsForm() {
       >
         <Input.TextArea
           rows={6}
-          placeholder={JSON.stringify({ extraHeaders: {}, extraBody: {}, modelKwargs: {} }, null, 2)}
+          placeholder={JSON.stringify(
+            {
+              extraHeaders: {},
+              extraBody: {},
+              modelKwargs: {},
+              useReasoningEffort: false,
+              useSessionPromptCache: false,
+            },
+            null,
+            2,
+          )}
         />
       </Form.Item>
       <Form.Item

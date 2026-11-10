@@ -8,7 +8,14 @@
  */
 
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import axios from 'axios';
+
+const serverRequestMock = vi.hoisted(() => vi.fn());
+
+vi.mock('@nocobase/utils', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@nocobase/utils')>();
+  return { ...original, serverRequest: serverRequestMock };
+});
+
 import { createMappingFetch, stripGeminiThoughtSuffix, CustomLLMProvider } from '../llm-providers/custom-llm';
 
 const CONTENT_PATH = 'choices.0.delta.content';
@@ -94,7 +101,10 @@ describe('stripGeminiThoughtSuffix', () => {
 });
 
 describe('CustomLLMProvider.listModels', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    serverRequestMock.mockReset();
+  });
 
   function makeApp() {
     return {
@@ -104,9 +114,9 @@ describe('CustomLLMProvider.listModels', () => {
   }
 
   it('builds URL + Bearer header and maps ids via dataPath/idPath', async () => {
-    const getSpy = vi.spyOn(axios, 'get').mockResolvedValue({
+    serverRequestMock.mockResolvedValue({
       data: { result: { list: [{ name: 'm-a' }, { name: 'm-b' }] } },
-    } as any);
+    });
 
     const provider = new CustomLLMProvider({
       app: makeApp(),
@@ -125,16 +135,20 @@ describe('CustomLLMProvider.listModels', () => {
 
     const result = await provider.listModels();
     expect(result.models).toEqual([{ id: 'm-a' }, { id: 'm-b' }]);
-    expect(getSpy).toHaveBeenCalledTimes(1);
-    const [url, config] = getSpy.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
-    expect(url).toBe('https://api.example.com/custom/models');
-    expect(config.headers).toMatchObject({ Authorization: 'Bearer sk-test', 'X-Tenant': 't1' });
+    expect(serverRequestMock).toHaveBeenCalledTimes(1);
+    expect(serverRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: 'GET',
+        url: 'https://api.example.com/custom/models',
+        headers: expect.objectContaining({ Authorization: 'Bearer sk-test', 'X-Tenant': 't1' }),
+      }),
+    );
   });
 
   it('uses x-api-key header for auth=api-key', async () => {
-    const getSpy = vi.spyOn(axios, 'get').mockResolvedValue({
+    serverRequestMock.mockResolvedValue({
       data: { data: [{ id: 'gpt-4' }] },
-    } as any);
+    });
 
     const provider = new CustomLLMProvider({
       app: makeApp(),
@@ -147,9 +161,12 @@ describe('CustomLLMProvider.listModels', () => {
 
     const result = await provider.listModels();
     expect(result.models).toEqual([{ id: 'gpt-4' }]);
-    const [, config] = getSpy.mock.calls[0] as unknown as [string, { headers: Record<string, string> }];
-    expect(config.headers['x-api-key']).toBe('sk-test');
-    expect(config.headers.Authorization).toBeUndefined();
+    expect(serverRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'x-api-key': 'sk-test' }),
+      }),
+    );
+    expect(serverRequestMock.mock.calls[0]?.[0].headers).not.toHaveProperty('Authorization');
   });
 
   it('returns code/errMsg when baseURL is missing', async () => {

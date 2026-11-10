@@ -23,7 +23,7 @@
   "Keepalive interval (ms)": "Keepalive interval (ms)",
   "Keepalive interval description": "Interval in milliseconds between keepalive signals. Default: 5000 (5 seconds).",
   "Request config (JSON)": "Request config (JSON)",
-  "Request config description": "Extra configuration for LLM requests. Supported keys: extraHeaders (custom HTTP headers), extraBody (extra request body fields), modelKwargs (LangChain model kwargs).",
+  "Request config description": "Extra LLM request configuration: extraHeaders, extraBody, modelKwargs, useReasoningEffort, and useSessionPromptCache. Enable the last two only if your endpoint supports them.",
   "Response config (JSON)": "Response config (JSON)",
   "Response config description": "Configure response parsing. contentPath: 'auto' or dot-path. reasoningKey: key for reasoning content. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — maps non-standard LLM response to OpenAI format. tool_calls/finish_reason are auto-detected if not specified.",
   "Models config (JSON)": "Models config (JSON)",

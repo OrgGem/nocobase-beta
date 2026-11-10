@@ -87,6 +87,8 @@ export const ProviderSettingsForm: React.FC = () => {
                   extraHeaders: {},
                   extraBody: {},
                   modelKwargs: {},
+                  useReasoningEffort: false,
+                  useSessionPromptCache: false,
                 },
                 null,
                 2,

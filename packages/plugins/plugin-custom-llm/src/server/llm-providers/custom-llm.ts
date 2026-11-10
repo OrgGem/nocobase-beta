@@ -11,9 +11,9 @@ import { LLMProvider, LLMProviderMeta } from '@nocobase/plugin-ai';
 import { EmbeddingProvider, SupportedModel } from '../utils/ai-types';
 import { EmbeddingsInterface } from '@langchain/core/embeddings';
 import { Model } from '@nocobase/database';
+import type { AttachmentModel, PluginFileManagerServer } from '@nocobase/plugin-file-manager';
+import { serverRequest } from '@nocobase/utils';
 import path from 'node:path';
-import fs from 'node:fs/promises';
-import axios from 'axios';
 import { Context } from '@nocobase/actions';
 
 // Keepalive marker — zero-width space prefix to distinguish from real content
@@ -1178,11 +1178,17 @@ export class CustomLLMProvider extends LLMProvider {
     return safeParseJSON(this.serviceOptions?.responseConfig, 'responseConfig');
   }
 
+  private getProviderDefaultHeaders(): Record<string, string> {
+    return typeof this.getDefaultHeaders === 'function' ? this.getDefaultHeaders() : {};
+  }
+
   createModel() {
     const { apiKey, disableStream, timeout, streamKeepAlive, keepAliveIntervalMs, enableReasoning } =
       this.serviceOptions || {};
     // baseURL comes from core's options.baseURL field
     const baseURL = this.serviceOptions?.baseURL;
+    const parsedBaseURL = baseURL ? new URL(baseURL) : undefined;
+    const isOpenAI = parsedBaseURL?.protocol === 'https:' && parsedBaseURL.hostname === 'api.openai.com';
     const {
       responseFormat,
       jsonSchemaDefinition,
@@ -1194,7 +1200,8 @@ export class CustomLLMProvider extends LLMProvider {
     const reqConfig = this.requestConfig;
     const resConfig = this.responseConfig;
 
-    const modelKwargs: Record<string, any> = {
+    const reasoningMode = this.modelReasoningOptions?.mode;
+    const modelKwargs: Record<string, unknown> = {
       ...(reqConfig.modelKwargs || {}),
     };
 
@@ -1234,6 +1241,29 @@ export class CustomLLMProvider extends LLMProvider {
       verbose: false,
     };
 
+    if (
+      (isOpenAI || reqConfig.useReasoningEffort === true) &&
+      reasoningMode &&
+      reasoningMode !== 'default' &&
+      langchainModelOptions.reasoning == null &&
+      !Object.prototype.hasOwnProperty.call(modelKwargs, 'reasoning') &&
+      !Object.prototype.hasOwnProperty.call(modelKwargs, 'reasoning_effort')
+    ) {
+      config.reasoning = { effort: reasoningMode === 'off' ? 'none' : reasoningMode };
+    }
+
+    // Generic OpenAI-compatible endpoints may reject prompt_cache_key, so only OpenAI receives
+    // an automatic session key. Other endpoints can opt in using requestConfig.
+    if (Object.prototype.hasOwnProperty.call(modelKwargs, 'prompt_cache_key')) {
+      config.promptCacheKey = modelKwargs.prompt_cache_key;
+    } else if (
+      (isOpenAI || reqConfig.useSessionPromptCache === true) &&
+      this.requestContext?.sessionId &&
+      langchainModelOptions.promptCacheKey == null
+    ) {
+      config.promptCacheKey = this.requestContext.sessionId;
+    }
+
     // Disable streaming for models with long thinking phases
     // that return empty stream values causing processing to terminate
     if (disableStream) {
@@ -1247,9 +1277,10 @@ export class CustomLLMProvider extends LLMProvider {
     config.timeout = effectiveTimeoutMs;
     config.configuration.timeout = effectiveTimeoutMs;
 
-    // Apply extra headers
+    // Preserve base provider headers (for example OpenCode's per-session headers).
+    config.configuration.defaultHeaders = this.getProviderDefaultHeaders();
     if (reqConfig.extraHeaders && typeof reqConfig.extraHeaders === 'object') {
-      config.configuration.defaultHeaders = reqConfig.extraHeaders;
+      config.configuration.defaultHeaders = { ...config.configuration.defaultHeaders, ...reqConfig.extraHeaders };
     }
 
     // Apply response mapping via custom fetch — pass timeout for fetch-level protection (Issue #7)
@@ -1308,6 +1339,7 @@ export class CustomLLMProvider extends LLMProvider {
     }
 
     const headers: Record<string, string> = {
+      ...this.getProviderDefaultHeaders(),
       ...(modelsConfig.headers && typeof modelsConfig.headers === 'object' ? modelsConfig.headers : {}),
     };
     if (auth === 'bearer') {
@@ -1317,7 +1349,7 @@ export class CustomLLMProvider extends LLMProvider {
     }
 
     try {
-      const response = await axios.get(url, { headers, timeout: 30_000 });
+      const response = await serverRequest({ method: 'GET', url, headers, timeout: 30_000 });
       const body = response.data;
       const rawItems = getByPath(body, modelsConfig.dataPath || 'data');
 
@@ -1414,7 +1446,7 @@ export class CustomLLMProvider extends LLMProvider {
   }
 
   parseResponseMessage(message: Model) {
-    const { content: rawContent, messageId, metadata, role, toolCalls, attachments, workContext } = message;
+    const { content: rawContent, messageId, metadata, role, toolCalls, attachments, workContext, createdAt } = message;
     const content: Record<string, any> = {
       ...(rawContent ?? {}),
       messageId,
@@ -1449,6 +1481,7 @@ export class CustomLLMProvider extends LLMProvider {
 
     return {
       key: messageId,
+      createdAt,
       content,
       role,
     };
@@ -1504,83 +1537,22 @@ export class CustomLLMProvider extends LLMProvider {
     return err?.message ?? 'Unexpected LLM service error';
   }
 
-  /**
-   * Self-contained file reading that correctly handles the APP_PUBLIC_PATH prefix.
-   *
-   * plugin-ai's encodeLocalFile does path.join(cwd, url) without stripping
-   * APP_PUBLIC_PATH, so when the app is deployed under a sub-path (e.g. /my-app)
-   * the resolved path becomes '{cwd}/my-app/storage/uploads/…' which does not exist.
-   * We cannot fix that in plugin-ai (core), so we re-implement file reading here
-   * with the prefix stripped before the cwd join.
-   */
-  /**
-   * Reads the attachment and returns its base64-encoded content plus, when the
-   * file lives on the local filesystem, the resolved absolute path so callers
-   * can hand that path directly to tools like DocPixie and avoid a second
-   * write-to-disk round-trip.
-   */
-  private async readFileData(ctx: Context, attachment: any): Promise<{ base64: string; absPath?: string }> {
-    const fileManager = this.app.pm.get('file-manager') as any;
-    const rawUrl: string = await fileManager.getFileURL(attachment);
-    const url = decodeURIComponent(rawUrl);
-
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      const referer = ctx.get('referer') || '';
-      const ua = ctx.get('user-agent') || '';
-      const response = await axios.get(url, {
-        responseType: 'arraybuffer',
-        timeout: 30_000,
-        headers: { referer, 'User-Agent': ua },
-      });
-      return { base64: Buffer.from(response.data).toString('base64') };
-    }
-
-    // Internal API stream URL (e.g. s3-private-storage proxy) — read directly via fileManager
-    if (url.includes('/api/attachments:stream')) {
-      const rawStorageId =
-        attachment.storageId ||
-        (typeof attachment.get === 'function' ? attachment.get('storageId') : attachment.storageId);
-      let matchedKey = null;
-      if (rawStorageId) {
-        const strId = String(rawStorageId);
-        for (const key of fileManager.storagesCache.keys()) {
-          if (String(key) === strId) {
-            matchedKey = key;
-            break;
+  private async readFileData(ctx: Context, attachment: AttachmentModel): Promise<Buffer> {
+    const fileManager = this.app.pm.get('file-manager') as PluginFileManagerServer;
+    const options =
+      typeof ctx.get === 'function'
+        ? {
+            requestOptions: {
+              headers: { Referer: ctx.get('referer') || '', 'User-Agent': ctx.get('user-agent') || '' },
+            },
           }
-        }
-      }
-
-      const attachmentObj = typeof attachment.toJSON === 'function' ? attachment.toJSON() : { ...attachment };
-      if (matchedKey !== null) {
-        attachmentObj.storageId = matchedKey;
-      }
-
-      const { stream } = await fileManager.getFileStream(attachmentObj);
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream) {
-        chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
-      }
-      return { base64: Buffer.concat(chunks).toString('base64') };
+        : undefined;
+    const { stream } = await fileManager.getFileStream(attachment, options);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
-
-    // Local file — strip APP_PUBLIC_PATH prefix before joining with cwd
-    let localPath = url;
-    const appPublicPath = (process.env.APP_PUBLIC_PATH || '/').replace(/\/+$/, '');
-    if (appPublicPath && localPath.startsWith(appPublicPath + '/')) {
-      localPath = localPath.slice(appPublicPath.length);
-    }
-
-    // Resolve and guard against path traversal
-    const storageRoot = path.resolve(process.cwd());
-    const absPath = path.resolve(storageRoot, localPath.replace(/^\//, ''));
-    if (!absPath.startsWith(storageRoot + path.sep) && absPath !== storageRoot) {
-      throw new Error(`Attachment path escapes storage root: ${localPath}`);
-    }
-
-    const data = await fs.readFile(absPath);
-    // Return absPath so parseAttachment can pass it directly to DocPixie
-    return { base64: Buffer.from(data).toString('base64'), absPath };
+    return Buffer.concat(chunks);
   }
 
   /**
@@ -1647,29 +1619,16 @@ export class CustomLLMProvider extends LLMProvider {
    * Returns a formatted `<processed_document>` context block the LLM can use immediately,
    * plus a clear instruction to call the RAG tool with the returned documentId for details.
    *
-   * Prefers passing `absPath` directly for local-storage files to avoid a second
-   * write-to-disk round-trip. Falls back to Buffer for remote / S3 files.
-   *
    * Returns null if DocPixie is unavailable, not configured, or processing fails.
    */
-  private async tryDocPixieFullProcess(
-    fileData: { base64: string; absPath?: string },
-    filename: string,
-    ctx: Context,
-  ): Promise<string | null> {
+  private async tryDocPixieFullProcess(fileData: Buffer, filename: string, ctx: Context): Promise<string | null> {
     try {
       const docpixie = this.app.pm.get('docpixie') as any;
       if (!docpixie?.service?.isReady?.()) return null;
 
       const userId: number | undefined = ctx.state?.currentUser?.id;
-      let result: { documentId: number; summary: string; pageCount: number };
-
-      if (fileData.absPath) {
-        result = await docpixie.service.processDocumentFromPath(fileData.absPath, filename, { userId });
-      } else {
-        const buffer = Buffer.from(fileData.base64, 'base64');
-        result = await docpixie.service.processDocumentFromBuffer(buffer, filename, { userId });
-      }
+      const result: { documentId: number; summary: string; pageCount: number } =
+        await docpixie.service.processDocumentFromBuffer(fileData, filename, { userId });
 
       const { documentId, summary, pageCount } = result;
       const summaryText = summary?.trim() || 'No summary available.';
@@ -1688,37 +1647,31 @@ export class CustomLLMProvider extends LLMProvider {
 
   /**
    * Try to extract text from an attachment using DocPixie (transient — no DB indexing).
-   * When `absPath` is provided (local-storage file), DocPixie reads the file
-   * directly — no Buffer decode/re-encode or extra temp-file write.
-   * Falls back to `extractTextFromBuffer` for remote/S3 files.
    * Returns null if DocPixie is unavailable, not ready, or file type unsupported.
    */
-  private async tryDocPixieExtract(
-    fileData: { base64: string; absPath?: string },
-    filename: string,
-  ): Promise<string | null> {
+  private async tryDocPixieExtract(fileData: Buffer, filename: string): Promise<string | null> {
     try {
       const docpixie = this.app.pm.get('docpixie') as any;
       if (!docpixie?.service) return null;
-      let text: string;
-      if (fileData.absPath) {
-        text = await docpixie.service.extractTextFromPath(fileData.absPath, filename);
-      } else {
-        const buffer = Buffer.from(fileData.base64, 'base64');
-        text = await docpixie.service.extractTextFromBuffer(buffer, filename);
-      }
+      const text: string = await docpixie.service.extractTextFromBuffer(fileData, filename);
       return text || null;
     } catch {
       return null;
     }
   }
 
-  async parseAttachment(ctx: Context, attachment: any) {
+  async parseAttachment(ctx: Context, attachment: AttachmentModel) {
+    const isExternalAttachment = Boolean(
+      attachment?.source?.dataSourceKey && attachment.source.dataSourceKey !== 'main',
+    );
+    if ((!attachment?.storageId && !isExternalAttachment) || !attachment?.filename) {
+      return super.parseAttachment(ctx, attachment);
+    }
     const mimetype: string = attachment.mimetype || 'application/octet-stream';
     // basename only — raw filenames are interpolated into prompt XML below
-    const filename: string = path.basename(String(attachment.filename || attachment.name || 'file'));
+    const filename = path.basename(attachment.filename);
     const fileData = await this.readFileData(ctx, attachment);
-    const { base64: data } = fileData;
+    const data = fileData.toString('base64');
 
     const { enableVision } = this.modelOptions || {};
     const isImage = mimetype.startsWith('image/');
@@ -1794,7 +1747,7 @@ export class CustomLLMProvider extends LLMProvider {
     let textContent: string;
     if (isTextMimetype(mimetype)) {
       // Decode to readable UTF-8 so the model can actually read the content
-      const decoded = Buffer.from(data, 'base64').toString('utf-8');
+      const decoded = fileData.toString('utf-8');
       textContent = `<attachment filename="${filename}" type="${mimetype}">\n${decoded}\n</attachment>`;
     } else {
       // Binary non-image: embed as data-URI; multi-modal models may process it,

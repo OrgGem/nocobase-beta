@@ -23,7 +23,7 @@
   "Keepalive interval (ms)": "Khoảng thời gian keepalive (ms)",
   "Keepalive interval description": "Khoảng thời gian giữa các tín hiệu keepalive, tính bằng mili giây. Mặc định: 5000 (5 giây).",
   "Request config (JSON)": "Cấu hình request (JSON)",
-  "Request config description": "Cấu hình bổ sung cho request LLM. Các key hỗ trợ: extraHeaders (HTTP headers tùy chỉnh), extraBody (thêm trường vào request body), modelKwargs (tham số model LangChain).",
+  "Request config description": "Cấu hình request LLM: extraHeaders, extraBody, modelKwargs, useReasoningEffort và useSessionPromptCache. Chỉ bật hai tùy chọn cuối khi endpoint hỗ trợ.",
   "Response config (JSON)": "Cấu hình response (JSON)",
   "Response config description": "Cấu hình parse response. contentPath: 'auto' hoặc dot-path. reasoningKey: key reasoning. responseMapping: { content: 'dot.path', tool_calls: 'dot.path', finish_reason: 'dot.path' } — mapping response không chuẩn OpenAI. tool_calls/finish_reason tự động phát hiện nếu không chỉ định.",
   "Models config (JSON)": "Cấu hình danh sách model (JSON)",
