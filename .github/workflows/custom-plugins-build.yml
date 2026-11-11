@@ -156,6 +156,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           yarn install --frozen-lockfile --network-timeout 600000
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build Git Manager prerequisite
+        if: steps.release.outputs.build == 'true' && matrix.plugin == 'plugin-workflow-git-review'
+        shell: pwsh
+        run: |
+          # Build from this job's pinned checkout before the workflow plugin bundles its dependency.
+          yarn nocobase build plugin-git-manager --no-dts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path 'node_modules/plugin-git-manager/dist/server/index.js' -PathType Leaf)) {
+            throw 'Git Manager prerequisite server build is missing'
+          }
       - name: Build and pack this plugin
         if: steps.release.outputs.build == 'true'
         shell: pwsh
