@@ -4,7 +4,7 @@ Tài liệu này mô tả quy trình staging/cutover/rollback dự kiến. Chưa
 
 ## Prerequisites
 
-- Dùng các package cùng một bản tương thích: `plugin-build-guide-block@1.1.14` và `plugin-workflow-build-guide@0.1.0`.
+- Dùng các package cùng một bản tương thích: `plugin-build-guide-block@1.1.15` và `plugin-workflow-build-guide@0.1.1`.
 - Bật sẵn các plugin AI, Workflow và Workflow Loop mà graph cần. Adapter phụ thuộc vào Build Guide, AI, Workflow và Loop; không cài adapter trước plugin phụ thuộc.
 - Xác nhận mọi HTTP và Workflow worker instance chạy cùng bản code. Nếu triển khai tách worker `workflow:process`, kiểm chứng role/queue đó riêng trong staging; validation receipt hiện chỉ xác nhận worker trong tiến trình `getApp`.
 - Sao lưu database và tệp đính kèm trước upgrade. Các collection/field mới đồng bộ qua quy trình `yarn nocobase upgrade` của môi trường; chưa chạy lệnh này trong công việc hiện tại.

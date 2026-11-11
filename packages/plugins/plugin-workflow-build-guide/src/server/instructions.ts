@@ -86,6 +86,7 @@ type StepClaim =
 const ERROR_CODES = new Set([
   'SOURCE_CHANGED',
   'SOURCE_ACCESS_DENIED',
+  'SOURCE_NO_USABLE_TEXT',
   'INVALID_PLAN',
   'PROVIDER_UNAVAILABLE',
   'UNKNOWN_OUTCOME',
@@ -711,10 +712,13 @@ export class GuidePrepareInstruction extends Instruction {
         );
         await resumeSavedJob(this.workflow, job.id, processor);
       } catch (error) {
+        const sourceCode = isRecord(error) && typeof error.code === 'string' ? error.code : undefined;
         const code =
           error instanceof Error && error.message === 'A source attachment changed before snapshotting'
             ? 'SOURCE_CHANGED'
-            : 'SOURCE_ACCESS_DENIED';
+            : sourceCode === 'SOURCE_NO_USABLE_TEXT'
+              ? sourceCode
+              : 'SOURCE_ACCESS_DENIED';
         await failRun(this.workflow, run, processor.execution.id, code, step.stepId, job.id);
         await resumeSavedJob(this.workflow, job.id, processor);
       } finally {

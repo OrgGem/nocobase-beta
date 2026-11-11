@@ -47,10 +47,6 @@ const BUILD_GUIDE_QUEUE_POLL_INTERVAL_MS = Math.max(
 const BUILD_GUIDE_QUEUE_WAKE_CHANNEL = 'plugin-build-guide-block.build.wake';
 const BUILD_GUIDE_QUEUE_REDIS_CONNECTION = 'plugin-build-guide-block.build.queue';
 const BUILD_TRIGGER_LOCK_TTL_MS = 30_000;
-const BUILD_RUN_LOCK_TTL_MS = Math.max(
-  60_000,
-  Number.parseInt(process.env.BUILD_GUIDE_RUN_LOCK_TTL_MS || '', 10) || 24 * 60 * 60 * 1000,
-);
 const BUILD_HEARTBEAT_INTERVAL_MS = Math.max(
   5_000,
   Number.parseInt(process.env.BUILD_GUIDE_HEARTBEAT_MS || '', 10) || 30_000,
@@ -59,6 +55,11 @@ const BUILD_STALE_MS = Math.max(
   BUILD_HEARTBEAT_INTERVAL_MS * 2,
   Number.parseInt(process.env.BUILD_GUIDE_STALE_MS || '', 10) || 120_000,
 );
+const BUILD_RECOVERY_INTERVAL_MS = Math.max(
+  BUILD_GUIDE_QUEUE_POLL_INTERVAL_MS,
+  Number.parseInt(process.env.BUILD_GUIDE_RECOVERY_INTERVAL_MS || '', 10) || 30_000,
+);
+const BUILD_RECOVERY_BATCH_SIZE = 100;
 
 const TEXT_EXTENSIONS = new Set([
   '.txt',
@@ -169,6 +170,7 @@ type BuildGuideQueueMessage = {
 type BuildRunContext = {
   spaceId: string;
   runId: string;
+  workerId?: string;
 };
 
 export type BuildGuideInputSnapshot = {
@@ -181,6 +183,18 @@ export type BuildGuideInputSnapshot = {
   chapterGuidance: string;
   documentsText: string;
   sourceHash: string;
+  sourceWarnings?: BuildGuideSourceWarning[];
+};
+
+export type BuildGuideSourceWarning = {
+  code: 'SOURCE_UNSUPPORTED' | 'SOURCE_READ_FAILED' | 'SOURCE_PARSE_FAILED' | 'SOURCE_EMPTY';
+  documentId: string;
+  filename: string;
+};
+
+type BuildGuideDocumentRead = {
+  documentsText: string;
+  sourceWarnings: BuildGuideSourceWarning[];
 };
 
 export type BuildGuideInputDescriptor = Omit<BuildGuideInputSnapshot, 'documentsText' | 'sourceHash'> & {
@@ -197,11 +211,24 @@ let buildQueueTimer: NodeJS.Timeout | null = null;
 let buildQueueKickTimer: NodeJS.Timeout | null = null;
 let buildQueueProcessing = false;
 let buildQueueWakeHandler: ((message?: any) => Promise<void>) | null = null;
+let buildRecoveryTimer: NodeJS.Timeout | null = null;
+let buildRecoveryProcessing = false;
+let buildRecoveryCursor: string | null = null;
+let buildQueueRunCursor: { createdAt: Date; id: string } | null = null;
 
 class StaleBuildRunError extends Error {
   constructor(spaceId: string, runId: string) {
     super(`Build run ${runId} for space ${spaceId} is no longer current`);
     this.name = 'StaleBuildRunError';
+  }
+}
+
+class BuildGuideSourceError extends Error {
+  readonly code = 'SOURCE_NO_USABLE_TEXT';
+
+  constructor(readonly sourceWarnings: BuildGuideSourceWarning[]) {
+    super('No configured source documents could be read');
+    this.name = 'BuildGuideSourceError';
   }
 }
 
@@ -273,31 +300,40 @@ function getDocumentParserPlugin(app: any) {
   return app.pm?.get?.('@nocobase/plugin-document-parser') || app.pm?.get?.('plugin-document-parser') || null;
 }
 
-function unsupportedDocumentMessage(file: any) {
-  const filename = file?.filename || file?.name || file?.id || 'document';
-  const type = file?.mimetype || resolveExtname(file) || 'unknown type';
-  return `[Unsupported document type: ${filename} (${type}). Enable and configure Document Parser to extract this file.]`;
+function sourceWarning(file: any, code: BuildGuideSourceWarning['code']): BuildGuideSourceWarning {
+  const filename = String(file?.filename || file?.name || 'document');
+  return {
+    code,
+    documentId: String(file?.id ?? ''),
+    filename: path.basename(filename).slice(0, 160),
+  };
 }
 
-async function fetchTextFileContent(app: any, file: any): Promise<string> {
+type SourceReadOutcome = { text: string; warning?: BuildGuideSourceWarning };
+
+function sourceTextOutcome(file: any, value: string): SourceReadOutcome {
+  const text = value.trim();
+  return text ? { text } : { text: '', warning: sourceWarning(file, 'SOURCE_EMPTY') };
+}
+
+async function fetchTextFileContent(app: any, file: any): Promise<SourceReadOutcome> {
   if (!isTextDocument(file)) {
-    return unsupportedDocumentMessage(file);
+    return { text: '', warning: sourceWarning(file, 'SOURCE_UNSUPPORTED') };
   }
 
   const docParserPlugin = getDocumentParserPlugin(app);
-  if (docParserPlugin?.fetchFileBuffer) {
-    const { buffer } = await docParserPlugin.fetchFileBuffer(createParserContext(app), file);
-    return buffer.toString('utf8');
-  }
-
-  const fileManager = app.pm.get('file-manager') as PluginFileManagerServer;
-  if (!fileManager) return '';
-  const url = await fileManager.getFileURL(file);
-
   try {
+    if (docParserPlugin?.fetchFileBuffer) {
+      const { buffer } = await docParserPlugin.fetchFileBuffer(createParserContext(app), file);
+      return sourceTextOutcome(file, buffer.toString('utf8'));
+    }
+
+    const fileManager = app.pm?.get?.('file-manager') as PluginFileManagerServer | undefined;
+    if (!fileManager) return { text: '', warning: sourceWarning(file, 'SOURCE_READ_FAILED') };
+    const url = await fileManager.getFileURL(file);
     if (url.startsWith('http')) {
       const response = await axios.get(url, { responseType: 'text', timeout: 15000 });
-      return response.data;
+      return sourceTextOutcome(file, String(response.data ?? ''));
     }
 
     let localPath = url;
@@ -305,56 +341,74 @@ async function fetchTextFileContent(app: any, file: any): Promise<string> {
       localPath = localPath.slice(process.env.APP_PUBLIC_PATH.length);
     }
     localPath = path.join(process.cwd(), localPath);
-    return await fs.promises.readFile(localPath, 'utf8');
+    return sourceTextOutcome(file, await fs.promises.readFile(localPath, 'utf8'));
   } catch (err) {
     app.log?.warn?.('[plugin-build-guide-block] Failed to read a source document', {
       errorName: err instanceof Error ? err.name : 'Error',
     });
-    return `[Failed to read document: ${file.filename}]`;
+    return { text: '', warning: sourceWarning(file, 'SOURCE_READ_FAILED') };
   }
 }
 
-async function parseWithDocumentParser(app: any, file: any): Promise<string> {
+async function parseWithDocumentParser(app: any, file: any): Promise<SourceReadOutcome | null> {
   const docParserPlugin = getDocumentParserPlugin(app);
-  if (!docParserPlugin) return '';
+  if (!docParserPlugin) return null;
 
   const parserCtx = createParserContext(app);
-  const defaultParser = async () => ({
-    placement: 'contentBlocks',
-    content: {
-      type: 'text',
-      text: await fetchTextFileContent(app, file),
-    },
-  });
+  if (docParserPlugin.documentParseService?.parseAttachment) {
+    try {
+      const result = await docParserPlugin.documentParseService.parseAttachment(parserCtx, file, { useCase: 'api' });
+      if (result?.handled && typeof result.text === 'string' && result.text.trim()) {
+        return sourceTextOutcome(file, result.text);
+      }
+      if (result?.handled) return { text: '', warning: sourceWarning(file, 'SOURCE_EMPTY') };
+      return null;
+    } catch (err) {
+      app.log?.warn?.('[plugin-build-guide-block] Document parser failed', {
+        errorName: err instanceof Error ? err.name : 'Error',
+      });
+      return { text: '', warning: sourceWarning(file, 'SOURCE_PARSE_FAILED') };
+    }
+  }
+
+  const defaultParser = async () => {
+    const result = await fetchTextFileContent(app, file);
+    return { placement: 'contentBlocks', content: { type: 'text', text: result.text } };
+  };
+
+  const isParserDirective = (text: string) =>
+    /<document_indexed\b/i.test(text) ||
+    /^\s*\[Attachment:.*(?:no parser available|unsupported|no usable text).*(?:\]|$)/i.test(text);
 
   try {
     if (docParserPlugin.parseRouter?.route) {
       const result = await docParserPlugin.parseRouter.route(parserCtx, file, defaultParser);
       const text = extractParsedText(result?.content);
-      if (text && !text.startsWith('[Unsupported document type:')) {
-        return text;
-      }
+      if (text.trim() && !isParserDirective(text)) return sourceTextOutcome(file, text);
     }
 
     if (docParserPlugin.internalParserRegistry?.parse) {
       const result = await docParserPlugin.internalParserRegistry.parse(file, parserCtx);
       if (result?.handled && result?.text?.trim()) {
-        return result.text;
+        return sourceTextOutcome(file, result.text);
       }
     }
   } catch (err) {
     app.log?.warn?.('[plugin-build-guide-block] Document parser failed', {
       errorName: err instanceof Error ? err.name : 'Error',
     });
+    return { text: '', warning: sourceWarning(file, 'SOURCE_PARSE_FAILED') };
   }
 
-  return '';
+  return null;
 }
 
-async function fetchFileContent(app: any, file: any): Promise<string> {
-  const parsedText = await parseWithDocumentParser(app, file);
-  if (parsedText) return parsedText;
-  return fetchTextFileContent(app, file);
+async function fetchFileContent(app: any, file: any): Promise<SourceReadOutcome> {
+  const parsed = await parseWithDocumentParser(app, file);
+  if (parsed?.text.trim()) return parsed;
+  const fallback = await fetchTextFileContent(app, file);
+  if (fallback.text.trim() || !parsed?.warning) return fallback;
+  return parsed;
 }
 
 export function toPlainText(value: unknown) {
@@ -725,19 +779,30 @@ export async function markdownToCleanHtml(markdown: string) {
   return sanitizeHtml(renderedHtml, SANITIZE_OPTIONS);
 }
 
-export async function readDocuments(app: any, space: any) {
+export async function readDocumentsWithMetadata(app: any, space: any): Promise<BuildGuideDocumentRead> {
   const documents = await space.getDocuments();
   if (!documents || documents.length === 0) {
-    return '';
+    return { documentsText: '', sourceWarnings: [] };
   }
 
-  const texts = await Promise.all(
-    documents.map(async (doc: any) => {
-      const content = await fetchFileContent(app, doc);
-      return `--- Document: ${doc.filename || doc.id} ---\n${content}\n`;
-    }),
+  const results = await Promise.all(
+    documents.map(async (document: any) => ({ document, outcome: await fetchFileContent(app, document) })),
   );
-  return texts.join('\n');
+  const readable = results.filter(({ outcome }) => outcome.text.trim());
+  const sourceWarnings = results
+    .filter(({ outcome }) => !outcome.text.trim())
+    .map(({ document, outcome }) => outcome.warning || sourceWarning(document, 'SOURCE_EMPTY'));
+  if (!readable.length) throw new BuildGuideSourceError(sourceWarnings);
+  return {
+    documentsText: readable
+      .map(({ document, outcome }) => `--- Document: ${document.filename || document.id} ---\n${outcome.text}\n`)
+      .join('\n'),
+    sourceWarnings,
+  };
+}
+
+export async function readDocuments(app: any, space: any) {
+  return (await readDocumentsWithMetadata(app, space)).documentsText;
 }
 
 export async function createBuildGuideInputDescriptor(space: any): Promise<BuildGuideInputDescriptor> {
@@ -793,7 +858,8 @@ export async function materializeBuildGuideInputSnapshot(
     get: (key?: string) => (key ? descriptor[key as keyof BuildGuideInputDescriptor] : descriptor),
     getDocuments: async () => documents,
   };
-  const documentsText = (await readDocuments(app, sourceSpace)).slice(0, MAX_SOURCE_CHARS);
+  const sourceRead = await readDocumentsWithMetadata(app, sourceSpace);
+  const documentsText = sourceRead.documentsText.slice(0, MAX_SOURCE_CHARS);
   for (const saved of descriptor.documents) {
     const record = await app.db.getRepository('attachments').findOne({ filterByTk: saved.id, appends: [] });
     if (!record || !matchesDescriptor(record, saved)) throw new Error('A source attachment changed while snapshotting');
@@ -808,6 +874,7 @@ export async function materializeBuildGuideInputSnapshot(
     chapterGuidance: descriptor.chapterGuidance,
     documentsText,
     sourceHash: crypto.createHash('sha256').update(documentsText).digest('hex'),
+    sourceWarnings: sourceRead.sourceWarnings,
   };
 }
 
@@ -815,35 +882,134 @@ function getSpaceModel(app: any) {
   return app.db.getModel('aiBuildGuideSpaces');
 }
 
-async function updateSpaceForRun(app: any, run: BuildRunContext, values: Record<string, any>, optional = false) {
-  const SpaceModel = getSpaceModel(app);
-  const [affected] = await SpaceModel.update(values, {
+async function lockOwnedBuildRun(app: any, run: BuildRunContext, transaction: any) {
+  const runRecord = await app.db.getCollection('aiBuildGuideRuns').model.findOne({
+    where: { id: run.runId, engine: 'legacy', status: run.workerId ? 'running' : 'queued' },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
+  });
+  const spaceRecord = await getSpaceModel(app).findOne({
     where: {
       id: run.spaceId,
+      status: 'building',
       buildRunId: run.runId,
+      ...(run.workerId ? { buildWorkerId: run.workerId } : {}),
     },
+    transaction,
+    lock: transaction.LOCK.UPDATE,
   });
-  if (!affected && !optional) {
+  if (!runRecord || !spaceRecord) throw new StaleBuildRunError(run.spaceId, run.runId);
+  return { runRecord, spaceRecord };
+}
+
+async function withOwnedBuildRun<T>(
+  app: any,
+  run: BuildRunContext,
+  fn: (runRecord: any, spaceRecord: any, transaction: any) => Promise<T>,
+) {
+  return app.db.sequelize.transaction(async (transaction: any) => {
+    const { runRecord, spaceRecord } = await lockOwnedBuildRun(app, run, transaction);
+    return fn(runRecord, spaceRecord, transaction);
+  });
+}
+
+async function updateSpaceForRun(app: any, run: BuildRunContext, values: Record<string, any>, optional = false) {
+  let updated = false;
+  try {
+    updated = await app.db.sequelize.transaction(async (transaction: any) => {
+      const { runRecord, spaceRecord } = await lockOwnedBuildRun(app, run, transaction);
+      await spaceRecord.update(values, { transaction });
+      const runValues: Record<string, unknown> = {};
+      if (typeof values.buildPhase === 'string') runValues.stage = values.buildPhase;
+      if (values.status === 'completed') {
+        runValues.status = 'completed';
+        runValues.stage = 'completed';
+        runValues.finishedAt = new Date();
+      } else if (values.status === 'error') {
+        runValues.status = 'failed';
+        runValues.stage = 'failed';
+        runValues.errorCode = values.buildLog === 'SOURCE_NO_USABLE_TEXT' ? values.buildLog : 'BUILD_FAILED';
+        runValues.finishedAt = new Date();
+      }
+      if (Object.keys(runValues).length) await runRecord.update(runValues, { transaction });
+      return true;
+    });
+  } catch (error) {
+    if (error instanceof StaleBuildRunError && optional) return false;
+    throw error;
+  }
+  if (!updated && !optional) {
     throw new StaleBuildRunError(run.spaceId, run.runId);
   }
-  if (affected) {
-    const runValues: Record<string, unknown> = {};
-    if (typeof values.buildPhase === 'string') runValues.stage = values.buildPhase;
-    if (values.status === 'completed') {
-      runValues.status = 'completed';
-      runValues.stage = 'completed';
-      runValues.finishedAt = new Date();
-    } else if (values.status === 'error') {
-      runValues.status = 'failed';
-      runValues.stage = 'failed';
-      runValues.errorCode = 'BUILD_FAILED';
-      runValues.finishedAt = new Date();
+  return updated;
+}
+
+async function buildRunStateForError(error: unknown) {
+  if (error instanceof BuildGuideSourceError) return error.code;
+  return 'BUILD_FAILED';
+}
+
+/*
+ * Keep the public terminal state and the private run row in one transaction.
+ * A stale worker cannot publish an error after recovery has transferred ownership.
+ */
+export async function markBuildError(
+  app: Application,
+  spaceId: string,
+  runId: string | undefined,
+  error: unknown,
+  workerId?: string,
+) {
+  const buildLog = await buildRunStateForError(error);
+  app.log?.warn?.('[plugin-build-guide-block] Legacy build failed', {
+    errorName: error instanceof Error ? error.name : 'Error',
+  });
+  const updated = await app.db.sequelize.transaction(async (transaction: any) => {
+    const spaceModel = getSpaceModel(app);
+    const pageModel = app.db.getCollection('aiBuildGuidePages').model;
+    if (runId) {
+      const run = await app.db.getCollection('aiBuildGuideRuns').model.findOne({
+        where: { id: runId, engine: 'legacy', status: workerId ? 'running' : 'queued' },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const space = await spaceModel.findOne({
+        where: {
+          id: spaceId,
+          status: 'building',
+          buildRunId: runId,
+          ...(workerId ? { buildWorkerId: workerId } : {}),
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!run || !space) return false;
+      await space.update(
+        { status: 'error', buildPhase: 'error', buildLog, buildHeartbeatAt: new Date(), activeRunId: null },
+        { transaction },
+      );
+      await run.update(
+        { status: 'failed', stage: 'failed', errorCode: buildLog, finishedAt: new Date() },
+        { transaction },
+      );
+      await pageModel.update(
+        { status: 'error', buildLog },
+        { where: { spaceId, runId, status: 'pending' }, transaction },
+      );
+      return true;
     }
-    if (Object.keys(runValues).length) {
-      await app.db.getRepository('aiBuildGuideRuns').update({ filterByTk: run.runId, values: runValues });
-    }
-  }
-  return affected > 0;
+
+    const space = await spaceModel.findOne({
+      where: { id: spaceId, status: 'building' },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!space) return false;
+    await space.update({ status: 'error', buildPhase: 'error', buildLog, activeRunId: null }, { transaction });
+    await pageModel.update({ status: 'error', buildLog }, { where: { spaceId, status: 'pending' }, transaction });
+    return true;
+  });
+  if (!updated) return;
 }
 
 async function claimBuildRun(app: any, run: BuildRunContext, workerId: string) {
@@ -897,7 +1063,7 @@ function startBuildHeartbeat(app: any, run: BuildRunContext) {
   return () => clearInterval(timer);
 }
 
-async function runBuild(app: any, db: any, run: BuildRunContext) {
+export async function runBuild(app: any, db: any, run: BuildRunContext) {
   const spaceRepo = db.getRepository('aiBuildGuideSpaces') as Repository;
   const space = await spaceRepo.findById(run.spaceId);
 
@@ -921,8 +1087,11 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
       : null;
   if (!snapshot && savedSnapshot && typeof savedSnapshot === 'object') {
     snapshot = await materializeBuildGuideInputSnapshot(app, savedSnapshot as BuildGuideInputDescriptor);
-    await updateSpaceForRun(app, run, { buildPhase: 'reading', buildLog: 'Preparing source snapshot' });
-    await inputArtifact.update({ payload: snapshot });
+    await withOwnedBuildRun(app, run, async (runRecord, spaceRecord, transaction) => {
+      await spaceRecord.update({ buildPhase: 'reading', buildLog: 'Preparing source snapshot' }, { transaction });
+      await runRecord.update({ stage: 'reading' }, { transaction });
+      await inputArtifact.update({ payload: snapshot }, { transaction });
+    });
   }
   const legacySpace = {
     get(key?: string) {
@@ -940,13 +1109,17 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
   const { llmService, model } = snapshot || space.get();
   if (!llmService || !model) throw new Error('LLM configuration is missing');
 
+  const sourceRead = snapshot
+    ? { documentsText: snapshot.documentsText, sourceWarnings: snapshot.sourceWarnings || [] }
+    : await readDocumentsWithMetadata(app, space);
+  const documentsText = sourceRead.documentsText.slice(0, MAX_SOURCE_CHARS);
+  const sourceHash = snapshot?.sourceHash ?? crypto.createHash('sha256').update(documentsText).digest('hex');
   await updateSpaceForRun(app, run, {
     buildPhase: 'reading',
-    buildLog: 'Reading source documents',
+    buildLog: sourceRead.sourceWarnings.length
+      ? `SOURCE_PARTIAL_READ:${sourceRead.sourceWarnings.length}`
+      : 'Reading source documents',
   });
-
-  const documentsText = snapshot?.documentsText ?? (await readDocuments(app, space)).slice(0, MAX_SOURCE_CHARS);
-  const sourceHash = snapshot?.sourceHash ?? crypto.createHash('sha256').update(documentsText).digest('hex');
   let provider: Awaited<ReturnType<typeof getLLMProvider>> | undefined;
   const getProvider = async () => {
     if (!provider) provider = await getLLMProvider(app, llmService, model);
@@ -970,8 +1143,13 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
       ? (previousPlanValue as GuidePlan)
       : await buildPlan(await getProvider(), guideSpace, documentsText);
   if (!previousPlan) {
-    await db.getRepository('aiBuildGuideRunArtifacts').create({
-      values: { id: crypto.randomUUID(), runId: run.runId, artifactKey: 'legacy-plan', payload: plan },
+    await withOwnedBuildRun(app, run, async (_runRecord, _spaceRecord, transaction) => {
+      await db
+        .getCollection('aiBuildGuideRunArtifacts')
+        .model.create(
+          { id: crypto.randomUUID(), runId: run.runId, artifactKey: 'legacy-plan', payload: plan },
+          { transaction },
+        );
     });
   }
   const chapterKeys = plan.chapters.map((chapter, index) => {
@@ -991,9 +1169,8 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
       payload?.status === 'completed'
     );
   }).length;
-  await db.getRepository('aiBuildGuideRuns').update({
-    filterByTk: run.runId,
-    values: { expectedCount: plan.chapters.length, completedCount: completedBefore },
+  await withOwnedBuildRun(app, run, async (runRecord, _spaceRecord, transaction) => {
+    await runRecord.update({ expectedCount: plan.chapters.length, completedCount: completedBefore }, { transaction });
   });
   await updateSpaceForRun(app, run, {
     buildPhase: 'building_pages',
@@ -1034,7 +1211,12 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
         lock: transaction.LOCK.UPDATE,
       });
       const activeSpace = await getSpaceModel(app).findOne({
-        where: { id: run.spaceId, status: 'building', buildRunId: run.runId },
+        where: {
+          id: run.spaceId,
+          status: 'building',
+          buildRunId: run.runId,
+          ...(run.workerId ? { buildWorkerId: run.workerId } : {}),
+        },
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
@@ -1109,7 +1291,15 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
         activeRunId: null,
         buildHeartbeatAt: new Date(),
       },
-      { where: { id: run.spaceId, buildRunId: run.runId, activeRunId: run.runId }, transaction },
+      {
+        where: {
+          id: run.spaceId,
+          buildRunId: run.runId,
+          activeRunId: run.runId,
+          ...(run.workerId ? { buildWorkerId: run.workerId } : {}),
+        },
+        transaction,
+      },
     );
     if (!affected) throw new StaleBuildRunError(run.spaceId, run.runId);
     const previousPages = await db.getCollection('aiBuildGuidePages').model.findAll({
@@ -1283,6 +1473,7 @@ function stopBuildGuideQueueProcessor(app: Application) {
     buildQueueWakeHandler = null;
   }
   buildQueueProcessing = false;
+  buildQueueRunCursor = null;
 }
 
 function scheduleBuildQueueTick(app: Application, delayMs: number) {
@@ -1309,6 +1500,30 @@ async function runBuildQueueTick(app: Application) {
   } finally {
     buildQueueProcessing = false;
   }
+}
+
+function startBuildRecoveryProcessor(app: Application) {
+  if (buildRecoveryTimer) return;
+  buildRecoveryTimer = setInterval(() => {
+    if (buildRecoveryProcessing) return;
+    buildRecoveryProcessing = true;
+    return recoverInterruptedBuilds(app)
+      .catch((error) => {
+        app.log?.warn?.('[plugin-build-guide-block] Periodic legacy build recovery failed', {
+          errorName: error instanceof Error ? error.name : 'Error',
+        });
+      })
+      .finally(() => {
+        buildRecoveryProcessing = false;
+      });
+  }, BUILD_RECOVERY_INTERVAL_MS);
+  buildRecoveryTimer.unref?.();
+}
+
+function stopBuildRecoveryProcessor() {
+  if (buildRecoveryTimer) clearInterval(buildRecoveryTimer);
+  buildRecoveryTimer = null;
+  buildRecoveryProcessing = false;
 }
 
 async function drainRedisBuildQueue(app: Application, count: number): Promise<BuildGuideQueueMessage[]> {
@@ -1339,78 +1554,49 @@ function createBuildQueueMessageFromSpace(space: any): BuildGuideQueueMessage | 
   };
 }
 
-async function processQueuedBuildsFromDb(app: Application, count: number) {
-  const runs = await app.db.getRepository('aiBuildGuideRuns').find({
-    filter: { engine: 'legacy', status: 'queued' },
-    sort: ['createdAt'],
-    limit: count,
+export async function processQueuedBuildsFromDb(app: Application, count: number) {
+  const RunModel = app.db.getCollection('aiBuildGuideRuns').model;
+  const SpaceModel = getSpaceModel(app);
+  const where: Record<PropertyKey, unknown> = { engine: 'legacy', status: 'queued' };
+  if (buildQueueRunCursor) {
+    where[Op.or] = [
+      { createdAt: { [Op.gt]: buildQueueRunCursor.createdAt } },
+      { createdAt: buildQueueRunCursor.createdAt, id: { [Op.gt]: buildQueueRunCursor.id } },
+    ];
+  }
+  const runs = await RunModel.findAll({
+    where,
+    attributes: ['id', 'spaceId', 'createdAt'],
+    order: [
+      ['createdAt', 'ASC'],
+      ['id', 'ASC'],
+    ],
+    limit: Math.max(10, count * 10),
   });
-  const messages = runs.map((run: { get: (field: string) => unknown }) => ({
-    spaceId: String(run.get('spaceId')),
-    runId: String(run.get('id')),
-  }));
+  if (!runs.length) {
+    buildQueueRunCursor = null;
+    return;
+  }
+
+  const messages: BuildGuideQueueMessage[] = [];
+  for (const run of runs) {
+    const runId = String(run.get('id'));
+    const spaceId = String(run.get('spaceId'));
+    buildQueueRunCursor = { createdAt: new Date(run.get('createdAt')), id: runId };
+    const space = await SpaceModel.findOne({
+      where: { id: spaceId, status: 'building', buildPhase: 'queued', buildRunId: runId },
+      attributes: ['id'],
+    });
+    if (!space) continue;
+    messages.push({ spaceId, runId });
+    if (messages.length >= count) break;
+  }
   await processBuildQueueMessages(app, messages);
 }
 
 async function processBuildQueueMessages(app: Application, messages: BuildGuideQueueMessage[]) {
   if (!messages.length) return;
   await Promise.all(messages.map((message) => processQueuedBuild(app, message)));
-}
-
-async function markBuildError(app: Application, spaceId: string, runId: string | undefined, error: any) {
-  const buildLog = 'BUILD_FAILED';
-  app.log?.warn?.('[plugin-build-guide-block] Legacy build failed', {
-    errorName: error instanceof Error ? error.name : 'Error',
-  });
-  let updated = false;
-  if (runId) {
-    updated = await updateSpaceForRun(
-      app,
-      { spaceId, runId },
-      {
-        status: 'error',
-        buildPhase: 'error',
-        buildLog,
-        buildHeartbeatAt: new Date(),
-        activeRunId: null,
-      },
-      true,
-    );
-  } else {
-    await app.db.getRepository('aiBuildGuideSpaces').update({
-      filterByTk: spaceId,
-      values: {
-        status: 'error',
-        buildPhase: 'error',
-        buildLog,
-        activeRunId: null,
-      },
-    });
-    updated = true;
-  }
-
-  if (!updated) {
-    return;
-  }
-
-  if (runId) {
-    await app.db.getRepository('aiBuildGuideRuns').update({
-      filterByTk: runId,
-      values: { status: 'failed', stage: 'failed', errorCode: 'BUILD_FAILED', finishedAt: new Date() },
-    });
-  }
-
-  await app.db.getRepository('aiBuildGuidePages').update({
-    filter: {
-      spaceId,
-      ...(runId ? { runId } : {}),
-      status: 'pending',
-    },
-    values: {
-      status: 'error',
-      buildLog,
-    },
-  });
 }
 
 async function enqueueBuild(app: Application, message: BuildGuideQueueMessage) {
@@ -1448,43 +1634,42 @@ async function processQueuedBuild(app: Application, message: BuildGuideQueueMess
     return;
   }
 
-  await withBuildRunLock(app, spaceId, async () => {
-    const run = { spaceId, runId };
-    const workerId = getBuildWorkerId(app);
-    const claimed = await claimBuildRun(app, run, workerId);
-    if (!claimed) {
-      app.log?.info?.(`[plugin-build-guide-block] Build ${runId} for space "${spaceId}" was already claimed or stale`);
+  const run = { spaceId, runId };
+  const workerId = `${getBuildWorkerId(app)}:${crypto.randomUUID()}`;
+  const claimed = await claimBuildRun(app, run, workerId);
+  if (!claimed) {
+    app.log?.info?.(`[plugin-build-guide-block] Build ${runId} for space "${spaceId}" was already claimed or stale`);
+    return;
+  }
+  const claimedRun = { ...run, workerId };
+
+  const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
+  const space = await spaceRepo.findById(spaceId);
+  if (!space) {
+    app.log?.warn?.(`[plugin-build-guide-block] Build space "${spaceId}" not found; skipping queued build`);
+    return;
+  }
+
+  if (space.get('status') !== 'building') {
+    app.log?.info?.(
+      `[plugin-build-guide-block] Build space "${spaceId}" is ${space.get('status')}; skipping queued build`,
+    );
+    return;
+  }
+
+  const stopHeartbeat = startBuildHeartbeat(app, claimedRun);
+  try {
+    await runBuild(app, app.db, claimedRun);
+  } catch (error) {
+    if (error instanceof StaleBuildRunError) {
+      app.log?.info?.(`[plugin-build-guide-block] ${error.message}`);
       return;
     }
-
-    const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
-    const space = await spaceRepo.findById(spaceId);
-    if (!space) {
-      app.log?.warn?.(`[plugin-build-guide-block] Build space "${spaceId}" not found; skipping queued build`);
-      return;
-    }
-
-    if (space.get('status') !== 'building') {
-      app.log?.info?.(
-        `[plugin-build-guide-block] Build space "${spaceId}" is ${space.get('status')}; skipping queued build`,
-      );
-      return;
-    }
-
-    const stopHeartbeat = startBuildHeartbeat(app, run);
-    try {
-      await runBuild(app, app.db, run);
-    } catch (error) {
-      if (error instanceof StaleBuildRunError) {
-        app.log?.info?.(`[plugin-build-guide-block] ${error.message}`);
-        return;
-      }
-      app.log?.error?.('Build Guide Worker Error', { errorName: error instanceof Error ? error.name : 'Error' });
-      await markBuildError(app, spaceId, runId, error);
-    } finally {
-      stopHeartbeat();
-    }
-  });
+    app.log?.error?.('Build Guide Worker Error', { errorName: error instanceof Error ? error.name : 'Error' });
+    await markBuildError(app, spaceId, runId, error, workerId);
+  } finally {
+    stopHeartbeat();
+  }
 }
 
 export function registerBuildGuideQueue(app: Application) {
@@ -1498,20 +1683,18 @@ export function registerBuildGuideQueue(app: Application) {
   if (!isBuildGuideWorker(app)) {
     app.on('afterStart', () => clearLocalBuildMemoryQueue(app));
   }
+  if (isBuildGuideWorker(app)) startBuildRecoveryProcessor(app);
   startBuildGuideQueueProcessor(app);
 }
 
 export function unregisterBuildGuideQueue(app: Application) {
   app.eventQueue.unsubscribe(BUILD_GUIDE_QUEUE_CHANNEL);
   stopBuildGuideQueueProcessor(app);
+  stopBuildRecoveryProcessor();
 }
 
 async function withBuildTriggerLock<T>(app: Application, spaceId: string, fn: () => Promise<T>) {
   return app.lockManager.runExclusive(`build-guide:trigger:${spaceId}`, fn, BUILD_TRIGGER_LOCK_TTL_MS);
-}
-
-async function withBuildRunLock<T>(app: Application, spaceId: string, fn: () => Promise<T>) {
-  return app.lockManager.runExclusive(`build-guide:run:${spaceId}`, fn, BUILD_RUN_LOCK_TTL_MS);
 }
 
 function fieldsAllow(fields: unknown, excluded: unknown, required: string[]) {
@@ -1613,99 +1796,99 @@ async function getAuthorizedBuildSpace(ctx: Context, spaceId: string) {
 }
 
 export async function recoverInterruptedBuilds(app: Application) {
-  const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
-  const pageRepo = app.db.getRepository('aiBuildGuidePages') as Repository;
+  const SpaceModel = getSpaceModel(app);
+  const RunModel = app.db.getCollection('aiBuildGuideRuns').model;
+  const PageModel = app.db.getCollection('aiBuildGuidePages').model;
   const staleBefore = new Date(Date.now() - BUILD_STALE_MS);
-  const runs = await app.db.getRepository('aiBuildGuideRuns').find({
-    filter: { engine: 'legacy', status: 'running' },
-    sort: ['createdAt'],
-  });
-
-  for (const run of runs) {
-    const spaceId = String(run.get('spaceId'));
-    const runId = String(run.get('id'));
-    const space = await spaceRepo.findOne({
-      filterByTk: spaceId,
-      filter: { status: 'building', buildRunId: runId },
-    });
-    const heartbeat = space?.get('buildHeartbeatAt');
-    if (!space || (heartbeat && new Date(heartbeat).getTime() > staleBefore.getTime())) continue;
-    const SpaceModel = getSpaceModel(app);
-    const [runAffected] = await app.db
-      .getCollection('aiBuildGuideRuns')
-      .model.update(
-        { status: 'queued', stage: 'queued', startedAt: null },
-        { where: { id: runId, engine: 'legacy', status: 'running' } },
-      );
-
-    if (!runAffected) continue;
-    const [spaceAffected] = await SpaceModel.update(
-      {
-        buildPhase: 'queued',
-        buildLog: 'Build re-queued after worker restart',
-        buildQueuedAt: new Date(),
-        buildStartedAt: null,
-        buildHeartbeatAt: null,
-        buildWorkerId: null,
+  const findStaleSpaces = (afterId: string | null) =>
+    SpaceModel.findAll({
+      where: {
+        status: 'building',
+        [Op.or]: [{ buildHeartbeatAt: null }, { buildHeartbeatAt: { [Op.lte]: staleBefore } }],
+        ...(afterId ? { id: { [Op.gt]: afterId } } : {}),
       },
-      { where: { id: spaceId, status: 'building', buildRunId: runId } },
-    );
-    if (!spaceAffected) continue;
-
-    await pageRepo.update({
-      filter: {
-        spaceId,
-        runId,
-        status: 'pending',
-      },
-      values: {
-        status: 'pending',
-        buildLog: 'Build re-queued after worker restart',
-      },
+      order: [['id', 'ASC']],
+      limit: BUILD_RECOVERY_BATCH_SIZE,
     });
-    await enqueueBuild(app, {
-      spaceId,
-      runId,
-      queuedAt: new Date().toISOString(),
-    });
+  let candidates = await findStaleSpaces(buildRecoveryCursor);
+  if (!candidates.length && buildRecoveryCursor) {
+    buildRecoveryCursor = null;
+    candidates = await findStaleSpaces(null);
   }
+  buildRecoveryCursor = candidates.length ? String(candidates[candidates.length - 1].get('id')) : null;
 
-  const buildingSpaces = await spaceRepo.find({ filter: { status: 'building' } });
-  for (const space of buildingSpaces) {
-    const runId = String(space.get('buildRunId') || '');
+  let recovered = 0;
+  for (const candidate of candidates) {
+    const spaceId = String(candidate.get('id'));
+    const runId = String(candidate.get('buildRunId') || '');
     if (!runId) continue;
-    const existing = await app.db.getRepository('aiBuildGuideRuns').findOne({ filterByTk: runId });
-    if (existing) continue;
-    // Upgrade recovery for builds created before run metadata was introduced. A workflow run is never inferred
-    // from mutable Space.engine; new workflow submissions always create their immutable Run in the same transaction.
+    const observedWorkerId = candidate.get('buildWorkerId') ?? null;
+    let shouldEnqueue = false;
+
     await app.db.sequelize.transaction(async (transaction: any) => {
-      const locked = await getSpaceModel(app).findOne({
-        where: { id: space.get('id'), status: 'building', buildRunId: runId },
+      const run = await RunModel.findOne({
+        where: { id: runId, engine: 'legacy', status: { [Op.in]: ['queued', 'running'] } },
         transaction,
         lock: transaction.LOCK.UPDATE,
       });
-      if (!locked) return;
-      await app.db.getCollection('aiBuildGuideRuns').model.create(
+      const space = await SpaceModel.findOne({
+        where: {
+          id: spaceId,
+          status: 'building',
+          buildRunId: runId,
+          buildWorkerId: observedWorkerId,
+          [Op.or]: [{ buildHeartbeatAt: null }, { buildHeartbeatAt: { [Op.lte]: staleBefore } }],
+        },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!space) return;
+
+      if (run?.get('status') === 'queued' && space.get('buildPhase') === 'queued') return;
+      if (!run) {
+        const existing = await RunModel.findOne({ where: { id: runId }, transaction, lock: transaction.LOCK.UPDATE });
+        if (existing) return;
+        await RunModel.create(
+          {
+            id: runId,
+            spaceId,
+            engine: 'legacy',
+            status: 'queued',
+            stage: 'queued',
+            requesterId: '',
+          },
+          { transaction },
+        );
+      } else if (run.get('status') === 'running') {
+        await run.update({ status: 'queued', stage: 'queued', startedAt: null }, { transaction });
+      }
+
+      await space.update(
         {
-          id: runId,
-          spaceId: String(space.get('id')),
-          engine: 'legacy',
-          status: 'queued',
-          stage: 'queued',
-          requesterId: '',
+          buildPhase: 'queued',
+          buildLog: 'Build re-queued after worker restart',
+          activeRunId: runId,
+          latestRunId: runId,
+          buildQueuedAt: new Date(),
+          buildStartedAt: null,
+          buildHeartbeatAt: null,
+          buildWorkerId: null,
         },
         { transaction },
       );
-      await locked.update(
-        { buildPhase: 'queued', buildLog: 'Build re-queued after worker restart', activeRunId: runId },
-        { transaction },
+      await PageModel.update(
+        { buildLog: 'Build re-queued after worker restart' },
+        { where: { spaceId, runId, status: 'pending' }, transaction },
       );
+      shouldEnqueue = true;
     });
+
+    if (!shouldEnqueue) continue;
+    await enqueueBuild(app, { spaceId, runId, queuedAt: new Date().toISOString() });
+    recovered += 1;
   }
 
-  if (runs.length) {
-    app.log?.info?.(`[plugin-build-guide-block] Re-queued ${runs.length} interrupted legacy build(s)`);
-  }
+  if (recovered) app.log?.info?.(`[plugin-build-guide-block] Re-queued ${recovered} interrupted legacy build(s)`);
 }
 
 export async function build(ctx: Context, next: Next) {
@@ -1784,6 +1967,10 @@ export async function build(ctx: Context, next: Next) {
           status: 'building',
           buildPhase: 'queued',
           buildLog: 'Build queued',
+          published:
+            locked.get('published') === true ||
+            locked.get('status') === 'completed' ||
+            Boolean(locked.get('publishedRunId') || locked.get('generatedHtml') || locked.get('generatedMarkdown')),
           buildRunId: runId,
           activeRunId: runId,
           latestRunId: runId,

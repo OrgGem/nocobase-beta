@@ -18,6 +18,33 @@ function fieldsAllow(fields: unknown, excluded: unknown, required: string[]) {
   );
 }
 
+const SOURCE_WARNING_CODES = new Set([
+  'SOURCE_UNSUPPORTED',
+  'SOURCE_READ_FAILED',
+  'SOURCE_PARSE_FAILED',
+  'SOURCE_EMPTY',
+]);
+
+async function getSafeSourceWarnings(ctx: Context, runId: string) {
+  const artifacts = ctx.db.getRepository('aiBuildGuideRunArtifacts');
+  const artifact =
+    (await artifacts.findOne({ filter: { runId, artifactKey: 'source-snapshot' }, appends: [] })) ||
+    (await artifacts.findOne({ filter: { runId, artifactKey: 'input' }, appends: [] }));
+  const payload: unknown = artifact?.get('payload');
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [];
+  const warnings: unknown = (payload as Record<string, unknown>).sourceWarnings;
+  if (!Array.isArray(warnings)) return [];
+  const counts = new Map<string, number>();
+  for (const warning of warnings) {
+    if (!warning || typeof warning !== 'object' || Array.isArray(warning)) continue;
+    const code = (warning as Record<string, unknown>).code;
+    if (typeof code === 'string' && SOURCE_WARNING_CODES.has(code)) {
+      counts.set(code, (counts.get(code) || 0) + 1);
+    }
+  }
+  return [...counts.entries()].map(([code, count]) => ({ code, count }));
+}
+
 async function getAccessibleRun(ctx: Context, runId: unknown, actionName: 'getStatus' | 'cancel' | 'retry') {
   if (typeof runId !== 'string' || !runId)
     ctx.throw(400, ctx.t('Run id is required', { ns: 'plugin-build-guide-block' }));
@@ -229,6 +256,7 @@ export async function getBuildGuideRunStatus(ctx: Context, next: Next) {
 
   const runStatus = String(run.get('status'));
   const runEngine = String(run.get('engine'));
+  const sourceWarnings = await getSafeSourceWarnings(ctx, runId);
   const adapter = (ctx.app.pm.get('plugin-workflow-build-guide') || ctx.app.pm.get('workflow-build-guide')) as
     | { canRetryRun?: (runId: string) => Promise<boolean>; cancelRun?: unknown }
     | undefined;
@@ -255,6 +283,7 @@ export async function getBuildGuideRunStatus(ctx: Context, next: Next) {
     expectedCount: run.get('expectedCount'),
     completedCount: run.get('completedCount'),
     errorCode: run.get('errorCode') || undefined,
+    sourceWarnings,
     canCancel,
     canRetry,
     ...(executionId === undefined ? {} : { executionId }),

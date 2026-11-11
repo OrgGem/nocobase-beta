@@ -9,6 +9,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   App,
   Button,
   Drawer,
@@ -28,6 +29,7 @@ import type { TableColumnsType } from 'antd';
 import { PlayCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { useTranslation } from 'react-i18next';
+import { GuideDocumentPicker } from './GuideDocumentPicker';
 
 const namespace = 'build-guide-block';
 import {
@@ -57,6 +59,7 @@ const SAFE_ERROR_CODES = new Set([
   'BUILD_FAILED',
   'WORKFLOW_UNAVAILABLE',
   'SOURCE_ACCESS_DENIED',
+  'SOURCE_NO_USABLE_TEXT',
   'INVALID_PLAN',
   'PROVIDER_UNAVAILABLE',
   'PROVIDER_FAILED',
@@ -77,6 +80,10 @@ type RunStep = {
   attempt: number;
   errorCode?: string;
 };
+type SourceWarning = {
+  code: 'SOURCE_UNSUPPORTED' | 'SOURCE_READ_FAILED' | 'SOURCE_PARSE_FAILED' | 'SOURCE_EMPTY';
+  count: number;
+};
 type GuideBuildRun = {
   id: ID;
   spaceId: ID;
@@ -90,6 +97,7 @@ type GuideBuildRun = {
   errorCode?: string;
   executionId?: ID;
   steps: RunStep[];
+  sourceWarnings?: SourceWarning[];
 };
 type SpaceRecord = {
   id: ID;
@@ -118,6 +126,7 @@ type SpaceFormValues = {
   targetChapterCount: number;
   chapterGuidance?: string;
   systemPrompt?: string;
+  documents?: ID[];
 };
 type LLMOption = { label: string; value: string };
 
@@ -145,6 +154,14 @@ function isRunStep(value: unknown): value is RunStep {
   );
 }
 
+function isSourceWarning(value: unknown): value is SourceWarning {
+  return (
+    isRecord(value) &&
+    ['SOURCE_UNSUPPORTED', 'SOURCE_READ_FAILED', 'SOURCE_PARSE_FAILED', 'SOURCE_EMPTY'].includes(String(value.code)) &&
+    typeof value.count === 'number'
+  );
+}
+
 function isGuideBuildRun(value: unknown): value is GuideBuildRun {
   return (
     isRecord(value) &&
@@ -158,12 +175,19 @@ function isGuideBuildRun(value: unknown): value is GuideBuildRun {
     typeof value.canCancel === 'boolean' &&
     typeof value.canRetry === 'boolean' &&
     Array.isArray(value.steps) &&
-    value.steps.every(isRunStep)
+    value.steps.every(isRunStep) &&
+    (value.sourceWarnings == null ||
+      (Array.isArray(value.sourceWarnings) && value.sourceWarnings.every(isSourceWarning)))
   );
 }
 
 function isSpaceRecord(value: unknown): value is SpaceRecord {
   return isRecord(value) && isId(value.id);
+}
+
+function readSpaceDocumentIds(value: unknown): ID[] | null {
+  if (!isRecord(value) || !Array.isArray(value.documents)) return null;
+  return value.documents.flatMap((document) => (isRecord(document) && isId(document.id) ? [document.id] : []));
 }
 
 function normalizeTargetChapterCount(value: unknown) {
@@ -258,6 +282,22 @@ function RunDetails({ run }: { run: GuideBuildRun }) {
         <Typography.Text type="secondary">{getStageLabel(run.stage, t)}</Typography.Text>
         {run.errorCode && <Typography.Text type="danger">{translatedRunError(run.errorCode, t)}</Typography.Text>}
       </Space>
+      {!!run.sourceWarnings?.length && (
+        <Alert
+          type="warning"
+          showIcon
+          message={t('Some source documents were skipped')}
+          description={
+            <ul aria-label={t('Source warnings')}>
+              {run.sourceWarnings.map((warning) => (
+                <li key={warning.code}>
+                  {t(warning.code)} ({t('{{count}} documents', { count: warning.count })})
+                </li>
+              ))}
+            </ul>
+          }
+        />
+      )}
       <List
         size="small"
         dataSource={run.steps}
@@ -294,6 +334,8 @@ export const UserGuideManager = () => {
   const [loading, setLoading] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingId, setEditingId] = useState<ID | null>(null);
+  const [documentsEditable, setDocumentsEditable] = useState(true);
+  const [documentsBusy, setDocumentsBusy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [busySpaceId, setBusySpaceId] = useState<ID | null>(null);
   const [serviceOptions, setServiceOptions] = useState<LLMOption[]>([]);
@@ -426,17 +468,16 @@ export const UserGuideManager = () => {
     [api],
   );
 
-  useEffect(() => {
-    loadModels(selectedService);
-  }, [selectedService, loadModels]);
-
   const openCreate = () => {
     setEditingId(null);
+    setDocumentsEditable(true);
+    setDocumentsBusy(false);
     form.resetFields();
     form.setFieldsValue({
       engine: 'legacy',
       outputFormat: 'html',
       targetChapterCount: DEFAULT_TARGET_CHAPTER_COUNT,
+      documents: [],
       systemPrompt:
         'You are an expert technical writer. Generate a comprehensive user guide based on the provided documents.',
     });
@@ -444,33 +485,68 @@ export const UserGuideManager = () => {
     setDrawerOpen(true);
   };
 
-  const openEdit = (record: SpaceRecord) => {
-    setEditingId(record.id);
-    form.resetFields();
-    form.setFieldsValue({
-      title: record.title,
-      llmService: record.llmService,
-      model: record.model,
-      engine: record.engine || 'legacy',
-      outputFormat: record.outputFormat || 'html',
-      targetChapterCount: normalizeTargetChapterCount(record.targetChapterCount),
-      chapterGuidance: record.chapterGuidance,
-      systemPrompt: record.systemPrompt,
-    });
-    loadServices();
-    loadModels(record.llmService);
-    setDrawerOpen(true);
+  const openEdit = async (record: SpaceRecord) => {
+    setDocumentsEditable(false);
+    setDocumentsBusy(false);
+    try {
+      const response: unknown = await api.resource('aiBuildGuideSpaces').get({
+        filterByTk: record.id,
+        fields: ['id', 'documents.id'],
+        appends: ['documents'],
+      });
+      const documentIds = readSpaceDocumentIds(readApiData(response));
+      setEditingId(record.id);
+      form.resetFields();
+      form.setFieldsValue({
+        title: record.title,
+        llmService: record.llmService,
+        model: record.model,
+        engine: record.engine || 'legacy',
+        outputFormat: record.outputFormat || 'html',
+        targetChapterCount: normalizeTargetChapterCount(record.targetChapterCount),
+        chapterGuidance: record.chapterGuidance,
+        systemPrompt: record.systemPrompt,
+        ...(documentIds ? { documents: documentIds } : {}),
+      });
+      setDocumentsEditable(documentIds !== null);
+      loadServices();
+      loadModels(record.llmService);
+      setDrawerOpen(true);
+    } catch {
+      setEditingId(record.id);
+      form.resetFields();
+      form.setFieldsValue({
+        title: record.title,
+        llmService: record.llmService,
+        model: record.model,
+        engine: record.engine || 'legacy',
+        outputFormat: record.outputFormat || 'html',
+        targetChapterCount: normalizeTargetChapterCount(record.targetChapterCount),
+        chapterGuidance: record.chapterGuidance,
+        systemPrompt: record.systemPrompt,
+      });
+      loadServices();
+      loadModels(record.llmService);
+      setDrawerOpen(true);
+    }
   };
 
   const handleSubmit = async () => {
+    if (documentsBusy) return;
     const values = await form.validateFields();
     values.targetChapterCount = normalizeTargetChapterCount(values.targetChapterCount);
+    const payload: Record<string, unknown> = { ...values };
+    if (editingId == null || documentsEditable) {
+      payload.documents = (values.documents || []).filter(isId).map((id) => ({ id }));
+    } else {
+      delete payload.documents;
+    }
     setSubmitting(true);
     try {
       if (editingId != null) {
-        await api.resource('aiBuildGuideSpaces').update({ filterByTk: editingId, values });
+        await api.resource('aiBuildGuideSpaces').update({ filterByTk: editingId, values: payload });
       } else {
-        await api.resource('aiBuildGuideSpaces').create({ values });
+        await api.resource('aiBuildGuideSpaces').create({ values: payload });
       }
       message.success(t('Saved successfully'));
       setDrawerOpen(false);
@@ -529,6 +605,10 @@ export const UserGuideManager = () => {
     } finally {
       setBusySpaceId(null);
     }
+  };
+
+  const closeEditor = () => {
+    if (!documentsBusy) setDrawerOpen(false);
   };
 
   const columns: TableColumnsType<SpaceRecord> = [
@@ -645,12 +725,16 @@ export const UserGuideManager = () => {
       <Drawer
         title={editingId != null ? t('Edit space') : t('Create space')}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={closeEditor}
+        maskClosable={!documentsBusy}
+        keyboard={!documentsBusy}
         width={640}
         footer={
           <Space style={{ float: 'right' }}>
-            <Button onClick={() => setDrawerOpen(false)}>{t('Cancel')}</Button>
-            <Button type="primary" loading={submitting} onClick={handleSubmit}>
+            <Button onClick={closeEditor} disabled={documentsBusy}>
+              {t('Cancel')}
+            </Button>
+            <Button type="primary" loading={submitting} disabled={documentsBusy} onClick={handleSubmit}>
               {t('Submit')}
             </Button>
           </Space>
@@ -676,7 +760,13 @@ export const UserGuideManager = () => {
           </Form.Item>
           <Typography.Paragraph type="secondary">{t('The engine selection applies to new runs.')}</Typography.Paragraph>
           <Form.Item name="llmService" label={t('LLM Service')} rules={[{ required: true }]}>
-            <Select options={serviceOptions} onFocus={loadServices} showSearch optionFilterProp="label" />
+            <Select
+              options={serviceOptions}
+              onFocus={loadServices}
+              onChange={(service: string | undefined) => loadModels(service)}
+              showSearch
+              optionFilterProp="label"
+            />
           </Form.Item>
           <Form.Item name="model" label={t('Model')} rules={[{ required: true }]}>
             <Select options={modelOptions} disabled={!selectedService} showSearch optionFilterProp="label" />
@@ -697,6 +787,9 @@ export const UserGuideManager = () => {
           </Form.Item>
           <Form.Item name="systemPrompt" label={t('System Prompt')}>
             <Input.TextArea rows={4} />
+          </Form.Item>
+          <Form.Item name="documents" label={t('Documents')}>
+            <GuideDocumentPicker disabled={!documentsEditable} onMutationChange={setDocumentsBusy} />
           </Form.Item>
         </Form>
       </Drawer>
