@@ -1,5 +1,15 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import {
+  Alert,
   Button,
   Card,
   Divider,
@@ -46,6 +56,41 @@ type ProfileFormValues = {
   title?: string;
   description?: string;
   enabled?: boolean;
+};
+
+type NativeScope = 'chat' | 'api' | 'workflow' | 'sub-agent';
+type CapabilityStatus = 'enforced' | 'observe-only' | 'unsupported';
+
+type CapabilityMatrix = {
+  scopes: NativeScope[];
+  nativeCapabilities: Array<{
+    id: string;
+    labelKey: string;
+    settings: string[];
+    byScope: Record<NativeScope, { status: CapabilityStatus; reasonKey: string }>;
+  }>;
+  scopedCapabilities: Array<{
+    id: string;
+    labelKey: string;
+    settings: string[];
+    status: CapabilityStatus;
+    scopeKey: string;
+    detailKey: string;
+  }>;
+  telemetrySettings: { settings: string[]; noteKey: string };
+  noteKey: string;
+};
+
+const STATUS_COLORS: Record<CapabilityStatus, string> = {
+  enforced: 'green',
+  'observe-only': 'gold',
+  unsupported: 'default',
+};
+
+const STATUS_LABELS: Record<CapabilityStatus, string> = {
+  enforced: 'Enforced',
+  'observe-only': 'Observe only',
+  unsupported: 'Unsupported',
 };
 
 const DEFAULT_SETTINGS = {
@@ -95,10 +140,87 @@ export const HarnessProfilesTab: React.FC = () => {
     },
   });
 
+  const { data: capabilityData, loading: capabilitiesLoading } = useRequest({
+    url: 'agentHarnessProfiles:capabilities',
+  });
+
   const rows = React.useMemo(() => {
     const raw = (data as { data?: ProfileRow[] } | undefined)?.data;
     return Array.isArray(raw) ? raw : [];
   }, [data]);
+
+  const capabilityMatrix = (capabilityData as { data?: CapabilityMatrix } | undefined)?.data;
+
+  const renderStatus = (status: CapabilityStatus) => (
+    <Tag color={STATUS_COLORS[status]}>{t(STATUS_LABELS[status])}</Tag>
+  );
+
+  const nativeCapabilityColumns = [
+    {
+      title: t('Harness capability'),
+      dataIndex: 'labelKey',
+      key: 'labelKey',
+      width: 190,
+      render: (labelKey: string) => t(labelKey),
+    },
+    {
+      title: t('Settings'),
+      dataIndex: 'settings',
+      key: 'settings',
+      width: 190,
+      render: (settings: string[]) => settings.join(', '),
+    },
+    ...(capabilityMatrix?.scopes || []).map((scope) => ({
+      title: t(scope === 'sub-agent' ? 'Native sub-agent' : `Native ${scope}`),
+      key: scope,
+      width: 250,
+      render: (_: unknown, record: CapabilityMatrix['nativeCapabilities'][number]) => {
+        const capability = record.byScope[scope];
+        return (
+          <Space direction="vertical" size={2}>
+            {renderStatus(capability.status)}
+            <Text type="secondary">{t(capability.reasonKey)}</Text>
+          </Space>
+        );
+      },
+    })),
+  ];
+
+  const scopedCapabilityColumns = [
+    {
+      title: t('Harness capability'),
+      dataIndex: 'labelKey',
+      key: 'labelKey',
+      width: 220,
+      render: (labelKey: string) => t(labelKey),
+    },
+    {
+      title: t('Settings'),
+      dataIndex: 'settings',
+      key: 'settings',
+      width: 240,
+      render: (settings: string[]) => settings.join(', '),
+    },
+    {
+      title: t('Status'),
+      dataIndex: 'status',
+      key: 'status',
+      width: 120,
+      render: (status: CapabilityStatus) => renderStatus(status),
+    },
+    {
+      title: t('Enforcement scope'),
+      dataIndex: 'scopeKey',
+      key: 'scopeKey',
+      width: 240,
+      render: (scopeKey: string, record: CapabilityMatrix['scopedCapabilities'][number]) => (
+        <Space direction="vertical" size={2}>
+          <Text>{t(scopeKey)}</Text>
+          <Text type="secondary">{t(record.detailKey)}</Text>
+        </Space>
+      ),
+    },
+  ];
 
   const openDraft = versions.find((version) => version.status === 'draft');
   const latestPublished = versions.find((version) => version.status === 'published');
@@ -421,11 +543,52 @@ export const HarnessProfilesTab: React.FC = () => {
 
   return (
     <div>
+      <Card bordered={false} style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="warning"
+            showIcon
+            message={t('Native harness support')}
+            description={t(capabilityMatrix?.noteKey || 'Harness capability: native enforcement boundary')}
+          />
+          <Table
+            aria-label={t('Native harness capability matrix')}
+            rowKey="id"
+            size="small"
+            loading={capabilitiesLoading}
+            dataSource={capabilityMatrix?.nativeCapabilities || []}
+            columns={nativeCapabilityColumns}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
+          <Text strong>{t('Scoped plugin-owned enforcement')}</Text>
+          <Table
+            aria-label={t('Plugin-owned harness capabilities')}
+            rowKey="id"
+            size="small"
+            loading={capabilitiesLoading}
+            dataSource={capabilityMatrix?.scopedCapabilities || []}
+            columns={scopedCapabilityColumns}
+            pagination={false}
+            scroll={{ x: 'max-content' }}
+          />
+          <Alert
+            type="info"
+            showIcon
+            message={t('Telemetry settings are plugin-local')}
+            description={t(
+              capabilityMatrix?.telemetrySettings.noteKey || 'Harness capability: telemetry settings scope',
+            )}
+          />
+          <Text type="secondary">{capabilityMatrix?.telemetrySettings.settings.join(', ')}</Text>
+        </Space>
+      </Card>
+
       <Card bordered={false}>
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
             <Text type="secondary">
-              {t('Policy profiles control native observation, memory scopes, and tracing retention.')}
+              {t('Harness profiles keep versioned settings; native runtime support is shown above by capability.')}
             </Text>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => openDrawer()}>
               {t('New Policy')}

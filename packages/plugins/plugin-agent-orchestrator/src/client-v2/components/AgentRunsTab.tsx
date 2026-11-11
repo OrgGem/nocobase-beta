@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -39,23 +48,13 @@ type TraceItem = {
   durationMs?: number;
   at?: string;
   content?: unknown;
-};
-
-type ToolMessage = {
-  sessionId?: string;
-  toolCallId?: string;
-  toolName?: string;
-  status?: string;
-  invokeStatus?: string;
-  content?: unknown;
-};
-
-type NativeMessage = {
-  sessionId?: string;
-  messageId?: string | number;
-  role?: string;
-  content?: unknown;
-  metadata?: unknown;
+  model?: string;
+  provider?: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  usageSource?: string;
+  cost?: number | null;
+  pricingStatus?: string;
 };
 
 type RunRecord = {
@@ -78,8 +77,23 @@ type RunRecord = {
   error?: unknown;
   metadata?: unknown;
   trace?: TraceItem[];
-  toolMessages?: ToolMessage[];
-  nativeMessages?: NativeMessage[];
+  usage?: {
+    modelCalls?: number;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    cost?: number | null;
+    currency?: string;
+    estimatedCalls?: number;
+    missingUsageCalls?: number;
+    unpricedCalls?: number;
+  };
+  coverage?: { truncated?: boolean };
+};
+
+type SyncResult = {
+  cursor?: Record<string, unknown> | null;
+  complete?: boolean;
+  counts?: { conversations?: number; linkedSubAgents?: number; toolMessages?: number; modelCalls?: number };
 };
 
 type ListResponse = {
@@ -163,6 +177,7 @@ export const AgentRunsTab: React.FC = () => {
   const [selectedRun, setSelectedRun] = useState<RunRecord | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState(false);
+  const [syncCursor, setSyncCursor] = useState<Record<string, unknown> | null>(null);
   // Guards the detail drawer against out-of-order responses when the user
   // switches rows quickly: only the newest request may commit its result.
   const detailRequestId = useRef(0);
@@ -173,7 +188,7 @@ export const AgentRunsTab: React.FC = () => {
     if (filters.subAgent) filter.subAgentUsername = filters.subAgent;
     if (filters.status) filter.status = filters.status;
     return {
-      sort: ['-createdAt'],
+      sort: ['-startedAt'],
       page,
       pageSize,
       filter,
@@ -253,10 +268,21 @@ export const AgentRunsTab: React.FC = () => {
       const res = await api.request({
         url: 'agentMonitor:sync',
         method: 'post',
-        data: { limit: 500 },
+        data: { limit: 500, cursor: syncCursor },
       });
-      const result = (res as { data?: { data?: { created?: number } } })?.data?.data || {};
-      message.success(t('Synced {{count}} native runs', { count: result.created || 0 }));
+      const payload = (res as { data?: { data?: { data?: SyncResult } | SyncResult } })?.data?.data;
+      const result = (payload as { data?: SyncResult })?.data || (payload as SyncResult) || {};
+      setSyncCursor(result.cursor || null);
+      const count =
+        (result.counts?.conversations || 0) +
+        (result.counts?.linkedSubAgents || 0) +
+        (result.counts?.toolMessages || 0) +
+        (result.counts?.modelCalls || 0);
+      message.success(
+        result.complete
+          ? t('Native sync pass completed ({{count}} records in this page)', { count })
+          : t('Synced {{count}} records; continue to finish this pass', { count }),
+      );
       refresh();
     } catch (error) {
       const text =
@@ -271,8 +297,6 @@ export const AgentRunsTab: React.FC = () => {
 
   const hasFilters = Boolean(filters.leader || filters.subAgent || filters.status);
   const trace: TraceItem[] = Array.isArray(selectedRun?.trace) ? selectedRun.trace : [];
-  const toolMessages: ToolMessage[] = Array.isArray(selectedRun?.toolMessages) ? selectedRun.toolMessages : [];
-  const nativeMessages: NativeMessage[] = Array.isArray(selectedRun?.nativeMessages) ? selectedRun.nativeMessages : [];
 
   const columns = [
     {
@@ -348,9 +372,7 @@ export const AgentRunsTab: React.FC = () => {
         message={t('Native Agent Runs')}
         description={
           <Text type="secondary">
-            {t(
-              'Native plugin-ai sub-agent dispatches captured by the orchestrator observer. Execution still runs through AIEmployee/SubAgentsDispatcher.',
-            )}
+            {t('Native monitor coverage description')} {t('Monitor descendant filters follow up to 32 levels')}
           </Text>
         }
       />
@@ -404,7 +426,7 @@ export const AgentRunsTab: React.FC = () => {
                 {t('Refresh')}
               </Button>
               <Button icon={<SyncOutlined />} onClick={syncNativeRuns} loading={syncLoading}>
-                {t('Sync')}
+                {syncCursor ? t('Continue sync') : t('Sync')}
               </Button>
             </Space>
           </Form.Item>
@@ -447,12 +469,12 @@ export const AgentRunsTab: React.FC = () => {
                 <Descriptions.Item label={t('Harness')}>{selectedRun.harnessTag || 'default'}</Descriptions.Item>
                 <Descriptions.Item label={t('Leader')}>
                   <Tag color="blue">
-                    {employeeMap.get(selectedRun.leaderUsername) || selectedRun.leaderUsername || '-'}
+                    {employeeMap.get(selectedRun.leaderUsername || '') || selectedRun.leaderUsername || '-'}
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label={t('Sub-Agent')}>
                   <Tag color="green">
-                    {employeeMap.get(selectedRun.subAgentUsername) || selectedRun.subAgentUsername || '-'}
+                    {employeeMap.get(selectedRun.subAgentUsername || '') || selectedRun.subAgentUsername || '-'}
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label={t('Parent session')}>
@@ -491,6 +513,14 @@ export const AgentRunsTab: React.FC = () => {
                             {item.durationMs ? <Text type="secondary">{formatDurationMs(item.durationMs)}</Text> : null}
                           </Space>
                           <Text type="secondary">{formatDate(item.at)}</Text>
+                          {item.type === 'model_call' && (
+                            <Text type="secondary">
+                              {[item.provider, item.model].filter(Boolean).join(' / ') || '-'} · {t('Input tokens')}:{' '}
+                              {item.inputTokens ?? '?'} · {t('Output tokens')}: {item.outputTokens ?? '?'} ·{' '}
+                              {t(item.usageSource || 'missing')} · {t('Calculated cost')}:{' '}
+                              {item.cost == null ? t('Unpriced or incomplete') : `${item.cost} USD`}
+                            </Text>
+                          )}
                           {item.content ? <TextBlock value={item.content} rows={4} /> : null}
                         </Space>
                       ),
@@ -501,59 +531,38 @@ export const AgentRunsTab: React.FC = () => {
                 )}
               </Card>
 
+              <Card title={t('Model usage')} size="small">
+                <Descriptions size="small" column={2}>
+                  <Descriptions.Item label={t('Model calls')}>{selectedRun.usage?.modelCalls ?? '-'}</Descriptions.Item>
+                  <Descriptions.Item label={t('Input tokens')}>
+                    {selectedRun.usage?.inputTokens ?? t('Incomplete')}
+                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Output tokens')}>
+                    {selectedRun.usage?.outputTokens ?? t('Incomplete')}
+                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Calculated cost')}>
+                    {selectedRun.usage?.cost == null
+                      ? t('Unpriced or incomplete')
+                      : `${selectedRun.usage.cost} ${selectedRun.usage.currency || 'USD'}`}
+                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Estimated calls')}>
+                    {selectedRun.usage?.estimatedCalls ?? 0}
+                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Missing usage calls')}>
+                    {selectedRun.usage?.missingUsageCalls ?? 0}
+                  </Descriptions.Item>
+                  <Descriptions.Item label={t('Unpriced calls')}>
+                    {selectedRun.usage?.unpricedCalls ?? 0}
+                  </Descriptions.Item>
+                </Descriptions>
+                {selectedRun.coverage?.truncated && (
+                  <Alert type="warning" showIcon message={t('Trace detail truncated; usage totals are incomplete')} />
+                )}
+              </Card>
+              <Alert type="info" showIcon message={t('Native content omitted without capture snapshot')} />
+
               <Collapse
                 items={[
-                  {
-                    key: 'toolMessages',
-                    label: t('Native tool messages ({{count}})', { count: toolMessages.length }),
-                    children: toolMessages.length ? (
-                      <Table
-                        rowKey={(record: ToolMessage) => `${record.sessionId}:${record.toolCallId}`}
-                        size="small"
-                        pagination={false}
-                        dataSource={toolMessages}
-                        scroll={{ x: 'max-content' }}
-                        columns={[
-                          { title: t('Session'), dataIndex: 'sessionId', key: 'sessionId' },
-                          { title: t('Tool'), dataIndex: 'toolName', key: 'toolName' },
-                          {
-                            title: t('Status'),
-                            dataIndex: 'status',
-                            key: 'status',
-                            render: (value: string) => <StatusTag status={value === 'error' ? 'error' : value} />,
-                          },
-                          { title: t('Invoke'), dataIndex: 'invokeStatus', key: 'invokeStatus' },
-                          {
-                            title: t('Content'),
-                            dataIndex: 'content',
-                            key: 'content',
-                            render: (value: unknown) => <TextBlock value={value} rows={3} />,
-                          },
-                        ]}
-                      />
-                    ) : (
-                      <Empty description={t('No native tool messages')} />
-                    ),
-                  },
-                  {
-                    key: 'messages',
-                    label: t('Native messages ({{count}})', { count: nativeMessages.length }),
-                    children: nativeMessages.length ? (
-                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                        {nativeMessages.map((item: NativeMessage) => (
-                          <Card
-                            key={`${item.sessionId}:${item.messageId}`}
-                            size="small"
-                            title={`${item.role} #${item.messageId}`}
-                          >
-                            <TextBlock value={item.content || item.metadata} rows={6} />
-                          </Card>
-                        ))}
-                      </Space>
-                    ) : (
-                      <Empty description={t('No native messages loaded')} />
-                    ),
-                  },
                   {
                     key: 'metadata',
                     label: t('Monitor metadata'),
@@ -562,7 +571,7 @@ export const AgentRunsTab: React.FC = () => {
                 ]}
               />
 
-              {(selectedRun.output || selectedRun.error) && (
+              {Boolean(selectedRun.output || selectedRun.error) && (
                 <Card title={selectedRun.error ? t('Error') : t('Result')} size="small">
                   <TextBlock value={selectedRun.error || selectedRun.output} rows={12} />
                 </Card>

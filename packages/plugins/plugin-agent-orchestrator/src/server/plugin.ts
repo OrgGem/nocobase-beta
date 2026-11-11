@@ -1,4 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
+import type { Context } from '@nocobase/actions';
 import path from 'path';
 import { createExternalRagSearchTool } from './tools/external-rag-search';
 import { registerTracingResource } from './resources/tracing';
@@ -9,8 +19,11 @@ import { registerAgentHarnessProfileResource } from './resources/agent-harness-p
 import { registerAgentLoopArtifactResource } from './resources/agent-loop-artifact';
 import { registerAgentLoopEventsStreamResource } from './resources/agent-loop-events-stream';
 import { registerAgentKnowledgeInsightsResource } from './resources/agent-knowledge-insights';
+import { registerAgentGovernanceResource } from './resources/agent-governance';
+import { registerAgentUsageResource } from './resources/agent-usage';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
+import { NativeAgentMonitorSyncService } from './services/NativeAgentMonitorSyncService';
 import { RegistrySkillSnapshotService } from './skill-hub/services/RegistrySkillSnapshotService';
 import { RegistrySkillInstallationService } from './skill-hub/services/RegistrySkillInstallationService';
 import { LoopPatternService } from './services/LoopPatternService';
@@ -25,6 +38,10 @@ import { validateInputSchemaDefinition } from './services/InputSchemaValidator';
 import { assertSkillToolNameAvailable, buildSkillToolName, getSkillToolName } from './utils/skill-tool-name';
 import { ensureAgentOrchestratorIndexes } from './utils/ensure-indexes';
 import { resetRunEventBus } from './services/RunEventBus';
+import { resolveTracingRetentionDays } from './services/TracingRetentionPolicy';
+import { createGovernanceAdmission } from './services/GovernanceAdmission';
+import { installManagedPromptProtection, ManagedPromptError } from './services/ManagedPromptProtection';
+import { installNativeUsageAttribution } from './services/NativeUsageAttribution';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -143,35 +160,17 @@ async function validateAgentMemoryContextValues(ctx: any) {
   ctx.action.params.values = normalizedValues;
 }
 
-async function resolveTracingRetentionDays(plugin: { db: any; app: any }) {
-  const envDays = Number(process.env.ORCHESTRATOR_LOG_RETENTION_DAYS);
-  if (Number.isFinite(envDays) && envDays > 0) return envDays;
-
-  try {
-    const defaultProfile = await plugin.db.getRepository('agentHarnessProfiles').findOne({
-      filter: {
-        tag: 'default',
-        enabled: true,
-      },
-    });
-    const settings = asObject(readModelValue(defaultProfile, 'settings'));
-    const profileDays = Number(settings.tracingRetentionDays);
-    if (Number.isFinite(profileDays) && profileDays > 0) {
-      return profileDays;
-    }
-  } catch (error) {
-    plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to load tracing retention policy', error);
-  }
-
-  return 30;
-}
-
 export class PluginAgentOrchestratorServer extends Plugin {
   skillHub: SkillHubSubFeature;
   registrySkillSnapshotService: RegistrySkillSnapshotService;
   registrySkillInstallationService: RegistrySkillInstallationService;
   nativeObserver: NativeSubAgentObserver;
   agentRuntimeLifecycle: AgentRuntimeLifecycle;
+  private nativeMonitorSyncService!: NativeAgentMonitorSyncService;
+  private removeNativeMonitorHook?: () => void;
+  private removeManagedPromptProtection?: () => void;
+  private removeNativeUsageAttribution?: () => void;
+  private governanceEnabled = true;
   loopScheduler: LoopSchedulerService;
   loopWorker: LoopWorkerService;
   private readonly installNativeObserver = () => {
@@ -190,6 +189,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
         error,
       });
     });
+    this.nativeMonitorSyncService = new NativeAgentMonitorSyncService(this);
+    this.installNativeMonitorHook();
     (this.app as typeof this.app & { agentRuntimeLifecycle: AgentRuntimeLifecycle }).agentRuntimeLifecycle =
       this.agentRuntimeLifecycle;
   }
@@ -215,6 +216,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
         'orchestratorConfig:*',
         'orchestratorTracing:*',
         'agentMonitor:*',
+        'agentUsage:*',
+        'agentGovernance:*',
         'agentKnowledgeInsights:*',
         'agentMemoryContexts:*',
         'agentLoopRuns:*',
@@ -254,6 +257,38 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('agentLoopApprovals', ['list', 'get', 'decide'], 'loggedIn');
     this.app.acl.allow('agentLoopArtifactsView', ['list', 'get'], 'loggedIn');
     this.app.acl.allow('agentLoopEventsStream', ['stream'], 'loggedIn');
+
+    this.installGovernanceHooks();
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        const { resourceName, actionName } = ctx.action || {};
+        if (
+          this.governanceEnabled &&
+          typeof resourceName === 'string' &&
+          [
+            'agentGovernancePolicies',
+            'agentGovernancePolicyVersions',
+            'agentGovernancePromptBindings',
+            'agentGovernanceAuditEvents',
+          ].includes(resourceName) &&
+          actionName
+        ) {
+          return ctx.throw(403, ctx.t('Governance records are only available through governance actions.'));
+        }
+        try {
+          await next();
+        } catch (error) {
+          if (error instanceof ManagedPromptError) return ctx.throw(403, ctx.t(error.message));
+          throw error;
+        }
+      },
+      { tag: 'orchestrator-governance-record-protection', after: 'acl' },
+    );
+    const governanceAdmission = createGovernanceAdmission(this, () => this.governanceEnabled);
+    this.app.resourceManager.use(async (ctx, next) => governanceAdmission(ctx as Context, next), {
+      tag: 'orchestrator-governance-admission',
+      after: 'acl',
+    });
 
     // Data scoping for skillExecutions: a logged-in non-admin user may only
     // read their own executions. Rows hold inputArgs / stdout / output files,
@@ -389,6 +424,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
     registerAgentLoopArtifactResource(this);
     registerAgentLoopEventsStreamResource(this);
     registerAgentHarnessProfileResource(this);
+    registerAgentGovernanceResource(this);
+    registerAgentUsageResource(this);
 
     // --- Native plugin-ai Monitor Resource ---
     registerAgentMonitorResource(this);
@@ -418,7 +455,31 @@ export class PluginAgentOrchestratorServer extends Plugin {
             : 0;
           const deletedSpans = spansRepo
             ? await spansRepo.destroy({
-                filter: { createdAt: { $lt: cutoff.toISOString() } },
+                // Model-call rows are the accounting ledger; trace retention must not remove
+                // usage needed for future totals and historical price snapshots.
+                filter: {
+                  $and: [
+                    { $or: [{ type: { $ne: 'model_call' } }, { type: null }] },
+                    {
+                      $or: [
+                        { source: 'native-plugin-ai', nativeActivityAt: { $lt: cutoff.toISOString() } },
+                        {
+                          source: 'native-plugin-ai',
+                          nativeActivityAt: null,
+                          startedAt: { $lt: cutoff.toISOString() },
+                        },
+                        {
+                          source: 'native-plugin-ai',
+                          nativeActivityAt: null,
+                          startedAt: null,
+                          createdAt: { $lt: cutoff.toISOString() },
+                        },
+                        { source: { $ne: 'native-plugin-ai' }, createdAt: { $lt: cutoff.toISOString() } },
+                        { source: null, createdAt: { $lt: cutoff.toISOString() } },
+                      ],
+                    },
+                  ],
+                },
               })
             : 0;
           this.app.log.info(
@@ -542,13 +603,29 @@ export class PluginAgentOrchestratorServer extends Plugin {
     await ensureAgentOrchestratorIndexes(this.db);
   }
 
-  async afterEnable() {}
+  async afterEnable() {
+    this.governanceEnabled = true;
+    this.installGovernanceHooks();
+    this.installNativeMonitorHook();
+  }
   async afterDisable() {
+    this.governanceEnabled = false;
+    this.removeManagedPromptProtection?.();
+    this.removeManagedPromptProtection = undefined;
+    this.removeNativeUsageAttribution?.();
+    this.removeNativeUsageAttribution = undefined;
     this.nativeObserver?.uninstall();
+    this.removeNativeMonitorHook?.();
+    this.removeNativeMonitorHook = undefined;
   }
   async remove() {}
 
   async beforeStop() {
+    this.governanceEnabled = false;
+    this.removeManagedPromptProtection?.();
+    this.removeManagedPromptProtection = undefined;
+    this.removeNativeUsageAttribution?.();
+    this.removeNativeUsageAttribution = undefined;
     this.app.off?.('afterStart', this.installNativeObserver);
     this.app.removeListener?.('afterStart', this.installNativeObserver);
     this.app.off?.('afterStart', this.startLoopWorker);
@@ -556,6 +633,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
     await this.loopWorker?.stop();
     await this.loopScheduler?.dispose();
     this.nativeObserver?.uninstall();
+    this.removeNativeMonitorHook?.();
+    this.removeNativeMonitorHook = undefined;
     await this.skillHub.beforeStop();
     resetRunEventBus();
   }
@@ -568,6 +647,28 @@ export class PluginAgentOrchestratorServer extends Plugin {
   private readonly startLoopWorker = () => {
     this.loopWorker?.start();
   };
+
+  private installGovernanceHooks() {
+    if (!this.removeManagedPromptProtection)
+      this.removeManagedPromptProtection = installManagedPromptProtection(this.db);
+    if (!this.removeNativeUsageAttribution) this.removeNativeUsageAttribution = installNativeUsageAttribution(this);
+  }
+
+  private installNativeMonitorHook() {
+    if (this.removeNativeMonitorHook || !this.agentRuntimeLifecycle || !this.nativeMonitorSyncService) return;
+    this.removeNativeMonitorHook = this.agentRuntimeLifecycle.registerAfterRunHook('native-monitor', (context) => {
+      if (context.source !== 'api' || !context.sessionId) return;
+      // The custom API lifecycle is best effort, not a global core hook. A detached bounded
+      // page avoids delaying the response; durable usage events support later reconciliation.
+      this.nativeMonitorSyncService.syncSession(context.sessionId).catch((error: unknown) => {
+        try {
+          this.app.logger.warn('[AgentOrchestrator] Failed to sync API agent telemetry.', { error });
+        } catch {
+          // Telemetry logging cannot affect native agent execution.
+        }
+      });
+    });
+  }
 }
 
 export default PluginAgentOrchestratorServer;

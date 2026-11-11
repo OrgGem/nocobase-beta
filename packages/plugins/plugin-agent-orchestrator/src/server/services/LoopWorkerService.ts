@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createHash, randomUUID } from 'node:crypto';
 import type { Database, Model } from '@nocobase/database';
 import type { Application } from '@nocobase/server';
@@ -79,6 +88,7 @@ function buildProgress(
 
 type RunSnapshot = {
   id: number;
+  rootRunId: string;
   patternId: number;
   goal: string;
   autonomyLevel: 'L1' | 'L2' | 'L3';
@@ -94,6 +104,7 @@ type RunSnapshot = {
   userId?: number;
   approvalStatus: string;
   resumeContext: ResumeContext | null;
+  verificationRecoverySummary: string | null;
 };
 
 function asStringArray(value: unknown): string[] {
@@ -315,12 +326,26 @@ export class LoopWorkerService {
       actorIdentity: this.workerId,
       leaseToken,
       eventType: 'run_started',
-      title: snapshot.resumeContext ? 'Run resumed' : 'Run started',
-      content: snapshot.resumeContext
-        ? `${snapshot.resumeContext.username} resumed after approval decisions.`
-        : `Leader ${snapshot.leaderUsername} began working on the goal.`,
-      correlationKey: `started:${snapshot.id}`,
-      values: { currentRole: snapshot.resumeContext ? snapshot.resumeContext.role : 'leader' },
+      title: snapshot.verificationRecoverySummary
+        ? 'Verification recovery started'
+        : snapshot.resumeContext
+          ? 'Run resumed'
+          : 'Run started',
+      content: snapshot.verificationRecoverySummary
+        ? 'Recovering verification using the saved maker summary.'
+        : snapshot.resumeContext
+          ? `${snapshot.resumeContext.username} resumed after approval decisions.`
+          : `Leader ${snapshot.leaderUsername} began working on the goal.`,
+      correlationKey: snapshot.verificationRecoverySummary
+        ? `verification-recovery-started:${leaseToken}`
+        : `started:${snapshot.id}`,
+      values: {
+        currentRole: snapshot.verificationRecoverySummary
+          ? 'verifier'
+          : snapshot.resumeContext
+            ? snapshot.resumeContext.role
+            : 'leader',
+      },
     });
 
     // Loops recorded before this claim (for example before a park for approval) keep warning the
@@ -328,6 +353,18 @@ export class LoopWorkerService {
     const loopNotices = await this.loopGuard.existingNotices(snapshot.id);
     const totalPhases = 1 + snapshot.makerUsernames.length + 1;
     const runStartedAt = new Date();
+
+    if (snapshot.verificationRecoverySummary) {
+      return this.finishVerification(
+        snapshot,
+        leaseToken,
+        signal,
+        loopNotices,
+        totalPhases,
+        runStartedAt,
+        snapshot.verificationRecoverySummary,
+      );
+    }
 
     let makerReports: string[];
     let makerQueue: string[];
@@ -451,6 +488,18 @@ export class LoopWorkerService {
     }
     const makerSummary = makerReports.join('\n\n');
 
+    await this.finishVerification(snapshot, leaseToken, signal, loopNotices, totalPhases, runStartedAt, makerSummary);
+  }
+
+  private async finishVerification(
+    snapshot: RunSnapshot,
+    leaseToken: string,
+    signal: AbortSignal,
+    loopNotices: string[],
+    totalPhases: number,
+    runStartedAt: Date,
+    makerSummary: string,
+  ) {
     await this.stateMachine.transition({
       runId: snapshot.id,
       to: 'verifying',
@@ -460,8 +509,14 @@ export class LoopWorkerService {
       eventType: 'run_verifying',
       title: 'Verification started',
       content: `Verifier ${snapshot.verifierUsername} is reviewing the reported result.`,
-      correlationKey: `verifying:${snapshot.id}`,
-      values: { currentRole: 'verifier', finalAnswer: makerSummary },
+      correlationKey: snapshot.verificationRecoverySummary
+        ? `verification-recovery:${leaseToken}`
+        : `verifying:${snapshot.id}`,
+      values: {
+        currentRole: 'verifier',
+        finalAnswer: makerSummary,
+        ...(snapshot.verificationRecoverySummary ? { resumeContext: null } : {}),
+      },
     });
     await this.updateProgress(
       snapshot.id,
@@ -483,6 +538,7 @@ export class LoopWorkerService {
     });
     const outcome = await this.verification.verifyAndFinalize({
       runId: snapshot.id,
+      rootRunId: snapshot.rootRunId,
       goal: snapshot.goal,
       autonomyLevel: snapshot.autonomyLevel,
       verifierUsername: snapshot.verifierUsername,
@@ -516,14 +572,7 @@ export class LoopWorkerService {
     await this.circuits.recordSuccess(snapshot.patternId, `pattern:${snapshot.patternId}`, snapshot.id);
     await this.updateProgress(
       snapshot.id,
-      buildProgress(
-        'complete',
-        totalPhases,
-        totalPhases,
-        'Run completed successfully',
-        snapshot.currentRole || 'verifier',
-        runStartedAt,
-      ),
+      buildProgress('complete', totalPhases, totalPhases, 'Run completed successfully', 'verifier', runStartedAt),
     );
   }
 
@@ -536,7 +585,7 @@ export class LoopWorkerService {
       paths: snapshot.actingOn,
       ttlMs: PATH_LOCK_TTL_MS,
     });
-    if (lock.acquired) {
+    if (lock.acquired === true) {
       // Recorded before any work starts so the heartbeat renews this lock for as long as the run
       // executes, and the release in `execute` frees exactly the lock this worker took.
       this.heldPathLocks.set(snapshot.id, snapshot.repositoryKey);
@@ -611,17 +660,24 @@ export class LoopWorkerService {
       signal: input.signal,
     });
 
-    // Track actual token usage from the LLM response; fall back to text-length estimation
-    await this.tokenTracker.trackActualUsage(
-      read(step, 'id'),
-      outcome.tokenUsage ?? null,
-      input.prompt,
-      outcome.content,
-      snapshot.id,
-    );
+    const stepId = read(step, 'id');
+    if (typeof stepId !== 'string' && typeof stepId !== 'number') throw new Error('Invocation step has no identifier.');
+    await this.tokenTracker.trackLoopInvocationUsage({
+      runId: snapshot.id,
+      rootRunId: snapshot.rootRunId,
+      stepId,
+      sessionId: outcome.sessionId,
+      messageId: outcome.messageId,
+      usage: outcome.tokenUsage,
+      input: input.prompt,
+      output: outcome.content,
+      role: input.role,
+      employeeUsername: input.username,
+      userId: snapshot.userId,
+    });
 
     await this.database.getRepository('agentLoopSteps').update({
-      filterByTk: read(step, 'id'),
+      filterByTk: stepId,
       values: {
         status: outcome.interrupted.length ? 'waiting_user' : 'succeeded',
         output: { content: outcome.content },
@@ -681,17 +737,24 @@ export class LoopWorkerService {
       signal,
     });
 
-    // Track actual token usage from the LLM response; fall back to text-length estimation
-    await this.tokenTracker.trackActualUsage(
-      read(step, 'id'),
-      outcome.tokenUsage ?? null,
-      resume.role === 'leader' ? LEADER_SYSTEM_MESSAGE : MAKER_SYSTEM_MESSAGE,
-      outcome.content,
-      snapshot.id,
-    );
+    const stepId = read(step, 'id');
+    if (typeof stepId !== 'string' && typeof stepId !== 'number') throw new Error('Resume step has no identifier.');
+    await this.tokenTracker.trackLoopInvocationUsage({
+      runId: snapshot.id,
+      rootRunId: snapshot.rootRunId,
+      stepId,
+      sessionId: outcome.sessionId,
+      messageId: outcome.messageId,
+      usage: outcome.tokenUsage,
+      input: resume.role === 'leader' ? LEADER_SYSTEM_MESSAGE : MAKER_SYSTEM_MESSAGE,
+      output: outcome.content,
+      role: resume.role,
+      employeeUsername: resume.username,
+      userId: snapshot.userId,
+    });
 
     await this.database.getRepository('agentLoopSteps').update({
-      filterByTk: read(step, 'id'),
+      filterByTk: stepId,
       values: {
         status: outcome.interrupted.length ? 'waiting_user' : 'succeeded',
         output: { content: outcome.content },
@@ -887,8 +950,16 @@ export class LoopWorkerService {
     const roleBindings = asObject(run.roleBindingsSnapshot);
     const makerSnapshots = asObject(run.makerHarnessSnapshot);
     const approvalStatus = String(run.approvalStatus || 'none');
+    const recoveryContext = asObject(run.resumeContext);
+    const verificationRecoverySummary =
+      recoveryContext.kind === 'verification_lease_recovery' &&
+      typeof recoveryContext.makerSummary === 'string' &&
+      recoveryContext.makerSummary.trim()
+        ? recoveryContext.makerSummary
+        : null;
     return {
       id: Number(run.id),
+      rootRunId: String(run.rootRunId || ''),
       patternId,
       goal: String(run.goal || ''),
       autonomyLevel: autonomyLevel(run.autonomyLevel),
@@ -903,10 +974,13 @@ export class LoopWorkerService {
       actingOn: asStringArray(run.actingOn),
       userId: Number(run.userId) || undefined,
       approvalStatus,
+      verificationRecoverySummary,
       // Only a live approval state may resume. Stale context left over from an expired window or a
       // cleared retry would otherwise replay an old conversation against fresh approvals.
       resumeContext:
-        approvalStatus === 'decided' || approvalStatus === 'pending' ? resumeContextFrom(run.resumeContext) : null,
+        !verificationRecoverySummary && (approvalStatus === 'decided' || approvalStatus === 'pending')
+          ? resumeContextFrom(run.resumeContext)
+          : null,
     };
   }
 }

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database, Model } from '@nocobase/database';
 import { getRunEventBus } from './RunEventBus';
 import { read } from '../utils/record-utils';
@@ -102,7 +111,13 @@ export class LoopRunRepository {
     const pageSize = 5_000;
     const ids: number[] = [];
     for (let page = 1; ; page += 1) {
-      const rows = await repository.find({ filter, fields: ['id'], sort: ['id'], page, pageSize });
+      const rows = await repository.find({
+        filter,
+        fields: ['id'],
+        sort: ['id'],
+        offset: (page - 1) * pageSize,
+        limit: pageSize,
+      });
       for (const row of rows) {
         ids.push(positiveId(read(row, 'id'), 'Agent loop run'));
       }
@@ -117,16 +132,16 @@ export class LoopRunRepository {
     const rootRunId = typeof run.rootRunId === 'string' ? run.rootRunId : '';
     const [steps, events, spans, artifacts, approvals, skillExecutions] = await Promise.all([
       this.database.getRepository('agentLoopSteps').find({ filter: { runId: id }, sort: ['index', 'createdAt'] }),
-      this.database.getRepository('agentLoopEvents').find({ filter: { runId: id }, sort: ['id'], pageSize: 1000 }),
+      this.database.getRepository('agentLoopEvents').find({ filter: { runId: id }, sort: ['id'], limit: 1000 }),
       this.database
         .getRepository('agentExecutionSpans')
-        .find({ filter: { agentLoopRunId: id }, sort: ['createdAt'], pageSize: 1000 }),
+        .find({ filter: { agentLoopRunId: id }, sort: ['createdAt'], limit: 1000 }),
       this.database.getRepository('agentLoopArtifacts').find({ filter: { runId: id }, sort: ['createdAt'] }),
       this.database.getRepository('agentLoopActionApprovals').find({ filter: { runId: id }, sort: ['createdAt'] }),
       this.database.getRepository('skillExecutions')
         ? this.database
             .getRepository('skillExecutions')
-            .find({ filter: { agentLoopRunId: String(id) }, sort: ['createdAt'], pageSize: 1000 })
+            .find({ filter: { agentLoopRunId: String(id) }, sort: ['createdAt'], limit: 1000 })
         : [],
     ]);
     return {
@@ -243,12 +258,15 @@ export class LoopRunRepository {
       const remaining = await approvals.find({ filter: { runId, status: 'pending' }, transaction });
       let requeued = false;
       let event: LoopRunRecord | null = null;
-      if (!remaining.length && run.status === 'waiting_approval') {
+      if (!remaining.length) {
         await runs.update({
           filterByTk: runId,
-          values: { status: 'queued', approvalStatus: 'decided' },
+          // A paused run keeps its pause but must be ready to consume decisions when the owner resumes it.
+          values: { approvalStatus: 'decided', ...(run.status === 'waiting_approval' ? { status: 'queued' } : {}) },
           transaction,
         });
+      }
+      if (!remaining.length && run.status === 'waiting_approval') {
         const created = await this.database.getRepository('agentLoopEvents').create({
           values: {
             runId,

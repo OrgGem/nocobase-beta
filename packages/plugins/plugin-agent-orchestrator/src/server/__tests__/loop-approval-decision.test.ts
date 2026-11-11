@@ -59,6 +59,7 @@ vi.mock('../services/VerificationService', () => ({
 }));
 
 const { LoopRunRepository } = await import('../services/LoopRunRepository');
+const { LoopRunStateMachine } = await import('../services/LoopRunStateMachine');
 const { LoopWorkerService } = await import('../services/LoopWorkerService');
 
 class MemoryRepository {
@@ -70,7 +71,14 @@ class MemoryRepository {
 
   async find(options: Row = {}) {
     const filter = (options.filter as Row | undefined) || {};
-    return this.rows.filter((row) => Object.entries(filter).every(([key, value]) => row[key] === value));
+    return this.rows.filter((row) =>
+      Object.entries(filter).every(([key, value]) => {
+        if (value && typeof value === 'object' && '$in' in value && Array.isArray(value.$in)) {
+          return value.$in.includes(row[key]);
+        }
+        return row[key] === value;
+      }),
+    );
   }
 
   async findOne(options: Row) {
@@ -251,7 +259,24 @@ describe('LoopRunRepository.decideApproval', () => {
     });
 
     expect(result).toMatchObject({ status: 'approved', requeued: false });
-    expect(repositories.get('agentLoopRuns')?.rows[0].status).toBe('paused');
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({
+      status: 'paused',
+      approvalStatus: 'decided',
+    });
+  });
+
+  it('keeps a paused run pending until all approvals have decisions', async () => {
+    const { repositories, repository } = setup(
+      [waitingRun({ status: 'paused' })],
+      [pendingApproval(), pendingApproval({ id: 11 })],
+    );
+
+    await repository.decideApproval({ approvalId: 10, userId: 7, isAdmin: false, decision: 'approved' });
+
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({
+      status: 'paused',
+      approvalStatus: 'pending',
+    });
   });
 
   it('refuses decisions from users who own neither the run nor the approval', async () => {
@@ -294,6 +319,7 @@ describe('LoopWorkerService approval resume-mode', () => {
         ]),
       ],
       ['agentLoopRuns', new MemoryRepository([{ ...run }])],
+      ['agentLoopPatterns', new MemoryRepository([{ id: 1, enabled: true }])],
       ['agentLoopActionApprovals', new MemoryRepository(approvals)],
       ['agentLoopEvents', new MemoryRepository()],
       ['agentLoopSteps', new MemoryRepository()],
@@ -309,8 +335,9 @@ describe('LoopWorkerService approval resume-mode', () => {
       log: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
       lockManager: { runExclusive: <T>(_key: string, operation: () => Promise<T>) => operation() },
     };
-    const worker = new LoopWorkerService(app as unknown as Application, createDatabase(repositories));
-    return { repositories, worker: worker as unknown as WorkerInternals };
+    const database = createDatabase(repositories);
+    const worker = new LoopWorkerService(app as unknown as Application, database);
+    return { repositories, database, worker: worker as unknown as WorkerInternals };
   }
 
   function resumedRun(overrides: Row = {}) {
@@ -370,6 +397,31 @@ describe('LoopWorkerService approval resume-mode', () => {
     expect(invokeCalls.map((call) => call.username)).toEqual(['maker-two']);
     expect(repositories.get('agentLoopRuns')?.rows[0].status).toBe('verifying');
   });
+
+  it.each(['approved', 'rejected'] as const)(
+    'resumes the interrupted role after a paused approval is %s and the owner resumes the run',
+    async (decision) => {
+      const run = resumedRun({ status: 'paused', approvalStatus: 'pending', lockedBy: null, lockedUntil: null });
+      const { repositories, database, worker } = createWorker(run, [pendingApproval()]);
+      const repository = new LoopRunRepository(database);
+      const stateMachine = new LoopRunStateMachine(database);
+
+      await repository.decideApproval({ approvalId: 10, userId: 7, isAdmin: false, decision });
+      await stateMachine.transition({ runId: 1, to: 'queued', actorType: 'human', actorIdentity: '7' });
+      const nextClaim = await stateMachine.claimNext('worker-a', 60_000);
+      if (!nextClaim) throw new Error('Expected the resumed run to be claimed.');
+      await worker.execute(nextClaim);
+
+      expect(resumeCalls).toHaveLength(1);
+      expect(resumeCalls[0]).toMatchObject({
+        username: 'maker-one',
+        decisions: [{ toolCallId: 'call-1', decision: { type: decision === 'approved' ? 'approve' : 'reject' } }],
+      });
+      expect(invokeCalls.map((call) => call.username)).toEqual(['maker-two']);
+      expect(repositories.get('agentLoopActionApprovals')?.rows[0].consumedAt).toBeInstanceOf(Date);
+      expect(repositories.get('agentLoopRuns')?.rows[0].status).toBe('verifying');
+    },
+  );
 
   it('maps edited and rejected approvals onto plugin-ai decisions', async () => {
     const run = resumedRun();

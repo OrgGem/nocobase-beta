@@ -8,7 +8,9 @@ Agent orchestration layer for NocoBase AI Employees (plugin-ai). The plugin prov
 2. **Harness (Policy Profiles)** — versioned, tag-addressed policy bundles that constrain what each role may do (tools, memory, delegation, limits, isolation, observability), compiled layer-by-layer with most-restrictive-wins semantics.
 3. **Skill Hub** — sandboxed Python/Node.js skills that AI employees can execute as tools, with async execution, human-in-the-loop review, an MCP-style surface, and Git/registry import.
 
-On top of these, the plugin observes native sub-agent dispatching from plugin-ai, records a unified execution-span tree, injects agent memory context, and exposes an external RAG search tool.
+The legacy loop engine remains available for compatibility. Native agent execution is owned by plugin-ai. The native observer does not change a task, prompt, memory, tool binding, result, or error; persisted native records can be reconciled into a session-level execution tree with model usage and configured cost snapshots. The plugin also exposes an external RAG search tool.
+
+Native harness settings are not global enforcement gates. The capability view describes which settings apply to plugin-owned components and which native policies are unsupported or observation-only. Cost is calculated from configured pricing, not provider billing, and missing usage or price remains unknown. Daily/global legacy cost buckets are not reconciled against every native provider call and must not be treated as confirmed actual-spend caps.
 
 ## Agent Loop Control Plane
 
@@ -39,8 +41,9 @@ Human actions on runs: pause, resume, cancel, retry, escalate, accept result. Bu
 
 ### Sub-agent observation and memory
 
-- `NativeSubAgentObserver` wraps plugin-ai's native `dispatch-sub-agent-task` flow: it resolves harness policy, injects memory context into the delegated question, records root/tool spans in `agentExecutionSpans`, tracks tokens/cost, and links skill executions. Legacy `delegate_*` / `dispatch_subagents_*` tools are retired.
-- `AgentMemoryContextService` builds an `<agent_memory_context>` block from `agentMemoryContexts` records (scopes `public`, `user`, `agent_user`, plus plugin-user-memory content), trimmed to the harness-configured character limit.
+- `NativeSubAgentObserver` observes the native `dispatch-sub-agent-task` flow without changing the task, result, or error. `agentMonitor:sync` reconciles persisted native sessions and calls in bounded pages; repeat complete passes to include late records and updates to older rows. A session root is not an individual request or complete real-time trace. Native message and tool content is omitted when no invocation-time capture-policy snapshot is available.
+- Trace reconciliation and cleanup use the same global retention window, based on native source activity rather than reconciliation time. The cleanup falls back to source start/creation timestamps for older rows without an activity field. Model-call usage and pricing snapshots are retained separately as accounting data; trace retention is not a deletion policy for that ledger or for native core records.
+- `AgentMemoryContextService` still provides context-building utilities for compatible plugin-owned consumers. The native observer no longer injects memory into delegated questions.
 - `AgentRegistryService` resolves leader↔sub-agent bindings from `orchestratorConfig`, model overrides, and alternative sub-agents for retry.
 
 ## Harness (Policy Profiles)
@@ -66,7 +69,7 @@ The compiled result is persisted on the run as an immutable snapshot (`leaderHar
 
 ### Tool planning
 
-At invocation time, `PluginAiRuntimeAdapter` converts the compiled harness into a tool plan: `deny` > `ask` > `allow`. Tools not explicitly allowed become `ask`; allowed tools with `write`/`external` effects stay `ask` unless listed in `trustedPreHandlerTools`. `ask` tools are attached without auto-call so they interrupt for approval; unenforceable system tools (e.g. web search) are blocked at the source.
+For legacy plugin-owned loop invocations, `PluginAiRuntimeAdapter` converts the compiled harness into a tool plan: `deny` > `ask` > `allow`. Tools not explicitly allowed become `ask`; allowed tools with `write`/`external` effects stay `ask` unless listed in `trustedPreHandlerTools`. `ask` tools are attached without auto-call so they interrupt for approval; unenforceable system tools (e.g. web search) are blocked at the source. This adapter does not establish a global gate for native chat, API, workflow, or sub-agent execution.
 
 ### Versioning
 

@@ -12,6 +12,7 @@ import type { Application } from '@nocobase/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { compileHarness } from '../services/HarnessCompiler';
 import type { CompiledHarness } from '../services/HarnessCompiler';
+import { LoopRunStateMachine } from '../services/LoopRunStateMachine';
 import { loopPatternPolicySchema } from '../services/LoopPatternSchema';
 
 type Row = Record<string, unknown>;
@@ -106,6 +107,7 @@ function createWorker(run: Row) {
       new MemoryRepository([{ id: 1, key: 'global', state: 'running', acceptNewRuns: true, globalMaxConcurrency: 5 }]),
     ],
     ['agentLoopRuns', new MemoryRepository([{ ...run }])],
+    ['agentLoopPatterns', new MemoryRepository([{ id: 1, enabled: true }])],
     ['agentLoopEvents', new MemoryRepository()],
     ['agentLoopSteps', new MemoryRepository()],
     ['aiMessages', new MemoryRepository()],
@@ -133,7 +135,7 @@ function createWorker(run: Row) {
     lockManager: { runExclusive: <T>(_key: string, operation: () => Promise<T>) => operation() },
   };
   const worker = new LoopWorkerService(app as unknown as Application, database as unknown as Database);
-  return { repositories, worker: worker as unknown as WorkerInternals, service: worker };
+  return { repositories, worker: worker as unknown as WorkerInternals, service: worker, database };
 }
 
 type WorkerInternals = {
@@ -200,6 +202,56 @@ describe('LoopWorkerService maker execution', () => {
     expect(verifyCalls[0].makerUsernames).toEqual(['maker-one', 'maker-two']);
     expect(verifyCalls[0].makerSummary).toContain('# maker-one');
     expect(verifyCalls[0].makerSummary).toContain('# maker-two');
+  });
+
+  it('resumes expired verification after a waiting-lock claim without replaying leader or makers', async () => {
+    const makerSummary = '# maker-one\nSaved implementation report';
+    const run = baseRun({
+      status: 'verifying',
+      finalAnswer: makerSummary,
+      lockedBy: 'expired-worker:lease',
+      lockedUntil: new Date(Date.now() - 60_000),
+      repositoryKey: 'repo',
+      actingOn: ['src/**'],
+    });
+    const { database, repositories, worker } = createWorker(run);
+    const pathLocks = repositories.get('agentLoopPathLocks');
+    if (!pathLocks) throw new Error('agentLoopPathLocks repository missing');
+    await pathLocks.create({
+      values: {
+        runId: 99,
+        repositoryKey: 'repo',
+        owner: 'another-run:lease',
+        paths: ['src/**'],
+        status: 'held',
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const stateMachine = new LoopRunStateMachine(database as unknown as Database);
+
+    const firstClaim = await stateMachine.claimNext('worker-a', 30_000);
+    if (!firstClaim) throw new Error('Expected the expired verifying run to be reclaimed');
+    expect(firstClaim.run.resumeContext).toEqual({ kind: 'verification_lease_recovery', makerSummary });
+    await worker.execute(firstClaim);
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ status: 'waiting_lock' });
+    expect(repositories.get('agentLoopRuns')?.rows[0].resumeContext).toEqual({
+      kind: 'verification_lease_recovery',
+      makerSummary,
+    });
+
+    const blocker = pathLocks.rows.find((row) => row.runId === 99);
+    if (!blocker) throw new Error('Expected the seeded path blocker');
+    await pathLocks.update({ filterByTk: blocker.id, values: { status: 'released' } });
+
+    const resumedClaim = await stateMachine.claimNext('worker-b', 30_000);
+    if (!resumedClaim) throw new Error('Expected the waiting-lock recovery run to be claimed');
+    expect(resumedClaim.run.resumeContext).toEqual({ kind: 'verification_lease_recovery', makerSummary });
+    await worker.execute(resumedClaim);
+
+    expect(invokeCalls).toHaveLength(0);
+    expect(verifyCalls).toEqual([{ makerSummary, makerUsernames: ['maker-one', 'maker-two'] }]);
+    // The mocked verifier records the input but does not perform VerificationService's final transition.
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ status: 'verifying', resumeContext: null });
   });
 
   it('fails the run when a bound maker has no harness snapshot', async () => {

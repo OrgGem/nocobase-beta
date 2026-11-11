@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database } from '@nocobase/database';
 import { describe, expect, it } from 'vitest';
 import { LoopBudgetService } from '../services/LoopBudgetService';
@@ -228,6 +237,33 @@ describe('LoopBudgetService', () => {
     expect(requests.filter((request) => request.status === 'rejected')).toHaveLength(1);
     expect(repositories.get('agentLoopRuns')?.rows[0].totalTokens).toBe(6);
     expect(repositories.get('agentLoopUsageBuckets')?.rows[0].totalTokens).toBe(6);
+  });
+
+  it('fails closed on incomplete usage despite known subtotals but permits a new zero-call run', async () => {
+    const limited = policy({ perRun: { maxTokens: 100 } });
+    for (const usageState of [
+      { usageStatus: 'missing' },
+      { usageStatus: 'partial' },
+      { usageStatus: 'actual', usageIncompleteSessions: ['session-1'] },
+    ]) {
+      const { service } = createService({
+        runs: [run(1, 1, { invocationCount: 1, totalTokens: 24, ...usageState })],
+      });
+      await expect(
+        service.reserve({ runId: 1, patternId: 1, policy: limited, delta: { invocations: 1 }, now }),
+      ).rejects.toThrow('Per-run token usage is unavailable');
+    }
+
+    const emptyRun = createService();
+    await expect(
+      emptyRun.service.reserve({
+        runId: 1,
+        patternId: 1,
+        policy: limited,
+        delta: { invocations: 1, totalTokens: 1 },
+        now,
+      }),
+    ).resolves.toMatchObject({ reserved: { invocations: 1, totalTokens: 1 } });
   });
 
   it('fails closed for invalid deltas, historical runs, mismatched patterns, and paused control', async () => {

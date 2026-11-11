@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database } from '@nocobase/database';
 import { describe, expect, it, vi } from 'vitest';
 import { compileHarness } from '../services/HarnessCompiler';
@@ -144,5 +153,40 @@ describe('LoopTriggerService.enqueue harness audit', () => {
     );
     expect(applied).toHaveLength(2);
     expect(applied.map((event) => (event.payload as Row).role)).toEqual(['leader', 'verifier']);
+  });
+
+  it.each([
+    { ownerId: 99, requesterId: 7 },
+    { ownerId: undefined, requesterId: 7 },
+    { ownerId: 7, requesterId: undefined },
+  ])('does not disclose a duplicate run owned by $ownerId to $requesterId', async ({ ownerId, requesterId }) => {
+    const { repositories, service } = setup(compiledSnapshot());
+    const input = { patternId: 1, triggerType: 'manual' as const, triggerKey: 'shared-key' };
+    await service.enqueue({ ...input, userId: ownerId, goal: 'Private owner goal' });
+    const runs = repositories.get('agentLoopRuns');
+    if (!runs) throw new Error('Expected the runs repository.');
+    const duplicate = Object.assign(new Error('Validation error'), { name: 'SequelizeUniqueConstraintError' });
+    vi.spyOn(runs, 'create').mockRejectedValueOnce(duplicate);
+
+    await expect(service.enqueue({ ...input, userId: requesterId })).rejects.toBe(duplicate);
+    expect(runs.rows).toHaveLength(1);
+  });
+
+  it.each([7, undefined])('preserves duplicate trigger idempotency for owner %s', async (userId) => {
+    const { repositories, service } = setup(compiledSnapshot());
+    const input = {
+      patternId: 1,
+      triggerType: userId ? ('manual' as const) : ('cron' as const),
+      triggerKey: 'same-owner-key',
+      userId,
+    };
+    const first = await service.enqueue(input);
+    const runs = repositories.get('agentLoopRuns');
+    if (!runs) throw new Error('Expected the runs repository.');
+    const duplicate = Object.assign(new Error('Validation error'), { name: 'SequelizeUniqueConstraintError' });
+    vi.spyOn(runs, 'create').mockRejectedValueOnce(duplicate);
+
+    await expect(service.enqueue(input)).resolves.toEqual({ created: false, run: first.run });
+    expect(runs.rows).toHaveLength(1);
   });
 });

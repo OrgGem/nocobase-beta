@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database } from '@nocobase/database';
 
 const INDEXED_COLLECTIONS = [
@@ -22,7 +31,8 @@ const INDEXED_COLLECTIONS = [
 
 type PhysicalIndex = {
   name?: string;
-  fields?: Array<{ attribute?: string } | string>;
+  unique?: boolean;
+  fields?: Array<{ attribute?: string; name?: string } | string>;
 };
 
 function resolvePhysicalField(collection: ReturnType<Database['getCollection']>, field: unknown): string | null {
@@ -43,7 +53,9 @@ function deriveIndexName(tableName: unknown, fieldNames: string[]) {
 }
 
 function physicalIndexFieldKey(index: PhysicalIndex): string {
-  return (index.fields || []).map((field) => (typeof field === 'string' ? field : field?.attribute || '')).join(',');
+  return (index.fields || [])
+    .map((field) => (typeof field === 'string' ? field : field?.attribute || field?.name || ''))
+    .join(',');
 }
 
 export async function ensureAgentOrchestratorIndexes(database: Database) {
@@ -59,6 +71,7 @@ export async function ensureAgentOrchestratorIndexes(database: Database) {
     // Track existing indexes by their ordered column composition so we skip an
     // index the framework's own db.sync() already created under a different name.
     const physicalFieldKeys = new Set(physicalIndexes.map(physicalIndexFieldKey));
+    const uniqueFieldKeys = new Set(physicalIndexes.filter((index) => index.unique).map(physicalIndexFieldKey));
 
     for (const index of collection.model.options.indexes || []) {
       if (!index.fields?.length) continue;
@@ -66,7 +79,8 @@ export async function ensureAgentOrchestratorIndexes(database: Database) {
       const physicalFieldNames = index.fields
         .map((field) => resolvePhysicalField(collection, field))
         .filter((name): name is string => !!name);
-      if (physicalFieldKeys.has(physicalFieldNames.join(','))) continue;
+      const fieldKey = physicalFieldNames.join(',');
+      if ((index.unique ? uniqueFieldKeys : physicalFieldKeys).has(fieldKey)) continue;
 
       const resolvedFields = index.fields.map((field) => {
         if (typeof field === 'string') {
@@ -81,8 +95,16 @@ export async function ensureAgentOrchestratorIndexes(database: Database) {
         return field;
       });
 
-      const indexName = index.name || deriveIndexName(tableName, physicalFieldNames);
-      if (physicalIndexNames.has(indexName)) continue;
+      let indexName = index.name || deriveIndexName(tableName, physicalFieldNames);
+      if (physicalIndexNames.has(indexName)) {
+        if (!index.unique) continue;
+        // A non-unique index with the same name/columns does not enforce identity uniqueness.
+        // Keep it intact and add a separately named unique index.
+        const baseName = `${indexName}_unique`;
+        indexName = baseName;
+        let suffix = 2;
+        while (physicalIndexNames.has(indexName)) indexName = `${baseName}_${suffix++}`;
+      }
 
       await queryInterface.addIndex(tableName, {
         name: indexName,
@@ -90,7 +112,8 @@ export async function ensureAgentOrchestratorIndexes(database: Database) {
         unique: index.unique,
       });
       physicalIndexNames.add(indexName);
-      physicalFieldKeys.add(physicalFieldNames.join(','));
+      physicalFieldKeys.add(fieldKey);
+      if (index.unique) uniqueFieldKeys.add(fieldKey);
     }
   }
 }

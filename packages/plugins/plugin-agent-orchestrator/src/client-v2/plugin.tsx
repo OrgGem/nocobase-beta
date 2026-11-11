@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin, Application } from '@nocobase/client-v2';
 import { InteractionSchemasProvider, registerSkillCard } from './skill-hub/tools/InteractionSchemasProvider';
 
@@ -27,6 +36,22 @@ export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>,
       key: 'tracing',
       title: this.t('Execution Tracing'),
       componentLoader: () => import('./pages/TracingPage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
+      key: 'usage-governance',
+      title: this.t('Usage and cost'),
+      componentLoader: () => import('./pages/UsageGovernancePage'),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'ai-orchestrator',
+      aclSnippet: 'pm.plugin-agent-orchestrator',
+      key: 'employee-governance',
+      title: this.t('Employee governance'),
+      componentLoader: () => import('./pages/EmployeeGovernancePage'),
     });
 
     this.pluginSettingsManager.addPageTabItem({

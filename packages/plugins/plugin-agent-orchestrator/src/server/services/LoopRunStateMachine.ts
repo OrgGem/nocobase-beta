@@ -1,5 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { randomUUID } from 'node:crypto';
-import type { Database, Model, Transaction } from '@nocobase/database';
+import type { Database, Model, Repository, Transaction } from '@nocobase/database';
 import { LoopControlService } from './LoopControlService';
 import { loopPatternPolicySchema } from './LoopPatternSchema';
 import { getRunEventBus } from './RunEventBus';
@@ -47,7 +56,7 @@ const transitions: Record<LoopRunStatus, ReadonlySet<LoopRunStatus>> = {
     'canceled',
   ]),
   waiting_approval: new Set(['queued', 'running', 'waiting_human', 'paused', 'blocked', 'failed', 'canceled']),
-  verifying: new Set(['running', 'waiting_human', 'paused', 'blocked', 'succeeded', 'failed', 'canceled']),
+  verifying: new Set(['queued', 'running', 'waiting_human', 'paused', 'blocked', 'succeeded', 'failed', 'canceled']),
   waiting_human: new Set(['running', 'succeeded', 'failed', 'canceled']),
   paused: new Set(['queued', 'preparing', 'running', 'waiting_approval', 'verifying', 'blocked', 'canceled']),
   blocked: new Set(['queued', 'waiting_human', 'failed', 'canceled']),
@@ -158,9 +167,8 @@ export class LoopRunStateMachine {
       const now = new Date();
       const reclaimedEvents: Array<{ runId: number; event: unknown }> = [];
 
-      // A worker that crashed mid-run leaves an active status behind with a lease that
-      // eventually expires. Those runs must be returned to the queue before concurrency is
-      // measured, otherwise each crash permanently consumes a slot.
+      // Reclaim stale leases before measuring concurrency. A verification-stage run must retain
+      // its completed work instead of executing the leader and makers again.
       const staleActive = await runs.find({
         filter: { runtimeVersion: 'control-plane-v2', status: { $in: activeExecutionStatuses } },
         transaction,
@@ -170,14 +178,27 @@ export class LoopRunStateMachine {
         if (!leaseIsReclaimable(candidate, now)) continue;
         const runId = asPositiveInteger(read(candidate, 'id'), 'Run identifier');
         const from = asStatus(read(candidate, 'status'));
+        const finalAnswer = read(candidate, 'finalAnswer');
+        const verificationRecovery = from === 'verifying' && typeof finalAnswer === 'string' && !!finalAnswer.trim();
+        const requiresReview = from === 'verifying' && !verificationRecovery;
+        const to = requiresReview ? 'waiting_human' : 'queued';
+        const reason = 'Verification lease expired without a saved maker summary; operator review is required.';
         assertRunTransition({
           from,
-          to: 'queued',
+          to,
           runtimeVersion: String(read(candidate, 'runtimeVersion') || ''),
         });
         await runs.update({
           filterByTk: runId,
-          values: { status: 'queued', lockedBy: null, lockedUntil: null },
+          values: {
+            status: to,
+            lockedBy: null,
+            lockedUntil: null,
+            ...(verificationRecovery
+              ? { resumeContext: { kind: 'verification_lease_recovery', makerSummary: finalAnswer } }
+              : {}),
+            ...(requiresReview ? { escalationReason: reason } : {}),
+          },
           transaction,
         });
         const event = await this.createEvent(
@@ -185,9 +206,13 @@ export class LoopRunStateMachine {
             runId,
             type: 'run_lease_expired',
             title: 'Worker lease expired',
-            content: `Run returned to the queue after its ${from} worker lease expired.`,
-            status: 'queued',
-            payload: { from, previousOwner: read(candidate, 'lockedBy') ?? null },
+            content: requiresReview
+              ? reason
+              : verificationRecovery
+                ? 'Run returned to the queue to resume verification of the saved maker summary.'
+                : `Run returned to the queue after its ${from} worker lease expired.`,
+            status: to,
+            payload: { from, previousOwner: read(candidate, 'lockedBy') ?? null, verificationRecovery, requiresReview },
             actorType: 'system',
             actorIdentity: normalizedWorkerId,
             correlationKey: `lease-expired:${runId}:${String(read(candidate, 'lockedBy') || '')}`,
@@ -261,7 +286,7 @@ export class LoopRunStateMachine {
         }
 
         const activePattern = await this.countActive(runs, { patternId }, transaction, now);
-        if (activePattern >= parsedPolicy.data.maxConcurrency) continue;
+        if (activePattern >= (parsedPolicy.success ? parsedPolicy.data.maxConcurrency : 0)) continue;
 
         const leaseToken = `${normalizedWorkerId}:${randomUUID()}`;
         const leaseUntil = new Date(now.getTime() + leaseMs);
@@ -505,17 +530,12 @@ export class LoopRunStateMachine {
     return committed;
   }
 
-  private async countActive(
-    runs: ReturnType<Database['getRepository']>,
-    filter: Record<string, unknown>,
-    transaction: Transaction,
-    now: Date,
-  ) {
+  private async countActive(runs: Repository, filter: Record<string, unknown>, transaction: Transaction, now: Date) {
     const rows = await runs.find({
       filter: { ...filter, runtimeVersion: 'control-plane-v2', status: { $in: activeExecutionStatuses } },
       transaction,
     });
-    return rows.filter((row) => !leaseIsReclaimable(row, now)).length;
+    return rows.filter((row: Model) => !leaseIsReclaimable(row, now)).length;
   }
 
   private async createEvent(values: Record<string, unknown>, transaction: Transaction) {

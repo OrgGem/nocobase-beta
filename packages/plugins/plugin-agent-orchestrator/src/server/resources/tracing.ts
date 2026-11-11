@@ -1,7 +1,18 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Plugin } from '@nocobase/server';
+import type { Context as ActionContext } from '@nocobase/actions';
 import { LoopRunAccessError, LoopRunRepository } from '../services/LoopRunRepository';
 import { requestActor, throwResourceError } from './resource-helpers';
-import { asObject } from '../utils/ctx-utils';
+import { NATIVE_SOURCE } from '../services/NativeSubAgentObserver';
+import { safeNativeSpan, selectNativeSubtree, summarizeNativeUsage } from './native-monitor-format';
 
 type TraceRecord = Record<string, unknown>;
 
@@ -132,8 +143,8 @@ export function registerTracingResource(plugin: Plugin) {
     actions: {
       async list(ctx, next) {
         try {
-          const actor = requestActor(ctx);
-          const { page = 1, pageSize = 50, sort = ['-createdAt'], filter = {} } = ctx.action.params;
+          const actor = requestActor(ctx as unknown as ActionContext);
+          const { page = 1, pageSize = 50, sort = ['-createdAt'], filter = {} } = ctx.action?.params || {};
           const ownedRunIds = actor.isAdmin ? [] : await runs.listOwnedRunIds(actor.userId, false);
           const spanAccess = actor.isAdmin
             ? {}
@@ -144,7 +155,7 @@ export function registerTracingResource(plugin: Plugin) {
                 ],
               };
           const spanFilter = mergeFilter(
-            { ...normalizeSpanFilter(filter), parentSpanId: null, type: 'sub_agent' },
+            { ...normalizeSpanFilter(filter), parentSpanId: null, type: { $in: ['main_agent', 'sub_agent'] } },
             spanAccess,
           );
           const spanRepo = ctx.db.getRepository('agentExecutionSpans');
@@ -157,7 +168,10 @@ export function registerTracingResource(plugin: Plugin) {
 
           if (spanCount > 0) {
             ctx.body = {
-              data: spanRows.map(formatSpanListRow),
+              data: spanRows.map((row: unknown) => {
+                const plain = plainRecord(row);
+                return formatSpanListRow(plain.source === NATIVE_SOURCE ? safeNativeSpan(plain) : plain);
+              }),
               meta: {
                 count: spanCount,
                 page: Number(page),
@@ -178,7 +192,7 @@ export function registerTracingResource(plugin: Plugin) {
           });
 
           ctx.body = {
-            data: rows.map((raw) => {
+            data: rows.map((raw: unknown) => {
               const row = plainRecord(raw);
               return {
                 id: row.id,
@@ -207,15 +221,15 @@ export function registerTracingResource(plugin: Plugin) {
             },
           };
         } catch (error) {
-          throwResourceError(ctx, error);
+          throwResourceError(ctx as unknown as ActionContext, error);
         }
         await next();
       },
 
       async get(ctx, next) {
         try {
-          const actor = requestActor(ctx);
-          const { filterByTk, source } = ctx.action.params;
+          const actor = requestActor(ctx as unknown as ActionContext);
+          const { filterByTk, source } = ctx.action?.params || {};
           if (!filterByTk) ctx.throw(400, 'id is required');
 
           const spanRepo = ctx.db.getRepository('agentExecutionSpans');
@@ -229,20 +243,42 @@ export function registerTracingResource(plugin: Plugin) {
                 throw new LoopRunAccessError(403, 'You cannot access this execution trace.');
               }
 
-              const rows = await spanRepo.find({
-                filter: { rootRunId: plainSpan.rootRunId },
+              const accessFilter = actor.isAdmin
+                ? { rootRunId: plainSpan.rootRunId }
+                : { rootRunId: plainSpan.rootRunId, userId: actor.userId };
+              const rawRows = await spanRepo.find({
+                filter: accessFilter,
                 sort: ['createdAt'],
+                limit: 5001,
               });
-              const metadata = asObject(plainSpan.metadata);
+              const isNative = plainSpan.source === NATIVE_SOURCE;
+              const truncated = rawRows.length > 5000;
+              const selectedRows = isNative
+                ? selectNativeSubtree(rawRows.slice(0, 5000), plainSpan)
+                : rawRows.slice(0, 5000);
+              const rows = selectedRows.map((row: unknown) => (isNative ? safeNativeSpan(row) : plainRecord(row)));
+              const visibleSpan = isNative ? safeNativeSpan(plainSpan) : plainSpan;
+              const metadata = asObject(visibleSpan.metadata);
+              const usage = isNative ? summarizeNativeUsage(rows) : undefined;
               ctx.body = {
                 data: {
-                  ...formatSpanListRow(plainSpan),
-                  input: plainSpan.input,
-                  output: plainSpan.output,
+                  ...formatSpanListRow(visibleSpan),
+                  input: visibleSpan.input,
+                  output: visibleSpan.output,
                   metadata,
                   trace: flattenSpanTimeline(rows),
                   messages: asArray(metadata.messages),
                   children: buildSpanTree(rows),
+                  ...(usage
+                    ? {
+                        usage: truncated ? { ...usage, inputTokens: null, outputTokens: null, cost: null } : usage,
+                        coverage: {
+                          granularity: 'session',
+                          contentCapture: 'omitted-without-invocation-policy-snapshot',
+                          truncated,
+                        },
+                      }
+                    : {}),
                 },
               };
               await next();
@@ -258,7 +294,7 @@ export function registerTracingResource(plugin: Plugin) {
           }
           ctx.body = { data: { ...plainLog, hasUnifiedTrace: false } };
         } catch (error) {
-          throwResourceError(ctx, error);
+          throwResourceError(ctx as unknown as ActionContext, error);
         }
         await next();
       },

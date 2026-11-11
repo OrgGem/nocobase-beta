@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { defineCollection } from '@nocobase/database';
 
 export default defineCollection({
@@ -191,26 +200,44 @@ export default defineCollection({
     {
       name: 'totalInputTokens',
       type: 'integer',
-      defaultValue: 0,
+      allowNull: true,
       comment: 'Accumulated input/prompt tokens across all spans in this run',
     },
     {
       name: 'totalOutputTokens',
       type: 'integer',
-      defaultValue: 0,
+      allowNull: true,
       comment: 'Accumulated output/completion tokens across all spans in this run',
     },
     {
       name: 'totalTokens',
       type: 'integer',
-      defaultValue: 0,
+      allowNull: true,
       comment: 'Total accumulated tokens (input + output) across all spans in this run',
     },
     {
       name: 'totalCost',
       type: 'float',
-      defaultValue: 0,
-      comment: 'Estimated total cost in USD across all spans in this run',
+      allowNull: true,
+      comment: 'Summed model-call cost from explicit price snapshots; null means unpriced.',
+    },
+    {
+      name: 'usageStatus',
+      type: 'string',
+      length: 20,
+      comment: 'actual, estimated, partial, or missing model-call usage.',
+    },
+    {
+      name: 'usageIncompleteSessions',
+      type: 'json',
+      allowNull: true,
+      comment: 'Native sessions whose usage reconciliation did not complete.',
+    },
+    {
+      name: 'pricingStatus',
+      type: 'string',
+      length: 20,
+      comment: 'configured, estimated, or unpriced model-call cost.',
     },
     {
       name: 'budgetMaxTokens',

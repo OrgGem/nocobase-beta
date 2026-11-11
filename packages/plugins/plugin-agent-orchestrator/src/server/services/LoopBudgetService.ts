@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database, Model } from '@nocobase/database';
 import type { LoopPatternPolicy } from './LoopPatternSchema';
 import { read } from '../utils/record-utils';
@@ -158,15 +167,48 @@ export class LoopBudgetService {
           toolCallCount: storedCount(read(run, 'toolCallCount'), 'Run tool call') + delta.toolCalls,
           delegationCount: storedCount(read(run, 'delegationCount'), 'Run delegation') + delta.delegations,
           verificationCount: storedCount(read(run, 'verificationCount'), 'Run verification') + delta.verifications,
-          totalInputTokens: storedCount(read(run, 'totalInputTokens'), 'Run input token') + delta.inputTokens,
-          totalOutputTokens: storedCount(read(run, 'totalOutputTokens'), 'Run output token') + delta.outputTokens,
-          totalTokens: storedCount(read(run, 'totalTokens'), 'Run total token') + delta.totalTokens,
-          totalCost: storedCost(read(run, 'totalCost'), 'Run cost') + delta.cost,
+          ...(input.delta.inputTokens === undefined
+            ? {}
+            : {
+                totalInputTokens:
+                  read(run, 'totalInputTokens') == null && read(run, 'usageStatus')
+                    ? null
+                    : storedCount(read(run, 'totalInputTokens'), 'Run input token') + delta.inputTokens,
+              }),
+          ...(input.delta.outputTokens === undefined
+            ? {}
+            : {
+                totalOutputTokens:
+                  read(run, 'totalOutputTokens') == null && read(run, 'usageStatus')
+                    ? null
+                    : storedCount(read(run, 'totalOutputTokens'), 'Run output token') + delta.outputTokens,
+              }),
+          ...(input.delta.totalTokens === undefined &&
+          input.delta.inputTokens === undefined &&
+          input.delta.outputTokens === undefined
+            ? {}
+            : {
+                totalTokens:
+                  read(run, 'totalTokens') == null && read(run, 'usageStatus')
+                    ? null
+                    : storedCount(read(run, 'totalTokens'), 'Run total token') + delta.totalTokens,
+              }),
+          ...(input.delta.cost === undefined
+            ? {}
+            : {
+                totalCost:
+                  read(run, 'totalCost') == null && read(run, 'pricingStatus')
+                    ? null
+                    : storedCost(read(run, 'totalCost'), 'Run cost') + delta.cost,
+              }),
         },
         transaction,
       });
+      const bucketId = read(bucket, 'id');
+      if (typeof bucketId !== 'string' && typeof bucketId !== 'number')
+        throw new Error('Daily usage bucket has no identifier.');
       await buckets.update({
-        filterByTk: read(bucket, 'id'),
+        filterByTk: bucketId,
         values: {
           invocationCount: storedCount(read(bucket, 'invocationCount'), 'Daily invocation') + delta.invocations,
           toolCallCount: storedCount(read(bucket, 'toolCallCount'), 'Daily tool call') + delta.toolCalls,
@@ -184,6 +226,29 @@ export class LoopBudgetService {
 
   private assertRunBudget(run: Model, policy: LoopPatternPolicy, delta: UsageTotals) {
     const limits = policy.perRun;
+    const hasInvocations = storedCount(read(run, 'invocationCount'), 'Run invocation') > 0;
+    const usageStatus = String(read(run, 'usageStatus') || '');
+    const pricingStatus = String(read(run, 'pricingStatus') || '');
+    const incompleteSessions = read(run, 'usageIncompleteSessions');
+    const hasIncompleteSessions = Array.isArray(incompleteSessions) && incompleteSessions.length > 0;
+    if (
+      limits.maxTokens !== null &&
+      (hasIncompleteSessions ||
+        usageStatus === 'partial' ||
+        usageStatus === 'missing' ||
+        (read(run, 'totalTokens') == null && (usageStatus || hasInvocations)))
+    ) {
+      throw new Error('Per-run token usage is unavailable for the configured budget.');
+    }
+    if (
+      limits.maxCost !== null &&
+      (hasIncompleteSessions ||
+        pricingStatus === 'unpriced' ||
+        pricingStatus === 'non_usd' ||
+        (read(run, 'totalCost') == null && (pricingStatus || hasInvocations)))
+    ) {
+      throw new Error('Per-run model cost is unavailable for the configured budget.');
+    }
     exceeds(
       storedCount(read(run, 'invocationCount'), 'Run invocation'),
       delta.invocations,
@@ -247,6 +312,7 @@ export class LoopBudgetService {
   }
 
   private assertGlobalDailyBudget(buckets: Model[], control: Model, delta: UsageTotals) {
+    const globalCostLimit = storedLimit(read(control, 'dailyMaxCost'), 'Global daily cost');
     const currentTokens = buckets.reduce(
       (total, bucket) => total + storedCount(read(bucket, 'totalTokens'), 'Daily total token'),
       0,
@@ -261,11 +327,6 @@ export class LoopBudgetService {
       storedLimit(read(control, 'dailyMaxTokens'), 'Global daily token'),
       'Global daily token',
     );
-    exceeds(
-      currentCost,
-      delta.cost,
-      storedLimit(read(control, 'dailyMaxCost'), 'Global daily cost'),
-      'Global daily cost',
-    );
+    exceeds(currentCost, delta.cost, globalCostLimit, 'Global daily cost');
   }
 }

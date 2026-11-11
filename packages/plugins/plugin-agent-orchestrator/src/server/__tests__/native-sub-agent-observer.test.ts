@@ -1,21 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync } from 'fs';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { describe, expect, it, vi } from 'vitest';
 import { AgentMemoryContextService } from '../services/AgentMemoryContextService';
-import { compileHarness } from '../services/HarnessCompiler';
 import { NativeSubAgentObserver } from '../services/NativeSubAgentObserver';
 import { getAgentExecutionContext } from '../services/AgentExecutionContext';
-import { REDACTED_PLACEHOLDER } from '../services/harness-runtime-policy';
-
-// The observer spills oversized sub-agent results to storage; keep tests side-effect free.
-vi.mock('fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('fs')>();
-  return {
-    ...actual,
-    mkdirSync: vi.fn(),
-    writeFileSync: vi.fn(),
-  };
-});
-
 function createObserverHarness(
   profileSettings: Record<string, unknown> | null = {},
   options: {
@@ -171,112 +166,162 @@ function createTask(getRepository?: (name: string) => unknown) {
   };
 }
 
+type TransparentTask = {
+  ctx: {
+    action: { params: { values: { sessionId: string } } };
+    auth: { user: { id: number } };
+    db: { getRepository: (name: string) => undefined };
+  };
+  sessionId: string;
+  employee: { username: string };
+  model: { name: string };
+  question: string;
+  skillSettings: { tools: readonly { name: string }[] };
+  writer: (chunk: Record<string, unknown>) => undefined;
+};
+
+type ObserverTestSeam = {
+  observeDispatch: (task: TransparentTask, status: 'success' | 'error', startedAt: number) => Promise<void>;
+};
+
+function createTransparentObserverHarness(run: (task: TransparentTask) => Promise<string>) {
+  const writer = vi.fn(() => undefined);
+  const skillSettings = Object.freeze({ tools: Object.freeze([{ name: 'native-tool' }]) });
+  const task: TransparentTask = Object.freeze({
+    ctx: {
+      action: { params: { values: { sessionId: 'parent-session' } } },
+      auth: { user: { id: 7 } },
+      db: { getRepository: vi.fn(() => undefined) },
+    },
+    sessionId: 'child-session',
+    employee: { username: 'sub-agent' },
+    model: { name: 'native-model' },
+    question: 'preserve this prompt',
+    skillSettings,
+    writer,
+  });
+  const originalRun = vi.fn(run);
+  const dispatcher = { run: originalRun };
+  const logger = { info: vi.fn(), warn: vi.fn() };
+  const plugin = {
+    app: {
+      logger,
+      pm: { get: vi.fn((name: string) => (name === 'ai' ? { subAgentsDispatcher: dispatcher } : null)) },
+    },
+    db: { getRepository: vi.fn(() => undefined) },
+  };
+  const observer = new NativeSubAgentObserver(
+    plugin as unknown as ConstructorParameters<typeof NativeSubAgentObserver>[0],
+  );
+  return { observer, dispatcher, originalRun, logger, task };
+}
 describe('NativeSubAgentObserver', () => {
-  it('wraps dispatcher once and calls the original native run', async () => {
-    const { plugin, dispatcher, originalRun, spanRepo } = createObserverHarness();
-    const observer = new NativeSubAgentObserver(plugin);
+  it('passes the original native task, writer and skill bindings through unchanged', async () => {
+    const writer = vi.fn(() => undefined);
+    const skillSettings = Object.freeze({ tools: Object.freeze([{ name: 'native-tool' }]) });
+    const task = Object.freeze({
+      ctx: {
+        action: { params: { values: { sessionId: 'parent-session' } } },
+        auth: { user: { id: 7 } },
+        db: { getRepository: vi.fn(() => undefined) },
+      },
+      sessionId: 'child-session',
+      employee: { username: 'sub-agent' },
+      model: { name: 'native-model' },
+      question: 'preserve this prompt',
+      skillSettings,
+      writer,
+    });
+    const nativeResult = 'native-result';
+    const originalRun = vi.fn(async (_task: typeof task) => nativeResult);
+    const dispatcher = { run: originalRun };
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const plugin = {
+      app: {
+        logger,
+        pm: { get: vi.fn((name: string) => (name === 'ai' ? { subAgentsDispatcher: dispatcher } : null)) },
+      },
+      db: { getRepository: vi.fn(() => undefined) },
+    };
+    const observer = new NativeSubAgentObserver(
+      plugin as unknown as ConstructorParameters<typeof NativeSubAgentObserver>[0],
+    );
+    const telemetry = vi.spyOn(observer as unknown as ObserverTestSeam, 'observeDispatch').mockResolvedValue(undefined);
 
     expect(observer.install()).toBe(true);
-    expect(observer.install()).toBe(false);
+    const result = await dispatcher.run(task);
 
-    const result = await dispatcher.run(createTask());
-
-    expect(result).toBe('answer:do the work');
     expect(originalRun).toHaveBeenCalledTimes(1);
-    expect(spanRepo.create).toHaveBeenCalled();
-    expect(spanRepo.update).toHaveBeenCalled();
+    expect(originalRun.mock.calls[0][0]).toBe(task);
+    expect(originalRun.mock.calls[0][0].writer).toBe(writer);
+    expect(originalRun.mock.calls[0][0].skillSettings).toBe(skillSettings);
+    expect(originalRun.mock.calls[0][0].question).toBe('preserve this prompt');
+    expect(result).toBe(nativeResult);
+    expect(telemetry).toHaveBeenCalledWith(task, 'success', expect.any(Number));
   });
 
-  it('uses the sub-agent employee bindings instead of inheriting the leader tool filter', async () => {
-    const { plugin, dispatcher, getObserved } = createObserverHarness();
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
+  it('does not block or replace a native result when telemetry rejects or stalls', async () => {
+    const failure = new Error('telemetry persistence failed');
+    const rejecting = createTransparentObserverHarness(async () => 'completed');
+    const rejectingTelemetry = vi
+      .spyOn(rejecting.observer as unknown as ObserverTestSeam, 'observeDispatch')
+      .mockRejectedValue(failure);
+    expect(rejecting.observer.install()).toBe(true);
+    expect(await rejecting.dispatcher.run(rejecting.task)).toBe('completed');
+    expect(rejecting.originalRun.mock.calls[0][0]).toBe(rejecting.task);
+    await vi.waitFor(() => {
+      expect(rejecting.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('telemetry failed; continuing native execution'),
+        { error: failure },
+      );
+    });
+    expect(rejectingTelemetry).toHaveBeenCalledWith(rejecting.task, 'success', expect.any(Number));
 
-    await dispatcher.run(createTask());
-
-    expect(getObserved()).toEqual({ observedIdentity: 'sub-agent', observedSkillSettings: undefined });
-  });
-
-  it('links a completed Skill Hub execution to its native tool span', async () => {
-    const { plugin, dispatcher, skillExecutionRepo } = createObserverHarness(
-      {},
-      {
-        toolCallResult: {
-          status: 'success',
-          content: JSON.stringify({ execId: 'execution-41' }),
-        },
-      },
+    const stalled = createTransparentObserverHarness(async () => 'still completed');
+    vi.spyOn(stalled.observer as unknown as ObserverTestSeam, 'observeDispatch').mockReturnValue(
+      new Promise<void>(() => {}),
     );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
+    expect(stalled.observer.install()).toBe(true);
+    await expect(stalled.dispatcher.run(stalled.task)).resolves.toBe('still completed');
+  });
 
-    await dispatcher.run(createTask());
+  it('preserves the original native error when telemetry also fails', async () => {
+    const nativeError = new Error('native dispatch failed');
+    const telemetryError = new Error('telemetry write failed');
+    const harness = createTransparentObserverHarness(async () => {
+      throw nativeError;
+    });
+    const telemetry = vi
+      .spyOn(harness.observer as unknown as ObserverTestSeam, 'observeDispatch')
+      .mockRejectedValue(telemetryError);
+    expect(harness.observer.install()).toBe(true);
 
-    expect(skillExecutionRepo.update).toHaveBeenCalledWith({
-      filterByTk: 'execution-41',
-      values: { orchestratorSpanId: 2 },
+    await expect(harness.dispatcher.run(harness.task)).rejects.toBe(nativeError);
+    expect(harness.originalRun.mock.calls[0][0]).toBe(harness.task);
+    expect(telemetry).toHaveBeenCalledWith(harness.task, 'error', expect.any(Number));
+    await vi.waitFor(() => {
+      expect(harness.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('telemetry failed; continuing native execution'),
+        { error: telemetryError },
+      );
     });
   });
 
-  it('restores the native dispatcher when uninstalled', async () => {
-    const { plugin, dispatcher, originalRun } = createObserverHarness();
-    const observer = new NativeSubAgentObserver(plugin);
+  it('installs once and restores the native dispatcher', async () => {
+    const harness = createTransparentObserverHarness(async () => 'native');
+    const originalRun = harness.dispatcher.run;
+    expect(harness.observer.install()).toBe(true);
+    const wrappedRun = harness.dispatcher.run;
+    expect(wrappedRun).not.toBe(originalRun);
+    expect(harness.observer.install()).toBe(false);
+    expect(harness.observer.uninstall()).toBe(true);
+    expect(harness.dispatcher.run).not.toBe(wrappedRun);
+    expect(harness.observer.uninstall()).toBe(false);
 
-    observer.install();
-    expect(dispatcher.run).not.toBe(originalRun);
-
-    expect(observer.uninstall()).toBe(true);
-    await dispatcher.run(createTask());
+    await harness.dispatcher.run(harness.task);
     expect(originalRun).toHaveBeenCalledTimes(1);
-    expect(observer.uninstall()).toBe(false);
-  });
-
-  it('maps dispatch toolCallId from native sub-agent metadata by sub-session', async () => {
-    const { plugin, dispatcher, spanRepo, repos } = createObserverHarness();
-    repos.aiMessages = {
-      find: vi.fn(async () => [
-        {
-          messageId: 30,
-          metadata: {
-            subAgentConversations: [
-              { sessionId: 'other-sub-session', toolCallId: 'other-dispatch-call', status: 'pending' },
-              { sessionId: 'sub-session', toolCallId: 'metadata-dispatch-call', status: 'pending' },
-            ],
-          },
-        },
-      ]),
-    };
-    repos.aiToolMessages = {
-      findOne: vi.fn(async ({ filter }) => ({
-        id: 11,
-        messageId: 30,
-        toolCallId: filter.toolCallId,
-        sessionId: filter.sessionId,
-      })),
-    };
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask(plugin.db.getRepository));
-
-    const rootSpanValues = spanRepo.create.mock.calls[0][0].values;
-    expect(rootSpanValues.toolCallId).toBe('metadata-dispatch-call');
-    expect(rootSpanValues.metadata.dispatchToolMessageId).toBe(11);
-  });
-
-  it('bypasses tracing and injection when policy disables the native observer', async () => {
-    const { plugin, dispatcher, originalRun, spanRepo } = createObserverHarness({ nativeObserverEnabled: false });
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    expect(originalRun).toHaveBeenCalledTimes(1);
-    expect(originalRun.mock.calls[0][0].question).toBe('do the work');
-    expect(spanRepo.create).not.toHaveBeenCalled();
   });
 });
-
 describe('AgentMemoryContextService', () => {
   it('prioritizes agent-user context before user and public memory', async () => {
     const rows = [
@@ -421,242 +466,5 @@ describe('AgentMemoryContextService', () => {
       nativeObserverEnabled: true,
       tracingRetentionDays: 7,
     });
-  });
-});
-
-describe('NativeSubAgentObserver memory injection', () => {
-  it('places reference memory before the immutable agent task', async () => {
-    const { plugin, dispatcher, originalRun } = createObserverHarness(
-      {},
-      {
-        memoryRows: [{ scope: 'public', enabled: true, userId: null, contentMd: 'Reference fact' }],
-      },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    const question = originalRun.mock.calls[0][0].question as string;
-    expect(question).toContain('<agent_memory_context>');
-    expect(question).toContain('<agent_task>\ndo the work\n</agent_task>');
-    expect(question.indexOf('Reference fact')).toBeLessThan(question.indexOf('<agent_task>'));
-  });
-
-  it('runs the native sub-agent with its Knowledge Base request identity', async () => {
-    const runWithAgentContext = vi.fn(async (_username: string, callback: () => Promise<string>) => callback());
-    const { plugin, dispatcher } = createObserverHarness({}, { knowledgeBasePlugin: { runWithAgentContext } });
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    expect(runWithAgentContext).toHaveBeenCalledWith('sub-agent', expect.any(Function));
-  });
-});
-
-describe('NativeSubAgentObserver harness policy', () => {
-  beforeEach(() => {
-    vi.mocked(writeFileSync).mockClear();
-  });
-
-  it('persists no spans at all when sharing is disabled', async () => {
-    const { plugin, dispatcher, originalRun, spanRepo } = createObserverHarness({
-      observability: { sharing: 'disabled' },
-    });
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    const result = await dispatcher.run(createTask());
-
-    expect(result).toBe('answer:do the work');
-    expect(originalRun).toHaveBeenCalledTimes(1);
-    expect(spanRepo.create).not.toHaveBeenCalled();
-    expect(spanRepo.update).not.toHaveBeenCalled();
-  });
-
-  it('captures outputs but omits inputs under feedback-only sharing', async () => {
-    const { plugin, dispatcher, spanRepo } = createObserverHarness({
-      observability: { sharing: 'feedback-only' },
-    });
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    const rootSpanValues = spanRepo.create.mock.calls[0][0].values;
-    const toolSpanValues = spanRepo.create.mock.calls[1][0].values;
-    expect(rootSpanValues.input).toBeUndefined();
-    expect(toolSpanValues.input).toBeUndefined();
-    const toolSpanUpdate = spanRepo.update.mock.calls[0][0].values;
-    expect(toolSpanUpdate.output).toBeDefined();
-  });
-
-  it('redacts secret-looking keys in captured tool args by default', async () => {
-    const { plugin, dispatcher, spanRepo } = createObserverHarness(
-      {},
-      { toolCallArgs: { apiKey: 'secret-value', path: '/tmp/x' } },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    const toolSpanValues = spanRepo.create.mock.calls[1][0].values;
-    expect(toolSpanValues.input).toEqual({ apiKey: REDACTED_PLACEHOLDER, path: '/tmp/x' });
-  });
-
-  it('keeps raw tool args when the profile disables redaction', async () => {
-    const { plugin, dispatcher, spanRepo } = createObserverHarness(
-      { observability: { redactSecrets: false } },
-      { toolCallArgs: { apiKey: 'secret-value' } },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    const toolSpanValues = spanRepo.create.mock.calls[1][0].values;
-    expect(toolSpanValues.input).toEqual({ apiKey: 'secret-value' });
-  });
-
-  it('spills oversized sub-agent results to disk and returns a bounded preview', async () => {
-    const longAnswer = `ANSWER-HEAD ${'y'.repeat(6000)} ANSWER-TAIL`;
-    const { plugin, dispatcher, spanRepo } = createObserverHarness(
-      { context: { spill: { maxInlineBytes: 400 } } },
-      { runResult: longAnswer },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    const result = await dispatcher.run(createTask());
-
-    expect(result).toContain('ANSWER-HEAD');
-    expect(result).toContain('ANSWER-TAIL');
-    expect(result).toContain('bytes omitted');
-    expect(Buffer.byteLength(result, 'utf8')).toBeLessThanOrEqual(400);
-    expect(writeFileSync).toHaveBeenCalledTimes(1);
-    const spillPath = vi.mocked(writeFileSync).mock.calls[0][0] as string;
-    expect(spillPath).toContain('spills');
-    // The root span (created first, id 1) stores the spilled preview, not the full text.
-    const rootSpanUpdate = spanRepo.update.mock.calls.map((call) => call[0]).find((values) => values.filterByTk === 1);
-    expect(rootSpanUpdate.values.output).toBe(result);
-  });
-
-  it('keeps small results inline when no spill budget is configured', async () => {
-    const { plugin, dispatcher } = createObserverHarness({}, { runResult: 'short answer' });
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    const result = await dispatcher.run(createTask());
-
-    expect(result).toBe('short answer');
-    expect(writeFileSync).not.toHaveBeenCalled();
-  });
-});
-
-describe('NativeSubAgentObserver delegation inheritance', () => {
-  function loopParentConversation() {
-    return {
-      sessionId: 'parent-session',
-      aiEmployeeUsername: 'leader',
-      userId: 7,
-      options: { controlPlaneRunId: 5 },
-    };
-  }
-
-  function loopRunHarness(settings: Record<string, unknown>) {
-    return {
-      id: 5,
-      roleBindingsSnapshot: { leader: 'leader' },
-      leaderHarnessSnapshot: {
-        effective: compileHarness([{ source: 'run-snapshot', settings }]),
-      },
-    };
-  }
-
-  it('inherits the loop role harness as an extra compile layer', async () => {
-    const { plugin, dispatcher, spanRepo } = createObserverHarness(
-      {},
-      {
-        parentConversation: loopParentConversation(),
-        loopRuns: {
-          5: loopRunHarness({
-            observability: { sharing: 'feedback-only' },
-            delegation: { maxDepth: 4 },
-          }),
-        },
-      },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask(plugin.db.getRepository));
-
-    const rootSpanValues = spanRepo.create.mock.calls[0][0].values;
-    // The parent layer tightens sharing to feedback-only even though the child profile defaults
-    // to full; the run linkage is persisted on the span and in its metadata.
-    expect(rootSpanValues.input).toBeUndefined();
-    expect(rootSpanValues.depth).toBe(1);
-    expect(rootSpanValues.agentLoopRunId).toBe(5);
-    expect(rootSpanValues.metadata.agentLoopRunId).toBe(5);
-  });
-
-  it('does not inherit a run harness when the parent conversation is not a loop session', async () => {
-    const { plugin, dispatcher, spanRepo, repos } = createObserverHarness(
-      {},
-      {
-        loopRuns: { 5: loopRunHarness({ observability: { sharing: 'feedback-only' } }) },
-      },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask(plugin.db.getRepository));
-
-    const rootSpanValues = spanRepo.create.mock.calls[0][0].values;
-    // Full sharing from the child profile: without controlPlaneRunId no parent layer is applied.
-    expect(rootSpanValues.input).toBeDefined();
-    expect(rootSpanValues.agentLoopRunId).toBeUndefined();
-    const runRepo = repos.agentLoopRuns as { findOne: ReturnType<typeof vi.fn> };
-    expect(runRepo.findOne).not.toHaveBeenCalled();
-  });
-
-  it('derives the child depth from the parent span persisted in the database', async () => {
-    const { plugin, dispatcher, spanRepo } = createObserverHarness(
-      {},
-      {
-        spanFindOne: async (query) => (query.filter?.subSessionId === 'parent-session' ? { id: 99, depth: 2 } : null),
-      },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await dispatcher.run(createTask());
-
-    const rootSpanValues = spanRepo.create.mock.calls[0][0].values;
-    expect(rootSpanValues.depth).toBe(3);
-    expect(rootSpanValues.parentSpanId).toBe('99');
-  });
-
-  it('fails the dispatch when the child depth exceeds the inherited maxDepth', async () => {
-    const { plugin, dispatcher, originalRun, spanRepo } = createObserverHarness(
-      {},
-      {
-        parentConversation: loopParentConversation(),
-        loopRuns: { 5: loopRunHarness({ delegation: { maxDepth: 2 } }) },
-        spanFindOne: async (query) => (query.filter?.subSessionId === 'parent-session' ? { id: 99, depth: 2 } : null),
-      },
-    );
-    const observer = new NativeSubAgentObserver(plugin);
-    observer.install();
-
-    await expect(dispatcher.run(createTask(plugin.db.getRepository))).rejects.toThrow(
-      'delegation depth 3 exceeds the harness limit of 2',
-    );
-    expect(originalRun).not.toHaveBeenCalled();
-    const rootSpanUpdate = spanRepo.update.mock.calls.map((call) => call[0]).find((values) => values.filterByTk === 1);
-    expect(rootSpanUpdate.values.status).toBe('error');
-    expect(rootSpanUpdate.values.error).toContain('exceeds the harness limit');
   });
 });

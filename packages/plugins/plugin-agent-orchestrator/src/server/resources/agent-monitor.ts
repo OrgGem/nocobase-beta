@@ -1,82 +1,52 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Plugin } from '@nocobase/server';
-import { asObject, currentUserId, isAdminUser, toPlain, trimText } from '../utils/ctx-utils';
-import { makeNativeRunId, NATIVE_SOURCE } from '../services/NativeSubAgentObserver';
+import { Op, Sequelize } from 'sequelize';
+import { asObject, currentUserId, isAdminUser, toPlain } from '../utils/ctx-utils';
+import { NATIVE_SOURCE } from '../services/NativeSubAgentObserver';
+import { NativeAgentMonitorSyncService } from '../services/NativeAgentMonitorSyncService';
+import { safeNativeSpan, selectNativeSubtree, summarizeNativeUsage } from './native-monitor-format';
 
-function normalizeString(value: unknown) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function readValue(record: unknown, key: string) {
-  const model = record as { get?: (name: string) => unknown; [key: string]: unknown };
-  return typeof model?.get === 'function' ? model.get(key) : model?.[key];
-}
+const MAX_DETAIL_SPANS = 5000;
+const MAX_FILTER_DEPTH = 32;
+type QueryGenerator = {
+  quoteIdentifier: (value: string) => string;
+  quoteTable: (value: unknown) => string;
+  escape: (value: string | number) => string;
+};
 
 function isAdmin(ctx: unknown) {
-  const context = ctx as { state?: { currentRoles?: string[] } };
   if (isAdminUser(ctx)) return true;
-  const roles = context?.state?.currentRoles;
+  const roles = (ctx as { state?: { currentRoles?: unknown } })?.state?.currentRoles;
   return Array.isArray(roles) && roles.some((role) => role === 'root' || role === 'admin');
 }
 
-function statusFromNative(status: unknown) {
-  if (status === 'completed' || status === 'done' || status === 'success') return 'success';
-  if (status === 'error' || status === 'failed') return 'error';
-  return 'running';
-}
-
-function formatDuration(ms: unknown) {
-  const value = Number(ms);
-  if (!Number.isFinite(value) || value <= 0) return null;
-  return value;
-}
-
 function formatSpanListRow(raw: unknown) {
-  const row = toPlain(raw);
-  const input = asObject(row?.input);
-  const metadata = asObject(row?.metadata);
+  const row = safeNativeSpan(raw);
   return {
-    id: row?.id,
-    rootRunId: row?.rootRunId,
-    source: row?.source || metadata.source,
-    parentSessionId: row?.parentSessionId || metadata.parentSessionId,
-    subSessionId: row?.subSessionId || metadata.subSessionId,
-    toolCallId: row?.toolCallId || metadata.toolCallId,
-    leaderUsername: row?.leaderUsername,
-    employeeUsername: row?.employeeUsername,
-    subAgentUsername: row?.employeeUsername,
-    toolName: row?.toolName || 'dispatch-sub-agent-task',
-    task: input.question || input.task || row?.title || '',
-    status: row?.status,
-    durationMs: row?.durationMs,
-    error: row?.error,
-    userId: row?.userId,
-    memoryContextApplied: Boolean(metadata.memoryContextApplied),
-    memoryScopes: metadata.memoryScopes || [],
-    harnessTag: metadata.harnessTag || 'default',
-    createdAt: row?.createdAt || row?.startedAt,
-    startedAt: row?.startedAt,
-    endedAt: row?.endedAt,
+    ...row,
+    subAgentUsername: row.employeeUsername,
+    task: row.title,
+    createdAt: row.startedAt || row.createdAt,
   };
 }
 
-function buildSpanTree(rows: unknown[]) {
+function buildSpanTree(rows: Record<string, unknown>[]) {
   const byId = new Map<string, Record<string, unknown> & { children: unknown[] }>();
   const roots: Array<Record<string, unknown> & { children: unknown[] }> = [];
-
-  for (const raw of rows) {
-    const row = toPlain(raw);
-    byId.set(String(row.id), { ...row, children: [] });
-  }
-
+  for (const row of rows) byId.set(String(row.id), { ...row, children: [] });
   for (const row of byId.values()) {
-    const parentSpanId = normalizeString(row.parentSpanId);
-    if (parentSpanId && byId.has(parentSpanId)) {
-      byId.get(parentSpanId)?.children.push(row);
-    } else {
-      roots.push(row);
-    }
+    const parent = row.parentSpanId ? byId.get(String(row.parentSpanId)) : undefined;
+    if (parent) parent.children.push(row);
+    else roots.push(row);
   }
-
   const sort = (items: Array<Record<string, unknown> & { children: unknown[] }>) => {
     items.sort(
       (a, b) =>
@@ -89,392 +59,155 @@ function buildSpanTree(rows: unknown[]) {
   return roots;
 }
 
-function flattenTimeline(rows: unknown[]) {
+function flattenTimeline(rows: Record<string, unknown>[]) {
   return rows
-    .map(toPlain)
+    .slice()
     .sort(
       (a, b) =>
         new Date(String(a.startedAt || a.createdAt || 0)).getTime() -
         new Date(String(b.startedAt || b.createdAt || 0)).getTime(),
     )
-    .map((row) => ({
-      id: row.id,
-      type: row.type,
-      at: row.startedAt || row.createdAt,
-      title: row.title || row.toolName || row.type,
-      toolName: row.toolName,
-      status: row.status,
-      durationMs: row.durationMs,
-      content: row.output || row.error || asObject(row.input).question || '',
-      parentSpanId: row.parentSpanId,
-      input: row.input,
-      output: row.output,
-      error: row.error,
-    }));
-}
-
-async function findConversation(ctx: any, sessionId?: string) {
-  if (!sessionId) return null;
-  try {
-    return toPlain(
-      await ctx.db.getRepository('aiConversations').findOne({
-        filter: { sessionId },
-      }),
-    );
-  } catch {
-    return null;
-  }
-}
-
-async function findToolMessages(ctx: any, sessionIds: string[]) {
-  const repo = ctx.db.getRepository('aiToolMessages');
-  const rows: unknown[] = [];
-  for (const sessionId of Array.from(new Set(sessionIds.filter(Boolean)))) {
-    try {
-      const list = await repo.find({
-        filter: { sessionId },
-        sort: ['messageId', 'id'],
-      });
-      rows.push(...list);
-    } catch {
-      // Keep monitor read-only and best-effort across plugin-ai versions.
-    }
-  }
-  return rows.map(toPlain);
-}
-
-async function findNativeMessages(ctx: any, parentSessionId?: string, subSessionId?: string) {
-  const repo = ctx.db.getRepository('aiMessages');
-  const rows: unknown[] = [];
-  for (const sessionId of [parentSessionId, subSessionId].filter(Boolean)) {
-    try {
-      const list = await repo.find({
-        filter: { sessionId },
-        sort: ['messageId'],
-        limit: 200,
-      });
-      rows.push(...list);
-    } catch {
-      // Optional native details only.
-    }
-  }
-  return rows.map(toPlain);
-}
-
-async function backfillFromMetadata(ctx: any, spanRepo: any, limit: number) {
-  const messageRepo = ctx.db.getRepository('aiMessages');
-  const toolRepo = ctx.db.getRepository('aiToolMessages');
-  const conversationRepo = ctx.db.getRepository('aiConversations');
-  const messages = await messageRepo.find({
-    sort: ['-messageId'],
-    limit,
-  });
-  let created = 0;
-  let skipped = 0;
-
-  for (const rawMessage of messages) {
-    const message = toPlain(rawMessage);
-    const conversations = asObject(message.metadata).subAgentConversations;
-    if (!Array.isArray(conversations)) continue;
-
-    for (const item of conversations) {
-      const subSessionId = normalizeString(item?.sessionId);
-      const toolCallId = normalizeString(item?.toolCallId);
-      if (!subSessionId || !toolCallId) {
-        skipped += 1;
-        continue;
-      }
-
-      const existing = await spanRepo.findOne({
-        filter: {
-          source: NATIVE_SOURCE,
-          subSessionId,
-          toolCallId,
-          type: 'sub_agent',
-        },
-      });
-      if (existing) {
-        skipped += 1;
-        continue;
-      }
-
-      const toolMessage = toPlain(
-        await toolRepo.findOne({
-          filter: { toolCallId },
-        }),
-      );
-      const parentSessionId = normalizeString(toolMessage?.sessionId) || normalizeString(message.sessionId);
-      const parentConversation = parentSessionId
-        ? toPlain(await conversationRepo.findOne({ filter: { sessionId: parentSessionId } }))
-        : null;
-      const subConversation = toPlain(await conversationRepo.findOne({ filter: { sessionId: subSessionId } }));
-      const invokeStart = Number(toolMessage?.invokeStartTime);
-      const invokeEnd = Number(toolMessage?.invokeEndTime);
-      const durationMs =
-        Number.isFinite(invokeStart) && Number.isFinite(invokeEnd) && invokeEnd >= invokeStart
-          ? invokeEnd - invokeStart
-          : undefined;
-      const rootRunId = makeNativeRunId([
-        parentSessionId,
-        subSessionId,
-        toolCallId,
-        subConversation?.aiEmployeeUsername,
-      ]);
-      const content = asObject(toolMessage?.content);
-
-      await spanRepo.create({
-        values: {
-          rootRunId,
-          parentSpanId: null,
-          source: NATIVE_SOURCE,
-          parentSessionId: parentSessionId || undefined,
-          subSessionId: subSessionId || undefined,
-          toolCallId,
-          type: 'sub_agent',
-          status: statusFromNative(item?.status || toolMessage?.status),
-          leaderUsername: parentConversation?.aiEmployeeUsername,
-          employeeUsername: subConversation?.aiEmployeeUsername,
-          toolName: 'dispatch-sub-agent-task',
-          title:
-            subConversation?.title ||
-            `${parentConversation?.aiEmployeeUsername || 'main'} -> ${
-              subConversation?.aiEmployeeUsername || 'sub-agent'
-            }`,
-          input: {
-            question: subConversation?.title,
-            parentSessionId: parentSessionId || undefined,
-            subSessionId: subSessionId || undefined,
-          },
-          output: trimText(content.answer || toolMessage?.content, 20000),
-          durationMs: formatDuration(durationMs),
-          startedAt: invokeStart ? new Date(invokeStart) : new Date(),
-          endedAt: invokeEnd ? new Date(invokeEnd) : undefined,
-          metadata: {
-            source: NATIVE_SOURCE,
-            backfilled: true,
-            messageId: message.messageId,
-            toolMessageId: toolMessage?.id,
-            nativeStatus: item?.status,
-          },
-          userId: parentConversation?.userId || subConversation?.userId,
-          createdAt: new Date(),
-        },
-      });
-      created += 1;
-    }
-  }
-
-  return { created, skipped };
-}
-
-async function backfillFromToolMessages(ctx: any, spanRepo: any, limit: number) {
-  const toolRepo = ctx.db.getRepository('aiToolMessages');
-  const toolMessages = await toolRepo.find({
-    filter: { toolName: 'dispatch-sub-agent-task' },
-    sort: ['-id'],
-    limit,
-  });
-  let created = 0;
-  let skipped = 0;
-
-  for (const rawToolMessage of toolMessages) {
-    const toolMessage = toPlain(rawToolMessage);
-    const content = asObject(toolMessage.content);
-    const subSessionId = normalizeString(content.sessionId);
-    const toolCallId = normalizeString(toolMessage.toolCallId);
-    if (!subSessionId || !toolCallId) {
-      skipped += 1;
-      continue;
-    }
-
-    const existing = await spanRepo.findOne({
-      filter: {
-        source: NATIVE_SOURCE,
-        subSessionId,
-        toolCallId,
-        type: 'sub_agent',
-      },
-    });
-    if (existing) {
-      skipped += 1;
-      continue;
-    }
-
-    const parentSessionId = normalizeString(toolMessage.sessionId);
-    const parentConversation = await findConversation(ctx, parentSessionId);
-    const subConversation = await findConversation(ctx, subSessionId);
-    const invokeStart = Number(toolMessage.invokeStartTime);
-    const invokeEnd = Number(toolMessage.invokeEndTime);
-    const rootRunId = makeNativeRunId([parentSessionId, subSessionId, toolCallId, subConversation?.aiEmployeeUsername]);
-
-    await spanRepo.create({
-      values: {
-        rootRunId,
-        parentSpanId: null,
-        source: NATIVE_SOURCE,
-        parentSessionId: parentSessionId || undefined,
-        subSessionId: subSessionId || undefined,
-        toolCallId,
-        type: 'sub_agent',
-        status: statusFromNative(toolMessage.status),
-        leaderUsername: parentConversation?.aiEmployeeUsername,
-        employeeUsername: subConversation?.aiEmployeeUsername,
-        toolName: 'dispatch-sub-agent-task',
-        title:
-          subConversation?.title ||
-          `${parentConversation?.aiEmployeeUsername || 'main'} -> ${
-            subConversation?.aiEmployeeUsername || 'sub-agent'
-          }`,
-        input: {
-          question: subConversation?.title,
-          parentSessionId: parentSessionId || undefined,
-          subSessionId: subSessionId || undefined,
-        },
-        output: trimText(content.answer || toolMessage.content, 20000),
-        durationMs:
-          Number.isFinite(invokeStart) && Number.isFinite(invokeEnd) && invokeEnd >= invokeStart
-            ? invokeEnd - invokeStart
-            : undefined,
-        startedAt: invokeStart ? new Date(invokeStart) : new Date(),
-        endedAt: invokeEnd ? new Date(invokeEnd) : undefined,
-        metadata: {
-          source: NATIVE_SOURCE,
-          backfilled: true,
-          toolMessageId: toolMessage.id,
-        },
-        userId: parentConversation?.userId || subConversation?.userId,
-        createdAt: new Date(),
-      },
-    });
-    created += 1;
-  }
-
-  return { created, skipped };
+    .map((row) => ({ ...row, at: row.startedAt || row.createdAt }));
 }
 
 export function registerAgentMonitorResource(plugin: Plugin) {
+  const sync = new NativeAgentMonitorSyncService(plugin);
   plugin.app.resource({
     name: 'agentMonitor',
     actions: {
       async list(ctx, next) {
-        const { page = 1, pageSize = 20, sort = ['-createdAt'], filter = {} } = ctx.action.params;
+        const { page = 1, pageSize = 20, sort = ['-startedAt'], filter = {} } = ctx.action?.params || {};
         const requestedFilter = asObject(filter);
         const spanFilter: Record<string, unknown> = {
           source: NATIVE_SOURCE,
-          type: 'sub_agent',
+          type: { [Op.in]: ['main_agent', 'sub_agent'] },
           parentSpanId: null,
         };
-
-        for (const key of [
-          'leaderUsername',
-          'employeeUsername',
-          'status',
-          'parentSessionId',
-          'subSessionId',
-          'toolCallId',
-        ]) {
+        for (const key of ['leaderUsername', 'parentSessionId']) {
           if (requestedFilter[key]) spanFilter[key] = requestedFilter[key];
         }
-        if (requestedFilter.subAgentUsername) spanFilter.employeeUsername = requestedFilter.subAgentUsername;
         if (requestedFilter.sessionId) spanFilter.parentSessionId = requestedFilter.sessionId;
-
-        if (!isAdmin(ctx)) {
+        const admin = isAdmin(ctx);
+        if (!admin) {
           const userId = currentUserId(ctx);
           if (!userId) ctx.throw(401, 'Not authenticated');
           spanFilter.userId = userId;
         } else if (requestedFilter.userId) {
           spanFilter.userId = requestedFilter.userId;
         }
-
+        const currentPage = Math.max(1, Math.trunc(Number(page) || 1));
+        const size = Math.min(100, Math.max(1, Math.trunc(Number(pageSize) || 20)));
         const repo = ctx.db.getRepository('agentExecutionSpans');
+        const childFilter: Record<string, unknown> = {};
+        for (const key of ['status', 'subSessionId', 'toolCallId', 'toolName']) {
+          if (requestedFilter[key]) childFilter[key] = requestedFilter[key];
+        }
+        if (requestedFilter.subAgentUsername || requestedFilter.employeeUsername) {
+          childFilter.employeeUsername = requestedFilter.subAgentUsername || requestedFilter.employeeUsername;
+          childFilter.type = 'sub_agent';
+        }
+        if (Object.keys(childFilter).length) {
+          // Legacy sessions can share a rootRunId. Follow parentSpanId from each accessible
+          // root so a matching sibling session cannot cause a false positive.
+          const model = repo.model;
+          const query = ctx.db.sequelize.getQueryInterface().queryGenerator as unknown as QueryGenerator;
+          const column = (alias: string, name: string) =>
+            `${alias}.${query.quoteIdentifier(model.rawAttributes[name]?.field || name)}`;
+          const predicate = (alias: string, [name, value]: [string, unknown]) => {
+            if (typeof value !== 'string' && typeof value !== 'number') ctx.throw(400, 'Invalid monitor filter value.');
+            return `${column(alias, name)} = ${query.escape(value as string | number)}`;
+          };
+          const table = query.quoteTable(model.getTableName());
+          const roots = [
+            predicate('monitor_root', ['source', NATIVE_SOURCE]),
+            `${column('monitor_root', 'type')} IN (${query.escape('main_agent')}, ${query.escape('sub_agent')})`,
+            `${column('monitor_root', 'parentSpanId')} IS NULL`,
+            ...['userId', 'leaderUsername', 'parentSessionId']
+              .filter((key) => spanFilter[key] !== undefined)
+              .map((key) => predicate('monitor_root', [key, spanFilter[key]])),
+          ];
+          const matches = Object.entries(childFilter).map((entry) => predicate('monitor_match', entry));
+          const owner = admin ? '' : ` AND ${predicate('monitor_child', ['userId', spanFilter.userId])}`;
+          const castType = ['mysql', 'mariadb'].includes(ctx.db.sequelize.getDialect()) ? 'CHAR' : 'TEXT';
+          const sql = `(WITH RECURSIVE monitor_tree(root_id, span_id, depth) AS (
+            SELECT ${column('monitor_root', 'id')}, ${column('monitor_root', 'id')}, 0
+            FROM ${table} AS monitor_root WHERE ${roots.join(' AND ')}
+            UNION ALL
+            SELECT monitor_tree.root_id, ${column('monitor_child', 'id')}, monitor_tree.depth + 1
+            FROM ${table} AS monitor_child JOIN monitor_tree
+              ON ${column('monitor_child', 'parentSpanId')} = CAST(monitor_tree.span_id AS ${castType})
+            WHERE monitor_tree.depth < ${MAX_FILTER_DEPTH}${owner}
+          ) SELECT DISTINCT monitor_tree.root_id FROM monitor_tree
+            JOIN ${table} AS monitor_match ON ${column('monitor_match', 'id')} = monitor_tree.span_id
+            WHERE ${matches.join(' AND ')})`;
+          spanFilter.id = { [Op.in]: Sequelize.literal(sql) };
+        }
         const [rows, count] = await repo.findAndCount({
-          filter: spanFilter,
+          where: spanFilter,
           sort,
-          offset: (Number(page) - 1) * Number(pageSize),
-          limit: Number(pageSize),
+          offset: (currentPage - 1) * size,
+          limit: size,
         });
-
         ctx.body = {
           data: rows.map(formatSpanListRow),
           meta: {
             count,
-            page: Number(page),
-            pageSize: Number(pageSize),
-            totalPage: Math.ceil(count / Number(pageSize)),
+            page: currentPage,
+            pageSize: size,
+            totalPage: Math.ceil(count / size),
+            ...(Object.keys(childFilter).length ? { filterDepthLimit: MAX_FILTER_DEPTH } : {}),
           },
         };
         await next();
       },
-
       async get(ctx, next) {
-        const { filterByTk } = ctx.action.params;
-        if (!filterByTk) {
-          ctx.throw(400, 'span id is required');
-          return;
-        }
-
+        const { filterByTk } = ctx.action?.params || {};
+        if (!filterByTk) ctx.throw(400, 'span id is required');
         const repo = ctx.db.getRepository('agentExecutionSpans');
-        const span = toPlain(
-          await repo.findOne({
-            filter: { id: filterByTk },
-          }),
-        );
-        if (!span) {
-          ctx.throw(404, 'span not found');
-          return;
-        }
-
-        if (!isAdmin(ctx) && String(span.userId || '') !== String(currentUserId(ctx) || '')) {
+        const span = toPlain(await repo.findOne({ filter: { id: filterByTk, source: NATIVE_SOURCE } }));
+        if (!span) ctx.throw(404, 'span not found');
+        const userId = currentUserId(ctx);
+        if (!isAdmin(ctx) && (!userId || String(span.userId || '') !== String(userId))) {
           ctx.throw(403, 'You cannot view this agent run.');
-          return;
         }
-
-        const rows = await repo.find({
-          filter: { rootRunId: span.rootRunId },
-          sort: ['createdAt'],
-        });
-        const parentSessionId = normalizeString(span.parentSessionId || asObject(span.metadata).parentSessionId);
-        const subSessionId = normalizeString(span.subSessionId || asObject(span.metadata).subSessionId);
-
+        const filter = isAdmin(ctx) ? { rootRunId: span.rootRunId } : { rootRunId: span.rootRunId, userId };
+        const rawRows = await repo.find({ filter, sort: ['createdAt'], limit: MAX_DETAIL_SPANS + 1 });
+        const truncated = rawRows.length > MAX_DETAIL_SPANS;
+        const rows = selectNativeSubtree(rawRows.slice(0, MAX_DETAIL_SPANS), span).map(safeNativeSpan);
+        const usage = summarizeNativeUsage(rows);
         ctx.body = {
           data: {
             ...formatSpanListRow(span),
-            input: span.input,
-            output: span.output,
-            metadata: span.metadata || {},
             children: buildSpanTree(rows),
             trace: flattenTimeline(rows),
-            nativeConversations: {
-              parent: await findConversation(ctx, parentSessionId),
-              subAgent: await findConversation(ctx, subSessionId),
+            usage: truncated ? { ...usage, inputTokens: null, outputTokens: null, cost: null } : usage,
+            coverage: {
+              granularity: 'session',
+              contentCapture: 'omitted-without-invocation-policy-snapshot',
+              truncated,
             },
-            nativeMessages: await findNativeMessages(ctx, parentSessionId, subSessionId),
-            toolMessages: await findToolMessages(ctx, [parentSessionId, subSessionId]),
+            // Keep response keys compatible without exposing native content or bypassing native ACL.
+            nativeConversations: { parent: null, subAgent: null },
+            nativeMessages: [],
+            toolMessages: [],
           },
         };
         await next();
       },
-
       async sync(ctx, next) {
-        if (!isAdmin(ctx)) {
-          ctx.throw(403, 'Admin role is required to sync native agent monitor spans.');
-          return;
+        if (!isAdmin(ctx)) ctx.throw(403, 'Admin role is required to sync native agent monitor spans.');
+        const values = asObject(ctx.action?.params?.values || ctx.request?.body);
+        try {
+          ctx.body = await sync.sync({
+            limit: Number(values.limit || ctx.action?.params?.limit || 200),
+            cursor: values.cursor,
+          });
+        } catch (error) {
+          if (error instanceof Error && /^(Invalid|Unsupported) native monitor cursor/.test(error.message)) {
+            ctx.throw(400, error.message);
+          }
+          throw error;
         }
-
-        const values = asObject(ctx.action.params?.values);
-        const limit = Math.min(Math.max(Number(values.limit || ctx.action.params?.limit || 200), 1), 1000);
-        const spanRepo = ctx.db.getRepository('agentExecutionSpans');
-        const metadataResult = await backfillFromMetadata(ctx, spanRepo, limit);
-        const toolResult = await backfillFromToolMessages(ctx, spanRepo, limit);
-
-        ctx.body = {
-          data: {
-            created: metadataResult.created + toolResult.created,
-            skipped: metadataResult.skipped + toolResult.skipped,
-            metadata: metadataResult,
-            toolMessages: toolResult,
-          },
-        };
         await next();
       },
     },

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { toPlain } from '../utils/ctx-utils';
 import { getAgentExecutionContext } from './AgentExecutionContext';
 
@@ -18,9 +27,10 @@ export type OrchestratorTraceContext = {
 
 type SpanValues = {
   rootRunId: string;
+  nativeIdentity?: string;
   parentSpanId?: string;
   depth?: number;
-  agentLoopRunId?: string | number;
+  agentLoopRunId?: string | number | null;
   source?: string;
   parentSessionId?: string;
   subSessionId?: string;
@@ -37,6 +47,7 @@ type SpanValues = {
   durationMs?: number;
   startedAt?: Date;
   endedAt?: Date;
+  nativeActivityAt?: Date;
   orchestratorLogId?: string | number;
   skillExecutionId?: string | number;
   metadata?: Record<string, unknown>;
@@ -46,12 +57,20 @@ type SpanValues = {
 export class ExecutionSpanService {
   constructor(
     private readonly plugin: {
-      app: { logger?: { warn?: (...args: unknown[]) => void } };
+      app: {
+        logger?: {
+          warn?: (
+            message: string,
+            meta?: { module?: string; submodule?: string; method?: string; [key: string]: unknown },
+          ) => void;
+        };
+      };
       db: {
         getRepository: (name: string) =>
           | {
               create: (opts: Record<string, unknown>) => Promise<unknown>;
               update: (opts: Record<string, unknown>) => Promise<unknown>;
+              findOne?: (opts: Record<string, unknown>) => Promise<unknown>;
             }
           | undefined;
       };
@@ -72,7 +91,52 @@ export class ExecutionSpanService {
       });
       return toPlain(record);
     } catch (error) {
-      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to create execution span', error);
+      this.plugin.app.logger?.warn?.('[AgentOrchestrator] Failed to create execution span', { error });
+      return null;
+    }
+  }
+
+  async upsertNative(identity: string, values: SpanValues) {
+    if (!identity) return null;
+    const repo = this.plugin.db.getRepository('agentExecutionSpans');
+    if (!repo?.findOne) return this.create({ ...values, nativeIdentity: identity });
+
+    try {
+      const existing = await repo.findOne({ filter: { nativeIdentity: identity } });
+      if (existing) return this.updateNativeRecord(repo, existing, values, identity);
+      try {
+        if (values.type === 'sub_agent' && values.parentSessionId && values.subSessionId && values.toolCallId) {
+          const legacy = await repo.findOne({
+            filter: {
+              nativeIdentity: null,
+              source: values.source,
+              type: 'sub_agent',
+              parentSessionId: values.parentSessionId,
+              subSessionId: values.subSessionId,
+              toolCallId: values.toolCallId,
+            },
+          });
+          if (legacy) return await this.updateNativeRecord(repo, legacy, values, identity);
+        }
+        const record = await repo.create({
+          values: {
+            ...values,
+            nativeIdentity: identity,
+            startedAt: values.startedAt || new Date(),
+            createdAt: new Date(),
+          },
+        });
+        return toPlain(record);
+      } catch (createError) {
+        // The unique native identity serializes projection writes from concurrent app instances.
+        // Re-read after a conflict so the losing writer can reconcile the row instead of creating
+        // a duplicate or failing the native agent call.
+        const raced = await repo.findOne({ filter: { nativeIdentity: identity } });
+        if (!raced) throw createError;
+        return this.updateNativeRecord(repo, raced, values, identity);
+      }
+    } catch (error) {
+      this.warn(`[AgentOrchestrator] Failed to upsert native execution span ${identity}`, error);
       return null;
     }
   }
@@ -91,7 +155,7 @@ export class ExecutionSpanService {
       });
       return { id: spanId };
     } catch (error) {
-      this.plugin.app.logger?.warn?.(`[AgentOrchestrator] Failed to update execution span ${spanId}`, error);
+      this.plugin.app.logger?.warn?.(`[AgentOrchestrator] Failed to update execution span ${spanId}`, { error });
       return null;
     }
   }
@@ -108,6 +172,66 @@ export class ExecutionSpanService {
       endedAt: new Date(),
       durationMs: Date.now() - startedAt,
     });
+  }
+
+  private async updateNativeRecord(
+    repo: {
+      update: (opts: Record<string, unknown>) => Promise<unknown>;
+    },
+    rawExisting: unknown,
+    values: SpanValues,
+    identity: string,
+  ) {
+    const existing = toPlain(rawExisting) as Record<string, unknown>;
+    const nextValues = Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined));
+    delete nextValues.nativeActivityAt;
+    const terminalStatuses = ['success', 'error', 'canceled', 'timeout'];
+    const isNonTerminal = !terminalStatuses.includes(values.status);
+    if (isNonTerminal) delete nextValues.status;
+    const existingMetadata =
+      existing.metadata && typeof existing.metadata === 'object' && !Array.isArray(existing.metadata)
+        ? (existing.metadata as Record<string, unknown>)
+        : {};
+    const incomingMetadata =
+      values.metadata && typeof values.metadata === 'object' && !Array.isArray(values.metadata) ? values.metadata : {};
+    await repo.update({
+      filterByTk: existing.id,
+      values: {
+        ...nextValues,
+        nativeIdentity: identity,
+        metadata: { ...existingMetadata, ...incomingMetadata },
+        startedAt: existing.startedAt || values.startedAt || new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    if (isNonTerminal) {
+      // A sync may have read an old running row while another instance completed it.
+      // Guard the status update in the database rather than trusting the earlier read.
+      await repo.update({
+        filter: { id: existing.id, status: { $notIn: terminalStatuses } },
+        values: { status: values.status },
+      });
+    }
+    if (values.nativeActivityAt)
+      await this.advanceNativeActivity(existing.id as string | number, values.nativeActivityAt);
+    return { ...existing, ...nextValues, nativeIdentity: identity, id: existing.id };
+  }
+
+  async advanceNativeActivity(id: string | number, activityAt: Date) {
+    const repo = this.plugin.db.getRepository('agentExecutionSpans');
+    if (!repo) throw new Error('Execution span repository is unavailable.');
+    await repo.update({
+      filter: { id, $or: [{ nativeActivityAt: null }, { nativeActivityAt: { $lt: activityAt.toISOString() } }] },
+      values: { nativeActivityAt: activityAt },
+    });
+  }
+
+  private warn(message: string, error: unknown) {
+    try {
+      this.plugin.app.logger?.warn?.(message, { error });
+    } catch {
+      // Telemetry logging must not affect the native agent call.
+    }
   }
 }
 
@@ -130,13 +254,21 @@ export function getOrchestratorTraceContext(ctx: NocoCtx): OrchestratorTraceCont
   const agentContext = getAgentExecutionContext();
   if (!requestContext && !agentContext) return null;
 
+  const requestRootRunId = (requestContext as Record<string, unknown>)?.rootRunId;
+  const rootRunId = typeof requestRootRunId === 'string' ? requestRootRunId : agentContext?.rootRunId;
+  if (!rootRunId) return null;
+
+  const toolCallId = [
+    deepGet(ctx, 'runtime.toolCallId'),
+    (requestContext as Record<string, unknown>)?.toolCallId,
+    agentContext?.toolCallId,
+  ].find((value): value is string => typeof value === 'string');
+
   return {
     ...(agentContext || {}),
     ...((requestContext as Record<string, unknown>) || {}),
-    toolCallId:
-      deepGet(ctx, 'runtime.toolCallId') ||
-      (requestContext as Record<string, unknown>)?.toolCallId ||
-      agentContext?.toolCallId,
+    rootRunId,
+    toolCallId,
   };
 }
 

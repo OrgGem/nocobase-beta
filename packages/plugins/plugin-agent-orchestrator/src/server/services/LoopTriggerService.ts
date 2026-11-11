@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { randomUUID } from 'node:crypto';
 import type { Database, Model } from '@nocobase/database';
 import { LoopControlService } from './LoopControlService';
@@ -144,8 +153,9 @@ export class LoopTriggerService {
       });
     } catch (error) {
       if (!isUniqueConstraintError(error)) throw error;
+      // A caller-supplied trigger key must never expose another owner's run through deduplication.
       const existing = await this.database.getRepository('agentLoopRuns').findOne({
-        filter: { patternId: input.patternId, triggerKey },
+        filter: { patternId: input.patternId, triggerKey, userId: input.userId || null },
       });
       if (!existing) throw error;
       this.logger?.debug?.(

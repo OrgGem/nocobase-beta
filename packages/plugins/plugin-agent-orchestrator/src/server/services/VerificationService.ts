@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database, Model } from '@nocobase/database';
 import type { CompiledHarness } from './HarnessCompiler';
 import type { LoopPatternPolicy } from './LoopPatternSchema';
@@ -11,6 +20,7 @@ import { TokenTracker } from './TokenTracker';
 
 export type VerificationRequest = {
   runId: number;
+  rootRunId?: string;
   goal: string;
   autonomyLevel: 'L1' | 'L2' | 'L3';
   verifierUsername: string;
@@ -226,6 +236,7 @@ export class VerificationService {
         createdAt: new Date(),
       },
     });
+    const prompt = verifierPrompt(input, artifacts, dynamicChecksFor(input));
     const outcome = await this.runtime.invoke({
       username: input.verifierUsername,
       sessionId,
@@ -233,18 +244,26 @@ export class VerificationService {
       systemMessage:
         'You verify completed work against its stated goal using only recorded evidence. You never modify anything.',
       harness: input.verifierHarness,
-      prompt: verifierPrompt(input, artifacts, dynamicChecksFor(input)),
+      prompt,
       signal: input.signal,
     });
 
-    // Track actual token usage from the verifier's LLM response
-    await this.tokenTracker.trackActualUsage(
-      read(step, 'id'),
-      outcome.tokenUsage ?? null,
-      verifierPrompt(input, artifacts, dynamicChecksFor(input)),
-      outcome.content,
-      input.runId,
-    );
+    const stepId = read(step, 'id');
+    if (typeof stepId === 'string' || typeof stepId === 'number') {
+      await this.tokenTracker.trackLoopInvocationUsage({
+        runId: input.runId,
+        rootRunId: input.rootRunId,
+        stepId,
+        sessionId: outcome.sessionId,
+        messageId: outcome.messageId,
+        usage: outcome.tokenUsage,
+        input: prompt,
+        output: outcome.content,
+        role: 'verifier',
+        employeeUsername: input.verifierUsername,
+        userId: input.userId,
+      });
+    }
 
     await this.database.getRepository('agentLoopSteps').update({
       filterByTk: read(step, 'id'),

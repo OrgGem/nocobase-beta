@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Database } from '@nocobase/database';
 import { describe, expect, it } from 'vitest';
 import { loopPatternPolicySchema } from '../services/LoopPatternSchema';
@@ -266,26 +275,80 @@ describe('LoopRunStateMachine worker leases', () => {
     expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ lockedBy: null, lockedUntil: null });
   });
 
-  it('reclaims a crashed run with an expired lease and frees its concurrency slot', async () => {
+  it.each(['preparing', 'running'])(
+    'reclaims a crashed %s run with an expired lease and frees its concurrency slot',
+    async (status) => {
+      const { repositories, stateMachine } = createStateMachine({
+        runs: [
+          run(1, 1, status, { lockedBy: 'worker-dead:1', lockedUntil: new Date(Date.now() - 1_000) }),
+          run(2, 2, 'queued'),
+        ],
+        globalMaxConcurrency: 1,
+      });
+
+      const claimed = await stateMachine.claimNext('worker-a', 30_000);
+
+      // Without reclaim the crashed run would hold the single global slot forever and nothing
+      // could be claimed. Once requeued it is the oldest candidate, so it is picked up first.
+      expect(claimed?.run.id).toBe(1);
+      expect(String(claimed?.leaseToken)).toMatch(/^worker-a:/);
+      expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ status: 'preparing' });
+      expect(repositories.get('agentLoopRuns')?.rows[1].status).toBe('queued');
+      expect(repositories.get('agentLoopEvents')?.rows).toMatchObject([
+        { runId: 1, type: 'run_lease_expired', status: 'queued' },
+        { runId: 1, type: 'run_claimed', status: 'preparing' },
+      ]);
+    },
+  );
+
+  it('requeues expired verification with a saved maker summary for verification recovery', async () => {
+    const makerSummary = '# maker-one\nSaved implementation report';
     const { repositories, stateMachine } = createStateMachine({
       runs: [
-        run(1, 1, 'running', { lockedBy: 'worker-dead:1', lockedUntil: new Date(Date.now() - 1_000) }),
-        run(2, 2, 'queued'),
+        run(1, 1, 'verifying', {
+          lockedBy: 'worker-dead:1',
+          lockedUntil: new Date(Date.now() - 1_000),
+          finalAnswer: makerSummary,
+        }),
       ],
-      globalMaxConcurrency: 1,
     });
 
     const claimed = await stateMachine.claimNext('worker-a', 30_000);
 
-    // Without reclaim the crashed run would hold the single global slot forever and nothing
-    // could be claimed. Once requeued it is the oldest candidate, so it is picked up first.
     expect(claimed?.run.id).toBe(1);
-    expect(String(claimed?.leaseToken)).toMatch(/^worker-a:/);
+    expect(claimed?.run.resumeContext).toEqual({ kind: 'verification_lease_recovery', makerSummary });
     expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({ status: 'preparing' });
-    expect(repositories.get('agentLoopRuns')?.rows[1].status).toBe('queued');
     expect(repositories.get('agentLoopEvents')?.rows).toMatchObject([
-      { runId: 1, type: 'run_lease_expired', status: 'queued' },
+      {
+        runId: 1,
+        type: 'run_lease_expired',
+        status: 'queued',
+        payload: { from: 'verifying', verificationRecovery: true, requiresReview: false },
+      },
       { runId: 1, type: 'run_claimed', status: 'preparing' },
+    ]);
+  });
+
+  it('sends expired verification without a saved maker summary to human review', async () => {
+    const { repositories, stateMachine } = createStateMachine({
+      runs: [run(1, 1, 'verifying', { lockedBy: 'worker-dead:1', lockedUntil: new Date(Date.now() - 1_000) })],
+    });
+
+    await expect(stateMachine.claimNext('worker-a', 30_000)).resolves.toBeNull();
+
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({
+      status: 'waiting_human',
+      lockedBy: null,
+      lockedUntil: null,
+      escalationReason: 'Verification lease expired without a saved maker summary; operator review is required.',
+    });
+    expect(repositories.get('agentLoopEvents')?.rows).toMatchObject([
+      {
+        runId: 1,
+        type: 'run_lease_expired',
+        status: 'waiting_human',
+        payload: { from: 'verifying', verificationRecovery: false, requiresReview: true },
+      },
     ]);
   });
 
