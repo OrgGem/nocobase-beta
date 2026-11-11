@@ -7,6 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+// SPDX-License-Identifier: Apache-2.0
+
 import { Context, Next } from '@nocobase/actions';
 import { readGuide } from './readGuide';
 

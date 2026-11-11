@@ -1,12 +1,57 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { InstallOptions, Plugin } from '@nocobase/server';
+import type { Context, Next } from '@nocobase/actions';
 import { resolve } from 'path';
-import { build, recoverInterruptedBuilds, registerBuildGuideQueue, unregisterBuildGuideQueue } from './actions/build';
+import {
+  build,
+  buildPageMarkdown,
+  buildPlan,
+  createBuildGuideInputDescriptor,
+  createGuideSearchMetadata,
+  getLLMProvider,
+  markdownToCleanHtml,
+  materializeBuildGuideInputSnapshot,
+  normalizePlan,
+  recoverInterruptedBuilds,
+  registerBuildGuideQueue,
+  slugify,
+  toPlainText,
+  unregisterBuildGuideQueue,
+} from './actions/build';
 import { getHtml } from './actions/getHtml';
 import { getMarkdown } from './actions/getMarkdown';
 import { searchBuildGuidesTool } from './tools';
+import { getBuildGuideRunStatus, cancelBuildGuideRun, retryBuildGuideRun } from './actions/run-status';
+import { guardBuildGuideResources } from './guards';
 
 export class PluginBuildGuideBlockServer extends Plugin {
-  private readonly schemaCollections = ['aiBuildGuideSpaces', 'aiBuildGuidePages'];
+  readonly workflowDomain = {
+    buildPageMarkdown,
+    buildPlan,
+    createBuildGuideInputDescriptor,
+    createGuideSearchMetadata,
+    getLLMProvider,
+    markdownToCleanHtml,
+    materializeBuildGuideInputSnapshot,
+    normalizePlan,
+    slugify,
+    toPlainText,
+  };
+  private readonly schemaCollections = [
+    'aiBuildGuideSpaces',
+    'aiBuildGuidePages',
+    'aiBuildGuideRuns',
+    'aiBuildGuideRunSteps',
+    'aiBuildGuideRunArtifacts',
+  ];
 
   afterAdd() {}
 
@@ -19,13 +64,17 @@ export class PluginBuildGuideBlockServer extends Plugin {
     await this.ensureSchema();
 
     this.app.resourceManager.registerActionHandlers({
-      'aiBuildGuideSpaces:build': build,
-      'aiBuildGuideSpaces:getHtml': getHtml,
-      'aiBuildGuideSpaces:getMarkdown': getMarkdown,
+      'aiBuildGuideSpaces:build': (ctx, next) => build(ctx as unknown as Context, next as Next),
+      'aiBuildGuideSpaces:getHtml': (ctx, next) => getHtml(ctx as unknown as Context, next as Next),
+      'aiBuildGuideSpaces:getMarkdown': (ctx, next) => getMarkdown(ctx as unknown as Context, next as Next),
+      'aiBuildGuideRuns:getStatus': (ctx, next) => getBuildGuideRunStatus(ctx as unknown as Context, next as Next),
+      'aiBuildGuideRuns:cancel': (ctx, next) => cancelBuildGuideRun(ctx as unknown as Context, next as Next),
+      'aiBuildGuideRuns:retry': (ctx, next) => retryBuildGuideRun(ctx as unknown as Context, next as Next),
     });
 
     this.app.acl.allow('aiBuildGuideSpaces', 'getHtml', 'loggedIn');
     this.app.acl.allow('aiBuildGuideSpaces', 'getMarkdown', 'loggedIn');
+    this.app.acl.allow('aiBuildGuideRuns', 'getStatus', 'loggedIn');
     this.app.acl.registerSnippet({
       name: 'pm.ai-build-guide',
       actions: [
@@ -35,10 +84,14 @@ export class PluginBuildGuideBlockServer extends Plugin {
         'aiBuildGuideSpaces:list',
         'aiBuildGuideSpaces:get',
         'aiBuildGuideSpaces:build',
+        'aiBuildGuideRuns:getStatus',
+        'aiBuildGuideRuns:cancel',
+        'aiBuildGuideRuns:retry',
         'aiBuildGuidePages:list',
         'aiBuildGuidePages:get',
       ],
     });
+    this.app.resourceManager.use((ctx, next) => guardBuildGuideResources(ctx as unknown as Context, next as Next));
 
     registerBuildGuideQueue(this.app);
 
@@ -47,7 +100,9 @@ export class PluginBuildGuideBlockServer extends Plugin {
       try {
         await recoverInterruptedBuilds(this.app);
       } catch (err) {
-        this.app.logger.warn('[plugin-build-guide-block] Failed to recover interrupted builds', err);
+        this.app.logger.warn('[plugin-build-guide-block] Failed to recover interrupted builds', {
+          errorName: err instanceof Error ? err.name : 'Error',
+        });
       }
     });
     this.app.on('beforeStop', () => {

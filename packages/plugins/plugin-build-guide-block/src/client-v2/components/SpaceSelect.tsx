@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { useApp } from '@nocobase/client-v2';
 import { Select, type SelectProps } from 'antd';
 import { useRequest } from 'ahooks';
@@ -7,7 +16,7 @@ export const SpaceSelect = (props: SelectProps<string | number>) => {
   const api = useApp().apiClient;
   const { data, loading } = useRequest(async () => {
     const response = await api.resource('aiBuildGuideSpaces').list({
-      filter: { status: 'completed' },
+      filter: { $or: [{ published: true }, { status: 'completed' }] },
       pageSize: 100,
       sort: ['-createdAt'],
     });

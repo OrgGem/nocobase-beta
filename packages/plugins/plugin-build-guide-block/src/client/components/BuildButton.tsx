@@ -1,76 +1,122 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import React, { useEffect, useRef, useState } from 'react';
 import { Button, App } from 'antd';
 import { useAPIClient, useCollectionRecordData, useDataBlockRequest } from '@nocobase/client';
 import { PlayCircleOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
+import { namespace } from '../locale';
 
 const POLL_INTERVAL_MS = 3000;
-const STILL_RUNNING_AFTER_MS = 5 * 60 * 1000;
-const SLOW_POLL_INTERVAL_MS = 10000;
+const SAFE_ERROR_CODES = new Set([
+  'BUILD_FAILED',
+  'WORKFLOW_UNAVAILABLE',
+  'SOURCE_ACCESS_DENIED',
+  'INVALID_PLAN',
+  'PROVIDER_UNAVAILABLE',
+  'PROVIDER_FAILED',
+  'PUBLISH_FAILED',
+  'UNKNOWN_OUTCOME',
+  'CANCELLED',
+]);
+type ID = string | number;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readApiData(response: unknown): unknown {
+  if (!isRecord(response)) return response;
+  const envelope = response.data;
+  if (!isRecord(envelope)) return envelope ?? response;
+  return envelope.data ?? envelope;
+}
+
+function isId(value: unknown): value is ID {
+  return typeof value === 'string' || typeof value === 'number';
+}
+
+function safeErrorMessage(error: unknown, t: (key: string) => string) {
+  if (
+    isRecord(error) &&
+    isRecord(error.response) &&
+    isRecord(error.response.data) &&
+    isRecord(error.response.data.error)
+  ) {
+    const code = error.response.data.error.code;
+    if (typeof code === 'string' && SAFE_ERROR_CODES.has(code)) return t(code);
+  }
+  return t('Build failed');
+}
 
 export const BuildButton = () => {
   const [loading, setLoading] = useState(false);
   const api = useAPIClient();
   const { message } = App.useApp();
-  const { t } = useTranslation();
+  const { t } = useTranslation([namespace, 'client']);
   const record = useCollectionRecordData();
   const { refresh } = useDataBlockRequest();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordId = isRecord(record) && isId(record.id) ? record.id : undefined;
+  const activeRunId = isRecord(record) && isId(record.activeRunId) ? record.activeRunId : undefined;
+  const isBuilding = activeRunId != null || (isRecord(record) && record.status === 'building');
 
-  const stopPolling = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    setLoading(false);
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
   }, []);
 
-  // Cleanup on unmount
-  useEffect(() => stopPolling, [stopPolling]);
-
   const handleBuild = async () => {
-    if (!record?.id) return;
+    if (recordId == null) return;
     setLoading(true);
     try {
-      await api.resource('aiBuildGuideSpaces').build({
-        filterByTk: record.id,
-      });
+      const response: unknown = await api.resource('aiBuildGuideSpaces').build({ filterByTk: recordId });
+      const result = readApiData(response);
+      const runId = isRecord(result) && isId(result.runId) ? result.runId : undefined;
+      if (runId == null) {
+        setLoading(false);
+        message.error(t('Build failed'));
+        return;
+      }
       message.success(t('Build started'));
 
-      const startedAt = Date.now();
-      let stillRunningNotified = false;
       const poll = async () => {
         try {
-          const res = await api.resource('aiBuildGuideSpaces').get({ filterByTk: record.id });
-          const status = res?.data?.data?.status;
-          if (status !== 'building') {
-            stopPolling();
+          const runResponse: unknown = await api.resource('aiBuildGuideRuns').getStatus({ filterByTk: runId });
+          const run = readApiData(runResponse);
+          const status = isRecord(run) && typeof run.status === 'string' ? run.status : undefined;
+          if (status && !['queued', 'running'].includes(status)) {
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = null;
+            setLoading(false);
             refresh?.();
-            if (status === 'completed') {
-              message.success(t('Build completed'));
-            } else if (status === 'error') {
-              message.error(t('Build failed'));
+            if (status === 'completed') message.success(t('Build completed'));
+            else {
+              const errorCode = isRecord(run) && typeof run.errorCode === 'string' ? run.errorCode : undefined;
+              message.error(errorCode && SAFE_ERROR_CODES.has(errorCode) ? t(errorCode) : t('Build failed'));
             }
             return;
           }
-
-          const elapsed = Date.now() - startedAt;
-          if (elapsed >= STILL_RUNNING_AFTER_MS && !stillRunningNotified) {
-            stillRunningNotified = true;
-            message.info(t('Build is still running'));
-          }
-          const nextPollDelay = elapsed >= STILL_RUNNING_AFTER_MS ? SLOW_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
-          timerRef.current = setTimeout(poll, nextPollDelay);
+          timerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
         } catch {
-          stopPolling();
+          if (timerRef.current) clearTimeout(timerRef.current);
+          timerRef.current = null;
+          setLoading(false);
           refresh?.();
         }
       };
 
       timerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
-    } catch (err: any) {
-      console.error(err);
-      message.error(err?.response?.data?.error?.message || t('Build failed'));
+    } catch (error: unknown) {
+      message.error(safeErrorMessage(error, t));
       setLoading(false);
     }
   };
@@ -81,7 +127,7 @@ export const BuildButton = () => {
       icon={<PlayCircleOutlined />}
       loading={loading}
       onClick={handleBuild}
-      disabled={record?.status === 'building'}
+      disabled={recordId == null || isBuilding}
     >
       {t('Build')}
     </Button>

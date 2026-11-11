@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context, Next } from '@nocobase/actions';
 import { Repository } from '@nocobase/database';
 import type { Application } from '@nocobase/server';
@@ -12,6 +21,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { marked } from 'marked';
+import { Op } from 'sequelize';
+import { NoPermissionError } from '@nocobase/acl';
 
 const MAX_SOURCE_CHARS = 90000;
 const MIN_CHAPTERS = 1;
@@ -126,13 +137,13 @@ const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   },
 };
 
-type GuidePlanItem = {
+export type GuidePlanItem = {
   title: string;
   goal?: string;
   sourceHints?: string[];
 };
 
-type GuidePlan = {
+export type GuidePlan = {
   title?: string;
   chapters: GuidePlanItem[];
 };
@@ -160,6 +171,28 @@ type BuildRunContext = {
   runId: string;
 };
 
+export type BuildGuideInputSnapshot = {
+  title: string;
+  llmService: string;
+  model: string;
+  systemPrompt: string;
+  outputFormat: string;
+  targetChapterCount: number;
+  chapterGuidance: string;
+  documentsText: string;
+  sourceHash: string;
+};
+
+export type BuildGuideInputDescriptor = Omit<BuildGuideInputSnapshot, 'documentsText' | 'sourceHash'> & {
+  documents: Array<{
+    id: string | number;
+    updatedAt: string;
+    filename: string;
+    mimetype: string;
+    extname: string;
+  }>;
+};
+
 let buildQueueTimer: NodeJS.Timeout | null = null;
 let buildQueueKickTimer: NodeJS.Timeout | null = null;
 let buildQueueProcessing = false;
@@ -172,7 +205,7 @@ class StaleBuildRunError extends Error {
   }
 }
 
-function clampChapterCount(value: unknown) {
+export function clampChapterCount(value: unknown) {
   const count = Number(value);
   if (!Number.isFinite(count)) return DEFAULT_TARGET_CHAPTERS;
   return Math.max(MIN_CHAPTERS, Math.min(MAX_CHAPTERS, Math.round(count)));
@@ -274,7 +307,9 @@ async function fetchTextFileContent(app: any, file: any): Promise<string> {
     localPath = path.join(process.cwd(), localPath);
     return await fs.promises.readFile(localPath, 'utf8');
   } catch (err) {
-    app.log.error(`Failed to read file content for document ${file.id}`, err);
+    app.log?.warn?.('[plugin-build-guide-block] Failed to read a source document', {
+      errorName: err instanceof Error ? err.name : 'Error',
+    });
     return `[Failed to read document: ${file.filename}]`;
   }
 }
@@ -308,7 +343,9 @@ async function parseWithDocumentParser(app: any, file: any): Promise<string> {
       }
     }
   } catch (err) {
-    app.log?.warn?.(`[plugin-build-guide-block] Document parser failed for ${file?.filename || file?.id}`, err);
+    app.log?.warn?.('[plugin-build-guide-block] Document parser failed', {
+      errorName: err instanceof Error ? err.name : 'Error',
+    });
   }
 
   return '';
@@ -320,7 +357,7 @@ async function fetchFileContent(app: any, file: any): Promise<string> {
   return fetchTextFileContent(app, file);
 }
 
-function toPlainText(value: unknown) {
+export function toPlainText(value: unknown) {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
     return value
@@ -351,7 +388,7 @@ function stripFence(text: string) {
     .trim();
 }
 
-function slugify(text: string, fallback: string) {
+export function slugify(text: string, fallback: string) {
   const slug = text
     .toLowerCase()
     .normalize('NFKD')
@@ -464,7 +501,7 @@ function extractKeywords(...parts: string[]) {
   return uniqueValues(tokens, 40);
 }
 
-function createGuideSearchMetadata(params: {
+export function createGuideSearchMetadata(params: {
   chapter: GuidePlanItem;
   guideTitle?: string;
   markdown?: string;
@@ -562,7 +599,7 @@ function createFallbackPlan(guideTitle: string, targetChapterCount: number): Gui
   };
 }
 
-function normalizePlan(rawText: string, guideTitle: string, targetChapterCount: number): GuidePlan {
+export function normalizePlan(rawText: string, guideTitle: string, targetChapterCount: number): GuidePlan {
   const targetCount = clampChapterCount(targetChapterCount);
   const cleanText = stripFence(stripThink(rawText));
   const jsonStart = cleanText.indexOf('{');
@@ -597,7 +634,7 @@ function normalizePlan(rawText: string, guideTitle: string, targetChapterCount: 
   };
 }
 
-async function getLLMProvider(app: any, llmService: string, model: string) {
+export async function getLLMProvider(app: any, llmService: string, model: string) {
   const aiPlugin = app.pm.get('ai') as PluginAIServer;
   if (!aiPlugin) {
     throw new Error('Plugin AI is not available');
@@ -606,7 +643,7 @@ async function getLLMProvider(app: any, llmService: string, model: string) {
   return serviceData.provider;
 }
 
-async function buildPlan(provider: any, space: any, documentsText: string): Promise<GuidePlan> {
+export async function buildPlan(provider: any, space: any, documentsText: string): Promise<GuidePlan> {
   const { title, systemPrompt, targetChapterCount, chapterGuidance } = space.get();
   const targetCount = clampChapterCount(targetChapterCount);
   const messages = [];
@@ -646,7 +683,7 @@ ${documentsText.slice(0, MAX_SOURCE_CHARS)}`),
   return normalizePlan(toPlainText(response.content), title || 'User guide', targetCount);
 }
 
-async function buildPageMarkdown(
+export async function buildPageMarkdown(
   provider: any,
   space: any,
   plan: GuidePlan,
@@ -683,12 +720,12 @@ ${documentsText.slice(0, MAX_SOURCE_CHARS)}`),
   return stripFence(stripThink(toPlainText(response.content)));
 }
 
-async function markdownToCleanHtml(markdown: string) {
+export async function markdownToCleanHtml(markdown: string) {
   const renderedHtml = await marked.parse(markdown, { async: true });
   return sanitizeHtml(renderedHtml, SANITIZE_OPTIONS);
 }
 
-async function readDocuments(app: any, space: any) {
+export async function readDocuments(app: any, space: any) {
   const documents = await space.getDocuments();
   if (!documents || documents.length === 0) {
     return '';
@@ -701,6 +738,77 @@ async function readDocuments(app: any, space: any) {
     }),
   );
   return texts.join('\n');
+}
+
+export async function createBuildGuideInputDescriptor(space: any): Promise<BuildGuideInputDescriptor> {
+  const values = space.get();
+  if (!values.llmService || !values.model) throw new Error('LLM configuration is missing');
+  return {
+    title: String(values.title || ''),
+    llmService: String(values.llmService),
+    model: String(values.model),
+    systemPrompt: String(values.systemPrompt || ''),
+    outputFormat: String(values.outputFormat || 'html'),
+    targetChapterCount: clampChapterCount(values.targetChapterCount),
+    chapterGuidance: String(values.chapterGuidance || ''),
+    documents: (await space.getDocuments()).map((document: any) => {
+      const updatedAt = document.get?.('updatedAt') ?? document.updatedAt;
+      if (!(updatedAt instanceof Date) && typeof updatedAt !== 'string') {
+        throw new Error('Source attachment version is unavailable');
+      }
+      return {
+        id: (document.get?.('id') ?? document.id) as string | number,
+        updatedAt: new Date(updatedAt).toISOString(),
+        filename: String(document.get?.('filename') ?? document.filename ?? ''),
+        mimetype: String(document.get?.('mimetype') ?? document.mimetype ?? ''),
+        extname: String(document.get?.('extname') ?? document.extname ?? ''),
+      };
+    }),
+  };
+}
+
+export async function materializeBuildGuideInputSnapshot(
+  app: any,
+  descriptor: BuildGuideInputDescriptor,
+): Promise<BuildGuideInputSnapshot> {
+  const matchesDescriptor = (record: any, saved: BuildGuideInputDescriptor['documents'][number]) => {
+    const updatedAt = record.get?.('updatedAt') ?? record.updatedAt;
+    return (
+      String(record.get?.('id') ?? record.id) === String(saved.id) &&
+      updatedAt != null &&
+      new Date(updatedAt).toISOString() === saved.updatedAt &&
+      String(record.get?.('filename') ?? record.filename ?? '') === saved.filename &&
+      String(record.get?.('mimetype') ?? record.mimetype ?? '') === saved.mimetype &&
+      String(record.get?.('extname') ?? record.extname ?? '') === saved.extname
+    );
+  };
+  const documents: unknown[] = [];
+  for (const saved of descriptor.documents) {
+    const record = await app.db.getRepository('attachments').findOne({ filterByTk: saved.id, appends: [] });
+    if (!record || !matchesDescriptor(record, saved))
+      throw new Error('A source attachment changed before snapshotting');
+    documents.push(record);
+  }
+  const sourceSpace = {
+    get: (key?: string) => (key ? descriptor[key as keyof BuildGuideInputDescriptor] : descriptor),
+    getDocuments: async () => documents,
+  };
+  const documentsText = (await readDocuments(app, sourceSpace)).slice(0, MAX_SOURCE_CHARS);
+  for (const saved of descriptor.documents) {
+    const record = await app.db.getRepository('attachments').findOne({ filterByTk: saved.id, appends: [] });
+    if (!record || !matchesDescriptor(record, saved)) throw new Error('A source attachment changed while snapshotting');
+  }
+  return {
+    title: descriptor.title,
+    llmService: descriptor.llmService,
+    model: descriptor.model,
+    systemPrompt: descriptor.systemPrompt,
+    outputFormat: descriptor.outputFormat,
+    targetChapterCount: descriptor.targetChapterCount,
+    chapterGuidance: descriptor.chapterGuidance,
+    documentsText,
+    sourceHash: crypto.createHash('sha256').update(documentsText).digest('hex'),
+  };
 }
 
 function getSpaceModel(app: any) {
@@ -718,29 +826,49 @@ async function updateSpaceForRun(app: any, run: BuildRunContext, values: Record<
   if (!affected && !optional) {
     throw new StaleBuildRunError(run.spaceId, run.runId);
   }
+  if (affected) {
+    const runValues: Record<string, unknown> = {};
+    if (typeof values.buildPhase === 'string') runValues.stage = values.buildPhase;
+    if (values.status === 'completed') {
+      runValues.status = 'completed';
+      runValues.stage = 'completed';
+      runValues.finishedAt = new Date();
+    } else if (values.status === 'error') {
+      runValues.status = 'failed';
+      runValues.stage = 'failed';
+      runValues.errorCode = 'BUILD_FAILED';
+      runValues.finishedAt = new Date();
+    }
+    if (Object.keys(runValues).length) {
+      await app.db.getRepository('aiBuildGuideRuns').update({ filterByTk: run.runId, values: runValues });
+    }
+  }
   return affected > 0;
 }
 
 async function claimBuildRun(app: any, run: BuildRunContext, workerId: string) {
   const now = new Date();
   const SpaceModel = getSpaceModel(app);
-  const [affected] = await SpaceModel.update(
-    {
-      buildPhase: 'running',
-      buildStartedAt: now,
-      buildHeartbeatAt: now,
-      buildWorkerId: workerId,
-    },
-    {
-      where: {
-        id: run.spaceId,
-        status: 'building',
-        buildPhase: 'queued',
-        buildRunId: run.runId,
-      },
-    },
-  );
-  return affected > 0;
+  return app.db.sequelize.transaction(async (transaction: any) => {
+    const runRecord = await app.db.getCollection('aiBuildGuideRuns').model.findOne({
+      where: { id: run.runId, engine: 'legacy', status: 'queued' },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!runRecord || String(runRecord.get('spaceId')) !== run.spaceId) return false;
+    const spaceRecord = await SpaceModel.findOne({
+      where: { id: run.spaceId, status: 'building', buildPhase: 'queued', buildRunId: run.runId },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!spaceRecord) return false;
+    await spaceRecord.update(
+      { buildPhase: 'running', buildStartedAt: now, buildHeartbeatAt: now, buildWorkerId: workerId },
+      { transaction },
+    );
+    await runRecord.update({ status: 'running', stage: 'reading', startedAt: now }, { transaction });
+    return true;
+  });
 }
 
 function getBuildWorkerId(app: any) {
@@ -771,7 +899,6 @@ function startBuildHeartbeat(app: any, run: BuildRunContext) {
 
 async function runBuild(app: any, db: any, run: BuildRunContext) {
   const spaceRepo = db.getRepository('aiBuildGuideSpaces') as Repository;
-  const pageRepo = db.getRepository('aiBuildGuidePages') as Repository;
   const space = await spaceRepo.findById(run.spaceId);
 
   if (!space) {
@@ -782,29 +909,49 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
     throw new StaleBuildRunError(run.spaceId, run.runId);
   }
 
-  const { llmService, model } = space.get();
-  if (!llmService || !model) {
-    throw new Error('LLM Service or model is missing in space configuration');
-  }
-
-  await pageRepo.destroy({
-    filter: {
-      spaceId: run.spaceId,
-    },
+  const inputArtifact = await db.getRepository('aiBuildGuideRunArtifacts').findOne({
+    filter: { runId: run.runId, artifactKey: 'input' },
   });
+  const savedSnapshot = inputArtifact?.get('payload');
+  let snapshot: BuildGuideInputSnapshot | null =
+    savedSnapshot &&
+    typeof savedSnapshot === 'object' &&
+    typeof (savedSnapshot as BuildGuideInputSnapshot).documentsText === 'string'
+      ? (savedSnapshot as BuildGuideInputSnapshot)
+      : null;
+  if (!snapshot && savedSnapshot && typeof savedSnapshot === 'object') {
+    snapshot = await materializeBuildGuideInputSnapshot(app, savedSnapshot as BuildGuideInputDescriptor);
+    await updateSpaceForRun(app, run, { buildPhase: 'reading', buildLog: 'Preparing source snapshot' });
+    await inputArtifact.update({ payload: snapshot });
+  }
+  const legacySpace = {
+    get(key?: string) {
+      return key ? space.get(key) : space.get();
+    },
+  };
+  const currentSnapshot = snapshot;
+  const guideSpace = currentSnapshot
+    ? {
+        get(key?: string) {
+          return key ? currentSnapshot[key as keyof BuildGuideInputSnapshot] : currentSnapshot;
+        },
+      }
+    : legacySpace;
+  const { llmService, model } = snapshot || space.get();
+  if (!llmService || !model) throw new Error('LLM configuration is missing');
 
   await updateSpaceForRun(app, run, {
     buildPhase: 'reading',
     buildLog: 'Reading source documents',
-    generatedHtml: null,
-    generatedMarkdown: null,
-    planJson: null,
-    pageCount: 0,
   });
 
-  const documentsText = await readDocuments(app, space);
-  const sourceHash = crypto.createHash('sha256').update(documentsText).digest('hex');
-  const provider = await getLLMProvider(app, llmService, model);
+  const documentsText = snapshot?.documentsText ?? (await readDocuments(app, space)).slice(0, MAX_SOURCE_CHARS);
+  const sourceHash = snapshot?.sourceHash ?? crypto.createHash('sha256').update(documentsText).digest('hex');
+  let provider: Awaited<ReturnType<typeof getLLMProvider>> | undefined;
+  const getProvider = async () => {
+    if (!provider) provider = await getLLMProvider(app, llmService, model);
+    return provider;
+  };
 
   await updateSpaceForRun(app, run, {
     buildPhase: 'planning',
@@ -812,105 +959,196 @@ async function runBuild(app: any, db: any, run: BuildRunContext) {
     sourceHash,
   });
 
-  const plan = await buildPlan(provider, space, documentsText);
+  const previousPlan = await db.getRepository('aiBuildGuideRunArtifacts').findOne({
+    filter: { runId: run.runId, artifactKey: 'legacy-plan' },
+  });
+  const previousPlanValue: unknown = previousPlan?.get('payload');
+  const plan =
+    previousPlanValue &&
+    typeof previousPlanValue === 'object' &&
+    Array.isArray((previousPlanValue as GuidePlan).chapters)
+      ? (previousPlanValue as GuidePlan)
+      : await buildPlan(await getProvider(), guideSpace, documentsText);
+  if (!previousPlan) {
+    await db.getRepository('aiBuildGuideRunArtifacts').create({
+      values: { id: crypto.randomUUID(), runId: run.runId, artifactKey: 'legacy-plan', payload: plan },
+    });
+  }
+  const chapterKeys = plan.chapters.map((chapter, index) => {
+    const slug = slugify(chapter.title, `chapter-${index + 1}`);
+    return `${index + 1}:${slug}`;
+  });
+  const chapterArtifacts = await db.getRepository('aiBuildGuideRunArtifacts').find({
+    filter: { runId: run.runId },
+    appends: [],
+  });
+  const completedBefore = chapterArtifacts.filter((artifact: any) => {
+    const key = artifact.get('artifactKey');
+    const payload = artifact.get('payload');
+    return (
+      typeof key === 'string' &&
+      chapterKeys.some((chapterKey) => key === `legacy-chapter:${chapterKey}`) &&
+      payload?.status === 'completed'
+    );
+  }).length;
+  await db.getRepository('aiBuildGuideRuns').update({
+    filterByTk: run.runId,
+    values: { expectedCount: plan.chapters.length, completedCount: completedBefore },
+  });
   await updateSpaceForRun(app, run, {
-    planJson: plan,
-    pageCount: plan.chapters.length,
     buildPhase: 'building_pages',
     buildLog: `Plan created with ${plan.chapters.length} chapters`,
   });
-
-  const pageRecords = [];
   for (const [index, chapter] of plan.chapters.entries()) {
     const chapterSlug = slugify(chapter.title, `chapter-${index + 1}`);
+    const chapterKey = chapterKeys[index];
+    const artifactKey = `legacy-chapter:${chapterKey}`;
+    const saved = await db
+      .getRepository('aiBuildGuideRunArtifacts')
+      .findOne({ filter: { runId: run.runId, artifactKey } });
+    const savedPayload: unknown = saved?.get('payload');
+    if (
+      savedPayload &&
+      typeof savedPayload === 'object' &&
+      (savedPayload as { status?: unknown }).status === 'completed'
+    ) {
+      continue;
+    }
+    await updateSpaceForRun(app, run, {
+      buildPhase: 'building_pages',
+      buildLog: `Building chapter ${index + 1}/${plan.chapters.length}`,
+    });
+
+    const markdown = await buildPageMarkdown(await getProvider(), guideSpace, plan, chapter, documentsText);
+    const html = await markdownToCleanHtml(markdown);
     const { metadata, searchText } = createGuideSearchMetadata({
       chapter,
-      guideTitle: plan.title || space.get('title'),
+      guideTitle: plan.title || guideSpace.get('title'),
+      markdown,
       slug: chapterSlug,
     });
-    const page = await pageRepo.create({
-      values: {
-        spaceId: run.spaceId,
+    await app.db.sequelize.transaction(async (transaction: any) => {
+      const activeRun = await db.getCollection('aiBuildGuideRuns').model.findOne({
+        where: { id: run.runId, engine: 'legacy', status: 'running' },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const activeSpace = await getSpaceModel(app).findOne({
+        where: { id: run.spaceId, status: 'building', buildRunId: run.runId },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!activeRun || !activeSpace) throw new StaleBuildRunError(run.spaceId, run.runId);
+      const artifact = await db.getRepository('aiBuildGuideRunArtifacts').findOne({
+        filter: { runId: run.runId, artifactKey },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const payload = {
+        status: 'completed',
+        chapterKey,
         sort: index + 1,
         title: chapter.title,
         slug: chapterSlug,
         goal: chapter.goal,
         planItem: chapter,
+        generatedMarkdown: markdown,
+        generatedHtml: html,
         searchMetadata: metadata,
         searchText,
-        status: 'pending',
-      },
+      };
+      if (artifact) await artifact.update({ payload }, { transaction });
+      else {
+        await db
+          .getCollection('aiBuildGuideRunArtifacts')
+          .model.create({ id: crypto.randomUUID(), runId: run.runId, artifactKey, payload }, { transaction });
+      }
+      await activeRun.increment('completedCount', { by: 1, transaction });
     });
-    pageRecords.push(page);
   }
 
-  for (const [index, page] of pageRecords.entries()) {
-    const chapter = plan.chapters[index];
-    const pageId = page.get('id');
-    await pageRepo.update({
-      filterByTk: pageId,
-      values: {
-        status: 'building',
-        buildLog: 'Building chapter with LLM',
-      },
-    });
-    await updateSpaceForRun(app, run, {
-      buildPhase: 'building_pages',
-      buildLog: `Building chapter ${index + 1}/${pageRecords.length}: ${chapter.title}`,
-    });
-
-    try {
-      const markdown = await buildPageMarkdown(provider, space, plan, chapter, documentsText);
-      const html = await markdownToCleanHtml(markdown);
-      const { metadata, searchText } = createGuideSearchMetadata({
-        chapter,
-        guideTitle: plan.title || space.get('title'),
-        markdown,
-        slug: page.get('slug'),
-      });
-      await pageRepo.update({
-        filterByTk: pageId,
-        values: {
-          status: 'completed',
-          generatedMarkdown: markdown,
-          generatedHtml: html,
-          searchMetadata: metadata,
-          searchText,
-          buildLog: null,
-        },
-      });
-    } catch (error: any) {
-      await pageRepo.update({
-        filterByTk: pageId,
-        values: {
-          status: 'error',
-          buildLog: error.message || String(error),
-        },
-      });
-      throw error;
-    }
-  }
-
-  const completedPages = await pageRepo.find({
-    filter: {
-      spaceId: run.spaceId,
-      status: 'completed',
-    },
-    sort: ['sort'],
+  const privateChapterArtifacts = await db.getRepository('aiBuildGuideRunArtifacts').find({
+    filter: { runId: run.runId },
+    appends: [],
   });
-  const combinedMarkdown = completedPages
-    .map((page: any) => page.get('generatedMarkdown'))
-    .filter(Boolean)
+  const privateChapters = chapterKeys.map((key) => {
+    const artifact = privateChapterArtifacts.find((item: any) => item.get('artifactKey') === `legacy-chapter:${key}`);
+    const payload: unknown = artifact?.get('payload');
+    return payload && typeof payload === 'object' && (payload as { status?: unknown }).status === 'completed'
+      ? (payload as Record<string, unknown>)
+      : null;
+  });
+  if (privateChapters.some((chapter) => !chapter || typeof chapter.generatedMarkdown !== 'string')) {
+    throw new Error('Guide chapter set is incomplete');
+  }
+  const combinedMarkdown = privateChapters
+    .map((chapter) => chapter?.generatedMarkdown)
+    .filter((markdown): markdown is string => typeof markdown === 'string')
     .join('\n\n---\n\n');
   const combinedHtml = await markdownToCleanHtml(combinedMarkdown);
 
-  await updateSpaceForRun(app, run, {
-    status: 'completed',
-    buildPhase: 'completed',
-    buildLog: `Built ${completedPages.length} chapters successfully`,
-    generatedMarkdown: combinedMarkdown,
-    generatedHtml: combinedHtml,
-    buildHeartbeatAt: new Date(),
+  await db.sequelize.transaction(async (transaction: any) => {
+    const activeRun = await db.getCollection('aiBuildGuideRuns').model.findOne({
+      where: { id: run.runId, engine: 'legacy', status: 'running' },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    if (!activeRun) throw new StaleBuildRunError(run.spaceId, run.runId);
+    const [affected] = await getSpaceModel(app).update(
+      {
+        status: 'completed',
+        buildPhase: 'completed',
+        buildLog: `Built ${privateChapters.length} chapters successfully`,
+        generatedMarkdown: combinedMarkdown,
+        generatedHtml: combinedHtml,
+        planJson: plan,
+        pageCount: privateChapters.length,
+        published: true,
+        publishedRunId: run.runId,
+        latestRunId: run.runId,
+        activeRunId: null,
+        buildHeartbeatAt: new Date(),
+      },
+      { where: { id: run.spaceId, buildRunId: run.runId, activeRunId: run.runId }, transaction },
+    );
+    if (!affected) throw new StaleBuildRunError(run.spaceId, run.runId);
+    const previousPages = await db.getCollection('aiBuildGuidePages').model.findAll({
+      where: { spaceId: run.spaceId, [Op.or]: [{ runId: { [Op.ne]: run.runId } }, { runId: null }] },
+      transaction,
+      lock: transaction.LOCK.UPDATE,
+    });
+    for (const page of previousPages) await page.destroy({ transaction });
+    for (const chapter of privateChapters) {
+      await db.getCollection('aiBuildGuidePages').model.create(
+        {
+          spaceId: run.spaceId,
+          sort: chapter?.sort,
+          title: chapter?.title,
+          slug: chapter?.slug,
+          goal: chapter?.goal,
+          planItem: chapter?.planItem,
+          status: 'completed',
+          runId: run.runId,
+          published: true,
+          generatedMarkdown: chapter?.generatedMarkdown,
+          generatedHtml: chapter?.generatedHtml,
+          searchMetadata: chapter?.searchMetadata,
+          searchText: chapter?.searchText,
+        },
+        { transaction },
+      );
+    }
+    const [runAffected] = await app.db.getCollection('aiBuildGuideRuns').model.update(
+      {
+        status: 'completed',
+        stage: 'completed',
+        expectedCount: privateChapters.length,
+        completedCount: privateChapters.length,
+        finishedAt: new Date(),
+      },
+      { where: { id: run.runId, status: 'running' }, transaction },
+    );
+    if (!runAffected) throw new StaleBuildRunError(run.spaceId, run.runId);
   });
 }
 
@@ -1102,16 +1340,15 @@ function createBuildQueueMessageFromSpace(space: any): BuildGuideQueueMessage | 
 }
 
 async function processQueuedBuildsFromDb(app: Application, count: number) {
-  const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
-  const spaces = await spaceRepo.find({
-    filter: {
-      status: 'building',
-      buildPhase: 'queued',
-    },
-    sort: ['buildQueuedAt'],
+  const runs = await app.db.getRepository('aiBuildGuideRuns').find({
+    filter: { engine: 'legacy', status: 'queued' },
+    sort: ['createdAt'],
     limit: count,
   });
-  const messages = spaces.map(createBuildQueueMessageFromSpace).filter(Boolean) as BuildGuideQueueMessage[];
+  const messages = runs.map((run: { get: (field: string) => unknown }) => ({
+    spaceId: String(run.get('spaceId')),
+    runId: String(run.get('id')),
+  }));
   await processBuildQueueMessages(app, messages);
 }
 
@@ -1121,7 +1358,10 @@ async function processBuildQueueMessages(app: Application, messages: BuildGuideQ
 }
 
 async function markBuildError(app: Application, spaceId: string, runId: string | undefined, error: any) {
-  const buildLog = error?.message || String(error);
+  const buildLog = 'BUILD_FAILED';
+  app.log?.warn?.('[plugin-build-guide-block] Legacy build failed', {
+    errorName: error instanceof Error ? error.name : 'Error',
+  });
   let updated = false;
   if (runId) {
     updated = await updateSpaceForRun(
@@ -1132,6 +1372,7 @@ async function markBuildError(app: Application, spaceId: string, runId: string |
         buildPhase: 'error',
         buildLog,
         buildHeartbeatAt: new Date(),
+        activeRunId: null,
       },
       true,
     );
@@ -1142,6 +1383,7 @@ async function markBuildError(app: Application, spaceId: string, runId: string |
         status: 'error',
         buildPhase: 'error',
         buildLog,
+        activeRunId: null,
       },
     });
     updated = true;
@@ -1151,10 +1393,18 @@ async function markBuildError(app: Application, spaceId: string, runId: string |
     return;
   }
 
+  if (runId) {
+    await app.db.getRepository('aiBuildGuideRuns').update({
+      filterByTk: runId,
+      values: { status: 'failed', stage: 'failed', errorCode: 'BUILD_FAILED', finishedAt: new Date() },
+    });
+  }
+
   await app.db.getRepository('aiBuildGuidePages').update({
     filter: {
       spaceId,
-      status: 'building',
+      ...(runId ? { runId } : {}),
+      status: 'pending',
     },
     values: {
       status: 'error',
@@ -1229,7 +1479,7 @@ async function processQueuedBuild(app: Application, message: BuildGuideQueueMess
         app.log?.info?.(`[plugin-build-guide-block] ${error.message}`);
         return;
       }
-      app.log?.error?.('Build Guide Worker Error', error);
+      app.log?.error?.('Build Guide Worker Error', { errorName: error instanceof Error ? error.name : 'Error' });
       await markBuildError(app, spaceId, runId, error);
     } finally {
       stopHeartbeat();
@@ -1264,48 +1514,149 @@ async function withBuildRunLock<T>(app: Application, spaceId: string, fn: () => 
   return app.lockManager.runExclusive(`build-guide:run:${spaceId}`, fn, BUILD_RUN_LOCK_TTL_MS);
 }
 
+function fieldsAllow(fields: unknown, excluded: unknown, required: string[]) {
+  const allowedFields = Array.isArray(fields) ? fields.map(String) : undefined;
+  const excludedFields = Array.isArray(excluded) ? excluded.map(String) : [];
+  return required.every(
+    (field) => (!allowedFields || allowedFields.includes(field)) && !excludedFields.includes(field),
+  );
+}
+
+async function getAuthorizedBuildSpace(ctx: Context, spaceId: string) {
+  const dataSource = ctx.app.dataSourceManager.get('main');
+  let access;
+  let buildAccess;
+  try {
+    access = await dataSource.acl.resolveActionParams(ctx, {
+      resourceName: 'aiBuildGuideSpaces',
+      actionName: 'get',
+      params: { filterByTk: spaceId },
+    });
+    buildAccess = await dataSource.acl.resolveActionParams(ctx, {
+      resourceName: 'aiBuildGuideSpaces',
+      actionName: 'build',
+      params: { filterByTk: spaceId },
+    });
+  } catch (error) {
+    if (error instanceof NoPermissionError)
+      ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+    throw error;
+  }
+  if (!access.can || !buildAccess.can)
+    ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+  const requiredSpaceFields = [
+    'id',
+    'title',
+    'llmService',
+    'model',
+    'systemPrompt',
+    'targetChapterCount',
+    'chapterGuidance',
+    'outputFormat',
+    'documents',
+  ];
+  const getFieldsAllowed = fieldsAllow(access.parsedParams?.fields, access.parsedParams?.except, requiredSpaceFields);
+  const buildFieldsAllowed = fieldsAllow(
+    buildAccess.parsedParams?.fields,
+    buildAccess.parsedParams?.except,
+    requiredSpaceFields,
+  );
+  if (!getFieldsAllowed || !buildFieldsAllowed) {
+    ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+  }
+  const space = await ctx.db.getRepository('aiBuildGuideSpaces').findOne({
+    ...access.mergedParams,
+    filterByTk: spaceId,
+    appends: [],
+  });
+  if (!space) ctx.throw(404, ctx.t('Space not found', { ns: 'plugin-build-guide-block' }));
+
+  const documents = await space.getDocuments();
+  const permittedDocuments: unknown[] = [];
+  const requiredDocumentFields = ['id', 'updatedAt', 'filename', 'mimetype', 'extname', 'url', 'storageId'];
+  for (const document of documents || []) {
+    let documentAccess;
+    try {
+      documentAccess = await dataSource.acl.resolveActionParams(ctx, {
+        resourceName: 'attachments',
+        actionName: 'get',
+        params: { filterByTk: document.id },
+      });
+    } catch (error) {
+      if (error instanceof NoPermissionError)
+        ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+      throw error;
+    }
+    if (!documentAccess.can) ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+    const allowedFields = documentAccess.parsedParams?.fields as string[] | undefined;
+    const excludedFields = (documentAccess.parsedParams?.except || []) as string[];
+    if (
+      requiredDocumentFields.some(
+        (field) => (allowedFields && !allowedFields.includes(field)) || excludedFields.includes(field),
+      )
+    ) {
+      ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+    }
+    const readable = await ctx.db.getRepository('attachments').findOne({
+      ...documentAccess.mergedParams,
+      filterByTk: document.id,
+      appends: [],
+    });
+    if (!readable) ctx.throw(403, ctx.t('Guide access denied.', { ns: 'plugin-build-guide-block' }));
+    permittedDocuments.push(readable);
+  }
+  return {
+    get: (key?: string) => (key ? space.get(key) : space.get()),
+    getDocuments: async () => permittedDocuments,
+    buildFilter: buildAccess.mergedParams,
+  };
+}
+
 export async function recoverInterruptedBuilds(app: Application) {
   const spaceRepo = app.db.getRepository('aiBuildGuideSpaces') as Repository;
   const pageRepo = app.db.getRepository('aiBuildGuidePages') as Repository;
   const staleBefore = new Date(Date.now() - BUILD_STALE_MS);
-  const spaces = await spaceRepo.find({
-    filter: {
-      status: 'building',
-      $or: [{ buildHeartbeatAt: null }, { buildHeartbeatAt: { $lt: staleBefore } }],
-    },
+  const runs = await app.db.getRepository('aiBuildGuideRuns').find({
+    filter: { engine: 'legacy', status: 'running' },
+    sort: ['createdAt'],
   });
 
-  for (const space of spaces) {
-    const spaceId = String(space.get('id'));
-    const runId = String(space.get('buildRunId') || crypto.randomUUID());
+  for (const run of runs) {
+    const spaceId = String(run.get('spaceId'));
+    const runId = String(run.get('id'));
+    const space = await spaceRepo.findOne({
+      filterByTk: spaceId,
+      filter: { status: 'building', buildRunId: runId },
+    });
+    const heartbeat = space?.get('buildHeartbeatAt');
+    if (!space || (heartbeat && new Date(heartbeat).getTime() > staleBefore.getTime())) continue;
     const SpaceModel = getSpaceModel(app);
-    const [affected] = await SpaceModel.update(
+    const [runAffected] = await app.db
+      .getCollection('aiBuildGuideRuns')
+      .model.update(
+        { status: 'queued', stage: 'queued', startedAt: null },
+        { where: { id: runId, engine: 'legacy', status: 'running' } },
+      );
+
+    if (!runAffected) continue;
+    const [spaceAffected] = await SpaceModel.update(
       {
         buildPhase: 'queued',
         buildLog: 'Build re-queued after worker restart',
-        buildRunId: runId,
         buildQueuedAt: new Date(),
         buildStartedAt: null,
         buildHeartbeatAt: null,
         buildWorkerId: null,
       },
-      {
-        where: {
-          id: spaceId,
-          status: 'building',
-          buildRunId: space.get('buildRunId') || null,
-        },
-      },
+      { where: { id: spaceId, status: 'building', buildRunId: runId } },
     );
-
-    if (!affected) {
-      continue;
-    }
+    if (!spaceAffected) continue;
 
     await pageRepo.update({
       filter: {
         spaceId,
-        status: 'building',
+        runId,
+        status: 'pending',
       },
       values: {
         status: 'pending',
@@ -1319,8 +1670,41 @@ export async function recoverInterruptedBuilds(app: Application) {
     });
   }
 
-  if (spaces.length) {
-    app.log?.info?.(`[plugin-build-guide-block] Re-queued ${spaces.length} interrupted build(s)`);
+  const buildingSpaces = await spaceRepo.find({ filter: { status: 'building' } });
+  for (const space of buildingSpaces) {
+    const runId = String(space.get('buildRunId') || '');
+    if (!runId) continue;
+    const existing = await app.db.getRepository('aiBuildGuideRuns').findOne({ filterByTk: runId });
+    if (existing) continue;
+    // Upgrade recovery for builds created before run metadata was introduced. A workflow run is never inferred
+    // from mutable Space.engine; new workflow submissions always create their immutable Run in the same transaction.
+    await app.db.sequelize.transaction(async (transaction: any) => {
+      const locked = await getSpaceModel(app).findOne({
+        where: { id: space.get('id'), status: 'building', buildRunId: runId },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      if (!locked) return;
+      await app.db.getCollection('aiBuildGuideRuns').model.create(
+        {
+          id: runId,
+          spaceId: String(space.get('id')),
+          engine: 'legacy',
+          status: 'queued',
+          stage: 'queued',
+          requesterId: '',
+        },
+        { transaction },
+      );
+      await locked.update(
+        { buildPhase: 'queued', buildLog: 'Build re-queued after worker restart', activeRunId: runId },
+        { transaction },
+      );
+    });
+  }
+
+  if (runs.length) {
+    app.log?.info?.(`[plugin-build-guide-block] Re-queued ${runs.length} interrupted legacy build(s)`);
   }
 }
 
@@ -1331,42 +1715,97 @@ export async function build(ctx: Context, next: Next) {
   }
 
   const app = ctx.app as Application;
-  const repository = ctx.db.getRepository('aiBuildGuideSpaces') as Repository;
-
   const body = await withBuildTriggerLock(app, String(filterByTk), async () => {
     const runId = crypto.randomUUID();
-    const space = await repository.findById(filterByTk);
-
-    if (!space) {
-      ctx.throw(404, 'Space not found');
-    }
+    const space = await getAuthorizedBuildSpace(ctx, String(filterByTk));
 
     if (space.get('status') === 'building') {
       ctx.throw(409, 'A build is already in progress for this space');
     }
+    let inputSnapshot: BuildGuideInputDescriptor;
+    try {
+      inputSnapshot = await createBuildGuideInputDescriptor(space);
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'Error';
+      app.log?.warn?.('[plugin-build-guide-block] Could not snapshot guide inputs', { errorName });
+      ctx.throw(400, ctx.t('Could not read the configured guide inputs', { ns: 'plugin-build-guide-block' }));
+    }
 
-    await repository.update({
-      filterByTk,
-      values: {
-        status: 'building',
-        buildPhase: 'queued',
-        buildLog: 'Build queued',
-        buildRunId: runId,
-        buildQueuedAt: new Date(),
-        buildStartedAt: null,
-        buildHeartbeatAt: null,
-        buildWorkerId: null,
-      },
+    const engine = space.get('engine') === 'workflow' ? 'workflow' : 'legacy';
+    let revision: { id: string | number; key: string } | null = null;
+    if (engine === 'workflow') {
+      const adapter = (app.pm.get('plugin-workflow-build-guide') || app.pm.get('workflow-build-guide')) as
+        | { getActiveRevision?: () => Promise<{ id: string | number; key: string } | null> }
+        | undefined;
+      if (!adapter?.getActiveRevision) {
+        ctx.throw(503, 'Workflow Build Guide adapter is unavailable');
+        return;
+      }
+      revision = await adapter.getActiveRevision();
+      if (!revision) {
+        ctx.throw(503, 'Workflow Build Guide workflow is not configured');
+        return;
+      }
+    }
+
+    await app.db.sequelize.transaction(async (transaction: any) => {
+      const locked = await app.db.getRepository('aiBuildGuideSpaces').findOne({
+        ...space.buildFilter,
+        filterByTk,
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+        appends: [],
+      });
+      if (!locked) ctx.throw(404, 'Space not found');
+      if (locked.get('status') === 'building') ctx.throw(409, 'A build is already in progress for this space');
+      const lockedEngine = locked.get('engine') === 'workflow' ? 'workflow' : 'legacy';
+      if (lockedEngine !== engine) ctx.throw(409, 'Build settings changed; try again');
+
+      await app.db.getRepository('aiBuildGuideRuns').create({
+        values: {
+          id: runId,
+          spaceId: String(filterByTk),
+          engine,
+          requesterId: String((ctx as any).state?.currentUser?.id ?? ''),
+          ...(revision ? { workflowKey: revision.key, workflowRevisionId: String(revision.id) } : {}),
+          status: 'queued',
+          stage: 'queued',
+        },
+        transaction,
+      });
+      await app.db
+        .getCollection('aiBuildGuideRunArtifacts')
+        .model.create(
+          { id: crypto.randomUUID(), runId, artifactKey: 'input', payload: inputSnapshot },
+          { transaction },
+        );
+      await locked.update(
+        {
+          status: 'building',
+          buildPhase: 'queued',
+          buildLog: 'Build queued',
+          buildRunId: runId,
+          activeRunId: runId,
+          latestRunId: runId,
+          buildQueuedAt: new Date(),
+          buildStartedAt: null,
+          buildHeartbeatAt: null,
+          buildWorkerId: null,
+        },
+        { transaction },
+      );
     });
 
-    await enqueueBuild(app, {
-      spaceId: String(filterByTk),
-      runId,
-      userId: (ctx as any).state?.currentUser?.id ?? null,
-      queuedAt: new Date().toISOString(),
-    });
+    if (engine === 'legacy') {
+      await enqueueBuild(app, {
+        spaceId: String(filterByTk),
+        runId,
+        userId: (ctx as any).state?.currentUser?.id ?? null,
+        queuedAt: new Date().toISOString(),
+      });
+    }
 
-    return { status: 'building' };
+    return { status: 'building', runId };
   });
 
   ctx.body = body;

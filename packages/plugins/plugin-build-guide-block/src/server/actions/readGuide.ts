@@ -7,6 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Context } from '@nocobase/actions';
 import { NoPermissionError } from '@nocobase/acl';
 
@@ -28,11 +30,11 @@ export async function readGuide(ctx: Context, field: 'generatedHtml' | 'generate
   if ((fields && !fields.includes(field)) || except.includes(field)) ctx.throw(403);
   const model = await ctx.db.getRepository(resourceName).findOne({
     ...resolved.mergedParams,
-    fields: ['status', field],
+    fields: ['status', 'published', field],
     appends: [],
   });
   if (!model) ctx.throw(404, ctx.t('User Guide not found', { ns: 'plugin-build-guide-block' }));
-  if (model.get('status') !== 'completed') {
+  if (model.get('status') !== 'completed' && model.get('published') !== true && !model.get(field)) {
     ctx.throw(400, ctx.t('User Guide is not ready yet', { ns: 'plugin-build-guide-block' }));
   }
   return model.get(field) || '';

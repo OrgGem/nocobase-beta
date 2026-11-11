@@ -7,4 +7,6 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+// SPDX-License-Identifier: Apache-2.0
+
 export { UserGuideBlockModel } from './UserGuideBlockModel';

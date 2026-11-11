@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { Select } from 'antd';
 import { useRequest } from '@nocobase/client';
@@ -12,16 +21,17 @@ export const SpaceSelect = (props: any) => {
     resource: 'aiBuildGuideSpaces',
     action: 'list',
     params: {
-      filter: { status: 'completed' },
+      filter: { $or: [{ published: true }, { status: 'completed' }] },
       pageSize: 100,
       sort: ['-createdAt'],
     },
   });
 
-  const options = normalizeRecords(data).map((item: any) => ({
-    label: item.title,
-    value: item.id,
-  })) || [];
+  const options =
+    normalizeRecords(data).map((item: any) => ({
+      label: item.title,
+      value: item.id,
+    })) || [];
 
   return (
     <Select
@@ -29,9 +39,7 @@ export const SpaceSelect = (props: any) => {
       loading={loading}
       options={options}
       showSearch
-      filterOption={(input, option) =>
-        (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
-      }
+      filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
     />
   );
 };

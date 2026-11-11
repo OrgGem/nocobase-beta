@@ -1,0 +1,16 @@
+{
+  "Build Guide": "Tạo hướng dẫn",
+  "Prepare guide build": "Chuẩn bị tạo hướng dẫn",
+  "Claim the run and load its pinned source documents.": "Nhận quyền xử lý lượt chạy và tải tài liệu nguồn đã ghim.",
+  "This managed step claims the build run and prepares its pinned source documents.": "Bước được quản lý này nhận quyền xử lý lượt tạo và chuẩn bị tài liệu nguồn đã ghim.",
+  "Build Guide AI step": "Bước AI tạo hướng dẫn",
+  "Plan chapters or write one chapter using the configured Build Guide space.": "Lập kế hoạch chương hoặc viết một chương bằng Space hướng dẫn đã cấu hình.",
+  "Step mode": "Chế độ bước",
+  "Plan outline": "Lập dàn ý",
+  "Write chapter": "Viết chương",
+  "The AI provider, model, and prompts are managed in the Build Guide space settings.": "Nhà cung cấp AI, mô hình và prompt được quản lý trong cài đặt Space hướng dẫn.",
+  "Chapter keys": "Khóa chương",
+  "Publish guide": "Phát hành hướng dẫn",
+  "Validate and publish the complete guide.": "Xác thực và phát hành hướng dẫn hoàn chỉnh.",
+  "This managed step validates and publishes the complete guide for its current run.": "Bước được quản lý này xác thực và phát hành hướng dẫn hoàn chỉnh cho lượt chạy hiện tại."
+}

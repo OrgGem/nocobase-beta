@@ -7,6 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin, Application } from '@nocobase/client-v2';
 import { UserGuideBlockModel } from './models/UserGuideBlockModel';
 
@@ -25,8 +27,7 @@ export class PluginBuildGuideBlockClient extends Plugin<Record<string, never>, A
       aclSnippet: 'pm.ai-build-guide',
       key: 'index',
       title: this.t('Build Guide Block'),
-
-      componentLoader: () => import('../client/UserGuideManager').then((m) => ({ default: m.UserGuideManager })),
+      componentLoader: () => import('./UserGuideManager').then((m) => ({ default: m.UserGuideManager })),
     });
   }
 }

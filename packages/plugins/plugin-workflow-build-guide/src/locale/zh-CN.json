@@ -1,0 +1,16 @@
+{
+  "Build Guide": "用户指南构建",
+  "Prepare guide build": "准备指南构建",
+  "Claim the run and load its pinned source documents.": "认领运行并加载已固定的来源文档。",
+  "This managed step claims the build run and prepares its pinned source documents.": "此托管步骤会认领构建运行并准备已固定的来源文档。",
+  "Build Guide AI step": "指南 AI 步骤",
+  "Plan chapters or write one chapter using the configured Build Guide space.": "使用已配置的指南空间规划章节或撰写单个章节。",
+  "Step mode": "步骤模式",
+  "Plan outline": "规划大纲",
+  "Write chapter": "撰写章节",
+  "The AI provider, model, and prompts are managed in the Build Guide space settings.": "AI 提供方、模型和提示词在指南空间设置中管理。",
+  "Chapter keys": "章节键",
+  "Publish guide": "发布指南",
+  "Validate and publish the complete guide.": "验证并发布完整指南。",
+  "This managed step validates and publishes the complete guide for its current run.": "此托管步骤会验证并发布当前运行的完整指南。"
+}

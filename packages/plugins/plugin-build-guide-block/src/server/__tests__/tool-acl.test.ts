@@ -7,6 +7,8 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Context } from '@nocobase/actions';
 import { createMockServer, type MockServer } from '@nocobase/test';
 import { DefaultToolsManager } from '@nocobase/ai';
@@ -15,8 +17,18 @@ import Plugin from '../plugin';
 
 vi.mock('../actions/build', () => ({
   build: vi.fn(),
+  buildPageMarkdown: vi.fn(),
+  buildPlan: vi.fn(),
+  createBuildGuideInputDescriptor: vi.fn(),
+  createGuideSearchMetadata: vi.fn(),
+  getLLMProvider: vi.fn(),
+  markdownToCleanHtml: vi.fn(),
+  materializeBuildGuideInputSnapshot: vi.fn(),
+  normalizePlan: vi.fn(),
   recoverInterruptedBuilds: vi.fn(),
   registerBuildGuideQueue: vi.fn(),
+  slugify: vi.fn(),
+  toPlainText: vi.fn(),
   unregisterBuildGuideQueue: vi.fn(),
 }));
 let app: MockServer;

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { defineCollection } from '@nocobase/database';
 
 export default defineCollection({
@@ -92,6 +101,28 @@ export default defineCollection({
       type: 'string',
       name: 'status',
       defaultValue: 'draft',
+    },
+    {
+      type: 'string',
+      name: 'engine',
+      defaultValue: 'legacy',
+    },
+    {
+      type: 'string',
+      name: 'activeRunId',
+    },
+    {
+      type: 'string',
+      name: 'latestRunId',
+    },
+    {
+      type: 'string',
+      name: 'publishedRunId',
+    },
+    {
+      type: 'boolean',
+      name: 'published',
+      defaultValue: false,
     },
     {
       type: 'text',

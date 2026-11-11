@@ -7,12 +7,14 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
+// SPDX-License-Identifier: Apache-2.0
+
 import { z } from 'zod';
 import type { Context } from '@nocobase/actions';
 import { NoPermissionError } from '@nocobase/acl';
 
 interface RecordReader {
-  get?: (key: string) => unknown;
+  get: (key: string) => unknown;
   [key: string]: unknown;
 }
 
@@ -225,15 +227,15 @@ export default {
         if (action === 'list_spaces') {
           const fields = ['id', 'title', 'chapterGuidance', 'pageCount'];
           const permission = await readPermission(ctx, 'aiBuildGuideSpaces', 'list', fields);
-          const filter: QueryFilter = { status: 'completed' };
+          const filter: QueryFilter = { $or: [{ published: true }, { status: 'completed' }] };
           if (query) filter.title = { [operator]: `%${query}%` };
-          const spaces = await spaceRepo.find({
+          const spaces = (await spaceRepo.find({
             ...permission,
             filter: scopedFilter(permission.filter, filter),
             fields,
             appends: [],
             limit: 20,
-          });
+          })) as unknown as RecordReader[];
           return {
             status: 'success',
             content: spaces.map((space) => ({
@@ -274,7 +276,7 @@ export default {
               (await spaceRepo.findOne({
                 ...spacePermission,
                 filterByTk: page.get('spaceId'),
-                filter: scopedFilter(spacePermission.filter, { status: 'completed' }),
+                filter: scopedFilter(spacePermission.filter, { $or: [{ published: true }, { status: 'completed' }] }),
                 fields: ['id', 'title'],
                 appends: [],
               }));
@@ -294,15 +296,15 @@ export default {
             };
           }
           if (query) filter.$or = createMetadataSearchConditions(query, operator);
-          let pages = await pageRepo.find({
+          let pages = (await pageRepo.find({
             ...permission,
             filter: scopedFilter(permission.filter, filter),
             fields,
             appends: [],
             limit: 30,
-          });
+          })) as unknown as RecordReader[];
           if (query && pages.length === 0) {
-            pages = await pageRepo.find({
+            pages = (await pageRepo.find({
               ...permission,
               filter: scopedFilter(permission.filter, {
                 ...filter,
@@ -311,19 +313,19 @@ export default {
               fields,
               appends: [],
               limit: 30,
-            });
+            })) as unknown as RecordReader[];
           }
           const spaces = pages.length
-            ? await spaceRepo.find({
+            ? ((await spaceRepo.find({
                 ...spacePermission,
                 filter: scopedFilter(spacePermission.filter, {
-                  status: 'completed',
+                  $or: [{ published: true }, { status: 'completed' }],
                   id: { $in: pages.map((page) => page.get('spaceId')) },
                 }),
                 fields: ['id', 'title'],
                 appends: [],
                 pagination: false,
-              })
+              })) as unknown as RecordReader[])
             : [];
           const visibleSpaces = new Map(spaces.map((space) => [String(space.get('id')), space.get('title')]));
           return {

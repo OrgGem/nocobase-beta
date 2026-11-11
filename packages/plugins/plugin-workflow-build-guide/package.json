@@ -1,0 +1,29 @@
+{
+  "name": "plugin-workflow-build-guide",
+  "displayName": "Build Guide Workflows",
+  "displayName.zh-CN": "指南构建工作流",
+  "displayName.vi-VN": "Luồng tạo hướng dẫn",
+  "description": "Managed native Workflow integration for Build Guide generation.",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": ["NocoBase", "Workflow", "AI", "Build Guide"],
+  "files": ["dist", "src", "client.js", "client-v2.js", "server.js", "client.d.ts", "client-v2.d.ts", "server.d.ts"],
+  "nocobase": {
+    "supportedVersions": [">=2.2.40 <3.0.0"],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@langchain/core": "1.1.49",
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/plugin-ai": ">=2.2.40 <3.0.0",
+    "@nocobase/plugin-workflow": ">=2.2.40 <3.0.0",
+    "@nocobase/plugin-workflow-loop": ">=2.2.40 <3.0.0",
+    "plugin-build-guide-block": "^1.1.14"
+  }
+}

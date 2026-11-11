@@ -1,0 +1,16 @@
+{
+  "Build Guide": "Build Guide",
+  "Prepare guide build": "Prepare guide build",
+  "Claim the run and load its pinned source documents.": "Claim the run and load its pinned source documents.",
+  "This managed step claims the build run and prepares its pinned source documents.": "This managed step claims the build run and prepares its pinned source documents.",
+  "Build Guide AI step": "Build Guide AI step",
+  "Plan chapters or write one chapter using the configured Build Guide space.": "Plan chapters or write one chapter using the configured Build Guide space.",
+  "Step mode": "Step mode",
+  "Plan outline": "Plan outline",
+  "Write chapter": "Write chapter",
+  "The AI provider, model, and prompts are managed in the Build Guide space settings.": "The AI provider, model, and prompts are managed in the Build Guide space settings.",
+  "Chapter keys": "Chapter keys",
+  "Publish guide": "Publish guide",
+  "Validate and publish the complete guide.": "Validate and publish the complete guide.",
+  "This managed step validates and publishes the complete guide for its current run.": "This managed step validates and publishes the complete guide for its current run."
+}
