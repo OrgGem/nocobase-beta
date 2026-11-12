@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Context } from '@nocobase/actions';
 import { buildAccessibleKnowledgeBaseFilter, resolveAccessContext } from '../utils/access';
 import { EXTERNAL_HTTP_RAG_PROVIDER, EXTERNAL_RAG_KB_TYPE } from '../providers/external-rag';
 import type { RagSearchResult } from '../providers/external-rag';
 import { usesForwardedEmbeddingCredentials } from '../providers/external-rag';
 import { KbCacheService, buildSearchCacheKey } from './cache';
+import { filterCurrentDocuments } from './index-visibility';
 
 export type KnowledgeSearchOptions = {
   knowledgeBaseIds?: string[];
@@ -19,6 +22,11 @@ export type KnowledgeSearchResult = RagSearchResult & {
   knowledgeBaseId?: string;
   knowledgeBaseName?: string;
 };
+
+// In-memory provenance is stamped by this service, never taken from provider metadata.
+// Symbols are copied by reranking but omitted from JSON responses.
+const SEARCH_SOURCE = Symbol('knowledge-search-source');
+type SourcedResult = KnowledgeSearchResult & { [SEARCH_SOURCE]?: 'native' | 'external' };
 
 const DEFAULT_TOP_K = 5;
 const DEFAULT_SCORE_THRESHOLD = 0.3;
@@ -128,13 +136,56 @@ export class KnowledgeSearchService {
     options: KnowledgeSearchOptions = {},
   ): Promise<KnowledgeSearchResult[]> {
     const kbIds = (options.knowledgeBaseIds ?? []).filter(Boolean).map(String).sort();
+    const access = await resolveAccessContext(ctx, this.plugin.db);
     const cacheKey = buildSearchCacheKey(kbIds, query?.trim() ?? '', {
       topK: options.topK,
       candidateK: options.candidateK,
       scoreThreshold: options.scoreThreshold,
       rerank: options.rerank,
+      principal: access,
     });
-    return searchCache.getOrLoad(cacheKey, () => this.search(ctx, query, options));
+    const cached = await searchCache.getOrLoad(cacheKey, () => this.search(ctx, query, options));
+    const visible = await this.validateCachedResults(ctx, cached);
+    if (visible.length === cached.length) return visible;
+    const refreshed = await this.search(ctx, query, options);
+    searchCache.set(cacheKey, refreshed);
+    return this.validateCachedResults(ctx, refreshed);
+  }
+
+  private async validateCachedResults(
+    ctx: Context,
+    results: KnowledgeSearchResult[],
+  ): Promise<KnowledgeSearchResult[]> {
+    if (!results.length) return [];
+    const ids = Array.from(
+      new Set(results.map((result) => result.knowledgeBaseId).filter((id): id is string => Boolean(id))),
+    );
+    if (!ids.length) return [];
+    const access = await resolveAccessContext(ctx, this.plugin.db);
+    const records = await this.plugin.db
+      .getRepository('aiKnowledgeBases')
+      .find({ filter: buildAccessibleKnowledgeBaseFilter(access, ids), fields: ['id', 'type', 'options'] });
+    const kbs = records.map((record: any) => (record.toJSON ? record.toJSON() : record));
+    const externalIds = new Set(
+      kbs
+        .filter(
+          (kb: any) => kb.type === EXTERNAL_RAG_KB_TYPE && (!usesForwardedEmbeddingCredentials(kb) || access.isAdmin),
+        )
+        .map((kb: any) => String(kb.id)),
+    );
+    const standardIds = new Set(
+      kbs.filter((kb: any) => kb.type !== EXTERNAL_RAG_KB_TYPE).map((kb: any) => String(kb.id)),
+    );
+    const standard = results.filter(
+      (result) =>
+        standardIds.has(String(result.knowledgeBaseId)) && (result as SourcedResult)[SEARCH_SOURCE] === 'native',
+    );
+    const validStandard = new Set(await filterCurrentDocuments(this.plugin, standard));
+    return results.filter(
+      (result) =>
+        (externalIds.has(String(result.knowledgeBaseId)) && (result as SourcedResult)[SEARCH_SOURCE] === 'external') ||
+        validStandard.has(result),
+    );
   }
 
   static invalidateKnowledgeBase(kbId: string): void {
@@ -193,12 +244,20 @@ export class KnowledgeSearchService {
               firstKB.vectorStoreProps,
             );
             const knowledgeBaseOuterIds = knowledgeBaseList.map((kb: any) => kb.knowledgeBaseOuterId);
-            const found = await service.search(trimmedQuery, {
-              topK: candidateK,
-              score: String(scoreThreshold),
-              filter: { knowledgeBaseOuterId: { in: knowledgeBaseOuterIds } },
-            });
-            results.push(...this.toSearchResults(found, knowledgeBaseList));
+            let requested = candidateK;
+            while (requested <= MAX_CANDIDATE_K) {
+              const found = await service.search(trimmedQuery, {
+                topK: requested,
+                score: String(scoreThreshold),
+                filter: { knowledgeBaseOuterId: { in: knowledgeBaseOuterIds } },
+              });
+              const visible = await filterCurrentDocuments(this.plugin, this.toSearchResults(found, knowledgeBaseList));
+              if (visible.length >= candidateK || requested >= MAX_CANDIDATE_K || found.length < requested) {
+                results.push(...visible.slice(0, candidateK));
+                break;
+              }
+              requested = Math.min(requested * 2, MAX_CANDIDATE_K);
+            }
           } catch (err) {
             (this.plugin as any).app.logger.error('[KB Search] Vector search failed:', err);
           }
@@ -230,6 +289,7 @@ export class KnowledgeSearchService {
               rerankScore: Number(item.score) || 0,
               knowledgeBaseId: String(kb.id),
               knowledgeBaseName: kb.name,
+              [SEARCH_SOURCE]: 'external' as const,
             })),
           );
         } catch (err) {
@@ -267,6 +327,7 @@ export class KnowledgeSearchService {
         rerankScore: score,
         knowledgeBaseId: knowledgeBaseId ?? (kb?.knowledgeBaseOuterId ? String(kb.knowledgeBaseOuterId) : undefined),
         knowledgeBaseName: kb?.name,
+        [SEARCH_SOURCE]: 'native' as const,
       };
     });
   }

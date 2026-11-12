@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import axios from 'axios';
 
@@ -121,7 +114,7 @@ export class SimpleHTTPEmbeddings {
 
         // Exponential backoff: 1s, 2s, 4s
         const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
-        await new Promise((r) => setTimeout(r, delayMs));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
     }
     throw new Error('Unreachable');

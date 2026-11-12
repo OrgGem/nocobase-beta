@@ -1,13 +1,7 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import type { Database } from '@nocobase/database';
+import type { IndexLifecycleService } from './index-lifecycle';
 
 const REPO_NAME = 'aiKnowledgeBaseDocumentVersions';
 const MAX_VERSIONS_PER_DOCUMENT = 20;
@@ -29,7 +23,10 @@ export type CreateVersionOptions = {
  * - Versions are capped per document; oldest versions beyond the cap are pruned.
  */
 export class DocumentVersionService {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly indexLifecycle?: IndexLifecycleService,
+  ) {}
 
   async recordVersion(options: CreateVersionOptions): Promise<number | null> {
     const repo = this.db.getRepository(REPO_NAME);
@@ -136,9 +133,8 @@ export class DocumentVersionService {
     if (!doc) {
       return { restored: false, error: 'Document not found' };
     }
-    if (doc.get?.('status') === 'processing') {
-      return { restored: false, error: 'Cannot restore while document is processing' };
-    }
+    if (doc.get?.('indexDeleted')) return { restored: false, error: 'Document not found' };
+    if (!this.indexLifecycle) throw new Error('Index lifecycle service is unavailable');
 
     // Snapshot current state before restoring so nothing is lost
     const currentText = doc.get?.('textContent') ?? null;
@@ -152,16 +148,7 @@ export class DocumentVersionService {
       });
     }
 
-    await docRepo.update({
-      filterByTk: documentId,
-      values: {
-        textContent: targetVersion.textContent,
-        status: 'pending',
-        error: null,
-        chunkCount: 0,
-        retryCount: 0,
-      },
-    });
+    await this.indexLifecycle.requestReprocess(documentId, { textContent: targetVersion.textContent, retryCount: 0 });
 
     // Record the restore itself as a new version
     await this.recordVersion({

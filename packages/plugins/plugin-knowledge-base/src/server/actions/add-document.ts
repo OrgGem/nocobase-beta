@@ -1,15 +1,11 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import PluginKnowledgeBaseServer from '../plugin';
 import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
 import { canManageKnowledgeBase, getAuthUserId, resolveAccessContext } from '../utils/access';
+import { findOwnedAiFile } from '../utils/file-access';
+import { createKnowledgeBaseDocument } from '../utils/create-document';
+import { requireRecordId } from '../utils/record-id';
 
 /**
  * API action: aiKnowledgeBase:addDocument
@@ -30,12 +26,15 @@ import { canManageKnowledgeBase, getAuthUserId, resolveAccessContext } from '../
  * Any client-provided userId in the request body is ignored to prevent spoofing.
  */
 export async function addDocumentAction(ctx: any, next: any) {
-  const { knowledgeBaseId, fileId, fileUrl, textContent, filename } = ctx.action.params.values ?? {};
-
-  if (!knowledgeBaseId) {
-    ctx.throw(400, 'knowledgeBaseId is required');
-    return;
-  }
+  const {
+    knowledgeBaseId: rawKnowledgeBaseId,
+    fileId: rawFileId,
+    fileUrl,
+    textContent,
+    filename,
+  } = ctx.action.params.values ?? {};
+  const knowledgeBaseId = requireRecordId(ctx, rawKnowledgeBaseId);
+  const fileId = rawFileId == null ? undefined : requireRecordId(ctx, rawFileId);
 
   if (fileUrl && !fileId) {
     ctx.throw(400, 'fileUrl is not supported by this action. Upload the file to aiFiles first and pass fileId.');
@@ -77,7 +76,6 @@ export async function addDocumentAction(ctx: any, next: any) {
     return;
   }
 
-  const docRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
   const docValues: any = {
     knowledgeBaseId,
     uploadedById: userId,
@@ -91,29 +89,15 @@ export async function addDocumentAction(ctx: any, next: any) {
   }
 
   if (fileId) {
-    const file = await ctx.db.getRepository('aiFiles').findOne({ filter: { id: fileId } });
-    if (!file) {
-      ctx.throw(404, `File "${fileId}" not found`);
-      return;
-    }
+    const file = await findOwnedAiFile(ctx, fileId);
+    if (!file) return;
     docValues.fileId = fileId;
     docValues.filename = filename || file.filename || file.get?.('filename') || 'uploaded-file';
   }
 
-  const doc = await docRepo.create({ values: docValues });
-  const documentId = doc.get?.('id') ?? doc.id;
-
-  if (fileId || knowledgeBaseId) {
-    await docRepo.update({
-      filterByTk: documentId,
-      values: {
-        knowledgeBaseId,
-        ...(fileId ? { fileId } : {}),
-      },
-    });
-  }
-
   const plugin = ctx.app.pm.get(PluginKnowledgeBaseServer) as PluginKnowledgeBaseServer;
+  const doc = await createKnowledgeBaseDocument(ctx, docValues, access);
+  const documentId = doc.get?.('id') ?? doc.id;
   await enqueueKnowledgeBaseDocument(plugin, {
     documentId: String(documentId),
     reason: 'addDocument',

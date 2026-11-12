@@ -1,13 +1,22 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { Context } from '@nocobase/actions';
+import { requireRecordId } from '../utils/record-id';
+import type { Transaction } from 'sequelize';
+import { pickAllowedValues, serializeVectorStore } from '../utils/credentials';
+
+const WRITABLE_VECTOR_STORE_FIELDS = ['name', 'vectorDatabaseId', 'llmService', 'embeddingModel', 'options', 'enabled'];
+const STORAGE_IN_USE_ERROR =
+  'Vector database storage location is in use; create a new vector database and migrate documents first';
+
+async function vectorStoreInUse(ctx: Context, vectorStoreId: string, transaction: Transaction): Promise<boolean> {
+  const docs = await ctx.db.getRepository('aiKnowledgeBaseDocuments').find({
+    filter: { $or: [{ indexDeleted: { $isFalsy: true } }, { indexCleanupPending: true }] },
+    appends: ['knowledgeBase'],
+    transaction,
+  });
+  return docs.some((doc) => String(doc.toJSON().knowledgeBase?.vectorStoreId ?? '') === vectorStoreId);
+}
 
 function normalizeSingleValue(value: any): any {
   return Array.isArray(value) ? value[0] : value;
@@ -16,6 +25,7 @@ function normalizeSingleValue(value: any): any {
 const LEGACY_VECTOR_STORE_FIELDS = ['embedding' + 'Provider', 'local' + 'EmbedModelId', 'local' + 'EmbedDtype'];
 
 async function validateVectorStoreValues(ctx: Context, values: any, existing?: any) {
+  if (values.vectorDatabaseId != null) values.vectorDatabaseId = requireRecordId(ctx, values.vectorDatabaseId);
   const effective = {
     ...(existing?.toJSON ? existing.toJSON() : existing ?? {}),
     ...values,
@@ -28,7 +38,10 @@ async function validateVectorStoreValues(ctx: Context, values: any, existing?: a
   values.llmService = normalizeSingleValue(effective.llmService);
   values.embeddingModel = normalizeSingleValue(effective.embeddingModel);
 
-  if (!effective.vectorDatabaseId) {
+  if (
+    !effective.vectorDatabaseId ||
+    (typeof effective.vectorDatabaseId !== 'string' && typeof effective.vectorDatabaseId !== 'number')
+  ) {
     ctx.throw(400, 'vectorDatabaseId is required');
     return;
   }
@@ -76,7 +89,7 @@ export default {
       const { filter, fields, sort, page, pageSize } = ctx.action.params;
       const repo = ctx.db.getRepository('aiVectorStores');
 
-      ctx.body = await repo.find({
+      const records = await repo.find({
         filter,
         fields,
         sort: sort ?? ['-createdAt'],
@@ -84,25 +97,27 @@ export default {
         offset: page ? (page - 1) * (pageSize || 20) : 0,
         appends: ['vectorDatabase'],
       });
+      ctx.body = serializeVectorStore(records);
 
       await next();
     },
 
     async get(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const repo = ctx.db.getRepository('aiVectorStores');
 
-      ctx.body = await repo.findOne({
+      const record = await repo.findOne({
         filterByTk,
         appends: ['vectorDatabase'],
       });
+      ctx.body = serializeVectorStore(record);
 
       await next();
     },
 
     async create(ctx: Context, next: Function) {
       const rawValues = ctx.action.params.values || {};
-      const values = rawValues.values || rawValues;
+      const values = pickAllowedValues(rawValues.values || rawValues, WRITABLE_VECTOR_STORE_FIELDS);
       const repo = ctx.db.getRepository('aiVectorStores');
 
       await validateVectorStoreValues(ctx, values);
@@ -117,36 +132,50 @@ export default {
         });
       }
 
-      ctx.body = record;
+      ctx.body = serializeVectorStore(record);
       await next();
     },
 
     async update(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const rawValues = ctx.action.params.values || {};
-      const values = rawValues.values || rawValues;
+      const values = pickAllowedValues(rawValues.values || rawValues, WRITABLE_VECTOR_STORE_FIELDS);
       const repo = ctx.db.getRepository('aiVectorStores');
 
-      const existing = await repo.findOne({ filterByTk });
-      if (!existing) {
-        ctx.throw(404, 'Vector store not found');
-        return;
-      }
-      await validateVectorStoreValues(ctx, values, existing);
-
-      ctx.body = await repo.update({
-        filterByTk,
-        values,
+      const updated = await ctx.db.sequelize.transaction(async (transaction) => {
+        const existing = await repo.collection.model.findOne({
+          where: { id: filterByTk },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        if (!existing) ctx.throw(404, 'Vector store not found');
+        const previous = existing.toJSON();
+        if (
+          'vectorDatabaseId' in values &&
+          String(values.vectorDatabaseId ?? '') !== String(previous.vectorDatabaseId ?? '') &&
+          (await vectorStoreInUse(ctx, String(filterByTk), transaction))
+        ) {
+          ctx.throw(409, ctx.t(STORAGE_IN_USE_ERROR, { ns: 'plugin-knowledge-base' }));
+        }
+        await validateVectorStoreValues(ctx, values, existing);
+        return repo.update({ filterByTk, values, transaction });
       });
+      ctx.body = serializeVectorStore(updated);
 
       await next();
     },
 
     async destroy(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const repo = ctx.db.getRepository('aiVectorStores');
 
-      await repo.destroy({ filterByTk });
+      await ctx.db.sequelize.transaction(async (transaction) => {
+        await repo.collection.model.findOne({ where: { id: filterByTk }, transaction, lock: transaction.LOCK.UPDATE });
+        if (await vectorStoreInUse(ctx, String(filterByTk), transaction)) {
+          ctx.throw(409, ctx.t(STORAGE_IN_USE_ERROR, { ns: 'plugin-knowledge-base' }));
+        }
+        await repo.destroy({ filterByTk, transaction });
+      });
       ctx.body = { success: true };
 
       await next();

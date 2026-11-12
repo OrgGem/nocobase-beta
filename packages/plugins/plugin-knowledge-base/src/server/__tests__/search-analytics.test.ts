@@ -1,5 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from 'vitest';
 import aiKnowledgeBase from '../resources/ai-knowledge-base';
+
+function createThrow() {
+  return vi.fn((status: number, message: string) => {
+    throw Object.assign(new Error(message), { status });
+  });
+}
 
 describe('aiKnowledgeBase.searchAnalytics', () => {
   function makeAdminCtx(db: unknown) {
@@ -9,26 +17,30 @@ describe('aiKnowledgeBase.searchAnalytics', () => {
       state: { currentRoles: ['root'] },
       app: { acl: { getRole: vi.fn(() => ({ getStrategy: () => ({ allowConfigure: true }) })) } },
       db,
-      throw: vi.fn(),
+      throw: createThrow(),
       body: null,
     } as never;
   }
 
   it('rejects non-admin users', async () => {
+    const throwRequest = createThrow();
     const ctx = {
       action: { params: {} },
       auth: { user: { id: 7, roles: ['member'] } },
       state: { currentRoles: ['member'] },
       app: { acl: { getRole: vi.fn() } },
       db: {},
-      throw: vi.fn(),
+      throw: throwRequest,
       body: null,
     } as never;
     const next = vi.fn();
 
-    await aiKnowledgeBase.actions.searchAnalytics(ctx, next);
+    await expect(aiKnowledgeBase.actions.searchAnalytics(ctx, next)).rejects.toMatchObject({
+      status: 403,
+      message: 'Only administrators can view search analytics',
+    });
 
-    expect((ctx as any).throw).toHaveBeenCalledWith(403, 'Only administrators can view search analytics');
+    expect(throwRequest).toHaveBeenCalledWith(403, 'Only administrators can view search analytics');
     expect(next).not.toHaveBeenCalled();
   });
 

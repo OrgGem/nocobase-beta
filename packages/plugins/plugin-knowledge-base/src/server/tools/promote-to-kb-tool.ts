@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Promote-to-KB AI Tool
  *
@@ -15,6 +17,7 @@ import type { SessionContextService, ContextScope } from '../services/session-co
 import { canManageKnowledgeBase, resolveAccessContext } from '../utils/access';
 import { enqueueKnowledgeBaseDocument } from '../queue/document-vectorization';
 import { resolveScope, resolveUserId } from '../utils/scope-resolver';
+import { createStoredKnowledgeBaseDocument } from '../utils/create-document';
 
 export function createPromoteToKbToolProvider(sessionContext: SessionContextService, db: any, pluginRef: any) {
   return async (register: { registerTools: (tools: any) => void }) => {
@@ -116,21 +119,22 @@ Args:
             return { status: 'error' as const, content: 'KB Documents repository not available.' };
           }
 
-          const doc = await docRepo.create({
-            values: {
+          const doc = await createStoredKnowledgeBaseDocument(
+            db,
+            {
               knowledgeBaseId: args.knowledgeBaseId,
               textContent,
               filename: docFilename,
               status: 'pending',
               uploadedById: resolveUserId(ctx),
             },
-          });
+            async (lockedKb) => {
+              const error = await checkUploadPermission(ctx, db, lockedKb);
+              if (error) throw new Error(error);
+            },
+          );
 
           const docId = (doc as any)?.get?.('id') ?? (doc as any)?.id;
-          await docRepo.update({
-            filterByTk: docId,
-            values: { knowledgeBaseId: args.knowledgeBaseId },
-          });
 
           await enqueueKnowledgeBaseDocument(pluginRef, {
             documentId: String(docId),

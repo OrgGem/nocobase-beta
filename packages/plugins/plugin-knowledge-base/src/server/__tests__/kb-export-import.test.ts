@@ -1,19 +1,35 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from 'vitest';
 import aiKnowledgeBase from '../resources/ai-knowledge-base';
 
 describe('aiKnowledgeBase.export/import', () => {
   function makeCtx(overrides: Record<string, unknown> = {}) {
+    type TestTransaction = { LOCK: { UPDATE: string } };
+    const transaction: TestTransaction = { LOCK: { UPDATE: 'UPDATE' } };
+    const { db: dbOverrides, ...ctxOverrides } = overrides;
+    const db = {
+      sequelize: {
+        transaction: vi.fn(async (callback: (transaction: TestTransaction) => Promise<unknown>) =>
+          callback(transaction),
+        ),
+      },
+      getRepository: vi.fn(),
+      ...(dbOverrides as Record<string, unknown> | undefined),
+    };
     return {
       action: { params: {} },
       auth: { user: { id: 1, roles: ['root'] } },
       state: { currentRoles: ['root'] },
       app: { acl: { getRole: vi.fn(() => ({ getStrategy: () => ({ allowConfigure: true }) })) } },
-      db: { getRepository: vi.fn() },
+      db,
       t: vi.fn((key: string) => key),
-      throw: vi.fn(),
+      throw: vi.fn((status: number, message: unknown) => {
+        throw Object.assign(new Error(String(message)), { status });
+      }),
       set: vi.fn(),
       body: null,
-      ...overrides,
+      ...ctxOverrides,
     } as never;
   }
 
@@ -61,6 +77,7 @@ describe('aiKnowledgeBase.export/import', () => {
     const create = vi.fn(async ({ values }: any) => ({ get: (k: string) => values[k] ?? `id-${values.name}` }));
     const docCreate = vi.fn(async ({ values }: any) => ({
       get: (k: string) => values[k] ?? 'doc-id',
+      set: vi.fn(),
     }));
     const ctx = makeCtx({
       auth: { user: { id: 7, roles: ['member'] } },
@@ -79,7 +96,17 @@ describe('aiKnowledgeBase.export/import', () => {
       },
       db: {
         getRepository: vi.fn((name: string) => {
-          if (name === 'aiKnowledgeBases') return { create, update: vi.fn() };
+          if (name === 'aiKnowledgeBases') {
+            return {
+              create,
+              update: vi.fn(),
+              collection: {
+                model: {
+                  findOne: vi.fn(async () => ({ toJSON: () => ({ id: 'id-Imported', vectorStoreId: null }) })),
+                },
+              },
+            };
+          }
           return { create: docCreate, update: vi.fn() };
         }),
       },
@@ -117,7 +144,10 @@ describe('aiKnowledgeBase.export/import', () => {
       },
     }) as any;
 
-    await aiKnowledgeBase.actions.import(ctx, vi.fn());
+    await expect(aiKnowledgeBase.actions.import(ctx, vi.fn())).rejects.toMatchObject({
+      status: 403,
+      message: 'Only administrators can import shared or public knowledge bases',
+    });
 
     expect(ctx.throw).toHaveBeenCalledWith(403, 'Only administrators can import shared or public knowledge bases');
     expect(create).not.toHaveBeenCalled();
@@ -127,7 +157,10 @@ describe('aiKnowledgeBase.export/import', () => {
       action: { params: { values: { payload: { formatVersion: 99 } } } },
     }) as any;
 
-    await aiKnowledgeBase.actions.import(ctx, vi.fn());
+    await expect(aiKnowledgeBase.actions.import(ctx, vi.fn())).rejects.toMatchObject({
+      status: 400,
+      message: 'Unsupported export format version',
+    });
 
     expect(ctx.throw).toHaveBeenCalledWith(400, 'Unsupported export format version');
   });

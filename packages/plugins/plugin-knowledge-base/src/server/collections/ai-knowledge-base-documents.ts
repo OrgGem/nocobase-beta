@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { defineCollection } from '@nocobase/database';
 
@@ -68,5 +61,19 @@ export default defineCollection({
       type: 'json',
       name: 'meta',
     },
+    // Index revisions are independent of the optional text-version history.
+    { type: 'string', name: 'indexRevision' },
+    { type: 'string', name: 'activeIndexRevision' },
+    // Marks new documents until the first vectorization attempt; legacy NULL remains unknown.
+    { type: 'string', name: 'indexWorkerToken' },
+    { type: 'date', name: 'indexWorkerStartedAt' },
+    { type: 'boolean', name: 'indexDeleted', defaultValue: false },
+    { type: 'json', name: 'retiredIndexRevisions' },
+    { type: 'boolean', name: 'indexCleanupNeeded', defaultValue: false },
+    { type: 'integer', name: 'indexCleanupCursor', defaultValue: 0 },
+    { type: 'date', name: 'indexCleanupAt' },
+    { type: 'json', name: 'indexCleanupRoute' },
+    { type: 'boolean', name: 'indexCleanupPending', defaultValue: false },
+    { type: 'integer', name: 'indexCleanupProgress', defaultValue: 0 },
   ],
 });

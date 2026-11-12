@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
@@ -389,7 +382,16 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
   const showUploadArea = selectedKB && canUpload(selectedKB);
 
   return (
-    <div style={{ display: 'flex', height: '65vh', minHeight: 480, background: '#f5f5f5', borderRadius: 12, overflow: 'hidden' }}>
+    <div
+      style={{
+        display: 'flex',
+        height: '65vh',
+        minHeight: 480,
+        background: '#f5f5f5',
+        borderRadius: 12,
+        overflow: 'hidden',
+      }}
+    >
       {/* ====== LEFT SIDEBAR ====== */}
       <div
         style={{
@@ -402,7 +404,16 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
           zIndex: 1,
         }}
       >
-        <div style={{ padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 12, background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
+        <div
+          style={{
+            padding: '16px 20px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 12,
+            background: '#fafafa',
+            borderBottom: '1px solid #f0f0f0',
+          }}
+        >
           <Text strong style={{ fontSize: 15 }}>
             Knowledge Bases
           </Text>
@@ -438,17 +449,19 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
                     boxShadow: isActive ? '0 2px 8px rgba(24, 144, 255, 0.1)' : 'none',
                   }}
                 >
-                  <div style={{ 
-                    width: 32, 
-                    height: 32, 
-                    borderRadius: '8px', 
-                    background: isActive ? '#1890ff' : '#fafafa', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    justifyContent: 'center',
-                    color: isActive ? '#fff' : '#8c8c8c',
-                    fontSize: 16
-                  }}>
+                  <div
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: '8px',
+                      background: isActive ? '#1890ff' : '#fafafa',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: isActive ? '#fff' : '#8c8c8c',
+                      fontSize: 16,
+                    }}
+                  >
                     {isActive ? <BookOutlined /> : accessIcons[kb.accessLevel || 'PUBLIC']}
                   </div>
                   <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -460,7 +473,13 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
                     </div>
                     <Tag
                       color={accessColors[kb.accessLevel || 'PUBLIC']}
-                      style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: '4px 0 0 0', borderRadius: 4 }}
+                      style={{
+                        fontSize: 10,
+                        lineHeight: '16px',
+                        padding: '0 6px',
+                        margin: '4px 0 0 0',
+                        borderRadius: 4,
+                      }}
                     >
                       {kb.accessLevel || 'PUBLIC'}
                     </Tag>
@@ -474,7 +493,17 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
       {/* ====== RIGHT CONTENT ====== */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: '16px' }}>
         {selectedKB ? (
-          <div style={{ background: '#fff', borderRadius: 12, display: 'flex', flexDirection: 'column', height: '100%', boxShadow: '0 2px 12px rgba(0,0,0,0.03)', border: '1px solid #f0f0f0' }}>
+          <div
+            style={{
+              background: '#fff',
+              borderRadius: 12,
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              boxShadow: '0 2px 12px rgba(0,0,0,0.03)',
+              border: '1px solid #f0f0f0',
+            }}
+          >
             {/* Header */}
             <div
               style={{
@@ -560,7 +589,17 @@ export const KnowledgeBaseSelector: React.FC<KnowledgeBaseSelectorProps> = ({
             </div>
           </div>
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', borderRadius: 12, border: '1px solid #f0f0f0' }}>
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: '#fff',
+              borderRadius: 12,
+              border: '1px solid #f0f0f0',
+            }}
+          >
             <Empty description="Select a knowledge base from the list" />
           </div>
         )}

@@ -1,14 +1,9 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '@nocobase/client-v2';
+import { useTranslation } from 'react-i18next';
+import type { UploadProps } from 'antd';
 import {
   Button,
   Modal,
@@ -34,6 +29,7 @@ import {
   Card,
   Layout,
   Divider,
+  Checkbox,
 } from 'antd';
 import {
   PlusOutlined,
@@ -122,11 +118,49 @@ function formatDate(value?: string) {
   return new Date(value).toLocaleString();
 }
 
+type KnowledgeBaseRecord = {
+  id: string;
+  name: string;
+  type: string;
+  accessLevel: string;
+  enabled?: boolean;
+  deleteSourceFile?: boolean;
+  description?: string;
+  fileStorage?: string;
+  options?: Record<string, unknown> & { ragApiKey?: string; hasRagApiKey?: boolean };
+  [key: string]: unknown;
+};
+
+function sanitizeKnowledgeBase(record: KnowledgeBaseRecord): KnowledgeBaseRecord {
+  if (!record.options) return record;
+  const { ragApiKey, ...options } = record.options;
+  return { ...record, options: { ...options, hasRagApiKey: options.hasRagApiKey ?? Boolean(ragApiKey) } };
+}
+
+function safeServerError(error: unknown, knownErrors: { source: string; localized: string }[], fallback: string) {
+  const response = error as { response?: { data?: { errors?: { message?: unknown }[] } } } | null;
+  const serverMessage = response?.response?.data?.errors?.[0]?.message;
+  const known = knownErrors.find(({ source, localized }) => serverMessage === source || serverMessage === localized);
+  return known?.localized ?? fallback;
+}
+
 export const KnowledgeBases: React.FC = () => {
   const api = useApp().apiClient;
+  const { t } = useTranslation('plugin-knowledge-base');
+  const knownErrors = [
+    'Provide a new credential or clear the saved credential when changing the connection destination',
+    'Vector database storage location is in use; create a new vector database and migrate documents first',
+    'Invalid vector store',
+    'Only administrators can configure External RAG providers that forward LLM credentials.',
+  ].map((source) => ({ source, localized: t(source) }));
   const [loading, setLoading] = useState(false);
   const [knowledgeBases, setKnowledgeBases] = useState<any[]>([]);
-  const [selectedKB, setSelectedKB] = useState<any | null>(null);
+  const [selectedKB, setSelectedKB] = useState<KnowledgeBaseRecord | null>(null);
+  const selectedKBRef = React.useRef<KnowledgeBaseRecord | null>(null);
+  const kbScopeRef = React.useRef(0);
+  const documentsRequestRef = React.useRef(0);
+  const knowledgeBasesRequestRef = React.useRef(0);
+  const searchRequestRef = React.useRef(0);
 
   // States
   const [searchText, setSearchText] = useState('');
@@ -134,6 +168,10 @@ export const KnowledgeBases: React.FC = () => {
   const [docStatusFilter, setDocStatusFilter] = useState<string>('all');
   const [docsLoading, setDocsLoading] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
+  const [documentSelection, setDocumentSelection] = useState<{ scope: number; ids: React.Key[] }>({
+    scope: 0,
+    ids: [],
+  });
   const [kbSearchQuery, setKbSearchQuery] = useState('');
   const [kbSearchLoading, setKbSearchLoading] = useState(false);
   const [kbSearchResults, setKbSearchResults] = useState<any[]>([]);
@@ -161,7 +199,40 @@ export const KnowledgeBases: React.FC = () => {
   const [knowledgeBasesPageHeight, setKnowledgeBasesPageHeight] = useState<number>();
   const [documentTableScrollY, setDocumentTableScrollY] = useState(160);
 
+  const selectKnowledgeBase = useCallback(
+    (kb: KnowledgeBaseRecord | null) => {
+      if (selectedKBRef.current?.id !== kb?.id) {
+        kbScopeRef.current += 1;
+        documentsRequestRef.current += 1;
+        searchRequestRef.current += 1;
+        setDocuments([]);
+        setDocumentSelection({ scope: kbScopeRef.current, ids: [] });
+        setDocStatusFilter('all');
+        setDocsLoading(false);
+        setKbSearchQuery('');
+        setKbSearchResults([]);
+        setKbSearchLoading(false);
+        setTextModalVisible(false);
+        textForm.resetFields();
+        settingsForm.resetFields();
+      }
+      selectedKBRef.current = kb;
+      setSelectedKB(kb);
+    },
+    [settingsForm, textForm],
+  );
+
+  useEffect(() => {
+    return () => {
+      kbScopeRef.current += 1;
+      documentsRequestRef.current += 1;
+      knowledgeBasesRequestRef.current += 1;
+      searchRequestRef.current += 1;
+    };
+  }, []);
+
   const documentStats = React.useMemo(() => getDocumentStats(documents), [documents]);
+  const selectedDocIds = documentSelection.scope === kbScopeRef.current ? documentSelection.ids : [];
   const filteredDocuments = React.useMemo(() => {
     if (docStatusFilter === 'all') {
       return documents;
@@ -169,6 +240,8 @@ export const KnowledgeBases: React.FC = () => {
     return documents.filter((doc) => doc.status === docStatusFilter);
   }, [docStatusFilter, documents]);
   const selectedTypeConfig = kbTypeConfig[selectedKB?.type || 'LOCAL'] || kbTypeConfig.LOCAL;
+  const selectedKBId = selectedKB?.id;
+  const currentScope = kbScopeRef.current;
 
   useEffect(() => {
     const page = knowledgeBasesPageRef.current;
@@ -218,26 +291,27 @@ export const KnowledgeBases: React.FC = () => {
   }, [selectedKB?.id]);
 
   const fetchData = useCallback(async () => {
+    const scope = kbScopeRef.current;
+    const requestId = ++knowledgeBasesRequestRef.current;
     setLoading(true);
     try {
       const res = await api.request({
         url: 'aiKnowledgeBase:list',
         params: { sort: ['-createdAt'], appends: ['documents'] },
       });
-      const kbList = res?.data?.data ?? [];
+      const kbList: KnowledgeBaseRecord[] = (res?.data?.data ?? []).map(sanitizeKnowledgeBase);
+      if (requestId !== knowledgeBasesRequestRef.current) return;
       setKnowledgeBases(kbList);
-      setSelectedKB((current) => {
-        if (!current) {
-          return kbList[0] ?? null;
-        }
-        return kbList.find((k: any) => k.id === current.id) ?? current;
-      });
+      if (scope === kbScopeRef.current) {
+        const current = selectedKBRef.current;
+        selectKnowledgeBase(current ? kbList.find((kb) => kb.id === current.id) ?? current : kbList[0] ?? null);
+      }
     } catch {
-      message.error('Failed to load knowledge bases');
+      if (requestId === knowledgeBasesRequestRef.current) message.error('Failed to load knowledge bases');
     } finally {
-      setLoading(false);
+      if (requestId === knowledgeBasesRequestRef.current) setLoading(false);
     }
-  }, [api]);
+  }, [api, selectKnowledgeBase]);
 
   const fetchDependencies = useCallback(async () => {
     try {
@@ -265,17 +339,24 @@ export const KnowledgeBases: React.FC = () => {
 
   const fetchDocuments = useCallback(
     async (kbId: string) => {
+      if (selectedKBRef.current?.id !== kbId) return;
+      const scope = kbScopeRef.current;
+      const requestId = ++documentsRequestRef.current;
       setDocsLoading(true);
       try {
         const res = await api.request({
           url: 'aiKnowledgeBaseDoc:list',
           params: { filter: { knowledgeBaseId: kbId }, sort: ['-createdAt'] },
         });
-        setDocuments(res?.data?.data ?? []);
+        if (scope === kbScopeRef.current && requestId === documentsRequestRef.current) {
+          setDocuments(res?.data?.data ?? []);
+        }
       } catch {
-        message.error('Failed to load documents');
+        if (scope === kbScopeRef.current && requestId === documentsRequestRef.current) {
+          message.error('Failed to load documents');
+        }
       } finally {
-        setDocsLoading(false);
+        if (scope === kbScopeRef.current && requestId === documentsRequestRef.current) setDocsLoading(false);
       }
     },
     [api],
@@ -287,19 +368,19 @@ export const KnowledgeBases: React.FC = () => {
   }, [fetchData, fetchDependencies]);
 
   useEffect(() => {
-    if (selectedKB) {
-      setDocStatusFilter('all');
-      fetchDocuments(selectedKB.id);
-
-      const formValues = { ...selectedKB };
-      if (selectedKB.options) {
-        Object.assign(formValues, selectedKB.options);
-      }
-      settingsForm.setFieldsValue(formValues);
-      setSAccessLevel(selectedKB.accessLevel);
-      setSType(selectedKB.type || 'LOCAL');
+    settingsForm.resetFields();
+    const current = selectedKBRef.current;
+    if (current && current.id === selectedKBId) {
+      fetchDocuments(current.id);
+      const { options, ...formValues } = current;
+      const safeOptions = { ...options };
+      delete safeOptions.ragApiKey;
+      delete safeOptions.hasRagApiKey;
+      settingsForm.setFieldsValue({ ...formValues, ...safeOptions });
+      setSAccessLevel(current.accessLevel);
+      setSType(current.type || 'LOCAL');
     }
-  }, [selectedKB, fetchDocuments, settingsForm]);
+  }, [selectedKBId, fetchDocuments, settingsForm]);
 
   // Create
   const handleCreate = () => {
@@ -318,6 +399,7 @@ export const KnowledgeBases: React.FC = () => {
   };
 
   const submitCreate = async () => {
+    const scope = kbScopeRef.current;
     try {
       const formValues = await createForm.validateFields();
       const {
@@ -334,12 +416,12 @@ export const KnowledgeBases: React.FC = () => {
         ...restValues
       } = formValues;
 
-      const values: any = { ...restValues, options: {} };
+      const values: Record<string, unknown> = { ...restValues, options: {} };
       if (restValues.type === 'EXTERNAL_RAG') {
         values.options = {
           ragProvider,
           ragApiUrl,
-          ragApiKey,
+          ...(ragApiKey && ragApiKey !== '***' ? { ragApiKey } : {}),
           ragNamespace,
           ragTopK,
           ragScoreThreshold,
@@ -356,23 +438,22 @@ export const KnowledgeBases: React.FC = () => {
       });
       message.success('Created successfully');
       setCreateModalVisible(false);
+      if (scope === kbScopeRef.current) selectKnowledgeBase(sanitizeKnowledgeBase(res.data.data));
       fetchData();
-      setSelectedKB(res.data.data);
-    } catch {
-      message.error('Create failed');
+    } catch (error) {
+      message.error(safeServerError(error, knownErrors, 'Create failed'));
     }
   };
 
   // Settings Update
-  const handleUpdateSettings = async () => {
+  const handleUpdateSettings = async (kbId: string, scope: number, formValues: Record<string, unknown>) => {
+    if (scope !== kbScopeRef.current || selectedKBRef.current?.id !== kbId) return;
     try {
-      const formValues = await settingsForm.validateFields();
-      if (!selectedKB) return;
-
       const {
         ragProvider,
         ragApiUrl,
         ragApiKey,
+        clearRagApiKey,
         ragNamespace,
         ragTopK,
         ragScoreThreshold,
@@ -383,12 +464,12 @@ export const KnowledgeBases: React.FC = () => {
         ...restValues
       } = formValues;
 
-      const values: any = { ...restValues, options: {} };
+      const values: Record<string, unknown> = { ...restValues, options: {} };
       if (restValues.type === 'EXTERNAL_RAG') {
         values.options = {
           ragProvider,
           ragApiUrl,
-          ragApiKey,
+          ...(clearRagApiKey ? { ragApiKey: null } : ragApiKey && ragApiKey !== '***' ? { ragApiKey } : {}),
           ragNamespace,
           ragTopK,
           ragScoreThreshold,
@@ -401,17 +482,20 @@ export const KnowledgeBases: React.FC = () => {
       await api.request({
         url: 'aiKnowledgeBase:update',
         method: 'post',
-        params: { filterByTk: selectedKB.id },
+        params: { filterByTk: kbId },
         data: { values },
       });
+      if (scope !== kbScopeRef.current) return;
+      settingsForm.setFieldsValue({ ragApiKey: undefined, clearRagApiKey: false });
       message.success('Settings updated successfully');
       fetchData();
-    } catch {
-      message.error('Update failed');
+    } catch (error) {
+      if (scope === kbScopeRef.current) message.error(safeServerError(error, knownErrors, 'Update failed'));
     }
   };
 
   const handleDeleteKB = async (id: string) => {
+    const scope = kbScopeRef.current;
     try {
       await api.request({
         url: 'aiKnowledgeBase:destroy',
@@ -419,8 +503,8 @@ export const KnowledgeBases: React.FC = () => {
         params: { filterByTk: id },
       });
       message.success('Deleted successfully');
-      if (selectedKB?.id === id) {
-        setSelectedKB(null);
+      if (scope === kbScopeRef.current && selectedKBRef.current?.id === id) {
+        selectKnowledgeBase(null);
       }
       fetchData();
     } catch {
@@ -429,130 +513,152 @@ export const KnowledgeBases: React.FC = () => {
   };
 
   // Document Handlers
-  const handleFileUpload = (file: any, onSuccess: any, onError: any) => {
+  const handleFileUpload: NonNullable<UploadProps['customRequest']> = async ({ file, onSuccess, onError }) => {
     if (!selectedKB) return;
-    const formData = new FormData();
-    formData.append('file', file);
+    const kbId = selectedKB.id;
+    const scope = kbScopeRef.current;
     const storageParam = selectedKB.fileStorage ? `?storageRule=${encodeURIComponent(selectedKB.fileStorage)}` : '';
-    api.axios
-      .post(`aiFiles:create${storageParam}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-      .then((res: any) => onSuccess?.(res.data, file))
-      .catch((err: any) => onError?.(err));
-  };
-
-  const handleUploadChange = (info: any) => {
-    if (info.file.status === 'done') {
-      const attachment = info.file.response?.data;
-      if (attachment && selectedKB) {
-        api
-          .request({
-            url: 'aiKnowledgeBaseDoc:create',
-            method: 'post',
-            data: {
-              values: {
-                knowledgeBaseId: selectedKB.id,
-                fileId: attachment.id,
-                filename: attachment.filename || info.file.name,
-                status: 'pending',
-              },
-            },
-          })
-          .then(() => {
-            message.success(`"${info.file.name}" uploaded`);
-            fetchDocuments(selectedKB.id);
-          })
-          .catch(() => {});
-      }
-    } else if (info.file.status === 'error') {
-      message.error(`Upload failed: ${info.file.name}`);
-    }
-  };
-
-  const handleAddTextDocument = async () => {
+    const filename = typeof file === 'string' ? file : 'name' in file ? file.name : 'file';
     try {
-      const values = await textForm.validateFields();
-      if (!selectedKB) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await api.axios.post(`aiFiles:create${storageParam}`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      const attachment = res?.data?.data;
+      if (!attachment?.id) throw new Error('Upload failed');
       await api.request({
         url: 'aiKnowledgeBaseDoc:create',
         method: 'post',
         data: {
           values: {
-            knowledgeBaseId: selectedKB.id,
+            knowledgeBaseId: kbId,
+            fileId: attachment.id,
+            filename: attachment.filename || filename,
+            status: 'pending',
+          },
+        },
+      });
+      onSuccess?.(res.data);
+      if (scope === kbScopeRef.current) {
+        message.success(`"${filename}" uploaded`);
+        fetchDocuments(kbId);
+      }
+    } catch {
+      onError?.(new Error('Upload failed'));
+      if (scope === kbScopeRef.current) message.error(`Upload failed: ${filename}`);
+    }
+  };
+
+  const handleAddTextDocument = async () => {
+    const kbId = selectedKBRef.current?.id;
+    const scope = kbScopeRef.current;
+    if (!kbId) return;
+    try {
+      const values = await textForm.validateFields();
+      if (scope !== kbScopeRef.current) return;
+      await api.request({
+        url: 'aiKnowledgeBaseDoc:create',
+        method: 'post',
+        data: {
+          values: {
+            knowledgeBaseId: kbId,
             filename: values.filename,
             textContent: values.textContent,
             status: 'pending',
           },
         },
       });
+      if (scope !== kbScopeRef.current) return;
       message.success('Text document added');
       setTextModalVisible(false);
       textForm.resetFields();
-      fetchDocuments(selectedKB.id);
+      fetchDocuments(kbId);
     } catch {
-      message.error('Failed to add text document');
+      if (scope === kbScopeRef.current) message.error('Failed to add text document');
     }
   };
 
   const handleDeleteDocument = async (docId: string) => {
+    const kbId = selectedKBRef.current?.id;
+    const scope = kbScopeRef.current;
+    if (!kbId || !documents.some((doc) => doc.id === docId)) return;
     try {
       await api.request({
         url: 'aiKnowledgeBaseDoc:destroy',
         method: 'post',
         params: { filterByTk: docId },
       });
+      if (scope !== kbScopeRef.current) return;
       message.success('Document deleted');
-      if (selectedKB) fetchDocuments(selectedKB.id);
+      fetchDocuments(kbId);
     } catch {
-      message.error('Delete failed');
+      if (scope === kbScopeRef.current) message.error('Delete failed');
     }
   };
 
-  const [selectedDocIds, setSelectedDocIds] = useState<React.Key[]>([]);
-
   const handleBulkDelete = async () => {
-    if (!selectedDocIds.length) return;
+    const kbId = selectedKBRef.current?.id;
+    const scope = kbScopeRef.current;
+    const documentIds =
+      documentSelection.scope === scope
+        ? documentSelection.ids.filter((id) => documents.some((doc) => doc.id === id))
+        : [];
+    if (!kbId || !documentIds.length) return;
     try {
       await api.request({
         url: 'aiKnowledgeBaseDoc:bulkDestroy',
         method: 'post',
-        data: { values: { documentIds: selectedDocIds } },
+        data: { values: { knowledgeBaseId: kbId, documentIds } },
       });
-      message.success(`Deleted ${selectedDocIds.length} document(s)`);
-      setSelectedDocIds([]);
-      if (selectedKB) fetchDocuments(selectedKB.id);
+      if (scope !== kbScopeRef.current) return;
+      message.success(`Deleted ${documentIds.length} document(s)`);
+      setDocumentSelection({ scope, ids: [] });
+      fetchDocuments(kbId);
     } catch {
-      message.error('Bulk delete failed');
+      if (scope === kbScopeRef.current) message.error('Bulk delete failed');
     }
   };
 
   const handleBulkReprocess = async () => {
-    if (!selectedDocIds.length) return;
+    const kbId = selectedKBRef.current?.id;
+    const scope = kbScopeRef.current;
+    const documentIds =
+      documentSelection.scope === scope
+        ? documentSelection.ids.filter((id) => documents.some((doc) => doc.id === id))
+        : [];
+    if (!kbId || !documentIds.length) return;
     try {
       const res = await api.request({
         url: 'aiKnowledgeBaseDoc:bulkReprocess',
         method: 'post',
-        data: { values: { documentIds: selectedDocIds } },
+        data: { values: { knowledgeBaseId: kbId, documentIds } },
       });
+      if (scope !== kbScopeRef.current) return;
       const queuedCount = res?.data?.data?.queuedCount ?? 0;
-      message.success(`Queued ${queuedCount} of ${selectedDocIds.length} document(s) for reprocessing`);
-      setSelectedDocIds([]);
-      if (selectedKB) fetchDocuments(selectedKB.id);
+      message.success(`Queued ${queuedCount} of ${documentIds.length} document(s) for reprocessing`);
+      setDocumentSelection({ scope, ids: [] });
+      fetchDocuments(kbId);
     } catch {
-      message.error('Bulk reprocess failed');
+      if (scope === kbScopeRef.current) message.error('Bulk reprocess failed');
     }
   };
 
   const handleReprocess = async (docId: string) => {
+    const kbId = selectedKBRef.current?.id;
+    const scope = kbScopeRef.current;
+    if (!kbId || !documents.some((doc) => doc.id === docId)) return;
     try {
       await api.request({
         url: 'aiKnowledgeBaseDoc:reprocess',
         method: 'post',
         params: { filterByTk: docId },
       });
+      if (scope !== kbScopeRef.current) return;
       message.success('Reprocessing started');
-      if (selectedKB) fetchDocuments(selectedKB.id);
+      fetchDocuments(kbId);
     } catch {
-      message.error('Reprocess failed');
+      if (scope === kbScopeRef.current) message.error('Reprocess failed');
     }
   };
 
@@ -562,6 +668,8 @@ export const KnowledgeBases: React.FC = () => {
       return;
     }
 
+    const scope = kbScopeRef.current;
+    const requestId = ++searchRequestRef.current;
     setKbSearchLoading(true);
     try {
       const res = await api.request({
@@ -578,16 +686,19 @@ export const KnowledgeBases: React.FC = () => {
           },
         },
       });
-      setKbSearchResults(res?.data?.data?.data ?? []);
+      if (scope === kbScopeRef.current && requestId === searchRequestRef.current) {
+        setKbSearchResults(res?.data?.data?.data ?? []);
+      }
     } catch {
-      message.error('Search failed');
+      if (scope === kbScopeRef.current && requestId === searchRequestRef.current) message.error('Search failed');
     } finally {
-      setKbSearchLoading(false);
+      if (scope === kbScopeRef.current && requestId === searchRequestRef.current) setKbSearchLoading(false);
     }
   };
 
   const handleSearchFeedback = async (item: any, feedback: 'positive' | 'negative') => {
     if (!selectedKB) return;
+    const scope = kbScopeRef.current;
     try {
       await api.request({
         url: 'aiKnowledgeBase:submitSearchFeedback',
@@ -602,9 +713,11 @@ export const KnowledgeBases: React.FC = () => {
           },
         },
       });
-      message.success(feedback === 'positive' ? 'Thanks for the positive feedback!' : 'Feedback recorded');
+      if (scope === kbScopeRef.current) {
+        message.success(feedback === 'positive' ? 'Thanks for the positive feedback!' : 'Feedback recorded');
+      }
     } catch {
-      message.error('Failed to submit feedback');
+      if (scope === kbScopeRef.current) message.error('Failed to submit feedback');
     }
   };
 
@@ -683,7 +796,7 @@ export const KnowledgeBases: React.FC = () => {
               return (
                 <div
                   key={kb.id}
-                  onClick={() => setSelectedKB(kb)}
+                  onClick={() => selectKnowledgeBase(kb)}
                   style={{
                     padding: '16px',
                     marginBottom: '8px',
@@ -821,7 +934,7 @@ export const KnowledgeBases: React.FC = () => {
         width: 120,
         render: (_: any, doc: any) => {
           const isProcessing = doc.status === 'processing';
-          const fileDeleted = selectedKB.deleteSourceFile && !doc.fileId && !doc.textContent;
+          const fileDeleted = selectedKB?.deleteSourceFile && !doc.fileId && !doc.textContent;
           const reprocessTip = isProcessing ? 'Processing...' : fileDeleted ? 'Source file deleted' : 'Reprocess';
 
           return (
@@ -869,8 +982,7 @@ export const KnowledgeBases: React.FC = () => {
                 multiple
                 showUploadList={false}
                 accept=".txt,.md,.pdf,.doc,.docx,.ppt,.pptx,.csv,.json"
-                customRequest={({ file, onSuccess, onError }) => handleFileUpload(file, onSuccess, onError)}
-                onChange={handleUploadChange}
+                customRequest={handleFileUpload}
                 style={{ height: '100%', padding: '0 20px', background: '#fafafa', border: 'none' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16, minHeight: 86, textAlign: 'left' }}>
@@ -940,7 +1052,7 @@ export const KnowledgeBases: React.FC = () => {
                 options={statusFilters}
                 style={{ width: 140 }}
               />
-              <Button icon={<ReloadOutlined />} onClick={() => fetchDocuments(selectedKB.id)}>
+              <Button icon={<ReloadOutlined />} onClick={() => selectedKB && fetchDocuments(selectedKB.id)}>
                 Refresh
               </Button>
             </Space>
@@ -985,10 +1097,11 @@ export const KnowledgeBases: React.FC = () => {
           </div>
           <div ref={documentTableViewportRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
             <Table
+              key={selectedKB?.id}
               rowKey="id"
               rowSelection={{
                 selectedRowKeys: selectedDocIds,
-                onChange: (keys: React.Key[]) => setSelectedDocIds(keys),
+                onChange: (keys: React.Key[]) => setDocumentSelection({ scope: kbScopeRef.current, ids: keys }),
               }}
               size="small"
               loading={docsLoading}
@@ -1084,6 +1197,7 @@ export const KnowledgeBases: React.FC = () => {
     currentAccessLevel: string,
     setCA: (v: string) => void,
     setCT: (v: string) => void,
+    isSettings = false,
   ) => (
     <>
       <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -1178,9 +1292,22 @@ export const KnowledgeBases: React.FC = () => {
           </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
-              <Form.Item name="ragApiKey" label="API Key">
+              <Form.Item
+                name="ragApiKey"
+                label="API Key"
+                extra={
+                  isSettings && selectedKB?.options?.hasRagApiKey
+                    ? t('A credential is configured. Leave blank to keep it.')
+                    : undefined
+                }
+              >
                 <Input.Password placeholder="Bearer token (optional)" />
               </Form.Item>
+              {isSettings && selectedKB?.options?.hasRagApiKey && (
+                <Form.Item name="clearRagApiKey" valuePropName="checked">
+                  <Checkbox>{t('Clear saved credential')}</Checkbox>
+                </Form.Item>
+              )}
             </Col>
             <Col span={12}>
               <Form.Item name="ragNamespace" label="Namespace">
@@ -1422,8 +1549,12 @@ export const KnowledgeBases: React.FC = () => {
                     ),
                     children: (
                       <div style={{ padding: '16px 0', overflowY: 'auto', height: '100%', maxWidth: 800 }}>
-                        <Form form={settingsForm} layout="vertical" onFinish={handleUpdateSettings}>
-                          {formFields(sType, sAccessLevel, setSAccessLevel, setSType)}
+                        <Form
+                          form={settingsForm}
+                          layout="vertical"
+                          onFinish={(values) => handleUpdateSettings(selectedKB.id, currentScope, values)}
+                        >
+                          {formFields(sType, sAccessLevel, setSAccessLevel, setSType, true)}
                           <Form.Item style={{ marginTop: 24 }}>
                             <Button type="primary" htmlType="submit" size="large" shape="round">
                               Save Changes

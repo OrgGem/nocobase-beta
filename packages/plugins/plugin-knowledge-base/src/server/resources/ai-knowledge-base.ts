@@ -1,13 +1,9 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { Context } from '@nocobase/actions';
+import { requireRecordId } from '../utils/record-id';
+import { createStoredKnowledgeBaseDocument, lockVectorStore } from '../utils/create-document';
+import { NEVER_INDEXED_TOKEN } from '../services/index-lifecycle';
 import PluginKnowledgeBaseServer from '../plugin';
 import {
   buildAccessibleKnowledgeBaseFilter,
@@ -20,6 +16,13 @@ import {
 } from '../utils/access';
 import { usesForwardedEmbeddingCredentials } from '../providers/external-rag';
 import { addDocumentAction } from '../actions/add-document';
+import {
+  credentialChangeNeedsConfirmation,
+  mergeSecretValues,
+  pickAllowedValues,
+  serializeKnowledgeBase,
+  withoutSecrets,
+} from '../utils/credentials';
 
 /**
  * Helper to get the knowledge base plugin instance via class reference (not string name).
@@ -33,8 +36,42 @@ const SUPPORTED_KNOWLEDGE_BASE_TYPES = new Set(['LOCAL', 'READONLY', 'EXTERNAL',
 const SUPPORTED_ACCESS_LEVELS = new Set(['BASIC', 'SHARED', 'PUBLIC']);
 const SUPPORTED_AGENT_ACCESS = new Set(['inherit', 'explicit', 'none']);
 const LEGACY_KNOWLEDGE_BASE_FIELDS = ['embed' + 'ModelId', 'embed' + 'Mode'];
+const WRITABLE_KNOWLEDGE_BASE_FIELDS = [
+  'name',
+  'description',
+  'type',
+  'fileStorage',
+  'vectorStoreId',
+  'enabled',
+  'accessLevel',
+  'allowedRoles',
+  'agentAccess',
+  'allowedAgents',
+  'uploadRoles',
+  'options',
+  'deleteSourceFile',
+  'useDocpixie',
+];
+const CREDENTIAL_DESTINATION_ERROR =
+  'Provide a new credential or clear the saved credential when changing the connection destination';
+const STORAGE_IN_USE_ERROR =
+  'Vector database storage location is in use; create a new vector database and migrate documents first';
+
+function serializeKnowledgeBaseResponse(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(serializeKnowledgeBaseResponse);
+  const data = serializeKnowledgeBase(value);
+  if (data) data.key = String(data.id);
+  return data;
+}
 
 function normalizeKnowledgeBaseValues(ctx: Context, values: any, existing?: any) {
+  if (
+    values.vectorStoreId != null &&
+    typeof values.vectorStoreId !== 'string' &&
+    typeof values.vectorStoreId !== 'number'
+  ) {
+    ctx.throw(400, ctx.t('Invalid vector store', { ns: 'plugin-knowledge-base' }));
+  }
   for (const field of LEGACY_KNOWLEDGE_BASE_FIELDS) {
     delete values[field];
   }
@@ -105,11 +142,12 @@ export default {
 
       // Apply permission-based filtering
       const access = await resolveAccessContext(ctx, ctx.db);
-      const effectiveFilter = access.isAdmin
-        ? filter
-        : {
-            $and: [{ ...filter }, buildAccessibleKnowledgeBaseFilter(access)],
-          };
+      const effectiveFilter =
+        access.isAdmin && !access.isAgentRun
+          ? filter
+          : {
+              $and: [{ ...filter }, buildAccessibleKnowledgeBaseFilter(access)],
+            };
 
       // Intercept 'key' field request since it is virtual and not in the DB
       let queryFields = fields;
@@ -148,7 +186,7 @@ export default {
           const documentRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
           const knowledgeBaseIds = records.map((record) => String(record.get?.('id') ?? record.id));
           const documents = await documentRepo.find({
-            filter: { knowledgeBaseId: { $in: knowledgeBaseIds } },
+            filter: { knowledgeBaseId: { $in: knowledgeBaseIds }, indexDeleted: { $isFalsy: true } },
             fields: ['knowledgeBaseId'],
           });
           for (const document of documents) {
@@ -160,7 +198,8 @@ export default {
         }
 
         ctx.body = records.map((record) => {
-          const data = record.toJSON ? record.toJSON() : record;
+          const data = serializeKnowledgeBase(record);
+          if (!data) return null;
           if (includesDocuments) {
             // The client needs only the count; a compact placeholder array
             // preserves the current response contract without exposing the
@@ -178,7 +217,7 @@ export default {
     },
 
     async get(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const repo = ctx.db.getRepository('aiKnowledgeBases');
 
       const record = await repo.findOne({
@@ -198,7 +237,7 @@ export default {
         return;
       }
 
-      const data = record.toJSON ? record.toJSON() : record;
+      const data = serializeKnowledgeBase(record);
       data.key = String(data.id);
       ctx.body = data;
       await next();
@@ -206,7 +245,7 @@ export default {
 
     async create(ctx: Context, next: Function) {
       const rawValues = ctx.action.params.values || {};
-      const values = rawValues.values || rawValues;
+      const values = pickAllowedValues(rawValues.values || rawValues, WRITABLE_KNOWLEDGE_BASE_FIELDS);
       const repo = ctx.db.getRepository('aiKnowledgeBases');
       const access = await resolveAccessContext(ctx, ctx.db);
 
@@ -220,6 +259,11 @@ export default {
         // Non-admins cannot configure agent exposure policy.
         delete values.agentAccess;
         delete values.allowedAgents;
+      }
+      if ('options' in values) {
+        const options = mergeSecretValues({}, values.options, ['ragApiKey']);
+        delete options.hasRagApiKey;
+        values.options = options;
       }
       normalizeKnowledgeBaseValues(ctx, values);
       if (!access.isAdmin && isCredentialForwardingExternalRag(values)) {
@@ -237,29 +281,30 @@ export default {
         values.ownerId = access.userId;
       }
 
-      const record = await repo.create({ values });
+      if (values.vectorStoreId != null) values.vectorStoreId = requireRecordId(ctx, values.vectorStoreId);
+      const record = await ctx.db.sequelize.transaction(async (transaction) => {
+        const created = await repo.create({ values, transaction });
+        if (values.vectorStoreId != null) {
+          await lockVectorStore(ctx.db, values.vectorStoreId, transaction);
+          await repo.update({
+            filterByTk: created.get('id'),
+            values: { vectorStoreId: values.vectorStoreId },
+            transaction,
+          });
+        }
+        return created;
+      });
 
-      // NocoBase repository strips belongsTo FK fields during create/update on
-      // custom resources (not routed through the NocoBase data manager). We use
-      // a targeted update via the repository to set the FK after creation.
-      // This is preferable to raw Sequelize SQL as it goes through ORM hooks.
-      if (values.vectorStoreId) {
-        await repo.update({
-          filterByTk: record.get('id'),
-          values: { vectorStoreId: values.vectorStoreId },
-        });
-      }
-
-      const data = record.toJSON ? record.toJSON() : record;
+      const data = serializeKnowledgeBase(record);
       data.key = String(data.id);
       ctx.body = data;
       await next();
     },
 
     async update(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const rawValues = ctx.action.params.values || {};
-      const values = rawValues.values || rawValues;
+      const values = pickAllowedValues(rawValues.values || rawValues, WRITABLE_KNOWLEDGE_BASE_FIELDS);
       const repo = ctx.db.getRepository('aiKnowledgeBases');
 
       const access = await resolveAccessContext(ctx, ctx.db);
@@ -273,16 +318,6 @@ export default {
         return;
       }
 
-      normalizeKnowledgeBaseValues(ctx, values, existing);
-      if (!access.isAdmin && isCredentialForwardingExternalRag(values, existing)) {
-        ctx.throw(
-          403,
-          ctx.t('Only administrators can configure External RAG providers that forward LLM credentials.', {
-            ns: 'plugin-knowledge-base',
-          }),
-        );
-        return;
-      }
       if (!access.isAdmin) {
         // Members may manage KB content/settings, but changing the row-level
         // access policy (user or agent) remains an admin concern.
@@ -292,25 +327,76 @@ export default {
         delete values.agentAccess;
         delete values.allowedAgents;
       }
-
-      const updated = await repo.update({
-        filterByTk,
-        values,
+      const updated = await ctx.db.sequelize.transaction(async (transaction) => {
+        const locked = await repo.collection.model.findOne({
+          where: { id: filterByTk },
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        });
+        if (!locked) ctx.throw(404, 'Knowledge base not found');
+        const previous = locked.toJSON();
+        if (!canManageKnowledgeBase(access, previous)) ctx.throw(403, 'Access denied');
+        if (values.vectorStoreId != null) values.vectorStoreId = requireRecordId(ctx, values.vectorStoreId);
+        if ('vectorStoreId' in values && String(values.vectorStoreId ?? '') !== String(previous.vectorStoreId ?? '')) {
+          if (values.vectorStoreId != null) await lockVectorStore(ctx.db, values.vectorStoreId, transaction);
+          const docs = await ctx.db.getRepository('aiKnowledgeBaseDocuments').find({
+            filter: {
+              knowledgeBaseId: filterByTk,
+              $or: [{ indexDeleted: { $isFalsy: true } }, { indexCleanupPending: true }],
+            },
+            transaction,
+          });
+          const isFirstBinding = previous.vectorStoreId == null && values.vectorStoreId != null;
+          const safeFirstBinding =
+            isFirstBinding &&
+            docs.every((doc) => {
+              const data = doc.toJSON();
+              return (
+                !data.activeIndexRevision &&
+                !data.indexCleanupRoute &&
+                !data.indexWorkerStartedAt &&
+                (!data.indexWorkerToken || data.indexWorkerToken === NEVER_INDEXED_TOKEN) &&
+                ['pending', 'failed', 'retrying'].includes(data.status)
+              );
+            });
+          if (docs.length && !safeFirstBinding)
+            ctx.throw(409, ctx.t(STORAGE_IN_USE_ERROR, { ns: 'plugin-knowledge-base' }));
+        }
+        if ('options' in values) {
+          const incoming = values.options;
+          const prior = previous.options ?? {};
+          const candidate = mergeSecretValues(prior, incoming, ['ragApiKey']);
+          const recipientChanged =
+            String(prior.ragProvider ?? 'external-http') !== String(candidate.ragProvider ?? 'external-http') ||
+            String(prior.ragApiUrl ?? '') !== String(candidate.ragApiUrl ?? '');
+          if (recipientChanged && credentialChangeNeedsConfirmation(prior, incoming, ['ragApiKey'])) {
+            ctx.throw(400, ctx.t(CREDENTIAL_DESTINATION_ERROR, { ns: 'plugin-knowledge-base' }));
+          }
+          const options = mergeSecretValues(recipientChanged ? withoutSecrets(prior, ['ragApiKey']) : prior, incoming, [
+            'ragApiKey',
+          ]);
+          delete options.hasRagApiKey;
+          values.options = options;
+        }
+        normalizeKnowledgeBaseValues(ctx, values, previous);
+        if (!access.isAdmin && isCredentialForwardingExternalRag(values, previous)) {
+          ctx.throw(
+            403,
+            ctx.t('Only administrators can configure External RAG providers that forward LLM credentials.', {
+              ns: 'plugin-knowledge-base',
+            }),
+          );
+        }
+        return repo.update({ filterByTk, values, transaction });
       });
 
-      if (updated) {
-        const data = updated.toJSON ? updated.toJSON() : updated;
-        data.key = String(data.id);
-        ctx.body = data;
-      } else {
-        ctx.body = updated;
-      }
+      ctx.body = updated ? serializeKnowledgeBaseResponse(updated) : updated;
 
       await next();
     },
 
     async destroy(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const repo = ctx.db.getRepository('aiKnowledgeBases');
 
       const access = await resolveAccessContext(ctx, ctx.db);
@@ -320,7 +406,16 @@ export default {
         return;
       }
 
-      await repo.destroy({ filterByTk });
+      if (!existing) {
+        ctx.throw(404, 'Knowledge base not found');
+        return;
+      }
+      const plugin = getPlugin(ctx);
+      if (!plugin?.indexLifecycle) {
+        ctx.throw(500, 'Knowledge Base plugin is not available');
+        return;
+      }
+      await plugin.indexLifecycle.destroyKnowledgeBase(String(filterByTk), (kb) => canManageKnowledgeBase(access, kb));
       ctx.body = { success: true };
 
       await next();
@@ -381,8 +476,11 @@ export default {
       const values = rawValues.values || rawValues;
       const query = typeof values.query === 'string' ? values.query.trim().slice(0, 2000) : '';
       const feedback = values.feedback === 'positive' || values.feedback === 'negative' ? values.feedback : '';
-      const documentId = values.documentId ? String(values.documentId).slice(0, 100) : '';
-      const knowledgeBaseId = values.knowledgeBaseId ? String(values.knowledgeBaseId) : '';
+      const documentId =
+        values.documentId == null || values.documentId === ''
+          ? ''
+          : requireRecordId(ctx, values.documentId).slice(0, 100);
+      const knowledgeBaseId = requireRecordId(ctx, values.knowledgeBaseId);
 
       if (!query || !knowledgeBaseId || (!documentId && !feedback)) {
         ctx.throw(400, 'query, knowledgeBaseId and feedback are required');
@@ -427,7 +525,7 @@ export default {
     },
 
     async export(ctx: Context, next: Function) {
-      const { filterByTk } = ctx.action.params;
+      const filterByTk = requireRecordId(ctx, ctx.action.params.filterByTk);
       const repo = ctx.db.getRepository('aiKnowledgeBases');
       const kb = await repo.findOne({ filterByTk, appends: ['vectorStore'] });
       if (!kb) {
@@ -442,7 +540,9 @@ export default {
       }
 
       const docRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
-      const documents = await docRepo.find({ filter: { knowledgeBaseId: String(filterByTk) } });
+      const documents = await docRepo.find({
+        filter: { knowledgeBaseId: String(filterByTk), indexDeleted: { $isFalsy: true } },
+      });
 
       // Strip secrets and internal ids; keep structure + text content
       const kbData = (kb.toJSON ? kb.toJSON() : kb) as Record<string, any>;
@@ -527,21 +627,17 @@ export default {
         await repo.update({ filterByTk: kbId, values: { ownerId: access.userId } });
       }
 
-      const docRepo = ctx.db.getRepository('aiKnowledgeBaseDocuments');
       const importedDocs: string[] = [];
       for (const doc of Array.isArray(payload.documents) ? payload.documents : []) {
         if (!doc?.textContent) continue;
-        const created = await docRepo.create({
-          values: {
-            knowledgeBaseId: kbId,
-            filename: String(doc.filename ?? 'imported'),
-            textContent: String(doc.textContent),
-            status: 'pending',
-            uploadedById: access.userId,
-          },
+        const created = await createStoredKnowledgeBaseDocument(ctx.db, {
+          knowledgeBaseId: kbId,
+          filename: String(doc.filename ?? 'imported'),
+          textContent: String(doc.textContent),
+          status: 'pending',
+          uploadedById: access.userId,
         });
         const docId = created.get?.('id') ?? (created as any).id;
-        await docRepo.update({ filterByTk: docId, values: { knowledgeBaseId: kbId } });
         importedDocs.push(String(docId));
       }
 

@@ -1,12 +1,5 @@
 // @ts-nocheck
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
@@ -16,7 +9,7 @@ import { KnowledgeBaseFeatureImpl } from './features/knowledge-base-impl';
 import { VectorDatabaseFeatureImpl } from './features/vector-database-impl';
 import { VectorDatabaseProviderImpl } from './features/vector-database-provider-impl';
 import { VectorStoreProviderImpl } from './features/vector-store-provider-impl';
-import { pgVectorProviderInfo } from './providers/pgvector';
+import { PGVectorDatabaseProvider, pgVectorProviderInfo } from './providers/pgvector';
 import { qdrantProviderInfo } from './providers/qdrant';
 import {
   E5_HTTP_RAG_PROVIDER,
@@ -32,6 +25,8 @@ import { KnowledgeSearchService } from './services/knowledge-search';
 import type { KnowledgeSearchOptions } from './services/knowledge-search';
 import { SessionContextService } from './services/session-context';
 import { DocumentVersionService } from './services/document-version';
+import { IndexLifecycleService } from './services/index-lifecycle';
+import { blockProtectedCollectionRoutes } from './middlewares/collection-policy';
 import { createSharedContextToolProvider } from './tools/shared-context-tool';
 import { createPromoteToKbToolProvider } from './tools/promote-to-kb-tool';
 import aiKnowledgeBase from './resources/ai-knowledge-base';
@@ -68,9 +63,11 @@ export class PluginKnowledgeBaseServer extends Plugin {
    */
   sessionContext: SessionContextService;
   documentVersionService: DocumentVersionService;
+  indexLifecycle: IndexLifecycleService;
 
   private retryTimer: ReturnType<typeof setInterval> | null = null;
   private sessionPruneTimer: ReturnType<typeof setInterval> | null = null;
+  private pgVectorProvider: PGVectorDatabaseProvider;
 
   /**
    * The VectorStore provider registry exposed publicly so that other plugins can
@@ -167,7 +164,8 @@ export class PluginKnowledgeBaseServer extends Plugin {
   async load() {
     // 1. Create feature implementations
     const vdbProvider = new VectorDatabaseProviderImpl();
-    vdbProvider.register(pgVectorProviderInfo);
+    this.pgVectorProvider = new PGVectorDatabaseProvider();
+    vdbProvider.register({ ...pgVectorProviderInfo, provider: this.pgVectorProvider });
     vdbProvider.register(qdrantProviderInfo);
 
     this.vectorStoreProvider = new VectorStoreProviderImpl(this, this.aiPlugin);
@@ -194,6 +192,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // 3. Initialize vectorization pipeline (with optional DocPixie extractor)
     this.docpixieExtractor = new DocPixieExtractor(this.db, () => this.getDocpixiePlugin());
+    this.indexLifecycle = new IndexLifecycleService(this);
     this.vectorizationPipeline = new VectorizationPipeline(this, this.docpixieExtractor);
     registerKnowledgeBaseDocumentQueue(this);
 
@@ -202,6 +201,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     await this.seedDefaultQdrantVectorStore();
 
     // 5. Middleware: propagate current userId + roles via AsyncLocalStorage
+    this.app.resourceManager.use(blockProtectedCollectionRoutes);
     this.app.resourceManager.use(async (ctx, next) => {
       const userId = ctx.auth?.user?.id ?? ctx.state?.currentUser?.id;
       const userRoles = getCurrentRoles(ctx);
@@ -257,7 +257,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
 
     // 10. Initialize Session Context Service (Tier 1 — ephemeral cross-agent scratchpad)
     this.sessionContext = new SessionContextService(this.db);
-    this.documentVersionService = new DocumentVersionService(this.db);
+    this.documentVersionService = new DocumentVersionService(this.db, this.indexLifecycle);
 
     // 11. Register shared_context AI tool via toolsManager
     this.registerSharedContextTool();
@@ -283,6 +283,7 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.clearRetryTimer();
     this.clearSessionPruneTimer();
     unregisterKnowledgeBaseDocumentQueue(this.app);
+    await this.pgVectorProvider?.close();
   }
 
   private clearRetryTimer() {
@@ -309,56 +310,60 @@ export class PluginKnowledgeBaseServer extends Plugin {
       async () => {
         try {
           const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
-          const tableName = docRepo.collection.model.tableName;
-
-          // Fix P1-2: Single atomic UPDATE+RETURNING to claim failed docs.
-          // Eliminates the race window between find() and UPDATE that existed before.
-          // The subquery with LIMIT prevents over-claiming, and WHERE status=failed
-          // ensures no double-processing across concurrent instances.
-          const claimedRows = (await this.db.sequelize.query(
-            `UPDATE "${tableName}" SET "status" = 'retrying'
-             WHERE "id" IN (
-               SELECT "id" FROM "${tableName}"
-               WHERE "status" = 'failed' AND "retryCount" < :maxRetry
-               LIMIT 10
-             )
-             RETURNING "id"`,
-            {
-              replacements: { maxRetry: MAX_RETRY_COUNT },
-              type: (this.db.sequelize.constructor as any).QueryTypes.SELECT,
-            },
-          )) as any[];
-
-          const claimedIds = claimedRows.map((r: any) => r.id);
-          if (claimedIds.length === 0) return;
-
-          // Load full records for claimed docs only
-          const claimedDocs = await docRepo.find({
-            filter: { id: { $in: claimedIds } },
-            appends: ['knowledgeBase'],
+          await this.indexLifecycle.sweep();
+          const configured = await this.db.getRepository('aiKnowledgeBases').find({
+            filter: { vectorStoreId: { $ne: null }, type: { $ne: 'EXTERNAL_RAG' } },
+            fields: ['id'],
           });
-
-          for (const doc of claimedDocs) {
-            if (!doc.knowledgeBase) continue;
-            const kbType = doc.knowledgeBase.type;
-
-            try {
-              if (kbType !== 'EXTERNAL_RAG') {
-                await docRepo.update({ filter: { id: doc.id }, values: { status: 'pending' } });
-                await enqueueKnowledgeBaseDocument(this, {
-                  documentId: String(doc.id),
-                  reason: 'retry',
-                  requestedById: doc.uploadedById ?? null,
-                });
-              } else {
-                await docRepo.update({
-                  filter: { id: doc.id },
-                  values: { status: 'failed', error: 'External RAG knowledge bases do not process local documents' },
-                });
-              }
-            } catch (err: any) {
-              this.app.logger.warn(`[KBRetry] Failed to trigger retry for doc ${doc.id}: ${err.message}`);
+          const configuredIds = configured.map((kb) => kb.get?.('id') ?? kb.id).filter(Boolean);
+          if (!configuredIds.length) return;
+          const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+          const abandoned = await docRepo.find({
+            filter: {
+              knowledgeBaseId: { $in: configuredIds },
+              status: 'processing',
+              $or: [
+                { indexWorkerStartedAt: { $lt: cutoff } },
+                { indexWorkerStartedAt: { $eq: null }, updatedAt: { $lt: cutoff } },
+              ],
+              indexDeleted: { $isFalsy: true },
+            },
+            fields: ['id'],
+            limit: 10,
+          });
+          for (const doc of abandoned) {
+            if (await this.indexLifecycle.recoverAbandoned(String(doc.id), cutoff)) {
+              await enqueueKnowledgeBaseDocument(this, { documentId: String(doc.id), reason: 'abandoned-attempt' });
             }
+          }
+          const pending = await docRepo.find({
+            filter: {
+              knowledgeBaseId: { $in: configuredIds },
+              status: { $in: ['pending', 'retrying'] },
+              indexDeleted: { $isFalsy: true },
+            },
+            fields: ['id'],
+            limit: 10,
+          });
+          for (const doc of pending) {
+            await enqueueKnowledgeBaseDocument(this, { documentId: String(doc.id), reason: 'pending-recovery' });
+          }
+          const failed = await docRepo.find({
+            filter: {
+              knowledgeBaseId: { $in: configuredIds },
+              status: 'failed',
+              retryCount: { $lt: MAX_RETRY_COUNT },
+              indexDeleted: { $isFalsy: true },
+            },
+            fields: ['id', 'uploadedById'],
+            limit: 10,
+          });
+          for (const doc of failed) {
+            await enqueueKnowledgeBaseDocument(this, {
+              documentId: String(doc.id),
+              reason: 'retry',
+              requestedById: doc.uploadedById ?? null,
+            });
           }
         } catch (err: any) {
           this.app.logger.warn(`[KBRetry] Retry job error: ${err.message}`);
@@ -657,12 +662,14 @@ export class PluginKnowledgeBaseServer extends Plugin {
     this.clearRetryTimer();
     this.clearSessionPruneTimer();
     unregisterKnowledgeBaseDocumentQueue(this.app);
+    await this.pgVectorProvider?.close();
   }
 
   async remove() {
     this.clearRetryTimer();
     this.clearSessionPruneTimer();
     unregisterKnowledgeBaseDocumentQueue(this.app);
+    await this.pgVectorProvider?.close();
   }
 }
 

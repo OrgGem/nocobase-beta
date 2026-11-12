@@ -1,5 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from 'vitest';
 import documentsResource from '../resources/ai-knowledge-base-documents';
+
+function createThrow() {
+  return vi.fn((status: number, message: string) => {
+    throw Object.assign(new Error(message), { status });
+  });
+}
 
 describe('aiKnowledgeBaseDoc.stats', () => {
   it('returns zeroed stats when non-admin has no accessible KBs', async () => {
@@ -8,6 +16,7 @@ describe('aiKnowledgeBaseDoc.stats', () => {
       auth: { user: { id: 7 } },
       state: {},
       app: { acl: { getRole: vi.fn() } },
+      t: (key: string) => key,
       db: {
         getRepository: vi.fn((name: string) => {
           if (name === 'aiKnowledgeBases') {
@@ -16,7 +25,7 @@ describe('aiKnowledgeBaseDoc.stats', () => {
           return { find: vi.fn() };
         }),
       },
-      throw: vi.fn(),
+      throw: createThrow(),
       body: null,
     };
     const next = vi.fn();
@@ -40,6 +49,7 @@ describe('aiKnowledgeBaseDoc.stats', () => {
       auth: { user: { id: 1, roles: ['root'] } },
       state: { currentRoles: ['root'] },
       app: { acl: { getRole: vi.fn(() => ({ getStrategy: () => ({ allowConfigure: true }) })) } },
+      t: (key: string) => key,
       db: {
         getRepository: vi.fn((name: string) => {
           if (name === 'aiKnowledgeBaseDocuments') {
@@ -48,7 +58,7 @@ describe('aiKnowledgeBaseDoc.stats', () => {
           return {};
         }),
       },
-      throw: vi.fn(),
+      throw: createThrow(),
       body: null,
     };
     const next = vi.fn();
@@ -85,7 +95,10 @@ describe('aiKnowledgeBase.list document appends', () => {
       expect.objectContaining({ appends: expect.arrayContaining(['vectorStore', 'documents']) }),
     );
     expect(documentFind).toHaveBeenCalledWith(
-      expect.objectContaining({ filter: { knowledgeBaseId: { $in: ['kb-1'] } }, fields: ['knowledgeBaseId'] }),
+      expect.objectContaining({
+        filter: { knowledgeBaseId: { $in: ['kb-1'] }, indexDeleted: { $isFalsy: true } },
+        fields: ['knowledgeBaseId'],
+      }),
     );
     expect(ctx.body).toEqual([expect.objectContaining({ id: 'kb-1', documents: [{}, {}] })]);
     expect(next).toHaveBeenCalled();

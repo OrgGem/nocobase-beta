@@ -49,5 +49,13 @@
   "Document Processing": "Xử lý tài liệu",
   "Total": "Tổng cộng",
   "Ready": "Sẵn sàng",
-  "Retrying": "Đang thử lại"
+  "Retrying": "Đang thử lại",
+  "A credential is configured. Leave blank to keep it.": "Đã cấu hình thông tin xác thực. Để trống để giữ nguyên.",
+  "Clear saved credential": "Xóa thông tin xác thực đã lưu",
+  "File not found or access denied": "Không tìm thấy tệp hoặc không có quyền truy cập",
+  "Connection test failed": "Kiểm tra kết nối thất bại",
+  "Provide a new credential or clear the saved credential when changing the connection destination": "Hãy nhập thông tin xác thực mới hoặc xóa thông tin đã lưu khi thay đổi đích kết nối",
+  "Vector database storage location is in use; create a new vector database and migrate documents first": "Vị trí lưu trữ vector đang được sử dụng; hãy tạo cơ sở dữ liệu vector mới và di chuyển tài liệu trước",
+  "Invalid vector store": "Kho vector không hợp lệ",
+  "A valid single record ID is required": "Cần một mã bản ghi hợp lệ"
 }

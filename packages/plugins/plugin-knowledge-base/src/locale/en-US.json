@@ -50,5 +50,13 @@
   "Total": "Total",
   "Pending": "Pending",
   "Ready": "Ready",
-  "Retrying": "Retrying"
+  "Retrying": "Retrying",
+  "A credential is configured. Leave blank to keep it.": "A credential is configured. Leave blank to keep it.",
+  "Clear saved credential": "Clear saved credential",
+  "File not found or access denied": "File not found or access denied",
+  "Connection test failed": "Connection test failed",
+  "Provide a new credential or clear the saved credential when changing the connection destination": "Provide a new credential or clear the saved credential when changing the connection destination",
+  "Vector database storage location is in use; create a new vector database and migrate documents first": "Vector database storage location is in use; create a new vector database and migrate documents first",
+  "Invalid vector store": "Invalid vector store",
+  "A valid single record ID is required": "A valid single record ID is required"
 }

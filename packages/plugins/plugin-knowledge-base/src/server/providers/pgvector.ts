@@ -1,14 +1,8 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import type { VectorDatabaseProvider, VectorDatabaseProviderInfo } from '../features/vector-database-provider-impl';
 import type { EmbeddingsInterface } from '@langchain/core/embeddings';
+import { createHash } from 'crypto';
 
 export type PGVectorConnectParams = {
   host: string;
@@ -20,15 +14,37 @@ export type PGVectorConnectParams = {
 };
 
 export class PGVectorDatabaseProvider implements VectorDatabaseProvider<PGVectorConnectParams, any> {
-  /**
-   * Fix P1-4: Cache PGVectorStore instances by connection params hash.
-   * Prevents opening a new PG connection + running DDL on every search call.
-   * Key = hash(host:port:db:table), Value = PGVectorStore instance.
-   */
-  private vectorStoreCache = new Map<string, { store: any; embedId: string }>();
+  private vectorStoreCache = new Map<
+    string,
+    { store: { end(): Promise<void> }; fingerprint: string; location: string }
+  >();
+  private cacheQueue: Promise<void> = Promise.resolve();
+  private readonly maxCachedStores = 16;
 
-  private getCacheKey(params: PGVectorConnectParams): string {
-    return `${params.host}:${params.port}:${params.database}:${params.tableName}`;
+  private digest(value: unknown): string {
+    return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  }
+
+  private async serialize<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.cacheQueue;
+    let release: () => void = () => {};
+    this.cacheQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.serialize(async () => {
+      const stores = Array.from(this.vectorStoreCache.values(), (entry) => entry.store);
+      this.vectorStoreCache.clear();
+      await Promise.allSettled(stores.map((store) => store.end()));
+    });
   }
 
   validateConnectParams(connectParams: PGVectorConnectParams): void {
@@ -100,42 +116,69 @@ export class PGVectorDatabaseProvider implements VectorDatabaseProvider<PGVector
 
   async createVectorStore(embeddings: EmbeddingsInterface, connectParams: PGVectorConnectParams): Promise<any> {
     this.validateConnectParams(connectParams);
+    return this.serialize(async () => {
+      const location = this.digest([
+        connectParams.host,
+        connectParams.port,
+        connectParams.database,
+        connectParams.tableName,
+      ]);
+      const fingerprint = this.digest([
+        connectParams.host,
+        connectParams.port,
+        connectParams.username,
+        connectParams.password,
+        connectParams.database,
+        connectParams.tableName,
+      ]);
+      const model = embeddings as EmbeddingsInterface & { modelName?: string; model?: string };
+      const embedId = model.modelName || model.model || embeddings.constructor.name;
+      const cacheKey = this.digest([location, embedId]);
+      const cached = this.vectorStoreCache.get(cacheKey);
+      if (cached?.fingerprint === fingerprint) {
+        this.vectorStoreCache.delete(cacheKey);
+        this.vectorStoreCache.set(cacheKey, cached);
+        return cached.store;
+      }
 
-    const cacheKey = this.getCacheKey(connectParams);
-    // Embeddings identity — use model name or class name as a proxy
-    const embedId = (embeddings as any).modelName || (embeddings as any).model || embeddings.constructor.name;
-
-    // Return cached instance if connection params and embedding model match
-    const cached = this.vectorStoreCache.get(cacheKey);
-    if (cached && cached.embedId === embedId) {
-      return cached.store;
-    }
-
-    const { PGVectorStore } = await import('@langchain/community/vectorstores/pgvector');
-
-    const config = {
-      postgresConnectionOptions: {
-        host: connectParams.host,
-        port: connectParams.port,
-        user: connectParams.username,
-        password: connectParams.password,
-        database: connectParams.database,
-      },
-      tableName: connectParams.tableName,
-      columns: {
-        idColumnName: 'id',
-        vectorColumnName: 'embedding',
-        contentColumnName: 'content',
-        metadataColumnName: 'metadata',
-      },
-    };
-
-    const vectorStore = await PGVectorStore.initialize(embeddings, config);
-
-    // Cache the instance for reuse
-    this.vectorStoreCache.set(cacheKey, { store: vectorStore, embedId });
-
-    return vectorStore;
+      const { PGVectorStore } = await import('@langchain/community/vectorstores/pgvector');
+      const config = {
+        postgresConnectionOptions: {
+          host: connectParams.host,
+          port: connectParams.port,
+          user: connectParams.username,
+          password: connectParams.password,
+          database: connectParams.database,
+        },
+        tableName: connectParams.tableName,
+        // LangChain otherwise returns cosine distance (zero is best).
+        distanceStrategy: 'cosine' as const,
+        scoreNormalization: 'similarity' as const,
+        columns: {
+          idColumnName: 'id',
+          vectorColumnName: 'embedding',
+          contentColumnName: 'content',
+          metadataColumnName: 'metadata',
+        },
+      };
+      const vectorStore = await PGVectorStore.initialize(embeddings, config);
+      const displaced: Array<{ end(): Promise<void> }> = [];
+      for (const [key, entry] of this.vectorStoreCache) {
+        if ((entry.location === location && entry.fingerprint !== fingerprint) || key === cacheKey) {
+          this.vectorStoreCache.delete(key);
+          displaced.push(entry.store);
+        }
+      }
+      this.vectorStoreCache.set(cacheKey, { store: vectorStore, fingerprint, location });
+      while (this.vectorStoreCache.size > this.maxCachedStores) {
+        const oldest = this.vectorStoreCache.entries().next().value;
+        if (!oldest) break;
+        this.vectorStoreCache.delete(oldest[0]);
+        displaced.push(oldest[1].store);
+      }
+      await Promise.allSettled(displaced.map((store) => store.end()));
+      return vectorStore;
+    });
   }
 }
 

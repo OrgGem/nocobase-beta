@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from 'vitest';
 import { createOpenAICompatibleRagStrategy } from '../providers/external-rag';
 import aiKnowledgeBase from '../resources/ai-knowledge-base';
@@ -35,6 +37,9 @@ describe('openai-compatible External RAG security', () => {
   it('denies non-administrators from creating a provider that forwards central LLM credentials', async () => {
     const create = vi.fn();
     const next = vi.fn();
+    const throwRequest = vi.fn((status: number, message: unknown) => {
+      throw Object.assign(new Error(String(message)), { status });
+    });
     const ctx = {
       action: {
         params: {
@@ -49,12 +54,15 @@ describe('openai-compatible External RAG security', () => {
       app: { acl: { getRole: vi.fn() } },
       db: { getRepository: vi.fn(() => ({ create })) },
       t: vi.fn((key: string) => `translated:${key}`),
-      throw: vi.fn(),
+      throw: throwRequest,
     };
 
-    await aiKnowledgeBase.actions.create(ctx as never, next);
+    await expect(aiKnowledgeBase.actions.create(ctx as never, next)).rejects.toMatchObject({
+      status: 403,
+      message: 'translated:Only administrators can configure External RAG providers that forward LLM credentials.',
+    });
 
-    expect(ctx.throw).toHaveBeenCalledWith(
+    expect(throwRequest).toHaveBeenCalledWith(
       403,
       'translated:Only administrators can configure External RAG providers that forward LLM credentials.',
     );

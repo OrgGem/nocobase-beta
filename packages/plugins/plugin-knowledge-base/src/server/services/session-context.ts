@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Session Context Service
  *
@@ -14,6 +16,7 @@
  */
 
 import { Database } from '@nocobase/database';
+import { createStoredKnowledgeBaseDocument } from '../utils/create-document';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -65,7 +68,7 @@ export class SessionContextService {
     if (!scope.rootRunId && !scope.sessionId && !scope.pipelineJobId) {
       throw new Error(
         `[SessionContext] ${operation} requires at least one scope key (rootRunId, sessionId, or pipelineJobId). ` +
-        'Empty scope would access ALL context entries — this is a context isolation violation.',
+          'Empty scope would access ALL context entries — this is a context isolation violation.',
       );
     }
   }
@@ -233,10 +236,7 @@ export class SessionContextService {
     let totalLen = 0;
 
     for (const [key, value] of entries) {
-      const preview =
-        typeof value === 'string'
-          ? value.slice(0, 1000)
-          : JSON.stringify(value).slice(0, 1000);
+      const preview = typeof value === 'string' ? value.slice(0, 1000) : JSON.stringify(value).slice(0, 1000);
       const line = `- **${key}**: ${preview}`;
 
       if (totalLen + line.length > maxChars) {
@@ -278,13 +278,11 @@ export class SessionContextService {
     const docRepo = this.db.getRepository('aiKnowledgeBaseDocuments');
     if (!docRepo) return null;
 
-    const doc = await docRepo.create({
-      values: {
-        knowledgeBaseId,
-        textContent,
-        filename: filename || `session-context-${key}`,
-        status: 'pending',
-      },
+    const doc = await createStoredKnowledgeBaseDocument(this.db, {
+      knowledgeBaseId,
+      textContent,
+      filename: filename || `session-context-${key}`,
+      status: 'pending',
     });
 
     return (doc as any)?.id || null;
@@ -306,8 +304,9 @@ export class SessionContextService {
     const PAGE_SIZE = 200;
     let totalDeleted = 0;
     let offset = 0;
+    let hasMore = true;
 
-    while (true) {
+    while (hasMore) {
       const records = await repo.find({
         filter: {
           ttlSeconds: { $ne: null },
@@ -332,8 +331,8 @@ export class SessionContextService {
         totalDeleted += idsToDelete.length;
       }
 
-      if ((records as any[]).length < PAGE_SIZE) break;
-      offset += PAGE_SIZE;
+      hasMore = records.length >= PAGE_SIZE;
+      if (hasMore) offset += PAGE_SIZE;
     }
 
     return totalDeleted;

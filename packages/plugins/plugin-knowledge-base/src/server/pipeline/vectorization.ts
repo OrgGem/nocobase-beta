@@ -1,14 +1,8 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { resolve as resolvePath, sep } from 'path';
-import { unlink, access, readFile } from 'fs/promises';
+import { access, readFile } from 'fs/promises';
+import { createHash } from 'crypto';
 import type PluginKnowledgeBaseServer from '../plugin';
 import { DocumentTextSplitter } from './text-splitter';
 import type { TextSplitterOptions } from './text-splitter';
@@ -17,6 +11,7 @@ import type { DocPixieExtractor } from '../services/docpixie-extractor';
 import { KnowledgeSearchService } from '../services/knowledge-search';
 import { detectLanguage, getChunkSizeMultiplier, getSeparatorsForLanguage } from '../services/language-detect';
 import { WebhookDispatcher } from '../services/webhook';
+import { deleteIndexRevision } from '../services/index-lifecycle';
 
 export type VectorizationResult = {
   success: boolean;
@@ -47,12 +42,11 @@ export class VectorizationPipeline {
 
   async processDocument(documentId: string, options?: TextSplitterOptions): Promise<VectorizationResult> {
     const docRepo = this.plugin.db.getRepository('aiKnowledgeBaseDocuments');
-
-    // Update status to processing
-    await docRepo.update({
-      filter: { id: documentId },
-      values: { status: 'processing' },
-    });
+    const attempt = await this.plugin.indexLifecycle.begin(documentId);
+    if (!attempt) return { success: true, chunkCount: 0 };
+    const { revision, token, vectorStore } = attempt;
+    let activated = false;
+    let completedChunks = 0;
 
     try {
       // Fix P1-5: Replaced unreliable 500ms sleep with polling retry.
@@ -67,7 +61,7 @@ export class VectorizationPipeline {
       while (waitedMs < MAX_FK_WAIT_MS) {
         docRecord = await docRepo.findOne({
           filter: { id: documentId },
-          appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
+          appends: ['file', 'knowledgeBase'],
         });
 
         if (docRecord && docRecord.get('knowledgeBaseId') && docRecord.knowledgeBase) {
@@ -87,7 +81,7 @@ export class VectorizationPipeline {
       if (!docRecord || !docRecord.knowledgeBase) {
         docRecord = await docRepo.findOne({
           filter: { id: documentId },
-          appends: ['file', 'knowledgeBase', 'knowledgeBase.vectorStore', 'knowledgeBase.vectorStore.vectorDatabase'],
+          appends: ['file', 'knowledgeBase'],
         });
       }
 
@@ -104,9 +98,7 @@ export class VectorizationPipeline {
         throw new Error('Document has no associated file or text content');
       }
 
-      if (!knowledgeBase?.vectorStore) {
-        throw new Error('Knowledge base has no vector store configured');
-      }
+      if (!knowledgeBase) throw new Error('Knowledge base is unavailable');
 
       // 2. Get the text content — try DocPixie → plugin-ai loaders → raw fallback
       let rawText = '';
@@ -160,14 +152,9 @@ export class VectorizationPipeline {
       }
 
       if (!rawText || rawText.trim().length === 0) {
-        // Mark as success with 0 chunks for empty documents
-        await docRepo.update({
-          filter: { id: documentId },
-          values: {
-            status: 'success',
-            chunkCount: 0,
-            ...(docpixieDocumentId ? { meta: { ...(doc.meta ?? {}), docpixieDocumentId } } : {}),
-          },
+        await this.plugin.indexLifecycle.activate(documentId, revision, token, {
+          chunkCount: 0,
+          ...(docpixieDocumentId ? { meta: { ...(doc.meta ?? {}), docpixieDocumentId } } : {}),
         });
         return { success: true, chunkCount: 0 };
       }
@@ -189,6 +176,7 @@ export class VectorizationPipeline {
         knowledgeBaseId: knowledgeBase.id,
         knowledgeBaseOuterId: knowledgeBase.id,
         documentId,
+        indexRevision: revision,
         source: file?.filename ?? doc.filename ?? 'pasted-text',
         // Permission metadata for vector-level filtering
         userId: doc.uploadedById ?? null,
@@ -200,19 +188,14 @@ export class VectorizationPipeline {
       });
 
       if (chunks.length === 0) {
-        await docRepo.update({
-          filter: { id: documentId },
-          values: {
-            status: 'success',
-            chunkCount: 0,
-            ...(docpixieDocumentId ? { meta: { ...(doc.meta ?? {}), docpixieDocumentId } } : {}),
-          },
+        await this.plugin.indexLifecycle.activate(documentId, revision, token, {
+          chunkCount: 0,
+          ...(docpixieDocumentId ? { meta: { ...(doc.meta ?? {}), docpixieDocumentId } } : {}),
         });
         return { success: true, chunkCount: 0 };
       }
 
       // 4. Store chunks in vector DB
-      const vectorStore = knowledgeBase.vectorStore;
       const vectorDatabase = vectorStore.vectorDatabase;
 
       // Create embedding model from the vector store's LLM service config.
@@ -226,25 +209,39 @@ export class VectorizationPipeline {
         vectorDatabase.connectParams,
       );
 
-      // Add documents to vector store (with retry for transient failures)
-      await this.retryAsync(
-        () => (vectorStoreInstance as any).addDocuments(chunks),
-        3,
-        `addDocuments(${chunks.length} chunks)`,
-      );
+      // Each attempt has a new revision; deterministic IDs prevent ambiguous chunk identity.
+      const ids = chunks.map((_, index) => {
+        const hash = createHash('sha256').update(`${revision}:${index}`).digest('hex');
+        return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(
+          20,
+          32,
+        )}`;
+      });
+      await vectorStoreInstance.addDocuments(chunks, { ids });
 
       // 5. Update status to success — persist docpixieDocumentId in meta for future reference
-      await docRepo.update({
-        filter: { id: documentId },
-        values: {
-          status: 'success',
-          chunkCount: chunks.length,
-          meta: {
-            ...(doc.meta ?? {}),
-            ...(docpixieDocumentId ? { docpixieDocumentId } : {}),
-          },
+      activated = await this.plugin.indexLifecycle.activate(documentId, revision, token, {
+        chunkCount: chunks.length,
+        meta: {
+          ...(doc.meta ?? {}),
+          ...(docpixieDocumentId ? { docpixieDocumentId } : {}),
         },
       });
+      if (!activated) {
+        try {
+          await deleteIndexRevision(
+            vectorDatabase.provider,
+            vectorDatabase.connectParams,
+            String(knowledgeBase.id),
+            String(documentId),
+            revision,
+          );
+        } catch {
+          this.plugin.app.logger.warn(`[Vectorization] Deferred stale revision cleanup for ${documentId}.`);
+        }
+        return { success: true, chunkCount: 0 };
+      }
+      completedChunks = chunks.length;
 
       // Invalidate cached search results for this KB — new chunks are searchable now
       KnowledgeSearchService.invalidateKnowledgeBase(String(knowledgeBase.id ?? knowledgeBase.knowledgeBaseOuterId));
@@ -263,7 +260,11 @@ export class VectorizationPipeline {
 
       // 6. Auto-delete source file if KB has deleteSourceFile enabled
       if (knowledgeBase.deleteSourceFile && file) {
-        await this.deleteSourceFile(documentId, file);
+        const deleted = await this.plugin.indexLifecycle.deleteOwnedSourceFile(documentId, revision);
+        if (!deleted)
+          this.plugin.app.logger.warn(
+            `[Vectorization] Source file retained for ${documentId}: ownership, references or current revision could not be verified.`,
+          );
       }
 
       await webhookDispatcher.dispatch('document.vectorized', {
@@ -274,96 +275,24 @@ export class VectorizationPipeline {
       });
 
       return { success: true, chunkCount: chunks.length };
-    } catch (error: any) {
-      const currentDoc = await docRepo.findOne({ filter: { id: documentId } });
-      const currentRetryCount = currentDoc?.retryCount ?? 0;
-      await docRepo.update({
-        filter: { id: documentId },
-        values: {
-          status: 'failed',
-          error: error.message ?? String(error),
-          retryCount: currentRetryCount + 1,
-        },
-      });
+    } catch {
+      if (activated) {
+        this.plugin.app.logger.warn(`[Vectorization] Post-activation task failed for ${documentId}.`);
+        return { success: true, chunkCount: completedChunks };
+      }
+      const message = 'Document vectorization failed';
+      await this.plugin.indexLifecycle.fail(documentId, revision, token, message);
 
       await webhookDispatcher.dispatch('document.failed', {
         documentId: String(documentId),
-        error: error.message ?? String(error),
+        error: message,
       });
 
       return {
         success: false,
         chunkCount: 0,
-        error: error.message ?? String(error),
+        error: message,
       };
-    }
-  }
-
-  // ── Retry helper ─────────────────────────────────────────────────────────
-
-  /**
-   * Retry an async operation with exponential backoff.
-   * Handles transient network errors, rate limits (429), and server errors (5xx)
-   * that are common with embedding APIs and vector database connections.
-   */
-  private async retryAsync<T>(fn: () => Promise<T>, maxRetries: number, label: string): Promise<T> {
-    let lastError: Error | undefined;
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await fn();
-      } catch (err: any) {
-        lastError = err;
-        const status = err?.response?.status ?? err?.status;
-        const isRetryable =
-          !status || // network error (no HTTP status)
-          status === 429 || // rate limited
-          status >= 500; // server error
-
-        if (!isRetryable || attempt === maxRetries) {
-          throw err;
-        }
-
-        const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
-        this.plugin.app.logger.warn(
-          `[Vectorization] ${label} attempt ${attempt}/${maxRetries} failed (${err.message}), retrying in ${delayMs}ms...`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-    }
-    throw lastError ?? new Error(`${label} failed`);
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  /**
-   * Delete a source file after successful vectorization.
-   * Uses async fs/promises instead of blocking sync calls.
-   */
-  private async deleteSourceFile(documentId: string, file: any): Promise<void> {
-    try {
-      const filePath = this.resolveLocalPath(file);
-      if (filePath) {
-        try {
-          await access(filePath);
-          await unlink(filePath);
-        } catch {
-          // File doesn't exist or already deleted — safe to ignore
-        }
-      }
-      const fileRepo = this.plugin.db.getRepository('aiFiles');
-      if (file.id) {
-        await fileRepo.destroy({ filterByTk: file.id });
-      }
-      // Clear the fileId FK on the document record
-      await this.plugin.db.getRepository('aiKnowledgeBaseDocuments').update({
-        filter: { id: documentId },
-        values: { fileId: null },
-      });
-      this.plugin.app.logger.info(`[Vectorization] Source file deleted for doc ${documentId}: ${file.filename}`);
-    } catch (delErr: any) {
-      this.plugin.app.logger.warn(
-        `[Vectorization] Failed to delete source file for doc ${documentId}: ${delErr.message}`,
-      );
     }
   }
 

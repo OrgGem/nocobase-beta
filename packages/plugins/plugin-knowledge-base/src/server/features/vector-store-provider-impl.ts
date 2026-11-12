@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 export interface VectorStoreProp {
   key: string;
@@ -43,6 +36,7 @@ import type PluginKnowledgeBaseServer from '../plugin';
 import type PluginAIServer from '@nocobase/plugin-ai';
 import { createEmbeddingsForVectorStore } from '../pipeline/embedding-factory';
 import { getCurrentUserId, getCurrentUserRoles } from '../request-context';
+import { filterCurrentDocuments } from '../services/index-visibility';
 
 export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
   private providers = new Map<string, VectorStoreProvider>();
@@ -165,7 +159,11 @@ export class VectorStoreProviderImpl implements VectorStoreProviderFeature {
       }
     }
 
-    return new DefaultVectorStoreService(vectorStore, vectorDatabase.provider, { accessLevel, ownerId, allowedRoles });
+    return new DefaultVectorStoreService(vectorStore, vectorDatabase.provider, this.plugin, {
+      accessLevel,
+      ownerId,
+      allowedRoles,
+    });
   }
 }
 
@@ -173,6 +171,12 @@ type AccessContext = {
   accessLevel?: string;
   ownerId?: string;
   allowedRoles?: string[];
+};
+
+type VectorSearchDocument = {
+  pageContent?: string | null;
+  metadata?: (Record<string, unknown> & { id?: string }) | null;
+  id?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -211,10 +215,11 @@ export function toQdrantMetadataFilter(filter: Record<string, unknown> | undefin
  * - SHARED: only allows access if user has matching role (DENIED returns empty)
  * - PUBLIC: no filtering
  */
-class DefaultVectorStoreService implements VectorStoreService {
+export class DefaultVectorStoreService implements VectorStoreService {
   constructor(
     private vectorStore: any,
     private vectorDatabaseProvider: string,
+    private plugin: PluginKnowledgeBaseServer,
     private accessContext: AccessContext = {},
   ) {}
 
@@ -246,19 +251,29 @@ class DefaultVectorStoreService implements VectorStoreService {
       this.vectorDatabaseProvider === 'qdrant'
         ? toQdrantMetadataFilter(mergedFilter as Record<string, unknown> | undefined)
         : mergedFilter;
-    const results = await this.vectorStore.similaritySearchWithScore(query, effectiveTopK, providerFilter);
-
     const parsedThreshold = score == null ? 0 : Number(score);
     const scoreThreshold = Number.isFinite(parsedThreshold) ? parsedThreshold : 0;
-
-    return results
-      .filter(([, resultScore]: [any, number]) => resultScore >= scoreThreshold)
-      .map(([doc, resultScore]: [any, number]) => ({
-        content: doc.pageContent ?? '',
-        metadata: doc.metadata || {},
-        id: doc.metadata?.id,
-        score: Number(resultScore) || 0,
-      }))
-      .filter((doc: DocumentSegmentedWithScore) => doc.content.trim().length > 0);
+    let fetchCount = effectiveTopK;
+    while (fetchCount <= 100) {
+      const results: Array<[VectorSearchDocument, number]> = await this.vectorStore.similaritySearchWithScore(
+        query,
+        fetchCount,
+        providerFilter,
+      );
+      const candidates: DocumentSegmentedWithScore[] = results
+        .filter(([, resultScore]) => resultScore >= scoreThreshold)
+        .map(([doc, resultScore]) => ({
+          content: doc.pageContent ?? '',
+          metadata: doc.metadata || {},
+          id: doc.id ?? doc.metadata?.id,
+          score: Number(resultScore) || 0,
+        }))
+        .filter((doc: DocumentSegmentedWithScore) => doc.content.trim().length > 0);
+      const visible = await filterCurrentDocuments<DocumentSegmentedWithScore>(this.plugin, candidates);
+      if (visible.length >= effectiveTopK || fetchCount >= 100 || results.length < fetchCount)
+        return visible.slice(0, effectiveTopK);
+      fetchCount = Math.min(fetchCount * 2, 100);
+    }
+    return [];
   }
 }

@@ -4,5 +4,13 @@
   "Document Processing": "文档处理",
   "Total": "总计",
   "Ready": "就绪",
-  "Retrying": "重试中"
+  "Retrying": "重试中",
+  "A credential is configured. Leave blank to keep it.": "已配置凭据。留空可保留现有凭据。",
+  "Clear saved credential": "清除已保存的凭据",
+  "File not found or access denied": "文件不存在或无权访问",
+  "Connection test failed": "连接测试失败",
+  "Provide a new credential or clear the saved credential when changing the connection destination": "更改连接目标时，请提供新凭据或清除已保存的凭据",
+  "Vector database storage location is in use; create a new vector database and migrate documents first": "向量数据库存储位置正在使用中；请先创建新的向量数据库并迁移文档",
+  "Invalid vector store": "无效的向量存储",
+  "A valid single record ID is required": "需要有效的单个记录 ID"
 }

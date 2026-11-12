@@ -1,6 +1,30 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from 'vitest';
 import { KbCacheService, buildSearchCacheKey } from '../services/cache';
 import { KnowledgeSearchService } from '../services/knowledge-search';
+
+function createExternalSearchFixture() {
+  const knowledgeBase = {
+    id: 'kb-9',
+    name: 'Public external KB',
+    type: 'EXTERNAL_RAG',
+    enabled: true,
+    accessLevel: 'PUBLIC',
+    options: { ragProvider: 'test-provider' },
+  };
+  const repository = { find: vi.fn(async () => [knowledgeBase]) };
+  const strategy = vi.fn(async () => [{ content: 'result', score: 0.9 }]);
+  const plugin = {
+    db: { getRepository: vi.fn(() => repository) },
+    getRagSearchStrategy: vi.fn(() => strategy),
+  };
+  const ctx = {
+    auth: { user: { id: '7', roles: ['member'] } },
+    state: { currentRoles: ['member'] },
+  };
+  return { service: new KnowledgeSearchService(plugin), ctx, strategy };
+}
 
 describe('KbCacheService', () => {
   it('stores and retrieves values within TTL', async () => {
@@ -47,45 +71,35 @@ describe('KbCacheService', () => {
 });
 
 describe('KnowledgeSearchService.searchCached', () => {
-  it('caches identical requests and skips loader on hit', async () => {
-    const loader = vi.fn(async () => [{ content: 'result' }]);
-    const plugin: any = {};
-    const service = new KnowledgeSearchService(plugin);
-    // Replace internal search via prototype stubbing
-    const originalSearch = (service as unknown as { search: unknown }).search;
-    (service as unknown as { search: unknown }).search = loader;
-
+  it('caches identical authorized requests and skips the external provider on a hit', async () => {
+    const { service, ctx, strategy } = createExternalSearchFixture();
     KnowledgeSearchService.cache.clear();
 
     const options = { knowledgeBaseIds: ['kb-9'], topK: 5 };
-    const first = await service.searchCached({} as never, 'hello', options);
-    const second = await service.searchCached({} as never, 'hello', options);
+    const first = await service.searchCached(ctx as never, 'hello', options);
+    const second = await service.searchCached(ctx as never, 'hello', options);
 
-    expect(first).toEqual([{ content: 'result' }]);
-    expect(second).toEqual([{ content: 'result' }]);
-    expect(loader).toHaveBeenCalledTimes(1);
+    expect(first.map((result) => result.content)).toEqual(['result']);
+    expect(second.map((result) => result.content)).toEqual(['result']);
+    expect(strategy).toHaveBeenCalledTimes(1);
 
-    (service as unknown as { search: unknown }).search = originalSearch;
     KnowledgeSearchService.cache.clear();
   });
 
-  it('invalidation by KB id forces reload', async () => {
-    let callCount = 0;
-    const loader = vi.fn(async () => {
-      callCount += 1;
-      return [{ content: `call-${callCount}` }];
-    });
-    const service = new KnowledgeSearchService({} as never);
-    (service as unknown as { search: unknown }).search = loader;
-
+  it('only matching KB invalidation forces a provider reload', async () => {
+    const { service, ctx, strategy } = createExternalSearchFixture();
     KnowledgeSearchService.cache.clear();
 
-    const options = { knowledgeBaseIds: ['kb-7'] };
-    await service.searchCached({} as never, 'query', options);
+    const options = { knowledgeBaseIds: ['kb-9'] };
+    await service.searchCached(ctx as never, 'query', options);
     KnowledgeSearchService.invalidateKnowledgeBase('kb-7');
-    await service.searchCached({} as never, 'query', options);
+    await service.searchCached(ctx as never, 'query', options);
+    expect(strategy).toHaveBeenCalledTimes(1);
 
-    expect(loader).toHaveBeenCalledTimes(2);
+    KnowledgeSearchService.invalidateKnowledgeBase('kb-9');
+    await service.searchCached(ctx as never, 'query', options);
+
+    expect(strategy).toHaveBeenCalledTimes(2);
     KnowledgeSearchService.cache.clear();
   });
 });

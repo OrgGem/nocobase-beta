@@ -1,16 +1,29 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, expect, it, vi } from 'vitest';
 import aiKnowledgeBase from '../resources/ai-knowledge-base';
 
+function createThrow() {
+  return vi.fn((status: number, message: string) => {
+    throw Object.assign(new Error(message), { status });
+  });
+}
+
 describe('aiKnowledgeBase.submitSearchFeedback', () => {
   it('rejects missing query/knowledgeBaseId/feedback', async () => {
+    const throwRequest = createThrow();
     const ctx: any = {
       action: { params: { values: {} } },
-      throw: vi.fn(),
+      t: (key: string) => key,
+      throw: throwRequest,
     };
 
-    await aiKnowledgeBase.actions.submitSearchFeedback(ctx, vi.fn());
+    await expect(aiKnowledgeBase.actions.submitSearchFeedback(ctx, vi.fn())).rejects.toMatchObject({
+      status: 400,
+      message: 'A valid single record ID is required',
+    });
 
-    expect(ctx.throw).toHaveBeenCalledWith(400, 'query, knowledgeBaseId and feedback are required');
+    expect(throwRequest).toHaveBeenCalledWith(400, 'A valid single record ID is required');
   });
 
   it('stores feedback for accessible KB', async () => {
@@ -41,7 +54,8 @@ describe('aiKnowledgeBase.submitSearchFeedback', () => {
           return { create };
         }),
       },
-      throw: vi.fn(),
+      t: (key: string) => key,
+      throw: createThrow(),
       body: null,
     };
     const next = vi.fn();
@@ -61,6 +75,7 @@ describe('aiKnowledgeBase.submitSearchFeedback', () => {
   });
 
   it('returns 404 for inaccessible KB', async () => {
+    const throwRequest = createThrow();
     const ctx: any = {
       action: {
         params: {
@@ -80,13 +95,17 @@ describe('aiKnowledgeBase.submitSearchFeedback', () => {
           create: vi.fn(),
         })),
       },
-      throw: vi.fn(),
+      t: (key: string) => key,
+      throw: throwRequest,
     };
     const next = vi.fn();
 
-    await aiKnowledgeBase.actions.submitSearchFeedback(ctx, next);
+    await expect(aiKnowledgeBase.actions.submitSearchFeedback(ctx, next)).rejects.toMatchObject({
+      status: 404,
+      message: 'Knowledge base not found',
+    });
 
-    expect(ctx.throw).toHaveBeenCalledWith(404, 'Knowledge base not found');
+    expect(throwRequest).toHaveBeenCalledWith(404, 'Knowledge base not found');
     expect(next).not.toHaveBeenCalled();
   });
 });
