@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin } from '@nocobase/client';
 import React from 'react';
-import { SettingsSearchInjector } from './SettingsSearchInjector';
+import { SettingsSearchInjector } from '../shared/SettingsSearchInjector';
 import { HelpVisibilityProvider } from './HelpVisibilityProvider';
 import { HelpSettingsPage } from './HelpSettingsPage';
 
