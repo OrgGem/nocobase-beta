@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Context, Next } from '@nocobase/actions';
-import type { Repository } from '@nocobase/database';
 import { toSafeErrorMessage } from '../utils/redact';
 import type PluginSftpgoIntegrationServer from '../plugin';
+import { SftpgoEnvironmentPermissionError } from '../utils/environment-permission';
+import { loadAuthorizedConnection } from '../utils/load-authorized-connection';
 
 export function createTestConnectionAction(plugin: PluginSftpgoIntegrationServer) {
   return async (ctx: Context, next: Next) => {
@@ -9,18 +12,15 @@ export function createTestConnectionAction(plugin: PluginSftpgoIntegrationServer
     if (!filterByTk) {
       return ctx.throw(400, 'filterByTk is required');
     }
-    const repo = ctx.db.getRepository('sftpgoConnections') as Repository;
-    const connection = await repo.findOne({ filterByTk });
-    if (!connection) {
-      return ctx.throw(404, 'Connection not found');
-    }
+    const connection = await loadAuthorizedConnection(ctx, filterByTk, true);
     try {
-      const client = await plugin.getClient(connection);
+      const client = await plugin.getClient(connection, ctx);
       await client.healthCheck();
       await client.verifyAuth();
       await connection.update({ lastCheckAt: new Date(), lastError: null }, { hooks: false });
       ctx.body = { success: true };
     } catch (err) {
+      if (err instanceof SftpgoEnvironmentPermissionError) throw err;
       const message = toSafeErrorMessage(err);
       await connection.update({ lastCheckAt: new Date(), lastError: message }, { hooks: false });
       return ctx.throw(502, message);

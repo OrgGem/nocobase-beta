@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import {
   Alert,
+  AutoComplete,
   Button,
   DatePicker,
   Form,
@@ -15,15 +18,17 @@ import {
   message,
 } from 'antd';
 import dayjs from 'dayjs';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
-import { useSftpgoTabVisibility } from '../hooks/useSftpgoTabVisibility';
+
+const PAGE_SIZE = 50;
 
 interface SftpgoConnectionOption {
   id: number;
   name: string;
   title?: string;
+  authMethod?: 'admin' | 'apikey';
 }
 
 interface SftpgoUserOption {
@@ -34,6 +39,7 @@ interface SftpgoApiKey {
   id: string;
   name: string;
   key?: string;
+  keyStorageWarning?: boolean;
   maskedKey?: string | null;
   scope: number;
   admin?: string;
@@ -57,69 +63,145 @@ export const SftpgoApiKeys: React.FC = () => {
   const api = useApp().apiClient;
   const [connections, setConnections] = useState<SftpgoConnectionOption[]>([]);
   const [connectionId, setConnectionId] = useState<number | null>(null);
+  const connectionIdRef = useRef<number | null>(null);
+  const requestIdRef = useRef(0);
+  const pageRef = useRef(0);
+  const usersRequestIdRef = useRef(0);
+  const modalIdRef = useRef(0);
+  const modalConnectionIdRef = useRef<number | null>(null);
+  const savingRef = useRef(false);
   const [apiKeys, setApiKeys] = useState<SftpgoApiKey[]>([]);
+  const [apiKeysConnectionId, setApiKeysConnectionId] = useState<number | null>(null);
+  const [page, setPage] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
   const [userOptions, setUserOptions] = useState<SftpgoUserOption[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersError, setUsersError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<SftpgoApiKey | null>(null);
-  const [revealKey, setRevealKey] = useState<string | null>(null);
+  const [revealKeys, setRevealKeys] = useState<{ key: string; storageWarning: boolean }[]>([]);
+  const revealKey = revealKeys[0];
   const [form] = Form.useForm<ApiKeyFormValues>();
   const scope = Form.useWatch('scope', form);
 
-  useSftpgoTabVisibility();
+  const selectConnection = useCallback((id: number) => {
+    connectionIdRef.current = id;
+    requestIdRef.current += 1;
+    pageRef.current = 0;
+    usersRequestIdRef.current += 1;
+    modalIdRef.current += 1;
+    modalConnectionIdRef.current = null;
+    setConnectionId(id);
+    setApiKeys([]);
+    setApiKeysConnectionId(null);
+    setPage(0);
+    setHasNextPage(false);
+    setUserOptions([]);
+    setUsersLoading(false);
+    setUsersError(false);
+    setLoading(false);
+    setError(null);
+    setModalOpen(false);
+    setEditing(null);
+  }, []);
+
+  const selectPage = useCallback((nextPage: number) => {
+    pageRef.current = nextPage;
+    requestIdRef.current += 1;
+    setPage(nextPage);
+    setApiKeys([]);
+    setApiKeysConnectionId(null);
+    setHasNextPage(false);
+    setLoading(true);
+    setError(null);
+  }, []);
 
   const loadConnections = useCallback(async () => {
     const res = await api.request({
       url: 'sftpgoConnections:list',
-      params: { filter: { enabled: true }, pageSize: 100, sort: ['id'] },
+      params: {
+        filter: { enabled: true },
+        fields: ['id', 'name', 'title', 'authMethod'],
+        paginate: false,
+        sort: ['id'],
+      },
     });
     const list = (res?.data?.data || []) as SftpgoConnectionOption[];
     setConnections(list);
-    setConnectionId((current) => current ?? list[0]?.id ?? null);
-  }, [api]);
+    const firstCompatible = list.find((connection) => connection.authMethod !== 'apikey');
+    if (connectionIdRef.current === null && firstCompatible) selectConnection(firstCompatible.id);
+  }, [api, selectConnection]);
 
   useEffect(() => {
     loadConnections().catch(() => undefined);
   }, [loadConnections]);
 
   const loadApiKeys = useCallback(
-    async (connId: number) => {
+    async (connId: number, pageNumber: number) => {
+      if (connId !== connectionIdRef.current || pageNumber !== pageRef.current) return;
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       setError(null);
       try {
-        const res = await api.request({ url: 'sftpgoApiKeys:list', params: { connectionId: connId, limit: 100 } });
-        setApiKeys((res?.data?.data || []) as SftpgoApiKey[]);
+        const res = await api.request({
+          url: 'sftpgoApiKeys:list',
+          params: { connectionId: connId, limit: PAGE_SIZE + 1, offset: pageNumber * PAGE_SIZE },
+        });
+        if (
+          requestIdRef.current === requestId &&
+          connectionIdRef.current === connId &&
+          pageRef.current === pageNumber
+        ) {
+          const items = (res?.data?.data || []) as SftpgoApiKey[];
+          if (items.length === 0 && pageNumber > 0) {
+            selectPage(pageNumber - 1);
+            return;
+          }
+          setApiKeys(items.slice(0, PAGE_SIZE));
+          setHasNextPage(items.length > PAGE_SIZE);
+          setApiKeysConnectionId(connId);
+        }
       } catch (err) {
-        setError(getErrorMessage(err, t('Failed to load API keys') as string));
-        setApiKeys([]);
+        if (requestIdRef.current === requestId && connectionIdRef.current === connId) {
+          setError(getErrorMessage(err, t('Failed to load API keys') as string));
+          setApiKeys([]);
+          setApiKeysConnectionId(null);
+          setHasNextPage(false);
+        }
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === requestId && connectionIdRef.current === connId) setLoading(false);
       }
     },
-    [api, t],
+    [api, selectPage, t],
   );
 
   useEffect(() => {
-    if (connectionId) loadApiKeys(connectionId).catch(() => undefined);
+    if (connectionId) loadApiKeys(connectionId, page).catch(() => undefined);
     else setApiKeys([]);
-  }, [connectionId, loadApiKeys]);
+  }, [connectionId, loadApiKeys, page]);
 
   const loadUserOptions = useCallback(
     async (connId: number) => {
+      if (connId !== connectionIdRef.current) return;
+      const requestId = ++usersRequestIdRef.current;
       setUsersLoading(true);
       setUsersError(false);
       try {
         const res = await api.request({ url: 'sftpgoUsers:list', params: { connectionId: connId, limit: 500 } });
         const data = res?.data?.data as unknown;
-        setUserOptions(Array.isArray(data) ? (data as SftpgoUserOption[]) : []);
+        if (usersRequestIdRef.current === requestId && connectionIdRef.current === connId) {
+          setUserOptions(Array.isArray(data) ? (data as SftpgoUserOption[]) : []);
+        }
       } catch {
-        setUserOptions([]);
-        setUsersError(true);
+        if (usersRequestIdRef.current === requestId && connectionIdRef.current === connId) {
+          setUserOptions([]);
+          setUsersError(true);
+        }
       } finally {
-        setUsersLoading(false);
+        if (usersRequestIdRef.current === requestId && connectionIdRef.current === connId) setUsersLoading(false);
       }
     },
     [api],
@@ -128,61 +210,94 @@ export const SftpgoApiKeys: React.FC = () => {
   useEffect(() => {
     if (scope === 2 && connectionId) {
       loadUserOptions(connectionId).catch(() => undefined);
-      return;
+      return () => {
+        usersRequestIdRef.current += 1;
+      };
     }
+    usersRequestIdRef.current += 1;
     setUserOptions([]);
+    setUsersLoading(false);
     setUsersError(false);
   }, [connectionId, loadUserOptions, scope]);
 
   const handleSave = async () => {
-    if (!connectionId) return;
-    const values = await form.validateFields();
-    const payload: Record<string, unknown> = {
-      name: values.name,
-      description: values.description,
-      scope: values.scope,
-      admin: values.scope === 1 ? values.admin : undefined,
-      user: values.scope === 2 ? values.user : undefined,
-      expires_at: values.expires_at ?? 0,
-    };
+    const targetConnectionId = modalConnectionIdRef.current;
+    const modalId = modalIdRef.current;
+    if (!targetConnectionId || targetConnectionId !== connectionIdRef.current || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
     try {
+      let values: ApiKeyFormValues;
+      try {
+        values = await form.validateFields();
+      } catch {
+        return;
+      }
+      if (targetConnectionId !== connectionIdRef.current || modalId !== modalIdRef.current) return;
+      const payload: Record<string, unknown> = {
+        name: values.name,
+        description: values.description,
+        scope: values.scope,
+        ...(values.scope === 1 ? { admin: values.admin } : { user: values.user ?? '' }),
+        expires_at: values.expires_at ?? 0,
+      };
+      if (editing && values.scope === editing.scope) {
+        const bindingUnchanged =
+          values.scope === 2
+            ? (values.user ?? '') === (editing.user ?? '')
+            : (values.admin ?? '') === (editing.admin ?? '');
+        if (bindingUnchanged) {
+          delete payload.scope;
+          if (values.scope === 2) delete payload.user;
+          else delete payload.admin;
+        }
+      }
       if (editing) {
         await api.request({
           url: 'sftpgoApiKeys:update',
           method: 'post',
-          params: { connectionId, filterByTk: editing.id },
+          params: { connectionId: targetConnectionId, filterByTk: editing.id },
           data: payload,
         });
         message.success(t('API key updated'));
-        setModalOpen(false);
-        setEditing(null);
-        form.resetFields();
       } else {
         const res = await api.request({
           url: 'sftpgoApiKeys:create',
           method: 'post',
-          params: { connectionId },
+          params: { connectionId: targetConnectionId },
           data: payload,
         });
         const created = res?.data?.data as SftpgoApiKey | undefined;
+        message.success(t('API key added'));
+        if (created?.key) {
+          const key = created.key;
+          setRevealKeys((current) => [...current, { key, storageWarning: !!created.keyStorageWarning }]);
+        }
+      }
+      if (modalId === modalIdRef.current) {
         setModalOpen(false);
         setEditing(null);
         form.resetFields();
-        message.success(t('API key added'));
-        if (created?.key) setRevealKey(created.key);
       }
-      await loadApiKeys(connectionId);
+      await loadApiKeys(targetConnectionId, pageRef.current);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to save') as string));
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!connectionId) return;
+  const handleDelete = async (id: string, targetConnectionId: number | null) => {
+    if (!targetConnectionId || targetConnectionId !== connectionIdRef.current) return;
     try {
-      await api.request({ url: 'sftpgoApiKeys:destroy', method: 'post', params: { connectionId, filterByTk: id } });
+      await api.request({
+        url: 'sftpgoApiKeys:destroy',
+        method: 'post',
+        params: { connectionId: targetConnectionId, filterByTk: id },
+      });
       message.success(t('Deleted'));
-      await loadApiKeys(connectionId);
+      await loadApiKeys(targetConnectionId, pageRef.current);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to delete') as string));
     }
@@ -230,6 +345,9 @@ export const SftpgoApiKeys: React.FC = () => {
           <Button
             size="small"
             onClick={() => {
+              if (!apiKeysConnectionId || apiKeysConnectionId !== connectionIdRef.current) return;
+              modalIdRef.current += 1;
+              modalConnectionIdRef.current = apiKeysConnectionId;
               setEditing(record);
               form.setFieldsValue({
                 name: record.name,
@@ -244,7 +362,7 @@ export const SftpgoApiKeys: React.FC = () => {
           >
             {t('Edit')}
           </Button>
-          <Popconfirm title={t('Delete this API key?')} onConfirm={() => handleDelete(record.id)}>
+          <Popconfirm title={t('Delete this API key?')} onConfirm={() => handleDelete(record.id, apiKeysConnectionId)}>
             <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('Delete') as string} />
           </Popconfirm>
         </Space>
@@ -259,19 +377,32 @@ export const SftpgoApiKeys: React.FC = () => {
           style={{ width: 240 }}
           placeholder={t('Select a connection')}
           value={connectionId ?? undefined}
-          onChange={(value) => setConnectionId(value)}
-          options={connections.map((c) => ({ value: c.id, label: c.title || c.name }))}
+          onChange={selectConnection}
+          options={connections.map((c) => ({
+            value: c.id,
+            disabled: c.authMethod === 'apikey',
+            title:
+              c.authMethod === 'apikey'
+                ? (t('API key management requires an admin-authenticated connection') as string)
+                : c.title || c.name,
+            label:
+              c.authMethod === 'apikey'
+                ? `${c.title || c.name} — ${t('API key management requires an admin-authenticated connection')}`
+                : c.title || c.name,
+          }))}
           notFoundContent={t('No connection available')}
         />
         {connectionId && (
           <>
-            <Button icon={<ReloadOutlined />} onClick={() => loadApiKeys(connectionId)}>
+            <Button icon={<ReloadOutlined />} onClick={() => loadApiKeys(connectionId, pageRef.current)}>
               {t('Refresh')}
             </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => {
+                modalIdRef.current += 1;
+                modalConnectionIdRef.current = connectionId;
                 setEditing(null);
                 form.resetFields();
                 setModalOpen(true);
@@ -293,15 +424,39 @@ export const SftpgoApiKeys: React.FC = () => {
         />
       )}
 
+      {!connectionId && connections.length > 0 && (
+        <Alert
+          type="info"
+          showIcon
+          message={t('API key management requires an admin-authenticated connection')}
+          style={{ marginBottom: 16 }}
+        />
+      )}
+
       {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} showIcon />}
 
       <Table dataSource={apiKeys} columns={columns} rowKey="id" size="small" loading={loading} pagination={false} />
+
+      {connectionId && (
+        <Space style={{ marginTop: 16 }}>
+          <Button disabled={loading || page === 0} onClick={() => selectPage(page - 1)}>
+            {t('Previous')}
+          </Button>
+          <span aria-live="polite">{t('Page {{number}}', { number: page + 1 })}</span>
+          <Button disabled={loading || !hasNextPage} onClick={() => selectPage(page + 1)}>
+            {t('Next')}
+          </Button>
+        </Space>
+      )}
 
       <Modal
         title={editing ? t('Edit API Key') : t('Add API Key')}
         open={modalOpen}
         onOk={handleSave}
+        confirmLoading={saving}
         onCancel={() => {
+          modalIdRef.current += 1;
+          modalConnectionIdRef.current = null;
           setModalOpen(false);
           setEditing(null);
         }}
@@ -327,14 +482,18 @@ export const SftpgoApiKeys: React.FC = () => {
               name="user"
               label={t('User')}
               extra={t('Bind this key to a specific SFTPGo user')}
-              rules={[{ required: true }]}
+              rules={[{ required: !editing || editing.scope !== 2 || !!editing.user }]}
             >
-              <Select
-                showSearch
-                optionFilterProp="label"
-                loading={usersLoading}
-                placeholder={t('Select a user')}
-                notFoundContent={t(usersError ? 'Failed to load users' : 'No users available')}
+              <AutoComplete
+                filterOption={(input, option) =>
+                  String(option?.value || '')
+                    .toLowerCase()
+                    .includes(input.toLowerCase())
+                }
+                placeholder={t('Select or enter a username') as string}
+                notFoundContent={t(
+                  usersLoading ? 'Loading' : usersError ? 'Failed to load users' : 'No users available',
+                )}
                 options={userOptions.map((item) => ({ value: item.username, label: item.username }))}
               />
             </Form.Item>
@@ -358,18 +517,26 @@ export const SftpgoApiKeys: React.FC = () => {
       <Modal
         title={t('API Key Created')}
         open={!!revealKey}
-        onCancel={() => setRevealKey(null)}
+        onCancel={() => setRevealKeys((current) => current.slice(1))}
         width={520}
         footer={[
-          <Button key="close" type="primary" onClick={() => setRevealKey(null)}>
+          <Button key="close" type="primary" onClick={() => setRevealKeys((current) => current.slice(1))}>
             {t('Close')}
           </Button>,
         ]}
       >
         <Space direction="vertical" style={{ width: '100%' }}>
-          <Alert type="warning" showIcon message={t('Copy this key now. SFTPGo will not show it again.')} />
+          <Alert
+            type="warning"
+            showIcon
+            message={t(
+              revealKey?.storageWarning
+                ? 'API key created, but it could not be stored locally. Copy it now.'
+                : 'Copy this key now. SFTPGo will not show it again.',
+            )}
+          />
           <Typography.Text code copyable style={{ wordBreak: 'break-all' }}>
-            {revealKey}
+            {revealKey?.key}
           </Typography.Text>
         </Space>
       </Modal>

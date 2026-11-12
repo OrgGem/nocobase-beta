@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { CheckCircleOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tooltip, message } from 'antd';
@@ -5,7 +7,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { EnvInput, type EnvVariableOption } from './EnvInput';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
-import { notifySftpgoConnectionsChanged, useSftpgoTabVisibility } from '../hooks/useSftpgoTabVisibility';
 
 const MASK = '••••••••';
 
@@ -46,8 +47,6 @@ export const SftpgoConnections: React.FC = () => {
   const [testingId, setTestingId] = useState<number | null>(null);
   const [form] = Form.useForm<ConnectionFormValues>();
   const authMethod = Form.useWatch('authMethod', form);
-
-  useSftpgoTabVisibility();
 
   const loadEnvVariables = useCallback(async () => {
     try {
@@ -103,7 +102,6 @@ export const SftpgoConnections: React.FC = () => {
       setEditing(null);
       form.resetFields();
       await loadConnections();
-      notifySftpgoConnectionsChanged(app);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to save') as string));
     }
@@ -114,7 +112,6 @@ export const SftpgoConnections: React.FC = () => {
       await api.request({ url: 'sftpgoConnections:destroy', method: 'post', params: { filterByTk: id } });
       message.success(t('Deleted'));
       await loadConnections();
-      notifySftpgoConnectionsChanged(app);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to delete') as string));
     }
@@ -134,7 +131,6 @@ export const SftpgoConnections: React.FC = () => {
     } finally {
       setTestingId(null);
       await loadConnections();
-      notifySftpgoConnectionsChanged(app);
     }
   };
 
@@ -147,7 +143,6 @@ export const SftpgoConnections: React.FC = () => {
         data: { enabled: checked },
       });
       await loadConnections();
-      notifySftpgoConnectionsChanged(app);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to save') as string));
     }

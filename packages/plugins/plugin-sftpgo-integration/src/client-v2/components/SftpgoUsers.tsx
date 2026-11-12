@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { DeleteOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import {
@@ -14,10 +16,11 @@ import {
   Table,
   message,
 } from 'antd';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../locale';
 import { getErrorMessage } from '../utils/errors';
-import { useSftpgoTabVisibility } from '../hooks/useSftpgoTabVisibility';
+
+const PAGE_SIZE = 50;
 
 interface SftpgoConnectionOption {
   id: number;
@@ -72,14 +75,48 @@ export const SftpgoUsers: React.FC = () => {
   const api = useApp().apiClient;
   const [connections, setConnections] = useState<SftpgoConnectionOption[]>([]);
   const [connectionId, setConnectionId] = useState<number | null>(null);
+  const connectionIdRef = useRef<number | null>(null);
+  const requestIdRef = useRef(0);
+  const pageRef = useRef(0);
+  const modalIdRef = useRef(0);
+  const modalConnectionIdRef = useRef<number | null>(null);
   const [users, setUsers] = useState<SftpgoUser[]>([]);
+  const [usersConnectionId, setUsersConnectionId] = useState<number | null>(null);
+  const [page, setPage] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<SftpgoUser | null>(null);
   const [form] = Form.useForm<UserFormValues>();
 
-  useSftpgoTabVisibility();
+  const selectConnection = useCallback((id: number) => {
+    connectionIdRef.current = id;
+    requestIdRef.current += 1;
+    pageRef.current = 0;
+    modalIdRef.current += 1;
+    modalConnectionIdRef.current = null;
+    setConnectionId(id);
+    setUsers([]);
+    setUsersConnectionId(null);
+    setPage(0);
+    setHasNextPage(false);
+    setLoading(false);
+    setError(null);
+    setModalOpen(false);
+    setEditing(null);
+  }, []);
+
+  const selectPage = useCallback((nextPage: number) => {
+    pageRef.current = nextPage;
+    requestIdRef.current += 1;
+    setPage(nextPage);
+    setUsers([]);
+    setUsersConnectionId(null);
+    setHasNextPage(false);
+    setLoading(true);
+    setError(null);
+  }, []);
 
   const loadConnections = useCallback(async () => {
     const res = await api.request({
@@ -88,71 +125,115 @@ export const SftpgoUsers: React.FC = () => {
     });
     const list = (res?.data?.data || []) as SftpgoConnectionOption[];
     setConnections(list);
-    setConnectionId((current) => current ?? list[0]?.id ?? null);
-  }, [api]);
+    if (connectionIdRef.current === null && list[0]) selectConnection(list[0].id);
+  }, [api, selectConnection]);
 
   useEffect(() => {
     loadConnections().catch(() => undefined);
   }, [loadConnections]);
 
   const loadUsers = useCallback(
-    async (connId: number) => {
+    async (connId: number, pageNumber: number) => {
+      if (connId !== connectionIdRef.current || pageNumber !== pageRef.current) return;
+      const requestId = ++requestIdRef.current;
       setLoading(true);
       setError(null);
       try {
-        const res = await api.request({ url: 'sftpgoUsers:list', params: { connectionId: connId, limit: 100 } });
-        setUsers((res?.data?.data || []) as SftpgoUser[]);
+        const res = await api.request({
+          url: 'sftpgoUsers:list',
+          params: { connectionId: connId, limit: PAGE_SIZE + 1, offset: pageNumber * PAGE_SIZE },
+        });
+        if (
+          requestIdRef.current === requestId &&
+          connectionIdRef.current === connId &&
+          pageRef.current === pageNumber
+        ) {
+          const items = (res?.data?.data || []) as SftpgoUser[];
+          if (items.length === 0 && pageNumber > 0) {
+            selectPage(pageNumber - 1);
+            return;
+          }
+          setUsers(items.slice(0, PAGE_SIZE));
+          setHasNextPage(items.length > PAGE_SIZE);
+          setUsersConnectionId(connId);
+        }
       } catch (err) {
-        setError(getErrorMessage(err, t('Failed to load users') as string));
-        setUsers([]);
+        if (requestIdRef.current === requestId && connectionIdRef.current === connId) {
+          setError(getErrorMessage(err, t('Failed to load users') as string));
+          setUsers([]);
+          setUsersConnectionId(null);
+          setHasNextPage(false);
+        }
       } finally {
-        setLoading(false);
+        if (requestIdRef.current === requestId && connectionIdRef.current === connId) setLoading(false);
       }
     },
-    [api, t],
+    [api, selectPage, t],
   );
 
   useEffect(() => {
-    if (connectionId) loadUsers(connectionId).catch(() => undefined);
+    if (connectionId) loadUsers(connectionId, page).catch(() => undefined);
     else setUsers([]);
-  }, [connectionId, loadUsers]);
+  }, [connectionId, loadUsers, page]);
 
   const handleSave = async () => {
-    if (!connectionId) return;
+    const targetConnectionId = modalConnectionIdRef.current;
+    const modalId = modalIdRef.current;
+    if (!targetConnectionId || targetConnectionId !== connectionIdRef.current) return;
     const values = await form.validateFields();
-    const payload: Record<string, unknown> = {
-      ...values,
-      permissions: { '/': values.permissions?.length ? values.permissions : ['*'] },
-    };
+    if (targetConnectionId !== connectionIdRef.current || modalId !== modalIdRef.current) return;
+    const rootPermissions = values.permissions ?? ['*'];
+    const previousRootPermissions = editing?.permissions?.['/'] ?? ['*'];
+    const payload: Record<string, unknown> = { ...values };
+    if (
+      !editing ||
+      rootPermissions.length !== previousRootPermissions.length ||
+      rootPermissions.some((permission, index) => permission !== previousRootPermissions[index])
+    ) {
+      payload.permissions = { ...editing?.permissions, '/': rootPermissions };
+    } else {
+      delete payload.permissions;
+    }
     if (!values.password) delete payload.password;
     try {
       if (editing) {
         await api.request({
           url: 'sftpgoUsers:update',
           method: 'post',
-          params: { connectionId, filterByTk: editing.username },
+          params: { connectionId: targetConnectionId, filterByTk: editing.username },
           data: payload,
         });
         message.success(t('User updated'));
       } else {
-        await api.request({ url: 'sftpgoUsers:create', method: 'post', params: { connectionId }, data: payload });
+        await api.request({
+          url: 'sftpgoUsers:create',
+          method: 'post',
+          params: { connectionId: targetConnectionId },
+          data: payload,
+        });
         message.success(t('User added'));
       }
-      setModalOpen(false);
-      setEditing(null);
-      form.resetFields();
-      await loadUsers(connectionId);
+      if (modalId === modalIdRef.current) {
+        setModalOpen(false);
+        setEditing(null);
+        form.resetFields();
+      }
+      await loadUsers(targetConnectionId, pageRef.current);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to save') as string));
     }
   };
 
-  const handleDelete = async (username: string) => {
-    if (!connectionId) return;
+  const handleDelete = async (username: string, targetConnectionId: number | null) => {
+    if (!targetConnectionId || targetConnectionId !== connectionIdRef.current) return;
     try {
-      await api.request({ url: 'sftpgoUsers:destroy', method: 'post', params: { connectionId, filterByTk: username } });
+      await api.request({
+        url: 'sftpgoUsers:destroy',
+        method: 'post',
+        params: { connectionId: targetConnectionId, filterByTk: username },
+      });
       message.success(t('Deleted'));
-      await loadUsers(connectionId);
+      await loadUsers(targetConnectionId, pageRef.current);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to delete') as string));
     }
@@ -178,14 +259,17 @@ export const SftpgoUsers: React.FC = () => {
           <Button
             size="small"
             onClick={() => {
+              if (!usersConnectionId || usersConnectionId !== connectionIdRef.current) return;
+              modalIdRef.current += 1;
+              modalConnectionIdRef.current = usersConnectionId;
               setEditing(record);
-              form.setFieldsValue({ ...record, password: '', permissions: record.permissions?.['/'] || ['*'] });
+              form.setFieldsValue({ ...record, password: '', permissions: record.permissions?.['/'] ?? ['*'] });
               setModalOpen(true);
             }}
           >
             {t('Edit')}
           </Button>
-          <Popconfirm title={t('Delete this user?')} onConfirm={() => handleDelete(record.username)}>
+          <Popconfirm title={t('Delete this user?')} onConfirm={() => handleDelete(record.username, usersConnectionId)}>
             <Button size="small" danger icon={<DeleteOutlined />} aria-label={t('Delete') as string} />
           </Popconfirm>
         </Space>
@@ -200,19 +284,21 @@ export const SftpgoUsers: React.FC = () => {
           style={{ width: 240 }}
           placeholder={t('Select a connection')}
           value={connectionId ?? undefined}
-          onChange={(value) => setConnectionId(value)}
+          onChange={selectConnection}
           options={connections.map((c) => ({ value: c.id, label: c.title || c.name }))}
           notFoundContent={t('No connection available')}
         />
         {connectionId && (
           <>
-            <Button icon={<ReloadOutlined />} onClick={() => loadUsers(connectionId)}>
+            <Button icon={<ReloadOutlined />} onClick={() => loadUsers(connectionId, pageRef.current)}>
               {t('Refresh')}
             </Button>
             <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => {
+                modalIdRef.current += 1;
+                modalConnectionIdRef.current = connectionId;
                 setEditing(null);
                 form.resetFields();
                 setModalOpen(true);
@@ -238,11 +324,25 @@ export const SftpgoUsers: React.FC = () => {
 
       <Table dataSource={users} columns={columns} rowKey="username" size="small" loading={loading} pagination={false} />
 
+      {connectionId && (
+        <Space style={{ marginTop: 16 }}>
+          <Button disabled={loading || page === 0} onClick={() => selectPage(page - 1)}>
+            {t('Previous')}
+          </Button>
+          <span aria-live="polite">{t('Page {{number}}', { number: page + 1 })}</span>
+          <Button disabled={loading || !hasNextPage} onClick={() => selectPage(page + 1)}>
+            {t('Next')}
+          </Button>
+        </Space>
+      )}
+
       <Modal
         title={editing ? t('Edit User') : t('Add User')}
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => {
+          modalIdRef.current += 1;
+          modalConnectionIdRef.current = null;
           setModalOpen(false);
           setEditing(null);
         }}

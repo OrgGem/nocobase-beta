@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { serverRequest } from '@nocobase/utils';
 import { toSafeErrorMessage } from './utils/redact';
 
@@ -30,12 +32,24 @@ export class SftpgoError extends Error {
   }
 }
 
+export class SftpgoInvalidApiKeyScopeError extends Error {
+  constructor() {
+    super('Invalid API key scope');
+    this.name = 'SftpgoInvalidApiKeyScopeError';
+  }
+}
+
+function normalizeApiKeyBindings(data: Record<string, unknown>): Record<string, unknown> {
+  if (data.scope !== 1 && data.scope !== 2) throw new SftpgoInvalidApiKeyScopeError();
+  return { ...data, ...(data.scope === 1 ? { user: '' } : { admin: '' }) };
+}
+
 export function assertValidAddress(address: string): void {
   let parsed: URL;
   try {
     parsed = new URL(address);
   } catch {
-    throw new SftpgoError(`Invalid SFTPGo base URL: "${address}"`);
+    throw new SftpgoError('Invalid SFTPGo base URL');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new SftpgoError('SFTPGo base URL must use http or https');
@@ -86,6 +100,7 @@ export class SftpgoClient {
         url: `${this.baseUrl}${API_BASE}/token`,
         headers: { Authorization: `Basic ${basic}` },
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
       const token = res.data?.access_token;
       if (!token) throw new SftpgoError('Token endpoint returned no access token');
@@ -109,6 +124,7 @@ export class SftpgoClient {
         url: `${this.baseUrl}${API_BASE}/status`,
         headers,
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
       return res.data || {};
     } catch (err) {
@@ -125,6 +141,7 @@ export class SftpgoClient {
         headers,
         params: { limit: 1 },
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
     } catch (err) {
       throw new SftpgoError(`Authentication verification failed: ${toSafeErrorMessage(err)}`);
@@ -140,6 +157,7 @@ export class SftpgoClient {
         headers,
         params,
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
       return res.data || [];
     } catch (err) {
@@ -155,6 +173,7 @@ export class SftpgoClient {
         url: `${this.baseUrl}${this.resourceItemPath(type, key)}`,
         headers,
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
       return res.data;
     } catch (err) {
@@ -163,15 +182,22 @@ export class SftpgoClient {
   }
 
   async createResource(type: SftpgoResourceType, data: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const payload = type === 'apikeys' ? normalizeApiKeyBindings(data) : data;
     try {
       const headers = await this.authHeaders();
       const res = await serverRequest<Record<string, unknown>>({
         method: 'POST',
         url: `${this.baseUrl}${this.resourcePath(type)}`,
         headers,
-        data,
+        data: payload,
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
+      if (type === 'apikeys') {
+        const header = res.headers?.['x-object-id'];
+        const id = typeof header === 'string' && header.trim() ? header.trim() : undefined;
+        return { ...res.data, id };
+      }
       return res.data;
     } catch (err) {
       throw new SftpgoError(`Failed to create ${type}: ${toSafeErrorMessage(err)}`);
@@ -191,7 +217,14 @@ export class SftpgoClient {
     patch: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const current = await this.getResource(type, key);
-    const merged: Record<string, unknown> = { ...current, ...patch };
+    const effectivePatch = { ...patch };
+    if (type === 'apikeys') {
+      for (const field of ['scope', 'admin', 'user']) {
+        if (effectivePatch[field] === undefined) delete effectivePatch[field];
+      }
+    }
+    let merged: Record<string, unknown> = { ...current, ...effectivePatch };
+    if (type === 'apikeys') merged = normalizeApiKeyBindings(merged);
     if (type === 'users' && !Object.prototype.hasOwnProperty.call(patch, 'password')) {
       delete merged.password;
     }
@@ -203,6 +236,7 @@ export class SftpgoClient {
         headers,
         data: merged,
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
       return res.data;
     } catch (err) {
@@ -218,6 +252,7 @@ export class SftpgoClient {
         url: `${this.baseUrl}${this.resourceItemPath(type, key)}`,
         headers,
         timeout: REQUEST_TIMEOUT,
+        maxRedirects: 0,
       });
     } catch (err) {
       throw new SftpgoError(`Failed to delete ${type} "${key}": ${toSafeErrorMessage(err)}`);

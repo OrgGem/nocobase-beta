@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Application, Plugin } from '@nocobase/client-v2';
 
 const SETTINGS_KEY = 'sftpgo-integration';
@@ -27,7 +29,6 @@ export class PluginSftpgoIntegrationClient extends Plugin<Record<string, never>,
       title: this.t('Users'),
       aclSnippet: SETTINGS_ACL,
       sort: 10,
-      hidden: true,
       componentLoader: () => import('./components/SftpgoUsers'),
     });
 
@@ -37,7 +38,6 @@ export class PluginSftpgoIntegrationClient extends Plugin<Record<string, never>,
       title: this.t('Folders'),
       aclSnippet: SETTINGS_ACL,
       sort: 20,
-      hidden: true,
       componentLoader: () => import('./components/SftpgoFolders'),
     });
 
@@ -47,7 +47,6 @@ export class PluginSftpgoIntegrationClient extends Plugin<Record<string, never>,
       title: this.t('API Keys'),
       aclSnippet: SETTINGS_ACL,
       sort: 30,
-      hidden: true,
       componentLoader: () => import('./components/SftpgoApiKeys'),
     });
   }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 const URL_CREDENTIALS = /(https?:\/\/)([^/:@\s]+):([^@\s]+)@/g;
 // SFTPGo JWT access tokens returned by GET /api/v2/token
 const JWT_TOKEN = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g;
@@ -19,6 +21,9 @@ export function toSafeErrorMessage(err: unknown): string {
   };
   const parts: string[] = [];
   if (typeof e.response?.status === 'number') parts.push(`HTTP ${e.response.status}`);
+  if (typeof e.response?.status === 'number' && e.response.status >= 300 && e.response.status < 400) {
+    return parts[0];
+  }
   const data = e.response?.data;
   const sftpgoMessage = data?.message ?? data?.error;
   if (typeof sftpgoMessage === 'string' && sftpgoMessage) {
