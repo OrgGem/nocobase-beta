@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin, lazy } from '@nocobase/client';
-import WorkflowPlugin from "@nocobase/plugin-workflow";
+import type WorkflowPlugin from '@nocobase/plugin-workflow/client';
 import { NAMESPACE } from './locale';
 import CarboneRenderInstruction from './workflow/CarboneRenderInstruction';
 
@@ -7,7 +9,6 @@ const { SettingsPage } = lazy(() => import('./components/SettingsPage'), 'Settin
 const { ConnectionSettings } = lazy(() => import('./components/ConnectionSettings'), 'ConnectionSettings');
 
 export class PluginCarboneTemplateManagerClient extends Plugin {
-  declare app: any;
   async load() {
     const locale = this.app.i18n.language || 'en-US';
     try {
@@ -39,10 +40,9 @@ export class PluginCarboneTemplateManagerClient extends Plugin {
 
     // P6 — register the workflow instruction. Skipped silently when the
     // workflow plugin isn't enabled.
-    const workflow = this.app.pm.get('workflow') as any;
+    const workflow = this.app.pm.get<WorkflowPlugin>('workflow');
     workflow?.registerInstruction('carbone-render', CarboneRenderInstruction);
   }
 }
 
 export default PluginCarboneTemplateManagerClient;
-

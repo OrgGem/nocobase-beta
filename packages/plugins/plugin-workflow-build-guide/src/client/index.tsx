@@ -8,7 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/client';
-import { registerInstructions, type GuideBuildWorkflowClient } from '../client-v2/instructions';
+import { registerInstructions, type GuideBuildWorkflowClient } from './instructions';
 
 export default class PluginWorkflowBuildGuideClient extends Plugin {
   async load() {

@@ -15,7 +15,9 @@ import {
 } from '../instructions';
 
 vi.mock('@nocobase/client-v2', () => ({ useApp: () => ({ i18n: { t: (key: string) => key } }) }));
-vi.mock('@nocobase/plugin-workflow/client-v2', () => ({ Instruction: class Instruction {} }));
+const runtime = vi.hoisted(() => ({ Instruction: class V2Instruction {} }));
+
+vi.mock('@nocobase/plugin-workflow/client-v2', () => ({ Instruction: runtime.Instruction }));
 vi.mock('@ant-design/icons', () => ({
   FileTextOutlined: () => null,
   RobotOutlined: () => null,
@@ -25,19 +27,23 @@ vi.mock('@ant-design/icons', () => ({
 describe('Workflow Build Guide instruction registration', () => {
   it('registers the three managed instruction types with restricted graph editing', () => {
     const groups = new Map<string, { key: string; label: string }>();
-    const instructions = new Map<string, unknown>();
+    const instructions = new Map<string, object>();
     registerInstructions({
       registerInstructionGroup: (key, value) => groups.set(key, value),
-      registerInstruction: (type, instruction) => instructions.set(type, instruction),
+      registerInstruction: (type, instruction) => {
+        const instance = typeof instruction === 'function' ? new instruction() : instruction;
+        if (!(instance instanceof runtime.Instruction)) throw new TypeError('invalid instruction type to register');
+        instructions.set(type, instance);
+      },
     });
 
     expect(groups.get('workflow-build-guide')).toEqual({
       key: 'workflow-build-guide',
       label: expect.stringContaining('Build Guide'),
     });
-    expect(instructions.get('guide-build-prepare')).toBe(GuideBuildPrepareInstruction);
-    expect(instructions.get('guide-build-llm')).toBe(GuideBuildLLMInstruction);
-    expect(instructions.get('guide-build-publish')).toBe(GuideBuildPublishInstruction);
+    expect(instructions.get('guide-build-prepare')).toBeInstanceOf(runtime.Instruction);
+    expect(instructions.get('guide-build-llm')).toBeInstanceOf(runtime.Instruction);
+    expect(instructions.get('guide-build-publish')).toBeInstanceOf(runtime.Instruction);
 
     const llm = new GuideBuildLLMInstruction();
     expect(llm.createDefaultConfig()).toEqual({ mode: 'plan' });

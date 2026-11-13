@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import React from 'react';
 import { FilePdfOutlined } from '@ant-design/icons';
-import Instruction from "@nocobase/plugin-workflow";
+import { Instruction } from '@nocobase/plugin-workflow/client';
 import { Variable } from '@nocobase/client';
 import { NAMESPACE } from '../locale';
 import { SUPPORTED_OUTPUT_FORMATS } from '../../shared/constants';
@@ -98,7 +100,7 @@ export default class CarboneRenderInstruction extends Instruction {
    * Expose the job result keys as downstream variables. Each entry shows up in
    * the variable picker as `<NodeTitle> > <Field>`.
    */
-  useVariables({ key, title }: any) {
+  useVariables({ key, title }: { key: string; title: string }) {
     const fields = [
       { key: 'attachmentId', label: `{{t("Attachment id", { ns: "${NAMESPACE}" })}}` },
       { key: 'url', label: `{{t("Attachment URL", { ns: "${NAMESPACE}" })}}` },
@@ -115,4 +117,3 @@ export default class CarboneRenderInstruction extends Instruction {
     };
   }
 }
-

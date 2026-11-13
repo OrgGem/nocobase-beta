@@ -4,7 +4,7 @@
   "displayName.zh-CN": "指南构建工作流",
   "displayName.vi-VN": "Luồng tạo hướng dẫn",
   "description": "Managed native Workflow integration for Build Guide generation.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": ["NocoBase", "Workflow", "AI", "Build Guide"],

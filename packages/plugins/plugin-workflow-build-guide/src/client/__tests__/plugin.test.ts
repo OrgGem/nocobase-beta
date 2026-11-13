@@ -9,14 +9,47 @@
 
 import PluginWorkflowBuildGuideClient from '../index';
 
-const mocks = vi.hoisted(() => ({ registerInstructions: vi.fn() }));
+const runtimes = vi.hoisted(() => {
+  class V1Instruction {}
+  class V2Instruction {}
+  return { V1Instruction, V2Instruction };
+});
 
 vi.mock('@nocobase/client', () => ({ Plugin: class Plugin {} }));
-vi.mock('../../client-v2/instructions', () => ({ registerInstructions: mocks.registerInstructions }));
+vi.mock('@nocobase/client-v2', () => ({
+  useApp: () => ({ i18n: { t: (key: string) => key } }),
+}));
+vi.mock('@nocobase/plugin-workflow/client', () => ({ Instruction: runtimes.V1Instruction }));
+vi.mock('@nocobase/plugin-workflow/client-v2', () => ({ Instruction: runtimes.V2Instruction }));
+vi.mock('@ant-design/icons', () => ({
+  FileTextOutlined: () => null,
+  RobotOutlined: () => null,
+  UploadOutlined: () => null,
+}));
+vi.mock('antd', () => ({
+  Form: { Item: () => null },
+  Select: () => null,
+  Typography: { Paragraph: () => null },
+}));
+
+function strictWorkflow(instructionBase: new (...args: never[]) => object) {
+  const entries = new Map<string, object>();
+  const groups = new Map<string, { key: string; label: string }>();
+  return {
+    entries,
+    groups,
+    registerInstructionGroup: (key: string, group: { key: string; label: string }) => groups.set(key, group),
+    registerInstruction: (type: string, instruction: object | (new (...args: never[]) => object)) => {
+      const instance = typeof instruction === 'function' ? new instruction() : instruction;
+      if (!(instance instanceof instructionBase)) throw new TypeError('invalid instruction type to register');
+      entries.set(type, instance);
+    },
+  };
+}
 
 describe('legacy Workflow Build Guide client', () => {
-  it('registers the managed guide instructions with the legacy workflow plugin', async () => {
-    const workflow = { registerInstruction: vi.fn(), registerInstructionGroup: vi.fn() };
+  it('registers managed instructions with the legacy runtime base class', async () => {
+    const workflow = strictWorkflow(runtimes.V1Instruction);
     const pluginContext = { app: { pm: { get: vi.fn(() => workflow) } } };
 
     await PluginWorkflowBuildGuideClient.prototype.load.call(
@@ -24,6 +57,16 @@ describe('legacy Workflow Build Guide client', () => {
     );
 
     expect(pluginContext.app.pm.get).toHaveBeenCalledWith('workflow');
-    expect(mocks.registerInstructions).toHaveBeenCalledWith(workflow);
+    expect([...workflow.entries.keys()]).toEqual(['guide-build-prepare', 'guide-build-llm', 'guide-build-publish']);
+    expect([...workflow.entries.values()].every((instruction) => instruction instanceof runtimes.V1Instruction)).toBe(
+      true,
+    );
+    expect(workflow.groups.get('workflow-build-guide')).toEqual({
+      key: 'workflow-build-guide',
+      label: expect.stringContaining('Build Guide'),
+    });
+    expect(
+      (workflow.entries.get('guide-build-llm') as { createDefaultConfig: () => unknown }).createDefaultConfig(),
+    ).toEqual({ mode: 'plan' });
   });
 });

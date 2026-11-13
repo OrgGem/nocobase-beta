@@ -9,7 +9,7 @@
 
 import React from 'react';
 import { Plugin } from '@nocobase/client';
-import { registerInstructions, type ReviewWorkflowClient } from '../client-v2/instructions';
+import { registerInstructions, type ReviewWorkflowClient } from './instructions';
 
 const Settings = React.lazy(() => import('../client-v2/Settings'));
 
