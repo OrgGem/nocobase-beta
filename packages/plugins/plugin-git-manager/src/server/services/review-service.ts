@@ -302,7 +302,7 @@ export class GitReviewService {
     return legacy;
   }
 
-  async cutoverStatus(): Promise<{
+  async cutoverStatus(canViewRepository?: (repositoryId: unknown) => Promise<boolean>): Promise<{
     state: string;
     legacyPending: number;
     legacyRunning: number;
@@ -334,8 +334,15 @@ export class GitReviewService {
         record = await model.findOne({ where: { key: 'global' } });
       }
     }
-    const legacy = await this.legacyRows();
-    const failed = await db.getRepository('gitCodeReviews').find({ filter: { status: 'failed' }, sort: ['id'] });
+    const visibleRows = async <T extends Getter>(rows: T[]): Promise<T[]> => {
+      if (!canViewRepository) return rows;
+      const allowed = await Promise.all(rows.map((row) => canViewRepository(value<unknown>(row, 'repositoryId'))));
+      return rows.filter((_row, index) => allowed[index]);
+    };
+    const legacy = await visibleRows(await this.legacyRows());
+    const failed = await visibleRows(
+      await db.getRepository('gitCodeReviews').find({ filter: { status: 'failed' }, sort: ['id'] }),
+    );
     const uncertain: Getter[] = [];
     for (const review of failed) {
       const metadata = value<Record<string, unknown> | null>(review, 'metadata');
@@ -343,9 +350,11 @@ export class GitReviewService {
       if (!(await db.getRepository('gitReviewInbox').findOne({ filter: { reviewId: value<Id>(review, 'id') } })))
         uncertain.push(review);
     }
-    const activeRows = await db
-      .getRepository('gitReviewInbox')
-      .find({ filter: { state: { $in: ['dispatched', 'running', 'quarantined'] } }, sort: ['id'] });
+    const activeRows = await visibleRows(
+      await db
+        .getRepository('gitReviewInbox')
+        .find({ filter: { state: { $in: ['dispatched', 'running', 'quarantined'] } }, sort: ['id'] }),
+    );
     const quarantined: Array<{ requestId: Id; executionId: Id | null; reviewId: Id; reason: string }> = [];
     const orphaned: Array<{ inboxId: Id; reviewId: Id }> = [];
     const postUnknownReviews: Array<{ reviewId: Id; postStatus: string; hasClaim: boolean; attemptId: string | null }> =
@@ -354,23 +363,35 @@ export class GitReviewService {
     const legacyProjects = await db.getRepository('gitReviewProjects').find({
       filter: { legacyPostReviewId: { $ne: null } },
       sort: ['id'],
-      limit: 100,
+      ...(canViewRepository ? {} : { limit: 100 }),
     });
     for (const project of legacyProjects) {
       const reviewId = value<Id>(project, 'legacyPostReviewId');
       const heldReview = await db.getRepository('gitCodeReviews').findOne({ filterByTk: reviewId });
+      if (canViewRepository && !(await canViewRepository(heldReview ? value(heldReview, 'repositoryId') : null)))
+        continue;
+      if (legacyPublicationHolds.length >= 100) break;
       legacyPublicationHolds.push({
         reviewId,
         repositoryId: heldReview ? value<Id>(heldReview, 'repositoryId') : null,
         attemptId: heldReview ? value<string | null>(heldReview, 'legacyPostClaim') ?? null : null,
       });
     }
-    const queuedBlocked = await db
-      .getRepository('gitReviewInbox')
-      .find({ filter: { state: 'queued', blockedReason: { $ne: null } }, sort: ['queuedAt', 'id'], limit: 100 });
-    const unresolved = await db
-      .getRepository('gitCodeReviews')
-      .find({ filter: { postStatus: { $in: ['posting', 'post_unknown', 'post_failed', 'retrying'] } }, sort: ['id'] });
+    const queuedBlocked = (
+      await visibleRows(
+        await db.getRepository('gitReviewInbox').find({
+          filter: { state: 'queued', blockedReason: { $ne: null } },
+          sort: ['queuedAt', 'id'],
+          ...(canViewRepository ? {} : { limit: 100 }),
+        }),
+      )
+    ).slice(0, 100);
+    const unresolved = await visibleRows(
+      await db.getRepository('gitCodeReviews').find({
+        filter: { postStatus: { $in: ['posting', 'post_unknown', 'post_failed', 'retrying'] } },
+        sort: ['id'],
+      }),
+    );
     for (const review of unresolved) {
       if (
         value<{ workflowManaged?: boolean } | null>(review, 'metadata')?.workflowManaged &&

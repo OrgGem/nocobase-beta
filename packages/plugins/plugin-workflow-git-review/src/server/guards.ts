@@ -11,23 +11,20 @@ import type { Context, Next } from '@nocobase/actions';
 import { isRecord, type ID, type PostMode } from './contracts';
 import { assignedReview } from './approvals';
 import { assertSafeWorkflow } from './safe-graph';
+import { findReviewFlowBinding, findReviewRequest, targetsReviewCollection } from './review-schema';
 
 const NAMESPACE = 'plugin-workflow-git-review';
 const NODE_MUTATIONS = new Set(['update', 'destroy', 'destroyBranch', 'duplicate', 'move']);
-const REVIEW_COLLECTION = 'gitReviewRequests';
-
-function targetsReviewCollection(config: unknown) {
-  if (!isRecord(config) || typeof config.collection !== 'string') return false;
-  return config.collection === REVIEW_COLLECTION || config.collection.endsWith(`:${REVIEW_COLLECTION}`);
-}
 
 async function managedWorkflow(ctx: Context, id: unknown) {
   if (typeof id !== 'number' && typeof id !== 'string') return null;
   const workflow = await ctx.db.getRepository('workflows').findOne({ filterByTk: id });
   if (!workflow) return null;
-  if (isRecord(workflow.options?.gitReview)) return workflow;
-  const flow = await ctx.db.getRepository('gitReviewFlows').findOne({ filter: { workflowKey: workflow.key } });
-  return flow ? workflow : null;
+  if (isRecord(workflow.options?.gitReview) || targetsReviewCollection(workflow.config)) return workflow;
+  const binding = await findReviewFlowBinding(ctx.db, workflow.key);
+  if (binding === 'found') return workflow;
+  if (await findReviewRequest(ctx.db, { workflowId: workflow.id })) return workflow;
+  return null;
 }
 
 async function matching(ctx: Context, collection: string) {

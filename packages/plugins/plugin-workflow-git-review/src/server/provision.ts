@@ -220,10 +220,15 @@ export async function getStatus(app: Application, flowId: ID): Promise<SetupStat
   };
 }
 
-async function provisionLocked(app: Application, input: SetupInput): Promise<SetupStatus> {
+async function provisionLocked(
+  app: Application,
+  input: SetupInput,
+  authorize?: (repositoryId: unknown) => void,
+): Promise<SetupStatus> {
   const flows = app.db.getRepository('gitReviewFlows');
   const initial = await flows.findOne({ filterByTk: input.flowId });
   if (!initial) throw new Error('Review flow not found');
+  authorize?.(initial.repositoryId);
   if (initial.workflowId && !input.createRevision) return getStatus(app, input.flowId);
   const { blockers, bindings } = await bindingsFor(app, initial.toJSON(), input);
   if (blockers.includes('unsupported_dependencies')) return getStatus(app, input.flowId);
@@ -231,6 +236,7 @@ async function provisionLocked(app: Application, input: SetupInput): Promise<Set
   const workflow = await app.db.sequelize.transaction(async (transaction) => {
     const flow = await flows.findOne({ filterByTk: input.flowId, transaction, lock: transaction.LOCK.UPDATE });
     if (!flow) throw new Error('Review flow not found');
+    authorize?.(flow.repositoryId);
     if (flow.workflowId && !input.createRevision) {
       return (await app.db
         .getRepository('workflows')
@@ -289,6 +295,7 @@ async function provisionLocked(app: Application, input: SetupInput): Promise<Set
       await app.db.sequelize.transaction(async (transaction) => {
         const current = await flows.findOne({ filterByTk: input.flowId, transaction, lock: transaction.LOCK.UPDATE });
         if (!current || String(current.workflowId) !== String(workflow.id) || current.enabled === false) return;
+        authorize?.(current.repositoryId);
         const options = optionsFor(workflow);
         const marker = isRecord(options.gitReview) ? options.gitReview : {};
         await workflow.update(
@@ -301,7 +308,11 @@ async function provisionLocked(app: Application, input: SetupInput): Promise<Set
   return getStatus(app, input.flowId);
 }
 
-export async function provision(app: Application, input: SetupInput): Promise<SetupStatus> {
+export async function provision(
+  app: Application,
+  input: SetupInput,
+  authorize?: (repositoryId: unknown) => void,
+): Promise<SetupStatus> {
   const lock = await app.lockManager.tryAcquire(`git-review-provision:${input.flowId}`, 60_000);
-  return lock.runExclusive(() => provisionLocked(app, input), 120_000);
+  return lock.runExclusive(() => provisionLocked(app, input, authorize), 120_000);
 }

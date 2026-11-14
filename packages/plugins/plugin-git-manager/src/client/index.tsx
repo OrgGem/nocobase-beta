@@ -16,6 +16,10 @@ const GitManagerSettings = React.lazy(() =>
   import('./components/GitManagerSettings').then((m) => ({ default: m.GitManagerSettings })),
 );
 
+const ReviewFlowsSettings = React.lazy(() =>
+  import('./components/ReviewFlows').then((m) => ({ default: m.ReviewFlowsSettings })),
+);
+
 const RepositoryConfig = React.lazy(() =>
   import('./components/RepositoryConfig').then((m) => ({ default: m.RepositoryConfigSettings })),
 );
@@ -57,6 +61,12 @@ export class PluginGitManagerClient extends Plugin {
       title: (this as any).t('Subtree Splits'),
       Component: SubtreeSplits,
       aclSnippet: `pm.plugin-git-manager.write`,
+    });
+
+    this.app.pluginSettingsManager.add('git-manager.review-flows', {
+      title: this.t('Review Flows'),
+      Component: ReviewFlowsSettings,
+      aclSnippet: 'pm.plugin-git-manager.read',
     });
 
     // Full management — requires full plugin permission

@@ -26,6 +26,34 @@ import { guardReviewReads } from './read-guard';
 const NAMESPACE = 'plugin-workflow-git-review';
 const MUTATIONS = new Set(['setup', 'repair']);
 
+function scopeMatchesRepository(filter: unknown, repositoryId: unknown): boolean | undefined {
+  if (filter == null) return true;
+  if (!isRecord(filter)) return undefined;
+  const keys = Object.keys(filter);
+  if (!keys.length) return true;
+  const operator = keys.find((key) => key === '$and' || key === '$or');
+  if (operator) {
+    if (keys.length !== 1 || !Array.isArray(filter[operator])) return undefined;
+    const branches = filter[operator].map((branch: unknown) => scopeMatchesRepository(branch, repositoryId));
+    if (branches.some((branch: boolean | undefined) => branch === undefined)) return undefined;
+    return operator === '$and' ? branches.every(Boolean) : branches.some(Boolean);
+  }
+  if (keys.length !== 1 || !('id' in filter)) return undefined;
+  const match = (id: unknown) => repositoryId != null && String(id) === String(repositoryId);
+  const condition = filter.id;
+  if (typeof condition === 'string' || typeof condition === 'number') return match(condition);
+  if (!isRecord(condition) || Object.keys(condition).length !== 1) return undefined;
+  if (typeof condition.$eq === 'string' || typeof condition.$eq === 'number') return match(condition.$eq);
+  if (Array.isArray(condition.$in) && condition.$in.every((id) => typeof id === 'string' || typeof id === 'number')) {
+    return condition.$in.some(match);
+  }
+  return undefined;
+}
+
+function scopeAllowsRepository(filter: unknown, repositoryId: unknown) {
+  return scopeMatchesRepository(filter, repositoryId) === true;
+}
+
 function validId(value: unknown): value is ID {
   return (
     (typeof value === 'string' && /^\d+$/.test(value)) ||
@@ -107,6 +135,10 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
 
   private async provisionExisting() {
     if (!this.db.getCollection('gitReviewFlows') || !this.db.getCollection('workflows')) return;
+    const gitManager = (this.app.pm.get('plugin-git-manager') || this.app.pm.get('git-manager')) as unknown as
+      | { ensureReviewSchema?: () => Promise<void> }
+      | undefined;
+    if (gitManager?.ensureReviewSchema) await gitManager.ensureReviewSchema();
     const flows = await this.db.getRepository('gitReviewFlows').find({ sort: ['id'] });
     for (const flow of flows) {
       if (flow.workflowId) continue;
@@ -171,26 +203,64 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
   };
 
   private async setupAction(ctx: Context, next: Next, createRevision: boolean) {
-    this.requireRoot(ctx);
     const input = setupInput(ctx.action.params.values, createRevision);
     if (!input) ctx.throw(400, ctx.t('Invalid setup parameters', { ns: NAMESPACE }));
+    const flow = await this.db.getRepository('gitReviewFlows').findOne({ filterByTk: input.flowId });
+    if (!flow || !this.canAccessFlow(ctx, flow.repositoryId, createRevision ? 'repair' : 'setup')) {
+      ctx.throw(403, ctx.t('Permission denied', { ns: NAMESPACE }));
+    }
     try {
-      ctx.body = await provision(this.app, input);
+      ctx.body = await provision(this.app, input, (repositoryId) => {
+        if (!this.canAccessFlow(ctx, repositoryId, createRevision ? 'repair' : 'setup')) {
+          ctx.throw(403, ctx.t('Permission denied', { ns: NAMESPACE }));
+        }
+      });
     } catch (error) {
+      if (error && typeof error === 'object' && 'status' in error && error.status === 403) throw error;
       this.log.warn('Git review setup failed', { error });
       ctx.throw(400, ctx.t('Could not set up the review workflow', { ns: NAMESPACE }));
     }
     await next();
   }
 
-  private requireRoot(ctx: Context) {
-    if (
-      !Array.isArray(ctx.state?.currentRoles) ||
-      !ctx.state.currentRoles.includes('root') ||
-      !ctx.state.currentUser?.id
-    ) {
-      ctx.throw(403, ctx.t('Permission denied', { ns: NAMESPACE }));
+  private canAccessFlow(ctx: Context, repositoryId: unknown, action: 'status' | 'setup' | 'repair') {
+    if (!ctx.state?.currentUser?.id || !Array.isArray(ctx.state.currentRoles)) return false;
+    const gitAction = action === 'status' ? 'fileContent' : 'triggerReview';
+    for (const role of ctx.state.currentRoles) {
+      if (typeof role !== 'string') continue;
+      const aclRole = this.app.acl.getRole(role);
+      const permission = this.app.acl.can({ role, resource: 'workflowGitReview', action });
+      const gitPermission = this.app.acl.can({ role, resource: 'gitManager', action: gitAction });
+      if (!permission && (aclRole?.getResource('workflowGitReview') || !gitPermission)) continue;
+      if (permission && !scopeAllowsRepository(permission.params?.filter, repositoryId)) continue;
+      if (gitPermission || aclRole?.getResource('gitManager')) {
+        if (gitPermission && scopeAllowsRepository(gitPermission.params?.filter, repositoryId)) return true;
+        continue;
+      }
+
+      // A standalone Workflow Git Review grant remains usable. If the role has
+      // configured repository permissions, those permissions still limit it.
+      const repositoryPermission = this.app.acl.can({ role, resource: 'gitRepositories', action: 'list' });
+      if (repositoryPermission || aclRole?.getResource('gitRepositories')) {
+        if (repositoryPermission && scopeAllowsRepository(repositoryPermission.params?.filter, repositoryId))
+          return true;
+        continue;
+      }
+      return true;
     }
+    return false;
+  }
+
+  private canUseGitPermission(ctx: Context, action: 'status' | 'setup' | 'repair') {
+    if (!ctx.state?.currentUser?.id || !Array.isArray(ctx.state.currentRoles)) return false;
+    const gitAction = action === 'status' ? 'fileContent' : 'triggerReview';
+    return ctx.state.currentRoles.some((role) => {
+      if (typeof role !== 'string') return false;
+      const workflowResource = this.app.acl.getRole(role)?.getResource('workflowGitReview');
+      const workflowPermission = this.app.acl.can({ role, resource: 'workflowGitReview', action });
+      if (workflowResource && !workflowPermission) return false;
+      return Boolean(this.app.acl.can({ role, resource: 'gitManager', action: gitAction }));
+    });
   }
 
   async load() {
@@ -205,10 +275,20 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
       name: 'workflowGitReview',
       actions: {
         status: async (ctx, next) => {
-          this.requireRoot(ctx as unknown as Context);
           const flows = await this.db.getRepository('gitReviewFlows').find({ sort: ['id'] });
           const results = [];
-          for (const flow of flows) results.push({ name: flow.name, ...(await getStatus(this.app, flow.id)) });
+          for (const flow of flows) {
+            if (!this.canAccessFlow(ctx as unknown as Context, flow.repositoryId, 'status')) continue;
+            results.push({
+              name: flow.name,
+              ...(await getStatus(this.app, flow.id)),
+              canWrite: this.canAccessFlow(
+                ctx as unknown as Context,
+                flow.repositoryId,
+                flow.workflowId ? 'repair' : 'setup',
+              ),
+            });
+          }
           ctx.body = { flows: results };
           await next();
         },
@@ -244,6 +324,9 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
       name: `pm.${this.name}.manage`,
       actions: ['workflowGitReview:status', 'workflowGitReview:setup', 'workflowGitReview:repair'],
     });
+    for (const action of ['status', 'setup', 'repair'] as const) {
+      this.app.acl.allow('workflowGitReview', action, (ctx: Context) => this.canUseGitPermission(ctx, action));
+    }
     this.app.acl.allow('workflowGitReview', ['approvals', 'approval'], 'loggedIn');
     this.db.on('executions.afterUpdate', this.executionUpdated);
     this.db.on('gitReviewFlows.afterDestroy', this.flowDestroyed);
@@ -253,7 +336,7 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
     this.db.on('flow_nodes.beforeUpdate', this.graphGuards.beforeNodeMutation);
     this.db.on('flow_nodes.beforeDestroy', this.graphGuards.beforeNodeMutation);
     this.app.on('afterStart', async () => {
-      await this.provisionExisting();
+      await this.provisionExisting().catch((error) => this.log.error('Git review provisioning failed', { error }));
       await this.reconcile().catch((error) => this.log.error('Git review reconciliation failed', { error }));
       if (!this.timer) {
         this.timer = setInterval(() => {

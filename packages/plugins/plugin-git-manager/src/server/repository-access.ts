@@ -78,6 +78,7 @@ export interface RepositoryPermissionChecker {
     resource: string;
     action: string;
   }): Promise<RepositoryPermissionResult> | RepositoryPermissionResult;
+  getRole?(name: string): { getResource(name: string): unknown } | undefined;
 }
 
 type RepositoryLookup = {
@@ -245,7 +246,7 @@ export async function hasRepositoryAccess(input: {
   return Boolean(permission && scopeIncludesRepository(permission.params?.filter, input.repositoryId));
 }
 
-async function hasUnrestrictedRepositoryAccess(input: {
+export async function hasUnrestrictedRepositoryAccess(input: {
   acl?: RepositoryPermissionChecker;
   roles: string[];
   action: string;
@@ -658,6 +659,39 @@ export async function enforceRepositoryCollectionAccess(
   }
 
   const roles = currentRoles(ctx);
+  if (collectionName === 'gitReviewFlows' && actionName && ['list', 'get'].includes(actionName)) {
+    const readPermission = await ctx.app.acl.can({ roles, resource: 'gitManager', action: 'fileContent' });
+    if (readPermission) {
+      const readScope = resolveRepositoryScope(readPermission.params?.filter);
+      if (!readScope.supported) ctx.throw(403, 'Permission denied');
+      if (!readScope.unrestricted) {
+        rejectScopedCredentialAssociationRoute(ctx);
+        rejectScopedRepositoryCredentialAssociationRead(ctx, actionName);
+        if (!ctx.action?.mergeParams) ctx.throw(403, 'Permission denied');
+        ctx.action.mergeParams({ filter: collectionFilter(collectionName, readScope.ids) });
+      }
+    }
+  }
+  if (collectionName === 'gitReviewFlows' && actionName && ['create', 'update', 'destroy'].includes(actionName)) {
+    const writePermission = await ctx.app.acl.can({ roles, resource: 'gitManager', action: 'triggerReview' });
+    const readPermission = await ctx.app.acl.can({ roles, resource: 'gitRepositories', action: 'list' });
+    const hasGitManagerPermissions = roles.some((role) => ctx.app.acl.getRole?.(role)?.getResource('gitManager'));
+    if (!writePermission && (readPermission || hasGitManagerPermissions)) ctx.throw(403, 'Permission denied');
+    if (writePermission) {
+      const writeScope = resolveRepositoryScope(writePermission.params?.filter);
+      if (!writeScope.supported) ctx.throw(403, 'Permission denied');
+      if (!writeScope.unrestricted) {
+        rejectScopedCredentialAssociationRoute(ctx);
+        if (actionName === 'create' || actionName === 'update') {
+          rejectScopedBulkMutationValues(ctx, actionName);
+          rejectScopedAssociationMutation(ctx, REPOSITORY_ASSOCIATION_SEGMENTS);
+          requireScopedRepositoryValue(ctx, effectiveMutationValues(ctx), writeScope, actionName);
+        }
+        if (!ctx.action?.mergeParams) ctx.throw(403, 'Permission denied');
+        ctx.action.mergeParams({ filter: collectionFilter(collectionName, writeScope.ids) });
+      }
+    }
+  }
   if (roles.includes('root')) {
     await next();
     return;

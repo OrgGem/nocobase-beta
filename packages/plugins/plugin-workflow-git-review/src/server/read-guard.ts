@@ -10,10 +10,16 @@
 import type { Context, Next } from '@nocobase/actions';
 import { hasRepositoryAccess } from 'plugin-git-manager/server';
 import { isRecord, type ID } from './contracts';
+import {
+  findReviewFlowBinding,
+  findReviewRequest,
+  listReviewFlowKeys,
+  listReviewRequests,
+  targetsReviewCollection,
+} from './review-schema';
 
 type Policy = 'unmanaged' | 'allowed' | 'denied';
-type ReviewFlowKeyRow = { workflowKey?: unknown };
-type WorkflowIdentityRow = { id: ID; key?: unknown; options?: { gitReview?: unknown } | null };
+type WorkflowIdentityRow = { id: ID; key?: unknown; config?: unknown; options?: { gitReview?: unknown } | null };
 
 function id(value: unknown): value is ID {
   return typeof value === 'string' || typeof value === 'number';
@@ -83,14 +89,20 @@ export async function guardReviewReads(ctx: Context, next: Next) {
     const existing = cache.get(key);
     if (existing) return existing;
     const execution = await ctx.db.getRepository('executions').findOne({ filterByTk: executionId });
-    const request = await ctx.db.getRepository('gitReviewRequests').findOne({ filter: { executionId } });
+    const request = await findReviewRequest(ctx.db, { executionId });
     const workflow = execution?.workflowId
       ? await ctx.db.getRepository('workflows').findOne({ filterByTk: execution.workflowId })
       : null;
-    const bound = workflow?.key
-      ? await ctx.db.getRepository('gitReviewFlows').findOne({ filter: { workflowKey: workflow.key } })
-      : null;
-    const managed = Boolean(request || isRecord(workflow?.options?.gitReview) || bound);
+    const bound = workflow ? await findReviewFlowBinding(ctx.db, workflow.key) : 'missing';
+    const workflowRequest =
+      !request && workflow?.id ? await findReviewRequest(ctx.db, { workflowId: workflow.id }) : null;
+    const managed = Boolean(
+      request ||
+        workflowRequest ||
+        isRecord(workflow?.options?.gitReview) ||
+        targetsReviewCollection(workflow?.config) ||
+        bound === 'found',
+    );
     if (!managed) return 'unmanaged';
     let result: Policy = 'denied';
     if (
@@ -131,10 +143,12 @@ export async function guardReviewReads(ctx: Context, next: Next) {
     const workflow = node?.workflowId
       ? await ctx.db.getRepository('workflows').findOne({ filterByTk: node.workflowId })
       : null;
-    const bound = workflow?.key
-      ? await ctx.db.getRepository('gitReviewFlows').findOne({ filter: { workflowKey: workflow.key } })
-      : null;
-    if (isRecord(workflow?.options?.gitReview) || bound) return 'denied';
+    const bound = workflow ? await findReviewFlowBinding(ctx.db, workflow.key) : 'missing';
+    if (isRecord(workflow?.options?.gitReview) || targetsReviewCollection(workflow?.config) || bound === 'found')
+      return 'denied';
+    if (workflow?.id && (await findReviewRequest(ctx.db, { workflowId: workflow.id }))) {
+      return 'denied';
+    }
     if (!workflow && typeof job.nodeKey === 'string' && job.nodeKey.startsWith('gr_')) return 'denied';
     return 'unmanaged';
   };
@@ -175,16 +189,22 @@ export async function guardReviewReads(ctx: Context, next: Next) {
     denied(ctx);
 
   if (action === 'list' && (target === 'executions' || target === 'jobs')) {
-    const requests = await ctx.db.getRepository('gitReviewRequests').find({ fields: ['executionId'] });
-    const flows = (await ctx.db
-      .getRepository('gitReviewFlows')
-      .find({ fields: ['workflowKey'] })) as ReviewFlowKeyRow[];
-    const keys = new Set(flows.map((flow) => String(flow.workflowKey)));
+    const requests = await listReviewRequests(ctx.db);
+    const keys = new Set(await listReviewFlowKeys(ctx.db));
+    const requestWorkflows = new Set(
+      requests.filter((request) => id(request.workflowId)).map((request) => String(request.workflowId)),
+    );
     const workflows = (await ctx.db.getRepository('workflows').find({
-      fields: ['id', 'key', 'options'],
+      fields: ['id', 'key', 'options', 'config'],
     })) as WorkflowIdentityRow[];
     const managedIds = workflows
-      .filter((workflow) => isRecord(workflow.options?.gitReview) || keys.has(String(workflow.key)))
+      .filter(
+        (workflow) =>
+          isRecord(workflow.options?.gitReview) ||
+          targetsReviewCollection(workflow.config) ||
+          keys.has(String(workflow.key)) ||
+          requestWorkflows.has(String(workflow.id)),
+      )
       .map((workflow) => workflow.id);
     const executions = managedIds.length
       ? await ctx.db.getRepository('executions').find({ filter: { workflowId: { $in: managedIds } }, fields: ['id'] })

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin, Application } from '@nocobase/client-v2';
 import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
 import type PluginAclClientV2 from '@nocobase/plugin-acl/client-v2';
@@ -51,6 +53,15 @@ export class PluginGitManagerClient extends Plugin<Record<string, never>, Applic
       aclSnippet: 'pm.plugin-git-manager.repositories',
       componentLoader: () =>
         import('../client/components/RepositoryConfig').then((m) => ({ default: m.RepositoryConfigSettings })),
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'git-manager',
+      key: 'review-flows',
+      title: this.t('Review Flows'),
+      aclSnippet: 'pm.plugin-git-manager.read',
+      componentLoader: () =>
+        import('../client/components/ReviewFlows').then((m) => ({ default: m.ReviewFlowsSettings })),
     });
 
     this.pluginSettingsManager.addPageTabItem({

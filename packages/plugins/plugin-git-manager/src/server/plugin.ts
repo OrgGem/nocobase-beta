@@ -8,6 +8,7 @@
  */
 
 import { Plugin } from '@nocobase/server';
+import type { Context } from '@nocobase/actions';
 import type { Database } from '@nocobase/database';
 import { resolve } from 'path';
 import { DataTypes } from 'sequelize';
@@ -31,6 +32,20 @@ import { isGitManagerResourceResponse, redactCredentialFields } from './utils/re
 import { containsCredentialBearingUrlField, URL_USERINFO_NOT_ALLOWED } from './utils/url-security';
 
 const GIT_CONFIGURATION_URL_FIELDS = new Set(['repoUrl', 'baseUrl']);
+
+function isConcurrentSchemaChange(error: unknown) {
+  if (!error || typeof error !== 'object') return false;
+  const databaseError = error as { original?: { code?: string; errno?: number; message?: string }; message?: string };
+  const code = databaseError.original?.code;
+  const number = databaseError.original?.errno;
+  const message = databaseError.original?.message || databaseError.message || '';
+  return (
+    ['42701', '42P07', 'ER_DUP_FIELDNAME', 'ER_DUP_KEYNAME'].includes(code || '') ||
+    number === 1060 ||
+    number === 1061 ||
+    /duplicate column name|index .* already exists/i.test(message)
+  );
+}
 
 export function isGitConfigurationUrlMutation(resourceName: unknown, actionName: unknown): boolean {
   return (
@@ -138,6 +153,45 @@ export class PluginGitManagerServer extends Plugin {
       ],
     });
 
+    // Existing repository permissions are stored on fileContent and triggerReview.
+    // Aliases let the ACL apply those same grants and scopes to review controls.
+    for (const [action, aliases] of [
+      ['fileContent', ['reviewCutoverStatus']],
+      [
+        'triggerReview',
+        [
+          'reviewConfirmCutover',
+          'reviewCancelLegacy',
+          'reviewRecover',
+          'reviewResetPostClaim',
+          'reviewCancelQueued',
+          'reviewLegacyReleaseHold',
+        ],
+      ],
+    ] as const) {
+      const registered = this.app.acl.getAvailableAction(action);
+      const previous = registered?.options?.aliases;
+      this.app.acl.setAvailableAction(action, {
+        ...registered?.options,
+        aliases: [...(Array.isArray(previous) ? previous : previous ? [previous] : []), ...aliases],
+      });
+    }
+
+    for (const action of ['list', 'get', 'create', 'update', 'destroy'] as const) {
+      this.app.acl.allow('gitReviewFlows', action, (ctx: Context) => {
+        const roles = ctx.state?.currentRoles;
+        if (!ctx.state?.currentUser?.id || !Array.isArray(roles)) return false;
+        const gitAction = action === 'list' || action === 'get' ? 'fileContent' : 'triggerReview';
+        return roles.some((role) => {
+          if (typeof role !== 'string') return false;
+          const collection = ctx.app.acl.getRole(role)?.getResource('gitReviewFlows');
+          const permission = ctx.app.acl.can({ role, resource: 'gitReviewFlows', action });
+          if (collection && !permission) return false;
+          return Boolean(ctx.app.acl.can({ role, resource: 'gitManager', action: gitAction }));
+        });
+      });
+    }
+
     this.app.resourceManager.use(enforceGitRequestMethod);
     this.app.resourceManager.use(enforceReviewControlAccess);
     (this as any).app.resourceManager.use(enforceRepositoryAccess);
@@ -167,6 +221,9 @@ export class PluginGitManagerServer extends Plugin {
     (this as any).app.on('afterStart', async () => {
       await ensureAutoReviewFlowSchema((this as any).app).catch(
         (err) => (this as any).app.log?.error?.('plugin-git-manager: ensure schema error', err),
+      );
+      await this.ensureReviewSchema().catch(
+        (error) => this.app.log?.error?.('plugin-git-manager: review schema error', error),
       );
       this.reviewService.start();
       subtreeActions
@@ -214,6 +271,8 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:pollerStatus',
         'gitManager:subtreePreview',
         'gitManager:subtreeOptions',
+        'gitManager:reviewCutoverStatus',
+        'workflowGitReview:status',
       ],
     });
 
@@ -246,6 +305,14 @@ export class PluginGitManagerServer extends Plugin {
         'gitSubtreeConfigs:update',
         'gitSubtreeConfigs:destroy',
         'gitManager:subtreeRun',
+        'gitManager:reviewConfirmCutover',
+        'gitManager:reviewCancelLegacy',
+        'gitManager:reviewRecover',
+        'gitManager:reviewResetPostClaim',
+        'gitManager:reviewCancelQueued',
+        'gitManager:reviewLegacyReleaseHold',
+        'workflowGitReview:setup',
+        'workflowGitReview:repair',
       ],
     });
 
@@ -365,6 +432,26 @@ export class PluginGitManagerServer extends Plugin {
     await (this as any).app.db.getCollection('gitReviewInbox')?.sync();
     await (this as any).app.db.getCollection('gitReviewRequests')?.sync();
     await (this as any).app.db.getCollection('gitReviewCutover')?.sync();
+    await this.ensureReviewSchema();
+  }
+
+  async ensureReviewSchema() {
+    const lock = await this.app.lockManager.tryAcquire('git-manager-review-schema', 60_000);
+    await lock.runExclusive(async () => {
+      for (const name of ['gitReviewFlows', 'gitCodeReviews']) {
+        const collection = this.db.getCollection(name);
+        if (!collection) continue;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await collection.model.sync({ alter: { drop: false } });
+            break;
+          } catch (error) {
+            if (attempt >= 3 || !isConcurrentSchemaChange(error)) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+          }
+        }
+      }
+    }, 300_000);
   }
 
   async beforeDisable() {

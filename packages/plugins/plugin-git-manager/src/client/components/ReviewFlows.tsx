@@ -25,8 +25,8 @@ import {
   Alert,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, BranchesOutlined } from '@ant-design/icons';
-import { useApp } from '@nocobase/client-v2';
-import { useGitManager } from '../context/GitManagerContext';
+import { createAclSnippetAllow, useACLContext, useACLRoleContext, useApp } from '@nocobase/client-v2';
+import { GitManagerProvider, useGitManager } from '../context/GitManagerContext';
 import { AIEmployeeSelect } from './AIEmployeeSelect';
 import { LLMServiceSelect } from './LLMServiceSelect';
 import { LLMModelSelect } from './LLMModelSelect';
@@ -51,6 +51,25 @@ export const ReviewFlows: React.FC = () => {
   const app = useApp();
   const api = app.apiClient;
   const { repos } = useGitManager();
+  const aclContext = useACLContext();
+  const { parseAction, snippets, allowAll, resources } = useACLRoleContext();
+  const snippetAllowed = createAclSnippetAllow(snippets, allowAll);
+  const canAct = (action: string) => {
+    if (!aclContext) return true;
+    const gitWrite = Boolean(parseAction('gitManager:triggerReview'));
+    if (resources?.includes('gitManager') && !gitWrite) return false;
+    const explicit = Boolean(parseAction(`gitReviewFlows:${action}`));
+    if (resources?.includes('gitReviewFlows')) return explicit;
+    return (
+      explicit ||
+      gitWrite ||
+      snippetAllowed('pm.plugin-git-manager.write') ||
+      snippetAllowed('pm.plugin-git-manager.manage')
+    );
+  };
+  const canCreate = canAct('create');
+  const canUpdate = canAct('update');
+  const canDestroy = canAct('destroy');
   const [flows, setFlows] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -183,12 +202,16 @@ export const ReviewFlows: React.FC = () => {
       width: 100,
       render: (_: any, record: any) => (
         <Space>
-          <Tooltip title={t('Edit')}>
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
-          </Tooltip>
-          <Popconfirm title={t('Delete this flow?')} onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {canUpdate && (
+            <Tooltip title={t('Edit')}>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+            </Tooltip>
+          )}
+          {canDestroy && (
+            <Popconfirm title={t('Delete this flow?')} onConfirm={() => handleDelete(record.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -197,9 +220,11 @@ export const ReviewFlows: React.FC = () => {
   return (
     <div>
       <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between' }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-          {t('Add Review Flow')}
-        </Button>
+        {canCreate && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            {t('Add Review Flow')}
+          </Button>
+        )}
         <Button onClick={load} loading={loading}>
           {t('Refresh')}
         </Button>
@@ -350,3 +375,19 @@ export const ReviewFlows: React.FC = () => {
     </div>
   );
 };
+
+function ReviewFlowsPageContent() {
+  const { refreshRepos } = useGitManager();
+  useEffect(() => {
+    refreshRepos();
+  }, [refreshRepos]);
+  return <ReviewFlows />;
+}
+
+export function ReviewFlowsSettings() {
+  return (
+    <GitManagerProvider>
+      <ReviewFlowsPageContent />
+    </GitManagerProvider>
+  );
+}

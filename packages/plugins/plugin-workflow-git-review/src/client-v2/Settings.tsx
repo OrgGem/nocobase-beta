@@ -23,19 +23,32 @@ type FlowStatus = {
   blockers: string[];
   template: 'quick' | 'full';
   approverIds: ID[];
+  canWrite?: boolean;
 };
 type CutoverStatus = {
   state: string;
+  canConfirmCutover?: boolean;
   legacyPending: number;
   legacyRunning: number;
-  quarantined: Array<{ requestId: ID; executionId: ID | null; reviewId: ID; reason: string }>;
-  legacyRunningReviews: Array<{ legacyReviewId: ID }>;
-  legacyPendingReviews?: Array<{ legacyReviewId: ID; repositoryId: ID; reason?: string }>;
+  quarantined: Array<{ requestId: ID; executionId: ID | null; reviewId: ID; reason: string; canWrite?: boolean }>;
+  legacyRunningReviews: Array<{ legacyReviewId: ID; canWrite?: boolean }>;
+  legacyPendingReviews?: Array<{ legacyReviewId: ID; repositoryId: ID; reason?: string; canWrite?: boolean }>;
   legacyUncertainReviews?: Array<{ legacyReviewId: ID; repositoryId: ID }>;
-  orphaned?: Array<{ inboxId: ID; reviewId: ID }>;
-  postUnknownReviews?: Array<{ reviewId: ID; postStatus: string; hasClaim: boolean; attemptId: string | null }>;
-  queuedBlockedReviews?: Array<{ inboxId: ID; reviewId: ID; repositoryId: ID; reason: string }>;
-  legacyPublicationHolds?: Array<{ reviewId: ID; repositoryId: ID | null; attemptId: string | null }>;
+  orphaned?: Array<{ inboxId: ID; reviewId: ID; canWrite?: boolean }>;
+  postUnknownReviews?: Array<{
+    reviewId: ID;
+    postStatus: string;
+    hasClaim: boolean;
+    attemptId: string | null;
+    canWrite?: boolean;
+  }>;
+  queuedBlockedReviews?: Array<{ inboxId: ID; reviewId: ID; repositoryId: ID; reason: string; canWrite?: boolean }>;
+  legacyPublicationHolds?: Array<{
+    reviewId: ID;
+    repositoryId: ID | null;
+    attemptId: string | null;
+    canWrite?: boolean;
+  }>;
 };
 
 function FlowCard({ flow, refresh }: { flow: FlowStatus; refresh: () => Promise<void> }) {
@@ -93,6 +106,7 @@ function FlowCard({ flow, refresh }: { flow: FlowStatus; refresh: () => Promise<
         <label htmlFor={`template-${flow.flowId}`}>{t('Starter template')}</label>
         <Select
           id={`template-${flow.flowId}`}
+          disabled={flow.canWrite === false}
           value={template}
           onChange={setTemplate}
           options={[
@@ -104,18 +118,21 @@ function FlowCard({ flow, refresh }: { flow: FlowStatus; refresh: () => Promise<
         <label htmlFor={`approvers-${flow.flowId}`}>{t('Approver user IDs, separated by commas')}</label>
         <Input
           id={`approvers-${flow.flowId}`}
+          disabled={flow.canWrite === false}
           value={approvers}
           onChange={(event) => setApprovers(event.target.value)}
         />
         <Space wrap>
-          <Popconfirm
-            title={t('Create a new workflow revision?')}
-            onConfirm={submit}
-            okText={t('Create revision')}
-            cancelText={t('Cancel')}
-          >
-            <Button loading={saving}>{t(flow.workflowId ? 'Create revision' : 'Set up workflow')}</Button>
-          </Popconfirm>
+          {flow.canWrite !== false && (
+            <Popconfirm
+              title={t('Create a new workflow revision?')}
+              onConfirm={submit}
+              okText={t('Create revision')}
+              cancelText={t('Cancel')}
+            >
+              <Button loading={saving}>{t(flow.workflowId ? 'Create revision' : 'Set up workflow')}</Button>
+            </Popconfirm>
+          )}
           {path && (
             <Button
               href={`${(getRouteRuntimeVersion() === 'modern'
@@ -275,14 +292,16 @@ export default function Settings() {
             'Confirm only after every old worker and its AI calls have stopped. Uncertain reviews remain quarantined.',
           )}
           action={
-            <Popconfirm
-              title={t('Have all old workers and AI calls stopped?')}
-              onConfirm={confirmCutover}
-              okText={t('Confirm')}
-              cancelText={t('Cancel')}
-            >
-              <Button>{t('Confirm cutover')}</Button>
-            </Popconfirm>
+            cutover.canConfirmCutover !== false && (
+              <Popconfirm
+                title={t('Have all old workers and AI calls stopped?')}
+                onConfirm={confirmCutover}
+                okText={t('Confirm')}
+                cancelText={t('Cancel')}
+              >
+                <Button>{t('Confirm cutover')}</Button>
+              </Popconfirm>
+            )
           }
         />
       )}
@@ -292,17 +311,21 @@ export default function Settings() {
             dataSource={cutover?.legacyPendingReviews ?? []}
             renderItem={(item) => (
               <List.Item
-                actions={[
-                  <Popconfirm
-                    key="cancel"
-                    title={t('Cancel this legacy review?')}
-                    onConfirm={() => cancelLegacy(item.legacyReviewId)}
-                    okText={t('Cancel review')}
-                    cancelText={t('Back')}
-                  >
-                    <Button danger>{t('Cancel review')}</Button>
-                  </Popconfirm>,
-                ]}
+                actions={
+                  item.canWrite === false
+                    ? []
+                    : [
+                        <Popconfirm
+                          key="cancel"
+                          title={t('Cancel this legacy review?')}
+                          onConfirm={() => cancelLegacy(item.legacyReviewId)}
+                          okText={t('Cancel review')}
+                          cancelText={t('Back')}
+                        >
+                          <Button danger>{t('Cancel review')}</Button>
+                        </Popconfirm>,
+                      ]
+                }
               >
                 <Space direction="vertical">
                   <span>
@@ -329,17 +352,21 @@ export default function Settings() {
             dataSource={cutover?.queuedBlockedReviews ?? []}
             renderItem={(item) => (
               <List.Item
-                actions={[
-                  <Popconfirm
-                    key="cancel"
-                    title={t('Cancel this queued review?')}
-                    onConfirm={() => cancelQueued(item.inboxId)}
-                    okText={t('Cancel review')}
-                    cancelText={t('Back')}
-                  >
-                    <Button danger>{t('Cancel review')}</Button>
-                  </Popconfirm>,
-                ]}
+                actions={
+                  item.canWrite === false
+                    ? []
+                    : [
+                        <Popconfirm
+                          key="cancel"
+                          title={t('Cancel this queued review?')}
+                          onConfirm={() => cancelQueued(item.inboxId)}
+                          okText={t('Cancel review')}
+                          cancelText={t('Back')}
+                        >
+                          <Button danger>{t('Cancel review')}</Button>
+                        </Popconfirm>,
+                      ]
+                }
               >
                 <Space direction="vertical">
                   <span>
@@ -368,32 +395,39 @@ export default function Settings() {
                     item.executionId == null ? '' : ` / ${t('Execution')} ${item.executionId}`
                   } — ${t(item.reason)}`,
                   target: { requestId: item.requestId, executionId: item.executionId },
+                  canWrite: item.canWrite,
                 })),
                 ...(cutover.legacyRunningReviews ?? []).map((item) => ({
                   key: `legacy-${item.legacyReviewId}`,
                   label: `${t('Legacy review')} ${item.legacyReviewId}`,
                   target: { legacyReviewId: item.legacyReviewId },
+                  canWrite: item.canWrite,
                 })),
                 ...(cutover.orphaned ?? []).map((item) => ({
                   key: `orphaned-${item.inboxId}`,
                   label: `${t('Review')} ${item.reviewId} / ${t('Queue item')} ${item.inboxId}`,
                   target: { inboxId: item.inboxId },
+                  canWrite: item.canWrite,
                 })),
               ]}
               renderItem={(item) => (
                 <List.Item
                   key={item.key}
-                  actions={[
-                    <Popconfirm
-                      key="recover"
-                      title={t('Has all underlying AI work stopped?')}
-                      onConfirm={() => recover(item.target)}
-                      okText={t('Recover')}
-                      cancelText={t('Cancel')}
-                    >
-                      <Button>{t('Recover')}</Button>
-                    </Popconfirm>,
-                  ]}
+                  actions={
+                    item.canWrite === false
+                      ? []
+                      : [
+                          <Popconfirm
+                            key="recover"
+                            title={t('Has all underlying AI work stopped?')}
+                            onConfirm={() => recover(item.target)}
+                            okText={t('Recover')}
+                            cancelText={t('Cancel')}
+                          >
+                            <Button>{t('Recover')}</Button>
+                          </Popconfirm>,
+                        ]
+                  }
                 >
                   {item.label}
                 </List.Item>
@@ -412,33 +446,37 @@ export default function Settings() {
             dataSource={cutover?.postUnknownReviews ?? []}
             renderItem={(item) => (
               <List.Item
-                actions={[
-                  <Button key="check" onClick={() => retryPost(item.reviewId, false)}>
-                    {t('Check publication')}
-                  </Button>,
-                  <Popconfirm
-                    key="reset"
-                    title={t('Has the previous outbound request stopped?')}
-                    onConfirm={() => resetPostClaim(item.reviewId, item.attemptId)}
-                    okText={t('Release publication hold')}
-                    cancelText={t('Cancel')}
-                  >
-                    <Button>{t('Release publication hold')}</Button>
-                  </Popconfirm>,
-                  ...(!item.hasClaim
-                    ? [
+                actions={
+                  item.canWrite === false
+                    ? []
+                    : [
+                        <Button key="check" onClick={() => retryPost(item.reviewId, false)}>
+                          {t('Check publication')}
+                        </Button>,
                         <Popconfirm
-                          key="resend"
+                          key="reset"
                           title={t('Has the previous outbound request stopped?')}
-                          onConfirm={() => retryPost(item.reviewId, true)}
-                          okText={t('Resend')}
+                          onConfirm={() => resetPostClaim(item.reviewId, item.attemptId)}
+                          okText={t('Release publication hold')}
                           cancelText={t('Cancel')}
                         >
-                          <Button>{t('Resend')}</Button>
+                          <Button>{t('Release publication hold')}</Button>
                         </Popconfirm>,
+                        ...(!item.hasClaim
+                          ? [
+                              <Popconfirm
+                                key="resend"
+                                title={t('Has the previous outbound request stopped?')}
+                                onConfirm={() => retryPost(item.reviewId, true)}
+                                okText={t('Resend')}
+                                cancelText={t('Cancel')}
+                              >
+                                <Button>{t('Resend')}</Button>
+                              </Popconfirm>,
+                            ]
+                          : []),
                       ]
-                    : []),
-                ]}
+                }
               >
                 {t('Review')} {item.reviewId} ({item.postStatus})
               </List.Item>
@@ -456,7 +494,7 @@ export default function Settings() {
             renderItem={(item) => (
               <List.Item
                 actions={
-                  item.repositoryId == null
+                  item.repositoryId == null || item.canWrite === false
                     ? []
                     : [
                         <Popconfirm

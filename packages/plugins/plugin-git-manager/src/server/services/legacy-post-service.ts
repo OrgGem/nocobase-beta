@@ -484,13 +484,8 @@ export class LegacyPostService {
   }
 
   async releaseHold(reviewId: Id, actor: Id, roles: string[], expectedAttempt: string | null): Promise<void> {
-    if (!roles.includes('root')) {
-      const error = new Error('Permission denied') as Error & { status: number };
-      error.status = 403;
-      throw error;
-    }
     const currentRoles = await resolveBackgroundReviewRoles(this.app.db, actor);
-    if (!currentRoles.includes('root')) {
+    if (!roles.length || roles.some((role) => !currentRoles.includes(role))) {
       const error = new Error('Permission denied') as Error & { status: number };
       error.status = 403;
       throw error;
@@ -504,6 +499,12 @@ export class LegacyPostService {
       (await this.app.db.getRepository('gitReviewInbox').findOne({ filter: { reviewId } }))
     )
       conflict('Legacy review is not available');
+    const repositoryId = value<Id>(review, 'repositoryId');
+    if (!(await hasRepositoryAccess({ acl: this.app.acl, roles, repositoryId, action: 'reviewLegacyReleaseHold' }))) {
+      const error = new Error('Permission denied') as Error & { status: number };
+      error.status = 403;
+      throw error;
+    }
     const projectKey = value<string | null>(review, 'legacyPostProjectKey') || sourceOf(review)?.projectKey;
     if (!projectKey) conflict('Legacy review has no publication hold');
     const db = this.app.db;
@@ -511,6 +512,9 @@ export class LegacyPostService {
       const current = await db
         .getCollection('gitCodeReviews')
         .model.findOne({ where: { id: reviewId }, transaction, lock: transaction.LOCK.UPDATE });
+      if (current && String(value<Id>(current, 'repositoryId')) !== String(repositoryId)) {
+        conflict('Review repository changed');
+      }
       if (
         !current ||
         (value<string | null>(current, 'legacyPostClaim') ?? null) !== expectedAttempt ||
