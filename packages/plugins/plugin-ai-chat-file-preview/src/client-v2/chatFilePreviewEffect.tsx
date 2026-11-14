@@ -10,11 +10,12 @@
 import { DownloadOutlined } from '@ant-design/icons';
 import type { Application } from '@nocobase/client-v2';
 import { FlowEngineProvider } from '@nocobase/flow-engine';
-import { getGlobalChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
+import type { ChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
 import { Alert, Button, Modal, Space, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { getChatScope, getChatScopes } from '../shared/chatScope';
 
 type UnknownRecord = Record<string, unknown>;
 type PreviewFile = UnknownRecord;
@@ -63,7 +64,6 @@ const FILE_EXTENSIONS = new Set([
   'svg',
 ]);
 
-const browserFileCache = new Map<string, PreviewFile>();
 let appRef: AppLike | null = null;
 
 const t = (key: string) => appRef?.i18n?.t(key, { ns: NAMESPACE }) || key;
@@ -163,9 +163,9 @@ const normalizeUrlForCompare = (url?: string) => {
   }
   try {
     const parsed = new URL(url, window.location.href);
-    return decodeURIComponent(`${parsed.pathname}${parsed.search}`).toLowerCase();
+    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
   } catch {
-    return decodeURIComponent(url).toLowerCase();
+    return url;
   }
 };
 
@@ -255,57 +255,38 @@ const getSessionSnapshot = (state: ChatMessagesSnapshot, sessionId?: string) => 
   return state.sessions?.[sessionId || CHAT_DEFAULT_SESSION_KEY] || {};
 };
 
-const getChatPreviewFiles = () => {
-  const files = [...browserFileCache.values()];
-  let messagesState: ChatMessagesSnapshot | null = null;
-  let conversationsState: ChatConversationsSnapshot | null = null;
-  try {
-    const runtime = getGlobalChatBoxRuntime();
-    conversationsState = {
-      currentConversation: runtime.chatConversationModel.currentConversation,
-    };
-    messagesState = {
-      getSessionState: (sessionId?: string) => runtime.chatMessageModel.getSessionState(sessionId),
-    };
-  } catch {
-    // plugin-ai not ready — fall back to browser cache only
+const getChatPreviewFiles = (runtime: ChatBoxRuntime) => {
+  const files: PreviewFile[] = [];
+  const messagesState: ChatMessagesSnapshot = runtime.chatMessageModel;
+  const conversationsState: ChatConversationsSnapshot = runtime.chatConversationModel;
+  const session = getSessionSnapshot(messagesState, conversationsState.currentConversation);
+  pushPreviewFile(files, session.attachments);
+  pushPreviewFile(files, runtime.chatSenderModel.attachments);
+  for (const chatMessage of session.messages || []) {
+    collectMessageFiles(files, chatMessage);
   }
-
-  if (messagesState) {
-    const sessionIds = Array.from(new Set([conversationsState?.currentConversation, undefined]));
-    for (const sessionId of sessionIds) {
-      const session = getSessionSnapshot(messagesState, sessionId);
-      pushPreviewFile(files, session.attachments);
-      for (const chatMessage of session.messages || []) {
-        collectMessageFiles(files, chatMessage);
-      }
-    }
-  }
-
   const seen = new Set<string>();
   return files.filter((file) => {
-    const key = normalizeUrlForCompare(resolveFileUrl(file)) || normalizeName(getDisplayName(file));
-    if (!key || seen.has(key)) {
-      return false;
-    }
+    const url = normalizeUrlForCompare(resolveFileUrl(file));
+    const id = file.id ?? file.uid;
+    const key = url ? `url:${url}` : id == null ? '' : `id:${String(id)}`;
+    if (!key) return true;
+    if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 };
 
-const findPreviewFile = (label?: string, href?: string) => {
-  const files = getChatPreviewFiles();
+const findPreviewFile = (runtime: ChatBoxRuntime, label?: string, href?: string) => {
+  const files = getChatPreviewFiles(runtime);
   const normalizedHref = normalizeUrlForCompare(href);
   if (normalizedHref) {
     const byUrl = files.find((file) => {
-      const fileUrl = normalizeUrlForCompare(resolveFileUrl(file));
-      return (
-        fileUrl && (fileUrl === normalizedHref || fileUrl.includes(normalizedHref) || normalizedHref.includes(fileUrl))
+      return ['url', 'preview', 'downloadUrl', 'path'].some(
+        (key) => normalizeUrlForCompare(getString(file, key)) === normalizedHref,
       );
     });
-    if (byUrl) {
-      return byUrl;
-    }
+    return byUrl;
   }
 
   const namesToMatch = new Set<string>();
@@ -316,7 +297,7 @@ const findPreviewFile = (label?: string, href?: string) => {
     }
   }
 
-  return files.find((file) => {
+  const matches = files.filter((file) => {
     const candidateNames = getCandidateNames(file);
     for (const name of namesToMatch) {
       if (candidateNames.has(name)) {
@@ -325,6 +306,10 @@ const findPreviewFile = (label?: string, href?: string) => {
     }
     return false;
   });
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  return undefined;
 };
 
 const createFallbackFile = (href: string, label?: string): PreviewFile => {
@@ -419,58 +404,70 @@ const mountPreview = (file: PreviewFile) => {
   );
 };
 
-const rememberBrowserFiles = (files?: FileList | File[] | null) => {
-  if (!files) {
-    return;
-  }
-  for (const file of Array.from(files)) {
-    const previewFile = toPreviewFile(file);
-    if (previewFile) {
-      browserFileCache.set(normalizeName(file.name), previewFile);
-    }
-  }
-};
-
 const findClickableFileTarget = (eventTarget: EventTarget | null) => {
   if (!(eventTarget instanceof Element)) {
     return null;
   }
+  if (eventTarget.closest('button, [class*="-remove"], .ant-tag-close-icon')) return null;
   const anchor = eventTarget.closest('a[href]') as HTMLAnchorElement | null;
   const card = eventTarget.closest(
-    '.ant-attachment, .ant-upload-list-item, [data-ai-chat-file-preview-card]',
+    '.ant-attachment-list-card, .ant-upload-list-item, [data-ai-chat-file-preview-card]',
   ) as HTMLElement | null;
   if (!anchor && !card) {
     return null;
   }
   const href =
     anchor?.getAttribute('href') || card?.querySelector<HTMLAnchorElement>('a[href]')?.getAttribute('href') || '';
-  const label = anchor?.textContent || card?.textContent || getNameFromUrl(href);
+  const label =
+    anchor?.textContent ||
+    card?.querySelector('[class*="-name"]')?.textContent ||
+    card?.textContent ||
+    getNameFromUrl(href);
   return { anchor, card, href, label };
 };
 
 const markPreviewTargets = () => {
-  for (const anchor of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
-    const href = anchor.getAttribute('href') || '';
-    const label = anchor.textContent || getNameFromUrl(href);
-    if (isFileLikeUrl(href) || findPreviewFile(label, href)) {
-      anchor.dataset.aiChatFilePreview = 'true';
+  if (!appRef) return;
+  for (const { root, runtime } of getChatScopes(appRef)) {
+    for (const anchor of Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+      const href = anchor.getAttribute('href') || '';
+      const label = anchor.textContent || getNameFromUrl(href);
+      if (isFileLikeUrl(href) || findPreviewFile(runtime, label, href)) {
+        anchor.dataset.aiChatFilePreview = 'true';
+      }
     }
-  }
-  for (const card of Array.from(document.querySelectorAll<HTMLElement>('.ant-attachment, .ant-upload-list-item'))) {
-    const label = card.textContent || '';
-    if (findPreviewFile(label)) {
-      card.dataset.aiChatFilePreviewCard = 'true';
+    for (const card of Array.from(
+      root.querySelectorAll<HTMLElement>('.ant-attachment-list-card, .ant-upload-list-item'),
+    )) {
+      const label = card.textContent || '';
+      if (findPreviewFile(runtime, label)) {
+        card.dataset.aiChatFilePreviewCard = 'true';
+      }
     }
   }
 };
 
 const handleClick = (event: MouseEvent) => {
+  if (
+    !appRef ||
+    !(event.target instanceof Element) ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  )
+    return;
+  const scope = getChatScope(appRef, event.target);
+  if (!scope) return;
   const target = findClickableFileTarget(event.target);
   if (!target) {
     return;
   }
+  if ((target.anchor && !scope.root.contains(target.anchor)) || (target.card && !scope.root.contains(target.card)))
+    return;
   const file =
-    findPreviewFile(target.label, target.href) ||
+    findPreviewFile(scope.runtime, target.label, target.href) ||
     (isFileLikeUrl(target.href) ? createFallbackFile(target.href, target.label) : null);
   if (!file) {
     return;
@@ -478,17 +475,6 @@ const handleClick = (event: MouseEvent) => {
   event.preventDefault();
   event.stopPropagation();
   mountPreview(file);
-};
-
-const handleDrop = (event: DragEvent) => {
-  rememberBrowserFiles(event.dataTransfer?.files || null);
-};
-
-const handleChange = (event: Event) => {
-  const input = event.target instanceof HTMLInputElement ? event.target : null;
-  if (input?.type === 'file') {
-    rememberBrowserFiles(input.files);
-  }
 };
 
 export function installAiChatFilePreviewEffect(app: Application) {
@@ -515,17 +501,14 @@ export function installAiChatFilePreviewEffect(app: Application) {
   document.head.appendChild(style);
 
   document.addEventListener('click', handleClick, true);
-  document.addEventListener('drop', handleDrop, true);
-  document.addEventListener('change', handleChange, true);
   const interval = window.setInterval(markPreviewTargets, 1500);
   markPreviewTargets();
 
   previewWindow.__pluginAiChatFilePreviewV2Cleanup = () => {
     document.removeEventListener('click', handleClick, true);
-    document.removeEventListener('drop', handleDrop, true);
-    document.removeEventListener('change', handleChange, true);
     window.clearInterval(interval);
     style.remove();
+    appRef = null;
     delete previewWindow.__pluginAiChatFilePreviewV2Cleanup;
   };
 }

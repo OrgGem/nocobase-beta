@@ -8,10 +8,11 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAPIClient, attachmentFileTypes } from '@nocobase/client';
-import { getGlobalChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
+import { useApp, attachmentFileTypes } from '@nocobase/client';
+import { getGlobalChatBoxRuntime, type ChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { Modal, Button } from 'antd';
 import { useTranslation } from './locale';
+import { getChatScope, getChatScopes } from '../shared/chatScope';
 
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_ATTACHMENTS: any[] = [];
@@ -24,10 +25,15 @@ type ChatSessionSnapshot = {
 // plugin-ai v2 exposes FlowEngine models (not zustand), so the v1 provider cannot subscribe
 // reactively. Poll the global runtime and only setState when the active session's content
 // actually changes (signature compare) to keep effect deps like [messages] stable.
-export function readActiveSession(sessionId?: string): { messages: any[]; attachments: any[] } {
+export function readActiveSession(
+  sessionId?: string,
+  runtime?: ChatBoxRuntime,
+): { messages: any[]; attachments: any[] } {
   try {
-    const runtime = getGlobalChatBoxRuntime();
-    const session: ChatSessionSnapshot = runtime.chatMessageModel.getSessionState(sessionId) as ChatSessionSnapshot;
+    const activeRuntime = runtime || getGlobalChatBoxRuntime();
+    const session: ChatSessionSnapshot = activeRuntime.chatMessageModel.getSessionState(
+      sessionId,
+    ) as ChatSessionSnapshot;
     return {
       messages: Array.isArray(session.messages) ? session.messages : EMPTY_MESSAGES,
       attachments: Array.isArray(session.attachments) ? session.attachments : EMPTY_ATTACHMENTS,
@@ -71,8 +77,6 @@ export function useChatRuntimeState() {
 }
 
 // Ant Design X 1.1.0 prefixes: sender -> ant-sender, bubble -> ant-bubble, attachment -> ant-attachment.
-const AI_CHAT_CONTAINER_SELECTOR = '.ant-sender, .ant-attachment, .ant-bubble';
-const AI_CHAT_SENDER_SELECTOR = '.ant-sender, .ant-attachment';
 
 export interface PreviewFile {
   id?: string | number;
@@ -97,6 +101,7 @@ export interface PreviewFile {
     [key: string]: any;
   };
   collectionName?: string;
+  originFileObj?: Blob;
   [key: string]: any;
 }
 
@@ -144,9 +149,6 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
     </Modal>
   );
 }
-
-// Define a reliable, context-isolated module-level RAM cache independent of the window object
-export const AppRamCache = new Map<string, File | Blob>();
 
 const FILE_EXTENSIONS = [
   'doc',
@@ -260,6 +262,7 @@ function attToPreviewFile(att: any): PreviewFile {
     storageType: att.storageType || att.storage?.type,
     storageName: att.storageName || att.storage?.name,
     storage: att.storage,
+    originFileObj: att.originFileObj || (att instanceof Blob ? att : undefined),
     collectionName: att.collectionName || 'aiFiles',
   };
 }
@@ -339,17 +342,6 @@ export function buildSkillHubManifestMap(messages: any[]): Map<string, SkillHubM
       }
     }
   }
-  return map;
-}
-
-// The marking interval and click handler both rebuild the manifest from the same `messages` array on
-// every tick/click. The poll bridge only swaps the array reference when the session actually changes,
-// so keying the cache on array identity skips the redundant JSON/base64 parse work between changes.
-let manifestCache: { messages: any[]; map: Map<string, SkillHubManifestEntry> } | null = null;
-function getCachedSkillHubManifestMap(messages: any[]): Map<string, SkillHubManifestEntry> {
-  if (manifestCache && manifestCache.messages === messages) return manifestCache.map;
-  const map = buildSkillHubManifestMap(messages);
-  manifestCache = { messages, map };
   return map;
 }
 
@@ -491,46 +483,18 @@ export function rewriteMarkdownContent(content: string, messages: any[]): string
 function findFileByDisplayName(displayName: string, messages: any[], pendingAttachments: any[]): PreviewFile | null {
   if (!displayName) return null;
   const displayNames = getDisplayNameCandidates(displayName);
-
-  // Search sent messages
+  const attachments = [...pendingAttachments];
   for (const msg of messages) {
     const content = msg.content || msg;
-    const attachments = content?.attachments;
-    if (!attachments?.length) continue;
-
-    for (const att of attachments) {
-      const attName = att.filename || att.name || '';
-      const attTitleExt = `${att.title || ''}${att.extname || ''}`;
-      if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
-        return attToPreviewFile(att);
-      }
-
-      // Relaxed match for NocoBase hashed file names
-      for (const name of displayNames) {
-        if ((attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) || (att.title && name.includes(att.title))) {
-          return attToPreviewFile(att);
-        }
-      }
-    }
+    if (Array.isArray(content?.attachments)) attachments.push(...content.attachments);
   }
 
-  // Search pending (not yet sent) attachments
-  for (const att of pendingAttachments || []) {
-    const attName = att.filename || att.name || '';
-    const attTitleExt = `${att.title || ''}${att.extname || ''}`;
-    if (displayNames.includes(attName) || displayNames.includes(attTitleExt)) {
-      return attToPreviewFile(att);
-    }
-
-    // Relaxed match for NocoBase hashed file names (e.g. report.docx-c2ywti.docx)
-    for (const name of displayNames) {
-      if ((attName && name.includes(attName.replace(/\.[^/.]+$/, ''))) || (att.title && name.includes(att.title))) {
-        return attToPreviewFile(att);
-      }
-    }
-  }
-
-  return null;
+  const matches = attachments.filter((attachment) => {
+    const name = attachment.filename || attachment.name || '';
+    const title = `${attachment.title || ''}${attachment.extname || ''}`;
+    return displayNames.includes(name) || displayNames.includes(title);
+  });
+  return matches.length === 1 ? attToPreviewFile(matches[0]) : null;
 }
 
 /**
@@ -540,9 +504,11 @@ function findFileByUrl(url: string, messages: any[], pendingAttachments: any[]):
   if (!url) return null;
   const matchUrl = (u1: string, u2: string) => {
     if (!u1 || !u2) return false;
-    const clean1 = u1.split('?')[0].replace(location.origin, '').replace(/^\//, '');
-    const clean2 = u2.split('?')[0].replace(location.origin, '').replace(/^\//, '');
-    return clean1 === clean2;
+    try {
+      return new URL(u1, location.href).href === new URL(u2, location.href).href;
+    } catch {
+      return u1 === u2;
+    }
   };
   for (const msg of messages) {
     const content = msg.content || msg;
@@ -559,131 +525,32 @@ function findFileByUrl(url: string, messages: any[], pendingAttachments: any[]):
 }
 
 /**
- * Inner component that reads from plugin-ai's global runtime via polling bridge.
- * Uses refs to make latest state available inside the DOM click handler.
+ * Preview controls for files in mounted AI chat runtimes.
  */
-const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const ChatFilePreviewInner: React.FC = () => {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
-  const apiClient = useAPIClient();
+  const app = useApp();
+  const objectUrlRef = useRef<string>();
 
-  const { currentConversation, messages, attachments: pendingAttachments } = useChatRuntimeState();
+  const { messages } = useChatRuntimeState();
 
-  // Keep latest values in refs for the click handler (avoids stale closures)
-  const messagesRef = useRef(messages);
-  const pendingAttachmentsRef = useRef(pendingAttachments);
-  messagesRef.current = messages;
-  pendingAttachmentsRef.current = pendingAttachments;
-
-  const token = apiClient.auth?.token || '';
-
-  // Track global drop and input change events to intercept file object selection ONLY for AI chat
+  // Decorate links only within a mounted AI chat.
   useEffect(() => {
-    // Modify href attributes of native NocoBase file links and images in chat to use the proxy and append the token
-    const rewriteObtrusiveLinks = () => {
-      const appendToken = (url: string) => {
-        if (!token) return url;
-        if (url.includes('token=')) return url;
-        return url + (url.includes('?') ? '&' : '?') + `token=${token}`;
-      };
-
-      const links = document.querySelectorAll<HTMLAnchorElement>('a[href*="/api/attachments"]');
-      links.forEach((link) => {
-        const href = link.getAttribute('href');
-        if (href && !href.includes('/api/filePreviewAuth:download')) {
-          link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
-        }
-      });
-
-      // Also rewrite ai-attachment-link anchors
-      const aiLinks = document.querySelectorAll<HTMLAnchorElement>('a.ai-attachment-link');
-      aiLinks.forEach((link) => {
-        const href = link.getAttribute('href');
-        if (
-          href &&
-          !href.includes('/api/filePreviewAuth:download') &&
-          !href.includes('skillHub:download') &&
-          !href.includes('worker-monitor')
-        ) {
-          link.setAttribute('href', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(href)}`));
-        }
-      });
-
-      // Also rewrite image tags so thumbnails don't 404
-      const imgs = document.querySelectorAll<HTMLImageElement>('img[src*="/api/attachments"]');
-      imgs.forEach((img) => {
-        const src = img.getAttribute('src');
-        if (src && !src.includes('/api/filePreviewAuth:download')) {
-          img.setAttribute('src', appendToken(`/api/filePreviewAuth:download?url=${encodeURIComponent(src)}`));
-        }
-      });
-
-      // Auto-style raw markdown links for Skill Hub and Worker Monitor as interactive file attachments
-      const rawFileLinks = document.querySelectorAll<HTMLAnchorElement>(
-        '.ant-bubble a[href*="skillHub:download"], .ant-bubble a[href*="worker-monitor"]',
-      );
-      rawFileLinks.forEach((link) => {
-        if (!link.classList.contains('ai-attachment-link')) {
-          link.classList.add('ai-attachment-link');
-        }
-      });
+    const decorateLinks = () => {
+      for (const { root } of getChatScopes(app)) {
+        root
+          .querySelectorAll<HTMLAnchorElement>(
+            '.ant-bubble a[href*="skillHub:download"], .ant-bubble a[href*="worker-monitor"]',
+          )
+          .forEach((link) => {
+            link.classList.add('ai-attachment-link');
+          });
+      }
     };
-
-    // Run periodically to catch newly rendered chat messages
-    const timer = setInterval(rewriteObtrusiveLinks, 1000);
+    const timer = setInterval(decorateLinks, 1000);
     return () => clearInterval(timer);
-  }, [token]);
-
-  useEffect(() => {
-    const handleDrop = (e: DragEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target || !target.closest) return;
-      if (!target.closest(AI_CHAT_SENDER_SELECTOR)) return;
-
-      if (e.dataTransfer?.files) {
-        Array.from(e.dataTransfer.files).forEach((f) => {
-          if (f.name) {
-            AppRamCache.set(f.name, f);
-          }
-        });
-      }
-    };
-
-    const handleChange = (e: Event) => {
-      const target = e.target as HTMLInputElement;
-      if (!target || !target.closest) return;
-      if (!target.closest(AI_CHAT_SENDER_SELECTOR)) return;
-
-      if (target?.type === 'file' && target.files) {
-        Array.from(target.files).forEach((f) => {
-          if (f.name) {
-            AppRamCache.set(f.name, f);
-          }
-        });
-      }
-    };
-
-    window.addEventListener('drop', handleDrop, true);
-    document.addEventListener('change', handleChange, true);
-    return () => {
-      window.removeEventListener('drop', handleDrop, true);
-      document.removeEventListener('change', handleChange, true);
-    };
-  }, []);
-
-  // Intercept antd upload origin files via Zustand state store as duplicate safety net
-  useEffect(() => {
-    if (!pendingAttachmentsRef.current?.length) return;
-    pendingAttachmentsRef.current.forEach((att: any) => {
-      const fileObj = att.originFileObj || att;
-      if (fileObj && (fileObj instanceof Blob || fileObj instanceof File || 'size' in fileObj)) {
-        const name = att.name || att.filename || fileObj.name;
-        if (name) {
-          AppRamCache.set(name, fileObj);
-        }
-      }
-    });
-  }, [pendingAttachments]);
+  }, [app]);
 
   // Rewrite sandbox: and relative download/ links in messages to clean absolute routes so rehypeSanitize doesn't strip them and links function correctly
   useEffect(() => {
@@ -704,102 +571,48 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     });
   }, [messages]);
 
-  // Periodically check pure RAM cache and ONLY mark DOM cards that physically exist in local JS memory.
-  // This automatically rules out external database checks and prevents 403s on old un-cached files.
+  // Mark only file cards belonging to a mounted AI chat.
   useEffect(() => {
-    const checkInterval = setInterval(() => {
-      // Isolate strictly to AI module components! (AI Chat outputs Ant Design X attachments)
-      const aiContainers = document.querySelectorAll(AI_CHAT_CONTAINER_SELECTOR);
-
-      const cards: Element[] = [];
-      aiContainers.forEach((container) => {
-        container
-          .querySelectorAll('div[class*="attachment-list-card"]:not([class*="attachment-list-card-"])')
-          .forEach((c) => cards.push(c));
-        container.querySelectorAll('a').forEach((a) => {
-          const href = (a as HTMLAnchorElement).href;
-          if (
-            href &&
-            (href.includes('/api/attachments/') ||
-              href.includes('/api/files/download/') ||
-              href.includes('/api/worker-monitor/') ||
-              href.includes('/api/skillHub:download'))
-          ) {
-            cards.push(a);
-            if (!a.classList.contains('ai-attachment-link')) {
-              a.classList.add('ai-attachment-link');
-              a.classList.add('attachment-list-card'); // Trick click interceptor
-            }
-          }
+    const markCards = () => {
+      for (const { root, runtime } of getChatScopes(app)) {
+        const session = readActiveSession(runtime.chatConversationModel.currentConversation, runtime);
+        const attachments = [...session.attachments, ...runtime.chatSenderModel.attachments];
+        const manifest = buildSkillHubManifestMap(session.messages);
+        root.querySelectorAll<HTMLElement>('.ant-attachment-list-card, .ant-bubble a[href]').forEach((card) => {
+          const name = getDisplayNameFromCard(card);
+          const href = card instanceof HTMLAnchorElement ? card.href : card.querySelector('a[href]')?.href || '';
+          const file = href
+            ? findFileByUrl(href, session.messages, attachments)
+            : findFileByDisplayName(name, session.messages, attachments);
+          const previewable = !!file || isKnownFileUrl(href) || !!findManifestEntryForName(name, manifest);
+          card.classList.toggle('is-cached-previewable', previewable);
+          if (card instanceof HTMLAnchorElement && previewable) card.classList.add('ai-attachment-link');
         });
-      });
-
-      cards.forEach((card) => {
-        const el = card as HTMLElement;
-        const displayName = getDisplayNameFromCard(el);
-        let fallbackUrl = '';
-        if (el.tagName === 'A') {
-          fallbackUrl = (el as HTMLAnchorElement).href;
-        } else {
-          const urlNodes = el.querySelectorAll('a');
-          urlNodes.forEach((node) => {
-            if (node.href) fallbackUrl = node.href;
-          });
-        }
-
-        // Resolve real file name from data store
-        const file =
-          findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) ||
-          findFileByUrl(fallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
-        const realName = file?.filename || file?.name || file?.title;
-        const normalizedDisplayName = extractFilenameFromText(displayName);
-
-        // Strict RAM cache check
-        const cacheHitName =
-          realName && AppRamCache.has(realName)
-            ? realName
-            : displayName && AppRamCache.has(displayName)
-              ? displayName
-              : normalizedDisplayName && AppRamCache.has(normalizedDisplayName)
-                ? normalizedDisplayName
-                : null;
-
-        const isAIGenerated = isKnownFileUrl(fallbackUrl);
-
-        // Manifest match marks a card previewable even when the LLM wrote a broken download/ link.
-        const manifestMap = getCachedSkillHubManifestMap(messagesRef.current);
-        const hasManifestEntry =
-          !!findManifestEntryForName(displayName, manifestMap) ||
-          !!findManifestEntryForName(normalizedDisplayName, manifestMap);
-
-        if (file || cacheHitName || isAIGenerated || hasManifestEntry) {
-          el.classList.add('is-cached-previewable');
-        } else {
-          el.classList.remove('is-cached-previewable');
-        }
-      });
-    }, 1000);
-    return () => clearInterval(checkInterval);
-  }, []);
+      }
+    };
+    markCards();
+    const timer = setInterval(markCards, 1000);
+    return () => clearInterval(timer);
+  }, [app]);
 
   // Inject global CSS for explicit UI and native z-index click interception for child texts/tags
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
-      .ant-attachment-list-card {
+      .ant-attachment-list-card.is-cached-previewable {
         position: relative !important;
         cursor: pointer !important;
       }
       /* Prevent pointer events on inner text and icons so the outer div receives the absolute click */
-      .ant-attachment-list-card a,
-      .ant-attachment-list-card [class*="-icon"],
-      .ant-attachment-list-card span {
+      .ant-attachment-list-card.is-cached-previewable a,
+      .ant-attachment-list-card.is-cached-previewable [class*="-icon"],
+      .ant-attachment-list-card.is-cached-previewable span {
         pointer-events: none !important;
       }
       /* Re-enable pointer events for the delete button specifically */
-      .ant-attachment-list-card [class*="-remove"],
-      .ant-attachment-list-card button,
-      .ant-attachment-list-card .ant-btn {
+      .ant-attachment-list-card.is-cached-previewable [class*="-remove"],
+      .ant-attachment-list-card.is-cached-previewable button,
+      .ant-attachment-list-card.is-cached-previewable .ant-btn {
         pointer-events: auto !important;
       }
       /* Visual "Preview" badge at the top-left corner using proper SVG */
@@ -869,6 +682,13 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
     const handler = (e: MouseEvent) => {
       const el = e.target as Element;
       if (!el || typeof el.closest !== 'function') return;
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      const scope = getChatScope(app, el);
+      if (!scope) return;
+      const runtime: ChatBoxRuntime = scope.runtime;
+      const session = readActiveSession(runtime.chatConversationModel.currentConversation, runtime);
+      const currentMessages = session.messages;
+      const currentAttachments = [...session.attachments, ...runtime.chatSenderModel.attachments];
 
       // Find closest Anchor (A), FileCard, or Ant Tag (from chat input attachments)
       let fallbackUrl = '';
@@ -911,15 +731,15 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      let file =
-        findFileByDisplayName(displayName, messagesRef.current, pendingAttachmentsRef.current) ||
-        findFileByUrl(originalFallbackUrl, messagesRef.current, pendingAttachmentsRef.current);
+      let file = originalFallbackUrl
+        ? findFileByUrl(originalFallbackUrl, currentMessages, currentAttachments)
+        : findFileByDisplayName(displayName, currentMessages, currentAttachments);
 
       const normalizedDisplayName = extractFilenameFromText(displayName);
 
       // Prefer the server-provided skillhub manifest: it carries the real downloadUrl keyed by
       // filename, so a click resolves correctly even when the LLM wrote a broken `download/...` link.
-      const manifestMap = buildSkillHubManifestMap(messagesRef.current);
+      const manifestMap = buildSkillHubManifestMap(currentMessages);
       const manifestEntry =
         findManifestEntryForName(displayName, manifestMap) ||
         findManifestEntryForName(normalizedDisplayName, manifestMap);
@@ -935,8 +755,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
         const name = manifestEntry.name || normalizedDisplayName || 'attachment';
         const extname = name.match(/\.([a-z0-9]+)$/i)?.[1];
         file = {
-          id: manifestEntry.downloadUrl,
-          uid: manifestEntry.downloadUrl,
           url: manifestEntry.downloadUrl,
           filename: name,
           name,
@@ -949,8 +767,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
           normalizedDisplayName.match(/\.([a-z0-9]+)$/i)?.[1] ||
           originalFallbackUrl.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1];
         file = {
-          id: originalFallbackUrl,
-          uid: originalFallbackUrl,
           url: originalFallbackUrl,
           filename: normalizedDisplayName || 'attachment',
           name: normalizedDisplayName || 'attachment',
@@ -964,33 +780,13 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
       e.preventDefault();
       e.stopPropagation();
 
-      // Convert to secure proxy URL for everything EXCEPT natively secured endpoints that don't belong to the attachments table
-      const proxyTargetUrl = file.url || originalFallbackUrl;
-      const shouldUseProxy =
-        proxyTargetUrl &&
-        !proxyTargetUrl.includes('skillHub:download') &&
-        !proxyTargetUrl.includes('worker-monitor') &&
-        !proxyTargetUrl.includes('filePreviewAuth:download');
-
-      let secureUrl = proxyTargetUrl;
-      if (shouldUseProxy) {
-        secureUrl = `/api/filePreviewAuth:download?url=${encodeURIComponent(proxyTargetUrl)}`;
-        const collectionName = (file as any).collectionName || 'aiFiles';
-        const storageId = (file as any).storage_id || (file as any).storageId;
-
-        if (collectionName) {
-          secureUrl += `&collection=${encodeURIComponent(collectionName)}`;
-        }
-        if (storageId) {
-          secureUrl += `&storageId=${encodeURIComponent(storageId)}`;
-        }
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = undefined;
+      if (file.originFileObj instanceof Blob && !file.url) {
+        const url = URL.createObjectURL(file.originFileObj);
+        objectUrlRef.current = url;
+        file = { ...file, id: undefined, uid: undefined, preview: undefined, url };
       }
-
-      file = {
-        ...file,
-        url: secureUrl,
-        collectionName: (file as any).collectionName || 'aiFiles',
-      };
 
       setPreviewFile(file);
       setPreviewOpen(true);
@@ -998,12 +794,19 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
 
     document.addEventListener('click', handler, { capture: true });
     return () => document.removeEventListener('click', handler, { capture: true });
-  }, []);
+  }, [app]);
 
   const handleClose = useCallback(() => {
     setPreviewOpen(false);
     setPreviewFile(null);
   }, []);
+
+  useEffect(
+    () => () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    },
+    [],
+  );
 
   const SystemPreviewer = useMemo(() => {
     if (!previewFile || !previewOpen) return null;
@@ -1013,7 +816,6 @@ const ChatFilePreviewInner: React.FC<{ children: React.ReactNode }> = ({ childre
 
   return (
     <>
-      {children}
       {SystemPreviewer && previewOpen && previewFile && (
         <SystemPreviewer
           index={0}
@@ -1059,8 +861,11 @@ export class ChatFilePreviewErrorBoundary extends React.Component<
 
 export const ChatFilePreviewProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
-    <ChatFilePreviewErrorBoundary>
-      <ChatFilePreviewInner>{children}</ChatFilePreviewInner>
-    </ChatFilePreviewErrorBoundary>
+    <>
+      {children}
+      <ChatFilePreviewErrorBoundary>
+        <ChatFilePreviewInner />
+      </ChatFilePreviewErrorBoundary>
+    </>
   );
 };

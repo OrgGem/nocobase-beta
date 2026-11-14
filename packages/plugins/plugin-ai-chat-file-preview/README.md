@@ -4,8 +4,8 @@
 NocoBase AI Assistant file preview plugin supporting Word, Excel, PDF, CSV, and S3 authentication.
 
 ## Features
-- **Multi-format Support**: Natively preview `.docx`, `.xlsx`, `.pdf`, and `.csv` files directly in the browser.
-- **Secure Access**: Integrates with S3 authentication for securely loading private files.
+- **Multi-format Support**: Preview formats provided by the enabled File Manager previewers.
+- **Secure Access**: Install and enable `plugin-file-preview-auth` to use its authenticated previewers for private files, including private S3 files. It also provides Word and Excel previewers.
 - **AI Chat Integration**: Allows users to preview attachments uploaded during AI conversations without downloading them.
 
 ## Usage
