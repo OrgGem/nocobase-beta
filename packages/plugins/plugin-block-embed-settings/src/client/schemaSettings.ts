@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useFieldSchema } from '@formily/react';
-import { SchemaSettings, useApp, useDesignable } from '@nocobase/client';
+import { ACLContext, SchemaSettings, useACLContext, useApp, useDesignable } from '@nocobase/client';
+import { createElement, type PropsWithChildren } from 'react';
 import { useT } from './locale';
 import {
   decodeCollectionPath,
@@ -47,6 +48,7 @@ export const embedSettingsBlockSettings = new SchemaSettings({
         const fieldSchema = useFieldSchema();
         const { dn } = useDesignable();
         const app = useApp();
+        const acl = useACLContext();
         const t = useT();
 
         const currentPluginName = fieldSchema?.['x-component-props']?.pluginName || '';
@@ -56,6 +58,9 @@ export const embedSettingsBlockSettings = new SchemaSettings({
 
         return {
           title: t('Select plugin'),
+          ModalContextProvider({ children }: PropsWithChildren) {
+            return createElement(ACLContext.Provider, { value: acl }, children);
+          },
           schema: {
             type: 'object',
             properties: {
