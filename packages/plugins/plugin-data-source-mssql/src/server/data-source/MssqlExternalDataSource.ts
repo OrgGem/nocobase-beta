@@ -8,7 +8,8 @@
  */
 
 import { Database } from '@nocobase/database';
-import { SequelizeDataSource, DatabaseIntrospector } from '@nocobase/data-source-manager';
+import { SequelizeDataSource } from '@nocobase/data-source-manager';
+import type { CollectionOptions, LoadedCollections, LoadTablesOptions } from '@nocobase/data-source-manager';
 import { MssqlCollectionManager } from './MssqlCollectionManager';
 import { MssqlIntrospector } from './MssqlIntrospector';
 import type { Context } from '@nocobase/actions';
@@ -166,6 +167,8 @@ export type MssqlDataSourceOptions = {
   name?: string;
   cache?: any;
   storagePath?: string;
+  addAllCollections?: boolean;
+  selectedCollections?: string[];
 };
 
 export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospector> {
@@ -333,7 +336,7 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
    * This method is called by the core framework with `localData` populated from
    * the `dataSourcesCollections` / `dataSourcesFields` tables.
    */
-  async load(options: any = {}) {
+  async load(options: { localData?: LoadedCollections } = {}) {
     const { localData = {} } = options;
 
     // Authenticate connection
@@ -354,8 +357,15 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
 
     // Introspect tables from the external database
     try {
-      const tables = await this.introspector.getTables();
-      this.logger?.info?.(`[MSSQL] Found ${tables.length} tables in database`);
+      const dataSourceOptions = this.options as MssqlDataSourceOptions;
+      // Existing sources may have addAllCollections=false without a stored selection: the previous
+      // implementation ignored that flag, so keep loading all tables until a selection is saved.
+      const selectedTables =
+        dataSourceOptions.addAllCollections === false && Array.isArray(dataSourceOptions.selectedCollections)
+          ? [...new Set(dataSourceOptions.selectedCollections.filter((name) => typeof name === 'string' && name))]
+          : undefined;
+      const tables = selectedTables ?? (await this.introspector.getTables());
+      this.logger?.info?.(`[MSSQL] Loading ${tables.length} tables in database`);
 
       const schema = this.collectionManager.db.options.schema || 'dbo';
       const total = tables.length;
@@ -364,11 +374,15 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       // Pre-load all column metadata + primary keys in one bulk query each before the
       // parallel introspection loop, so per-table describeTable()/sys.indexes calls are
       // served from memory (anti-N+1).
-      await (this.introspector as MssqlIntrospector).preloadAllColumns(schema);
-      await (this.introspector as MssqlIntrospector).preloadAllPrimaryKeys(schema);
+      if (!selectedTables) {
+        await this.introspector.preloadAllColumns(schema);
+        await this.introspector.preloadAllPrimaryKeys(schema);
+      }
 
       // Pre-load FTS index info, then register smart text operators (CONTAINS vs LIKE routing)
-      await (this.introspector as MssqlIntrospector).preloadFTSIndexedColumns(schema);
+      if (tables.length) {
+        await this.introspector.preloadFTSIndexedColumns(schema, selectedTables);
+      }
       this.registerMssqlTextOperators();
 
       // Parallelize introspection in batches to avoid connection pool exhaustion
@@ -380,10 +394,12 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
           batch.map(async (tableName) => {
             const tableInfo = { tableName, schema };
             try {
-              const collectionOptions = await this.introspector.getCollection({
+              const name = this.introspector.tableInfoToCollectionOptions(tableInfo).name;
+              const introspected = await this.introspector.getCollection({
                 tableInfo,
-                localOptions: localData[tableName] || {},
+                localOptions: localData[name] || localData[tableName] || {},
               });
+              const [collectionOptions] = this.mergeWithLoadedCollections([introspected], localData);
 
               collectionOptions.introspected = true;
               collectionOptions.repository = 'mssql-repo';
@@ -422,12 +438,35 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
    * Called by the core framework's loadDataSourceTablesIntoCollections middleware
    * when creating/updating a data source with selected tables.
    *
-   * This method persists selected tables to the `dataSourcesCollections` table
-   * via the middleware pipeline.
+   * The middleware persists the selected table names in the data source options.
    */
-  async loadTables(ctx: Context, tables: string[]): Promise<any> {
-    this.logger?.info?.(`[MSSQL] Loading ${tables.length} specific tables:`, tables);
+  async loadTables(ctx: Context, tables: string[] = [], options: LoadTablesOptions = {}): Promise<void> {
+    // The core middleware removes values.collections after this call. Persist the selection
+    // in the datasource options so it is available to load() after create, update, or restart.
+    const { resourceName, actionName, params } = ctx.action || {};
+    if (resourceName === 'dataSources' && (actionName === 'create' || actionName === 'update')) {
+      const values = params.values;
+      const addAllCollections = values?.addAllCollections ?? values?.options?.addAllCollections;
+      if (addAllCollections === false && Array.isArray(params.values?.collections)) {
+        values.options = {
+          ...values.options,
+          addAllCollections: false,
+          selectedCollections: [
+            ...new Set(tables.filter((name): name is string => typeof name === 'string' && name.length > 0)),
+          ],
+        };
+      }
+    }
 
+    const collections = await this.prepareTables(tables, options.localData);
+    for (const collection of collections) {
+      this.collectionManager.defineCollection(collection);
+    }
+  }
+
+  async prepareTables(tables: string[], localData: LoadedCollections = {}): Promise<CollectionOptions[]> {
+    const collections: CollectionOptions[] = [];
+    this.logger?.info?.(`[MSSQL] Loading ${tables.length} specific tables:`, tables);
     for (const tableName of tables) {
       const tableInfo = {
         tableName,
@@ -435,18 +474,24 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       };
 
       try {
-        const collectionOptions = await this.introspector.getCollection({ tableInfo });
+        const name = this.introspector.tableInfoToCollectionOptions(tableInfo).name;
+        const introspected = await this.introspector.getCollection({
+          tableInfo,
+          localOptions: localData[name] || localData[tableName] || {},
+        });
+        const [collectionOptions] = this.mergeWithLoadedCollections([introspected], localData);
         collectionOptions.introspected = true;
         collectionOptions.repository = 'mssql-repo';
         collectionOptions.simplePaginate = true;
 
-        this.collectionManager.defineCollection(collectionOptions);
+        collections.push(collectionOptions);
         this.logger?.debug?.(`[MSSQL] Loaded table ${tableName} as collection`);
       } catch (error) {
         this.logger?.error?.(`[MSSQL] Failed to load table ${tableName}:`, error);
         throw error;
       }
     }
+    return collections;
   }
 
   /**
@@ -462,6 +507,8 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       schema: opts.schema,
       tablePrefix: opts.tablePrefix,
       encrypt: opts.encrypt,
+      addAllCollections: opts.addAllCollections,
+      selectedCollections: opts.selectedCollections,
       isExternal: true,
       isDBInstance: true,
     };

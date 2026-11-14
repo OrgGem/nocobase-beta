@@ -7,11 +7,22 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Checkbox, Form, Input, InputNumber, Select } from 'antd';
 import { useFlowContext } from '@nocobase/flow-engine';
 import type { DataSourceSettingsFormProps } from '@nocobase/plugin-data-source-manager/client-v2';
 import { useTranslation } from 'react-i18next';
+
+const CONNECTION_FIELDS = [
+  'host',
+  'port',
+  'database',
+  'schema',
+  'username',
+  'password',
+  'encrypt',
+  'tablePrefix',
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -31,28 +42,79 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
   const form = Form.useFormInstance();
   const ctx = useFlowContext();
   const addAllCollections = Form.useWatch(['options', 'addAllCollections'], form);
+  const host = Form.useWatch(['options', 'host'], form);
+  const port = Form.useWatch(['options', 'port'], form);
+  const database = Form.useWatch(['options', 'database'], form);
+  const schema = Form.useWatch(['options', 'schema'], form);
+  const username = Form.useWatch(['options', 'username'], form);
+  const password = Form.useWatch(['options', 'password'], form);
+  const encrypt = Form.useWatch(['options', 'encrypt'], form);
+  const tablePrefix = Form.useWatch(['options', 'tablePrefix'], form);
   const [collectionOptions, setCollectionOptions] = useState<{ label: string; value: string }[]>([]);
   const [loading, setLoading] = useState(false);
+  const requestGeneration = useRef(0);
+  const hasLoaded = useRef(false);
+  const isLoading = useRef(false);
+  const cachedConnection = useRef<unknown[]>();
+  const savedSelection = initialValues?.options?.selectedCollections;
+  const preserveLegacySelection =
+    mode === 'edit' && initialValues?.options?.addAllCollections === false && !Array.isArray(savedSelection);
+
+  useEffect(() => {
+    if (mode === 'edit' && Array.isArray(savedSelection) && form.getFieldValue('collections') === undefined) {
+      form.setFieldValue('collections', savedSelection);
+    }
+  }, [form, mode, savedSelection]);
+
+  useEffect(() => {
+    requestGeneration.current += 1;
+    hasLoaded.current = false;
+    isLoading.current = false;
+    cachedConnection.current = undefined;
+    setCollectionOptions([]);
+    setLoading(false);
+  }, [host, port, database, schema, username, password, encrypt, tablePrefix]);
 
   const handleLoadCollections = useCallback(async () => {
+    const values = form.getFieldsValue(true);
+    const connection = [values.key, ...CONNECTION_FIELDS.map((field) => values.options?.[field])];
+    const sameConnection = cachedConnection.current?.every((value, index) => value === connection[index]);
+    if (sameConnection && (hasLoaded.current || isLoading.current)) return;
+    if (!sameConnection) {
+      requestGeneration.current += 1;
+      hasLoaded.current = false;
+      cachedConnection.current = connection;
+    }
+    isLoading.current = true;
+    const generation = requestGeneration.current;
     setLoading(true);
     try {
-      const values = form.getFieldsValue(true);
+      const connectionChanged = CONNECTION_FIELDS.some(
+        (field) => values.options?.[field] !== initialValues?.options?.[field],
+      );
       const result =
-        mode === 'create'
+        mode === 'create' || connectionChanged
           ? (
               await ctx.api
                 .resource('dataSources')
                 .readTables({ values: { dataSourceKey: values.key, dbOptions: { ...values.options, type: 'mssql' } } })
             ).data
           : await loadCollections(String(initialValues.key));
-      setCollectionOptions(toCollectionOptions(result));
+      if (generation === requestGeneration.current) {
+        setCollectionOptions(toCollectionOptions(result));
+        hasLoaded.current = true;
+      }
     } catch {
-      ctx.message.error(String(t('Unable to load collections')));
+      if (generation === requestGeneration.current) {
+        ctx.message.error(String(t('Unable to load collections')));
+      }
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) {
+        isLoading.current = false;
+        setLoading(false);
+      }
     }
-  }, [ctx, form, loadCollections, initialValues?.key, mode, t]);
+  }, [ctx, form, loadCollections, initialValues, mode, t]);
 
   return (
     <>
@@ -88,6 +150,9 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
       >
         <Checkbox />
       </Form.Item>
+      <Form.Item name="__mssqlPreserveLegacySelection" initialValue={preserveLegacySelection} hidden>
+        <input type="hidden" />
+      </Form.Item>
       {!addAllCollections ? (
         <Form.Item name="collections" label={t('Collections')}>
           <Select
@@ -96,6 +161,7 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
             loading={loading}
             options={collectionOptions}
             onFocus={handleLoadCollections}
+            onChange={() => form.setFieldValue('__mssqlPreserveLegacySelection', false)}
             optionFilterProp="label"
           />
         </Form.Item>

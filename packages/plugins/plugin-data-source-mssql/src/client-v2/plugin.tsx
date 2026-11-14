@@ -25,13 +25,20 @@ export class PluginDataSourceMssqlClient extends Plugin<Record<string, never>, A
         allowCollectionDeletion: true,
         DeleteCollection: MssqlDeleteCollection,
         disableAddFields: false,
-        normalizeValues: (values) => ({
-          ...values,
-          options: {
-            ...values.options,
-            addAllCollections: values.options?.addAllCollections ?? values.addAllCollections ?? true,
-          },
-        }),
+        normalizeValues: (values) => {
+          const { __mssqlPreserveLegacySelection, ...normalized } = values;
+          const addAllCollections = values.options?.addAllCollections ?? values.addAllCollections ?? true;
+          if (__mssqlPreserveLegacySelection && addAllCollections === false) {
+            delete normalized.collections;
+          }
+          return {
+            ...normalized,
+            options: {
+              ...values.options,
+              addAllCollections,
+            },
+          };
+        },
       });
     }
   }

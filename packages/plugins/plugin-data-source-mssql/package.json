@@ -3,7 +3,7 @@
   "displayName": "Data source: MSSQL",
   "displayName.ru-RU": "Источник данных: MSSQL",
   "displayName.zh-CN": "数据源：MSSQL",
-  "version": "2.0.11",
+  "version": "2.0.12",
   "description": "External MSSQL data source support for NocoBase.",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",

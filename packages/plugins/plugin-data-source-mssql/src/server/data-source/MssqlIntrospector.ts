@@ -9,6 +9,8 @@
 
 import { DatabaseIntrospector } from '@nocobase/data-source-manager';
 import { tableInfo } from '@nocobase/data-source-manager';
+import { QueryTypes } from 'sequelize';
+import { quoteIdentifier } from '../security/sql-quote';
 import {
   buildBulkColumnsSql,
   groupColumnsByTable,
@@ -147,7 +149,11 @@ export class MssqlIntrospector extends DatabaseIntrospector {
    * Load Full-Text Search index info for ALL columns in one query and cache the result.
    * Call this once before queries run so that text operators can route to CONTAINS() vs LIKE.
    */
-  async preloadFTSIndexedColumns(schemaName = 'dbo'): Promise<void> {
+  async preloadFTSIndexedColumns(schemaName = 'dbo', tableNames?: string[]): Promise<void> {
+    if (tableNames && !tableNames.length) {
+      this.ftsColumnCache = new Map();
+      return;
+    }
     try {
       const sql = `
         SELECT t.name AS table_name, c.name AS column_name
@@ -156,6 +162,7 @@ export class MssqlIntrospector extends DatabaseIntrospector {
         INNER JOIN sys.tables t ON fic.object_id = t.object_id
         INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
         WHERE s.name = ${this.db.sequelize.escape(schemaName)}
+        ${tableNames ? `AND t.name IN (${tableNames.map((name) => this.db.sequelize.escape(name)).join(', ')})` : ''}
       `;
       const rows = (await this.db.sequelize.query(sql, { type: 'SELECT' })) as any[];
 
@@ -183,22 +190,13 @@ export class MssqlIntrospector extends DatabaseIntrospector {
     return this.ftsColumnCache.get(tableName)?.has(columnName) ?? false;
   }
 
-  /**
-   * Override getTableList to handle MSSQL's object-format table names.
-   * MSSQL's showAllTables() may return {tableName: 'Name', schema: 'dbo'} objects.
-   */
+  /** List only tables in the configured schema; names are relative to that schema. */
   async getTableList(): Promise<string[]> {
-    const tables = await this.db.sequelize.getQueryInterface().showAllTables();
-    return tables.map((table: any) => {
-      if (typeof table === 'string') {
-        return table;
-      }
-      // Object format: {tableName: 'TableName', schema: 'dbo'}
-      if (table && typeof table === 'object') {
-        return table.tableName || table.name || String(Object.values(table).find((v) => typeof v === 'string'));
-      }
-      return String(table);
-    });
+    const rows = await this.db.sequelize.query<{ name: string }>(
+      'SELECT t.name AS name FROM sys.tables t INNER JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE s.name = :schema',
+      { replacements: { schema: this.db.options.schema || 'dbo' }, type: QueryTypes.SELECT },
+    );
+    return rows.map((row) => row.name);
   }
 
   /**
@@ -279,8 +277,12 @@ export class MssqlIntrospector extends DatabaseIntrospector {
    */
   async getTableConstraints(tableInfo: tableInfo) {
     try {
-      const tableName = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
-      return await this.db.sequelize.getQueryInterface().showIndex(tableName);
+      const name = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
+      const schema = typeof tableInfo === 'string' ? this.db.options.schema || 'dbo' : tableInfo.schema || 'dbo';
+      return await this.db.sequelize.query('EXEC sys.sp_helpindex @objname = :name', {
+        replacements: { name: `${quoteIdentifier(schema)}.${quoteIdentifier(name)}` },
+        type: QueryTypes.SHOWINDEXES,
+      });
     } catch (err) {
       // MSSQL may not support showIndex well for all table types
       this.db.logger.warn(
@@ -291,16 +293,12 @@ export class MssqlIntrospector extends DatabaseIntrospector {
     }
   }
 
-  /**
-   * Override getViewList — MSSQL view listing support
-   */
+  /** List only views in the configured schema; the generic MSSQL query interface has no listViews. */
   async getViewList(): Promise<string[]> {
-    try {
-      const views = await this.db.queryInterface.listViews();
-      return views.map((view: any) => (typeof view === 'string' ? view : view.name || String(view)));
-    } catch {
-      // View listing may not be supported
-      return [];
-    }
+    const rows = await this.db.sequelize.query<{ name: string }>(
+      'SELECT v.name AS name FROM sys.views v INNER JOIN sys.schemas s ON s.schema_id = v.schema_id WHERE s.name = :schema',
+      { replacements: { schema: this.db.options.schema || 'dbo' }, type: QueryTypes.SELECT },
+    );
+    return rows.map((row) => row.name);
   }
 }
