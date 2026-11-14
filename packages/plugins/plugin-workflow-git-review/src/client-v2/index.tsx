@@ -7,13 +7,15 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { Plugin } from '@nocobase/client-v2';
+import { ExtendCollectionsProvider, Plugin } from '@nocobase/client-v2';
 import type { Instruction, TaskTypeOptions } from '@nocobase/plugin-workflow/client-v2';
 import { NativeManualInstruction, registerInstructions, type ReviewWorkflowClient } from './instructions';
 import { reviewApprovalTaskType } from './Approvals';
+import { reviewRequestCollection } from '../common/review-request-collection';
 
 export default class PluginWorkflowGitReviewClientV2 extends Plugin {
   async load() {
+    this.app.addProvider(ExtendCollectionsProvider, { collections: [reviewRequestCollection] });
     const workflow = this.app.pm.get<
       ReviewWorkflowClient & {
         getInstruction(type: string): Instruction | undefined;

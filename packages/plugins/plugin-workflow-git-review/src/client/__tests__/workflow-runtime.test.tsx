@@ -6,12 +6,14 @@ import PluginWorkflowGitReviewClientV2 from '../../client-v2';
 const runtimes = vi.hoisted(() => {
   class V1Instruction {}
   class V2Instruction {}
-  return { V1Instruction, V2Instruction };
+  const ExtendCollectionsProvider = () => null;
+  return { V1Instruction, V2Instruction, ExtendCollectionsProvider };
 });
 
 vi.mock('@nocobase/client', () => ({ Plugin: class Plugin {}, lazy: () => () => null }));
 vi.mock('@nocobase/client-v2', () => ({
   Plugin: class Plugin {},
+  ExtendCollectionsProvider: runtimes.ExtendCollectionsProvider,
   useApp: () => ({ i18n: { t: (key: string) => key } }),
 }));
 vi.mock('@nocobase/plugin-workflow/client', () => ({ Instruction: runtimes.V1Instruction }));
@@ -50,13 +52,28 @@ function strictWorkflow(instructionBase: new (...args: never[]) => object) {
 }
 
 function pluginContext(workflow: ReturnType<typeof strictWorkflow>) {
+  const collections = new Map<string, object>();
+  const reloadCallbacks: Array<() => void> = [];
+  const dataSource = {
+    collectionManager: {
+      getCollection: (name: string) => collections.get(name),
+      addCollections: (items: Array<{ name: string }>) => {
+        for (const item of items) collections.set(item.name, item);
+      },
+    },
+    addReloadCallback: (callback: () => void) => reloadCallbacks.push(callback),
+  };
   return {
     app: {
       pm: { get: vi.fn(() => workflow) },
+      dataSourceManager: { getDataSource: vi.fn(() => dataSource) },
+      addProvider: vi.fn(),
       pluginSettingsManager: { add: vi.fn(), addMenuItem: vi.fn(), addPageTabItem: vi.fn() },
     },
     t: (key: string) => key,
     pluginSettingsManager: { add: vi.fn(), addMenuItem: vi.fn(), addPageTabItem: vi.fn() },
+    collections,
+    reloadCallbacks,
   };
 }
 
@@ -72,6 +89,12 @@ describe('Git Review workflow instruction runtime registration', () => {
     const context = pluginContext(workflow);
 
     await PluginWorkflowGitReviewClient.prototype.load.call(context as unknown as PluginWorkflowGitReviewClient);
+
+    expect(context.collections.has('gitReviewRequests')).toBe(true);
+    expect(context.reloadCallbacks).toHaveLength(1);
+    context.collections.delete('gitReviewRequests');
+    context.reloadCallbacks[0]();
+    expect(context.collections.has('gitReviewRequests')).toBe(true);
 
     expect([...workflow.entries.keys()].filter((type) => type.startsWith('git-review-'))).toEqual([
       'git-review-llm',
@@ -100,6 +123,10 @@ describe('Git Review workflow instruction runtime registration', () => {
     const context = pluginContext(workflow);
 
     await PluginWorkflowGitReviewClientV2.prototype.load.call(context as unknown as PluginWorkflowGitReviewClientV2);
+
+    expect(context.app.addProvider).toHaveBeenCalledWith(runtimes.ExtendCollectionsProvider, {
+      collections: [expect.objectContaining({ name: 'gitReviewRequests', hidden: true })],
+    });
 
     for (const type of ['git-review-llm', 'git-review-context', 'git-review-result', 'git-review-publish', 'manual']) {
       expect(workflow.entries.get(type)).toBeInstanceOf(runtimes.V2Instruction);
