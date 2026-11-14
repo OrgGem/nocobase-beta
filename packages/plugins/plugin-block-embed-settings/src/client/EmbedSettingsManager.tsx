@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import React, { useMemo, useState } from 'react';
 import { Table, Button, Switch, Empty, Space, Popconfirm, Typography, message, Spin } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -34,6 +36,7 @@ export const EmbedSettingsManager: React.FC = () => {
         values: { pluginName, title, enabled: true },
       });
       message.success(t('Saved successfully'));
+      window.dispatchEvent(new Event('embed-settings:changed'));
       refresh();
     } catch (error) {
       console.error('[EmbedSettingsManager] Failed to add plugin:', error);
@@ -51,6 +54,7 @@ export const EmbedSettingsManager: React.FC = () => {
         values: { enabled },
       });
       message.success(t('Saved successfully'));
+      window.dispatchEvent(new Event('embed-settings:changed'));
       refresh();
     } catch (error) {
       console.error('[EmbedSettingsManager] Failed to toggle plugin:', error);
@@ -71,6 +75,7 @@ export const EmbedSettingsManager: React.FC = () => {
         filterByTk: id,
       });
       message.success(t('Saved successfully'));
+      window.dispatchEvent(new Event('embed-settings:changed'));
       refresh();
     } catch (error) {
       console.error('[EmbedSettingsManager] Failed to remove plugin:', error);

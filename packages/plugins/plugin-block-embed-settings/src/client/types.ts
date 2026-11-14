@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import type { Application } from '@nocobase/client-v2';
 import type React from 'react';
 
@@ -11,8 +13,8 @@ export interface EmbedSettingsPluginOption {
 export interface EmbedSettingsTabOption {
   value: string;
   label: string;
-  componentLoader?: () => Promise<{ default: React.ComponentType<EmbedTabComponentProps> }>;
-  Component?: React.ComponentType<EmbedTabComponentProps>;
+  componentLoader?: () => Promise<unknown>;
+  Component?: React.ComponentType<EmbedTabComponentProps> | string;
   componentProps?: Record<string, unknown>;
 }
 
@@ -106,9 +108,10 @@ export interface PluginSettingEntry {
   key?: string;
   title?: string | React.ReactNode;
   label?: string | React.ReactNode;
-  Component?: React.ComponentType<EmbedTabComponentProps>;
-  componentLoader?: () => Promise<{ default: React.ComponentType<EmbedTabComponentProps> }>;
+  Component?: React.ComponentType<EmbedTabComponentProps> | string;
+  componentLoader?: () => Promise<unknown>;
   children?: PluginSettingEntry[];
+  hidden?: boolean;
   embedSettings?: EmbedSettingsMeta;
 }
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin, RemoteSelect } from '@nocobase/client';
 import { EmbedSettingsBlockProvider } from './EmbedSettingsBlockProvider';
 import { EmbedSettingsBlock } from './EmbedSettingsBlock';
@@ -38,7 +40,7 @@ export class PluginBlockEmbedSettingsClient extends Plugin {
       title: this.t('Embed Settings Block'),
       icon: 'BlockOutlined',
       Component: EmbedSettingsManager,
-      aclSnippet: `pm.${NAMESPACE}`,
+      aclSnippet: `pm.${this.options.name || 'block-embed-settings'}`,
     });
 
     const title = `{{t("Plugin Settings", { ns: ["${NAMESPACE}", "client"], nsMode: "fallback" })}}`;

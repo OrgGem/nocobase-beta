@@ -35,6 +35,28 @@ describe('Embed settings with native V2 registry', () => {
     manager.setAclSnippets(['!pm.demo.index']);
     expect(collectEmbeddablePluginTabs(app, 'demo')).toEqual([]);
   });
+
+  it('retains an ACL-granted child tab without requiring a parent-menu grant', () => {
+    const app = createMockClient();
+    const manager = app.pluginSettingsManager;
+    manager.addMenuItem({ key: 'demo', title: 'Demo' });
+    manager.addPageTabItem({
+      menuKey: 'demo',
+      key: 'index',
+      title: 'Index',
+      componentLoader: async () => ({ default: () => null }),
+    });
+    manager.addPageTabItem({
+      menuKey: 'demo',
+      key: 'restricted',
+      title: 'Restricted',
+      componentLoader: async () => ({ default: () => null }),
+    });
+    manager.setAclSnippets(['!pm.demo', 'pm.demo.index', '!pm.demo.restricted']);
+
+    expect(collectEmbeddablePluginTabs(app, 'demo').map((tab) => tab.value)).toEqual(['demo.index']);
+  });
+
   it('uses the server plugin name for both settings ACL entries', async () => {
     const app = createMockClient();
     await new Plugin({}, app).load();

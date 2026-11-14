@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin } from '@nocobase/server';
 import { resolve } from 'path';
 
@@ -14,8 +16,22 @@ export class PluginBlockEmbedSettingsServer extends Plugin {
       actions: ['embedAllowedPlugins:*'],
     });
 
-    // Public read access so blocks can check allowed list
-    this.app.acl.allow('embedAllowedPlugins', 'list', 'loggedIn');
+    this.app.resourcer.define({
+      name: 'embedSettings',
+      only: ['enabled'],
+      actions: {
+        enabled: async (ctx, next) => {
+          const records = await this.db.getCollection('embedAllowedPlugins').model.findAll({
+            attributes: ['pluginName', 'title'],
+            where: { enabled: true },
+            raw: true,
+          });
+          ctx.body = records;
+          await next();
+        },
+      },
+    });
+    this.app.acl.allow('embedSettings', 'enabled', 'loggedIn');
   }
 }
 

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { useFieldSchema } from '@formily/react';
 import { SchemaSettings, useApp, useDesignable } from '@nocobase/client';
 import { useT } from './locale';
@@ -103,14 +105,7 @@ export const embedSettingsBlockSettings = new SchemaSettings({
           }) {
             const requiresCollection = pluginRequiresCollection(app, pluginName);
             const availableTabKeys = collectEmbeddablePluginTabs(app, pluginName).map((tab) => tab.value);
-            const availableTabKeySet = new Set(availableTabKeys);
-            const validEnabledTabKeys = Array.isArray(enabledTabKeys)
-              ? enabledTabKeys.filter((key) => availableTabKeySet.has(key))
-              : [];
-            const nextEnabledTabKeys =
-              !Array.isArray(enabledTabKeys) || (enabledTabKeys.length > 0 && validEnabledTabKeys.length === 0)
-                ? availableTabKeys
-                : validEnabledTabKeys;
+            const nextEnabledTabKeys = Array.isArray(enabledTabKeys) ? enabledTabKeys : availableTabKeys;
             const { dataSourceName, collectionName } = requiresCollection
               ? decodeCollectionPath(collectionPath)
               : { dataSourceName: undefined, collectionName: undefined };

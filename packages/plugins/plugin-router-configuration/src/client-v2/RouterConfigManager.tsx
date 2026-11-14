@@ -92,12 +92,14 @@ const loadSupportedDesktopRouteIds = async (api: ReturnType<typeof useApp>['apiC
 
 interface RouterConfigManagerViewProps {
   api: ReturnType<typeof useApp>['apiClient'];
+  embedded?: boolean;
   enablePathAliases?: boolean;
   refreshRoutes?: () => Promise<unknown>;
 }
 
 export function RouterConfigManagerView({
   api,
+  embedded = false,
   enablePathAliases = false,
   refreshRoutes,
 }: RouterConfigManagerViewProps) {
@@ -315,16 +317,16 @@ export function RouterConfigManagerView({
   ];
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: embedded ? 0 : 24 }}>
       <div
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
+          justifyContent: embedded ? 'flex-end' : 'space-between',
           alignItems: 'center',
           marginBottom: 16,
         }}
       >
-        <h2>{t('Router Configuration')}</h2>
+        {!embedded && <h2>{t('Router Configuration')}</h2>}
         <Button icon={<ReloadOutlined />} onClick={loadRoutes}>
           {t('Refresh')}
         </Button>
@@ -398,12 +400,13 @@ export function RouterConfigManagerView({
   );
 }
 
-export function RouterConfigManager() {
+export function RouterConfigManager({ embedded = false }: { embedded?: boolean } = {}) {
   const app = useApp();
 
   return (
     <RouterConfigManagerView
       api={app.apiClient}
+      embedded={embedded}
       enablePathAliases
       refreshRoutes={() => app.flowEngine.context.routeRepository.refreshAccessible()}
     />

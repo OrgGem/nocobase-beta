@@ -1,10 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import React, { Component as ReactComponent, Suspense, useMemo } from 'react';
 import { useFieldSchema } from '@formily/react';
 import { useApp } from '@nocobase/client-v2';
 import { Empty, Result, Button, Typography, Tabs, Spin } from 'antd';
 import { css } from '@emotion/css';
 import { useT } from './locale';
-import { collectEmbeddablePluginTabs } from './EmbedSettingsPluginSelect';
+import { collectEmbeddablePluginTabs, useEnabledEmbedSettingsPluginOptions } from './EmbedSettingsPluginSelect';
 import type { EmbedSettingsBlockProps, EmbedSettingsTabOption } from './types';
 
 const { Text } = Typography;
@@ -71,9 +73,7 @@ class EmbedTabErrorBoundary extends ReactComponent<
   render() {
     if (this.state.error) {
       const msg = this.state.error.message || '';
-      const isContextError =
-        msg.includes('parseVariable') ||
-        msg.includes('Cannot read properties of null');
+      const isContextError = msg.includes('parseVariable') || msg.includes('Cannot read properties of null');
       return (
         <Result
           status="warning"
@@ -100,6 +100,7 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
   const fieldSchema = useFieldSchema();
   const app = useApp();
   const t = useT();
+  const { loading, options } = useEnabledEmbedSettingsPluginOptions();
   const pluginName = pluginNameProp || fieldSchema?.['x-component-props']?.pluginName;
   const enabledTabKeys = enabledTabKeysProp || fieldSchema?.['x-component-props']?.enabledTabKeys;
   const dataSourceName = dataSourceNameProp || fieldSchema?.['x-component-props']?.dataSourceName;
@@ -120,15 +121,15 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
     );
   }
 
-  if (!app.pluginSettingsManager.has(pluginName)) {
+  if (loading) return <Spin />;
+  if (!options.some((option) => option.value === pluginName) || !app.pluginSettingsManager.has(pluginName)) {
     return <Empty description={t('Plugin not found or not authorized')} />;
   }
 
   const tabOptions = collectEmbeddablePluginTabs(app, pluginName);
   const selectedTabKeys = Array.isArray(enabledTabKeys) ? enabledTabKeys : tabOptions.map((tab) => tab.value);
   const enabledTabs = tabOptions.filter((tab) => selectedTabKeys.includes(tab.value));
-  const tabsToRender =
-    enabledTabs.length === 0 && Array.isArray(enabledTabKeys) && enabledTabKeys.length > 0 ? tabOptions : enabledTabs;
+  const tabsToRender = enabledTabs;
 
   if (tabOptions.length === 0) {
     return <Empty description={t('This plugin has no embeddable settings page')} />;
@@ -139,10 +140,10 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
   }
 
   return (
-    <EmbedErrorBoundary pluginName={pluginName}>
+    <EmbedErrorBoundary key={pluginName} pluginName={pluginName}>
       <div className={embedBlockStyles}>
         {tabsToRender.length === 1 ? (
-          <EmbedTabErrorBoundary tabLabel={tabsToRender[0].label}>
+          <EmbedTabErrorBoundary key={tabsToRender[0].value} tabLabel={tabsToRender[0].label}>
             <EmbedTabContent tab={tabsToRender[0]} dataSourceName={dataSourceName} collectionName={collectionName} />
           </EmbedTabErrorBoundary>
         ) : (
@@ -168,11 +169,24 @@ const EmbedTabContent: React.FC<{
   dataSourceName?: string;
   collectionName?: string;
 }> = ({ tab, dataSourceName, collectionName }) => {
+  const app = useApp();
+  const { Component, componentLoader } = tab;
   const Comp = useMemo<React.ComponentType<Record<string, unknown>>>(() => {
-    if (tab.Component) return tab.Component;
-    if (tab.componentLoader) return React.lazy(tab.componentLoader);
+    if (componentLoader)
+      return React.lazy(async () => {
+        const loaded = await componentLoader();
+        const component =
+          loaded && typeof loaded === 'object' && ('default' in loaded || 'Component' in loaded)
+            ? ('default' in loaded && loaded.default) || ('Component' in loaded && loaded.Component)
+            : loaded;
+        const resolved = typeof component === 'string' ? app.getComponent(component) : component;
+        if (!resolved) throw new Error('componentLoader did not resolve a component');
+        return { default: resolved as React.ComponentType<Record<string, unknown>> };
+      });
+    if (typeof Component === 'string') return app.getComponent(Component) || (() => null);
+    if (Component) return Component;
     return () => null;
-  }, [tab.Component, tab.componentLoader]);
+  }, [app, Component, componentLoader]);
 
   return (
     <Suspense fallback={<Spin />}>

@@ -7,9 +7,10 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Select } from 'antd';
-import { useApp } from '@nocobase/client-v2';
+import { useACLContext, useApp } from '@nocobase/client-v2';
+import { useRolesCheckRefresh } from '../shared/useRolesCheckRefresh';
 import type {
   EmbedSettingsPluginOption,
   EmbedSettingsTabOption,
@@ -77,7 +78,7 @@ export function collectEmbeddablePluginTabs(
 ): EmbedSettingsTabOption[] {
   if (!pluginName || !app.pluginSettingsManager.has(pluginName)) return [];
   const setting = app.pluginSettingsManager.get(pluginName);
-  if (!setting) return [];
+  if (!setting || setting.hidden) return [];
 
   const children = Array.isArray(setting.children) ? setting.children.filter(isRenderablePage) : [];
   if (children.length > 0) {
@@ -147,17 +148,29 @@ export function normalizeAllowedRecords(data: unknown): AllowedPluginRecord[] {
 export function useEnabledEmbedSettingsPluginOptions(): EmbedSettingsPluginOptionsResult {
   const app = useApp();
   const api = app.apiClient;
+  const acl = useACLContext();
+  const { valid: aclValid } = useRolesCheckRefresh(api);
   const [records, setRecords] = useState<AllowedPluginRecord[] | null>(null);
   const [version, setVersion] = useState(0);
+  const requestVersion = useRef(0);
 
   useEffect(() => {
     const refresh = () => {
+      requestVersion.current += 1;
       setRecords(null);
       setVersion((value) => value + 1);
     };
+    const refreshOnFocus = () => {
+      requestVersion.current += 1;
+      setVersion((value) => value + 1);
+    };
+    window.addEventListener('embed-settings:changed', refresh);
+    window.addEventListener('focus', refreshOnFocus);
     app.eventBus.addEventListener('auth:roleChanged', refresh);
     app.eventBus.addEventListener('auth:tokenChanged', refresh);
     return () => {
+      window.removeEventListener('embed-settings:changed', refresh);
+      window.removeEventListener('focus', refreshOnFocus);
       app.eventBus.removeEventListener('auth:roleChanged', refresh);
       app.eventBus.removeEventListener('auth:tokenChanged', refresh);
     };
@@ -165,17 +178,22 @@ export function useEnabledEmbedSettingsPluginOptions(): EmbedSettingsPluginOptio
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++requestVersion.current;
     api
       .request({
-        url: 'embedAllowedPlugins:list',
-        params: { filter: { enabled: true }, pageSize: 200 },
+        url: 'embedSettings:enabled',
         signal: controller.signal,
       })
       .then(({ data }: { data: unknown }) => {
-        if (!controller.signal.aborted) setRecords(normalizeAllowedRecords(data));
+        if (!controller.signal.aborted && requestId === requestVersion.current)
+          setRecords(normalizeAllowedRecords(data));
       })
       .catch((err: unknown) => {
-        if (!controller.signal.aborted && !(err instanceof DOMException && err.name === 'AbortError')) {
+        if (
+          !controller.signal.aborted &&
+          requestId === requestVersion.current &&
+          !(err instanceof DOMException && err.name === 'AbortError')
+        ) {
           setRecords([]);
         }
       });
@@ -184,19 +202,20 @@ export function useEnabledEmbedSettingsPluginOptions(): EmbedSettingsPluginOptio
     };
   }, [api, version]);
 
-  const options = useMemo(() => {
-    if (!records) return [];
+  const aclRole = app.context?.acl ? app.context.acl.data?.role : acl?.data?.data?.role;
+  let options: EmbedSettingsPluginOption[] = [];
+  if (records && aclValid && aclRole) {
     const allowedTitles = new Map(records.map((record: AllowedPluginRecord) => [record.pluginName, record.title]));
-    return collectEmbeddablePlugins(app)
+    options = collectEmbeddablePlugins(app)
       .filter((option) => allowedTitles.has(option.value))
       .map((option) => ({
         ...option,
         label: stringifyLabel(allowedTitles.get(option.value), option.label),
       }));
-  }, [app, records]);
+  }
 
   return {
-    loading: records === null,
+    loading: records === null || !!acl?.loading,
     options,
   };
 }

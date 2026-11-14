@@ -144,10 +144,10 @@ export const EmbedSettingsBlock: React.FC<EmbedSettingsBlockProps> = ({
   }
 
   return (
-    <EmbedErrorBoundary pluginName={pluginName} t={t}>
+    <EmbedErrorBoundary key={pluginName} pluginName={pluginName} t={t}>
       <div className={embedBlockStyles}>
         {tabsToRender.length === 1 ? (
-          <EmbedTabErrorBoundary tabLabel={tabsToRender[0].label} t={t}>
+          <EmbedTabErrorBoundary key={tabsToRender[0].value} tabLabel={tabsToRender[0].label} t={t}>
             <EmbedTabContent tab={tabsToRender[0]} dataSourceName={dataSourceName} collectionName={collectionName} />
           </EmbedTabErrorBoundary>
         ) : (
@@ -174,18 +174,23 @@ const EmbedTabContent: React.FC<{
   collectionName?: string;
 }> = ({ tab, dataSourceName, collectionName }) => {
   const app = useApp();
+  const { Component, componentLoader } = tab;
   const Comp = useMemo<React.ComponentType<Record<string, unknown>>>(() => {
-    if (typeof tab.Component === 'string') return app.getComponent(tab.Component) || (() => null);
-    if (tab.Component) return tab.Component;
-    if (tab.componentLoader)
+    if (componentLoader)
       return React.lazy(async () => {
-        const loaded = await tab.componentLoader();
-        const component = loaded && typeof loaded === 'object' && 'default' in loaded ? loaded.default : loaded;
+        const loaded = await componentLoader();
+        const component =
+          loaded && typeof loaded === 'object' && ('default' in loaded || 'Component' in loaded)
+            ? ('default' in loaded && loaded.default) || ('Component' in loaded && loaded.Component)
+            : loaded;
         const resolved = typeof component === 'string' ? app.getComponent(component) : component;
-        return { default: (resolved || (() => null)) as React.ComponentType<Record<string, unknown>> };
+        if (!resolved) throw new Error('componentLoader did not resolve a component');
+        return { default: resolved as React.ComponentType<Record<string, unknown>> };
       });
+    if (typeof Component === 'string') return app.getComponent(Component) || (() => null);
+    if (Component) return Component;
     return () => null;
-  }, [app, tab]);
+  }, [app, Component, componentLoader]);
 
   return (
     <Suspense fallback={<Spin />}>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import React, { useEffect, useMemo, useRef } from 'react';
 import { useForm } from '@formily/react';
 import { observer } from '@formily/reactive-react';
@@ -34,9 +36,6 @@ export const EmbedSettingsTabSelect = observer((props: EmbedSettingsTabSelectPro
     }
 
     if (options.length === 0) {
-      if (Array.isArray(value) && value.length > 0) {
-        onChange?.([]);
-      }
       return;
     }
 
@@ -56,15 +55,10 @@ export const EmbedSettingsTabSelect = observer((props: EmbedSettingsTabSelectPro
       return;
     }
 
-    // Same plugin: filter out invalid keys, select all if no selection yet
-    if (!Array.isArray(value) || value.length === 0) {
+    // Same plugin: select all only for an uninitialized selection.
+    if (!Array.isArray(value)) {
       onChange?.(options.map((option) => option.value));
       return;
-    }
-
-    const validKeys = value.filter((key: string) => optionKeys.has(key));
-    if (validKeys.length !== value.length) {
-      onChange?.(validKeys);
     }
   }, [onChange, options, pluginName, value]);
 

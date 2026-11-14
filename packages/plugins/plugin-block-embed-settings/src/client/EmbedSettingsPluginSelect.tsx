@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+// SPDX-License-Identifier: Apache-2.0
+
+import React, { useEffect, useRef, useState } from 'react';
 import { Select } from 'antd';
+import { useACLContext } from '@nocobase/client';
 import { useApp } from '@nocobase/client-v2';
+import { useRolesCheckRefresh } from '../shared/useRolesCheckRefresh';
 import type {
   EmbedSettingsPluginOption,
   EmbedSettingsTabOption,
@@ -51,6 +55,7 @@ function compileLabel(
 
 function isRenderablePage(page: PluginSettingEntry | undefined): boolean {
   if (!page) return false;
+  if (page.hidden || page.key?.includes(':')) return false;
   return Boolean(page.Component || page.componentLoader);
 }
 
@@ -60,14 +65,18 @@ function isRenderablePage(page: PluginSettingEntry | undefined): boolean {
  */
 export function collectEmbeddablePluginTabs(
   app: {
-    pluginSettingsManager: { has: (name: string) => boolean; get: (name: string) => PluginSettingEntry | undefined };
+    pluginSettingsManager: {
+      has: (name: string) => boolean;
+      get: (name: string) => PluginSettingEntry | undefined;
+      getSetting?: (name: string) => { children?: Record<string, unknown> } | undefined;
+    };
     i18n?: { t?: (key: string, options?: Record<string, unknown>) => unknown };
   },
   pluginName?: string,
 ): EmbedSettingsTabOption[] {
   if (!pluginName || !app.pluginSettingsManager.has(pluginName)) return [];
   const setting = app.pluginSettingsManager.get(pluginName);
-  if (!setting) return [];
+  if (!setting || setting.hidden) return [];
 
   const children = Array.isArray(setting.children) ? setting.children.filter(isRenderablePage) : [];
   if (children.length > 0) {
@@ -79,7 +88,8 @@ export function collectEmbeddablePluginTabs(
     }));
   }
 
-  if (isRenderablePage(setting)) {
+  const rawChildren = app.pluginSettingsManager.getSetting?.(pluginName)?.children;
+  if (!Array.isArray(setting.children) && !Object.keys(rawChildren || {}).length && isRenderablePage(setting)) {
     return [
       {
         value: setting.name,
@@ -137,42 +147,70 @@ export function normalizeAllowedRecords(data: unknown): AllowedPluginRecord[] {
 export function useEnabledEmbedSettingsPluginOptions(): EmbedSettingsPluginOptionsResult {
   const app = useApp();
   const api = app.apiClient;
+  const acl = useACLContext();
+  const aclRole = !acl?.error && acl?.data?.data?.role;
+  const { valid: aclValid } = useRolesCheckRefresh(api);
   const [records, setRecords] = useState<AllowedPluginRecord[] | null>(null);
+  const [version, setVersion] = useState(0);
+  const requestVersion = useRef(0);
+
+  useEffect(() => {
+    const refresh = () => {
+      requestVersion.current += 1;
+      setRecords(null);
+      setVersion((value) => value + 1);
+    };
+    const refreshOnFocus = () => {
+      requestVersion.current += 1;
+      setVersion((value) => value + 1);
+    };
+    window.addEventListener('embed-settings:changed', refresh);
+    window.addEventListener('focus', refreshOnFocus);
+    return () => {
+      window.removeEventListener('embed-settings:changed', refresh);
+      window.removeEventListener('focus', refreshOnFocus);
+    };
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
+    const requestId = ++requestVersion.current;
     api
       .request({
-        url: 'embedAllowedPlugins:list',
-        params: { filter: { enabled: true }, pageSize: 200 },
+        url: 'embedSettings:enabled',
         signal: controller.signal,
       })
       .then(({ data }: { data: unknown }) => {
-        if (!controller.signal.aborted) setRecords(normalizeAllowedRecords(data));
+        if (!controller.signal.aborted && requestId === requestVersion.current)
+          setRecords(normalizeAllowedRecords(data));
       })
       .catch((err: unknown) => {
-        if (!controller.signal.aborted && !(err instanceof DOMException && err.name === 'AbortError')) {
+        if (
+          !controller.signal.aborted &&
+          requestId === requestVersion.current &&
+          !(err instanceof DOMException && err.name === 'AbortError')
+        ) {
           setRecords([]);
         }
       });
     return () => {
       controller.abort();
     };
-  }, [api]);
+  }, [api, version]);
 
-  const options = useMemo(() => {
-    if (!records) return [];
+  let options: EmbedSettingsPluginOption[] = [];
+  if (records && aclValid && aclRole) {
     const allowedTitles = new Map(records.map((record: AllowedPluginRecord) => [record.pluginName, record.title]));
-    return collectEmbeddablePlugins(app)
+    options = collectEmbeddablePlugins(app)
       .filter((option) => allowedTitles.has(option.value))
       .map((option) => ({
         ...option,
         label: stringifyLabel(allowedTitles.get(option.value), option.label),
       }));
-  }, [app, records]);
+  }
 
   return {
-    loading: records === null,
+    loading: records === null || !!acl?.loading,
     options,
   };
 }

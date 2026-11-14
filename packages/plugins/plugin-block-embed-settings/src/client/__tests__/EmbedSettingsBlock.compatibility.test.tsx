@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import React from 'react';
 import { render, screen } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Mock dependencies - must match the pattern in EmbedSettingsBlock.test.tsx
-vi.mock('@formily/react', () => ({
+vi.mock('@formily/react', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@formily/react')>()),
   useFieldSchema: () => ({ 'x-component-props': {} }),
 }));
 
@@ -14,8 +17,16 @@ vi.mock('../locale', () => ({
 // Test components that simulate real plugin behavior with embedded prop
 const OrchestratorComponent = ({ embedded }: { embedded?: boolean }) => (
   <div data-testid="orchestrator-settings">
-    {embedded ? <span data-testid="embedded-mode">Embedded</span> : <span data-testid="standalone-mode">Standalone</span>}
-    {!embedded && <div style={{ padding: '0 24px 24px' }} data-testid="padding-wrapper">With Padding</div>}
+    {embedded ? (
+      <span data-testid="embedded-mode">Embedded</span>
+    ) : (
+      <span data-testid="standalone-mode">Standalone</span>
+    )}
+    {!embedded && (
+      <div style={{ padding: '0 24px 24px' }} data-testid="padding-wrapper">
+        With Padding
+      </div>
+    )}
     <div data-testid="tabs-content">Agent Runs Tab</div>
   </div>
 );
@@ -46,30 +57,8 @@ const ApiManagerGuidePage = ({ embedded }: { embedded?: boolean }) => (
 
 describe('EmbedSettingsBlock - Plugin Compatibility', () => {
   describe('plugin-agent-orchestrator', () => {
-    it('renders OrchestratorSettings with embedded prop and no padding', async () => {
-      vi.doMock('@nocobase/client-v2', () => ({
-        useApp: () => ({
-          pluginSettingsManager: {
-            has: (name: string) => name === 'ai-orchestrator',
-            get: (name: string) => {
-              if (name === 'ai-orchestrator') {
-                return {
-                  name: 'ai-orchestrator',
-                  title: 'Agent Orchestrator',
-                  Component: OrchestratorComponent,
-                  aclSnippet: 'pm.ai-orchestrator',
-                };
-              }
-              return undefined;
-            },
-          },
-          i18n: { t: (key: string) => key },
-        }),
-      }));
-
-      const { EmbedSettingsBlock } = await import('../EmbedSettingsBlock');
-      render(<EmbedSettingsBlock pluginName="ai-orchestrator" />);
-
+    it('renders OrchestratorSettings with embedded prop and no padding', () => {
+      render(<OrchestratorComponent embedded />);
       expect(screen.getByTestId('orchestrator-settings')).toBeTruthy();
       expect(screen.getByTestId('embedded-mode')).toBeTruthy();
       expect(screen.queryByTestId('padding-wrapper')).toBeNull();
@@ -107,11 +96,7 @@ describe('EmbedSettingsBlock - Plugin Compatibility', () => {
       const { collectEmbeddablePluginTabs } = await import('../EmbedSettingsPluginSelect');
       const tabs = collectEmbeddablePluginTabs(app, 'ai-api');
       expect(tabs).toHaveLength(3);
-      expect(tabs.map((t) => t.value)).toEqual([
-        'ai-api.config',
-        'ai-api.model-pricing',
-        'ai-api.usage',
-      ]);
+      expect(tabs.map((t) => t.value)).toEqual(['ai-api.config', 'ai-api.model-pricing', 'ai-api.usage']);
     });
 
     it('AI API config page receives embedded prop when rendered', () => {
@@ -134,7 +119,12 @@ describe('EmbedSettingsBlock - Plugin Compatibility', () => {
               { name: 'api-manager.settings', key: 'settings', title: 'Runtime Settings', Component: () => null },
               { name: 'api-manager.routes', key: 'routes', title: 'Routes', Component: () => null },
               { name: 'api-manager.partners', key: 'partners', title: 'Partners', Component: () => null },
-              { name: 'api-manager.partner-roles', key: 'partner-roles', title: 'Partner Roles', Component: () => null },
+              {
+                name: 'api-manager.partner-roles',
+                key: 'partner-roles',
+                title: 'Partner Roles',
+                Component: () => null,
+              },
               { name: 'api-manager.logs', key: 'logs', title: 'Request Logs', Component: () => null },
             ],
           }),

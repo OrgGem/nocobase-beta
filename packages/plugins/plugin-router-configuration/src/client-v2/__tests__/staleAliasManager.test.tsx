@@ -57,6 +57,31 @@ const renderManager = (api: React.ComponentProps<typeof RouterConfigManagerView>
   );
 
 describe('Router Configuration stale aliases', () => {
+  it('hides the page title and outer padding when embedded while retaining management controls', async () => {
+    const { api } = createApi([]);
+    const view = render(
+      <App>
+        <RouterConfigManagerView api={api} embedded enablePathAliases />
+      </App>,
+    );
+    const root = view.container.firstElementChild?.firstElementChild as HTMLElement;
+
+    expect(await screen.findByText('Legacy page')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Router Configuration' })).toBeNull();
+    expect(screen.getByRole('button', { name: /Refresh/ })).toBeTruthy();
+    expect(root.style.padding).toBe('0px');
+  });
+
+  it('preserves the standalone page title and spacing', async () => {
+    const { api } = createApi([]);
+    const view = renderManager(api);
+    const root = view.container.firstElementChild?.firstElementChild as HTMLElement;
+
+    expect(await screen.findByText('Legacy page')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Router Configuration' })).toBeTruthy();
+    expect(root.style.padding).toBe('24px');
+  });
+
   it('shows the stored alias for an ineligible route and permits removal only', async () => {
     const { api, request } = createApi([{ desktopRouteId: route.id, pathAlias: 'sales-dashboard' }]);
     renderManager(api);
