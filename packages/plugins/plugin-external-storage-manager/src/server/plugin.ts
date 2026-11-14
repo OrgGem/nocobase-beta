@@ -11,6 +11,36 @@ import { Plugin } from '@nocobase/server';
 import { NAMESPACE } from '../constants';
 import { IStorageAdapter } from './adapters/types';
 import { createExtStorageActions } from './actions/ext-storage';
+import type { Context } from '@nocobase/actions';
+
+/** File-operation scopes must not authorize edits to the directory mappings themselves. */
+export async function guardDirectoryManagement(ctx: Context, next: () => Promise<unknown>) {
+  const resourceName = ctx.action?.resourceName || '';
+  const segments = resourceName.split(/[.,]/);
+  let resolvedCollection = '';
+  try {
+    const repository = ctx.getCurrentRepository?.();
+    resolvedCollection = repository?.targetCollection?.name || repository?.collection?.name || '';
+  } catch {
+    // Non-collection resources do not have a current repository.
+  }
+  const params = ctx.action?.params;
+  const isDirectoryResource =
+    segments.includes('externalStorageDirectories') ||
+    resolvedCollection === 'externalStorageDirectories' ||
+    ctx.permission?.resourceName === 'externalStorageDirectories' ||
+    params?.targetCollection === 'externalStorageDirectories' ||
+    params?.values?.__collection === 'externalStorageDirectories';
+  const isDirectRead =
+    resourceName === 'externalStorageDirectories' &&
+    !ctx.action?.sourceId &&
+    ['list', 'get', 'query'].includes(ctx.action?.actionName);
+
+  if (isDirectoryResource && !isDirectRead && !ctx.can({ resource: 'extStorage', action: 'manageDirectories' })) {
+    return ctx.throw(403, ctx.t('Permission denied', { ns: NAMESPACE }));
+  }
+  return next();
+}
 
 export type StorageAdapterFactory = (directory: any) => Promise<IStorageAdapter>;
 
@@ -23,6 +53,11 @@ export class PluginExternalStorageManagerServer extends Plugin {
 
   async load() {
     const extStorageActions = createExtStorageActions(this.getAdapter.bind(this));
+
+    this.app.resourceManager.use(guardDirectoryManagement, {
+      tag: 'external-storage-directory-management',
+      after: 'acl',
+    });
 
     // Register handlers globally BEFORE defining the resource
     for (const [key, handler] of Object.entries(extStorageActions)) {

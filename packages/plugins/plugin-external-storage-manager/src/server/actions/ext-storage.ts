@@ -11,8 +11,8 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { IStorageAdapter, FileEntry, ListOptions, RangeOptions } from '../adapters/types';
-import { koaMulter as multer } from '@nocobase/utils';
-import { STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
+import { koaMulter as multer, uid } from '@nocobase/utils';
+import { NAMESPACE, STORAGE_TYPE_S3, STORAGE_TYPE_SFTP } from '../../constants';
 import { buildContentDisposition } from '../content-disposition';
 import { TtlCache } from '../list-cache';
 import { verifyDownloadSignature } from '../url-signing';
@@ -96,6 +96,29 @@ function sortEntries(entries: FileEntry[], sort = 'name', order = 'asc') {
 function safeUploadFilename(value: string) {
   const normalized = String(value || 'unnamed').replace(/\\/g, '/');
   return path.posix.basename(normalized) || 'unnamed';
+}
+
+const SAFE_INLINE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/webm',
+  'video/mp4',
+  'video/ogg',
+  'video/webm',
+]);
+
+function safeContentType(value: unknown): string {
+  if (typeof value !== 'string') return 'application/octet-stream';
+  const type = value.split(';', 1)[0].trim().toLowerCase();
+  return /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/.test(type) ? type : 'application/octet-stream';
 }
 
 /**
@@ -239,47 +262,70 @@ function getRecordValue(record: any, key: string) {
  * `null` lets callers *refuse to overwrite* those complex scopes instead of
  * silently replacing them.
  */
-export function extractDirectoryIds(scope: any): number[] | null {
-  if (scope === null || scope === undefined) {
-    return [];
-  }
+type DirectoryId = number | string;
+type PermissionAction = 'view' | 'update' | 'destroy';
+const PERMISSION_ACTIONS: PermissionAction[] = ['view', 'update', 'destroy'];
 
-  // Direct `{ id: { $in: [...] } }` or `{ id: 5 }`.
-  if (scope.id !== undefined) {
-    if (Array.isArray(scope.id.$in)) {
-      return scope.id.$in;
-    }
-    if (typeof scope.id === 'number' || typeof scope.id === 'string') {
-      return [scope.id];
-    }
-    return null;
-  }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 
-  if (Array.isArray(scope.$and)) {
-    if (scope.$and.length === 0) {
-      return [];
-    }
-    const ids: number[] = [];
-    for (const clause of scope.$and) {
-      const clauseIds = extractDirectoryIds(clause);
-      if (clauseIds === null) {
-        return null;
-      }
-      for (const id of clauseIds) {
-        if (!ids.includes(id)) {
-          ids.push(id);
-        }
-      }
-    }
-    return ids;
-  }
+function isDirectoryId(value: unknown): value is DirectoryId {
+  return (
+    (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) ||
+    (typeof value === 'string' && value.length > 0 && !value.includes('{{') && !value.includes('}}'))
+  );
+}
 
-  // Empty scope objects such as `{}` are representable as "no ids".
-  if (Object.keys(scope).length === 0) {
-    return [];
-  }
+export function extractDirectoryIds(scope: unknown): DirectoryId[] | null {
+  if (!isRecord(scope)) return null;
+  const keys = Object.keys(scope);
+  if (keys.length !== 1) return null;
 
-  return null;
+  if (keys[0] === '$and') {
+    const clauses = scope.$and;
+    return Array.isArray(clauses) && clauses.length === 1 ? extractDirectoryIds(clauses[0]) : null;
+  }
+  if (keys[0] !== 'id') return null;
+
+  const id = scope.id;
+  if (isDirectoryId(id)) return [id];
+  if (!isRecord(id) || Object.keys(id).length !== 1 || !Array.isArray(id.$in)) return null;
+  return id.$in.every(isDirectoryId) ? id.$in : null;
+}
+
+function getManagedActionIds(action: unknown): DirectoryId[] | null {
+  if (!isRecord(action)) return null;
+  const data: unknown = typeof action.toJSON === 'function' ? action.toJSON() : action;
+  if (!isRecord(data)) return null;
+  const scopeRow = data.scope;
+  if (!isRecord(scopeRow) || scopeRow.key === 'own') return null;
+  return extractDirectoryIds('scope' in scopeRow ? scopeRow.scope : scopeRow);
+}
+
+type DirectoryAclContext = {
+  app: {
+    acl: {
+      getRole?: (name: string) => { getStrategy?: () => { options?: { actions?: unknown } } | null } | undefined;
+      can: (options: { role: string; resource: string; action: string }) => unknown;
+    };
+  };
+};
+
+function hasInheritedDirectoryPermissions(ctx: DirectoryAclContext, roleName: string): boolean {
+  const actions = new Set(['view', 'create', 'update', 'destroy']);
+  const role = ctx.app.acl.getRole?.(roleName);
+  const strategyActions: unknown = role?.getStrategy?.()?.options?.actions;
+  if (Array.isArray(strategyActions)) {
+    for (const action of strategyActions) {
+      if (typeof action === 'string') actions.add(action.split(':')[0]);
+    }
+  } else if (typeof strategyActions === 'string' && strategyActions !== '*') {
+    actions.add(strategyActions.split(':')[0]);
+  }
+  return [...actions].some((action) =>
+    ctx.app.acl.can({ role: roleName, resource: 'externalStorageDirectories', action }),
+  );
 }
 
 /**
@@ -675,7 +721,11 @@ export function createExtStorageActions(
 
         const filename = path.basename(subPath);
 
-        ctx.set('Content-Type', contentType || 'application/octet-stream');
+        const responseContentType = safeContentType(contentType);
+        const disposition = mode === 'inline' && SAFE_INLINE_TYPES.has(responseContentType) ? 'inline' : 'attachment';
+        ctx.set('Content-Type', responseContentType);
+        ctx.set('X-Content-Type-Options', 'nosniff');
+        ctx.set('Content-Security-Policy', "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'");
         ctx.set('Accept-Ranges', 'bytes');
         if (size !== undefined && size !== null) {
           // When serving a range this is the partial length, not the total.
@@ -690,7 +740,7 @@ export function createExtStorageActions(
           }
         }
 
-        ctx.set('Content-Disposition', buildContentDisposition(filename, mode === 'inline' ? 'inline' : 'attachment'));
+        ctx.set('Content-Disposition', buildContentDisposition(filename, disposition));
 
         // Private: browser/CDN may cache per-user, but permission revocation
         // takes up to this window to be reflected for already-cached responses.
@@ -970,9 +1020,23 @@ export function createExtStorageActions(
       if (!result) return;
 
       const { directory, subPath } = result;
+      if (subPath === '/') return ctx.throw(400, ctx.t('Cannot delete the mapped directory root', { ns: NAMESPACE }));
+      const itemType = ctx.action.params.values?.type || ctx.action.params.type || 'file';
+      if (itemType !== 'file' && itemType !== 'directory') {
+        return ctx.throw(400, ctx.t('Invalid item type', { ns: NAMESPACE }));
+      }
       const adapter = await getAdapter(directory);
       const remotePath = resolveRemotePath(directory.get('rootPath'), subPath);
-      const itemType = ctx.action.params.values?.type || ctx.action.params.type || 'file';
+
+      let entry: FileEntry;
+      try {
+        entry = await adapter.stat(remotePath);
+      } catch {
+        return ctx.throw(404, ctx.t('File or directory not found', { ns: NAMESPACE }));
+      }
+      if (entry.type !== itemType) {
+        return ctx.throw(409, ctx.t('Requested item type does not match the stored entry', { ns: NAMESPACE }));
+      }
 
       try {
         if (itemType === 'directory') {
@@ -1112,45 +1176,60 @@ export function createExtStorageActions(
       }
 
       const roleName = ctx.action.params.roleName;
-      if (!roleName) return ctx.throw(400, 'roleName is required');
+      if (typeof roleName !== 'string' || !roleName)
+        return ctx.throw(400, ctx.t('roleName is required', { ns: NAMESPACE }));
 
-      const resource = await ctx.db.getRepository('rolesResources').findOne({
-        filter: { roleName, name: 'externalStorageDirectories' },
-      });
-      if (!resource) {
-        ctx.body = { data: { view: [], update: [], destroy: [] } };
-        return;
-      }
-      const actions = await ctx.db.getRepository('rolesResourcesActions').find({
-        filter: { rolesResourceId: getRecordValue(resource, 'id') },
-        appends: ['scope'],
-      });
-
-      const result: { view: number[]; update: number[]; destroy: number[] } = {
+      const result: Record<PermissionAction, DirectoryId[]> & { readOnlyActions: PermissionAction[] } = {
         view: [],
         update: [],
         destroy: [],
+        readOnlyActions: [],
       };
-      for (const action of actions) {
-        const actionData = action.toJSON ? action.toJSON() : action;
-        const actionName = actionData.name as 'view' | 'update' | 'destroy';
-        if (!result[actionName]) {
-          continue;
+      if (roleName === 'root') {
+        result.readOnlyActions = [...PERMISSION_ACTIONS];
+        ctx.body = result;
+        return;
+      }
+      const resource = await ctx.db.getRepository('dataSourcesRolesResources').findOne({
+        filter: { roleName, dataSourceKey: 'main', name: 'externalStorageDirectories' },
+      });
+      if (!resource) {
+        const legacyResource = await ctx.db.getRepository('rolesResources').findOne({
+          filter: { roleName, name: 'externalStorageDirectories' },
+        });
+        if (legacyResource || hasInheritedDirectoryPermissions(ctx, roleName)) {
+          result.readOnlyActions = [...PERMISSION_ACTIONS];
         }
-        const scopeRow = actionData.scope;
-        const scope = scopeRow?.scope || scopeRow; // handle both populated relation and raw json if legacy
-        const ids = extractDirectoryIds(scope);
-        if (ids !== null) {
+        ctx.body = result;
+        return;
+      }
+      if (getRecordValue(resource, 'usingActionsConfig') === false) {
+        result.readOnlyActions = [...PERMISSION_ACTIONS];
+        ctx.body = result;
+        return;
+      }
+
+      const actions = await ctx.db.getRepository('dataSourcesRolesResourcesActions').find({
+        filter: { rolesResourceId: getRecordValue(resource, 'id') },
+        appends: ['scope'],
+      });
+      const seen = new Set<PermissionAction>();
+      for (const action of actions) {
+        const actionName = getRecordValue(action, 'name');
+        if (!PERMISSION_ACTIONS.includes(actionName)) continue;
+        const ids = getManagedActionIds(action);
+        if (ids === null || seen.has(actionName)) {
+          if (!result.readOnlyActions.includes(actionName)) result.readOnlyActions.push(actionName);
+          result[actionName] = [];
+        } else if (!result.readOnlyActions.includes(actionName)) {
           result[actionName] = ids;
         }
+        seen.add(actionName);
       }
       ctx.body = result;
     },
 
-    /**
-     * POST extStorage:updateRolePermissions
-     * Update Data Scopes in rolesResourcesActions to reflect simple ID lists.
-     */
+    /** Update only supplied, losslessly representable directory ID scopes. */
     updateRolePermissions: async (ctx: any) => {
       const currentRoles = getCurrentRoles(ctx);
       if (!currentRoles.includes('root')) {
@@ -1160,81 +1239,153 @@ export function createExtStorageActions(
 
       const payload = ctx.action.params.values || ctx.request.body || {};
       const roleName = payload.roleName || ctx.action.params.roleName;
-      const permissions = payload.values || {};
-      if (!roleName) return ctx.throw(400, 'roleName is required');
-
-      const resourceRepo = ctx.db.getRepository('rolesResources');
-      let resource = await resourceRepo.findOne({ filter: { roleName, name: 'externalStorageDirectories' } });
-      if (!resource) {
-        resource = await resourceRepo.create({
-          values: { roleName, name: 'externalStorageDirectories', usingActionsConfig: true },
-        });
-      } else if (!getRecordValue(resource, 'usingActionsConfig')) {
-        await resource.update({ usingActionsConfig: true });
+      const permissions: unknown = payload.values;
+      if (typeof roleName !== 'string' || !roleName)
+        return ctx.throw(400, ctx.t('roleName is required', { ns: NAMESPACE }));
+      if (roleName === 'root')
+        return ctx.throw(409, ctx.t('Root permissions cannot be edited here', { ns: NAMESPACE }));
+      if (!isRecord(permissions)) {
+        return ctx.throw(400, ctx.t('values must contain permission actions', { ns: NAMESPACE }));
+      }
+      const actionNames = Object.keys(permissions);
+      if (!actionNames.length || actionNames.some((name) => !PERMISSION_ACTIONS.includes(name as PermissionAction))) {
+        return ctx.throw(400, ctx.t('Invalid permission actions', { ns: NAMESPACE }));
+      }
+      for (const actionName of actionNames) {
+        const ids = permissions[actionName];
+        if (!Array.isArray(ids) || !ids.every(isDirectoryId)) {
+          return ctx.throw(400, ctx.t('Invalid directory IDs', { ns: NAMESPACE }));
+        }
       }
 
-      const rolesResourceId = getRecordValue(resource, 'id');
-      const actionsRepo = ctx.db.getRepository('rolesResourcesActions');
-      for (const actionName of ['view', 'update', 'destroy']) {
-        const ids = permissions[actionName] || [];
-        const action = await actionsRepo.findOne({
-          filter: { rolesResourceId, name: actionName },
-          appends: ['scope'],
+      const resourceRepo = ctx.db.getRepository('dataSourcesRolesResources');
+      const actionsRepo = ctx.db.getRepository('dataSourcesRolesResourcesActions');
+      const scopeRepo = ctx.db.getRepository('dataSourcesRolesResourcesScopes');
+      const resource = await ctx.db.sequelize.transaction(async (transaction) => {
+        // Serialise plugin updates for this role even before the resource row exists.
+        const role = await ctx.db.getRepository('roles').findOne({
+          filterByTk: roleName,
+          transaction,
+          lock: true,
         });
+        if (!role) return ctx.throw(404, ctx.t('Role not found', { ns: NAMESPACE }));
 
-        if (ids.length === 0) {
-          // Remove the action if no ids allowed
-          if (action) await action.destroy();
-        } else {
-          const scopeJson = { $and: [{ id: { $in: ids } }] };
+        let resource = await resourceRepo.findOne({
+          filter: { roleName, dataSourceKey: 'main', name: 'externalStorageDirectories' },
+          transaction,
+          lock: true,
+        });
+        const legacyResource = !resource
+          ? await ctx.db.getRepository('rolesResources').findOne({
+              filter: { roleName, name: 'externalStorageDirectories' },
+              transaction,
+            })
+          : null;
+        if (
+          (!resource && (legacyResource || hasInheritedDirectoryPermissions(ctx, roleName))) ||
+          (resource && getRecordValue(resource, 'usingActionsConfig') === false)
+        ) {
+          return ctx.throw(409, ctx.t('Inherited permissions cannot be edited here', { ns: NAMESPACE }));
+        }
+
+        const existingActions = resource
+          ? await actionsRepo.find({
+              filter: { rolesResourceId: getRecordValue(resource, 'id') },
+              appends: ['scope'],
+              transaction,
+            })
+          : [];
+        for (const actionName of actionNames) {
+          const matching = existingActions.filter((action) => getRecordValue(action, 'name') === actionName);
+          if (matching.length > 1 || (matching.length === 1 && getManagedActionIds(matching[0]) === null)) {
+            return ctx.throw(409, ctx.t('This permission uses an advanced data scope', { ns: NAMESPACE }));
+          }
+        }
+
+        if (!resource && actionNames.every((name) => (permissions[name] as DirectoryId[]).length === 0)) return null;
+        const dataSourceRoles = ctx.db.getRepository('dataSourcesRoles');
+        const dataSourceRole = await dataSourceRoles.findOne({
+          filter: { roleName, dataSourceKey: 'main' },
+          transaction,
+          lock: true,
+        });
+        if (!dataSourceRole) {
+          await dataSourceRoles.create({
+            values: { id: uid(), roleName, dataSourceKey: 'main', strategy: getRecordValue(role, 'strategy') },
+            transaction,
+            hooks: false,
+          });
+        }
+        if (!resource) {
+          resource = await resourceRepo.create({
+            values: {
+              id: ctx.app.snowflakeIdGenerator.generate(),
+              roleName,
+              dataSourceKey: 'main',
+              name: 'externalStorageDirectories',
+              usingActionsConfig: true,
+            },
+            transaction,
+            hooks: false,
+          });
+        }
+
+        for (const actionName of actionNames) {
+          const ids = permissions[actionName] as DirectoryId[];
+          const action = existingActions.find((item) => getRecordValue(item, 'name') === actionName);
+          if (!action && ids.length === 0) continue;
+
+          // A scope can be shared by other actions or roles: never mutate it in place.
+          const scope = await scopeRepo.create({
+            values: {
+              dataSourceKey: 'main',
+              resourceName: 'externalStorageDirectories',
+              scope: { $and: [{ id: { $in: ids } }] },
+            },
+            transaction,
+          });
           if (action) {
-            const actionData = action.toJSON ? action.toJSON() : action;
-            const actionScope = actionData.scope;
-            const existingScope = actionScope?.scope ?? actionScope;
-
-            // Never overwrite a complex data scope this plugin did not author.
-            const existingIds = extractDirectoryIds(existingScope);
-            if (existingIds === null) {
-              ctx.logger?.warn?.(
-                `[ext-storage] Refusing to overwrite non-list data scope for role action ${actionName}`,
-              );
-              continue;
-            }
-
-            const actionScopeId =
-              getRecordValue(actionScope, 'id') || actionData.scopeId || getRecordValue(action, 'scopeId');
-            // Update existing action
-            if (actionScopeId) {
-              // update the related scope record
-              await ctx.db.getRepository('rolesResourcesScopes').update({
-                filterByTk: actionScopeId,
-                values: { scope: scopeJson },
-              });
-            } else {
-              // create a new scope record and link it
-              const newScope = await ctx.db.getRepository('rolesResourcesScopes').create({
-                values: { scope: scopeJson },
-              });
-              await action.update({ scopeId: getRecordValue(newScope, 'id') });
-            }
+            await action.update({ scopeId: getRecordValue(scope, 'id') }, { transaction, hooks: false });
           } else {
-            const newScope = await ctx.db.getRepository('rolesResourcesScopes').create({
-              values: { scope: scopeJson },
-            });
             await actionsRepo.create({
-              values: { rolesResourceId, name: actionName, scopeId: getRecordValue(newScope, 'id') },
+              values: {
+                rolesResourceId: getRecordValue(resource, 'id'),
+                name: actionName,
+                scopeId: getRecordValue(scope, 'id'),
+              },
+              transaction,
+            });
+          }
+        }
+        return resource;
+      });
+
+      if (resource) {
+        const dataSourcePlugin = ctx.app.pm?.get('data-source-manager');
+        try {
+          await resource.writeToACL({ acl: ctx.app.acl });
+        } catch (error) {
+          // A failed refresh must not leave a revoked permission active in this process.
+          const role = ctx.app.acl.getRole(roleName);
+          if (role) {
+            if (!role.getResource('externalStorageDirectories')) {
+              role.grantAction('externalStorageDirectories:view', {});
+            }
+            const cachedResource = role.getResource('externalStorageDirectories');
+            for (const actionName of Object.keys(cachedResource.getActions())) cachedResource.removeAction(actionName);
+          }
+          throw error;
+        } finally {
+          if (dataSourcePlugin) {
+            await dataSourcePlugin.sendSyncMessage({
+              type: 'syncRoleResource',
+              roleName,
+              dataSourceKey: 'main',
+              resourceName: 'externalStorageDirectories',
             });
           }
         }
       }
-
-      // Force reload the ACL cache in memory for this resource
-      try {
-        await resource.writeToACL({ acl: ctx.app.acl });
-      } catch (e) {
-        ctx.logger?.warn?.('[ext-storage] Failed to write resource to ACL memory cache:', e);
-      }
-
       ctx.body = { data: 'ok' };
     },
   };

@@ -59,6 +59,7 @@ import {
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useApp } from '@nocobase/client-v2';
+import { useTranslation } from 'react-i18next';
 import { useFileBrowser, FileItem } from '../hooks/useFileBrowser';
 
 const { Sider, Content } = Layout;
@@ -100,6 +101,7 @@ const getFileIcon = (mimetype?: string) => {
 };
 
 export const FileBrowser: React.FC = () => {
+  const { t } = useTranslation('plugin-external-storage-manager');
   const api = useApp().apiClient;
   const browser = useFileBrowser();
   const {
@@ -717,10 +719,9 @@ export const FileBrowser: React.FC = () => {
       {previewOpen && previewFile
         ? (() => {
             const ext = (previewFile.extname || '').toLowerCase().replace(/^\./, '');
-            const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(ext);
-            const isVideo = ['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext);
-            const isAudio = ['mp3', 'wav', 'oga', 'm4a', 'flac', 'aac'].includes(ext);
-            const isPdf = ext === 'pdf';
+            const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif'].includes(ext);
+            const isVideo = ['mp4', 'webm', 'ogg'].includes(ext);
+            const isAudio = ['mp3', 'wav', 'oga', 'm4a'].includes(ext);
             const close = () => setPreviewOpen(false);
             if (isImage) {
               return (
@@ -750,16 +751,13 @@ export const FileBrowser: React.FC = () => {
                   <video src={previewFile.url} controls style={{ width: '100%' }} />
                 ) : isAudio ? (
                   <audio src={previewFile.url} controls style={{ width: '100%' }} />
-                ) : isPdf ? (
-                  <iframe
-                    src={previewFile.url}
-                    title={previewFile.filename}
-                    style={{ width: '100%', height: '70vh', border: 'none' }}
-                  />
                 ) : (
-                  <Empty description="Preview not available for this file type" image={Empty.PRESENTED_IMAGE_SIMPLE}>
-                    <Button type="primary" href={previewFile.url} target="_blank" rel="noopener noreferrer">
-                      Download
+                  <Empty
+                    description={t('Preview not available for this file type')}
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  >
+                    <Button type="primary" href={previewFile.downloadUrl} target="_blank" rel="noopener noreferrer">
+                      {t('Download')}
                     </Button>
                   </Empty>
                 )}

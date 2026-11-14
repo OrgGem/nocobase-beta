@@ -8,11 +8,17 @@
  */
 
 import { vi } from 'vitest';
-import { PluginExternalStorageManagerServer } from '../plugin';
+import { ACL } from '@nocobase/acl';
+import type { Context } from '@nocobase/actions';
+import { guardDirectoryManagement, PluginExternalStorageManagerServer } from '../plugin';
 
 function makePlugin() {
   const snippets = new Map<string, { name: string; actions: string[] }>();
   const allowCalls: Array<{ resource: string; actions: string[]; role: string }> = [];
+  const acl = new ACL();
+  const registerAclSnippet = acl.registerSnippet.bind(acl);
+  const allowAcl = acl.allow.bind(acl);
+  const resourceMiddlewares: Array<{ middleware: unknown; options: Record<string, unknown> }> = [];
 
   const childLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const app: any = {
@@ -27,19 +33,38 @@ function makePlugin() {
     resourceManager: {
       registerActionHandler: vi.fn(),
       define: vi.fn(),
+      use: vi.fn((middleware: unknown, options: Record<string, unknown>) => {
+        resourceMiddlewares.push({ middleware, options });
+      }),
     },
-    acl: {
+    acl: Object.assign(acl, {
       registerSnippet: vi.fn((snippet: { name: string; actions: string[] }) => {
         snippets.set(snippet.name, snippet);
+        registerAclSnippet(snippet);
       }),
       allow: vi.fn((resource: string, actions: string[], role: string) => {
         allowCalls.push({ resource, actions, role });
+        allowAcl(resource, actions, role);
       }),
-    },
+    }),
   };
 
   const plugin = new PluginExternalStorageManagerServer(app, { name: 'plugin-external-storage-manager' } as any);
-  return { app, plugin, snippets, allowCalls };
+  return { app, plugin, snippets, allowCalls, resourceMiddlewares };
+}
+
+function guardContext(acl: ACL, role: string, resourceName: string, actionName: string) {
+  return {
+    action: { resourceName, actionName, params: {} },
+    state: { currentRoles: [role], currentRole: role },
+    t: (key: string) => key,
+    can: (options: { resource: string; action: string }) => acl.can({ roles: [role], ...options }),
+    throw(status: number, message: string) {
+      const error = new Error(message) as Error & { status: number };
+      error.status = status;
+      throw error;
+    },
+  } as unknown as Context;
 }
 
 describe('plugin-external-storage-manager ACL registration', () => {
@@ -84,5 +109,66 @@ describe('plugin-external-storage-manager ACL registration', () => {
 
     const extStorageAllows = allowCalls.filter((call) => call.resource === 'extStorage');
     expect(extStorageAllows).toEqual([{ resource: 'extStorage', actions: 'download', role: 'loggedIn' }]);
+  });
+
+  it('registers a directory-management guard after ACL middleware', async () => {
+    const { plugin, app } = makePlugin();
+    await plugin.load();
+
+    expect(app.resourceManager.use).toHaveBeenCalledWith(guardDirectoryManagement, {
+      tag: 'external-storage-directory-management',
+      after: 'acl',
+    });
+  });
+
+  it('does not let file update/delete grants authorize directory mapping CRUD or association writes', async () => {
+    const { plugin, app } = makePlugin();
+    await plugin.load();
+    app.acl.define({
+      role: 'file-manager',
+      actions: {
+        'externalStorageDirectories:view': {},
+        'externalStorageDirectories:update': {},
+        'externalStorageDirectories:destroy': {},
+        'extStorage:upload': {},
+        'extStorage:delete': {},
+      },
+    });
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      guardDirectoryManagement(guardContext(app.acl, 'file-manager', 'externalStorageDirectories', 'update'), next),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      guardDirectoryManagement(guardContext(app.acl, 'file-manager', 'externalStorageDirectories', 'destroy'), next),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      guardDirectoryManagement(
+        guardContext(app.acl, 'file-manager', 'externalStorageDirectories.tags', 'create'),
+        next,
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+
+    await guardDirectoryManagement(guardContext(app.acl, 'file-manager', 'externalStorageDirectories', 'list'), next);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows mapping CRUD only for the plugin directories snippet', async () => {
+    const { plugin, app } = makePlugin();
+    await plugin.load();
+    const manager = app.acl.define({ role: 'directory-manager' });
+    manager.snippets.add('pm.plugin-external-storage-manager.directories');
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await guardDirectoryManagement(
+      guardContext(app.acl, 'directory-manager', 'externalStorageDirectories', 'update'),
+      next,
+    );
+    await guardDirectoryManagement(
+      guardContext(app.acl, 'directory-manager', 'externalStorageDirectories.files', 'create'),
+      next,
+    );
+
+    expect(next).toHaveBeenCalledTimes(2);
   });
 });

@@ -10,11 +10,10 @@
 import { extractDirectoryIds } from '../actions/ext-storage';
 
 describe('extractDirectoryIds', () => {
-  it('returns [] for empty/undefined scopes', () => {
-    expect(extractDirectoryIds(undefined)).toEqual([]);
-    expect(extractDirectoryIds(null)).toEqual([]);
-    expect(extractDirectoryIds({})).toEqual([]);
-    expect(extractDirectoryIds({ $and: [] })).toEqual([]);
+  it('treats unrestricted and absent scopes as unrepresentable', () => {
+    expect(extractDirectoryIds(undefined)).toBeNull();
+    expect(extractDirectoryIds(null)).toBeNull();
+    expect(extractDirectoryIds({})).toBeNull();
   });
 
   it('parses a direct id value', () => {
@@ -26,13 +25,22 @@ describe('extractDirectoryIds', () => {
     expect(extractDirectoryIds({ id: { $in: [1, 2, 3] } })).toEqual([1, 2, 3]);
   });
 
-  it('flattens and dedupes $and clauses', () => {
-    expect(extractDirectoryIds({ $and: [{ id: { $in: [1, 2] } }, { id: { $in: [2, 3] } }] })).toEqual([1, 2, 3]);
+  it('accepts the plugin-authored single-clause $and wrapper', () => {
+    expect(extractDirectoryIds({ $and: [{ id: { $in: [1, 2] } }] })).toEqual([1, 2]);
   });
 
-  it('returns null for unsupported operators', () => {
+  it('rejects scopes with additional conditions or unsupported operators', () => {
+    expect(extractDirectoryIds({ id: { $in: [1] }, enabled: true })).toBeNull();
+    expect(extractDirectoryIds({ $and: [{ id: 1 }, { id: 2 }] })).toBeNull();
     expect(extractDirectoryIds({ $or: [{ id: 1 }] })).toBeNull();
     expect(extractDirectoryIds({ id: { $ne: 1 } })).toBeNull();
-    expect(extractDirectoryIds({ $and: [{ id: 1 }, { id: { $ne: 2 } }] })).toBeNull();
+    expect(extractDirectoryIds({ id: { $in: [1], $ne: 2 } })).toBeNull();
+  });
+
+  it('rejects malformed, unsafe, and templated IDs', () => {
+    expect(extractDirectoryIds({ id: { $in: [1, null] } })).toBeNull();
+    expect(extractDirectoryIds({ id: 9_007_199_254_740_992 })).toBeNull();
+    expect(extractDirectoryIds({ id: '{{ $user.id }}' })).toBeNull();
+    expect(extractDirectoryIds({ id: '' })).toBeNull();
   });
 });

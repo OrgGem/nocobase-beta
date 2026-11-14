@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { vi } from 'vitest';
 import { createExtStorageActions, parseRangeHeader } from '../actions/ext-storage';
 import type { IStorageAdapter } from '../adapters/types';
@@ -36,7 +38,7 @@ describe('parseRangeHeader', () => {
   });
 });
 
-function createDownloadContext(statSize?: number) {
+function createDownloadContext(statSize?: number, contentType = 'video/mp4') {
   const directoryValues: Record<string, string | number | boolean> = {
     id: 1,
     name: 'docs',
@@ -55,12 +57,12 @@ function createDownloadContext(statSize?: number) {
       const end = Math.min(range.end ?? total - 1, total - 1);
       return {
         stream: 'fake-stream',
-        contentType: 'video/mp4',
+        contentType,
         size: end - range.start + 1,
         contentRange: `bytes ${range.start}-${end}/${total}`,
       };
     }
-    return { stream: 'fake-stream', contentType: 'video/mp4', size: total };
+    return { stream: 'fake-stream', contentType, size: total };
   });
   const stat = vi.fn().mockResolvedValue({ name: 'video.mp4', type: 'file', size: statSize ?? 1000, modifiedAt: 0 });
   const adapter = { getStream, stat } as unknown as IStorageAdapter;
@@ -77,6 +79,7 @@ function createDownloadContext(statSize?: number) {
     },
     state: {},
     app: {},
+    t: (key: string) => key,
     can: () => ({ params: { filter: {} } }),
     db: { getRepository: () => ({ findOne: async () => directory }) },
     logger: { error: vi.fn(), warn: vi.fn() },
@@ -141,4 +144,30 @@ describe('extStorage:download range support', () => {
     await actions.download(ctx);
     expect(headers['Content-Disposition']).toContain(`filename*=UTF-8''b%C3%A1o%20c%C3%A1o.pdf`);
   });
+
+  it.each(['text/html', 'image/svg+xml', 'application/pdf'])(
+    'forces %s to download even when inline is requested',
+    async (contentType) => {
+      const { actions, ctx, headers } = createDownloadContext(undefined, contentType);
+
+      await actions.download(ctx);
+
+      expect(headers['Content-Type']).toBe(contentType);
+      expect(headers['Content-Disposition']).toContain('attachment');
+      expect(headers['X-Content-Type-Options']).toBe('nosniff');
+      expect(headers['Content-Security-Policy']).toContain("sandbox; default-src 'none'");
+    },
+  );
+
+  it.each(['image/jpeg', 'video/mp4', 'audio/mpeg'])(
+    'keeps safe media type %s eligible for inline preview',
+    async (contentType) => {
+      const { actions, ctx, headers } = createDownloadContext(undefined, contentType);
+
+      await actions.download(ctx);
+
+      expect(headers['Content-Disposition']).toContain('inline');
+      expect(headers['X-Content-Type-Options']).toBe('nosniff');
+    },
+  );
 });
