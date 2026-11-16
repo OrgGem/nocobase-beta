@@ -1,16 +1,23 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React, { useState } from 'react';
 import {
-  Card, Table, Button, Modal, Form, Input, Select, Switch, Space, message, Popconfirm,
-  Tag, Typography, Checkbox, Divider, InputNumber,
+  Card,
+  Table,
+  Button,
+  Modal,
+  Form,
+  Input,
+  Select,
+  Switch,
+  Space,
+  message,
+  Popconfirm,
+  Tag,
+  Typography,
+  Checkbox,
+  Divider,
+  InputNumber,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
@@ -32,28 +39,43 @@ export const DirectoryManager: React.FC = () => {
   const [dirForm] = Form.useForm();
   const [configForm] = Form.useForm();
 
-  const { data: dirsData, loading: dirsLoading, refresh: refreshDirs } = useRequest<any, []>(() =>
+  const {
+    data: dirsData,
+    loading: dirsLoading,
+    refresh: refreshDirs,
+  } = useRequest<any, []>(() =>
     api.request({
       url: 'externalStorageDirectories:list',
       params: { sort: ['sort', 'name'], pageSize: 100 },
     }),
   );
 
-  const { data: rolesData } = useRequest<any, []>(() =>
-    api.request({ url: 'roles:list', params: { pageSize: 100 } }),
+  const { data: rolesData } = useRequest<any, []>(() => api.request({ url: 'roles:list', params: { pageSize: 100 } }));
+  const { data: storageOptionsData, refresh: refreshStorageOptions } = useRequest<any, []>(() =>
+    api.request({ url: 'extStorage:storageOptions', method: 'get' }),
   );
-  const {
-    data: storageOptionsData,
-    refresh: refreshStorageOptions,
-  } = useRequest<any, []>(() => api.request({ url: 'extStorage:storageOptions', method: 'get' }));
 
-  const dirs = Array.isArray(dirsData?.data?.data) ? dirsData.data.data : Array.isArray(dirsData?.data) ? dirsData.data : Array.isArray(dirsData) ? dirsData : [];
-  const roles = Array.isArray(rolesData?.data?.data) ? rolesData.data.data : Array.isArray(rolesData?.data) ? rolesData.data : Array.isArray(rolesData) ? rolesData : [];
-  
+  const dirs = Array.isArray(dirsData?.data?.data)
+    ? dirsData.data.data
+    : Array.isArray(dirsData?.data)
+      ? dirsData.data
+      : Array.isArray(dirsData)
+        ? dirsData
+        : [];
+  const roles = Array.isArray(rolesData?.data?.data)
+    ? rolesData.data.data
+    : Array.isArray(rolesData?.data)
+      ? rolesData.data
+      : Array.isArray(rolesData)
+        ? rolesData
+        : [];
+
   // NocoBase useRequest might return the payload directly, or wrapped in { data: payload }
-  const rawStorageData = storageOptionsData?.data?.data || storageOptionsData?.data || storageOptionsData || { s3: [], sftp: [] };
+  const rawStorageData = storageOptionsData?.data?.data ||
+    storageOptionsData?.data ||
+    storageOptionsData || { s3: [], sftp: [] };
   const storageOptions = rawStorageData.s3 ? rawStorageData : { s3: [], sftp: [] };
-  
+
   const s3Options = Array.isArray(storageOptions.s3) ? storageOptions.s3 : [];
   const sftpOptions = Array.isArray(storageOptions.sftp) ? storageOptions.sftp : [];
   const selectedStorageType = Form.useWatch('storageType', dirForm);
@@ -176,12 +198,40 @@ export const DirectoryManager: React.FC = () => {
   const dirColumns = [
     { title: 'Name', dataIndex: 'name', key: 'name', width: 160 },
     { title: 'Slug', dataIndex: 'slug', key: 'slug', width: 120, render: (v: string) => <Text code>{v}</Text> },
-    { title: 'Storage', dataIndex: 'storageType', key: 'storageType', width: 100, render: (v: string) => <Tag color={v === 'sftp-private' ? 'green' : 'blue'}>{v === 'sftp-private' ? 'SFTP' : 'S3'}</Tag> },
-    { title: 'Config', dataIndex: 'storageConfigName', key: 'storageConfigName', width: 140, render: (v: string) => <Text code>{v}</Text> },
-    { title: 'Root Path', dataIndex: 'rootPath', key: 'rootPath', width: 180, render: (v: string) => <Text code>{v}</Text> },
-    { title: 'Enabled', dataIndex: 'enabled', key: 'enabled', width: 70, render: (v: boolean) => v ? <Tag color="success">Yes</Tag> : <Tag>No</Tag> },
     {
-      title: 'Actions', key: 'actions', width: 100,
+      title: 'Storage',
+      dataIndex: 'storageType',
+      key: 'storageType',
+      width: 100,
+      render: (v: string) => (
+        <Tag color={v === 'sftp-private' ? 'green' : 'blue'}>{v === 'sftp-private' ? 'SFTP' : 'S3'}</Tag>
+      ),
+    },
+    {
+      title: 'Config',
+      dataIndex: 'storageConfigName',
+      key: 'storageConfigName',
+      width: 140,
+      render: (v: string) => <Text code>{v}</Text>,
+    },
+    {
+      title: 'Root Path',
+      dataIndex: 'rootPath',
+      key: 'rootPath',
+      width: 180,
+      render: (v: string) => <Text code>{v}</Text>,
+    },
+    {
+      title: 'Enabled',
+      dataIndex: 'enabled',
+      key: 'enabled',
+      width: 70,
+      render: (v: boolean) => (v ? <Tag color="success">Yes</Tag> : <Tag>No</Tag>),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 100,
       render: (_: any, r: any) => (
         <Space size="small">
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditDir(r)} />
@@ -195,25 +245,63 @@ export const DirectoryManager: React.FC = () => {
 
   return (
     <>
-      <Card title="External Storage Directories" extra={<Button type="primary" icon={<PlusOutlined />} onClick={handleAddDir}>Add Directory</Button>}>
-        <Table dataSource={dirs} columns={dirColumns} rowKey="id" loading={dirsLoading} pagination={false} size="middle" />
+      <Card
+        title="External Storage Directories"
+        extra={
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAddDir}>
+            Add Directory
+          </Button>
+        }
+      >
+        <Table
+          dataSource={dirs}
+          columns={dirColumns}
+          rowKey="id"
+          loading={dirsLoading}
+          pagination={false}
+          size="middle"
+        />
       </Card>
 
       {/* Directory Form Modal */}
-      <Modal title={editingDir ? 'Edit Directory' : 'New Directory'} open={dirModalOpen} onOk={handleSaveDir} onCancel={() => setDirModalOpen(false)} width={520}>
+      <Modal
+        title={editingDir ? 'Edit Directory' : 'New Directory'}
+        open={dirModalOpen}
+        onOk={handleSaveDir}
+        onCancel={() => setDirModalOpen(false)}
+        width={520}
+      >
         <Form form={dirForm} layout="vertical">
-          <Form.Item name="name" label="Name" rules={[{ required: true }]}><Input /></Form.Item>
-          <Form.Item name="slug" label="Slug" rules={[{ required: true }, { pattern: /^[a-z0-9-]+$/, message: 'Lowercase letters, numbers, hyphens only' }]}><Input disabled={!!editingDir} /></Form.Item>
+          <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item
+            name="slug"
+            label="Slug"
+            rules={[
+              { required: true },
+              { pattern: /^[a-z0-9-]+$/, message: 'Lowercase letters, numbers, hyphens only' },
+            ]}
+          >
+            <Input disabled={!!editingDir} />
+          </Form.Item>
           <Form.Item name="storageType" label="Storage Type" rules={[{ required: true }]}>
             <Select
-              options={[{ label: 'S3 Private', value: 's3-private' }, { label: 'SFTP Private', value: 'sftp-private' }]}
+              options={[
+                { label: 'S3 Private', value: 's3-private' },
+                { label: 'SFTP Private', value: 'sftp-private' },
+              ]}
               onChange={() => dirForm.setFieldValue('storageConfigName', undefined)}
             />
           </Form.Item>
           <Form.Item name="storageConfigName" label="Storage Config" rules={[{ required: true }]}>
             <Select
               showSearch
-              placeholder={selectedStorageType === 'sftp-private' ? 'Select an SFTP configuration' : 'Select a File manager S3 storage'}
+              placeholder={
+                selectedStorageType === 'sftp-private'
+                  ? 'Select an SFTP configuration'
+                  : 'Select a File manager S3 storage'
+              }
               optionFilterProp="label"
               options={configOptions}
               dropdownRender={(menu) => (
@@ -232,11 +320,19 @@ export const DirectoryManager: React.FC = () => {
               )}
             />
           </Form.Item>
-          <Form.Item name="rootPath" label="Root Path"><Input placeholder="/" /></Form.Item>
-          <Form.Item name="description" label="Description"><TextArea rows={2} /></Form.Item>
+          <Form.Item name="rootPath" label="Root Path">
+            <Input placeholder="/" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <TextArea rows={2} />
+          </Form.Item>
           <Space>
-            <Form.Item name="enabled" label="Enabled" valuePropName="checked"><Switch /></Form.Item>
-            <Form.Item name="sort" label="Sort Order"><InputNumber style={{ width: 100 }} /></Form.Item>
+            <Form.Item name="enabled" label="Enabled" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item name="sort" label="Sort Order">
+              <InputNumber style={{ width: 100 }} />
+            </Form.Item>
           </Space>
         </Form>
       </Modal>
@@ -251,7 +347,12 @@ export const DirectoryManager: React.FC = () => {
       >
         <Form form={configForm} layout="vertical" autoComplete="off">
           <Form.Item name="type" label="Storage Type" rules={[{ required: true }]}>
-            <Select options={[{ label: 'S3 Private', value: 's3-private' }, { label: 'SFTP Private', value: 'sftp-private' }]} />
+            <Select
+              options={[
+                { label: 'S3 Private', value: 's3-private' },
+                { label: 'SFTP Private', value: 'sftp-private' },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="title" label="Title" rules={[{ required: true }]}>
             <Input placeholder="My storage" />
@@ -261,7 +362,10 @@ export const DirectoryManager: React.FC = () => {
             label="Name"
             rules={[
               { required: true },
-              { pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/, message: 'Must start with letter, only letters/numbers/underscores' },
+              {
+                pattern: /^[a-zA-Z][a-zA-Z0-9_]*$/,
+                message: 'Must start with letter, only letters/numbers/underscores',
+              },
             ]}
           >
             <Input placeholder="my_storage" />
@@ -281,7 +385,12 @@ export const DirectoryManager: React.FC = () => {
                 <Input />
               </Form.Item>
               <Form.Item name="authMethod" label="Authentication Method">
-                <Select options={[{ label: 'Password', value: 'password' }, { label: 'Private Key', value: 'privateKey' }]} />
+                <Select
+                  options={[
+                    { label: 'Password', value: 'password' },
+                    { label: 'Private Key', value: 'privateKey' },
+                  ]}
+                />
               </Form.Item>
               {configAuthMethod === 'privateKey' ? (
                 <>

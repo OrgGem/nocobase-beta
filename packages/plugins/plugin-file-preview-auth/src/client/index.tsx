@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -23,7 +16,7 @@ import {
 import { Modal, Button, Spin, Alert, Space, message, Tabs, Tag } from 'antd';
 import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype, useComponent } from '@nocobase/client';
 // @ts-ignore
-import { filePreviewTypes } from "@nocobase/plugin-file-manager";
+import { filePreviewTypes } from '@nocobase/plugin-file-manager';
 import { useT } from './locale';
 import { AIFilePreviewAction, registerFilePreviewAIWorkContext } from './AIFilePreviewAction';
 
@@ -1816,4 +1809,3 @@ export class PluginFilePreviewAuthClient extends Plugin {
 }
 
 export default PluginFilePreviewAuthClient;
-

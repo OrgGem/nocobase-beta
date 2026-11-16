@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 // Older sessions may contain a viewer URL derived from the privileged CDP URL.
 // Keep backend credentials out of both REST responses and AI tool results.

@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React, { useState, useMemo, useCallback } from 'react';
 import { Modal, Tabs, Form, Select, Button, Space, Radio, Input, Table, Checkbox, Typography, Divider } from 'antd';
@@ -413,5 +406,3 @@ export const CrossJoinConfigurator: React.FC<Props> = ({ visible, onCancel, onSu
     </Modal>
   );
 };
-
-

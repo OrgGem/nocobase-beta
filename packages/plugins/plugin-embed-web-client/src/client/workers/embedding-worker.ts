@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 /**
  * Embedding Web Worker
@@ -77,13 +70,7 @@ function send(msg: WorkerResponse) {
 
 // ── Model Loading ─────────────────────────────────────────────────────────────
 
-
-async function loadModel(
-  id: string,
-  dtype: string,
-  preferWebGPU: boolean,
-  serverOrigin: string,
-) {
+async function loadModel(id: string, dtype: string, preferWebGPU: boolean, serverOrigin: string) {
   modelId = id;
   currentServerOrigin = serverOrigin;
 

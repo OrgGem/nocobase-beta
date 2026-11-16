@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import type { Context } from '@nocobase/actions';
 import * as XLSX from 'xlsx';
@@ -86,7 +79,8 @@ export class ExcelParserHandler implements InternalParserHandler {
   }
 
   async parse(attachment: AttachmentLike, ctx: Context): Promise<InternalParseResult> {
-    const docParserPlugin = ((ctx.app as any).pm?.get('@nocobase/plugin-document-parser') || (ctx.app as any).pm?.get('plugin-document-parser')) as any;
+    const docParserPlugin = ((ctx.app as any).pm?.get('@nocobase/plugin-document-parser') ||
+      (ctx.app as any).pm?.get('plugin-document-parser')) as any;
     if (!docParserPlugin?.fetchFileBuffer) {
       ctx.log?.warn?.('[ExcelParser] plugin-document-parser not available — cannot fetch file bytes');
       return { text: '', handled: false };

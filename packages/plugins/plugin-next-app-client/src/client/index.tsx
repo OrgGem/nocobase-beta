@@ -1,14 +1,7 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { PagePopups, Plugin, createRouterManager, RouterManager, lazy } from '@nocobase/client';
-import PluginACLClient from "@nocobase/plugin-acl";
+import PluginACLClient from '@nocobase/plugin-acl';
 import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { MenuPermissions, NextAppAllRoutesProvider } from './MenuPermissions';
@@ -175,4 +168,3 @@ export class PluginNextAppClient extends Plugin {
 }
 
 export default PluginNextAppClient;
-

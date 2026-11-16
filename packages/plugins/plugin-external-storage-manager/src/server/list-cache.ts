@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 /**
  * Small bounded TTL cache used to memoize expensive storage listings.
@@ -19,9 +12,7 @@
 export class TtlCache<V> {
   private entries = new Map<string, { value: V; expiresAt: number }>();
 
-  constructor(
-    private options: { ttlMs: number; maxEntries?: number } = { ttlMs: 30_000, maxEntries: 200 },
-  ) {}
+  constructor(private options: { ttlMs: number; maxEntries?: number } = { ttlMs: 30_000, maxEntries: 200 }) {}
 
   get enabled(): boolean {
     return this.options.ttlMs > 0;

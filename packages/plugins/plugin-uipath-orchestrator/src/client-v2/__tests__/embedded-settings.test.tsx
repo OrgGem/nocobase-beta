@@ -1,17 +1,11 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React from 'react';
 import { cleanup, render, waitFor } from '@testing-library/react';
 import * as ClientV2 from '@nocobase/client-v2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AxiosHeaders } from 'axios';
+import type { PluginSettingEntry } from '../../../../plugin-block-embed-settings/src/client-v2/types';
 import { collectEmbeddablePluginTabs } from '../../../../plugin-block-embed-settings/src/client-v2/EmbedSettingsPluginSelect';
 import AgentPlugin from '../../../../plugin-agent-orchestrator/src/client-v2/plugin';
 import KnowledgePlugin from '../../../../plugin-knowledge-base/src/client-v2/plugin';
@@ -21,9 +15,57 @@ import knowledgeChinese from '../../../../plugin-knowledge-base/src/locale/zh-CN
 
 const cases = [
   ['UiPath', UiPathPlugin, 'uipath-orchestrator', 'pm.plugin-uipath-orchestrator', 1],
-  ['Agent', AgentPlugin, 'ai-orchestrator', 'pm.plugin-agent-orchestrator', 12],
+  ['Agent', AgentPlugin, 'ai-orchestrator', 'pm.plugin-agent-orchestrator', 14],
   ['Knowledge Base', KnowledgePlugin, 'ai-knowledge-base', 'pm.plugin-knowledge-base.knowledge-base', 3],
 ] as const;
+
+const emptyHarnessCapabilityMatrix = {
+  noteKey: 'No harness capabilities reported',
+  scopes: [],
+  nativeCapabilities: [],
+  scopedCapabilities: [],
+  telemetrySettings: { noteKey: 'Telemetry settings are plugin-local', settings: [] },
+};
+
+type SettingsEntrySource = {
+  name?: string;
+  key?: string;
+  title?: React.ReactNode;
+  label?: React.ReactNode;
+  Component?: unknown;
+  componentLoader?: unknown;
+  children?: readonly SettingsEntrySource[];
+};
+
+function normalizeSetting(entry: SettingsEntrySource, fallbackName: string): PluginSettingEntry {
+  return {
+    name: entry.name ?? fallbackName,
+    key: entry.key,
+    title: entry.title,
+    label: entry.label,
+    Component: entry.Component as PluginSettingEntry['Component'],
+    componentLoader: entry.componentLoader as PluginSettingEntry['componentLoader'],
+    children: entry.children?.map((child) =>
+      normalizeSetting(child, child.name ?? `${fallbackName}.${child.key ?? 'child'}`),
+    ),
+  };
+}
+
+function collectTabs(app: ReturnType<typeof ClientV2.createMockClient>, pluginName: string) {
+  return collectEmbeddablePluginTabs(
+    {
+      pluginSettingsManager: {
+        has: (name) => app.pluginSettingsManager.has(name),
+        get: (name) => {
+          const setting = app.pluginSettingsManager.get(name);
+          return setting ? normalizeSetting(setting, name) : undefined;
+        },
+      },
+      i18n: app.i18n,
+    },
+    pluginName,
+  );
+}
 
 beforeEach(() => {
   vi.spyOn(window, 'matchMedia').mockImplementation((media) => ({
@@ -53,13 +95,13 @@ describe.each(cases)('%s embedded settings', (_label, Plugin, menuKey, snippet, 
   it('uses the server permission for the menu and every embeddable tab', async () => {
     const app = await loadPlugin();
     expect(new Set(app.pluginSettingsManager.getAclSnippets())).toEqual(new Set([snippet]));
-    expect(collectEmbeddablePluginTabs(app, menuKey)).toHaveLength(tabCount);
+    expect(collectTabs(app, menuKey)).toHaveLength(tabCount);
   });
 
   it('hides all embedded pages when the server permission is denied', async () => {
     const app = await loadPlugin();
     app.pluginSettingsManager.setAclSnippets([`!${snippet}`]);
-    expect(collectEmbeddablePluginTabs(app, menuKey)).toEqual([]);
+    expect(collectTabs(app, menuKey)).toEqual([]);
     expect(app.pluginSettingsManager.get(menuKey)).toBeNull();
   });
 
@@ -70,20 +112,23 @@ describe.each(cases)('%s embedded settings', (_label, Plugin, menuKey, snippet, 
       `!pm.${menuKey}`,
       ...(menu?.children ?? []).map((page) => `!pm.${page.name}`),
     ]);
-    expect(collectEmbeddablePluginTabs(app, menuKey)).toHaveLength(tabCount);
+    expect(collectTabs(app, menuKey)).toHaveLength(tabCount);
   });
 
   it('loads and renders every tab with only the application available', async () => {
     const app = await loadPlugin();
     vi.spyOn(ClientV2, 'useApp').mockReturnValue(app);
-    const request = vi.spyOn(app.apiClient, 'request').mockResolvedValue({
-      data: { data: [] },
-      status: 200,
-      statusText: 'OK',
-      headers: {},
-      config: { headers: new AxiosHeaders() },
+    const request = vi.spyOn(app.apiClient, 'request').mockImplementation(async (config) => {
+      const url = 'url' in config ? config.url : undefined;
+      return {
+        data: url === 'agentHarnessProfiles:capabilities' ? { data: emptyHarnessCapabilityMatrix } : { data: [] },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config: { headers: new AxiosHeaders() },
+      };
     });
-    for (const tab of collectEmbeddablePluginTabs(app, menuKey)) {
+    for (const tab of collectTabs(app, menuKey)) {
       const loader = tab.componentLoader;
       expect(loader).toBeTypeOf('function');
       if (!loader) throw new Error('Missing settings page loader');

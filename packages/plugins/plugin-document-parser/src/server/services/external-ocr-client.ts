@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import axios, { AxiosRequestConfig } from 'axios';
 import FormData from 'form-data';
@@ -221,14 +214,17 @@ export async function callExternalOcr(
  * to check reachability and auth. Used by the "Test Connection" button.
  */
 export async function testOcrProviderConnection(
-  providerConfig: Pick<OcrProviderConfig, 'apiEndpoint' | 'authType' | 'apiKey' | 'authConfig' | 'timeout' | 'requestFormat' | 'requestConfig'>,
+  providerConfig: Pick<
+    OcrProviderConfig,
+    'apiEndpoint' | 'authType' | 'apiKey' | 'authConfig' | 'timeout' | 'requestFormat' | 'requestConfig'
+  >,
 ): Promise<{ ok: boolean; status?: number; message?: string }> {
   try {
     const authHeaders = buildAuthHeaders(providerConfig as OcrProviderConfig);
-    
+
     // Build a dummy request based on the request format to prevent generic routing 404s
     let body: any = null;
-    let headers: Record<string, string> = { ...authHeaders };
+    const headers: Record<string, string> = { ...authHeaders };
 
     if (providerConfig.requestFormat === 'multipart') {
       const form = new FormData();
@@ -241,7 +237,11 @@ export async function testOcrProviderConnection(
       Object.assign(headers, form.getHeaders());
     } else if (providerConfig.requestFormat === 'json-base64') {
       const jsonBody: Record<string, any> = { ...(providerConfig.requestConfig?.extraBody ?? {}) };
-      setByPath(jsonBody, providerConfig.requestConfig?.base64FieldPath || 'file', Buffer.from('dummy').toString('base64'));
+      setByPath(
+        jsonBody,
+        providerConfig.requestConfig?.base64FieldPath || 'file',
+        Buffer.from('dummy').toString('base64'),
+      );
       body = jsonBody;
       headers['Content-Type'] = 'application/json';
     } else if (providerConfig.requestFormat === 'url') {

@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { BlockModel } from '@nocobase/client-v2';
 import { tExpr } from '@nocobase/flow-engine';
@@ -99,7 +92,13 @@ export class CrossJoinBlockModel extends BlockModel {
   private buildColumns() {
     const cfg = this.config;
     if (cfg?.columns?.length) {
-      const cols: { title: string; dataIndex: string; key: string; ellipsis: boolean; render: (val: unknown) => string }[] = [];
+      const cols: {
+        title: string;
+        dataIndex: string;
+        key: string;
+        ellipsis: boolean;
+        render: (val: unknown) => string;
+      }[] = [];
       for (const col of cfg.columns) {
         if (col.jsonExpand?.length) {
           for (const jsonKey of col.jsonExpand) {
@@ -218,4 +217,3 @@ CrossJoinBlockModel.registerFlow({
     },
   },
 });
-

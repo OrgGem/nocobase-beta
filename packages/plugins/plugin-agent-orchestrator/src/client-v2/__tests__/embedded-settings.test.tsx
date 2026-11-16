@@ -1,11 +1,4 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import React from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
@@ -89,8 +82,8 @@ function mockApiRequest(app: ReturnType<typeof ClientV2.createMockClient>) {
       data:
         url === 'agentHarnessProfiles:capabilities'
           ? { data: emptyCapabilityMatrix }
-          : url === 'embedAllowedPlugins:list'
-            ? { data: [{ id: 1, pluginName: 'ai-orchestrator', title: 'Agent Orchestrator', enabled: true }] }
+          : url === 'embedSettings:enabled'
+            ? { data: [{ pluginName: 'ai-orchestrator', title: 'Agent Orchestrator' }] }
             : { data: [], meta: { count: 0 } },
       status: 200,
       statusText: 'OK',
@@ -98,6 +91,20 @@ function mockApiRequest(app: ReturnType<typeof ClientV2.createMockClient>) {
       config: { headers: new AxiosHeaders() },
     };
   });
+}
+
+function renderWithAcl(node: React.ReactNode) {
+  return render(
+    <ClientV2.ACLContext.Provider
+      value={{
+        loading: false,
+        data: { data: { role: 'admin', snippets: ['pm.*'] }, meta: {} },
+        refresh: async () => {},
+      }}
+    >
+      {node}
+    </ClientV2.ACLContext.Provider>,
+  );
 }
 
 beforeEach(() => {
@@ -132,6 +139,8 @@ describe('Agent Orchestrator v2 embedded settings', () => {
   async function loadPlugin() {
     const app = ClientV2.createMockClient();
     await new PluginAgentOrchestratorClient({}, app).load();
+    app.context.acl.setData({ role: 'admin', snippets: ['pm.*'] });
+    app.pluginSettingsManager.setAclSnippets(['pm.*']);
     return app;
   }
 
@@ -181,7 +190,7 @@ describe('Agent Orchestrator v2 embedded settings', () => {
     const request = mockApiRequest(app);
     vi.spyOn(ClientV2, 'useApp').mockReturnValue(app);
 
-    const view = render(
+    const view = renderWithAcl(
       <EmbedSettingsBlock pluginName="ai-orchestrator" enabledTabKeys={['ai-orchestrator.employee-governance']} />,
     );
 

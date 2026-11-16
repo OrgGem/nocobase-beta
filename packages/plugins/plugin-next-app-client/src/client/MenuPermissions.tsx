@@ -1,17 +1,10 @@
-/**
- * This file is part of the NocoBase (R) project.
- * Copyright (c) 2020-2024 NocoBase Co., Ltd.
- * Authors: NocoBase Team.
- *
- * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
- * For more information, please refer to: https://www.nocobase.com/agreement.
- */
+// SPDX-License-Identifier: Apache-2.0
 
 import { css } from '@emotion/css';
 import { createForm, Form, onFormValuesChange } from '@formily/core';
 import { uid } from '@formily/shared';
 import { SchemaComponent, useAPIClient, useCompile, useRequest, UseRequestResult } from '@nocobase/client';
-import { RolesManagerContext } from "@nocobase/plugin-acl";
+import { RolesManagerContext } from '@nocobase/plugin-acl';
 import { useMemoizedFn } from 'ahooks';
 import { Checkbox, message, Spin, Table, TableProps } from 'antd';
 import _, { uniq } from 'lodash';
@@ -316,4 +309,3 @@ export const NextAppAllRoutesProvider: React.FC<{ active: boolean }> = ({ active
     </div>
   );
 };
-
