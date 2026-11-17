@@ -148,7 +148,11 @@ export function useEnabledEmbedSettingsPluginOptions(): EmbedSettingsPluginOptio
   const app = useApp();
   const api = app.apiClient;
   const acl = useACLContext();
-  const aclRole = !acl?.error && acl?.data?.data?.role;
+  // FlowSettings dialogs can render outside the V1 ACL provider while retaining the checked app ACL.
+  const hasAclContext = Boolean(acl && ('data' in acl || 'loading' in acl || 'error' in acl));
+  const appAclRole = app.context?.acl?.data?.role;
+  const aclRole =
+    !acl?.error && (hasAclContext ? acl?.data?.data?.role : appAclRole === api.auth?.role ? appAclRole : undefined);
   const { valid: aclValid } = useRolesCheckRefresh(api);
   const [records, setRecords] = useState<AllowedPluginRecord[] | null>(null);
   const [version, setVersion] = useState(0);
