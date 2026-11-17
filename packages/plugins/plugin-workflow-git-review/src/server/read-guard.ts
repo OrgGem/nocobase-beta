@@ -226,17 +226,24 @@ export async function guardReviewReads(ctx: Context, next: Next) {
     return typeof relation.target === 'string' ? { target: relation.target, modelAssociation } : null;
   };
   await next();
+  const body: unknown = ctx.body;
+  let rootPlain: unknown;
   const scrub = async (value: unknown, collectionName: string, identity?: ID, executionHint?: ID): Promise<unknown> => {
     if (Array.isArray(value)) {
       const rows = await Promise.all(value.map((item) => scrub(item, collectionName, undefined, executionHint)));
-      return rows.filter((item) => item !== null);
+      const filtered = rows.filter((item) => item !== null);
+      return filtered.length === value.length && filtered.every((item, index) => item === value[index])
+        ? value
+        : filtered;
     }
     if (!value || typeof value !== 'object') return value;
     if (value instanceof Date || Buffer.isBuffer(value)) return value;
     const candidate = value as { toJSON?: () => unknown };
     const plain = typeof candidate.toJSON === 'function' ? candidate.toJSON() : value;
+    if (value === body) rootPlain = plain;
     if (!isRecord(plain)) return plain;
     const record = { ...plain };
+    let changed = false;
     const paginationKeys = new Set([
       'rows',
       'items',
@@ -254,17 +261,25 @@ export async function guardReviewReads(ctx: Context, next: Next) {
       Object.keys(record).every((key) => paginationKeys.has(key))
     ) {
       for (const key of ['rows', 'items']) {
-        if (Array.isArray(record[key]))
-          record[key] = await scrub(record[key], collectionName, undefined, executionHint);
+        if (Array.isArray(record[key])) {
+          const filtered = await scrub(record[key], collectionName, undefined, executionHint);
+          if (filtered !== record[key]) {
+            record[key] = filtered;
+            changed = true;
+          }
+        }
       }
-      return record;
+      return changed ? record : value;
     }
     const recordId = id(record.id) ? record.id : identity;
     const isExecution = collectionName === 'executions';
     const isJob = collectionName === 'jobs';
     const executionId = isExecution ? recordId : id(record.executionId) ? record.executionId : executionHint;
     if (isExecution && executionId != null && (await executionPolicy(executionId)) === 'denied') return null;
-    if (isExecution && executionId == null) delete record.context;
+    if (isExecution && executionId == null && Object.prototype.hasOwnProperty.call(record, 'context')) {
+      delete record.context;
+      changed = true;
+    }
     if (isJob) {
       const policy =
         recordId != null
@@ -292,14 +307,31 @@ export async function guardReviewReads(ctx: Context, next: Next) {
         const foreignId: unknown = record[foreignKey];
         if (id(foreignId)) relatedId = foreignId;
       }
-      record[key] = await scrub(nested, relation.target, relatedId);
+      const filtered = await scrub(nested, relation.target, relatedId);
+      if (filtered !== nested) {
+        record[key] = filtered;
+        changed = true;
+      }
     }
-    return record;
+    return changed ? record : value;
   };
-  ctx.body = await scrub(
-    ctx.body,
+  const filtered = await scrub(
+    body,
     target,
     rootIdentity,
     id(ctx.action.sourceId) && resource === 'executions.jobs' ? ctx.action.sourceId : undefined,
   );
+  // Data wrapping treats a root rows property as pagination and would spread Model internals into metadata.
+  if (
+    filtered === body &&
+    isRecord(body) &&
+    typeof body.get === 'function' &&
+    typeof body.setDataValue === 'function' &&
+    typeof body.toJSON === 'function' &&
+    body.rows
+  ) {
+    ctx.body = rootPlain;
+  } else {
+    ctx.body = filtered;
+  }
 }

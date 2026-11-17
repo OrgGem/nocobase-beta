@@ -32,6 +32,13 @@ async function addLicenseToFile(filePath) {
 
   const data = await fs.readFile(filePath, 'utf8');
 
+  const relativePath = path.relative(path.resolve(__dirname, '..'), path.resolve(filePath)).replace(/\\/g, '/');
+  if (
+    /^packages\/plugins\/plugin-[a-z0-9][a-z0-9._-]*\/src\//.test(relativePath) &&
+    /^\/\/ SPDX-License-Identifier: Apache-2\.0(?:\r?\n|$)/.test(data)
+  )
+    return false;
+
   if (data.startsWith(licenseText)) return false;
   if (data.startsWith(commercialLicense) || data.startsWith(openSourceLicense)) return false;
 
