@@ -7,10 +7,10 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { ThemeItem } from '../types';
+import { BuiltinThemeSeed } from '../types';
 
 /** antd 默认主题 */
-export const defaultTheme: Omit<ThemeItem, 'id'> = {
+export const defaultTheme: BuiltinThemeSeed = {
   config: {
     name: 'Default',
   },
@@ -20,10 +20,9 @@ export const defaultTheme: Omit<ThemeItem, 'id'> = {
   default: process.env.__E2E__ ? true : false,
 };
 
-export const dark: Omit<ThemeItem, 'id'> = {
+export const dark: BuiltinThemeSeed = {
   config: {
     name: 'Dark',
-    // @ts-ignore
     algorithm: 'darkAlgorithm',
   },
   optional: true,
@@ -32,10 +31,9 @@ export const dark: Omit<ThemeItem, 'id'> = {
   default: false,
 };
 
-export const compact: Omit<ThemeItem, 'id'> = {
+export const compact: BuiltinThemeSeed = {
   config: {
     name: 'Compact',
-    // @ts-ignore
     algorithm: 'compactAlgorithm',
     token: {
       fontSize: 16,
@@ -48,15 +46,15 @@ export const compact: Omit<ThemeItem, 'id'> = {
 };
 
 /** 同时包含 `紧凑` 和 `暗黑` 两种模式 */
-export const compactDark: Omit<ThemeItem, 'id'> = {
+export const compactDark: BuiltinThemeSeed = {
   config: {
     name: 'Compact dark',
-    // @ts-ignore
     algorithm: ['compactAlgorithm', 'darkAlgorithm'],
     token: {
       fontSize: 16,
       colorBgHeader: '#000000',
       colorPrimaryHeader: '#000000',
+      colorSettings: '#F18B62',
     },
   },
   optional: true,
@@ -70,7 +68,7 @@ export const compactDark: Omit<ThemeItem, 'id'> = {
  * Inspired by modern SaaS dashboards (Notion, Linear, Stripe)
  * Key: Refined blue-gray palette, generous spacing, minimal borders, soft shadows
  */
-export const businessPro: Omit<ThemeItem, 'id'> = {
+export const businessPro: BuiltinThemeSeed = {
   config: {
     name: 'Business Pro',
     token: {
@@ -125,6 +123,8 @@ export const businessPro: Omit<ThemeItem, 'id'> = {
       colorTextSiderMenuActive: '#4F46E5',
       colorBgSiderMenuHover: '#F1F5F9',
       colorBgSiderMenuActive: '#EEF2FF',
+
+      colorSettings: '#F18B62',
     },
     components: {
       Button: {
@@ -191,10 +191,9 @@ export const businessPro: Omit<ThemeItem, 'id'> = {
  * Inspired by Vercel Dashboard, GitHub Dark, Linear Dark
  * Key: Deep navy-black, purple-blue accent, glass-like cards, crisp typography
  */
-export const midnightEnterprise: Omit<ThemeItem, 'id'> = {
+export const midnightEnterprise: BuiltinThemeSeed = {
   config: {
     name: 'Midnight Enterprise',
-    // @ts-ignore
     algorithm: 'darkAlgorithm',
     token: {
       // Brand — vibrant violet-blue
@@ -239,6 +238,8 @@ export const midnightEnterprise: Omit<ThemeItem, 'id'> = {
       colorTextSiderMenuActive: '#A78BFA',
       colorBgSiderMenuHover: '#1E1E2E',
       colorBgSiderMenuActive: '#1E1B3A',
+
+      colorSettings: '#F18B62',
     },
     components: {
       Button: {
@@ -312,10 +313,9 @@ export const midnightEnterprise: Omit<ThemeItem, 'id'> = {
  * Red accent: #EE1C25 (logo flower), Clean white backgrounds
  * Style: Flat, high border-radius, modern sans-serif, light shadows
  */
-export const vpbank: Omit<ThemeItem, 'id'> = {
+export const vpbank: BuiltinThemeSeed = {
   config: {
     name: 'VPBank',
-    // @ts-ignore
     algorithm: 'compactAlgorithm',
     token: {
       // Brand — VPBank signature green
@@ -374,6 +374,8 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
       colorTextSiderMenuActive: '#009A44',
       colorBgSiderMenuHover: '#F0FFF4',
       colorBgSiderMenuActive: '#E6FFED',
+
+      colorSettings: '#F18B62',
     },
     components: {
       Button: {
@@ -466,7 +468,7 @@ export const vpbank: Omit<ThemeItem, 'id'> = {
  * Tween One — Theme inspired by https://tween-one.vercel.app/ (Dumi/Ant Motion style)
  * Style: Clean white backgrounds, distinct gray-blue text (#454d64), classic Ant Design blue primary
  */
-export const tweenOne: Omit<ThemeItem, 'id'> = {
+export const tweenOne: BuiltinThemeSeed = {
   config: {
     name: 'Tween One',
     token: {
@@ -489,7 +491,7 @@ export const tweenOne: Omit<ThemeItem, 'id'> = {
       margin: 16,
       marginSM: 12,
       marginXS: 8,
-      
+
       colorBgBase: '#ffffff',
       borderRadius: 4,
 
@@ -506,6 +508,8 @@ export const tweenOne: Omit<ThemeItem, 'id'> = {
       colorTextSiderMenuActive: '#1890ff',
       colorBgSiderMenuHover: '#e6f7ff',
       colorBgSiderMenuActive: '#e6f7ff',
+
+      colorSettings: '#F18B62',
     },
     components: {
       Button: {
@@ -537,7 +541,7 @@ export const tweenOne: Omit<ThemeItem, 'id'> = {
  * Muse Dashboard — Theme inspired by Creative Tim's Muse Ant Design Dashboard
  * Style: Clean white cards with generous border-radius, soft shadows, light gray-blue layout background.
  */
-export const museDashboard: Omit<ThemeItem, 'id'> = {
+export const museDashboard: BuiltinThemeSeed = {
   config: {
     name: 'Muse Dashboard',
     token: {
@@ -577,6 +581,8 @@ export const museDashboard: Omit<ThemeItem, 'id'> = {
       colorTextSiderMenuActive: '#1890ff',
       colorBgSiderMenuHover: '#f0f2f5',
       colorBgSiderMenuActive: '#e6f7ff',
+
+      colorSettings: '#F18B62',
     },
     components: {
       Button: {
@@ -609,3 +615,14 @@ export const museDashboard: Omit<ThemeItem, 'id'> = {
   default: false,
 };
 
+export const ALL_BUILTIN_THEMES: BuiltinThemeSeed[] = [
+  defaultTheme,
+  dark,
+  compact,
+  compactDark,
+  businessPro,
+  midnightEnterprise,
+  vpbank,
+  tweenOne,
+  museDashboard,
+];

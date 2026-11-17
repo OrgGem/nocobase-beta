@@ -10,12 +10,13 @@
 import { useApp } from '@nocobase/client-v2';
 import { error } from '@nocobase/utils/client';
 import { useCallback } from 'react';
+import type { ThemeId } from '../../types';
 
 export function useUpdateThemeSettings() {
   const api = useApp().apiClient;
 
   const updateUserThemeSettings = useCallback(
-    async (themeId: number | null) => {
+    async (themeId: ThemeId | null) => {
       try {
         await api.resource('users').updateAntdStyleTheme({
           values: {

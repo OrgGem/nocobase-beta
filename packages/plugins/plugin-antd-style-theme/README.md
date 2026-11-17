@@ -1,16 +1,19 @@
 # plugin-antd-style-theme
 
 ## Overview
-Advanced Ant Design component-level style theme editor for NocoBase. Customize styles for Menu, Table, Button, Input, Select, and all other Ant Design components.
+Advanced Ant Design v5 component-level style theme editor for NocoBase (supporting both v1 and v2 client runtimes). Customize global design tokens, per-component tokens (Menu, Table, Button, Input, Select, and more), Header/Sider layout tokens, and `/signin` page branding.
 
 ## Features
-- **Visual Editor**: Real-time visual interface for tweaking Ant Design CSS variables.
-- **Component-Level Control**: Fine-tune specific UI elements rather than just global colors.
-- **Theme Export/Import**: Easily share or backup your custom themes.
+- **Built-in Themes**: Ships with 9 curated themes (`Default`, `Dark`, `Compact`, `Compact dark`, `Business Pro`, `Midnight Enterprise`, `VPBank`, `Tween One`, `Muse Dashboard`).
+- **Component-Level Control**: Fine-tune per-component Ant Design tokens with live preview.
+- **Header & Sider Layout Styles**: Customize NocoBase navigation bar and sidebar colors.
+- **Login Page Branding**: Customize `/signin` background, logo, card, button, app title, and favicon.
+- **User Theme Preferences**: Allow users to switch between selectable themes in the User Center menu.
+- **Extended Icon Picker**: Registers 315+ curated Material Design and Bootstrap icons alongside built-in Ant Design icons.
 
 ## Usage
-1. Enable the plugin.
-2. Go to `Settings -> Theme Editor` (or User Interface Settings).
-3. Select the component category you wish to customize (e.g., "Buttons" or "Tables").
-4. Adjust properties (colors, border-radius, padding) and preview changes instantly.
-5. Save and apply the theme globally.
+1. Enable the plugin (it automatically disables the built-in `theme-editor` plugin to avoid conflicts).
+2. Go to `Settings -> Antd Style Theme`.
+3. Edit an existing theme or click `Add new theme` to create a custom theme.
+4. Adjust global tokens, `Component Styles`, `Layout Styles`, or `Login Styles` and save.
+5. Set a theme as the system default or mark it `User selectable` so users can choose it from User Center.

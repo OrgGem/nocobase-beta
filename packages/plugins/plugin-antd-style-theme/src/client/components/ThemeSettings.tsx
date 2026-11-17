@@ -22,10 +22,10 @@ export const ThemeSettings = () => {
   const { currentThemeId } = useThemeId();
   const options = useMemo(() => {
     return data
-      ?.filter((item) => item.optional)
+      ?.filter((item) => item.optional && item.config)
       .map((item) => {
         return {
-          label: t(item.config.name),
+          label: t(item.config?.name || ''),
           value: item.id,
         };
       });
@@ -35,7 +35,7 @@ export const ThemeSettings = () => {
     if (!data) {
       run();
     }
-  }, []);
+  }, [data, run]);
 
   if (err) {
     error(err);

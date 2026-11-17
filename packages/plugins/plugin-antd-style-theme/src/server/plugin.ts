@@ -8,20 +8,24 @@
  */
 
 import { InstallOptions, Plugin } from '@nocobase/server';
-import { businessPro, compact, compactDark, dark, defaultTheme, midnightEnterprise, vpbank, tweenOne, museDashboard } from './builtinThemes';
+import type { StoredThemeConfig } from '../types';
+import { ALL_BUILTIN_THEMES } from './builtinThemes';
 import { updateTheme } from './actions/update-user-theme';
+import themeConfigCollection from './collections/theme-config';
 
 const THEME_EDITOR_NAMES = ['theme-editor', '@nocobase/plugin-theme-editor'];
 
 export class PluginAntdStyleThemeServer extends Plugin {
-  declare app: any;
-  declare db: any;
-  declare name: string;
-  theme: any;
-
   afterAdd() {}
 
   async beforeLoad() {}
+
+  async loadCollections() {
+    await super.loadCollections();
+    if (!this.db.hasCollection('antdStyleThemeConfig')) {
+      this.db.collection(themeConfigCollection);
+    }
+  }
 
   /**
    * Disable the built-in theme-editor plugin via direct DB update.
@@ -44,7 +48,57 @@ export class PluginAntdStyleThemeServer extends Plugin {
       }
     } catch (err) {
       // Silently ignore if applicationPlugins table doesn't exist yet (first install)
-      this.app.log.debug(`[antd-style-theme] Could not check theme-editor status: ${err.message}`);
+      const message = err instanceof Error ? err.message : String(err);
+      this.app.log.debug(`[antd-style-theme] Could not check theme-editor status: ${message}`);
+    }
+  }
+
+  async ensureBuiltinThemes(options: { onlyWhenEmpty?: boolean } = {}) {
+    const themeRepo = this.db.getRepository('antdStyleThemeConfig');
+    if (!themeRepo) {
+      return;
+    }
+
+    const totalCount = await themeRepo.count();
+    if (options.onlyWhenEmpty && totalCount > 0) {
+      return;
+    }
+
+    let hasDefault = (await themeRepo.count({ filter: { default: true } })) > 0;
+    for (const item of ALL_BUILTIN_THEMES) {
+      const existing = await themeRepo.findOne({ filter: { uid: item.uid } });
+      if (!existing) {
+        const shouldBeDefault = !hasDefault && Boolean(item.default);
+        if (shouldBeDefault) {
+          hasDefault = true;
+        }
+        try {
+          await themeRepo.create({
+            values: {
+              ...item,
+              default: shouldBeDefault,
+            },
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === 'SequelizeUniqueConstraintError') {
+            continue;
+          }
+          throw err;
+        }
+      } else if (existing.get('isBuiltIn') && item.config?.token?.colorSettings) {
+        const currentConfig = (existing.get('config') as StoredThemeConfig | null) || null;
+        if (currentConfig && !currentConfig.token?.colorSettings) {
+          await existing.update({
+            config: {
+              ...currentConfig,
+              token: {
+                ...currentConfig.token,
+                colorSettings: item.config.token.colorSettings,
+              },
+            },
+          });
+        }
+      }
     }
   }
 
@@ -58,21 +112,10 @@ export class PluginAntdStyleThemeServer extends Plugin {
       actions: ['antdStyleThemeConfig:*'],
     });
 
-    // Disable built-in theme-editor on every startup
+    // Disable built-in theme-editor on startup and backfill built-in themes only on an empty table.
     this.app.on('afterStart', async () => {
       await this.disableBuiltinThemeEditor();
-
-      // Ensure all built-in templates exist (handles upgrades with new templates)
-      const themeRepo = this.db.getRepository('antdStyleThemeConfig');
-      if (!themeRepo) return;
-
-      const allBuiltins = [defaultTheme, dark, compact, compactDark, businessPro, midnightEnterprise, vpbank, tweenOne, museDashboard];
-      for (const theme of allBuiltins) {
-        const exists = await themeRepo.findOne({ filter: { uid: theme.uid } });
-        if (!exists) {
-          await themeRepo.create({ values: theme });
-        }
-      }
+      await this.ensureBuiltinThemes({ onlyWhenEmpty: true });
     });
   }
 
@@ -83,16 +126,13 @@ export class PluginAntdStyleThemeServer extends Plugin {
       throw new Error(`antdStyleThemeConfig repository does not exist`);
     }
 
-    if ((await themeRepo.count()) === 0) {
-      await themeRepo.create({
-        values: [defaultTheme, dark, compact, compactDark, businessPro, midnightEnterprise, vpbank, tweenOne, museDashboard],
-      });
-    }
+    await this.ensureBuiltinThemes({ onlyWhenEmpty: true });
   }
 
   async afterEnable() {
-    // Also disable theme-editor when this plugin is first enabled
+    // Disable theme-editor and ensure any newly shipped built-in templates exist on enable/upgrade.
     await this.disableBuiltinThemeEditor();
+    await this.ensureBuiltinThemes();
   }
 
   async afterDisable() {}

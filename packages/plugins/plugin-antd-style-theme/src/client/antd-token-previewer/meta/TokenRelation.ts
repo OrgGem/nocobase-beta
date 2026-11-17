@@ -64,8 +64,10 @@ export function sortToken<T extends (keyof AliasToken)[]>(arr: T): T {
     if (!tokenOrder[a] && tokenOrder[b]) {
       return 1;
     }
-    if (tokenOrder[a] && tokenOrder[b]) {
-      return tokenOrder[a]! - tokenOrder[b]!;
+    const orderA = tokenOrder[a];
+    const orderB = tokenOrder[b];
+    if (orderA && orderB) {
+      return orderA - orderB;
     }
     return a.localeCompare(b);
   });

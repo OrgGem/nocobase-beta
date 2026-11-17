@@ -7,16 +7,10 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import { Icon, Plugin, createStyles, defaultTheme, useGlobalTheme } from '@nocobase/client';
+import { Icon, Plugin, createStyles, defaultTheme, lazy, useGlobalTheme } from '@nocobase/client';
 import { ConfigProvider } from 'antd';
-import _ from 'lodash';
 import React, { useMemo } from 'react';
-// import InitializeTheme from './components/InitializeTheme';
-// import { ThemeEditorProvider } from './components/ThemeEditorProvider';
-// import ThemeList from './components/ThemeList';
-// import { ThemeListProvider } from './components/ThemeListProvider';
-// import CustomTheme from './components/theme-editor';
-import { lazy } from '@nocobase/client';
+import { normalizeTheme } from '../client-v2/themeApi';
 const InitializeTheme = lazy(() => import('./components/InitializeTheme'));
 const { ThemeEditorProvider } = lazy(() => import('./components/ThemeEditorProvider'), 'ThemeEditorProvider');
 const ThemeList = lazy(() => import('./components/ThemeList'));
@@ -67,12 +61,10 @@ const CustomThemeProvider = React.memo((props: React.PropsWithChildren) => {
     </div>
   );
 
-  if (!theme?.token?.motionUnit) {
-    _.set(theme, 'token.motionUnit', defaultTheme.token.motionUnit);
-  }
+  const normalizedTheme = useMemo(() => normalizeTheme(theme, defaultTheme), [theme]);
 
   return (
-    <ConfigProvider theme={theme}>
+    <ConfigProvider theme={normalizedTheme}>
       <LoginThemeProvider>
         <ThemeListProvider>
           <InitializeTheme>
@@ -89,21 +81,12 @@ CustomThemeProvider.displayName = 'CustomThemeProvider';
 
 export class PluginAntdStyleThemeClient extends Plugin {
   async load() {
-    // Register extra icons AND override IconPicker synchronously
-    // to ensure they're available before any component renders
+    // Register extra icons AND override IconPicker synchronously to ensure availability before render.
     const { extraIcons } = await import('./icons/extra-icons');
     Icon.register(extraIcons);
 
     const { IconPicker } = await import('./components/EnhancedIconPicker');
-    this.app.addComponents({ IconPicker: IconPicker as any });
-
-    // Override core Input with IME-safe version to fix Vietnamese/CJK composition
-    // 1. Schema/Formily path: override the Input component
-    // const { IMESafeInput } = await import('./components/IMESafeInput');
-    // this.app.addComponents({ Input: IMESafeInput as any });
-
-    // const { IMESafeInputFieldModel } = await import('./models/IMESafeInputFieldModel');
-    // this.flowEngine.registerModels({ InputFieldModel: IMESafeInputFieldModel as any });
+    this.app.addComponents({ IconPicker: IconPicker as React.ComponentType });
 
     this.app.use(CustomThemeProvider);
     this.app.pluginSettingsManager.add(NAMESPACE, {

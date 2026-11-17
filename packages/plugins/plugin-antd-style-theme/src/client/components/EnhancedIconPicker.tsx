@@ -29,7 +29,7 @@ const { Search } = Input;
 
 export interface IconPickerProps {
   value?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   suffix?: React.ReactNode;
   iconSize?: number;
@@ -48,8 +48,10 @@ const groupByIconName = (data: string[]) => {
 
 function IconField(props: IconPickerProps) {
   const { fontSizeXL } = theme.useToken().token;
-  const availableIcons = useMemo(() => [...icons.keys()], [icons.size]);
+  const availableIcons = useMemo(() => [...icons.keys()], []);
   const layout = useFormLayout();
+  const buttonSize =
+    layout?.size === 'small' || layout?.size === 'middle' || layout?.size === 'large' ? layout.size : undefined;
   const { value, onChange, disabled, iconSize = fontSizeXL, searchable = true } = props;
   const [visible, setVisible] = useState(false);
   const [filteredIcons, setFilteredIcons] = useState(availableIcons);
@@ -57,9 +59,9 @@ function IconField(props: IconPickerProps) {
   const { t } = useTranslation();
   const groupIconData = useMemo(() => groupByIconName(availableIcons), [availableIcons]);
 
-  const style: any = {
+  const style: React.CSSProperties = {
     width: '26em',
-    [`${searchable ? 'height' : 'maxHeight'}`]: '20em',
+    [searchable ? 'height' : 'maxHeight']: '20em',
     overflowY: 'auto',
   };
 
@@ -153,16 +155,17 @@ function IconField(props: IconPickerProps) {
           }
           trigger="click"
         >
-          <Button size={layout.size as any} disabled={disabled}>
+          <Button size={buttonSize} disabled={disabled}>
             {hasIcon(value) ? <Icon type={value} /> : t('Select icon')}
           </Button>
         </StablePopover>
         {value && !disabled && (
           <Button
-            size={layout.size as any}
+            size={buttonSize}
             icon={<CloseOutlined />}
+            aria-label={t('Clear icon')}
             onClick={() => {
-              onChange(null);
+              onChange?.(null);
             }}
           ></Button>
         )}

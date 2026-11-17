@@ -8,22 +8,25 @@
  */
 
 import { StablePopover } from '../../theme-compat';
-import { Button, Collapse, ConfigProvider, Empty, Input, InputNumber, Select, Space, Tooltip, Typography } from 'antd';
+import { Collapse, ConfigProvider, Empty, Input, InputNumber, Select, Tooltip, Typography } from 'antd';
 import classNames from 'classnames';
 import type { FC } from 'react';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useDebouncyFn } from 'use-debouncy';
 import { MutableTheme } from '../../../types';
+import { useTranslation } from '../../locale';
 import ColorPanel from '../ColorPanel';
 import ComponentDemos from '../component-demos';
 import { antdComponents } from '../component-panel';
-import { useLocale } from '../locale';
 import makeStyle from '../utils/makeStyle';
 import { getComponentToken } from '../utils/statistic';
-import tokenMeta from './token-meta.json';
 
 const { Panel } = Collapse;
 const { Text } = Typography;
+
+type ComponentTokenValue = string | number | boolean | undefined;
+type ComponentTokenRecord = Record<string, ComponentTokenValue>;
+type ComponentsConfigMap = Record<string, ComponentTokenRecord | undefined>;
 
 const useStyle = makeStyle('ComponentTokenPanel', (token) => ({
   '.component-token-panel': {
@@ -93,7 +96,7 @@ const isColorToken = (tokenName: string): boolean => {
   );
 };
 
-const isNumberToken = (tokenName: string, value: any): boolean => {
+const isNumberToken = (tokenName: string, value: ComponentTokenValue): boolean => {
   if (typeof value === 'number') return true;
   const lower = tokenName.toLowerCase();
   return (
@@ -111,14 +114,23 @@ const isNumberToken = (tokenName: string, value: any): boolean => {
 
 type TokenEditorProps = {
   tokenName: string;
-  value: any;
-  defaultValue: any;
-  onChange: (value: any) => void;
+  value: ComponentTokenValue;
+  defaultValue: ComponentTokenValue;
+  onChange: (value: ComponentTokenValue) => void;
   onReset: () => void;
   isModified: boolean;
+  resetLabel: string;
 };
 
-const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onChange, onReset, isModified }) => {
+const TokenEditor: FC<TokenEditorProps> = ({
+  tokenName,
+  value,
+  defaultValue,
+  onChange,
+  onReset,
+  isModified,
+  resetLabel,
+}) => {
   const displayValue = value ?? defaultValue;
 
   if (isColorToken(tokenName) && typeof displayValue === 'string') {
@@ -126,7 +138,7 @@ const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onC
       <div className="component-token-panel-token-value">
         {isModified && (
           <Typography.Link style={{ fontSize: 12 }} onClick={onReset}>
-            Reset
+            {resetLabel}
           </Typography.Link>
         )}
         <StablePopover
@@ -135,7 +147,9 @@ const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onC
           overlayInnerStyle={{ padding: 0 }}
           content={<ColorPanel color={displayValue} onChange={onChange} style={{ border: 'none' }} />}
         >
-          <div
+          <button
+            type="button"
+            aria-label={`${tokenName}: ${displayValue}`}
             style={{
               cursor: 'pointer',
               display: 'flex',
@@ -144,6 +158,7 @@ const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onC
               border: `1px solid ${isModified ? '#1677ff' : '#d9d9d9'}`,
               borderRadius: 4,
               padding: '2px 8px',
+              background: 'transparent',
             }}
           >
             <div
@@ -156,7 +171,7 @@ const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onC
               }}
             />
             <Text style={{ fontSize: 12, fontFamily: 'Monaco, monospace' }}>{displayValue}</Text>
-          </div>
+          </button>
         </StablePopover>
       </div>
     );
@@ -167,12 +182,13 @@ const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onC
       <div className="component-token-panel-token-value">
         {isModified && (
           <Typography.Link style={{ fontSize: 12 }} onClick={onReset}>
-            Reset
+            {resetLabel}
           </Typography.Link>
         )}
         <InputNumber
           size="small"
-          value={displayValue}
+          aria-label={tokenName}
+          value={typeof displayValue === 'number' ? displayValue : undefined}
           onChange={(val) => val !== null && onChange(val)}
           style={{ width: 80, borderColor: isModified ? '#1677ff' : undefined }}
         />
@@ -184,12 +200,13 @@ const TokenEditor: FC<TokenEditorProps> = ({ tokenName, value, defaultValue, onC
     <div className="component-token-panel-token-value">
       {isModified && (
         <Typography.Link style={{ fontSize: 12 }} onClick={onReset}>
-          Reset
+          {resetLabel}
         </Typography.Link>
       )}
       <Input
         size="small"
-        value={displayValue}
+        aria-label={tokenName}
+        value={displayValue != null ? String(displayValue) : ''}
         onChange={(e) => onChange(e.target.value)}
         style={{ width: 120, borderColor: isModified ? '#1677ff' : undefined }}
       />
@@ -206,28 +223,31 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
   const [wrapSSR, hashId] = useStyle();
   const [selectedComponent, setSelectedComponent] = useState<string>('Menu');
   const [searchText, setSearchText] = useState('');
-  const locale = useLocale();
+  const { t } = useTranslation();
 
   // Get component token info from antd's token.json
   const componentTokenInfo = useMemo(() => {
-    return getComponentToken(selectedComponent);
+    return getComponentToken(selectedComponent) as { component?: ComponentTokenRecord } | undefined;
   }, [selectedComponent]);
 
-  const componentTokens = useMemo(() => {
-    if (!componentTokenInfo?.component) return {};
-    return componentTokenInfo.component;
+  const componentTokens = useMemo<ComponentTokenRecord>(() => {
+    return componentTokenInfo?.component || {};
   }, [componentTokenInfo]);
 
+  const componentsMap = useMemo<ComponentsConfigMap>(() => {
+    return (theme.config.components as ComponentsConfigMap | undefined) || {};
+  }, [theme.config.components]);
+
   // Get current theme config for this component
-  const currentComponentConfig = useMemo(() => {
-    return (theme.config.components as any)?.[selectedComponent] || {};
-  }, [theme.config.components, selectedComponent]);
+  const currentComponentConfig = useMemo<ComponentTokenRecord>(() => {
+    return componentsMap[selectedComponent] || {};
+  }, [componentsMap, selectedComponent]);
 
   // Filtered token list based on search
   const filteredTokens = useMemo(() => {
     const tokens = Object.keys(componentTokens);
     if (!searchText) return tokens;
-    return tokens.filter((t) => t.toLowerCase().includes(searchText.toLowerCase()));
+    return tokens.filter((tokenName) => tokenName.toLowerCase().includes(searchText.toLowerCase()));
   }, [componentTokens, searchText]);
 
   // Categorize tokens
@@ -251,14 +271,15 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
     return Object.entries(categories).filter(([, tokens]) => tokens.length > 0);
   }, [filteredTokens, componentTokens]);
 
-  const debouncedOnChange = useDebouncyFn((component: string, tokenName: string, value: any) => {
+  const debouncedOnChange = useDebouncyFn((component: string, tokenName: string, value: ComponentTokenValue) => {
+    const existingComponents = (theme.config.components as ComponentsConfigMap | undefined) || {};
     theme.onThemeChange?.(
       {
         ...theme.config,
         components: {
-          ...(theme.config.components || {}),
+          ...existingComponents,
           [component]: {
-            ...((theme.config.components as any)?.[component] || {}),
+            ...(existingComponents[component] || {}),
             [tokenName]: value,
           },
         },
@@ -268,7 +289,7 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
   }, 300);
 
   const handleTokenChange = useCallback(
-    (tokenName: string, value: any) => {
+    (tokenName: string, value: ComponentTokenValue) => {
       debouncedOnChange(selectedComponent, tokenName, value);
     },
     [selectedComponent, debouncedOnChange],
@@ -276,14 +297,15 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
 
   const handleTokenReset = useCallback(
     (tokenName: string) => {
-      const currentConfig = (theme.config.components as any)?.[selectedComponent] || {};
-      const newConfig = { ...currentConfig };
+      const existingComponents = (theme.config.components as ComponentsConfigMap | undefined) || {};
+      const currentConfig = existingComponents[selectedComponent] || {};
+      const newConfig: ComponentTokenRecord = { ...currentConfig };
       delete newConfig[tokenName];
       theme.onThemeChange?.(
         {
           ...theme.config,
           components: {
-            ...(theme.config.components || {}),
+            ...existingComponents,
             [selectedComponent]: Object.keys(newConfig).length > 0 ? newConfig : undefined,
           },
         },
@@ -298,8 +320,10 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
 
   // Reset all tokens for current component
   const handleResetAll = useCallback(() => {
-    const newComponents = { ...(theme.config.components || {}) };
-    delete (newComponents as any)[selectedComponent];
+    const newComponents: ComponentsConfigMap = {
+      ...((theme.config.components as ComponentsConfigMap | undefined) || {}),
+    };
+    delete newComponents[selectedComponent];
     theme.onThemeChange?.(
       {
         ...theme.config,
@@ -309,11 +333,14 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
     );
   }, [selectedComponent, theme]);
 
+  const resetLabel = t('Reset');
+
   return wrapSSR(
     <div className={classNames(hashId, 'component-token-panel')} style={style}>
       <div className="component-token-panel-header">
         <Select
           showSearch
+          aria-label={t('Select Component')}
           style={{ width: '100%', marginBottom: 8 }}
           value={selectedComponent}
           onChange={setSelectedComponent}
@@ -321,12 +348,13 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
             label: name,
             value: name,
           }))}
-          placeholder="Select Component"
+          placeholder={t('Select Component')}
           filterOption={(input, option) => (option?.label as string)?.toLowerCase().includes(input.toLowerCase())}
         />
         <Input
           size="small"
-          placeholder={locale._lang === 'zh-CN' ? '搜索 Token...' : 'Search tokens...'}
+          aria-label={t('Search tokens...')}
+          placeholder={t('Search tokens...')}
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           allowClear
@@ -335,10 +363,10 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
         {modifiedCount > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {modifiedCount} token(s) modified
+              {t('{{count}} token(s) modified', { count: modifiedCount })}
             </Text>
             <Typography.Link style={{ fontSize: 12 }} onClick={handleResetAll}>
-              Reset All
+              {t('Reset All')}
             </Typography.Link>
           </div>
         )}
@@ -355,7 +383,7 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
         {categorizedTokens.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={searchText ? 'No matching tokens' : 'No component tokens available'}
+            description={searchText ? t('No matching tokens') : t('No component tokens available')}
           />
         ) : (
           <Collapse defaultActiveKey={categorizedTokens.map(([key]) => key)} ghost size="small">
@@ -363,7 +391,7 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
               <Panel
                 header={
                   <span style={{ fontWeight: 500 }}>
-                    {category} ({tokens.length})
+                    {t(category)} ({tokens.length})
                   </span>
                 }
                 key={category}
@@ -395,6 +423,7 @@ const ComponentTokenPanel: FC<ComponentTokenPanelProps> = ({ theme, style }) => 
                         onChange={(val) => handleTokenChange(tokenName, val)}
                         onReset={() => handleTokenReset(tokenName)}
                         isModified={isModified}
+                        resetLabel={resetLabel}
                       />
                     </div>
                   );

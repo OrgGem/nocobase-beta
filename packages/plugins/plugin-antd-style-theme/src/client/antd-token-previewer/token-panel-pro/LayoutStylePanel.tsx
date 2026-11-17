@@ -8,14 +8,14 @@
  */
 
 import { StablePopover } from '../../theme-compat';
-import { Collapse, Divider, Typography } from 'antd';
+import { Collapse, Typography } from 'antd';
 import classNames from 'classnames';
 import type { FC } from 'react';
 import React, { useCallback } from 'react';
 import { useDebouncyFn } from 'use-debouncy';
 import { MutableTheme } from '../../../types';
+import { useTranslation } from '../../locale';
 import ColorPanel from '../ColorPanel';
-import { useLocale } from '../locale';
 import makeStyle from '../utils/makeStyle';
 
 const { Panel } = Collapse;
@@ -83,7 +83,9 @@ const ColorTokenEditor: FC<ColorTokenEditorProps> = ({ label, value, onChange })
           overlayInnerStyle={{ padding: 0 }}
           content={<ColorPanel color={value || '#ffffff'} onChange={onChange} style={{ border: 'none' }} />}
         >
-          <div
+          <button
+            type="button"
+            aria-label={label}
             style={{
               cursor: 'pointer',
               display: 'flex',
@@ -92,6 +94,7 @@ const ColorTokenEditor: FC<ColorTokenEditorProps> = ({ label, value, onChange })
               border: '1px solid #d9d9d9',
               borderRadius: 4,
               padding: '2px 8px',
+              background: 'transparent',
             }}
           >
             <div
@@ -104,7 +107,7 @@ const ColorTokenEditor: FC<ColorTokenEditorProps> = ({ label, value, onChange })
               }}
             />
             <Text style={{ fontSize: 12, fontFamily: 'Monaco, monospace' }}>{value || '—'}</Text>
-          </div>
+          </button>
         </StablePopover>
       </div>
     </div>
@@ -131,25 +134,6 @@ const siderTokens = [
   { key: 'colorBgSiderMenuActive', label: 'Menu Background (Active)' },
 ];
 
-const headerTokensZh = [
-  { key: 'colorBgHeader', label: '顶栏背景色' },
-  { key: 'colorPrimaryHeader', label: '顶栏主色' },
-  { key: 'colorTextHeaderMenu', label: '菜单文字颜色' },
-  { key: 'colorTextHeaderMenuHover', label: '菜单文字悬浮色' },
-  { key: 'colorTextHeaderMenuActive', label: '菜单文字激活色' },
-  { key: 'colorBgHeaderMenuHover', label: '菜单背景悬浮色' },
-  { key: 'colorBgHeaderMenuActive', label: '菜单背景激活色' },
-];
-
-const siderTokensZh = [
-  { key: 'colorBgSider', label: '侧边栏背景色' },
-  { key: 'colorTextSiderMenu', label: '菜单文字颜色' },
-  { key: 'colorTextSiderMenuHover', label: '菜单文字悬浮色' },
-  { key: 'colorTextSiderMenuActive', label: '菜单文字激活色' },
-  { key: 'colorBgSiderMenuHover', label: '菜单背景悬浮色' },
-  { key: 'colorBgSiderMenuActive', label: '菜单背景激活色' },
-];
-
 export type LayoutStylePanelProps = {
   theme: MutableTheme;
   style?: React.CSSProperties;
@@ -157,11 +141,7 @@ export type LayoutStylePanelProps = {
 
 const LayoutStylePanel: FC<LayoutStylePanelProps> = ({ theme, style }) => {
   const [wrapSSR, hashId] = useStyle();
-  const locale = useLocale();
-  const isZh = locale._lang === 'zh-CN';
-
-  const currentHeaderTokens = isZh ? headerTokensZh : headerTokens;
-  const currentSiderTokens = isZh ? siderTokensZh : siderTokens;
+  const { t } = useTranslation();
 
   const debouncedChange = useDebouncyFn((tokenKey: string, value: string) => {
     theme.onThemeChange?.(
@@ -184,34 +164,30 @@ const LayoutStylePanel: FC<LayoutStylePanelProps> = ({ theme, style }) => {
   );
 
   const getTokenValue = (key: string): string => {
-    return (theme.config.token as any)?.[key] || '';
+    const tokenRecord = theme.config.token as Record<string, unknown> | undefined;
+    const val = tokenRecord?.[key];
+    return typeof val === 'string' ? val : '';
   };
 
   return wrapSSR(
     <div className={classNames(hashId, 'layout-style-panel')} style={style}>
       <Collapse defaultActiveKey={['header', 'sider']} ghost size="small">
-        <Panel
-          header={<span style={{ fontWeight: 600 }}>{isZh ? '🔝 顶部导航栏' : '🔝 Header / Navigation'}</span>}
-          key="header"
-        >
-          {currentHeaderTokens.map(({ key, label }) => (
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🔝 Header / Navigation')}</span>} key="header">
+          {headerTokens.map(({ key, label }) => (
             <ColorTokenEditor
               key={key}
-              label={label}
+              label={t(label)}
               value={getTokenValue(key)}
               onChange={(val) => handleTokenChange(key, val)}
             />
           ))}
         </Panel>
 
-        <Panel
-          header={<span style={{ fontWeight: 600 }}>{isZh ? '◀️ Sidebar / Menu bên' : '◀️ Sidebar / Sider Menu'}</span>}
-          key="sider"
-        >
-          {currentSiderTokens.map(({ key, label }) => (
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('◀️ Sidebar / Sider Menu')}</span>} key="sider">
+          {siderTokens.map(({ key, label }) => (
             <ColorTokenEditor
               key={key}
-              label={label}
+              label={t(label)}
               value={getTokenValue(key)}
               onChange={(val) => handleTokenChange(key, val)}
             />

@@ -9,33 +9,56 @@
 
 import { theme as antdTheme } from 'antd';
 import _ from 'lodash';
-import { ThemeConfig } from '../../types';
+import type { StoredAlgorithm, StoredThemeConfig, ThemeConfig } from '../../types';
 
-export function changeAlgorithmFromFunctionToString(themeConfig: any) {
-  themeConfig = _.cloneDeep(themeConfig);
-
-  if (!themeConfig.algorithm) {
+export function changeAlgorithmFromFunctionToString(
+  themeConfig: ThemeConfig | null | undefined,
+): StoredThemeConfig | null | undefined {
+  if (!themeConfig) {
     return themeConfig;
   }
+  const cloned: StoredThemeConfig = _.cloneDeep(themeConfig);
+
+  if (!themeConfig.algorithm) {
+    return cloned;
+  }
   if (Array.isArray(themeConfig.algorithm)) {
-    themeConfig.algorithm = themeConfig.algorithm.map((algorithm) => parseAlgorithm(algorithm)).filter(Boolean);
+    const encoded = themeConfig.algorithm
+      .map((algorithm) => parseAlgorithm(algorithm))
+      .filter((item): item is StoredAlgorithm => Boolean(item));
+    if (encoded.length > 0) {
+      cloned.algorithm = encoded;
+    } else {
+      delete cloned.algorithm;
+    }
   } else {
-    themeConfig.algorithm = parseAlgorithm(themeConfig.algorithm);
+    const encoded = parseAlgorithm(themeConfig.algorithm);
+    if (encoded) {
+      cloned.algorithm = encoded;
+    } else {
+      delete cloned.algorithm;
+    }
   }
-  if (_.isEmpty(themeConfig.algorithm)) {
-    delete themeConfig.algorithm;
-  }
-  return themeConfig;
+  return cloned;
 }
 
-function parseAlgorithm(algorithm: ThemeConfig['algorithm']): string {
+function parseAlgorithm(algorithm: ThemeConfig['algorithm'] | StoredAlgorithm): StoredAlgorithm | undefined {
   if (typeof algorithm === 'string') {
-    return algorithm;
+    return algorithm === 'defaultAlgorithm' || algorithm === 'darkAlgorithm' || algorithm === 'compactAlgorithm'
+      ? algorithm
+      : undefined;
   }
-  if (algorithm.toString() === antdTheme.darkAlgorithm.toString()) {
+  if (!algorithm) {
+    return undefined;
+  }
+  if (algorithm === antdTheme.defaultAlgorithm || algorithm.toString() === antdTheme.defaultAlgorithm.toString()) {
+    return 'defaultAlgorithm';
+  }
+  if (algorithm === antdTheme.darkAlgorithm || algorithm.toString() === antdTheme.darkAlgorithm.toString()) {
     return 'darkAlgorithm';
   }
-  if (algorithm.toString() === antdTheme.compactAlgorithm.toString()) {
+  if (algorithm === antdTheme.compactAlgorithm || algorithm.toString() === antdTheme.compactAlgorithm.toString()) {
     return 'compactAlgorithm';
   }
+  return undefined;
 }

@@ -31,6 +31,7 @@ export default defineCollection({
     {
       type: 'uid',
       name: 'uid',
+      unique: true,
     },
     {
       type: 'radio',

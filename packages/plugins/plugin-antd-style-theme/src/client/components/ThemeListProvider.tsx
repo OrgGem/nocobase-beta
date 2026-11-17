@@ -11,8 +11,7 @@ import { useApp } from '@nocobase/client-v2';
 import { useRequest } from 'ahooks';
 import { error } from '@nocobase/utils/client';
 import React, { createContext, useMemo } from 'react';
-import { ThemeItem } from '../../types';
-import { changeAlgorithmFromStringToFunction } from '../utils/changeAlgorithmFromStringToFunction';
+import { deserializeTheme, type StoredThemeItem, type ThemeItem } from '../../client-v2/themeApi';
 
 interface TData {
   data?: ThemeItem[];
@@ -22,14 +21,18 @@ interface TData {
   loading: boolean;
 }
 
-const ThemeListContext = createContext<TData>(null);
+const ThemeListContext = createContext<TData>({
+  run: () => {},
+  refresh: () => {},
+  loading: false,
+});
 ThemeListContext.displayName = 'ThemeListContext';
 
 export const useThemeListContext = () => {
   return React.useContext(ThemeListContext);
 };
 
-export const ThemeListProvider = ({ children }) => {
+export const ThemeListProvider: React.FC<React.PropsWithChildren> = ({ children }) => {
   const app = useApp();
   const api = app.apiClient;
   const {
@@ -41,7 +44,7 @@ export const ThemeListProvider = ({ children }) => {
   } = useRequest(
     () =>
       api
-        .request({
+        .request<{ data: StoredThemeItem[] }>({
           url: 'antdStyleThemeConfig:list',
           params: {
             sort: 'id',
@@ -55,7 +58,7 @@ export const ThemeListProvider = ({ children }) => {
   );
 
   const items = useMemo(() => {
-    return ((data as any)?.data as ThemeItem[])?.map((item) => changeAlgorithmFromStringToFunction(item));
+    return data?.data?.map((item) => deserializeTheme(item));
   }, [data]);
 
   if (err) {

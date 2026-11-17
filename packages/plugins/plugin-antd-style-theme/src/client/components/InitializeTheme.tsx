@@ -9,15 +9,22 @@
 
 import { defaultTheme as presetTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
 import { error } from '@nocobase/utils/client';
-import React, { useEffect, useMemo, useRef } from 'react';
-import { changeAlgorithmFromFunctionToString } from '../utils/changeAlgorithmFromFunctionToString';
-import { changeAlgorithmFromStringToFunction } from '../utils/changeAlgorithmFromStringToFunction';
+import React, { useEffect, useMemo } from 'react';
+import {
+  deserializeTheme,
+  getEffectiveTheme,
+  getUserThemeId,
+  normalizeTheme,
+  serializeTheme,
+  THEME_STORAGE_KEY,
+} from '../../client-v2/themeApi';
+import type { ThemeId } from '../../types';
 import { useThemeListContext } from './ThemeListProvider';
 
 const ThemeIdContext = React.createContext<{
-  currentThemeId?: number;
-  defaultThemeId?: number;
-}>({} as any);
+  currentThemeId?: ThemeId;
+  defaultThemeId?: ThemeId;
+}>({});
 
 export const useThemeId = () => {
   return React.useContext(ThemeIdContext);
@@ -31,15 +38,15 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
   const { setTheme } = useGlobalTheme();
   const { run, data, loading } = useThemeListContext();
   const defaultTheme = useMemo(() => data?.find((item) => item.default), [data]);
-  const themeId = useRef<number>(null);
+  const userThemeId = getUserThemeId(currentUser?.data?.data);
+  const selectedTheme = useMemo(() => (data ? getEffectiveTheme(data, userThemeId) : undefined), [data, userThemeId]);
   const api = useApp().apiClient;
-  const authToken = api.auth.getToken?.() || api.auth.token;
 
   useEffect(() => {
-    const storageTheme = api.auth.getOption('theme');
+    const storageTheme = api.auth.getOption(THEME_STORAGE_KEY);
     if (storageTheme) {
       try {
-        setTheme(changeAlgorithmFromStringToFunction(JSON.parse(storageTheme)).config);
+        setTheme(normalizeTheme(deserializeTheme(JSON.parse(storageTheme)).config, presetTheme));
       } catch (err) {
         error(err);
       }
@@ -47,45 +54,30 @@ const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
   }, [api.auth, setTheme]);
 
   useEffect(() => {
-    if (!authToken) {
-      return;
-    }
     if (!data) {
       run();
       return;
     }
 
-    const currentThemeId = currentUser?.data?.data?.systemSettings?.themeId;
-    let theme: any;
-    if (currentThemeId !== null && currentThemeId !== undefined) {
-      // Use the theme from the current user's system settings
-      theme = data.find((item) => item.id === currentThemeId);
-    }
-    if (!theme) {
-      // Use the default theme if there is not an available theme in user's system settings
-      theme = defaultTheme;
-    }
-    if (theme) {
-      themeId.current = theme.id;
-      setTheme(theme.config);
-      api.auth.setOption(
-        'theme',
-        JSON.stringify(Object.assign({ ...theme }, { config: changeAlgorithmFromFunctionToString(theme.config) })),
-      );
+    if (selectedTheme) {
+      setTheme(normalizeTheme(selectedTheme.config, presetTheme));
+      api.auth.setOption(THEME_STORAGE_KEY, serializeTheme(selectedTheme));
     } else {
-      // Use the preset theme if the theme is not found
       setTheme(presetTheme);
-      api.auth.setOption('theme', null);
+      api.auth.setOption(THEME_STORAGE_KEY, null);
     }
-  }, [api.auth, authToken, currentUser?.data?.data?.systemSettings?.themeId, data, run, setTheme, defaultTheme]);
+  }, [api.auth, data, run, selectedTheme, setTheme]);
 
-  const value =
-    (loading && !data) || currentUser?.loading
-      ? {}
-      : {
-          currentThemeId: themeId.current,
-          defaultThemeId: defaultTheme?.id,
-        };
+  const value = useMemo(
+    () =>
+      (loading && !data) || Boolean(currentUser?.loading)
+        ? {}
+        : {
+            currentThemeId: selectedTheme?.id,
+            defaultThemeId: defaultTheme?.id,
+          },
+    [currentUser?.loading, data, defaultTheme?.id, loading, selectedTheme?.id],
+  );
 
   return <ThemeIdContext.Provider value={value}>{children}</ThemeIdContext.Provider>;
 };

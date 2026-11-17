@@ -12,8 +12,8 @@ import classNames from 'classnames';
 import type { FC } from 'react';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Theme } from '../../../types';
+import { useTranslation } from '../../locale';
 import type { SelectedToken } from '../interface';
-import { useLocale } from '../locale';
 import { tokenCategory } from '../meta';
 import type { TokenGroup } from '../meta/interface';
 import makeStyle from '../utils/makeStyle';
@@ -67,7 +67,7 @@ const TokenPanelPro: FC<TokenPanelProProps> = ({
 }) => {
   const [wrapSSR, hashId] = useStyle();
   const [activeGroup, setActiveGroup] = useState<string>('brandColor');
-  const locale = useLocale();
+  const { t } = useTranslation();
 
   const activeCategory = useMemo(() => {
     return tokenCategory.reduce<TokenGroup<string> | undefined>((result, category) => {
@@ -77,7 +77,7 @@ const TokenPanelPro: FC<TokenPanelProProps> = ({
 
   useEffect(() => {
     onTokenSelect?.(activeCategory?.seedToken ?? [], 'seed');
-  }, [activeCategory]);
+  }, [activeCategory, onTokenSelect]);
 
   return wrapSSR(
     <div className={classNames(hashId, className, 'token-panel-pro')} style={style}>
@@ -93,7 +93,7 @@ const TokenPanelPro: FC<TokenPanelProProps> = ({
         items={[
           ...tokenCategory.map((category) => ({
             key: category.nameEn,
-            label: locale._lang === 'zh-CN' ? category.name : category.nameEn,
+            label: t(category.nameEn),
             children: (
               <TokenContent
                 category={category}
@@ -109,17 +109,17 @@ const TokenPanelPro: FC<TokenPanelProProps> = ({
           })),
           {
             key: 'components',
-            label: locale._lang === 'zh-CN' ? '组件样式' : 'Component Styles',
+            label: t('Component Styles'),
             children: <ComponentTokenPanel theme={theme} style={{ height: '100%' }} />,
           },
           {
             key: 'layout',
-            label: locale._lang === 'zh-CN' ? '布局样式' : 'Layout Styles',
+            label: t('Layout Styles'),
             children: <LayoutStylePanel theme={theme} style={{ height: '100%' }} />,
           },
           {
             key: 'login',
-            label: locale._lang === 'zh-CN' ? '登录页样式' : 'Login Styles',
+            label: t('Login Styles'),
             children: <LoginStylePanel theme={theme} style={{ height: '100%' }} />,
           },
         ]}

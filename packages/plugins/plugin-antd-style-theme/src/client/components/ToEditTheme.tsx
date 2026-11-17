@@ -8,7 +8,8 @@
  */
 
 import { PlusOutlined } from '@ant-design/icons';
-import { compatOldTheme, defaultTheme, useGlobalTheme } from '@nocobase/client-v2';
+import { defaultTheme, useGlobalTheme } from '@nocobase/client-v2';
+import { normalizeTheme } from '../../client-v2/themeApi';
 import { useToken } from '../theme-compat';
 import { App, Button, Space } from 'antd';
 import React, { useCallback } from 'react';
@@ -16,7 +17,7 @@ import { useTranslation } from '../locale';
 import { useThemeEditorContext } from './ThemeEditorProvider';
 
 const ToEditTheme = () => {
-  const { theme, setTheme, setCurrentSettingTheme } = useGlobalTheme();
+  const { theme, setTheme, setCurrentSettingTheme, getCurrentSettingTheme, setCurrentEditingTheme } = useGlobalTheme();
   const { token } = useToken();
   const { setOpen } = useThemeEditorContext();
   const { t } = useTranslation();
@@ -32,8 +33,11 @@ const ToEditTheme = () => {
         <Space style={{ float: 'right', marginTop: token.margin, justifyContent: 'flex-end' }} wrap>
           <Button
             onClick={() => {
-              setCurrentSettingTheme(theme);
-              setTheme(compatOldTheme(theme));
+              if (!getCurrentSettingTheme()) {
+                setCurrentSettingTheme(theme);
+              }
+              setCurrentEditingTheme(null as unknown as Parameters<typeof setCurrentEditingTheme>[0]);
+              setTheme(normalizeTheme(theme, defaultTheme));
               setOpen(true);
               m.destroy();
             }}
@@ -43,8 +47,11 @@ const ToEditTheme = () => {
           <Button
             type={'primary'}
             onClick={() => {
-              setCurrentSettingTheme(theme);
-              setTheme(compatOldTheme(defaultTheme));
+              if (!getCurrentSettingTheme()) {
+                setCurrentSettingTheme(theme);
+              }
+              setCurrentEditingTheme(null as unknown as Parameters<typeof setCurrentEditingTheme>[0]);
+              setTheme(normalizeTheme(defaultTheme, defaultTheme));
               setOpen(true);
               m.destroy();
             }}
@@ -54,7 +61,17 @@ const ToEditTheme = () => {
         </Space>
       ),
     });
-  }, [modal, setCurrentSettingTheme, setOpen, setTheme, t, theme, token.margin]);
+  }, [
+    getCurrentSettingTheme,
+    modal,
+    setCurrentEditingTheme,
+    setCurrentSettingTheme,
+    setOpen,
+    setTheme,
+    t,
+    theme,
+    token.margin,
+  ]);
 
   return (
     <Button

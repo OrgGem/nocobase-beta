@@ -187,29 +187,34 @@ const Previewer: React.FC<PreviewerProps> = ({ onSave, showTheme, theme, onTheme
 
   const mutableThemes = useMemo(
     () =>
-      enabledThemes.map<MutableTheme>((item) => {
-        const themeEntity = themes.find((themeItem) => themeItem.key === item)!;
-        return {
-          name: themeEntity.name,
-          key: themeEntity.key,
-          config: themeEntity.config,
-          onThemeChange: (newTheme) => {
-            if (themeEntity.key === theme?.key) {
-              onThemeChange?.(newTheme);
-            } else {
-              setThemes((prev) =>
-                prev.map((themeItem) =>
-                  themeItem.key === themeEntity.key
-                    ? {
-                        ...themeItem,
-                        config: newTheme,
-                      }
-                    : themeItem,
-                ),
-              );
-            }
+      enabledThemes.flatMap<MutableTheme>((item) => {
+        const themeEntity = themes.find((themeItem) => themeItem.key === item);
+        if (!themeEntity) {
+          return [];
+        }
+        return [
+          {
+            name: themeEntity.name,
+            key: themeEntity.key,
+            config: themeEntity.config,
+            onThemeChange: (newTheme) => {
+              if (themeEntity.key === theme?.key) {
+                onThemeChange?.(newTheme);
+              } else {
+                setThemes((prev) =>
+                  prev.map((themeItem) =>
+                    themeItem.key === themeEntity.key
+                      ? {
+                          ...themeItem,
+                          config: newTheme,
+                        }
+                      : themeItem,
+                  ),
+                );
+              }
+            },
           },
-        };
+        ];
       }),
     [enabledThemes, onThemeChange, theme?.key, themes],
   );

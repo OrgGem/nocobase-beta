@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { theme } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import {
   deserializeTheme,
   getEffectiveTheme,
   getUserThemeId,
+  isSameThemeId,
   listThemes,
   normalizeTheme,
   serializeTheme,
@@ -49,13 +52,34 @@ describe('V2 custom theme persistence', () => {
     expect(getEffectiveTheme([])).toBeUndefined();
   });
 
-  it('supplies the required motion token without overwriting an explicit zero or changing the input', () => {
-    const fallback = { token: { motionUnit: 0.1 } };
-    const config = { token: { colorPrimary: 'red' } };
-    expect(normalizeTheme(config, fallback).token?.motionUnit).toBe(0.1);
-    expect(config).toEqual({ token: { colorPrimary: 'red' } });
-    expect(normalizeTheme({ token: { motionUnit: 0 } }, fallback).token?.motionUnit).toBe(0);
+  it('supplies required fallback tokens without overwriting custom header tokens or explicit zero', () => {
+    const fallback = { token: { motionUnit: 0.1, colorSettings: '#F18B62', colorBgHeader: '#001529' } };
+    const config = { token: { colorPrimary: 'red', colorBgHeader: '#FFFFFF', colorTextHeaderMenu: '#2E3A5B' } };
+    const normalized = normalizeTheme(config, fallback);
+    expect(normalized.token?.motionUnit).toBe(0.1);
+    expect(normalized.token?.colorSettings).toBe('#F18B62');
+    expect(normalized.token?.colorBgHeader).toBe('#FFFFFF');
+    expect(normalized.token?.colorTextHeaderMenu).toBe('#2E3A5B');
+    expect(config).toEqual({
+      token: { colorPrimary: 'red', colorBgHeader: '#FFFFFF', colorTextHeaderMenu: '#2E3A5B' },
+    });
+    expect(normalizeTheme({ token: { motionUnit: 0, colorSettings: '#111111' } }, fallback).token).toMatchObject({
+      motionUnit: 0,
+      colorSettings: '#111111',
+    });
     expect(normalizeTheme(null, fallback)).toBe(fallback);
+  });
+
+  it('prefers antdStyleThemeId over legacy themeId and matches numeric/string IDs', () => {
+    expect(getUserThemeId({ systemSettings: { antdStyleThemeId: 7, themeId: 2 } })).toBe(7);
+    expect(getUserThemeId({ systemSettings: { antdStyleThemeId: null, themeId: 2 } })).toBeUndefined();
+    expect(getUserThemeId({ systemSettings: { themeId: 3 } })).toBe(3);
+
+    expect(isSameThemeId(5, '5')).toBe(true);
+    expect(isSameThemeId('5', 5)).toBe(true);
+    expect(isSameThemeId(5, 6)).toBe(false);
+    expect(isSameThemeId(null, '5')).toBe(false);
+    expect(isSameThemeId(undefined, undefined)).toBe(false);
   });
 
   it('uses the custom collection and user action while preserving large persisted IDs', async () => {

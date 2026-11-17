@@ -12,11 +12,19 @@ import React from 'react';
 const ThemeEditorContext = React.createContext<{
   open: boolean;
   setOpen: React.Dispatch<React.SetStateAction<boolean>>;
-}>(null);
+}>({
+  open: false,
+  setOpen: () => {},
+});
 
 export const useThemeEditorContext = () => React.useContext(ThemeEditorContext);
 
-export const ThemeEditorProvider = ({ children, open, setOpen }) => {
+export const ThemeEditorProvider: React.FC<
+  React.PropsWithChildren<{
+    open: boolean;
+    setOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  }>
+> = ({ children, open, setOpen }) => {
   return <ThemeEditorContext.Provider value={{ open, setOpen }}>{children}</ThemeEditorContext.Provider>;
 };
 

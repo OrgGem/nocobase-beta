@@ -9,10 +9,34 @@
 
 import type { ThemeConfig as Config } from '@nocobase/client-v2';
 import type { ReactElement } from 'react';
+
 export type ThemeConfig = Config;
+export type ThemeId = number | string;
+export type StoredAlgorithm = 'defaultAlgorithm' | 'darkAlgorithm' | 'compactAlgorithm';
+
+export interface LoginThemeTokens {
+  appFavicon?: string;
+  appTitle?: string;
+  loginBgColor?: string;
+  loginBgImage?: string;
+  loginBgGradient?: string;
+  loginLogoUrl?: string;
+  loginLogoHeight?: number;
+  loginCardBg?: string;
+  loginCardBorderRadius?: number;
+  loginCardShadow?: string;
+  loginCardWidth?: number;
+  loginBtnBg?: string;
+  loginBtnBorderRadius?: number;
+}
+
+export type StoredThemeConfig = Omit<ThemeConfig, 'algorithm' | 'token'> & {
+  algorithm?: ThemeConfig['algorithm'] | StoredAlgorithm | StoredAlgorithm[];
+  token?: ThemeConfig['token'] & LoginThemeTokens;
+};
 
 export interface ThemeItem {
-  id: number;
+  id: ThemeId;
   /** 主题配置内容，一个 JSON 字符串 */
   config: ThemeConfig | null;
   /** 主题是否可选 */
@@ -20,6 +44,15 @@ export interface ThemeItem {
   isBuiltIn?: boolean;
   uid?: string;
   default?: boolean; // 当前系统默认主题
+}
+
+export interface StoredThemeItem extends Omit<ThemeItem, 'config'> {
+  config: StoredThemeConfig | null;
+}
+
+export interface BuiltinThemeSeed extends Omit<StoredThemeItem, 'id'> {
+  isBuiltIn: boolean;
+  uid: string;
 }
 
 export type Theme = {

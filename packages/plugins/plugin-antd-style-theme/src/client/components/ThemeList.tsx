@@ -23,7 +23,7 @@ const ThemeList = () => {
     if (!data) {
       run();
     }
-  }, []);
+  }, [data, run]);
 
   const handleChange = useCallback(() => {
     refresh();

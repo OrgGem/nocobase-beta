@@ -10,7 +10,7 @@
 export default {
   openapi: '3.0.2',
   info: {
-    title: 'NocoBase API - Theme editor plugin',
+    title: 'NocoBase API - Antd Style Theme plugin',
   },
   components: {
     schemas: {
@@ -20,24 +20,37 @@ export default {
           id: {
             type: 'integer',
           },
+          uid: {
+            type: 'string',
+          },
           config: {
             type: 'object',
             properties: {
               name: {
                 type: 'string',
               },
+              algorithm: {
+                oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+              },
               token: {
                 type: 'object',
-                additionalProperties: false,
+                additionalProperties: true,
+              },
+              components: {
+                type: 'object',
+                additionalProperties: true,
               },
             },
             required: ['name'],
-            additionalProperties: false,
+            additionalProperties: true,
           },
           optional: {
             type: 'boolean',
           },
           isBuiltIn: {
+            type: 'boolean',
+          },
+          default: {
             type: 'boolean',
           },
           updatedAt: {
@@ -56,9 +69,9 @@ export default {
   },
   tags: [],
   paths: {
-    '/themeConfig:list': {
+    '/antdStyleThemeConfig:list': {
       get: {
-        tags: ['themeConfig'],
+        tags: ['antdStyleThemeConfig'],
         description: 'Get a list of themes',
         parameters: [],
         responses: {
@@ -84,9 +97,9 @@ export default {
         },
       },
     },
-    '/themeConfig:create': {
+    '/antdStyleThemeConfig:create': {
       post: {
-        tags: ['themeConfig'],
+        tags: ['antdStyleThemeConfig'],
         description: 'Create a new theme',
         requestBody: {
           required: true,
@@ -102,10 +115,12 @@ export default {
                       token: {
                         type: 'object',
                       },
-                      // 可以根据需要添加其他属性
+                      components: {
+                        type: 'object',
+                      },
                     },
                     required: ['name'],
-                    additionalProperties: false,
+                    additionalProperties: true,
                   },
                   optional: { type: 'boolean' },
                   isBuiltIn: { type: 'boolean' },
@@ -136,9 +151,9 @@ export default {
         },
       },
     },
-    '/themeConfig:update': {
+    '/antdStyleThemeConfig:update/{id}': {
       post: {
-        tags: ['themeConfig'],
+        tags: ['antdStyleThemeConfig'],
         description: 'Update an existing theme',
         parameters: [
           {
@@ -165,12 +180,15 @@ export default {
                       token: {
                         type: 'object',
                       },
-                      // 可以根据需要添加其他属性
+                      components: {
+                        type: 'object',
+                      },
                     },
-                    additionalProperties: false,
+                    additionalProperties: true,
                   },
                   optional: { type: 'boolean' },
                   isBuiltIn: { type: 'boolean' },
+                  default: { type: 'boolean' },
                 },
                 additionalProperties: false,
               },
@@ -200,9 +218,9 @@ export default {
         },
       },
     },
-    '/themeConfig:destroy': {
+    '/antdStyleThemeConfig:destroy/{id}': {
       post: {
-        tags: ['themeConfig'],
+        tags: ['antdStyleThemeConfig'],
         description: 'Delete an existing theme',
         parameters: [
           {
@@ -224,6 +242,40 @@ export default {
           },
           '404': {
             description: 'Not Found',
+          },
+        },
+      },
+    },
+    '/users:updateAntdStyleTheme': {
+      post: {
+        tags: ['users'],
+        description: 'Persist the current user theme selection',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  themeId: {
+                    oneOf: [{ type: 'integer' }, { type: 'string' }, { type: 'null' }],
+                  },
+                },
+                required: ['themeId'],
+                additionalProperties: false,
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'OK',
+          },
+          '400': {
+            description: 'Invalid or non-selectable themeId',
+          },
+          '401': {
+            description: 'Unauthorized',
           },
         },
       },

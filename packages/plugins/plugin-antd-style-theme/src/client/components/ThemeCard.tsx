@@ -8,12 +8,13 @@
  */
 
 import { DeleteOutlined, EditOutlined, EllipsisOutlined } from '@ant-design/icons';
-import { compatOldTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
+import { defaultTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
 import { useToken } from '../theme-compat';
 import { error } from '@nocobase/utils/client';
-import { App, Card, ConfigProvider, Dropdown, Space, Switch, Tag, message } from 'antd';
+import { App, Button, Card, ConfigProvider, Dropdown, Space, Switch, Tag, message } from 'antd';
 import React, { useCallback, useMemo } from 'react';
-import { ThemeConfig, ThemeItem } from '../../types';
+import { getUserThemeId, isSameThemeId, normalizeTheme, type ThemeItem } from '../../client-v2/themeApi';
+import type { ThemeConfig } from '../../types';
 import { Primary } from '../antd-token-previewer';
 import { useUpdateThemeSettings } from '../hooks/useUpdateThemeSettings';
 import { useTranslation } from '../locale';
@@ -67,6 +68,7 @@ const ThemeCard = (props: Props) => {
     theme: currentTheme,
     setTheme,
     setCurrentSettingTheme,
+    getCurrentSettingTheme,
     setCurrentEditingTheme,
     getCurrentEditingTheme,
   } = useGlobalTheme();
@@ -81,7 +83,8 @@ const ThemeCard = (props: Props) => {
   const { t } = useTranslation();
   const { token } = useToken();
 
-  const isDefault = item.id === defaultThemeId;
+  const isDefault = isSameThemeId(item.id, defaultThemeId);
+  const userThemeId = getUserThemeId(currentUser?.data?.data);
 
   const handleDelete = useCallback(() => {
     if (isDefault) {
@@ -96,40 +99,31 @@ const ThemeCard = (props: Props) => {
           url: `antdStyleThemeConfig:destroy/${item.id}`,
         });
 
-        if (item.id === currentUser?.data?.data?.systemSettings?.themeId) {
-          updateUserThemeSettings(null);
+        if (isSameThemeId(item.id, userThemeId)) {
+          await updateUserThemeSettings(null);
         }
         message.success(t('Deleted successfully'));
         onChange?.({ type: HandleTypes.delete, item });
       },
     });
-  }, [
-    api,
-    currentUser?.data?.data?.systemSettings?.themeId,
-    isDefault,
-    item,
-    modal,
-    onChange,
-    t,
-    updateUserThemeSettings,
-  ]);
+  }, [api, isDefault, item, modal, onChange, t, updateUserThemeSettings, userThemeId]);
+
   const handleSwitchOptional = useCallback(
     async (checked: boolean) => {
       setLoading(true);
       try {
         if (!checked) {
-          await Promise.all([
-            api.request({
-              url: `antdStyleThemeConfig:update/${item.id}`,
-              method: 'post',
-              data: {
-                optional: checked,
-                default: false,
-              },
-            }),
-            // 如果用户把当前设置的主题设置为不可选，那么就需要把当前设置的主题设置为默认主题
-            item.id === currentUser?.data?.data?.systemSettings?.themeId && updateUserThemeSettings(null),
-          ]);
+          await api.request({
+            url: `antdStyleThemeConfig:update/${item.id}`,
+            method: 'post',
+            data: {
+              optional: checked,
+              default: false,
+            },
+          });
+          if (isSameThemeId(item.id, userThemeId)) {
+            await updateUserThemeSettings(null);
+          }
         } else {
           await api.request({
             url: `antdStyleThemeConfig:update/${item.id}`,
@@ -139,31 +133,30 @@ const ThemeCard = (props: Props) => {
             },
           });
         }
+        message.success(t('Updated successfully'));
+        onChange?.({ type: HandleTypes.optional, item });
       } catch (err) {
         error(err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-      message.success(t('Updated successfully'));
-      onChange?.({ type: HandleTypes.optional, item });
     },
-    [api, currentUser?.data?.data?.systemSettings?.themeId, item, onChange, t, updateUserThemeSettings],
+    [api, item, onChange, t, updateUserThemeSettings, userThemeId],
   );
+
   const handleSwitchDefault = useCallback(
     async (checked: boolean) => {
       setLoading(true);
       try {
         if (checked) {
-          await Promise.all([
-            // 用户在设置该主题为默认主题时，肯定也希望该主题可被用户选择
-            api.request({
-              url: `antdStyleThemeConfig:update/${item.id}`,
-              method: 'post',
-              data: {
-                optional: true,
-                default: true,
-              },
-            }),
-          ]);
+          await api.request({
+            url: `antdStyleThemeConfig:update/${item.id}`,
+            method: 'post',
+            data: {
+              optional: true,
+              default: true,
+            },
+          });
         } else {
           await api.request({
             url: `antdStyleThemeConfig:update/${item.id}`,
@@ -173,22 +166,25 @@ const ThemeCard = (props: Props) => {
             },
           });
         }
+        message.success(t('Updated successfully'));
+        onChange?.({ type: HandleTypes.optional, item });
       } catch (err) {
         error(err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
-      message.success(t('Updated successfully'));
-      onChange?.({ type: HandleTypes.optional, item });
     },
     [api, item, onChange, t],
   );
 
   const handleEdit = useCallback(() => {
-    setCurrentSettingTheme(currentTheme);
-    setCurrentEditingTheme(item);
-    setTheme(compatOldTheme(item.config));
+    if (!getCurrentSettingTheme()) {
+      setCurrentSettingTheme(currentTheme);
+    }
+    setCurrentEditingTheme(item as unknown as Parameters<typeof setCurrentEditingTheme>[0]);
+    setTheme(normalizeTheme(item.config, defaultTheme));
     setOpen(true);
-  }, [item, setCurrentEditingTheme, setCurrentSettingTheme, setOpen, setTheme, currentTheme]);
+  }, [currentTheme, getCurrentSettingTheme, item, setCurrentEditingTheme, setCurrentSettingTheme, setOpen, setTheme]);
 
   const menu = useMemo(() => {
     return {
@@ -206,11 +202,11 @@ const ThemeCard = (props: Props) => {
               <Switch
                 disabled={isDefault}
                 style={{ transform: 'translateY(-2px)' }}
-                checked={item.optional}
-                size={'small'}
+                checked={Boolean(item.optional)}
+                size="small"
                 loading={loading}
                 onChange={handleSwitchOptional}
-              ></Switch>
+              />
             </Space>
           ),
         },
@@ -228,7 +224,7 @@ const ThemeCard = (props: Props) => {
                 disabled={isDefault}
                 style={{ transform: 'translateY(-2px)' }}
                 checked={isDefault}
-                size={'small'}
+                size="small"
                 loading={loading}
                 onChange={handleSwitchDefault}
               />
@@ -241,56 +237,52 @@ const ThemeCard = (props: Props) => {
 
   const actions = useMemo(() => {
     return [
-      <EditOutlined key="edit" onClick={handleEdit} />,
-      <DeleteOutlined
+      <Button
+        key="edit"
+        type="text"
+        size="small"
+        aria-label={t('Edit')}
+        icon={<EditOutlined />}
+        onClick={handleEdit}
+      />,
+      <Button
         key="delete"
-        style={
-          isDefault
-            ? {
-                color: token.colorTextDisabled,
-                cursor: 'not-allowed',
-              }
-            : null
-        }
+        type="text"
+        size="small"
         disabled={isDefault}
+        aria-label={t('Delete theme')}
+        icon={<DeleteOutlined />}
         onClick={handleDelete}
       />,
       <Dropdown key="ellipsis" menu={menu}>
-        <EllipsisOutlined />
+        <Button type="text" size="small" aria-label={t('Theme settings')} icon={<EllipsisOutlined />} />
       </Dropdown>,
     ];
-  }, [handleDelete, handleEdit, isDefault, menu, token.colorTextDisabled]);
+  }, [handleDelete, handleEdit, isDefault, menu, t]);
 
   const extra = useMemo(() => {
-    if (item.id !== defaultThemeId && !item.optional) {
+    if (!isDefault && !item.optional) {
       return null;
     }
-    const text =
-      item.id === currentThemeId
-        ? t('Current')
-        : item.id === defaultThemeId
-          ? t('Default')
-          : item.optional
-            ? t('Optional')
-            : t('Non-optional');
-    const color =
-      item.id === currentThemeId
-        ? 'processing'
-        : item.id === defaultThemeId
-          ? 'default'
-          : item.optional
-            ? 'success'
-            : 'error';
+    const isCurrent = isSameThemeId(item.id, currentThemeId);
+    const text = isCurrent
+      ? t('Current')
+      : isDefault
+        ? t('Default')
+        : item.optional
+          ? t('Optional')
+          : t('Non-optional');
+    const color = isCurrent ? 'processing' : isDefault ? 'default' : item.optional ? 'success' : 'error';
 
     return (
       <Tag style={{ marginRight: 0 }} color={color}>
         {text}
       </Tag>
     );
-  }, [currentThemeId, defaultThemeId, item.id, item.optional, t]);
+  }, [currentThemeId, isDefault, item.id, item.optional, t]);
 
   const cardStyle = useMemo(() => {
-    if (getCurrentEditingTheme()?.id === item.id) {
+    if (isSameThemeId(getCurrentEditingTheme()?.id, item.id)) {
       return {
         cursor: 'default',
         width: 240,
@@ -307,13 +299,13 @@ const ThemeCard = (props: Props) => {
     <Card
       hoverable
       extra={extra}
-      title={t(item.config?.name)}
+      title={t(item.config?.name || '')}
       size="small"
       style={cardStyle}
-      headStyle={{ minHeight: 38 }}
+      styles={{ header: { minHeight: 38 } }}
       actions={actions}
     >
-      <Overview theme={item.config} />
+      <Overview theme={item.config || defaultTheme} />
     </Card>
   );
 };

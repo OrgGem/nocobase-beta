@@ -13,9 +13,9 @@ import classNames from 'classnames';
 import type { FC } from 'react';
 import React, { useCallback } from 'react';
 import { useDebouncyFn } from 'use-debouncy';
-import { MutableTheme } from '../../../types';
+import type { LoginThemeTokens, MutableTheme } from '../../../types';
+import { useTranslation } from '../../locale';
 import ColorPanel from '../ColorPanel';
-import { useLocale } from '../locale';
 import makeStyle from '../utils/makeStyle';
 
 const { Panel } = Collapse;
@@ -69,30 +69,36 @@ const useStyle = makeStyle('LoginStylePanel', (token) => ({
   },
 }));
 
+interface LoginTokenDef {
+  key: keyof LoginThemeTokens;
+  label: string;
+  type: 'text' | 'color' | 'number';
+}
+
 // Login-specific custom tokens stored in theme.config.token
-const loginTokens = {
+const loginTokens: Record<'appBranding' | 'background' | 'logo' | 'card' | 'button', LoginTokenDef[]> = {
   appBranding: [
-    { key: 'appFavicon', label: 'Favicon URL', labelZh: 'Favicon URL', type: 'text' },
-    { key: 'appTitle', label: 'App Title', labelZh: '应用标题', type: 'text' },
+    { key: 'appFavicon', label: 'Favicon URL', type: 'text' },
+    { key: 'appTitle', label: 'App Title', type: 'text' },
   ],
   background: [
-    { key: 'loginBgColor', label: 'Background Color', labelZh: '背景颜色', type: 'color' },
-    { key: 'loginBgImage', label: 'Background Image URL', labelZh: '背景图片 URL', type: 'text' },
-    { key: 'loginBgGradient', label: 'Background Gradient CSS', labelZh: '渐变背景 CSS', type: 'text' },
+    { key: 'loginBgColor', label: 'Background Color', type: 'color' },
+    { key: 'loginBgImage', label: 'Background Image URL', type: 'text' },
+    { key: 'loginBgGradient', label: 'Background Gradient CSS', type: 'text' },
   ],
   logo: [
-    { key: 'loginLogoUrl', label: 'Login Logo URL', labelZh: '登录页 Logo URL', type: 'text' },
-    { key: 'loginLogoHeight', label: 'Logo Height (px)', labelZh: 'Logo 高度 (px)', type: 'number' },
+    { key: 'loginLogoUrl', label: 'Login Logo URL', type: 'text' },
+    { key: 'loginLogoHeight', label: 'Logo Height (px)', type: 'number' },
   ],
   card: [
-    { key: 'loginCardBg', label: 'Card Background', labelZh: '卡片背景色', type: 'color' },
-    { key: 'loginCardBorderRadius', label: 'Card Border Radius', labelZh: '卡片圆角', type: 'number' },
-    { key: 'loginCardShadow', label: 'Card Box Shadow', labelZh: '卡片阴影', type: 'text' },
-    { key: 'loginCardWidth', label: 'Card Width (px)', labelZh: '卡片宽度 (px)', type: 'number' },
+    { key: 'loginCardBg', label: 'Card Background', type: 'color' },
+    { key: 'loginCardBorderRadius', label: 'Card Border Radius', type: 'number' },
+    { key: 'loginCardShadow', label: 'Card Box Shadow', type: 'text' },
+    { key: 'loginCardWidth', label: 'Card Width (px)', type: 'number' },
   ],
   button: [
-    { key: 'loginBtnBg', label: 'Button Background', labelZh: '按钮背景色', type: 'color' },
-    { key: 'loginBtnBorderRadius', label: 'Button Border Radius', labelZh: '按钮圆角', type: 'number' },
+    { key: 'loginBtnBg', label: 'Button Background', type: 'color' },
+    { key: 'loginBtnBorderRadius', label: 'Button Border Radius', type: 'number' },
   ],
 };
 
@@ -103,10 +109,9 @@ export type LoginStylePanelProps = {
 
 const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
   const [wrapSSR, hashId] = useStyle();
-  const locale = useLocale();
-  const isZh = locale._lang === 'zh-CN';
+  const { t } = useTranslation();
 
-  const debouncedChange = useDebouncyFn((tokenKey: string, value: any) => {
+  const debouncedChange = useDebouncyFn((tokenKey: keyof LoginThemeTokens, value: string | number | null) => {
     theme.onThemeChange?.(
       {
         ...theme.config,
@@ -120,21 +125,27 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
   }, 200);
 
   const handleChange = useCallback(
-    (tokenKey: string, value: any) => {
+    (tokenKey: keyof LoginThemeTokens, value: string | number | null) => {
       debouncedChange(tokenKey, value);
     },
     [debouncedChange],
   );
 
-  const getVal = (key: string): any => {
-    return (theme.config.token as any)?.[key] ?? '';
+  const tokenRecord = (theme.config.token || {}) as Record<string, unknown>;
+  const getString = (key: string): string => {
+    const val = tokenRecord[key];
+    return typeof val === 'string' ? val : '';
+  };
+  const getNumber = (key: string): number | undefined => {
+    const val = tokenRecord[key];
+    return typeof val === 'number' && Number.isFinite(val) ? val : undefined;
   };
 
-  const renderEditor = (item: { key: string; label: string; labelZh: string; type: string }) => {
-    const label = isZh ? item.labelZh : item.label;
-    const value = getVal(item.key);
+  const renderEditor = (item: LoginTokenDef) => {
+    const label = t(item.label);
 
     if (item.type === 'color') {
+      const value = getString(item.key);
       return (
         <div className="login-style-panel-item" key={item.key}>
           <span className="login-style-panel-label">{label}</span>
@@ -150,7 +161,9 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
               />
             }
           >
-            <div
+            <button
+              type="button"
+              aria-label={label}
               style={{
                 cursor: 'pointer',
                 display: 'flex',
@@ -159,6 +172,7 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
                 border: '1px solid #d9d9d9',
                 borderRadius: 4,
                 padding: '2px 8px',
+                background: 'transparent',
               }}
             >
               <div
@@ -171,49 +185,56 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
                 }}
               />
               <Text style={{ fontSize: 12, fontFamily: 'Monaco, monospace' }}>{value || '—'}</Text>
-            </div>
+            </button>
           </StablePopover>
         </div>
       );
     }
 
     if (item.type === 'number') {
+      const value = getNumber(item.key);
       return (
         <div className="login-style-panel-item" key={item.key}>
           <span className="login-style-panel-label">{label}</span>
           <InputNumber
             size="small"
-            value={value || undefined}
+            aria-label={label}
+            value={value}
             onChange={(val) => val !== null && handleChange(item.key, val)}
             style={{ width: 80 }}
-            placeholder="auto"
+            placeholder={t('auto')}
           />
         </div>
       );
     }
 
-    // text
+    const value = getString(item.key);
     return (
       <div className="login-style-panel-item" key={item.key}>
         <span className="login-style-panel-label">{label}</span>
         <Input
           size="small"
+          aria-label={label}
           value={value}
           onChange={(e) => handleChange(item.key, e.target.value)}
           style={{ width: 200 }}
-          placeholder={item.key.includes('Url') ? 'https://...' : ''}
+          placeholder={item.key.includes('Url') || item.key === 'appFavicon' ? 'https://...' : ''}
         />
       </div>
     );
   };
 
   // Mini preview
-  const bgColor = getVal('loginBgColor') || '#f0f2f5';
-  const bgGradient = getVal('loginBgGradient');
-  const bgImage = getVal('loginBgImage');
-  const cardBg = getVal('loginCardBg') || '#ffffff';
-  const cardRadius = getVal('loginCardBorderRadius') || 8;
-  const cardShadow = getVal('loginCardShadow') || '0 2px 8px rgba(0,0,0,0.15)';
+  const bgColor = getString('loginBgColor') || '#f0f2f5';
+  const bgGradient = getString('loginBgGradient');
+  const bgImage = getString('loginBgImage');
+  const cardBg = getString('loginCardBg') || '#ffffff';
+  const cardRadius = getNumber('loginCardBorderRadius') ?? 8;
+  const cardShadow = getString('loginCardShadow') || '0 2px 8px rgba(0,0,0,0.15)';
+  const logoUrl = getString('loginLogoUrl');
+  const logoHeight = getNumber('loginLogoHeight') ?? 32;
+  const btnBg = getString('loginBtnBg') || getString('colorPrimary') || '#1677ff';
+  const btnRadius = getNumber('loginBtnBorderRadius') ?? 4;
 
   const previewBg: React.CSSProperties = {
     backgroundColor: bgColor,
@@ -233,19 +254,18 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
             boxShadow: cardShadow,
           }}
         >
-          {getVal('loginLogoUrl') ? (
+          {logoUrl ? (
             <img
-              src={getVal('loginLogoUrl')}
+              src={logoUrl}
               style={{
-                height: getVal('loginLogoHeight') || 32,
-                marginBottom: 8,
+                height: logoHeight,
                 display: 'block',
                 margin: '0 auto 8px',
               }}
               alt="logo"
             />
           ) : (
-            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#333' }}>Logo</div>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#333' }}>{t('Logo')}</div>
           )}
           <div style={{ width: 80, height: 8, backgroundColor: '#e0e0e0', borderRadius: 4, marginBottom: 6 }} />
           <div style={{ width: 80, height: 8, backgroundColor: '#e0e0e0', borderRadius: 4, marginBottom: 8 }} />
@@ -253,8 +273,8 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
             style={{
               width: 80,
               height: 20,
-              backgroundColor: getVal('loginBtnBg') || (theme.config.token as any)?.colorPrimary || '#1677ff',
-              borderRadius: getVal('loginBtnBorderRadius') || 4,
+              backgroundColor: btnBg,
+              borderRadius: btnRadius,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -262,28 +282,25 @@ const LoginStylePanel: FC<LoginStylePanelProps> = ({ theme, style }) => {
               color: '#fff',
             }}
           >
-            {isZh ? '登录' : 'Sign In'}
+            {t('Sign In')}
           </div>
         </div>
       </div>
 
       <Collapse defaultActiveKey={['appBranding', 'background', 'logo', 'card', 'button']} ghost size="small">
-        <Panel
-          header={<span style={{ fontWeight: 600 }}>{isZh ? '🌐 App Branding' : '🌐 App Branding'}</span>}
-          key="appBranding"
-        >
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🌐 App Branding')}</span>} key="appBranding">
           {loginTokens.appBranding.map(renderEditor)}
         </Panel>
-        <Panel header={<span style={{ fontWeight: 600 }}>{isZh ? '🖼️ 背景' : '🖼️ Background'}</span>} key="background">
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🖼️ Background')}</span>} key="background">
           {loginTokens.background.map(renderEditor)}
         </Panel>
-        <Panel header={<span style={{ fontWeight: 600 }}>{isZh ? '🏷️ Logo' : '🏷️ Logo'}</span>} key="logo">
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🏷️ Logo')}</span>} key="logo">
           {loginTokens.logo.map(renderEditor)}
         </Panel>
-        <Panel header={<span style={{ fontWeight: 600 }}>{isZh ? '🃏 登录卡片' : '🃏 Login Card'}</span>} key="card">
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🃏 Login Card')}</span>} key="card">
           {loginTokens.card.map(renderEditor)}
         </Panel>
-        <Panel header={<span style={{ fontWeight: 600 }}>{isZh ? '🔘 按钮' : '🔘 Button'}</span>} key="button">
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🔘 Button')}</span>} key="button">
           {loginTokens.button.map(renderEditor)}
         </Panel>
       </Collapse>

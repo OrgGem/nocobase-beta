@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { CloseOutlined } from '@ant-design/icons';
 import { connect, mapReadPretty } from '@formily/react';
 import { Icon, icons } from '@nocobase/client-v2';
 import { Button, Empty, Flex, Input, Popover, Radio, Space } from 'antd';
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getIconGroup, ICON_GROUPS } from '../icons';
 
@@ -29,11 +31,15 @@ export function NativeIconPicker({
   const [open, setOpen] = useState(false);
   const [group, setGroup] = useState('Outlined');
   const [search, setSearch] = useState('');
-  const available = [...icons.keys()];
-  const groups = ICON_GROUPS.filter((name) => available.some((key) => getIconGroup(key) === name));
-  const filtered = available.filter(
-    (key) => getIconGroup(key) === group && key.toLowerCase().includes(search.trim().toLowerCase()),
+  const available = useMemo(() => [...icons.keys()], []);
+  const groups = useMemo(
+    () => ICON_GROUPS.filter((name) => available.some((key) => getIconGroup(key) === name)),
+    [available],
   );
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return available.filter((key) => getIconGroup(key) === group && key.toLowerCase().includes(query));
+  }, [available, group, search]);
   const select = (key: string | null) => {
     onChange?.(key);
     onChangeComplete?.(key);

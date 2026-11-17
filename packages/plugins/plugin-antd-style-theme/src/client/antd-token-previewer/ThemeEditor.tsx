@@ -9,7 +9,7 @@
 
 import type { DerivativeFunc } from '@ant-design/cssinjs';
 import classNames from 'classnames';
-import React, { forwardRef, useImperativeHandle, useMemo, useState } from 'react';
+import React, { forwardRef, useCallback, useImperativeHandle, useMemo, useState } from 'react';
 import useControlledTheme from './hooks/useControlledTheme';
 import type { SelectedToken, Theme } from './interface';
 import { LocaleContext, zhCN } from './locale';
@@ -68,7 +68,7 @@ const ThemeEditor = forwardRef<ThemeEditorRef, ThemeEditorProps>(
       updateRef,
     }));
 
-    const handleTokenSelect: TokenPanelProProps['onTokenSelect'] = (token, type) => {
+    const handleTokenSelect: NonNullable<TokenPanelProProps['onTokenSelect']> = useCallback((token, type) => {
       setSelectedTokens((prev) => {
         const tokens = typeof token === 'string' ? (token ? [token] : []) : token;
         if (type === 'seed') {
@@ -91,7 +91,7 @@ const ThemeEditor = forwardRef<ThemeEditorRef, ThemeEditorProps>(
         }
         return newSelectedTokens;
       });
-    };
+    }, []);
 
     const computedSelectedTokens = useMemo(() => {
       if (selectedTokens.seed?.length && !selectedTokens.map?.length && !selectedTokens.alias?.length) {
