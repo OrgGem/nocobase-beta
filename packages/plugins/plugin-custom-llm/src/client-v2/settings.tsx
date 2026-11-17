@@ -1,12 +1,78 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { EnvVariableInput } from '@nocobase/client-v2';
+import { useApp } from '@nocobase/client-v2';
 import { ModelSelect } from '@nocobase/plugin-ai/client-v2';
-import { Checkbox, Collapse, Form, Input, InputNumber, Select } from 'antd';
-import React from 'react';
+import { Button, Checkbox, Collapse, Flex, Form, Input, InputNumber, Select, Spin } from 'antd';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const namespace = 'plugin-custom-llm';
+
+function ApiKeyInput({ value, onChange, id }: { value?: string; onChange?: (value: string) => void; id?: string }) {
+  const { t } = useTranslation(namespace);
+  const app = useApp();
+  const [names, setNames] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const isVariable = !!value && /^\s*\{\{\s*\$env\.[^{}]+?\s*\}\}\s*$/.test(value);
+
+  const loadVariables = async () => {
+    if (loading) return;
+    setLoading(true);
+    setFailed(false);
+    try {
+      const response = await app.apiClient.request({ url: 'environmentVariables?paginate=false', skipNotify: true });
+      const data: unknown = response.data?.data;
+      if (!Array.isArray(data)) throw new Error('Invalid environment variables response');
+      setNames(
+        data.flatMap((item: unknown) => {
+          if (!item || typeof item !== 'object' || !('name' in item)) return [];
+          const name = item.name;
+          return typeof name === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(name) ? [name] : [];
+        }),
+      );
+    } catch {
+      setNames([]);
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Flex vertical gap="small" style={{ width: '100%' }}>
+      {isVariable ? (
+        <Input
+          id={id}
+          value={value}
+          readOnly
+          suffix={
+            <Button type="text" size="small" onClick={() => onChange?.('')}>
+              {t('Clear API key')}
+            </Button>
+          }
+        />
+      ) : (
+        <Input.Password id={id} value={value} allowClear onChange={(event) => onChange?.(event.target.value)} />
+      )}
+      <Select<string>
+        aria-label={t('Select environment variable')}
+        placeholder={t('Select environment variable')}
+        showSearch
+        value={null}
+        options={names.map((name) => ({ label: name, value: name }))}
+        style={{ width: '100%' }}
+        notFoundContent={
+          loading ? <Spin size="small" /> : failed ? t('Unable to load environment variables') : undefined
+        }
+        onDropdownVisibleChange={(open) => {
+          if (open) loadVariables();
+        }}
+        onChange={(name) => onChange?.(`{{ $env.${name} }}`)}
+      />
+    </Flex>
+  );
+}
 
 export function ProviderSettingsForm() {
   const { t } = useTranslation(namespace);
@@ -15,7 +81,7 @@ export function ProviderSettingsForm() {
   return (
     <>
       <Form.Item name={['options', 'apiKey']} label={t('API Key')} rules={[{ required: true }]}>
-        <EnvVariableInput password />
+        <ApiKeyInput />
       </Form.Item>
       <Form.Item name={['options', 'disableStream']} valuePropName="checked" extra={t('Disable streaming description')}>
         <Checkbox>{t('Disable streaming')}</Checkbox>

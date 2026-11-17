@@ -1,5 +1,8 @@
 {
   "API Key": "API Key",
+  "Select environment variable": "Chọn biến môi trường",
+  "Clear API key": "Xóa API key",
+  "Unable to load environment variables": "Không thể tải biến môi trường",
   "Model": "Mô hình",
   "Options": "Tùy chọn",
   "Temperature": "Nhiệt độ",

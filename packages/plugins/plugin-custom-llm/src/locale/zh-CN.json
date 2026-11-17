@@ -1,5 +1,8 @@
 {
   "API Key": "API 密钥",
+  "Select environment variable": "选择环境变量",
+  "Clear API key": "清除 API 密钥",
+  "Unable to load environment variables": "无法加载环境变量",
   "Model": "模型",
   "Options": "选项",
   "Temperature": "温度",

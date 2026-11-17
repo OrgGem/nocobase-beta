@@ -1,5 +1,8 @@
 {
   "API Key": "API Key",
+  "Select environment variable": "Select environment variable",
+  "Clear API key": "Clear API key",
+  "Unable to load environment variables": "Unable to load environment variables",
   "Model": "Model",
   "Options": "Options",
   "Temperature": "Temperature",
