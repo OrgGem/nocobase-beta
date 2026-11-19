@@ -19,6 +19,12 @@ import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype, useComponent 
 import { filePreviewTypes } from '@nocobase/plugin-file-manager';
 import { useT } from './locale';
 import { AIFilePreviewAction, registerFilePreviewAIWorkContext } from './AIFilePreviewAction';
+import {
+  createLruBlobCache,
+  isInternalAuthenticatedDownloadUrl,
+  parseXlsxSheetsToRows,
+  toPdfBlob,
+} from '../shared/previewHelpers';
 
 // ─── Supported MIME types ────────────────────────────────────────────
 
@@ -47,11 +53,8 @@ const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
 const TEXT_EXTS = ['txt', 'csv', 'html', 'css', 'js', 'json', 'xml', 'log', 'md', 'yaml', 'yml', 'xaml'];
 const DOCX_EXTS = ['docx'];
 const XLSX_EXTS = ['xlsx', 'xls'];
-const PPTX_MIME_TYPES = [
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.ms-powerpoint',
-];
-const PPTX_EXTS = ['pptx', 'ppt'];
+const PPTX_MIME_TYPES = ['application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+const PPTX_EXTS = ['pptx'];
 const IMAGE_PLACEHOLDER_ICON_MAP: Record<string, string> = {
   png: 'png-200-200.png',
   jpg: 'jpeg-200-200.png',
@@ -295,10 +298,10 @@ const getFileDisplayName = (file: any): string => {
   return record.filename || record.name || record.title || 'download';
 };
 
-const loadedBlobCache = new Map<string, Promise<Blob>>();
+const loadedBlobCache = createLruBlobCache(20);
 
-function getBlobCacheKey(file: any, token: string, downloadUrl: string): string {
-  return `${token ? 'auth' : 'anon'}:${token || ''}:${getFileDependencyKey(file) || downloadUrl}`;
+function getBlobCacheKey(file: any, downloadUrl: string): string {
+  return `${getFileDependencyKey(file) || downloadUrl}`;
 }
 
 function normalizeFileForServer(file: any) {
@@ -323,30 +326,6 @@ function normalizeFileForServer(file: any) {
     collectionName: record?.collectionName,
     lastModified: record?.lastModified,
   };
-}
-
-function isInternalAuthenticatedDownloadUrl(url: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url, location.origin);
-    if (parsed.origin !== location.origin) {
-      return false;
-    }
-    return [
-      '/api/filePreviewAuth:download',
-      '/api/extStorage:download',
-      '/api/skillHub:download',
-      '/api/worker-monitor',
-      '/api/carboneTemplates:download',
-      '/api/attachments:stream',
-      '/api/attachments:sftpStream',
-    ].some(
-      (path) =>
-        parsed.pathname === path || parsed.pathname.startsWith(`${path}/`) || parsed.pathname.startsWith(`${path}:`),
-    );
-  } catch {
-    return false;
-  }
 }
 
 function getPublicAssetUrl(path: string): string {
@@ -469,16 +448,8 @@ async function getLoadedFileBlob(file: any, token: string, mode: 'inline' | 'att
   if (!downloadUrl || downloadUrl.endsWith('?')) {
     throw new Error('No file URL');
   }
-  const cacheKey = getBlobCacheKey(file, token, downloadUrl);
-  let pending = loadedBlobCache.get(cacheKey);
-  if (!pending) {
-    pending = fetchFileAsBlob(downloadUrl, token).catch((err) => {
-      loadedBlobCache.delete(cacheKey);
-      throw err;
-    });
-    loadedBlobCache.set(cacheKey, pending);
-  }
-  return pending;
+  const cacheKey = getBlobCacheKey(file, downloadUrl);
+  return loadedBlobCache.getOrLoad(token, cacheKey, () => fetchFileAsBlob(downloadUrl, token));
 }
 
 // ─── Authenticated download helper ─────────────────────────────────
@@ -499,7 +470,7 @@ async function downloadFileWithAuth(file: any, token: string): Promise<void> {
 
 // ─── useBlobUrl hook ────────────────────────────────────────────────
 
-function useBlobUrl(file: any, token: string) {
+function useBlobUrl(file: any, token: string, options?: { forcePdfMime?: boolean }) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -507,6 +478,7 @@ function useBlobUrl(file: any, token: string) {
   const fileRef = useRef(file);
   fileRef.current = file;
   const fileDependencyKey = getFileDependencyKey(file);
+  const forcePdfMime = Boolean(options?.forcePdfMime);
 
   useEffect(() => {
     let cancelled = false;
@@ -527,7 +499,8 @@ function useBlobUrl(file: any, token: string) {
     getLoadedFileBlob(currentFile, token)
       .then((blob) => {
         if (cancelled) return;
-        const objectUrl = URL.createObjectURL(blob);
+        const safeBlob = forcePdfMime ? toPdfBlob(blob) : blob;
+        const objectUrl = URL.createObjectURL(safeBlob);
         blobUrlRef.current = objectUrl;
         setBlobUrl(objectUrl);
         setLoading(false);
@@ -545,7 +518,7 @@ function useBlobUrl(file: any, token: string) {
         blobUrlRef.current = null;
       }
     };
-  }, [fileDependencyKey, token]);
+  }, [fileDependencyKey, token, forcePdfMime]);
 
   return { blobUrl, loading, error };
 }
@@ -678,11 +651,13 @@ function AuthPdfInlinePreviewer({ file }: any) {
   const apiClient = useAPIClient();
   const t = useT();
   const token = apiClient.auth?.token || '';
-  const { blobUrl, loading, error } = useBlobUrl(file, token);
+  const { blobUrl, loading, error } = useBlobUrl(file, token, { forcePdfMime: true });
 
   if (loading) return <LoadingIndicator message={t('Loading preview...')} />;
   if (error || !blobUrl) return <ErrorMessage message={t('Failed to load file preview')} />;
-  return <iframe src={blobUrl} width="100%" height="100%" style={{ border: 'none' }} />;
+  return (
+    <iframe src={blobUrl} title={getFileDisplayName(file)} width="100%" height="100%" style={{ border: 'none' }} />
+  );
 }
 
 function AuthImageInlinePreviewer({ file }: any) {
@@ -825,7 +800,7 @@ function AuthXlsxInlinePreviewer({ file }: any) {
   const [error, setError] = useState<string | null>(null);
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState<string>('');
-  const [sheetsHtml, setSheetsHtml] = useState<Record<string, string>>({});
+  const [sheetsRows, setSheetsRows] = useState<Record<string, string[][]>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -843,39 +818,39 @@ function AuthXlsxInlinePreviewer({ file }: any) {
     setLoading(true);
     setError(null);
 
-    (async () => {
+    const loadWorkbook = async () => {
       try {
         const blob = await getLoadedFileBlob(currentFile, token);
         if (cancelled) return;
-        // Dynamic import for code-splitting (bundled, no CDN needed)
         // @ts-ignore
         const XLSX = await import('xlsx');
         if (cancelled) return;
         const arrayBuffer = await blob.arrayBuffer();
         if (cancelled) return;
         const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-        const names = workbook.SheetNames as string[];
-        const htmlMap: Record<string, string> = {};
-        for (const name of names) {
-          const sheet = workbook.Sheets[name];
-          htmlMap[name] = XLSX.utils.sheet_to_html(sheet, { id: 'xlsx-preview-table' });
-        }
+        const parsed = parseXlsxSheetsToRows(workbook, XLSX.utils);
         if (cancelled) return;
-        setSheetNames(names);
-        setActiveSheet(names[0] || '');
-        setSheetsHtml(htmlMap);
+        setSheetNames(parsed.sheetNames);
+        setActiveSheet(parsed.sheetNames[0] || '');
+        setSheetsRows(parsed.sheetsRows);
         setLoading(false);
       } catch (err: any) {
         if (cancelled) return;
         setError(err.message || 'Failed to render XLSX');
         setLoading(false);
       }
-    })();
+    };
+    loadWorkbook();
 
     return () => {
       cancelled = true;
     };
   }, [fileDependencyKey, token]);
+
+  const activeRows = sheetsRows[activeSheet] || [];
+  const columnCount = activeRows.reduce((max, row) => Math.max(max, row.length), 0);
+  const headerRow = activeRows[0] || [];
+  const bodyRows = activeRows.slice(1);
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -885,6 +860,7 @@ function AuthXlsxInlinePreviewer({ file }: any) {
         <>
           {sheetNames.length > 1 && (
             <div
+              role="tablist"
               style={{
                 display: 'flex',
                 gap: 0,
@@ -898,6 +874,9 @@ function AuthXlsxInlinePreviewer({ file }: any) {
               {sheetNames.map((name) => (
                 <button
                   key={name}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSheet === name}
                   onClick={() => setActiveSheet(name)}
                   style={{
                     padding: '8px 16px',
@@ -917,11 +896,28 @@ function AuthXlsxInlinePreviewer({ file }: any) {
               ))}
             </div>
           )}
-          <div
-            ref={containerRef}
-            style={{ flex: 1, overflow: 'auto', padding: 0 }}
-            dangerouslySetInnerHTML={{ __html: sheetsHtml[activeSheet] || '' }}
-          />
+          <div ref={containerRef} style={{ flex: 1, overflow: 'auto', padding: 0 }}>
+            {activeRows.length > 0 && columnCount > 0 ? (
+              <table id="xlsx-preview-table">
+                <thead>
+                  <tr>
+                    {Array.from({ length: columnCount }, (_, colIdx) => (
+                      <th key={colIdx}>{headerRow[colIdx] ?? ''}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {bodyRows.map((row, rowIdx) => (
+                    <tr key={rowIdx}>
+                      {Array.from({ length: columnCount }, (_, colIdx) => (
+                        <td key={colIdx}>{row[colIdx] ?? ''}</td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+          </div>
           <style>{`
             #xlsx-preview-table {
               border-collapse: collapse;
@@ -938,18 +934,17 @@ function AuthXlsxInlinePreviewer({ file }: any) {
               white-space: normal;
               word-break: break-word;
             }
-            #xlsx-preview-table tr:first-child td,
-            #xlsx-preview-table tr:first-child th {
+            #xlsx-preview-table thead th {
               background: #fafafa;
               font-weight: 600;
               position: sticky;
               top: 0;
               z-index: 1;
             }
-            #xlsx-preview-table tr:nth-child(even) {
+            #xlsx-preview-table tbody tr:nth-child(even) {
               background: #fafafa;
             }
-            #xlsx-preview-table tr:hover {
+            #xlsx-preview-table tbody tr:hover {
               background: #f0f7ff;
             }
           `}</style>
@@ -1122,6 +1117,9 @@ function AuthRawTextPreviewer({ file }: any) {
   const [content, setContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const fileDependencyKey = getFileDependencyKey(file);
 
   // Use NocoBase's Markdown renderer if available (e.g. from plugin-field-markdown-vditor)
   const MarkdownVditor = useComponent('MarkdownVditor');
@@ -1129,28 +1127,48 @@ function AuthRawTextPreviewer({ file }: any) {
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    const currentFile = fileRef.current;
+
+    const loadRawText = async () => {
       setLoading(true);
       setError(null);
       try {
-        const token = apiClient.auth?.token || '';
-        const blob = await getLoadedFileBlob(file, token);
-        if (cancelled) return;
+        const record = getPreviewFileRecord(currentFile);
+        const normalized = normalizeFileForServer(currentFile);
+        const sourceUrl = resolveFileUrl(currentFile);
+        const localBlob =
+          record?.originFileObj instanceof Blob
+            ? record.originFileObj
+            : currentFile instanceof Blob
+              ? currentFile
+              : null;
+        const isLocalOnly = Boolean(localBlob) || (Boolean(sourceUrl) && /^(blob|data):/i.test(sourceUrl));
 
-        const formData = new FormData();
-        formData.append('file', blob, getFileDisplayName(file));
-        formData.append('attachment', JSON.stringify(normalizeFileForServer(file)));
-
-        const response = await apiClient.request({
-          url: 'filePreviewAuth:getContent',
-          method: 'post',
-          data: formData,
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
+        let response: any;
+        if (isLocalOnly) {
+          const token = apiClient.auth?.token || '';
+          const blob = localBlob || (await getLoadedFileBlob(currentFile, token));
+          if (cancelled) return;
+          const formData = new FormData();
+          formData.append('file', blob, getFileDisplayName(currentFile));
+          formData.append('attachment', JSON.stringify(normalized));
+          response = await apiClient.request({
+            url: 'filePreviewAuth:getContent',
+            method: 'post',
+            data: formData,
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+        } else {
+          response = await apiClient.request({
+            url: 'filePreviewAuth:getContent',
+            method: 'post',
+            data: { file: normalized },
+          });
+        }
         if (cancelled) return;
         const text = response?.data?.data?.content || '';
 
-        // The server wraps content in <file_preview> XML tags, let's strip it for a cleaner raw text view
+        // Strip the <file_preview> wrapper tags returned for AI context to display clean raw text.
         let cleanText = text;
         const match = text.match(/<file_preview[^>]*>([\s\S]*?)<\/file_preview>/i);
         if (match) {
@@ -1164,11 +1182,13 @@ function AuthRawTextPreviewer({ file }: any) {
         setError(err.message || 'Failed to fetch raw text');
         setLoading(false);
       }
-    })();
+    };
+    loadRawText();
+
     return () => {
       cancelled = true;
     };
-  }, [file, apiClient]);
+  }, [fileDependencyKey, apiClient]);
 
   if (loading) return <Spin size="large" tip={t('Extracting raw text...')} style={{ marginTop: '40px' }} />;
   if (error) return <Alert type="error" message={error} style={{ width: '100%', margin: '20px' }} />;
@@ -1324,16 +1344,17 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
     setOcrStatus('no-ocr');
     setOcrError(null);
 
-    loadOcrStatus()
-      .then(() => {
-        if (cancelled) return;
+    loadOcrStatus({ updateState: false })
+      .then((record) => {
+        if (cancelled || !record) return;
+        applyOcrRecord(record);
       })
       .catch(console.error);
 
     return () => {
       cancelled = true;
     };
-  }, [ocrAttachmentId, loadOcrStatus]);
+  }, [ocrAttachmentId, loadOcrStatus, applyOcrRecord]);
 
   // Polling for OCR job completion when ocrStatus is 'pending-ocr'
   useEffect(() => {
@@ -1501,11 +1522,11 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
             >
               <ScanOutlined style={{ fontSize: '64px', color: '#1890ff', marginBottom: '20px' }} />
               <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '10px' }}>
-                {t('Word-level Song ngữ (English & Vietnamese) OCR')}
+                {t('Word-level Bilingual (English & Vietnamese) OCR')}
               </h3>
               <p style={{ color: '#8c8c8c', maxWidth: '480px', textAlign: 'center', marginBottom: '24px' }}>
                 {t(
-                  'Chưa có dữ liệu OCR cấp độ Từ (Word-level) cho tệp này. Hãy chạy nhận dạng Tesseract-OCR để bắt đầu đối soát và verify toạ độ.',
+                  'No word-level OCR data is available for this file yet. Run Tesseract OCR to start coordinate verification.',
                 )}
               </p>
               <Button type="primary" size="large" icon={<ThunderboltOutlined />} onClick={handleRunOcr}>
@@ -1524,7 +1545,7 @@ function AuthCatchAllModalPreviewer({ index, list, onSwitchIndex }: any) {
                 padding: '40px',
               }}
             >
-              <Spin size="large" tip={t('Analyzing layout structure and running song ngữ OCR...')} />
+              <Spin size="large" tip={t('Analyzing layout structure and running bilingual OCR...')} />
               <p style={{ color: '#8c8c8c', marginTop: '20px', fontSize: '13px', textAlign: 'center' }}>
                 {t(
                   'Extracting word-level coordinates via Tesseract-OCR. This will automatically refresh when complete.',
@@ -1694,7 +1715,6 @@ function AuthDownloadPreviewer({ file }: any) {
 
 export class PluginFilePreviewAuthClient extends Plugin {
   async load() {
-    this.patchUploadPreviewBase64Fallback();
     registerFilePreviewAIWorkContext(this.app);
 
     // ────────────────────────────────────────────────────────────────
@@ -1764,47 +1784,6 @@ export class PluginFilePreviewAuthClient extends Plugin {
       match: isPptxFile,
       Previewer: wrapWithAuthModalPreviewer(AuthPptxInlinePreviewer),
     });
-  }
-
-  private patchUploadPreviewBase64Fallback() {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const fileReaderProto = window.FileReader?.prototype as any;
-    if (!fileReaderProto || fileReaderProto.__filePreviewAuthBase64FallbackPatched) {
-      return;
-    }
-
-    const originalReadAsDataURL = fileReaderProto.readAsDataURL;
-    if (typeof originalReadAsDataURL !== 'function') {
-      return;
-    }
-
-    Object.defineProperty(fileReaderProto, '__filePreviewAuthBase64FallbackPatched', {
-      value: true,
-      configurable: true,
-    });
-
-    fileReaderProto.readAsDataURL = function readAsDataURLWithEmptyFallback(blob: Blob | null | undefined) {
-      if (blob != null) {
-        return originalReadAsDataURL.call(this, blob);
-      }
-
-      setTimeout(() => {
-        try {
-          Object.defineProperty(this, 'result', {
-            value: '',
-            configurable: true,
-          });
-        } catch {
-          // Ignore readonly result assignment failures; the caller will still continue via onload.
-        }
-
-        this.onload?.(new ProgressEvent('load'));
-        this.onloadend?.(new ProgressEvent('loadend'));
-      }, 0);
-    };
   }
 }
 

@@ -6,6 +6,34 @@ import { getGlobalChatBoxRuntime, type ChatBoxRuntime } from '@nocobase/plugin-a
 import { Modal, Button } from 'antd';
 import { useTranslation } from './locale';
 import { getChatScope, getChatScopes } from '../shared/chatScope';
+import {
+  buildSkillHubManifestMap,
+  extractFilenameFromText,
+  findLatestExecId,
+  findManifestEntryForName,
+  findSkillHubUrlForFile,
+  getCachedSkillHubManifestMap,
+  getDisplayNameCandidates,
+  isKnownFileUrl,
+  resolveDownloadUrl,
+  rewriteMarkdownContent,
+  stripFilenameNoise,
+  type SkillHubManifestEntry,
+} from '../shared/fileLinks';
+
+export {
+  buildSkillHubManifestMap,
+  extractFilenameFromText,
+  findLatestExecId,
+  findManifestEntryForName,
+  findSkillHubUrlForFile,
+  getDisplayNameCandidates,
+  isKnownFileUrl,
+  resolveDownloadUrl,
+  rewriteMarkdownContent,
+  stripFilenameNoise,
+  type SkillHubManifestEntry,
+};
 
 const EMPTY_MESSAGES: any[] = [];
 const EMPTY_ATTACHMENTS: any[] = [];
@@ -108,11 +136,14 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
 
   if (!file) return null;
 
-  const url = typeof file === 'string' ? file : file?.url;
+  const rawUrl = typeof file === 'string' ? file : file?.url || '';
+  const isSafeSpecialScheme = /^(https?:|blob:|data:)/i.test(rawUrl);
   const resolvedUrl =
-    url && (url.startsWith('https://') || url.startsWith('http://'))
-      ? url
-      : `${window.location.origin}/${(url || '').replace(/^\//, '')}`;
+    !rawUrl || /^javascript:/i.test(rawUrl)
+      ? ''
+      : isSafeSpecialScheme
+        ? rawUrl
+        : `${window.location.origin}/${rawUrl.replace(/^\//, '')}`;
 
   return (
     <Modal
@@ -121,7 +152,12 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
       onCancel={() => onSwitchIndex(null)}
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <Button onClick={() => window.open(resolvedUrl, '_blank')}>{t('Open Default')}</Button>
+          <Button
+            disabled={!resolvedUrl}
+            onClick={() => resolvedUrl && window.open(resolvedUrl, '_blank', 'noopener,noreferrer')}
+          >
+            {t('Open Default')}
+          </Button>
           <Button onClick={() => onSwitchIndex(null)}>{t('Close')}</Button>
         </div>
       }
@@ -137,75 +173,15 @@ function FallbackModalPreviewer({ index, list, onSwitchIndex }: any) {
           flexDirection: 'column',
         }}
       >
-        <iframe src={resolvedUrl} style={{ width: '100%', height: '100%', border: 'none', flex: 1 }} />
+        {resolvedUrl ? (
+          <iframe
+            src={resolvedUrl}
+            title={file?.title || file?.filename || file?.name || 'preview'}
+            style={{ width: '100%', height: '100%', border: 'none', flex: 1 }}
+          />
+        ) : null}
       </div>
     </Modal>
-  );
-}
-
-const FILE_EXTENSIONS = [
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'pdf',
-  'csv',
-  'txt',
-  'ppt',
-  'pptx',
-  'zip',
-  'rar',
-  '7z',
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'svg',
-];
-
-const FILENAME_IN_TEXT_RE = new RegExp(
-  `[^\\s"'<>()[\\]{}]+\\.(${FILE_EXTENSIONS.join('|')})(?=$|[\\s"'<>()[\\]{},.;:!?])`,
-  'gi',
-);
-
-export function stripFilenameNoise(value: string): string {
-  return value
-    .trim()
-    .replace(/^[\s"'`(<[{]+/, '')
-    .replace(/[\s"'`)>}\].,;:!?]+$/, '');
-}
-
-export function extractFilenameFromText(value: string): string {
-  const text = stripFilenameNoise(value);
-  if (!text) return '';
-
-  const matches = Array.from(text.matchAll(FILENAME_IN_TEXT_RE));
-  const lastMatch = matches[matches.length - 1];
-  if (lastMatch?.[0]) {
-    return stripFilenameNoise(lastMatch[0]);
-  }
-
-  return text;
-}
-
-export function getDisplayNameCandidates(displayName: string): string[] {
-  const candidates = [displayName, extractFilenameFromText(displayName)]
-    .map((value) => stripFilenameNoise(value))
-    .filter(Boolean);
-
-  return Array.from(new Set(candidates));
-}
-
-export function isKnownFileUrl(url?: string): boolean {
-  return (
-    !!url &&
-    (url.includes('/api/attachments/') ||
-      url.includes('/api/files/download/') ||
-      url.includes('/api/worker-monitor/') ||
-      url.includes('/api/skillHub:download') ||
-      url.includes('/storage/uploads/') ||
-      url.includes('amazonaws.com'))
   );
 }
 
@@ -258,216 +234,6 @@ function attToPreviewFile(att: any): PreviewFile {
     originFileObj: att.originFileObj || (att instanceof Blob ? att : undefined),
     collectionName: att.collectionName || 'aiFiles',
   };
-}
-
-export interface SkillHubManifestEntry {
-  name: string;
-  downloadUrl: string;
-  mimetype?: string | null;
-  size?: number | null;
-  execId?: string | null;
-}
-
-const SKILLHUB_MANIFEST_RE = /<!--skillhub:files\s+([\s\S]*?)-->/g;
-
-/**
- * Collect every text fragment from a message that may carry a skillhub manifest.
- * Tool results live under content.tool_calls[].content and are produced by the
- * server, so the embedded manifest is trustworthy regardless of how the LLM
- * rewrote the visible markdown links.
- */
-function collectMessageTexts(msg: any): string[] {
-  const texts: string[] = [];
-  const push = (value: unknown) => {
-    if (typeof value === 'string' && value) {
-      texts.push(value);
-    } else if (value && typeof value === 'object') {
-      texts.push(JSON.stringify(value));
-    }
-  };
-
-  if (!msg) return texts;
-  const content = msg.content ?? msg;
-  push(typeof content === 'string' ? content : content?.content);
-
-  const toolCalls = content?.tool_calls;
-  if (Array.isArray(toolCalls)) {
-    for (const tc of toolCalls) {
-      push(tc?.content);
-    }
-  }
-  return texts;
-}
-
-function decodeManifestPayload(raw: string): string {
-  let payload = raw.trim();
-  // When the manifest is read from a JSON.stringify'd object, quotes are escaped.
-  if (payload.includes('\\"') && !payload.includes('"')) {
-    payload = payload.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-  }
-  return payload;
-}
-
-/**
- * Build filename -> manifest entry map from all skillhub manifests in the conversation.
- * Later entries win so the most recent execution's URL is preferred.
- */
-export function buildSkillHubManifestMap(messages: any[]): Map<string, SkillHubManifestEntry> {
-  const map = new Map<string, SkillHubManifestEntry>();
-  if (!Array.isArray(messages)) return map;
-
-  for (const msg of messages) {
-    for (const text of collectMessageTexts(msg)) {
-      SKILLHUB_MANIFEST_RE.lastIndex = 0;
-      let match: RegExpExecArray | null;
-      while ((match = SKILLHUB_MANIFEST_RE.exec(text)) !== null) {
-        try {
-          const entries = JSON.parse(decodeManifestPayload(match[1]));
-          if (!Array.isArray(entries)) continue;
-          for (const entry of entries) {
-            if (entry?.name && entry?.downloadUrl) {
-              map.set(String(entry.name).toLowerCase().trim(), entry as SkillHubManifestEntry);
-            }
-          }
-        } catch {
-          // ignore malformed manifest
-        }
-      }
-    }
-  }
-  return map;
-}
-
-/**
- * Resolve a manifest entry for a displayed filename, trying exact and normalized names.
- */
-export function findManifestEntryForName(
-  displayName: string,
-  manifestMap: Map<string, SkillHubManifestEntry>,
-): SkillHubManifestEntry | null {
-  if (!displayName || manifestMap.size === 0) return null;
-  for (const candidate of getDisplayNameCandidates(displayName)) {
-    const hit = manifestMap.get(candidate.toLowerCase().trim());
-    if (hit) return hit;
-  }
-  return null;
-}
-
-export function findSkillHubUrlForFile(filename: string, messages: any[]): string | null {
-  if (!filename) return null;
-  const cleanFilename = filename.toLowerCase().trim();
-
-  for (const msg of messages) {
-    if (!msg?.content) continue;
-    const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-    const regex = /\/api\/skillHub:download\?[^)\s"']+/g;
-    const matches = contentStr.match(regex);
-    if (matches) {
-      for (const match of matches) {
-        try {
-          const cleanMatch = match.replace(/&amp;/g, '&');
-          const url = new URL(cleanMatch, window.location.origin);
-          const f = url.searchParams.get('f');
-          const fn = url.searchParams.get('filename') || url.searchParams.get('name');
-
-          let decodedName = '';
-          if (f) {
-            try {
-              let base64 = f.replace(/-/g, '+').replace(/_/g, '/');
-              while (base64.length % 4) {
-                base64 += '=';
-              }
-              decodedName = atob(base64);
-            } catch {
-              // ignore
-            }
-          } else if (fn) {
-            decodedName = decodeURIComponent(fn);
-          }
-
-          if (decodedName && decodedName.toLowerCase().trim() === cleanFilename) {
-            return cleanMatch;
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-  }
-  return null;
-}
-
-export function findLatestExecId(messages: any[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg?.content) continue;
-    const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-    const match = contentStr.match(/execId=([a-zA-Z0-9_-]+)/);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
-export function resolveDownloadUrl(urlOrPath: string, messages: any[]): string {
-  if (!urlOrPath) return urlOrPath;
-
-  if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-    return urlOrPath;
-  }
-
-  const cleanPath = urlOrPath.replace(/^sandbox:(?:\/\/)?/, '');
-
-  if (cleanPath.startsWith('api/')) {
-    return '/' + cleanPath;
-  }
-
-  let isDownload = false;
-  let filenamePath = cleanPath;
-  if (cleanPath.startsWith('download/')) {
-    isDownload = true;
-    filenamePath = cleanPath.substring('download/'.length);
-  } else if (cleanPath.startsWith('/download/')) {
-    isDownload = true;
-    filenamePath = cleanPath.substring('/download/'.length);
-  }
-
-  if (isDownload) {
-    const filename = filenamePath;
-    const matchedUrl = findSkillHubUrlForFile(filename, messages);
-    if (matchedUrl) {
-      return matchedUrl;
-    }
-    const latestExecId = findLatestExecId(messages);
-    if (latestExecId) {
-      return `/api/skillHub:download?execId=${latestExecId}&filename=${encodeURIComponent(filename)}`;
-    }
-    return '/download/' + filename;
-  }
-
-  if (!cleanPath.startsWith('/') && !cleanPath.includes(':')) {
-    return '/' + cleanPath;
-  }
-
-  return cleanPath;
-}
-
-export function rewriteMarkdownContent(content: string, messages: any[]): string {
-  if (typeof content !== 'string') return content;
-
-  // Match: sandbox:download/, sandbox://download/, download/, /download/ with optional sandbox prefix
-  let nextContent = content.replace(/\]\(((?:sandbox:(?:\/\/)?|\/?download\/)[^)]+)\)/g, (match, p1) => {
-    const resolved = resolveDownloadUrl(p1, messages);
-    return `](${resolved})`;
-  });
-
-  nextContent = nextContent.replace(/href=["']((?:sandbox:(?:\/\/)?|\/?download\/)[^"']+)["']/g, (match, p1) => {
-    const resolved = resolveDownloadUrl(p1, messages);
-    return `href="${resolved}"`;
-  });
-
-  return nextContent;
 }
 
 /**
@@ -526,51 +292,32 @@ const ChatFilePreviewInner: React.FC = () => {
   const app = useApp();
   const objectUrlRef = useRef<string>();
 
-  const { messages } = useChatRuntimeState();
-
-  // Decorate links only within a mounted AI chat.
+  // Decorate links, mark previewable cards, and rewrite sandbox:/download/ URLs across all mounted AI chat scopes.
   useEffect(() => {
-    const decorateLinks = () => {
-      for (const { root } of getChatScopes(app)) {
-        root
-          .querySelectorAll<HTMLAnchorElement>(
-            '.ant-bubble a[href*="skillHub:download"], .ant-bubble a[href*="worker-monitor"]',
-          )
-          .forEach((link) => {
-            link.classList.add('ai-attachment-link');
-          });
-      }
-    };
-    const timer = setInterval(decorateLinks, 1000);
-    return () => clearInterval(timer);
-  }, [app]);
+    const syncChatScopes = () => {
+      const scopes = getChatScopes(app);
+      if (scopes.length === 0) return;
 
-  // Rewrite sandbox: and relative download/ links in messages to clean absolute routes so rehypeSanitize doesn't strip them and links function correctly
-  useEffect(() => {
-    if (!messages?.length) return;
-    messages.forEach((msg) => {
-      if (!msg) return;
-      if (typeof msg.content === 'string') {
-        const nextContent = rewriteMarkdownContent(msg.content, messages);
-        if (nextContent !== msg.content) {
-          msg.content = nextContent;
-        }
-      } else if (msg.content && typeof msg.content === 'object' && typeof msg.content.content === 'string') {
-        const nextContent = rewriteMarkdownContent(msg.content.content, messages);
-        if (nextContent !== msg.content.content) {
-          msg.content.content = nextContent;
-        }
-      }
-    });
-  }, [messages]);
-
-  // Mark only file cards belonging to a mounted AI chat.
-  useEffect(() => {
-    const markCards = () => {
-      for (const { root, runtime } of getChatScopes(app)) {
+      for (const { root, runtime } of scopes) {
         const session = readActiveSession(runtime.chatConversationModel.currentConversation, runtime);
         const attachments = [...session.attachments, ...runtime.chatSenderModel.attachments];
-        const manifest = buildSkillHubManifestMap(session.messages);
+        const manifest = getCachedSkillHubManifestMap(session.messages);
+
+        for (const msg of session.messages) {
+          if (!msg) continue;
+          if (typeof msg.content === 'string') {
+            const nextContent = rewriteMarkdownContent(msg.content, session.messages);
+            if (nextContent !== msg.content) {
+              msg.content = nextContent;
+            }
+          } else if (msg.content && typeof msg.content === 'object' && typeof msg.content.content === 'string') {
+            const nextContent = rewriteMarkdownContent(msg.content.content, session.messages);
+            if (nextContent !== msg.content.content) {
+              msg.content.content = nextContent;
+            }
+          }
+        }
+
         root.querySelectorAll<HTMLElement>('.ant-attachment-list-card, .ant-bubble a[href]').forEach((card) => {
           const name = getDisplayNameFromCard(card);
           const href = card instanceof HTMLAnchorElement ? card.href : card.querySelector('a[href]')?.href || '';
@@ -579,12 +326,15 @@ const ChatFilePreviewInner: React.FC = () => {
             : findFileByDisplayName(name, session.messages, attachments);
           const previewable = !!file || isKnownFileUrl(href) || !!findManifestEntryForName(name, manifest);
           card.classList.toggle('is-cached-previewable', previewable);
-          if (card instanceof HTMLAnchorElement && previewable) card.classList.add('ai-attachment-link');
+          if (card instanceof HTMLAnchorElement && previewable) {
+            card.classList.add('ai-attachment-link');
+          }
         });
       }
     };
-    markCards();
-    const timer = setInterval(markCards, 1000);
+
+    syncChatScopes();
+    const timer = setInterval(syncChatScopes, 1000);
     return () => clearInterval(timer);
   }, [app]);
 
@@ -732,7 +482,7 @@ const ChatFilePreviewInner: React.FC = () => {
 
       // Prefer the server-provided skillhub manifest: it carries the real downloadUrl keyed by
       // filename, so a click resolves correctly even when the LLM wrote a broken `download/...` link.
-      const manifestMap = buildSkillHubManifestMap(currentMessages);
+      const manifestMap = getCachedSkillHubManifestMap(currentMessages);
       const manifestEntry =
         findManifestEntryForName(displayName, manifestMap) ||
         findManifestEntryForName(normalizedDisplayName, manifestMap);

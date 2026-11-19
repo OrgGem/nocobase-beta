@@ -4,7 +4,7 @@ import { Plugin, type Application } from '@nocobase/server';
 import type { Context } from '@nocobase/actions';
 import type { AttachmentLike, DocumentParseService } from 'plugin-document-parser';
 import { koaMulter as multer } from '@nocobase/utils';
-import { ExcelParserHandler } from './excel-parser-handler';
+import crypto from 'crypto';
 import { readFile, unlink } from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -32,11 +32,13 @@ export class PluginFilePreviewAuthServer extends Plugin {
     await this.db.import({ directory: path.resolve(__dirname, 'collections') });
   }
 
-  async load() {
+  async install() {
     await this.syncOcrResultCollection();
+  }
+
+  async load() {
     this.cache = await this.app.cacheManager.createCache({ name: 'file-preview-auth' });
     this.ocrWorker = new TesseractWorker(this.app);
-    this.registerExcelParser();
     this.registerAIWorkContext();
     this.registerDownloadApi();
 
@@ -102,31 +104,45 @@ export class PluginFilePreviewAuthServer extends Plugin {
       name: 'filePreviewAuth',
       actions: {
         getContent: async (ctx: any, next: any) => {
+          this.assertAuthenticated(ctx);
+
           const uploaded = await this.consumeUploadedParseFile(ctx);
           const params = ctx.action.params || {};
           const values = params.values || {};
-          // NocoBase strips non-standard query parameters from ctx.action.params, so we check ctx.request.query and ctx.request.body
+          // NocoBase strips non-standard query parameters from ctx.action.params, so check request query and body too.
           const reqQuery = ctx.request.query || {};
           const reqBody = ctx.request.body || {};
 
           const fileInput =
             uploaded?.attachment || values.file || params.file || reqQuery.file || reqBody.file || params;
-          const attachment = uploaded
-            ? await this.resolveAttachment(ctx, fileInput).catch(() => fileInput)
-            : await this.resolveAttachment(ctx, fileInput);
-          this.assertAuthenticated(ctx);
+          let attachment: any;
+          let cacheKey: string;
 
-          const cacheKey = `document_parser_parsed_text:${
-            attachment.id || attachment.key || attachment.url || attachment.path || uploaded?.cacheKey
-          }`;
+          if (uploaded) {
+            attachment = uploaded.attachment;
+            cacheKey = `document_parser_uploaded_text:${uploaded.cacheKey}`;
+          } else {
+            attachment = await this.resolveAttachment(ctx, fileInput);
+            await this.assertCanAccessAttachment(ctx, attachment);
+            const attachmentCollection =
+              attachment?.constructor?.collection?.name ||
+              getAttachmentValue(attachment, 'collectionName') ||
+              'attachments';
+            const attachmentKey =
+              getAttachmentValue(attachment, 'id') ||
+              getAttachmentValue(attachment, 'key') ||
+              getAttachmentValue(attachment, 'url') ||
+              getAttachmentValue(attachment, 'path');
+            cacheKey = `document_parser_parsed_text:${attachmentCollection}:${attachmentKey}`;
+          }
+
           let text = await this.cache.get(cacheKey);
 
           if (text == null) {
             text = uploaded
               ? await this.extractUploadedFileText(ctx, uploaded.buffer, attachment)
               : await this.extractAttachmentText(ctx, attachment);
-            // Cache the extracted text for 1 day (86400000 ms)
-            // Even if empty string, we cache it so it doesn't repeatedly fail
+            // Cache the extracted text for 1 day (86400000 ms), including empty results to avoid repeated parse loops.
             await this.cache.set(cacheKey, text, 86400000);
           }
 
@@ -140,6 +156,8 @@ export class PluginFilePreviewAuthServer extends Plugin {
         },
 
         download: async (ctx: any, next: any) => {
+          this.assertAuthenticated(ctx);
+
           const params = ctx.action.params || {};
           const values = params.values || {};
           const reqQuery = ctx.request.query || {};
@@ -171,8 +189,8 @@ export class PluginFilePreviewAuthServer extends Plugin {
           if (rawUrl) {
             try {
               url = decodeURIComponent(rawUrl);
-            } catch (e) {
-              // ignore
+            } catch {
+              // ignore malformed encoding
             }
           }
 
@@ -186,6 +204,11 @@ export class PluginFilePreviewAuthServer extends Plugin {
             reqBody.collection ||
             reqBody.collectionName ||
             fileInput.collectionName;
+
+          if (collection && !this.isAllowedFileCollection(collection)) {
+            ctx.throw(400, `Invalid file collection: ${collection}`);
+          }
+
           const storageIdInput =
             values.storageId || params.storageId || reqQuery.storageId || reqBody.storageId || fileInput.storageId;
           let storageId = storageIdInput;
@@ -197,21 +220,21 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
           let filterByTk = null;
           try {
-            // Parse the decoded URL to extract inner parameters
             const parsedUrl = new URL(url, 'http://local');
             filterByTk = parsedUrl.searchParams.get('filterByTk');
             if (!storageId) {
               storageId = parsedUrl.searchParams.get('storageId') || parsedUrl.searchParams.get('storage_id');
             }
-          } catch (e) {
+          } catch {
             // ignore
           }
 
           let attachment = null;
           let attachmentCollection = collection;
-          let isVirtual = false;
-          // Prioritize aiFiles since chat attachments are mostly aiFiles
-          const collectionsToTry = Array.from(new Set([collection, 'aiFiles', 'attachments'].filter(Boolean)));
+          // Prioritize aiFiles since chat attachments are mostly stored in aiFiles.
+          const collectionsToTry = Array.from(new Set([collection, 'aiFiles', 'attachments'].filter(Boolean))).filter(
+            (name) => this.isAllowedFileCollection(name),
+          );
 
           this.log.debug(
             `[FilePreviewAuth] Download input ${safeDebugJson({
@@ -292,33 +315,10 @@ export class PluginFilePreviewAuthServer extends Plugin {
                 }
                 if (attachment) {
                   attachmentCollection = colName;
-                  // To prevent finding a record in 'attachments' when it actually belongs to 'aiFiles'
-                  // and having permissions fail, if we found it in the wrong collection, we shouldn't break yet if url doesn't match?
-                  // Actually, just break.
                   break;
                 }
               }
             }
-          }
-
-          // Fallback: If DB query fails but we have storageId, construct virtual attachment
-          if (!attachment && storageId) {
-            attachment = {
-              ...fileInput,
-              url,
-              storageId,
-              collectionName: collection || fileInput.collectionName,
-              filename:
-                values.filename ||
-                params.filename ||
-                reqQuery.filename ||
-                reqBody.filename ||
-                fileInput.filename ||
-                'file',
-              mimetype:
-                values.mimetype || params.mimetype || reqQuery.mimetype || reqBody.mimetype || fileInput.mimetype,
-            };
-            isVirtual = true;
           }
 
           if (!attachment) {
@@ -328,14 +328,11 @@ export class PluginFilePreviewAuthServer extends Plugin {
           this.log.debug(
             `[FilePreviewAuth] Attachment resolved ${safeDebugJson({
               ...summarizeAttachmentForLog(attachment, attachmentCollection),
-              isVirtual,
               requestedCollection: collection,
             })}`,
           );
 
-          if (!isVirtual) {
-            await this.assertCanAccessAttachment(ctx, attachment);
-          }
+          await this.assertCanAccessAttachment(ctx, attachment);
 
           let attachmentObj: any;
           let storageModel: any;
@@ -351,25 +348,19 @@ export class PluginFilePreviewAuthServer extends Plugin {
               })}`,
             );
             const { stream, contentType } = await fileManager.getFileStream(attachmentObj);
+            ctx.set('X-Content-Type-Options', 'nosniff');
             ctx.type = contentType || attachmentObj.mimetype || 'application/octet-stream';
             ctx.attachment(attachmentObj.filename);
             ctx.body = stream;
           } catch (err: any) {
-            this.log.error(`[FilePreviewAuth] Error fetching stream for URL ${url}: ${err.message}`);
-            try {
-              require('fs').writeFileSync(
-                require('path').join(process.cwd(), 'preview_error.log'),
-                `Error fetching stream for URL ${url}:\n` +
-                  `Time: ${new Date().toISOString()}\n` +
-                  `Message: ${err.message}\n` +
-                  `Stack: ${err.stack}\n` +
-                  `Attachment: ${JSON.stringify(attachment, null, 2)}\n` +
-                  `AttachmentObj: ${JSON.stringify(attachmentObj, null, 2)}\n` +
-                  `StorageModel: ${JSON.stringify(storageModel, null, 2)}\n`,
-              );
-            } catch (fsErr: any) {
-              this.log.error(`[FilePreviewAuth] Failed to write preview_error.log: ${fsErr.message}`);
-            }
+            this.log.error(
+              `[FilePreviewAuth] Error fetching stream ${safeDebugJson({
+                urlPath: getDebugUrlPath(url),
+                message: err?.message || String(err),
+                attachment: summarizeAttachmentForLog(attachmentObj || attachment, attachmentCollection),
+                storage: summarizeStorageForLog(storageModel),
+              })}`,
+            );
             ctx.throw(500, `Failed to fetch the file from storage: ${err.message}`);
           }
 
@@ -473,15 +464,16 @@ export class PluginFilePreviewAuthServer extends Plugin {
       throw new Error('attachmentOcrResults repository not found');
     }
 
+    const nextValues = {
+      attachmentId,
+      ...values,
+    };
+
     const existing = await repo.findOne({
       filter: {
         attachmentId,
       },
     });
-    const nextValues = {
-      attachmentId,
-      ...values,
-    };
 
     if (existing) {
       await repo.update({
@@ -494,14 +486,32 @@ export class PluginFilePreviewAuthServer extends Plugin {
       });
     }
 
-    const created = await repo.create({
-      values: nextValues,
-    });
+    try {
+      const created = await repo.create({
+        values: nextValues,
+      });
 
-    return repo.findOne({
-      filterByTk: created.get('id'),
-      appends: ['attachment'],
-    });
+      return repo.findOne({
+        filterByTk: created.get('id'),
+        appends: ['attachment'],
+      });
+    } catch (err: any) {
+      if (!isUniqueConstraintError(err)) {
+        throw err;
+      }
+      const raced = await repo.findOne({ filter: { attachmentId } });
+      if (!raced) {
+        throw err;
+      }
+      await repo.update({
+        filterByTk: raced.get('id'),
+        values: nextValues,
+      });
+      return repo.findOne({
+        filterByTk: raced.get('id'),
+        appends: ['attachment'],
+      });
+    }
   }
 
   private serializeOcrResult(record: any, attachmentId: number | string) {
@@ -539,9 +549,10 @@ export class PluginFilePreviewAuthServer extends Plugin {
     try {
       aiPlugin.workContextHandler.registerStrategy(FILE_PREVIEW_WORK_CONTEXT_TYPE, {
         resolve: async (ctx: any, contextItem: any) => {
+          this.assertAuthenticated(ctx);
           const file = contextItem?.content?.file || contextItem?.content || contextItem;
           const attachment = await this.resolveAttachment(ctx, file);
-          this.assertAuthenticated(ctx);
+          await this.assertCanAccessAttachment(ctx, attachment);
           const text = await this.extractAttachmentText(ctx, attachment);
           return this.formatAttachmentWorkContext(attachment, text);
         },
@@ -552,12 +563,29 @@ export class PluginFilePreviewAuthServer extends Plugin {
     }
   }
 
+  private isAllowedFileCollection(collectionName?: string, db: any = this.db): boolean {
+    if (!collectionName) {
+      return false;
+    }
+    if (collectionName === 'attachments' || collectionName === 'aiFiles') {
+      return true;
+    }
+    const collection = db?.getCollection?.(collectionName);
+    return Boolean(collection?.options?.template === 'file');
+  }
+
   private async resolveAttachment(ctx: any, input: any) {
     const file = input?.file || input || {};
     const streamParams = getAttachmentStreamParams(file.url || file.preview || file.path);
+    const requestedCollections = [streamParams.collection, file.collectionName].filter(Boolean);
+    for (const requested of requestedCollections) {
+      if (!this.isAllowedFileCollection(requested, ctx.db)) {
+        ctx.throw(400, `Invalid file collection: ${requested}`);
+      }
+    }
     const collectionNames = Array.from(
-      new Set([streamParams.collection, file.collectionName, 'attachments', 'aiFiles'].filter(Boolean)),
-    );
+      new Set([...requestedCollections, 'attachments', 'aiFiles'].filter(Boolean)),
+    ).filter((name) => this.isAllowedFileCollection(name, ctx.db));
 
     const ids = [file.id, file.uid, streamParams.filterByTk].filter((value) => isLikelyRecordId(value));
     for (const collectionName of collectionNames) {
@@ -579,7 +607,7 @@ export class PluginFilePreviewAuthServer extends Plugin {
       }
     }
 
-    // Try finding by filename since dynamic virtual url columns may not be searchable in DB
+    // Try finding by filename since dynamic virtual url columns may not be searchable in DB.
     for (const collectionName of collectionNames) {
       if (!ctx.db.getCollection(collectionName)) continue;
       const repo = ctx.db.getRepository(collectionName);
@@ -595,11 +623,6 @@ export class PluginFilePreviewAuthServer extends Plugin {
           if (record) return record;
         }
       }
-    }
-
-    // Fallback for files from plugin-external-storage (which might not exist in attachments collection)
-    if ((file.storageId || file.url?.includes('extStorage:download')) && (file.url || file.path || file.key)) {
-      return file;
     }
 
     ctx.throw(404, 'Attachment not found for this preview file');
@@ -670,34 +693,32 @@ export class PluginFilePreviewAuthServer extends Plugin {
 
       try {
         const throughCollection = this.db.getCollection(parent.throughTable);
-        if (throughCollection) {
+        if (throughCollection && ctx) {
           const links = await throughCollection.repository.find({
             filter: { [parent.otherKey]: attachmentId },
           });
           if (links.length > 0) {
             const parentIds = links.map((l) => l.get(parent['foreignKey'])).filter(Boolean);
             if (parentIds.length > 0) {
-              let dataScopeFilter = canView.params?.filter || {};
-              if (ctx && ctx.app.environment) {
-                dataScopeFilter = ctx.app.environment.renderJsonTemplate(dataScopeFilter, {
-                  $user: ctx.state.currentUser?.toJSON ? ctx.state.currentUser.toJSON() : ctx.state.currentUser,
-                  $nRole: ctx.state.currentRole,
-                });
-              }
-
               const parentCollection = this.db.getCollection(parent.collectionName);
               const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
-              const count = await parentCollection.repository.count({
-                filter: {
-                  $and: [{ [pk]: { $in: parentIds } }, dataScopeFilter],
+              const { mergedParams } = await this.app.acl.resolveActionParams(ctx, {
+                resourceName: parent.collectionName,
+                actionName: 'view',
+                params: {
+                  filter: { [pk]: { $in: parentIds } },
                 },
+              });
+              const count = await parentCollection.repository.count({
+                ...mergedParams,
+                context: ctx,
               });
               if (count > 0) return true;
             }
           }
         }
       } catch (error) {
-        this.log.warn(`[FilePreviewAuth] Failed to query through table "${parent.throughTable}":`, error.message);
+        this.log?.warn?.(`[FilePreviewAuth] Failed to query through table "${parent.throughTable}":`, error.message);
       }
     }
 
@@ -792,19 +813,15 @@ export class PluginFilePreviewAuthServer extends Plugin {
       size: attachment.size || file.size,
     };
 
+    const contentHash = crypto.createHash('sha256').update(buffer).digest('hex');
+
     return {
       buffer,
       attachment,
       cacheKey: [
-        attachment.id ||
-          attachment.uid ||
-          attachment.url ||
-          attachment.path ||
-          file.originalname ||
-          attachment.filename ||
-          'file',
-        attachment.lastModified || '',
-        file.size || buffer.length,
+        contentHash,
+        attachment.extname || path.extname(file.originalname || attachment.filename || ''),
+        buffer.length,
       ].join(':'),
     };
   }
@@ -1161,31 +1178,23 @@ export class PluginFilePreviewAuthServer extends Plugin {
       '</file_preview>',
     ].join('\n');
   }
-
-  /**
-   * Register Excel handler into plugin-document-parser's InternalParserRegistry.
-   * Uses prepend:true so SheetJS takes priority over the AI-loader fallback.
-   * Silent no-op when plugin-document-parser is not loaded.
-   */
-  private registerExcelParser() {
-    const docParserPlugin = (this.pm.get('@nocobase/plugin-document-parser') ||
-      this.pm.get('plugin-document-parser')) as any;
-    if (!docParserPlugin?.internalParserRegistry) {
-      this.log.debug('[FilePreviewAuth] plugin-document-parser not found — Excel parser registration skipped');
-      return;
-    }
-
-    try {
-      docParserPlugin.internalParserRegistry.register(new ExcelParserHandler(), { prepend: true });
-      this.log.info('[FilePreviewAuth] Excel parser handler registered into plugin-document-parser');
-    } catch (err) {
-      // Duplicate registration (e.g. hot-reload) — safe to ignore
-      this.log.warn(`[FilePreviewAuth] Excel parser registration skipped: ${err}`);
-    }
-  }
 }
 
 export default PluginFilePreviewAuthServer;
+
+function isUniqueConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const err = error as { name?: string; original?: { code?: string }; parent?: { code?: string } };
+  return (
+    err.name === 'SequelizeUniqueConstraintError' ||
+    err.original?.code === '23505' ||
+    err.parent?.code === '23505' ||
+    err.original?.code === 'SQLITE_CONSTRAINT' ||
+    err.original?.code === 'ER_DUP_ENTRY'
+  );
+}
 
 function isFilePreviewOcrWorker(app: Application) {
   return app.serving(WORKER_JOB_FILE_PREVIEW_OCR_PROCESS) || workerModeServesFilePreviewOcr();

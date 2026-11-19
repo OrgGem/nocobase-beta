@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 vi.mock('@nocobase/client', () => ({
@@ -17,6 +26,7 @@ import {
   isKnownFileUrl,
   buildSkillHubManifestMap,
   findManifestEntryForName,
+  findSkillHubUrlForFile,
   readActiveSession,
 } from '../ChatFilePreviewProvider';
 
@@ -151,6 +161,15 @@ describe('AI Chat File Preview client utils', () => {
       ])}-->`;
       const map = buildSkillHubManifestMap([{ content: older }, { content: manifestComment }]);
       expect(map.get('report.docx')?.downloadUrl).toBe(manifestUrl);
+    });
+
+    it('decodes UTF-8 base64 filenames and prefers the latest execId in findSkillHubUrlForFile', () => {
+      const utf8Filename = 'báo cáo.docx';
+      const encoded = Buffer.from(utf8Filename, 'utf-8').toString('base64url');
+      const oldUrl = `/api/skillHub:download?execId=1&f=${encoded}`;
+      const newUrl = `/api/skillHub:download?execId=9&f=${encoded}`;
+      const messages = [{ content: `Old: ${oldUrl}` }, { content: `New: ${newUrl}` }];
+      expect(findSkillHubUrlForFile(utf8Filename, messages)).toBe(newUrl);
     });
   });
 });

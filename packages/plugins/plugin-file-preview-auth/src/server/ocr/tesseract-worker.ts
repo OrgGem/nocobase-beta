@@ -165,8 +165,10 @@ export class TesseractWorker {
       const redisJobs = await this.drainRedisQueue(FILE_PREVIEW_OCR_QUEUE_CONCURRENCY);
       await this.processAttachmentIds(redisJobs);
 
-      const remaining = Math.max(1, FILE_PREVIEW_OCR_QUEUE_CONCURRENCY - redisJobs.length);
-      await this.processPendingDbJobs(remaining);
+      const remaining = Math.max(0, FILE_PREVIEW_OCR_QUEUE_CONCURRENCY - redisJobs.length);
+      if (remaining > 0) {
+        await this.processPendingDbJobs(remaining);
+      }
     } finally {
       this.isProcessing = false;
     }
@@ -222,8 +224,21 @@ export class TesseractWorker {
   }
 
   private async processAttachmentIds(attachmentIds: Array<number | string>) {
-    for (const attachmentId of attachmentIds) {
-      await this.processJobWithLock(attachmentId);
+    if (attachmentIds.length === 0) return;
+    if (FILE_PREVIEW_OCR_QUEUE_CONCURRENCY <= 1 || attachmentIds.length === 1) {
+      for (const attachmentId of attachmentIds) {
+        await this.processJobWithLock(attachmentId);
+      }
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      attachmentIds.map((attachmentId) => this.processJobWithLock(attachmentId)),
+    );
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        this.log.error(`[TesseractWorker] Concurrent OCR job failed: ${getErrorMessage(result.reason)}`);
+      }
     }
   }
 
@@ -331,10 +346,39 @@ export class TesseractWorker {
       return existing;
     }
 
-    return repo.create({
-      values: nextValues,
-    });
+    try {
+      return await repo.create({
+        values: nextValues,
+      });
+    } catch (err: unknown) {
+      if (!isUniqueConstraintError(err)) {
+        throw err;
+      }
+      const raced = await repo.findOne({ filter: { attachmentId } });
+      if (!raced) {
+        throw err;
+      }
+      await repo.update({
+        filterByTk: raced.get('id'),
+        values: nextValues,
+      });
+      return raced;
+    }
   }
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const err = error as { name?: string; original?: { code?: string }; parent?: { code?: string } };
+  return (
+    err.name === 'SequelizeUniqueConstraintError' ||
+    err.original?.code === '23505' ||
+    err.parent?.code === '23505' ||
+    err.original?.code === 'SQLITE_CONSTRAINT' ||
+    err.original?.code === 'ER_DUP_ENTRY'
+  );
 }
 
 function parseAttachmentId(value: unknown): number | string | null {

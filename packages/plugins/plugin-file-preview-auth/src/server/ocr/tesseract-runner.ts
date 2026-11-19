@@ -24,8 +24,21 @@ export interface OcrWordItem {
   status: string;
 }
 
+const MAX_STDERR_BYTES = 64 * 1024;
+const OCR_COMMAND_TIMEOUT_MS = Math.max(
+  5_000,
+  Number.parseInt(process.env.FILE_PREVIEW_OCR_CMD_TIMEOUT_MS || '', 10) || 120_000,
+);
+const OCR_PDF_MAX_PAGES = Math.max(1, Number.parseInt(process.env.FILE_PREVIEW_OCR_MAX_PAGES || '', 10) || 50);
+
 export class TesseractRunner {
-  constructor(_app?: unknown) {}
+  private readonly commandTimeoutMs: number;
+  private readonly maxPdfPages: number;
+
+  constructor(_app?: unknown, options?: { commandTimeoutMs?: number; maxPdfPages?: number }) {
+    this.commandTimeoutMs = options?.commandTimeoutMs ?? OCR_COMMAND_TIMEOUT_MS;
+    this.maxPdfPages = options?.maxPdfPages ?? OCR_PDF_MAX_PAGES;
+  }
 
   async runOcr(
     filePath: string,
@@ -51,28 +64,56 @@ export class TesseractRunner {
   }
 
   private executeTesseract(imagePath: string, outputPathBase: string): Promise<void> {
+    return this.runCommand('tesseract', [imagePath, outputPathBase, '-l', 'eng+vie', 'tsv']);
+  }
+
+  private runCommand(command: string, args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Chạy Tesseract song ngữ tiếng Việt & tiếng Anh, xuất ra TSV cấu trúc
-      const child = spawn('tesseract', [imagePath, outputPathBase, '-l', 'eng+vie', 'tsv'], {
+      const child = spawn(command, args, {
         shell: false,
         windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
 
+      let settled = false;
       let stderr = '';
-      child.stderr.on('data', (data) => {
-        stderr += data.toString();
+      const finish = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      };
+
+      const timer = setTimeout(() => {
+        try {
+          child.kill?.('SIGKILL');
+        } catch {
+          // Ignore kill errors if the process already exited.
+        }
+        finish(new Error(`${command} timed out after ${this.commandTimeoutMs}ms`));
+      }, this.commandTimeoutMs);
+      timer.unref?.();
+
+      child.stderr?.on('data', (data) => {
+        if (stderr.length < MAX_STDERR_BYTES) {
+          stderr += data.toString().slice(0, MAX_STDERR_BYTES - stderr.length);
+        }
       });
 
       child.on('close', (code) => {
         if (code === 0) {
-          resolve();
+          finish();
         } else {
-          reject(new Error(`tesseract exited with code ${code}. Stderr: ${stderr}`));
+          finish(new Error(`${command} exited with code ${code}. Stderr: ${stderr}`));
         }
       });
 
       child.on('error', (err) => {
-        reject(err);
+        finish(err);
       });
     });
   }
@@ -177,33 +218,21 @@ export class TesseractRunner {
   }
 
   private async convertPdfToImages(pdfPath: string, outputDir: string): Promise<string[]> {
-    return new Promise((resolve, reject) => {
-      // pdftoppm -png -r 150 <pdfPath> <outputDir>/page
-      const child = spawn('pdftoppm', ['-png', '-r', '150', pdfPath, path.join(outputDir, 'page')], {
-        shell: false,
-        windowsHide: true,
-      });
-
-      child.on('close', async (code) => {
-        if (code === 0) {
-          try {
-            const files = await fs.readdir(outputDir);
-            const pngFiles = files
-              .filter((f) => f.startsWith('page-') && f.endsWith('.png'))
-              .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-              .map((f) => path.join(outputDir, f));
-            resolve(pngFiles);
-          } catch (err) {
-            reject(err);
-          }
-        } else {
-          reject(new Error(`pdftoppm exited with code ${code}`));
-        }
-      });
-
-      child.on('error', (err) => {
-        reject(err);
-      });
-    });
+    await this.runCommand('pdftoppm', [
+      '-png',
+      '-r',
+      '150',
+      '-f',
+      '1',
+      '-l',
+      String(this.maxPdfPages),
+      pdfPath,
+      path.join(outputDir, 'page'),
+    ]);
+    const files = await fs.readdir(outputDir);
+    return files
+      .filter((f) => f.startsWith('page-') && f.endsWith('.png'))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map((f) => path.join(outputDir, f));
   }
 }

@@ -98,3 +98,32 @@ it.each(['storage', 'engine'])('marks %s failures as failed with no fabricated r
   );
   if (failure === 'storage') expect(run).not.toHaveBeenCalled();
 });
+
+it('recovers from unique constraint races in updateOcrResult by updating the raced row', async () => {
+  const update = vi.fn();
+  const racedRow = { get: (key: string) => (key === 'id' ? 99 : 1) };
+  const findOne = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(racedRow);
+  const create = vi
+    .fn()
+    .mockRejectedValue(Object.assign(new Error('duplicate'), { name: 'SequelizeUniqueConstraintError' }));
+  const app = {
+    db: { getRepository: () => ({ findOne, create, update }) },
+    pm: { get: () => null },
+    logger: { info: vi.fn(), debug: vi.fn(), error: vi.fn() },
+    i18n: { t: (key: string) => key },
+  } as unknown as Application;
+
+  const worker = new TesseractWorker(app) as unknown as {
+    updateOcrResult(id: number, values: Record<string, unknown>): Promise<unknown>;
+  };
+
+  await worker.updateOcrResult(1, { status: 'waiting-verify', error: null });
+
+  expect(create).toHaveBeenCalledTimes(1);
+  expect(update).toHaveBeenCalledWith(
+    expect.objectContaining({
+      filterByTk: 99,
+      values: expect.objectContaining({ attachmentId: 1, status: 'waiting-verify' }),
+    }),
+  );
+});

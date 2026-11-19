@@ -1,8 +1,23 @@
-import { DownloadOutlined } from '@ant-design/icons';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import { DownloadOutlined, LeftOutlined, RightOutlined } from '@ant-design/icons';
 import type { Application } from '@nocobase/client-v2';
 import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
 import { Alert, Button, Modal, Space, Spin, message } from 'antd';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  createLruBlobCache,
+  isInternalAuthenticatedDownloadUrl,
+  parseXlsxSheetsToRows,
+  toPdfBlob,
+} from '../shared/previewHelpers';
 import AIFilePreviewAction from './AIFilePreviewAction';
 
 type UnknownRecord = Record<string, unknown>;
@@ -23,13 +38,17 @@ type DownloadMode = 'inline' | 'attachment';
 const NAMESPACE = 'plugin-file-preview-auth';
 const TEXT_EXTENSIONS = new Set(['txt', 'md', 'csv', 'json', 'xml', 'log', 'yaml', 'yml']);
 const IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
-const WORD_EXTENSIONS = new Set(['docx', 'doc']);
+const WORD_EXTENSIONS = new Set(['docx']);
 const EXCEL_EXTENSIONS = new Set(['xlsx', 'xls', 'csv']);
-const POWERPOINT_EXTENSIONS = new Set(['pptx', 'ppt']);
+const POWERPOINT_EXTENSIONS = new Set(['pptx']);
 
 let appRef: AppLike | null = null;
 let registered = false;
-const blobCache = new Map<string, Promise<Blob>>();
+const blobCache = createLruBlobCache(20);
+
+export function resetBlobCacheForTest() {
+  blobCache.clear();
+}
 
 const t = (key: string) => appRef?.i18n?.t(key, { ns: [NAMESPACE, 'client'], nsMode: 'fallback' }) || key;
 
@@ -184,11 +203,11 @@ const isTextFile = (file: unknown) => {
   return mimetype.startsWith('text/') || TEXT_EXTENSIONS.has(getFileExt(file));
 };
 
-const isDocxFile = (file: unknown) => WORD_EXTENSIONS.has(getFileExt(file));
+export const isDocxFile = (file: unknown) => WORD_EXTENSIONS.has(getFileExt(file));
 
-const isXlsxFile = (file: unknown) => EXCEL_EXTENSIONS.has(getFileExt(file));
+export const isXlsxFile = (file: unknown) => EXCEL_EXTENSIONS.has(getFileExt(file));
 
-const isPptxFile = (file: unknown) => POWERPOINT_EXTENSIONS.has(getFileExt(file));
+export const isPptxFile = (file: unknown) => POWERPOINT_EXTENSIONS.has(getFileExt(file));
 
 const isPreviewableFile = (file: unknown) =>
   isPdfFile(file) || isImageFile(file) || isTextFile(file) || isDocxFile(file) || isXlsxFile(file) || isPptxFile(file);
@@ -240,9 +259,9 @@ const buildFilePayload = (file: unknown) => {
   };
 };
 
-const buildAuthenticatedDownloadUrl = (file: unknown, mode: DownloadMode) => {
+export const buildAuthenticatedDownloadUrl = (file: unknown, mode: DownloadMode) => {
   const url = resolveFileUrl(file);
-  if (url && /^(blob|data):/i.test(url)) {
+  if (url && (/^(blob|data):/i.test(url) || isInternalAuthenticatedDownloadUrl(url))) {
     return url;
   }
 
@@ -287,7 +306,7 @@ const getAuthHeaders = () => {
   return headers;
 };
 
-const getLoadedFileBlob = async (file: unknown, mode: DownloadMode = 'inline') => {
+export const getLoadedFileBlob = async (file: unknown, mode: DownloadMode = 'inline') => {
   const directBlob = getOriginBlob(file);
   if (directBlob) {
     return directBlob;
@@ -295,23 +314,18 @@ const getLoadedFileBlob = async (file: unknown, mode: DownloadMode = 'inline') =
 
   const url = buildAuthenticatedDownloadUrl(file, mode);
   const token = appRef?.apiClient?.auth?.token || '';
-  const cacheKey = `${mode}:${token}:${url}`;
-  const cached = blobCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
+  const cacheKey = `${mode}:${url}`;
 
-  const request = fetch(url, {
-    headers: /^(blob|data):/i.test(url) ? undefined : getAuthHeaders(),
-    credentials: /^(blob|data):/i.test(url) ? undefined : 'include',
-  }).then((response) => {
+  return blobCache.getOrLoad(token, cacheKey, async () => {
+    const response = await fetch(url, {
+      headers: /^(blob|data):/i.test(url) ? undefined : getAuthHeaders(),
+      credentials: /^(blob|data):/i.test(url) ? undefined : 'include',
+    });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
     return response.blob();
   });
-  blobCache.set(cacheKey, request);
-  return request;
 };
 
 const getDownloadFileName = (file: unknown) => {
@@ -346,8 +360,11 @@ const ErrorMessage = () => (
   <Alert type="error" style={{ width: '100%' }} message={t('Failed to load file preview')} showIcon />
 );
 
-const useBlobUrl = (file: unknown) => {
+const useBlobUrl = (file: unknown, options?: { forcePdfMime?: boolean }) => {
   const dependencyKey = getDependencyKey(file);
+  const fileRef = useRef(file);
+  fileRef.current = file;
+  const forcePdfMime = Boolean(options?.forcePdfMime);
   const [state, setState] = useState<{ loading: boolean; error: boolean; url: string | null }>({
     loading: true,
     error: false,
@@ -359,12 +376,13 @@ const useBlobUrl = (file: unknown) => {
     let objectUrl: string | null = null;
 
     setState({ loading: true, error: false, url: null });
-    getLoadedFileBlob(file)
+    getLoadedFileBlob(fileRef.current)
       .then((blob) => {
         if (cancelled) {
           return;
         }
-        objectUrl = URL.createObjectURL(blob);
+        const safeBlob = forcePdfMime ? toPdfBlob(blob) : blob;
+        objectUrl = URL.createObjectURL(safeBlob);
         setState({ loading: false, error: false, url: objectUrl });
       })
       .catch(() => {
@@ -379,13 +397,15 @@ const useBlobUrl = (file: unknown) => {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [dependencyKey, file]);
+  }, [dependencyKey, forcePdfMime]);
 
   return state;
 };
 
 const useTextContent = (file: unknown) => {
   const dependencyKey = getDependencyKey(file);
+  const fileRef = useRef(file);
+  fileRef.current = file;
   const [state, setState] = useState<{ loading: boolean; error: boolean; text: string }>({
     loading: true,
     error: false,
@@ -395,7 +415,7 @@ const useTextContent = (file: unknown) => {
   useEffect(() => {
     let cancelled = false;
     setState({ loading: true, error: false, text: '' });
-    getLoadedFileBlob(file)
+    getLoadedFileBlob(fileRef.current)
       .then((blob) => blob.text())
       .then((text) => {
         if (!cancelled) {
@@ -411,13 +431,13 @@ const useTextContent = (file: unknown) => {
     return () => {
       cancelled = true;
     };
-  }, [dependencyKey, file]);
+  }, [dependencyKey]);
 
   return state;
 };
 
-function AuthPdfInlinePreviewer({ file }: FilePreviewerProps) {
-  const { loading, error, url } = useBlobUrl(file);
+export function AuthPdfInlinePreviewer({ file }: FilePreviewerProps) {
+  const { loading, error, url } = useBlobUrl(file, { forcePdfMime: true });
   if (loading) return <LoadingIndicator />;
   if (error || !url) return <ErrorMessage />;
   return <iframe src={url} title={getFileDisplayName(file)} width="100%" height="100%" style={{ border: 'none' }} />;
@@ -462,6 +482,8 @@ function AuthTextInlinePreviewer({ file }: FilePreviewerProps) {
 
 function AuthDocxInlinePreviewer({ file }: FilePreviewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef(file);
+  fileRef.current = file;
   const dependencyKey = getDependencyKey(file);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -471,7 +493,7 @@ function AuthDocxInlinePreviewer({ file }: FilePreviewerProps) {
     setLoading(true);
     setError(false);
 
-    getLoadedFileBlob(file)
+    getLoadedFileBlob(fileRef.current)
       .then(async (blob) => {
         // @ts-ignore module is an optional runtime dependency of this plugin.
         const docxPreview = (await import('docx-preview')) as {
@@ -515,7 +537,7 @@ function AuthDocxInlinePreviewer({ file }: FilePreviewerProps) {
     return () => {
       cancelled = true;
     };
-  }, [dependencyKey, file]);
+  }, [dependencyKey]);
 
   return (
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
@@ -526,20 +548,22 @@ function AuthDocxInlinePreviewer({ file }: FilePreviewerProps) {
   );
 }
 
-function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
+export function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
   const dependencyKey = getDependencyKey(file);
+  const fileRef = useRef(file);
+  fileRef.current = file;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [sheetNames, setSheetNames] = useState<string[]>([]);
   const [activeSheet, setActiveSheet] = useState('');
-  const [sheetsHtml, setSheetsHtml] = useState<Record<string, string>>({});
+  const [sheetsRows, setSheetsRows] = useState<Record<string, string[][]>>({});
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(false);
 
-    getLoadedFileBlob(file)
+    getLoadedFileBlob(fileRef.current)
       .then(async (blob) => {
         // @ts-ignore module is an optional runtime dependency of this plugin.
         const XLSX = (await import('xlsx')) as {
@@ -551,19 +575,16 @@ function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
             Sheets: Record<string, unknown>;
           };
           utils: {
-            sheet_to_html: (sheet: unknown, options: { id: string }) => string;
+            sheet_to_json: <T = unknown>(sheet: unknown, options: { header: number; defval: string }) => T[];
           };
         };
         const arrayBuffer = await blob.arrayBuffer();
         const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-        const htmlMap: Record<string, string> = {};
-        for (const name of workbook.SheetNames) {
-          htmlMap[name] = XLSX.utils.sheet_to_html(workbook.Sheets[name], { id: 'xlsx-preview-table' });
-        }
+        const parsed = parseXlsxSheetsToRows(workbook, XLSX.utils);
         if (!cancelled) {
-          setSheetNames(workbook.SheetNames);
-          setActiveSheet(workbook.SheetNames[0] || '');
-          setSheetsHtml(htmlMap);
+          setSheetNames(parsed.sheetNames);
+          setActiveSheet(parsed.sheetNames[0] || '');
+          setSheetsRows(parsed.sheetsRows);
           setLoading(false);
         }
       })
@@ -577,19 +598,29 @@ function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
     return () => {
       cancelled = true;
     };
-  }, [dependencyKey, file]);
+  }, [dependencyKey]);
 
   if (loading) return <LoadingIndicator />;
   if (error) return <ErrorMessage />;
 
+  const activeRows = sheetsRows[activeSheet] || [];
+  const columnCount = activeRows.reduce((max, row) => Math.max(max, row.length), 0);
+  const headerRow = activeRows[0] || [];
+  const bodyRows = activeRows.slice(1);
+
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
       {sheetNames.length > 1 && (
-        <div style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid #e8e8e8', background: '#fafafa' }}>
+        <div
+          role="tablist"
+          style={{ display: 'flex', overflowX: 'auto', borderBottom: '1px solid #e8e8e8', background: '#fafafa' }}
+        >
           {sheetNames.map((name) => (
             <button
               key={name}
               type="button"
+              role="tab"
+              aria-selected={activeSheet === name}
               onClick={() => setActiveSheet(name)}
               style={{
                 padding: '8px 16px',
@@ -607,7 +638,28 @@ function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
           ))}
         </div>
       )}
-      <div style={{ flex: 1, overflow: 'auto' }} dangerouslySetInnerHTML={{ __html: sheetsHtml[activeSheet] || '' }} />
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {activeRows.length > 0 && columnCount > 0 ? (
+          <table id="xlsx-preview-table">
+            <thead>
+              <tr>
+                {Array.from({ length: columnCount }, (_, colIdx) => (
+                  <th key={colIdx}>{headerRow[colIdx] ?? ''}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {bodyRows.map((row, rowIdx) => (
+                <tr key={rowIdx}>
+                  {Array.from({ length: columnCount }, (_, colIdx) => (
+                    <td key={colIdx}>{row[colIdx] ?? ''}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : null}
+      </div>
       <style>{`
         #xlsx-preview-table {
           border-collapse: collapse;
@@ -624,8 +676,7 @@ function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
           white-space: normal;
           word-break: break-word;
         }
-        #xlsx-preview-table tr:first-child td,
-        #xlsx-preview-table tr:first-child th {
+        #xlsx-preview-table thead th {
           background: #fafafa;
           font-weight: 600;
           position: sticky;
@@ -639,6 +690,8 @@ function AuthXlsxInlinePreviewer({ file }: FilePreviewerProps) {
 
 function AuthPptxInlinePreviewer({ file }: FilePreviewerProps) {
   const dependencyKey = getDependencyKey(file);
+  const fileRef = useRef(file);
+  fileRef.current = file;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [fileBlob, setFileBlob] = useState<Blob | null>(null);
@@ -650,7 +703,7 @@ function AuthPptxInlinePreviewer({ file }: FilePreviewerProps) {
     setError(false);
 
     Promise.all([
-      getLoadedFileBlob(file),
+      getLoadedFileBlob(fileRef.current),
       // @ts-ignore module is an optional runtime dependency of this plugin.
       import('react-pptx-preview-kit') as Promise<{ PptxPreview: React.ComponentType<{ file: Blob | null }> }>,
     ])
@@ -671,7 +724,7 @@ function AuthPptxInlinePreviewer({ file }: FilePreviewerProps) {
     return () => {
       cancelled = true;
     };
-  }, [dependencyKey, file]);
+  }, [dependencyKey]);
 
   if (loading) return <LoadingIndicator />;
   if (error || !PptxPreviewer) return <ErrorMessage />;
@@ -712,7 +765,7 @@ function AuthDownloadPreviewer({ file }: FilePreviewerProps) {
 
 const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<FilePreviewerProps>) => {
   return function AuthWrappedPreviewer(props: FilePreviewerProps) {
-    const { open, onOpenChange, onClose, file } = props;
+    const { open, onOpenChange, onClose, file, index, list, onSwitchIndex } = props;
     const [downloading, setDownloading] = useState(false);
     const authOnDownload = useCallback(
       async (target?: unknown) => {
@@ -736,6 +789,10 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<FilePreviewer
       return <Previewer {...props} onDownload={authOnDownload} />;
     }
 
+    const hasListNav = Array.isArray(list) && list.length > 1 && typeof index === 'number' && Boolean(onSwitchIndex);
+    const canPrev = hasListNav && index > 0;
+    const canNext = hasListNav && index < list.length - 1;
+
     return (
       <Modal
         open={open}
@@ -743,6 +800,22 @@ const wrapWithAuthModalPreviewer = (Previewer: React.ComponentType<FilePreviewer
         onCancel={handleClose}
         footer={
           <Space>
+            {hasListNav && (
+              <>
+                <Button
+                  icon={<LeftOutlined />}
+                  disabled={!canPrev}
+                  aria-label={t('Previous')}
+                  onClick={() => canPrev && onSwitchIndex?.(index - 1)}
+                />
+                <Button
+                  icon={<RightOutlined />}
+                  disabled={!canNext}
+                  aria-label={t('Next')}
+                  onClick={() => canNext && onSwitchIndex?.(index + 1)}
+                />
+              </>
+            )}
             <AIFilePreviewAction file={normalizeFileInput(file)} />
             <Button icon={<DownloadOutlined />} loading={downloading} onClick={() => authOnDownload(file)}>
               {t('Download')}

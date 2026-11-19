@@ -26,9 +26,11 @@ afterEach(async () => {
   await fs.rm(directory, { recursive: true, force: true });
 });
 
-function mockCommand(run: (command: string, args: string[], child: EventEmitter) => Promise<void>) {
+function mockCommand(
+  run: (command: string, args: string[], child: EventEmitter & { kill: ReturnType<typeof vi.fn> }) => Promise<void>,
+) {
   vi.mocked(spawn).mockImplementation((command, args) => {
-    const child = Object.assign(new EventEmitter(), { stderr: new PassThrough() });
+    const child = Object.assign(new EventEmitter(), { stderr: new PassThrough(), kill: vi.fn() });
     run(command, args as string[], child).catch((error: unknown) => child.emit('error', error));
     return child as unknown as ReturnType<typeof spawn>;
   });
@@ -83,7 +85,30 @@ it.each([true, false])(
     expect(spawn).toHaveBeenCalledWith('tesseract', [input, expect.any(String), '-l', 'eng+vie', 'tsv'], {
       shell: false,
       windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
     });
     await expect(fs.stat(outputDirectory)).rejects.toThrow();
   },
 );
+
+it('passes page limits and piped stderr to pdftoppm and aborts timed-out commands', async () => {
+  input = path.join(directory, 'large.pdf');
+  await fs.writeFile(input, 'pdf fixture');
+  let spawnedChild: (EventEmitter & { kill: ReturnType<typeof vi.fn> }) | null = null;
+  mockCommand(async (_command, _args, child) => {
+    spawnedChild = child;
+  });
+
+  const runner = new TesseractRunner(undefined, { commandTimeoutMs: 50, maxPdfPages: 12 });
+  await expect(runner.runOcr(input, 1)).rejects.toThrow('pdftoppm timed out');
+  expect(spawn).toHaveBeenCalledWith(
+    'pdftoppm',
+    ['-png', '-r', '150', '-f', '1', '-l', '12', input, expect.any(String)],
+    {
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    },
+  );
+  expect(spawnedChild?.kill).toHaveBeenCalledWith('SIGKILL');
+});

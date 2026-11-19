@@ -5,10 +5,17 @@ import type { Application } from '@nocobase/client-v2';
 import { FlowEngineProvider } from '@nocobase/flow-engine';
 import type { ChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
-import { Alert, Button, Modal, Space, message } from 'antd';
+import { Alert, App as AntdApp, Button, Modal, Space, message } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { getChatScope, getChatScopes } from '../shared/chatScope';
+import {
+  FILE_EXTENSION_SET,
+  findManifestEntryForName,
+  getCachedSkillHubManifestMap,
+  isKnownFileUrl,
+  resolveDownloadUrl,
+} from '../shared/fileLinks';
 
 type UnknownRecord = Record<string, unknown>;
 type PreviewFile = UnknownRecord;
@@ -35,29 +42,9 @@ type PreviewWindow = Window & {
 
 const NAMESPACE = 'plugin-ai-chat-file-preview';
 const CHAT_DEFAULT_SESSION_KEY = '__draft__';
-const FILE_EXTENSIONS = new Set([
-  'pdf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'csv',
-  'ppt',
-  'pptx',
-  'txt',
-  'md',
-  'json',
-  'xml',
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'bmp',
-  'svg',
-]);
 
 let appRef: AppLike | null = null;
+const activePreviewCleanups = new Set<() => void>();
 
 const t = (key: string) => appRef?.i18n?.t(key, { ns: NAMESPACE }) || key;
 
@@ -105,7 +92,7 @@ const extractFilenameFromText = (value?: string) => {
     return '';
   }
   const match = value.match(/[^\s"'<>()[\]{}]+\.([a-z0-9]{2,8})/i);
-  if (!match || !FILE_EXTENSIONS.has(match[1].toLowerCase())) {
+  if (!match || !FILE_EXTENSION_SET.has(match[1].toLowerCase())) {
     return '';
   }
   return match[0];
@@ -166,10 +153,10 @@ const isFileLikeUrl = (url?: string) => {
   if (!url || /^(mailto|tel|javascript):/i.test(url)) {
     return false;
   }
-  if (/^(blob|data):/i.test(url) || /\/api\/(attachments:stream|filePreviewAuth:download)/.test(url)) {
+  if (/^(blob|data):/i.test(url) || isKnownFileUrl(url)) {
     return true;
   }
-  return FILE_EXTENSIONS.has(getExtFromName(url));
+  return FILE_EXTENSION_SET.has(getExtFromName(url));
 };
 
 const toPreviewFile = (value: unknown): PreviewFile | null => {
@@ -305,15 +292,69 @@ const findPreviewFile = (runtime: ChatBoxRuntime, label?: string, href?: string)
   return undefined;
 };
 
+const getSessionMessages = (runtime: ChatBoxRuntime): unknown[] => {
+  const messagesState: ChatMessagesSnapshot = runtime.chatMessageModel;
+  const conversationsState: ChatConversationsSnapshot = runtime.chatConversationModel;
+  const session = getSessionSnapshot(messagesState, conversationsState.currentConversation);
+  return Array.isArray(session.messages) ? session.messages : [];
+};
+
+const resolveSkillHubFile = (runtime: ChatBoxRuntime, label?: string, href?: string): PreviewFile | undefined => {
+  const messages = getSessionMessages(runtime);
+  const manifestMap = getCachedSkillHubManifestMap(messages);
+  const nameCandidates = [label, extractFilenameFromText(label), href ? getNameFromUrl(href) : ''].filter(
+    (item): item is string => Boolean(item),
+  );
+
+  for (const candidate of nameCandidates) {
+    const manifestEntry = findManifestEntryForName(candidate, manifestMap);
+    if (manifestEntry) {
+      const name = manifestEntry.name || extractFilenameFromText(label) || 'attachment';
+      const ext = getExtFromName(name);
+      return {
+        url: manifestEntry.downloadUrl,
+        filename: name,
+        name,
+        title: name,
+        extname: ext ? `.${ext}` : undefined,
+        mimetype: manifestEntry.mimetype || '',
+        size: manifestEntry.size ?? undefined,
+      };
+    }
+  }
+
+  if (href && /^(?:sandbox:(?:\/\/)?|\/?download\/)/i.test(href)) {
+    const resolved = resolveDownloadUrl(href, messages);
+    if (resolved && resolved !== href) {
+      const name = extractFilenameFromText(label) || getNameFromUrl(resolved) || label?.trim() || 'attachment';
+      const ext = getExtFromName(name);
+      return {
+        url: resolved,
+        filename: name,
+        name,
+        title: name,
+        extname: ext ? `.${ext}` : undefined,
+      };
+    }
+  }
+
+  return undefined;
+};
+
 const createFallbackFile = (href: string, label?: string): PreviewFile => {
-  const filename = normalizeName(extractFilenameFromText(label) || getNameFromUrl(href) || label || 'file');
-  return {
+  const rawName = extractFilenameFromText(label) || getNameFromUrl(href) || label?.trim() || 'file';
+  const ext = getExtFromName(rawName);
+  const file: PreviewFile = {
     url: href,
-    filename,
-    name: filename,
-    title: filename,
-    collectionName: 'aiFiles',
+    filename: rawName,
+    name: rawName,
+    title: rawName,
+    extname: ext ? `.${ext}` : undefined,
   };
+  if (!isKnownFileUrl(href) || href.includes('/api/attachments')) {
+    file.collectionName = 'aiFiles';
+  }
+  return file;
 };
 
 const openFallbackDownload = (file: unknown) => {
@@ -386,13 +427,17 @@ const mountPreview = (file: PreviewFile) => {
   document.body.appendChild(container);
   let root: Root | null = createRoot(container);
   const destroy = () => {
+    activePreviewCleanups.delete(destroy);
     root?.unmount();
     root = null;
     container.remove();
   };
+  activePreviewCleanups.add(destroy);
   root.render(
     <FlowEngineProvider engine={app.flowEngine}>
-      <DetachedPreviewModal file={file} onDestroy={destroy} />
+      <AntdApp>
+        <DetachedPreviewModal file={file} onDestroy={destroy} />
+      </AntdApp>
     </FlowEngineProvider>,
   );
 };
@@ -421,11 +466,13 @@ const findClickableFileTarget = (eventTarget: EventTarget | null) => {
 
 const markPreviewTargets = () => {
   if (!appRef) return;
-  for (const { root, runtime } of getChatScopes(appRef)) {
+  const scopes = getChatScopes(appRef);
+  if (scopes.length === 0) return;
+  for (const { root, runtime } of scopes) {
     for (const anchor of Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
       const href = anchor.getAttribute('href') || '';
       const label = anchor.textContent || getNameFromUrl(href);
-      if (isFileLikeUrl(href) || findPreviewFile(runtime, label, href)) {
+      if (isFileLikeUrl(href) || findPreviewFile(runtime, label, href) || resolveSkillHubFile(runtime, label, href)) {
         anchor.dataset.aiChatFilePreview = 'true';
       }
     }
@@ -433,7 +480,7 @@ const markPreviewTargets = () => {
       root.querySelectorAll<HTMLElement>('.ant-attachment-list-card, .ant-upload-list-item'),
     )) {
       const label = card.textContent || '';
-      if (findPreviewFile(runtime, label)) {
+      if (findPreviewFile(runtime, label) || resolveSkillHubFile(runtime, label)) {
         card.dataset.aiChatFilePreviewCard = 'true';
       }
     }
@@ -461,6 +508,7 @@ const handleClick = (event: MouseEvent) => {
     return;
   const file =
     findPreviewFile(scope.runtime, target.label, target.href) ||
+    resolveSkillHubFile(scope.runtime, target.label, target.href) ||
     (isFileLikeUrl(target.href) ? createFallbackFile(target.href, target.label) : null);
   if (!file) {
     return;
@@ -501,6 +549,9 @@ export function installAiChatFilePreviewEffect(app: Application) {
     document.removeEventListener('click', handleClick, true);
     window.clearInterval(interval);
     style.remove();
+    for (const cleanup of Array.from(activePreviewCleanups)) {
+      cleanup();
+    }
     appRef = null;
     delete previewWindow.__pluginAiChatFilePreviewV2Cleanup;
   };

@@ -252,4 +252,50 @@ describe('AI file preview native V2 context', () => {
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Native preview context' })).toBeNull());
   });
+
+  it('intercepts SkillHub download links and manifest-backed links in client v2 and cleans up open roots', async () => {
+    const app = createMockClient();
+    const chatRoot = document.createElement('div');
+    const manifestUrl = '/api/skillHub:download?execId=42&f=cmVwb3J0LmRvY3g';
+    const manifestComment = `<!--skillhub:files ${JSON.stringify([
+      { name: 'report.docx', downloadUrl: manifestUrl, mimetype: null, size: 123, execId: '42' },
+    ])}-->`;
+
+    const link = document.createElement('a');
+    link.setAttribute('href', 'sandbox:download/report.docx');
+    link.textContent = 'report.docx';
+    chatRoot.append(link);
+    document.body.append(chatRoot);
+
+    const baseRuntime = aiPluginClient.getGlobalChatBoxRuntime();
+    const runtime = {
+      ...baseRuntime,
+      chatBoxModel: { ...baseRuntime.chatBoxModel, chatBoxRef: { current: chatRoot } },
+      chatConversationModel: { ...baseRuntime.chatConversationModel, currentConversation: 'conv-1' },
+      chatMessageModel: {
+        ...baseRuntime.chatMessageModel,
+        getSessionState: () => ({
+          messages: [{ content: { content: 'Done', tool_calls: [{ content: manifestComment }] } }],
+          attachments: [],
+        }),
+      },
+      chatSenderModel: { ...baseRuntime.chatSenderModel, attachments: [] },
+    } as ChatBoxRuntime;
+    vi.spyOn(aiPluginClient, 'getGlobalChatBoxRuntime').mockReturnValue(runtime);
+    const previewer = vi.spyOn(filePreviewTypes, 'getTypeByFile').mockReturnValue({
+      Previewer: () => <div>SkillHub Preview Open</div>,
+    });
+
+    installAiChatFilePreviewEffect(app);
+
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    link.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(await screen.findByText('SkillHub Preview Open')).toBeTruthy();
+    expect(previewer.mock.calls[0][0]).toEqual(expect.objectContaining({ url: manifestUrl, filename: 'report.docx' }));
+
+    previewWindow.__pluginAiChatFilePreviewV2Cleanup?.();
+    await waitFor(() => expect(screen.queryByText('SkillHub Preview Open')).toBeNull());
+  });
 });
