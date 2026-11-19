@@ -83,6 +83,22 @@ export function ProviderSettingsForm() {
       <Form.Item name={['options', 'apiKey']} label={t('API Key')} rules={[{ required: true }]}>
         <ApiKeyInput />
       </Form.Item>
+      <Form.Item name={['options', 'apiMode']} label={t('API mode')} extra={t('API mode description')}>
+        <Select
+          placeholder={t('Automatic')}
+          options={[
+            { value: 'auto', label: t('Automatic') },
+            { value: 'chat-completions', label: t('Chat Completions') },
+          ]}
+        />
+      </Form.Item>
+      <Form.Item
+        name={['options', 'claudeModelAliases']}
+        label={t('Claude model aliases')}
+        extra={t('Claude model aliases description')}
+      >
+        <Select mode="tags" tokenSeparators={[',']} placeholder={t('Enter exact model aliases')} />
+      </Form.Item>
       <Form.Item name={['options', 'disableStream']} valuePropName="checked" extra={t('Disable streaming description')}>
         <Checkbox>{t('Disable streaming')}</Checkbox>
       </Form.Item>

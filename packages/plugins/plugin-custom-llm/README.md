@@ -15,6 +15,34 @@ OpenAI-compatible LLM provider with auto response format detection for external 
 4. Add the names of the models you wish to use.
 5. You can now select these models when configuring AI Employees or Chat agents.
 
+### LiteLLM Chat Completions
+
+For a LiteLLM service exposing `/v1/chat/completions`, enter its `/v1` base URL and choose **Chat Completions** in
+**API mode**. The default **Automatic** lets LangChain select its API as before. The selected mode applies to the
+service and all its model aliases, including GPT aliases whose names make LangChain prefer Responses.
+
+In **Claude model aliases**, enter the exact LiteLLM aliases that route to Claude, for example `claude-work` and
+`claude-analysis`. The plugin adjusts sampling parameters for those aliases, giving `temperature` precedence over
+`top_p`. Leave GPT and Gemini aliases out of this list. The list is stored in the service options, so it also applies
+to AI Employee chats where individual model options are not passed to the provider.
+
+For an OpenAI-compatible LiteLLM response, leave `responseMapping` unset. Mapping is only needed when the gateway
+returns a different response shape. The provider checks both mapped and unmapped Chat Completions streams for
+upstream errors and premature closure, and reports `length` and `content_filter` as incomplete responses. A gateway
+must send `[DONE]` or a successful `finish_reason` before closing the stream.
+
+The chat error includes a reference ID. Search the NocoBase backend log for that ID to find the safe error code,
+request stage, session, model alias, HTTP status, finish reason and LiteLLM request ID when available. Prompts,
+tool payloads, credentials and model signatures are omitted from these diagnostics. For example, an error with
+reference `c16e8050-6ec7-4b43-9bc0-6a8b43d5cc48` can be located by searching for that identifier in the backend log.
+
+Chat Completions does not automatically retry a received partial stream or incomplete response. Optional bounded
+retries for non-streaming HTTP 429 and 5xx responses can be configured in **Request config (JSON)**:
+
+```json
+{ "retry": { "maxRetries": 2, "delayMs": 1000 } }
+```
+
 ## Request configuration
 
 The provider extends the host AI plugin's LLM provider and keeps the persisted `custom-llm` provider ID. It merges

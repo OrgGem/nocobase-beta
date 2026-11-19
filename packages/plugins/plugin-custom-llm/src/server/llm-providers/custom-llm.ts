@@ -8,6 +8,25 @@ import type { AttachmentModel, PluginFileManagerServer } from '@nocobase/plugin-
 import { serverRequest } from '@nocobase/utils';
 import path from 'node:path';
 import { Context } from '@nocobase/actions';
+import {
+  createChatCompletionsFetch,
+  createInvalidToolCallFailure,
+  createTimeoutFailure,
+  isChatCompletionFailure,
+  recoverChatCompletionFailure,
+  TransportOptions,
+} from './chat-completions-transport';
+import {
+  collectRequestMessageContexts,
+  prepareSignedMessage,
+  restoreRequestMessageContexts,
+  shortToolCallId,
+  SIGNED_CONTEXT_KEY,
+  SignedContextScope,
+  SignedStreamAccumulator,
+} from './signed-context';
+
+export { createMappingFetch } from './chat-completions-transport';
 
 // Keepalive marker — zero-width space prefix to distinguish from real content
 const KEEPALIVE_PREFIX = '\u200B\u200B\u200B';
@@ -70,124 +89,197 @@ function getChatOpenAICompletions() {
  * causes errors when langgraph reads messages back from history.
  */
 export function stripGeminiThoughtSuffix(id: string | undefined): string | undefined {
-  if (!id || typeof id !== 'string') return id;
-  const idx = id.indexOf('__thought__');
-  return idx !== -1 ? id.substring(0, idx) : id;
+  return typeof id === 'string' ? shortToolCallId(id) : id;
 }
 
-/**
- * Build tool_calls key for reasoning content map lookup.
- */
-function getToolCallsKey(toolCalls: Array<{ id?: string; name?: string; function?: { name?: string } }> = []): string {
-  return toolCalls
-    .map((tc) => {
-      const id = tc?.id ?? '';
-      const name = tc?.name ?? tc?.function?.name ?? '';
-      return `${id}:${name}`;
-    })
-    .join('|');
-}
+const REQUEST_MESSAGE_CONTEXTS_KEY = '__custom_llm_request_contexts';
+const STREAM_THINKING_BLOCKS_KEY = '__custom_llm_stream_thinking_blocks';
 
 /**
- * Collect reasoning_content from history messages keyed by their tool_calls.
- * This is needed because some APIs (DeepSeek) require reasoning_content to
- * be present in assistant messages that precede tool results.
+ * Preserve provider-specific state across the OpenAI message conversion. Tool
+ * calls are released after the stream ends, when their full IDs and signatures
+ * are known and the gateway has confirmed a complete response.
  */
-function collectReasoningMap(messages: any[]): Map<string, string> {
-  const reasoningMap = new Map<string, string>();
-  for (const message of messages ?? []) {
-    if (message?.getType?.() !== 'ai' && message?._getType?.() !== 'ai') continue;
-    if (!message?.tool_calls?.length) continue;
-    const reasoningContent = message?.additional_kwargs?.reasoning_content;
-    if (typeof reasoningContent !== 'string' || !reasoningContent) continue;
-    const key = getToolCallsKey(message.tool_calls);
-    if (key) reasoningMap.set(key, reasoningContent);
-  }
-  return reasoningMap;
-}
-
-/**
- * Patch request messages to restore reasoning_content on assistant messages
- * that have tool_calls — needed for APIs that require it on round-trip.
- */
-function patchRequestMessagesReasoning(request: any, reasoningMap?: Map<string, string>): void {
-  if (!reasoningMap?.size || !Array.isArray(request?.messages)) return;
-  const lastMsg = request.messages.at(-1);
-  if (lastMsg?.role !== 'tool') return;
-  for (const msg of request.messages) {
-    if (msg?.role !== 'assistant') continue;
-    if (!Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) continue;
-    if (msg.reasoning_content) continue;
-    const key = getToolCallsKey(msg.tool_calls);
-    const rc = key ? reasoningMap.get(key) : undefined;
-    if (rc) msg.reasoning_content = rc;
-  }
-}
-
-const REASONING_MAP_KEY = '__nb_reasoning_map';
-
-/**
- * Create a ReasoningChatOpenAI class that extends ChatOpenAICompletions.
- * This patches reasoning_content into the request messages before sending
- * to the API, which is required for models like DeepSeek-R1 that need
- * reasoning_content present in assistant messages during tool call cycles.
- */
-function createReasoningChatClass() {
+function createCompatibleCompletionsClass(
+  scope: SignedContextScope,
+  enableReasoning: boolean,
+  normalizeClaudeSampling: boolean,
+  transportOptions: TransportOptions,
+) {
   const ChatOpenAICompletions = getChatOpenAICompletions();
   if (!ChatOpenAICompletions) {
-    // Fallback — completions class not available, use plain ChatOpenAI
-    return getChatOpenAI();
+    throw new Error('The installed @langchain/openai does not provide ChatOpenAICompletions');
   }
 
-  return class ReasoningChatOpenAI extends ChatOpenAICompletions {
+  return class CompatibleChatOpenAICompletions extends ChatOpenAICompletions {
+    constructor(fields: Record<string, unknown>) {
+      super(fields);
+    }
+
     async _generate(messages: any[], options: any, runManager?: any) {
-      const reasoningMap = collectReasoningMap(messages);
-      return super._generate(messages, { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap }, runManager);
+      const contexts = collectRequestMessageContexts(messages, scope, enableReasoning);
+      const nextOptions = {
+        ...(options || {}),
+        [REQUEST_MESSAGE_CONTEXTS_KEY]: contexts,
+        options: { ...(options?.options || {}), [REQUEST_MESSAGE_CONTEXTS_KEY]: contexts },
+      };
+      return super._generate(messages, nextOptions, runManager);
     }
 
     async *_streamResponseChunks(messages: any[], options: any, runManager?: any) {
-      const reasoningMap =
-        options?.[REASONING_MAP_KEY] instanceof Map
-          ? (options[REASONING_MAP_KEY] as Map<string, string>)
-          : collectReasoningMap(messages);
-
-      const stream = super._streamResponseChunks(
-        messages,
-        { ...(options || {}), [REASONING_MAP_KEY]: reasoningMap },
-        runManager,
-      );
+      const contexts = collectRequestMessageContexts(messages, scope, enableReasoning);
+      const stream = super._streamResponseChunks(messages, {
+        ...(options || {}),
+        [REQUEST_MESSAGE_CONTEXTS_KEY]: contexts,
+      });
+      const accumulator = new SignedStreamAccumulator();
+      const ChatGenerationChunk = requireFromApp('@langchain/core/outputs').ChatGenerationChunk;
+      let finishReason: string | undefined;
 
       for await (const chunk of stream) {
-        yield chunk;
+        const message = chunk.message;
+        const kwargs = { ...(message.additional_kwargs || {}) };
+        const rawToolCalls = kwargs.tool_calls;
+        const thinkingBlocks = kwargs[STREAM_THINKING_BLOCKS_KEY];
+        accumulator.addToolCalls(rawToolCalls);
+        accumulator.addThinkingBlocks(thinkingBlocks);
+        if (typeof chunk.generationInfo?.finish_reason === 'string') {
+          finishReason = chunk.generationInfo.finish_reason;
+        }
+        delete kwargs.tool_calls;
+        delete kwargs[STREAM_THINKING_BLOCKS_KEY];
+
+        const safeMessage = createAIMessageChunk({
+          id: message.id,
+          name: message.name,
+          content: message.content,
+          additional_kwargs: kwargs,
+          response_metadata: message.response_metadata,
+          usage_metadata: message.usage_metadata,
+        });
+        const safeChunk = new ChatGenerationChunk({
+          message: safeMessage,
+          text: chunk.text,
+          generationInfo: chunk.generationInfo,
+        });
+        yield safeChunk;
+        await runManager?.handleLLMNewToken(
+          safeChunk.text ?? '',
+          { prompt: options?.promptIndex ?? 0, completion: safeChunk.generationInfo?.completion ?? 0 },
+          undefined,
+          undefined,
+          undefined,
+          { chunk: safeChunk },
+        );
+      }
+
+      if (options?.signal?.aborted) return;
+      const { toolCallChunks, signedContext } = accumulator.result(scope);
+      if (finishReason === 'tool_calls' && !toolCallChunks.length) {
+        throw createInvalidToolCallFailure(transportOptions, 'stream');
+      }
+      for (const toolCall of toolCallChunks) {
+        try {
+          if (typeof toolCall.id !== 'string' || !toolCall.id || typeof toolCall.name !== 'string' || !toolCall.name) {
+            throw new Error('Missing tool call identifier or name');
+          }
+          const args = JSON.parse(String(toolCall.args));
+          if (!args || typeof args !== 'object' || Array.isArray(args)) {
+            throw new Error('Tool call arguments must be an object');
+          }
+        } catch {
+          throw createInvalidToolCallFailure(transportOptions, 'stream');
+        }
+      }
+      if (toolCallChunks.length || signedContext) {
+        const message = createAIMessageChunk({
+          content: '',
+          tool_call_chunks: toolCallChunks,
+          additional_kwargs: signedContext ? { [SIGNED_CONTEXT_KEY]: signedContext } : {},
+        });
+        const finalChunk = new ChatGenerationChunk({
+          message,
+          text: '',
+          generationInfo: { prompt: options?.promptIndex ?? 0, completion: 0 },
+        });
+        yield finalChunk;
+        await runManager?.handleLLMNewToken(
+          '',
+          { prompt: options?.promptIndex ?? 0, completion: 0 },
+          undefined,
+          undefined,
+          undefined,
+          { chunk: finalChunk },
+        );
       }
     }
 
     _convertCompletionsDeltaToBaseMessageChunk(delta: any, rawResponse: any, defaultRole?: any) {
-      const messageChunk = super._convertCompletionsDeltaToBaseMessageChunk(delta, rawResponse, defaultRole);
-      if (delta?.reasoning_content) {
-        messageChunk.additional_kwargs = {
-          ...(messageChunk.additional_kwargs || {}),
-          reasoning_content: delta.reasoning_content,
+      const chunk = super._convertCompletionsDeltaToBaseMessageChunk(delta, rawResponse, defaultRole);
+      const thinkingBlocks = delta?.thinking_blocks ?? delta?.provider_specific_fields?.thinking_blocks;
+      if (Array.isArray(thinkingBlocks)) {
+        chunk.additional_kwargs = {
+          ...(chunk.additional_kwargs || {}),
+          [STREAM_THINKING_BLOCKS_KEY]: thinkingBlocks,
         };
       }
-      return messageChunk;
+      return chunk;
     }
 
     _convertCompletionsMessageToBaseMessage(message: any, rawResponse: any) {
-      const langChainMessage = super._convertCompletionsMessageToBaseMessage(message, rawResponse);
-      if (message?.reasoning_content) {
-        langChainMessage.additional_kwargs = {
-          ...(langChainMessage.additional_kwargs || {}),
-          reasoning_content: message.reasoning_content,
-        };
+      const prepared = prepareSignedMessage(message, scope);
+      const result = super._convertCompletionsMessageToBaseMessage(prepared.message, rawResponse);
+      if (
+        result.invalid_tool_calls?.length ||
+        result.tool_calls?.some(
+          (toolCall: { id?: string; name?: string; args?: unknown }) =>
+            !toolCall?.id ||
+            !toolCall.name ||
+            !toolCall.args ||
+            typeof toolCall.args !== 'object' ||
+            Array.isArray(toolCall.args),
+        ) ||
+        (rawResponse?.choices?.[0]?.finish_reason === 'tool_calls' && !result.tool_calls?.length)
+      ) {
+        throw createInvalidToolCallFailure(transportOptions);
       }
-      return langChainMessage;
+      if (prepared.signedContext) {
+        result.additional_kwargs = {
+          ...(result.additional_kwargs || {}),
+          [SIGNED_CONTEXT_KEY]: prepared.signedContext,
+        };
+        result.lc_kwargs.additional_kwargs = result.additional_kwargs;
+      }
+      return result;
     }
 
     async completionWithRetry(request: any, requestOptions?: any): Promise<any> {
-      const reasoningMap = requestOptions?.[REASONING_MAP_KEY] as Map<string, string> | undefined;
-      patchRequestMessagesReasoning(request, reasoningMap);
-      return super.completionWithRetry(request, requestOptions) as any;
+      const contexts = requestOptions?.[REQUEST_MESSAGE_CONTEXTS_KEY];
+      if (Array.isArray(contexts)) restoreRequestMessageContexts(request, contexts);
+      if (normalizeClaudeSampling) {
+        if (request.temperature === -1) delete request.temperature;
+        if (request.top_p === -1) delete request.top_p;
+        if (request.temperature !== undefined && request.temperature !== null) {
+          delete request.top_p;
+        }
+        delete request.top_k;
+      }
+      try {
+        return await super.completionWithRetry(request, requestOptions);
+      } catch (error) {
+        const failure = recoverChatCompletionFailure(error);
+        if (failure) throw failure;
+        if (
+          error &&
+          typeof error === 'object' &&
+          'name' in error &&
+          error.name === 'TimeoutError' &&
+          !requestOptions?.signal?.aborted
+        ) {
+          throw createTimeoutFailure(transportOptions);
+        }
+        throw error;
+      }
     }
   };
 }
@@ -448,414 +540,6 @@ function getByPath(obj: any, dotPath: string): any {
 }
 
 /**
- * Create a custom fetch that intercepts LLM responses and maps them
- * from a non-standard format to OpenAI-compatible format.
- *
- * responseMapping config example:
- * {
- *   "content": "message.response"       // dot-path to the content field
- *   "role": "message.role"              // optional, dot-path to role (default: "assistant")
- *   "id": "id"                          // optional, dot-path to response id
- *   "tool_calls": "message.tool_calls"  // optional, dot-path to tool_calls array
- *   "finish_reason": "finish_reason"    // optional, dot-path to finish_reason
- * }
- */
-function getHeaderValue(headers: HeadersInit | undefined, name: string): string | undefined {
-  if (!headers) return undefined;
-  if (headers instanceof Headers) return headers.get(name) || undefined;
-
-  const lowerName = name.toLowerCase();
-  if (Array.isArray(headers)) {
-    const item = headers.find(([key]) => key.toLowerCase() === lowerName);
-    return item?.[1];
-  }
-
-  for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === lowerName) {
-      return String(value);
-    }
-  }
-  return undefined;
-}
-
-function parseRetryAfterSeconds(value: string | null): number | null {
-  if (!value) return null;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const date = Date.parse(value);
-  if (Number.isFinite(date)) return Math.max(0, date - Date.now());
-  return null;
-}
-
-export function createMappingFetch(
-  responseMapping: Record<string, string>,
-  retry?: { maxRetries?: number; delayMs?: number },
-) {
-  const contentPath = responseMapping.content;
-  if (!contentPath) return undefined; // No mapping needed
-
-  // Resolve path for tool_calls — if not set, try the standard OpenAI paths as fallback
-  const toolCallsPath = responseMapping.tool_calls;
-  const finishReasonPath = responseMapping.finish_reason;
-
-  // Bounded non-streaming retry on 429/5xx. Streaming (SSE) responses are
-  // never retried — a live stream cannot be replayed safely.
-  const maxRetries = retry ? normalizePositiveNumber(retry.maxRetries, 2) : 0;
-  const retryDelayMs = normalizePositiveNumber(retry?.delayMs, 1000);
-
-  return async (url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const acceptHeader = getHeaderValue(init?.headers, 'accept') || '';
-    const isStreamingRequest = acceptHeader.includes('text/event-stream');
-
-    // Preserve the OpenAI SDK's AbortSignal. The SDK already applies its
-    // request timeout before headers; replacing the signal here causes
-    // user aborts/timeouts to be ignored and previously imposed a hard 120s cap.
-    let response = await fetch(url, init);
-
-    if (!isStreamingRequest && maxRetries > 0 && (response.status === 429 || response.status >= 500)) {
-      for (let attempt = 0; attempt < maxRetries && (response.status === 429 || response.status >= 500); attempt++) {
-        const retryAfter = parseRetryAfterSeconds(response.headers.get('retry-after'));
-        const waitMs = retryAfter ?? retryDelayMs * (attempt + 1);
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
-        response = await fetch(url, init);
-      }
-    }
-
-    // Only intercept successful JSON responses
-    if (!response.ok) return response;
-
-    const contentType = response.headers.get('content-type') || '';
-
-    // Handle streaming responses (SSE) — transform each chunk
-    if (contentType.includes('text/event-stream') || acceptHeader.includes('text/event-stream')) {
-      const reader = response.body?.getReader();
-      if (!reader) return response;
-
-      const stream = new ReadableStream({
-        async start(controller) {
-          const decoder = new TextDecoder();
-          const encoder = new TextEncoder();
-          let buffer = '';
-
-          const enqueueChunked = (baseMapped: any) => {
-            // SSE proxy layer chunk size — intentionally smaller than
-            // DEFAULT_STREAM_CHUNK_SIZE (512) because we're splitting raw
-            // HTTP response body bytes before LangChain parses them.
-            const SSE_MAPPING_CHUNK_SIZE = 128;
-            const delta = baseMapped.choices[0].delta;
-            const content = delta.content;
-            const toolCalls = delta.tool_calls;
-
-            let hasEmitted = false;
-
-            // 1. Process and stream content if it exists
-            if (content !== undefined && content !== null) {
-              const contentStr = String(content);
-              if (contentStr.length > SSE_MAPPING_CHUNK_SIZE) {
-                for (let i = 0; i < contentStr.length; i += SSE_MAPPING_CHUNK_SIZE) {
-                  const chunkMapped = cloneDeep(baseMapped);
-                  const newDelta = { ...delta };
-                  if (i > 0) delete newDelta.role; // Only send role on first chunk
-                  delete newDelta.tool_calls; // Handled separately
-
-                  newDelta.content = contentStr.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
-                  chunkMapped.choices[0].delta = newDelta;
-
-                  // Clear finish_reason for intermediate chunks or if toolCalls will follow
-                  if (i + SSE_MAPPING_CHUNK_SIZE < contentStr.length || toolCalls) {
-                    chunkMapped.choices[0].finish_reason = null;
-                  }
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                  hasEmitted = true;
-                }
-              } else {
-                const chunkMapped = cloneDeep(baseMapped);
-                const newDelta = { ...delta };
-                delete newDelta.tool_calls;
-                newDelta.content = contentStr;
-                chunkMapped.choices[0].delta = newDelta;
-
-                if (toolCalls) chunkMapped.choices[0].finish_reason = null;
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                hasEmitted = true;
-              }
-            }
-
-            // 2. Process and stream tool_calls if they exist
-            if (toolCalls && toolCalls.length > 0) {
-              let needsChunking = false;
-              for (const tc of toolCalls) {
-                if (tc.function?.arguments && tc.function.arguments.length > SSE_MAPPING_CHUNK_SIZE) {
-                  needsChunking = true;
-                  break;
-                }
-              }
-
-              if (needsChunking) {
-                const toolCallsCopy = cloneDeep(toolCalls);
-                let maxLen = 0;
-                for (const tc of toolCallsCopy) {
-                  if (tc.function?.arguments) {
-                    maxLen = Math.max(maxLen, tc.function.arguments.length);
-                  }
-                }
-
-                for (let i = 0; i < maxLen; i += SSE_MAPPING_CHUNK_SIZE) {
-                  const chunkMapped = cloneDeep(baseMapped);
-                  const newDelta = !hasEmitted && i === 0 ? { ...delta } : {};
-                  if (delta.role && i === 0) newDelta.role = delta.role;
-                  if ('content' in newDelta) delete newDelta.content;
-                  newDelta.tool_calls = [];
-                  chunkMapped.choices[0].delta = newDelta;
-
-                  // Only keep finish_reason on the very last chunk
-                  if (i + SSE_MAPPING_CHUNK_SIZE < maxLen) {
-                    chunkMapped.choices[0].finish_reason = null;
-                  }
-
-                  for (const tc of toolCallsCopy) {
-                    const args = tc.function?.arguments || '';
-                    if (i < args.length) {
-                      const chunkTc = cloneDeep(tc);
-                      if (chunkTc.function) {
-                        chunkTc.function.arguments = args.slice(i, i + SSE_MAPPING_CHUNK_SIZE);
-                      }
-                      // Strip metadata on subsequent chunks to conform to OpenAI stream protocol
-                      if (i > 0) {
-                        delete chunkTc.id;
-                        delete chunkTc.type;
-                        if (chunkTc.function) delete chunkTc.function.name;
-                      }
-                      chunkMapped.choices[0].delta.tool_calls.push(chunkTc);
-                    }
-                  }
-                  controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                  hasEmitted = true;
-                }
-              } else {
-                const chunkMapped = cloneDeep(baseMapped);
-                const newDelta = !hasEmitted ? { ...delta } : {};
-                if (delta.role) newDelta.role = delta.role;
-                if ('content' in newDelta) delete newDelta.content;
-                newDelta.tool_calls = toolCalls;
-                chunkMapped.choices[0].delta = newDelta;
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunkMapped)}\n\n`));
-                hasEmitted = true;
-              }
-            }
-
-            // 3. Fallback if chunk had no content and no tool_calls (e.g., finish_reason only)
-            if (!hasEmitted) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(baseMapped)}\n\n`));
-            }
-          };
-
-          try {
-            // Accumulate `data:` lines for one SSE event (SSE allows multiple data
-            // lines per event). Flush on a blank line.
-            let dataLines: string[] = [];
-
-            const flushEvent = () => {
-              if (dataLines.length === 0) return;
-              const rawData = dataLines.join('\n');
-              dataLines = [];
-
-              const trimmedData = rawData.trim();
-              if (trimmedData === '[DONE]') {
-                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-                return;
-              }
-
-              let parsed: any;
-              try {
-                parsed = JSON.parse(rawData);
-              } catch {
-                // Non-JSON / foreign-format event — drop rather than re-emitting raw.
-                return;
-              }
-
-              const mappedContent = getByPath(parsed, contentPath);
-
-              // Extract tool_calls from the response (Issue #1)
-              // Try custom path first, then fall back to standard OpenAI chunk paths
-              const mappedToolCalls = toolCallsPath
-                ? getByPath(parsed, toolCallsPath)
-                : getByPath(parsed, 'choices.0.delta.tool_calls') ?? getByPath(parsed, 'delta.tool_calls');
-
-              const mappedFinishReason = finishReasonPath
-                ? getByPath(parsed, finishReasonPath)
-                : getByPath(parsed, 'choices.0.finish_reason') ?? getByPath(parsed, 'finish_reason');
-
-              if (mappedContent === undefined && !mappedToolCalls && mappedFinishReason === undefined) {
-                // No content/tool_calls/finish_reason — drop (e.g. usage-only chunks).
-                return;
-              }
-
-              // Build the delta — include content, tool_calls, and finish_reason
-              const delta: Record<string, any> = { role: 'assistant' };
-              if (mappedContent !== undefined) {
-                delta.content = String(mappedContent);
-              }
-              if (mappedToolCalls) {
-                delta.tool_calls = mappedToolCalls;
-              }
-
-              const mapped = {
-                id: getByPath(parsed, responseMapping.id || 'id') || 'chatcmpl-custom',
-                object: 'chat.completion.chunk',
-                created: Math.floor(Date.now() / 1000),
-                model: 'custom',
-                choices: [
-                  {
-                    index: 0,
-                    delta,
-                    finish_reason: mappedFinishReason ?? null,
-                  },
-                ],
-              };
-
-              enqueueChunked(mapped);
-            };
-
-            // eslint-disable-next-line no-constant-condition
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) {
-                buffer += decoder.decode();
-              } else {
-                buffer += decoder.decode(value, { stream: true });
-              }
-
-              const lines = buffer.split('\n');
-              buffer = lines.pop() || '';
-
-              for (const rawLine of lines) {
-                const line = rawLine.replace(/\r$/, '');
-                const trimmed = line.trim();
-
-                if (trimmed === '') {
-                  // Blank line terminates the current event.
-                  flushEvent();
-                  continue;
-                }
-                if (trimmed.startsWith(':')) {
-                  // SSE comment — drop.
-                  continue;
-                }
-
-                const dataMatch = trimmed.match(/^data\s*:\s?(.*)$/);
-                if (dataMatch) {
-                  dataLines.push(dataMatch[1]);
-                }
-                // Other fields (event:, id:, retry:) carry no payload we need.
-              }
-
-              if (done) {
-                // Flush a trailing event that lacked a terminating blank line.
-                if (buffer) {
-                  const line = buffer.replace(/\r$/, '').trim();
-                  const dataMatch = line.match(/^data\s*:\s?(.*)$/);
-                  if (dataMatch) dataLines.push(dataMatch[1]);
-                }
-                flushEvent();
-                controller.close();
-                break;
-              }
-            }
-          } catch (err) {
-            controller.error(err);
-          }
-        },
-      });
-
-      return new Response(stream, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: new Headers({
-          'content-type': 'text/event-stream',
-        }),
-      });
-    }
-
-    // Handle non-streaming JSON responses
-    if (contentType.includes('application/json')) {
-      const rawBody = await response.text();
-      let body: any;
-      try {
-        body = JSON.parse(rawBody);
-      } catch {
-        // Not valid JSON despite the content-type — pass the body through
-        return new Response(rawBody, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: new Headers({ 'content-type': contentType }),
-        });
-      }
-      const mappedContent = getByPath(body, contentPath);
-
-      // Extract tool_calls for non-streaming (Issue #1)
-      const mappedToolCalls = toolCallsPath
-        ? getByPath(body, toolCallsPath)
-        : getByPath(body, 'choices.0.message.tool_calls') ?? getByPath(body, 'message.tool_calls');
-
-      const mappedFinishReason = finishReasonPath
-        ? getByPath(body, finishReasonPath)
-        : getByPath(body, 'choices.0.finish_reason') ?? getByPath(body, 'finish_reason');
-
-      if (mappedContent !== undefined || mappedToolCalls) {
-        const message: Record<string, any> = {
-          role: getByPath(body, responseMapping.role || '') || 'assistant',
-        };
-        if (mappedContent !== undefined) {
-          message.content = String(mappedContent);
-        } else {
-          // When only tool_calls, content should be null (OpenAI convention)
-          message.content = null;
-        }
-        if (mappedToolCalls) {
-          message.tool_calls = mappedToolCalls;
-        }
-
-        const mapped = {
-          id: getByPath(body, responseMapping.id || 'id') || 'chatcmpl-custom',
-          object: 'chat.completion',
-          created: Math.floor(Date.now() / 1000),
-          model: 'custom',
-          choices: [
-            {
-              index: 0,
-              message,
-              finish_reason: mappedFinishReason ?? (mappedToolCalls ? 'tool_calls' : 'stop'),
-            },
-          ],
-          usage: body.usage ?? { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-        };
-
-        return new Response(JSON.stringify(mapped), {
-          status: response.status,
-          statusText: response.statusText,
-          headers: new Headers({
-            'content-type': 'application/json',
-          }),
-        });
-      }
-
-      // Mapping found nothing — reconstruct the response because the body
-      // was already consumed above
-      return new Response(JSON.stringify(body), {
-        status: response.status,
-        statusText: response.statusText,
-        headers: new Headers({
-          'content-type': 'application/json',
-        }),
-      });
-    }
-
-    return response;
-  };
-}
-
-/**
  * Check if a text string is a keepalive marker.
  */
 function isKeepAlive(text: string): boolean {
@@ -1020,6 +704,7 @@ function patchRunnableForSanitization(
           // HTTP/transport errors (auth, rate limit, network, aborts) would
           // fail again and the corrective prompt below does not apply.
           const isTransportError =
+            isChatCompletionFailure(e) ||
             typeof e?.status === 'number' ||
             e?.name === 'AbortError' ||
             e?.code === 'ECONNABORTED' ||
@@ -1132,11 +817,12 @@ function patchRunnableForSanitization(
       const bound = origBindTools(fixedTools, kwargs);
       // Phase 2: Post-conversion fix — patch the converted tools in the result
       try {
-        const config = bound?.kwargs ?? bound?.defaultOptions;
-        if (config?.tools && Array.isArray(config.tools)) {
-          for (const tool of config.tools) {
-            if (tool?.function?.parameters) fixPropertiesInSchema(tool.function.parameters);
-            if (tool?.parameters) fixPropertiesInSchema(tool.parameters);
+        for (const config of [bound?.kwargs, bound?.defaultOptions, bound?.config]) {
+          if (Array.isArray(config?.tools)) {
+            for (const tool of config.tools) {
+              if (tool?.function?.parameters) fixPropertiesInSchema(tool.function.parameters);
+              if (tool?.parameters) fixPropertiesInSchema(tool.parameters);
+            }
           }
         }
       } catch {
@@ -1207,10 +893,6 @@ export class CustomLLMProvider extends LLMProvider {
       Object.assign(modelKwargs, reqConfig.extraBody);
     }
 
-    // Issue #4: Use ReasoningChatOpenAI when enableReasoning is set.
-    // This ensures reasoning_content is preserved and patched back into
-    // assistant messages during tool call round-trips (required by DeepSeek-R1, etc.)
-    const ChatClass = enableReasoning ? createReasoningChatClass() : getChatOpenAI();
     // Exclude plugin-specific fields from the LangChain config spread.
     // Fields like maxToolRetries, enableToolRetry, enableVision etc. are not
     // LangChain constructor params and could cause collisions (e.g. maxRetries).
@@ -1276,12 +958,41 @@ export class CustomLLMProvider extends LLMProvider {
       config.configuration.defaultHeaders = { ...config.configuration.defaultHeaders, ...reqConfig.extraHeaders };
     }
 
-    // Apply response mapping via custom fetch — pass timeout for fetch-level protection (Issue #7)
-    if (resConfig.responseMapping) {
-      config.configuration.fetch = createMappingFetch(resConfig.responseMapping, reqConfig.retry);
-    }
+    const transportOptions: TransportOptions = {
+      mapping: resConfig.responseMapping,
+      retry: reqConfig.retry,
+      sessionId: this.requestContext?.sessionId,
+      model: typeof this.modelOptions?.model === 'string' ? this.modelOptions.model : undefined,
+      logger: this.app?.logger,
+      sdkErrorEnvelope: true,
+    };
+    config.configuration.fetch = createChatCompletionsFetch(transportOptions);
 
-    let model = new ChatClass(config);
+    const serviceName = this.modelOptions?.llmService;
+    const scope: SignedContextScope = {
+      service:
+        typeof serviceName === 'string' && serviceName
+          ? serviceName
+          : parsedBaseURL
+            ? `${parsedBaseURL.origin}${parsedBaseURL.pathname}`
+            : '',
+      model: typeof this.modelOptions?.model === 'string' ? this.modelOptions.model : '',
+      ...(this.requestContext?.sessionId ? { sessionId: this.requestContext.sessionId } : {}),
+    };
+    const claudeAliases = Array.isArray(this.serviceOptions?.claudeModelAliases)
+      ? this.serviceOptions.claudeModelAliases
+      : [];
+    const CompatibleCompletions = createCompatibleCompletionsClass(
+      scope,
+      enableReasoning === true,
+      claudeAliases.includes(scope.model),
+      transportOptions,
+    );
+    // A response can fail after HTTP 200. Do not let AsyncCaller resend it.
+    // Non-streaming HTTP retries remain available through requestConfig.retry.
+    const completions = new CompatibleCompletions({ ...config, maxRetries: 0 });
+    const forceCompletions = this.serviceOptions?.apiMode === 'chat-completions' || enableReasoning === true;
+    let model = forceCompletions ? completions : new (getChatOpenAI())({ ...config, completions });
 
     // Sanitize Gemini's __thought__<base64> suffixes in tool call IDs.
     // Patches invoke/stream/bindTools/bind at the public API level so that
@@ -1450,7 +1161,11 @@ export class CustomLLMProvider extends LLMProvider {
 
     if (toolCalls) {
       content.tool_calls = Array.isArray(toolCalls)
-        ? toolCalls.map((tc: any) => ({ ...tc, id: stripGeminiThoughtSuffix(tc.id) }))
+        ? toolCalls.map((toolCall: Record<string, unknown> | null) => {
+            if (!toolCall || typeof toolCall !== 'object') return toolCall;
+            const { provider_specific_fields: _providerFields, extra_content: _extraContent, ...rest } = toolCall;
+            return { ...rest, id: typeof rest.id === 'string' ? shortToolCallId(rest.id) : rest.id };
+          })
         : toolCalls;
     }
 
@@ -1466,9 +1181,21 @@ export class CustomLLMProvider extends LLMProvider {
       content.content = stripToolCallTags(content.content);
     }
 
-    // Clean internal keepalive flag from persisted additional_kwargs
-    if (content.metadata?.additional_kwargs?.__keepalive !== undefined) {
-      const { __keepalive, ...cleanKwargs } = content.metadata.additional_kwargs;
+    // Signed provider state is required for replay but is not part of the chat response.
+    if (content.metadata?.additional_kwargs) {
+      const cleanKwargs = { ...content.metadata.additional_kwargs };
+      delete cleanKwargs.__keepalive;
+      delete cleanKwargs[SIGNED_CONTEXT_KEY];
+      delete cleanKwargs[STREAM_THINKING_BLOCKS_KEY];
+      delete cleanKwargs.thinking_blocks;
+      delete cleanKwargs.__raw_response;
+      if (Array.isArray(cleanKwargs.tool_calls)) {
+        cleanKwargs.tool_calls = cleanKwargs.tool_calls.map((toolCall: Record<string, unknown> | null) => {
+          if (!toolCall || typeof toolCall !== 'object') return toolCall;
+          const { provider_specific_fields: _providerFields, extra_content: _extraContent, ...rest } = toolCall;
+          return { ...rest, id: typeof rest.id === 'string' ? shortToolCallId(rest.id) : rest.id };
+        });
+      }
       content.metadata = { ...content.metadata, additional_kwargs: cleanKwargs };
     }
 
@@ -1526,8 +1253,38 @@ export class CustomLLMProvider extends LLMProvider {
     }
   }
 
-  parseResponseError(err: any) {
-    return err?.message ?? 'Unexpected LLM service error';
+  parseResponseError(err: unknown) {
+    let current: unknown = err;
+    const seen = new Set<unknown>();
+    while (current && typeof current === 'object' && !seen.has(current)) {
+      seen.add(current);
+      const candidate = current as {
+        code?: unknown;
+        correlationId?: unknown;
+        cause?: unknown;
+        error?: { code?: unknown };
+        headers?: { get?: (name: string) => string | null };
+      };
+      const code = typeof candidate.code === 'string' ? candidate.code : candidate.error?.code;
+      const reference =
+        typeof candidate.correlationId === 'string'
+          ? candidate.correlationId
+          : candidate.headers?.get?.('x-nocobase-correlation-id');
+      if (typeof code === 'string' && typeof reference === 'string') {
+        const translate = this.app?.i18n?.t?.bind(this.app.i18n);
+        if (translate) {
+          const reason = translate(`Custom LLM error ${code}`, { ns: 'plugin-custom-llm' });
+          return translate('Custom LLM error: {{reason}} (reference: {{reference}})', {
+            ns: 'plugin-custom-llm',
+            reason,
+            reference,
+          });
+        }
+        return current instanceof Error ? current.message : `LLM service error (${code}), reference ${reference}`;
+      }
+      current = candidate.cause;
+    }
+    return err instanceof Error ? err.message : 'Unexpected LLM service error';
   }
 
   private async readFileData(ctx: Context, attachment: AttachmentModel): Promise<Buffer> {

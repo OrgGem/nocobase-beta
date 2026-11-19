@@ -72,10 +72,11 @@ describe('createMappingFetch SSE parser', () => {
     expect(out).toContain('"finish_reason":"stop"');
   });
 
-  it('drops non-JSON / foreign-format events instead of re-emitting raw data', async () => {
-    const out = await runMapping('data: not-json-at-all\n\ndata: [DONE]\n\n');
-    expect(out).toContain('data: [DONE]');
-    expect(out).not.toContain('not-json-at-all');
+  it('fails malformed completion events instead of silently ending the response', async () => {
+    await expect(runMapping('data: not-json-at-all\n\ndata: [DONE]\n\n')).rejects.toMatchObject({
+      name: 'ChatCompletionFailure',
+      code: 'MALFORMED_STREAM',
+    });
   });
 });
 

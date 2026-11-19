@@ -18,6 +18,29 @@ export const ProviderSettingsForm: React.FC = () => {
             'x-decorator': 'FormItem',
             'x-component': 'TextAreaWithGlobalScope',
           },
+          apiMode: {
+            title: tval('API mode', { ns: namespace }),
+            type: 'string',
+            'x-decorator': 'FormItem',
+            'x-component': 'Select',
+            enum: [
+              { value: 'auto', label: tval('Automatic', { ns: namespace }) },
+              { value: 'chat-completions', label: tval('Chat Completions', { ns: namespace }) },
+            ],
+            description: tval('API mode description', { ns: namespace }),
+          },
+          claudeModelAliases: {
+            title: tval('Claude model aliases', { ns: namespace }),
+            type: 'array',
+            'x-decorator': 'FormItem',
+            'x-component': 'Select',
+            'x-component-props': {
+              mode: 'tags',
+              tokenSeparators: [','],
+              placeholder: tval('Enter exact model aliases', { ns: namespace }),
+            },
+            description: tval('Claude model aliases description', { ns: namespace }),
+          },
           disableStream: {
             title: tval('Disable streaming', { ns: namespace }),
             type: 'boolean',

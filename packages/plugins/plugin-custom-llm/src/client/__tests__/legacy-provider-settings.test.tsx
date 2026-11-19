@@ -6,6 +6,7 @@ import { Button, Form, type FormInstance } from 'antd';
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { customLLMProviderOptions } from '../llm-providers/custom-llm';
+import PluginCustomLLMClient from '../index';
 
 const { apiClientRequest } = vi.hoisted(() => ({ apiClientRequest: vi.fn() }));
 
@@ -57,6 +58,59 @@ describe('legacy Custom LLM provider settings', () => {
         ],
       },
     });
+  });
+
+  it('defaults new services to automatic API mode and no Claude aliases', () => {
+    renderSettings({ apiKey: 'local-test-key' });
+
+    expect(screen.getByText('Automatic')).toBeInTheDocument();
+    expect(screen.getByText('Enter exact model aliases')).toBeInTheDocument();
+  });
+
+  it('loads and saves Chat Completions mode and exact Claude aliases', async () => {
+    const onFinish = vi.fn();
+    renderSettings(
+      {
+        apiKey: 'local-test-key',
+        apiMode: 'chat-completions',
+        claudeModelAliases: ['claude-sonnet-internal', 'claude-opus-internal'],
+      },
+      onFinish,
+    );
+
+    expect(screen.getByText('Chat Completions')).toBeInTheDocument();
+    expect(screen.getByText('claude-sonnet-internal')).toBeInTheDocument();
+    expect(screen.getByText('claude-opus-internal')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(onFinish).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          options: expect.objectContaining({
+            apiMode: 'chat-completions',
+            claudeModelAliases: ['claude-sonnet-internal', 'claude-opus-internal'],
+          }),
+        }),
+      );
+    });
+  });
+
+  it('registers the shared provider settings form in the legacy AI client', async () => {
+    const registerLLMProvider = vi.fn();
+    const app = {
+      pm: {
+        get: vi.fn(() => ({ aiManager: { registerLLMProvider } })),
+      },
+    };
+    const plugin = new PluginCustomLLMClient(
+      {},
+      app as unknown as ConstructorParameters<typeof PluginCustomLLMClient>[1],
+    );
+
+    await plugin.load();
+
+    expect(registerLLMProvider).toHaveBeenCalledWith('custom-llm', customLLMProviderOptions);
+    expect(customLLMProviderOptions.components.ProviderSettingsForm).toBe(ProviderSettings);
   });
 
   it('loads variable names from the environment API and saves the selected variable reference', async () => {
