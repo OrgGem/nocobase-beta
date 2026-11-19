@@ -2,10 +2,12 @@
 
 import { Plugin, Application } from '@nocobase/client-v2';
 import { InteractionSchemasProvider, registerSkillCard } from './skill-hub/tools/InteractionSchemasProvider';
+import { AutoApprovalProvider } from './auto-approval/AutoApprovalProvider';
 
 export class PluginAgentOrchestratorClient extends Plugin<Record<string, never>, Application> {
   async load() {
     this.app.use(InteractionSchemasProvider);
+    this.app.use(AutoApprovalProvider);
     registerSkillCard(this.ai.toolsManager, 'skill_hub_execute');
     this.pluginSettingsManager.addMenuItem({
       key: 'ai-orchestrator',

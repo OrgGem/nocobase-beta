@@ -149,7 +149,7 @@ export class VerificationService {
       eventType: 'run_verified',
       title: `Verifier returned ${verdict.verdict}`,
       content: verdict.summary,
-      correlationKey: `verified:${input.runId}:${verdict.verdict}`,
+      correlationKey: `verified:${input.leaseToken}`,
       values: {
         verifierVerdict: verdict.verdict,
         verifierEvidence: verdict,
@@ -194,7 +194,7 @@ export class VerificationService {
       eventType: finding.level === 'block' ? 'run_blocked' : 'run_escalated',
       title: finding.level === 'block' ? 'Run blocked by tool loop detection' : 'Run escalated by tool loop detection',
       content: reason,
-      correlationKey: `tool-loop-${finding.level}:${input.runId}:${finding.signature}`,
+      correlationKey: `tool-loop-${finding.level}:${input.leaseToken}`,
       values: finding.level === 'block' ? { blockedReason: reason } : { escalationReason: reason },
     });
     return 'halt';

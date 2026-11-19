@@ -40,7 +40,7 @@ export default defineCollection({
     {
       name: 'role',
       type: 'string',
-      length: 30,
+      length: 255,
     },
     {
       name: 'harnessProfileTag',
@@ -209,12 +209,12 @@ export default defineCollection({
     {
       name: 'leaderUsername',
       type: 'string',
-      length: 100,
+      length: 255,
     },
     {
       name: 'employeeUsername',
       type: 'string',
-      length: 100,
+      length: 255,
       comment: 'The AI Employee currently executing this span',
     },
     {

@@ -20,6 +20,7 @@ import {
 import { CheckOutlined, DeleteOutlined, EditOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
 import { useApiClient as useAPIClient, useRequest } from '../hooks/useApiRequest';
 import { useT } from '../skill-hub/locale';
+import { HarnessSettingsForm } from './HarnessSettingsForm';
 
 const { Text } = Typography;
 
@@ -657,6 +658,8 @@ export const HarnessProfilesTab: React.FC = () => {
         <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
           {t('Saving updates the open draft (or creates one). Publishing makes the draft the active version.')}
         </Text>
+        <HarnessSettingsForm value={settingsText} onChange={setSettingsText} />
+        <Text>{t('Advanced settings JSON')}</Text>
         <Input.TextArea
           aria-label={t('Settings JSON')}
           rows={12}

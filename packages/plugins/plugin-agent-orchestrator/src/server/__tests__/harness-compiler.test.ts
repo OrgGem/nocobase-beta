@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { describe, expect, it } from 'vitest';
 import { compileHarness, decideTool } from '../services/HarnessCompiler';
 import { parseHarnessSettings, validateHarnessSettings } from '../services/HarnessSchema';
@@ -24,6 +33,28 @@ describe('HarnessSchema', () => {
   it('rejects invalid limits and unknown typed settings', () => {
     expect(validateHarnessSettings({ limits: { recursionLimit: 0 } }).success).toBe(false);
     expect(validateHarnessSettings({ unsupported: true }).success).toBe(false);
+  });
+
+  it('keeps legacy profiles valid and validates configured routing models', () => {
+    expect(parseHarnessSettings({}).routing).toBeUndefined();
+    expect(
+      validateHarnessSettings({
+        routing: {
+          models: {
+            primary: { llmService: ' fast ', model: ' lite ' },
+            fallback: [{ llmService: 'backup', model: 'backup-lite' }],
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      validateHarnessSettings({ routing: { models: { primary: { llmService: '', model: 'lite' } } } }).success,
+    ).toBe(false);
+    expect(
+      validateHarnessSettings({
+        routing: { models: { fallback: Array.from({ length: 21 }, () => ({ llmService: 'backup', model: 'lite' })) } },
+      }).success,
+    ).toBe(false);
   });
 });
 
@@ -210,5 +241,38 @@ describe('HarnessCompiler', () => {
     ]);
 
     expect(compiled.tools.escalate).toEqual(['deployService']);
+  });
+
+  it('takes the most-specific routing models while retaining restrictive limits', () => {
+    const compiled = compileHarness([
+      {
+        source: 'platform',
+        settings: {
+          routing: { models: { primary: { llmService: 'shared', model: 'strong' } } },
+          limits: { timeoutMs: 90_000, maxInvocations: 8 },
+        },
+      },
+      {
+        source: 'specialist',
+        settings: {
+          routing: {
+            models: {
+              primary: { llmService: 'fast', model: 'lite' },
+              fallback: [{ llmService: 'backup', model: 'backup-lite' }],
+            },
+          },
+          limits: { timeoutMs: 30_000, maxInvocations: 3 },
+        },
+      },
+    ]);
+
+    expect(compiled.routing).toEqual({
+      models: {
+        primary: { llmService: 'fast', model: 'lite' },
+        fallback: [{ llmService: 'backup', model: 'backup-lite' }],
+      },
+    });
+    expect(compiled.limits.timeoutMs).toBe(30_000);
+    expect(compiled.limits.maxInvocations).toBe(3);
   });
 });

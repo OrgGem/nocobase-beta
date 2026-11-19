@@ -14,6 +14,9 @@ import { registerAgentLoopEventsStreamResource } from './resources/agent-loop-ev
 import { registerAgentKnowledgeInsightsResource } from './resources/agent-knowledge-insights';
 import { registerAgentGovernanceResource } from './resources/agent-governance';
 import { registerAgentUsageResource } from './resources/agent-usage';
+import { registerHierarchicalRoutingResource } from './resources/hierarchical-routing';
+import { registerAgentAutoApprovalResource } from './resources/agent-auto-approval';
+import { guardAutoApprovalDecision } from './services/SessionAutoApproval';
 import SkillHubSubFeature from './skill-hub/plugin';
 import { NativeSubAgentObserver } from './services/NativeSubAgentObserver';
 import { NativeAgentMonitorSyncService } from './services/NativeAgentMonitorSyncService';
@@ -35,6 +38,11 @@ import { resolveTracingRetentionDays } from './services/TracingRetentionPolicy';
 import { createGovernanceAdmission } from './services/GovernanceAdmission';
 import { installManagedPromptProtection, ManagedPromptError } from './services/ManagedPromptProtection';
 import { installNativeUsageAttribution } from './services/NativeUsageAttribution';
+import { createHierarchicalAgentTools } from './services/HierarchicalAgentRuntime';
+import { validateRoutingBindingAction } from './services/RoutingBindingValidation';
+import { initializeRoutingGraphLock, RoutingBindingRepository } from './services/RoutingBindingRepository';
+import { guardHierarchyEnrollment, guardManagedChildActions } from './services/HierarchyEnrollmentGuard';
+import { HierarchyRequestCancellation } from './services/HierarchyRequestCancellation';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -154,6 +162,7 @@ async function validateAgentMemoryContextValues(ctx: any) {
 }
 
 export class PluginAgentOrchestratorServer extends Plugin {
+  private readonly hierarchyCancellation = new HierarchyRequestCancellation(this);
   skillHub: SkillHubSubFeature;
   registrySkillSnapshotService: RegistrySkillSnapshotService;
   registrySkillInstallationService: RegistrySkillInstallationService;
@@ -189,6 +198,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   }
 
   async beforeLoad() {
+    this.db.registerRepositories({ RoutingBindingRepository });
     // Import collection definitions
     this.db.import({ directory: path.resolve(__dirname, 'collections') });
 
@@ -211,6 +221,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
         'agentMonitor:*',
         'agentUsage:*',
         'agentGovernance:*',
+        'agentHierarchy:*',
         'agentKnowledgeInsights:*',
         'agentMemoryContexts:*',
         'agentLoopRuns:*',
@@ -250,8 +261,25 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('agentLoopApprovals', ['list', 'get', 'decide'], 'loggedIn');
     this.app.acl.allow('agentLoopArtifactsView', ['list', 'get'], 'loggedIn');
     this.app.acl.allow('agentLoopEventsStream', ['stream'], 'loggedIn');
+    this.app.acl.allow('agentAutoApproval', ['get', 'set', 'eligible'], 'loggedIn');
 
     this.installGovernanceHooks();
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        if (
+          [
+            'agentHierarchyInvocations',
+            'agentSessionAutoApprovals',
+            'agentAutoApprovalCheckpoints',
+            'agentRoutingGraphLocks',
+          ].includes(ctx.action?.resourceName ?? '')
+        ) {
+          return ctx.throw(403, ctx.t('Hierarchy invocation records are not directly accessible.'));
+        }
+        return next();
+      },
+      { tag: 'orchestrator-hierarchy-record-protection', after: 'acl' },
+    );
     this.app.resourceManager.use(
       async (ctx, next) => {
         const { resourceName, actionName } = ctx.action || {};
@@ -281,6 +309,27 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.resourceManager.use(async (ctx, next) => governanceAdmission(ctx as Context, next), {
       tag: 'orchestrator-governance-admission',
       after: 'acl',
+    });
+
+    this.app.resourceManager.use(async (ctx, next) => validateRoutingBindingAction(ctx as Context, next), {
+      tag: 'orchestrator-routing-binding-validation',
+      after: 'acl',
+    });
+    this.app.resourceManager.use(async (ctx, next) => guardHierarchyEnrollment(ctx as Context, next), {
+      tag: 'orchestrator-hierarchy-enrollment',
+      after: 'acl',
+    });
+    this.app.resourceManager.use(async (ctx, next) => guardManagedChildActions(ctx as Context, next), {
+      tag: 'orchestrator-hierarchy-child-protection',
+      after: 'orchestrator-hierarchy-enrollment',
+    });
+    this.app.resourceManager.use(async (ctx, next) => guardAutoApprovalDecision(ctx as Context, next), {
+      tag: 'orchestrator-auto-approval-decision',
+      after: 'orchestrator-hierarchy-child-protection',
+    });
+    this.app.resourceManager.use(async (ctx, next) => this.hierarchyCancellation.middleware(ctx as Context, next), {
+      tag: 'orchestrator-hierarchy-cancellation',
+      after: 'orchestrator-hierarchy-child-protection',
     });
 
     // Data scoping for skillExecutions: a logged-in non-admin user may only
@@ -401,6 +450,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     // drives work through the Loop Control Plane (trigger → durable run → worker → verifier).
     const toolsManager = getAIToolsManager(this.app);
     toolsManager.registerTools(createExternalRagSearchTool(this));
+    toolsManager.registerTools(createHierarchicalAgentTools(this));
 
     // --- Loop Control Plane runtime ---
     const patterns = new LoopPatternService(this.db, employeeHarnessResolver(this), async () =>
@@ -418,6 +468,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
     registerAgentLoopEventsStreamResource(this);
     registerAgentHarnessProfileResource(this);
     registerAgentGovernanceResource(this);
+    registerHierarchicalRoutingResource(this);
+    registerAgentAutoApprovalResource(this);
     registerAgentUsageResource(this);
 
     // --- Native plugin-ai Monitor Resource ---
@@ -589,10 +641,12 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
   async install() {
     await this.skillHub.install();
+    await initializeRoutingGraphLock(this.db);
     await ensureAgentOrchestratorIndexes(this.db);
   }
 
   async upgrade() {
+    await initializeRoutingGraphLock(this.db);
     await ensureAgentOrchestratorIndexes(this.db);
   }
 
@@ -603,6 +657,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   }
   async afterDisable() {
     this.governanceEnabled = false;
+    this.hierarchyCancellation.abortAll();
     this.removeManagedPromptProtection?.();
     this.removeManagedPromptProtection = undefined;
     this.removeNativeUsageAttribution?.();
@@ -615,6 +670,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
 
   async beforeStop() {
     this.governanceEnabled = false;
+    this.hierarchyCancellation.abortAll();
     this.removeManagedPromptProtection?.();
     this.removeManagedPromptProtection = undefined;
     this.removeNativeUsageAttribution?.();
@@ -633,6 +689,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   }
 
   async handleSyncMessage(message: unknown) {
+    this.hierarchyCancellation.handleSyncMessage(message);
     await this.loopScheduler?.handleSyncMessage(message);
     await this.loopWorker?.handleSyncMessage(message);
   }

@@ -306,7 +306,7 @@ export class LoopWorkerService {
         eventType: 'run_waiting_approval',
         title: 'Waiting for action approval',
         content: 'Run requeued while its approval decisions are still pending.',
-        correlationKey: `approval-repark:${snapshot.id}`,
+        correlationKey: `approval-repark:${leaseToken}`,
         values: { approvalStatus: 'pending' },
       });
       return;
@@ -329,9 +329,7 @@ export class LoopWorkerService {
         : snapshot.resumeContext
           ? `${snapshot.resumeContext.username} resumed after approval decisions.`
           : `Leader ${snapshot.leaderUsername} began working on the goal.`,
-      correlationKey: snapshot.verificationRecoverySummary
-        ? `verification-recovery-started:${leaseToken}`
-        : `started:${snapshot.id}`,
+      correlationKey: `started:${leaseToken}`,
       values: {
         currentRole: snapshot.verificationRecoverySummary
           ? 'verifier'
@@ -502,9 +500,7 @@ export class LoopWorkerService {
       eventType: 'run_verifying',
       title: 'Verification started',
       content: `Verifier ${snapshot.verifierUsername} is reviewing the reported result.`,
-      correlationKey: snapshot.verificationRecoverySummary
-        ? `verification-recovery:${leaseToken}`
-        : `verifying:${snapshot.id}`,
+      correlationKey: `verifying:${leaseToken}`,
       values: {
         currentRole: 'verifier',
         finalAnswer: makerSummary,
@@ -595,7 +591,7 @@ export class LoopWorkerService {
       eventType: deadlocked ? 'run_blocked' : 'run_waiting_lock',
       title: deadlocked ? 'Run blocked by a lock cycle' : 'Waiting for repository paths',
       content: `Blocked by run(s): ${lock.blockers.join(', ')}.`,
-      correlationKey: `lock:${snapshot.id}:${lock.blockers.join('-')}`,
+      correlationKey: `lock:${leaseToken}`,
       values: deadlocked ? { blockedReason: 'Path lock wait graph contains a cycle.' } : {},
     });
     return false;
@@ -800,7 +796,7 @@ export class LoopWorkerService {
       eventType: finding.level === 'block' ? 'run_blocked' : 'run_escalated',
       title: finding.level === 'block' ? 'Run blocked by tool loop detection' : 'Run escalated by tool loop detection',
       content: reason,
-      correlationKey: `tool-loop-${finding.level}:${snapshot.id}:${finding.signature}`,
+      correlationKey: `tool-loop-${finding.level}:${leaseToken}`,
       values: finding.level === 'block' ? { blockedReason: reason } : { escalationReason: reason },
     });
     return 'halt';
@@ -894,7 +890,7 @@ export class LoopWorkerService {
       eventType: 'run_waiting_approval',
       title: 'Waiting for action approval',
       content: `${outcome.interrupted.length} tool call(s) require approval.`,
-      correlationKey: `approval:${snapshot.id}:${outcome.messageId}`,
+      correlationKey: `approval:${leaseToken}`,
       values: { approvalStatus: 'pending', messageId: outcome.messageId },
     });
   }
@@ -920,7 +916,7 @@ export class LoopWorkerService {
         eventType: 'run_failed',
         title: 'Run failed',
         content: message,
-        correlationKey: `failed:${runId}`,
+        correlationKey: `failed:${leaseToken}`,
         values: { summary: message },
       });
     } catch (transitionError) {

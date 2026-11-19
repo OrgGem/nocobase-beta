@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { describe, expect, it, vi } from 'vitest';
 import { createSkillExecuteTool } from '../tools/skill-execute';
 
@@ -20,6 +29,7 @@ describe('createSkillExecuteTool', () => {
           findOne: vi.fn(async () => skill),
         })),
       },
+      assertSkillReviewApproved: vi.fn().mockResolvedValue(undefined),
       executeSkill,
     };
 
@@ -27,6 +37,7 @@ describe('createSkillExecuteTool', () => {
     const result = await tool.invoke(ctx, { action: 'execute', skillName: 'demo', input: { ok: true } }, runtime);
 
     expect(result.status).toBe('success');
+    expect(plugin.assertSkillReviewApproved).toHaveBeenCalledWith(skill, runtime, 'skill_hub_execute', ctx);
     expect(executeSkill).toHaveBeenCalledOnce();
     expect(ctx.runtime).toBeUndefined();
   });

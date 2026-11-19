@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { resolve } from 'path';
 import { createReadStream, createWriteStream, unlinkSync } from 'fs';
 import * as os from 'os';
@@ -886,6 +895,36 @@ export class SkillHubSubFeature {
     return configsBySkillId;
   }
 
+  async assertSkillReviewApproved(
+    skill: unknown,
+    runtime: ToolRuntimeInput,
+    toolName: string,
+    ctx?: { t?: (key: string, options: { ns: string }) => string },
+  ) {
+    const loopConfig = await this.db.getRepository('skillLoopConfigs').findOne({
+      filter: { enabled: true, skillId: this.getSkillRecordId(skill) },
+      sort: ['-updatedAt'],
+    });
+    const interactionSchema =
+      this.resolveLoopInteractionSchema(loopConfig) || parseJsonText(readRecordValue(skill, 'interactionSchema'), null);
+    if (!interactionSchema) return;
+
+    const toolCallId = normalizeToolRuntime(runtime)?.toolCallId;
+    const call = toolCallId
+      ? await this.db.getRepository('aiToolMessages').findOne({ filter: { toolCallId, toolName } })
+      : null;
+    const decision = readRecordValue(readRecordValue(call, 'userDecision'), 'type');
+    if (
+      readRecordValue(call, 'auto') !== false ||
+      readRecordValue(call, 'invokeStatus') !== 'pending' ||
+      (decision !== 'approve' && decision !== 'edit')
+    ) {
+      const message =
+        'Human review is required for this skill. Disable Auto call and approve the tool call before execution.';
+      throw new Error(ctx?.t?.(message, { ns: 'plugin-agent-orchestrator' }) || message);
+    }
+  }
+
   private registerAITools() {
     try {
       // Register on the SAME tools manager the harness resolves from
@@ -952,6 +991,7 @@ export class SkillHubSubFeature {
                     if (!latestSkill) {
                       return { status: 'error', content: `Skill "${skill.get('name')}" is no longer available` };
                     }
+                    await this.assertSkillReviewApproved(latestSkill, runtime, getSkillToolName(skill), toolCtx);
                     const result = await this.executeSkill(latestSkill, args, toolCtx);
                     return {
                       status: result.status === 'succeeded' ? 'success' : 'error',

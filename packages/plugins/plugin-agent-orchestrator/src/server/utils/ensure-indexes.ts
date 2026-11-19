@@ -6,6 +6,7 @@ const INDEXED_COLLECTIONS = [
   'agentExecutionSpans',
   'agentHarnessProfiles',
   'agentHarnessProfileVersions',
+  'agentHierarchyInvocations',
   'agentLoopActionApprovals',
   'agentLoopArtifacts',
   'agentLoopCircuitStates',

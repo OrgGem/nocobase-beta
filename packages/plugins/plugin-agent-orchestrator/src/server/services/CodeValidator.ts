@@ -1,7 +1,20 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 interface ForbiddenPattern {
   pattern: RegExp;
   reason: string;
 }
+
+const NODE_ENV_PATTERN = /process\.env(?!\s*\.OUTPUT_DIR)/;
+const REGISTRY_NODE_ENV_PATTERN =
+  /process\.env(?!\s*\.OUTPUT_DIR)(?!\s*\.SKILL_INPUT_FILE(?![$\u200C\u200D\p{ID_Continue}\\]))/u;
 
 const DANGEROUS_NODE_PATTERNS: ForbiddenPattern[] = [
   { pattern: /require\s*\(\s*['"]child_process['"]\s*\)/, reason: 'child_process module not allowed' },
@@ -15,7 +28,7 @@ const DANGEROUS_NODE_PATTERNS: ForbiddenPattern[] = [
   { pattern: /require\s*\(\s*['"]inspector['"]\s*\)/, reason: 'inspector module not allowed' },
   { pattern: /require\s*\(\s*['"]v8['"]\s*\)/, reason: 'v8 module not allowed' },
   { pattern: /process\.exit/, reason: 'process.exit not allowed' },
-  { pattern: /process\.env(?!\s*\.OUTPUT_DIR)/, reason: 'process.env access not allowed (use OUTPUT_DIR only)' },
+  { pattern: NODE_ENV_PATTERN, reason: 'process.env access not allowed (use OUTPUT_DIR only)' },
   { pattern: /process\.kill/, reason: 'process.kill not allowed' },
   { pattern: /process\.binding\s*\(/, reason: 'process.binding not allowed' },
   { pattern: /\bglobalThis\b/, reason: 'globalThis access not allowed' },
@@ -142,12 +155,18 @@ export class CodeValidator {
    * Check code against forbidden patterns (dangerous modules/functions).
    * @throws CodeValidationError if a forbidden pattern is found.
    */
-  validate(code: string, language: 'node' | 'python'): void {
+  validate(code: string, language: 'node' | 'python', options?: { allowSkillInputFile?: boolean }): void {
     const patterns = language === 'node' ? DANGEROUS_NODE_PATTERNS : DANGEROUS_PYTHON_PATTERNS;
 
     for (const { pattern, reason } of patterns) {
-      if (pattern.test(code)) {
-        throw new CodeValidationError(reason, pattern.source);
+      const checkedPattern =
+        options?.allowSkillInputFile && pattern === NODE_ENV_PATTERN ? REGISTRY_NODE_ENV_PATTERN : pattern;
+      if (checkedPattern.test(code)) {
+        const message =
+          checkedPattern === REGISTRY_NODE_ENV_PATTERN
+            ? 'process.env access not allowed (use OUTPUT_DIR or SKILL_INPUT_FILE only)'
+            : reason;
+        throw new CodeValidationError(message, checkedPattern.source);
       }
     }
   }

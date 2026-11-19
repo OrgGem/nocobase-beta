@@ -77,6 +77,20 @@ class MemoryRepository {
   }
 }
 
+class UniqueEventRepository extends MemoryRepository {
+  async create(options: Row) {
+    const values = (options.values as Row | undefined) || {};
+    const duplicate =
+      values.correlationKey !== undefined &&
+      values.correlationKey !== null &&
+      this.rows.some(
+        (row) => row.runId === values.runId && row.type === values.type && row.correlationKey === values.correlationKey,
+      );
+    if (duplicate) throw new Error('Unique constraint violation on (runId, type, correlationKey)');
+    return super.create(options);
+  }
+}
+
 class TransactionQueue {
   private tail = Promise.resolve();
 
@@ -123,7 +137,7 @@ function createStateMachine(input: { runs: Row[]; patterns?: Row[]; globalMaxCon
         ],
       ),
     ],
-    ['agentLoopEvents', new MemoryRepository()],
+    ['agentLoopEvents', new UniqueEventRepository()],
     [
       'agentLoopControlSettings',
       new MemoryRepository([
@@ -170,6 +184,36 @@ function createStateMachine(input: { runs: Row[]; patterns?: Row[]; globalMaxCon
 }
 
 describe('LoopRunStateMachine worker leases', () => {
+  it('retries a blocked candidate with a disabled pattern without starving the next queued run', async () => {
+    const { repositories, stateMachine } = createStateMachine({
+      runs: [run(1, 1, 'queued'), run(2, 2, 'queued'), run(3, 3, 'queued')],
+      patterns: [
+        { id: 1, enabled: false },
+        { id: 2, enabled: true },
+        { id: 3, enabled: true },
+      ],
+    });
+
+    const firstClaim = await stateMachine.claimNext('worker-a', 30_000);
+    expect(firstClaim?.run.id).toBe(2);
+    expect(repositories.get('agentLoopRuns')?.rows[0].status).toBe('blocked');
+
+    await stateMachine.transition({ runId: 1, to: 'queued', actorType: 'human', actorIdentity: '7' });
+
+    const retryClaim = await stateMachine.claimNext('worker-b', 30_000);
+
+    expect(retryClaim?.run.id).toBe(3);
+    expect(repositories.get('agentLoopRuns')?.rows[0]).toMatchObject({
+      status: 'blocked',
+      blockedReason: 'Loop pattern is disabled.',
+    });
+    const blockedEvents = (repositories.get('agentLoopEvents')?.rows || []).filter(
+      (event) => event.runId === 1 && event.type === 'run_blocked',
+    );
+    expect(blockedEvents).toHaveLength(2);
+    expect(blockedEvents[0].correlationKey).not.toBe(blockedEvents[1].correlationKey);
+  });
+
   it('allows only one of two workers to claim a queued run', async () => {
     const { repositories, stateMachine } = createStateMachine({ runs: [run(1, 1, 'queued')] });
     const claims = await Promise.all([

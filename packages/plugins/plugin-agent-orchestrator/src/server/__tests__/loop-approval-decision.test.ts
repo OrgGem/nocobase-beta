@@ -97,6 +97,20 @@ class MemoryRepository {
   }
 }
 
+class UniqueEventRepository extends MemoryRepository {
+  async create(options: Row) {
+    const values = (options.values as Row | undefined) || {};
+    const duplicate =
+      values.correlationKey !== undefined &&
+      values.correlationKey !== null &&
+      this.rows.some(
+        (row) => row.runId === values.runId && row.type === values.type && row.correlationKey === values.correlationKey,
+      );
+    if (duplicate) throw new Error('Unique constraint violation on (runId, type, correlationKey)');
+    return super.create(options);
+  }
+}
+
 function createDatabase(repositories: Map<string, MemoryRepository>) {
   return {
     getRepository(name: string) {
@@ -155,7 +169,7 @@ describe('LoopRunRepository.decideApproval', () => {
     const repositories = new Map<string, MemoryRepository>([
       ['agentLoopRuns', new MemoryRepository(runs)],
       ['agentLoopActionApprovals', new MemoryRepository(approvals)],
-      ['agentLoopEvents', new MemoryRepository()],
+      ['agentLoopEvents', new UniqueEventRepository()],
     ]);
     return { repositories, repository: new LoopRunRepository(createDatabase(repositories)) };
   }
@@ -183,6 +197,37 @@ describe('LoopRunRepository.decideApproval', () => {
     const events = repositories.get('agentLoopEvents')?.rows || [];
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ runId: 1, type: 'run_approval_decided', actorType: 'human' });
+  });
+
+  it('uses distinct event keys for successive approval rounds on one run', async () => {
+    const { repositories, repository } = setup([waitingRun()], [pendingApproval()]);
+
+    const first = await repository.decideApproval({
+      approvalId: 10,
+      userId: 7,
+      isAdmin: false,
+      decision: 'approved',
+    });
+    expect(first.requeued).toBe(true);
+
+    const approvals = repositories.get('agentLoopActionApprovals');
+    const runs = repositories.get('agentLoopRuns');
+    if (!approvals || !runs) throw new Error('Approval test repositories are missing.');
+    await approvals.create({ values: pendingApproval({ id: 11, toolCallId: 'call-2', inputHash: 'hash-2' }) });
+    await runs.update({ filterByTk: 1, values: { status: 'waiting_approval', approvalStatus: 'pending' } });
+
+    const second = await repository.decideApproval({
+      approvalId: 11,
+      userId: 7,
+      isAdmin: false,
+      decision: 'rejected',
+    });
+
+    expect(second.requeued).toBe(true);
+    const events = repositories.get('agentLoopEvents')?.rows || [];
+    expect(events).toHaveLength(2);
+    expect(events[0].correlationKey).not.toBe(events[1].correlationKey);
+    expect(new Set(events.map((event) => `${event.runId}:${event.type}:${event.correlationKey}`)).size).toBe(2);
   });
 
   it('records the decision but keeps the run parked while approvals remain pending', async () => {
@@ -303,7 +348,7 @@ describe('LoopWorkerService approval resume-mode', () => {
 
   const policy = loopPatternPolicySchema.parse({ maxConcurrency: 1 });
 
-  function createWorker(run: Row, approvals: Row[] = []) {
+  function createWorker(run: Row, approvals: Row[] = [], events: Row[] = []) {
     const repositories = new Map<string, MemoryRepository>([
       [
         'agentLoopControlSettings',
@@ -314,7 +359,7 @@ describe('LoopWorkerService approval resume-mode', () => {
       ['agentLoopRuns', new MemoryRepository([{ ...run }])],
       ['agentLoopPatterns', new MemoryRepository([{ id: 1, enabled: true }])],
       ['agentLoopActionApprovals', new MemoryRepository(approvals)],
-      ['agentLoopEvents', new MemoryRepository()],
+      ['agentLoopEvents', new UniqueEventRepository(events)],
       ['agentLoopSteps', new MemoryRepository()],
       ['aiMessages', new MemoryRepository()],
       ['agentLoopUsageBuckets', new MemoryRepository()],
@@ -395,7 +440,11 @@ describe('LoopWorkerService approval resume-mode', () => {
     'resumes the interrupted role after a paused approval is %s and the owner resumes the run',
     async (decision) => {
       const run = resumedRun({ status: 'paused', approvalStatus: 'pending', lockedBy: null, lockedUntil: null });
-      const { repositories, database, worker } = createWorker(run, [pendingApproval()]);
+      const { repositories, database, worker } = createWorker(
+        run,
+        [pendingApproval()],
+        [{ id: 20, runId: 1, type: 'run_started', correlationKey: 'started:1' }],
+      );
       const repository = new LoopRunRepository(database);
       const stateMachine = new LoopRunStateMachine(database);
 
@@ -413,6 +462,11 @@ describe('LoopWorkerService approval resume-mode', () => {
       expect(invokeCalls.map((call) => call.username)).toEqual(['maker-two']);
       expect(repositories.get('agentLoopActionApprovals')?.rows[0].consumedAt).toBeInstanceOf(Date);
       expect(repositories.get('agentLoopRuns')?.rows[0].status).toBe('verifying');
+      const startedEvents = (repositories.get('agentLoopEvents')?.rows || []).filter(
+        (event) => event.type === 'run_started',
+      );
+      expect(startedEvents).toHaveLength(2);
+      expect(startedEvents[0].correlationKey).not.toBe(startedEvents[1].correlationKey);
     },
   );
 

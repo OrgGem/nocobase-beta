@@ -1,9 +1,19 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { createHash } from 'crypto';
 
 import type { Database } from '@nocobase/database';
 
 import type { SkillRepositoryService } from '../../services/SkillRepositoryService';
 import { assertSkillToolNameAvailable, buildSkillToolName } from '../../utils/skill-tool-name';
+import { registryNodeWrapper } from './registry-node-package';
 
 export interface RegistryInstallationInput {
   registryPackageId: string | number;
@@ -84,7 +94,7 @@ function executionWrapper(runtime: 'python' | 'node', entrypoint: string): strin
       '',
     ].join('\n');
   }
-  return `require(require('path').join(process.env.SKILL_DIR, ${serializedEntrypoint}));\n`;
+  return registryNodeWrapper(entrypoint);
 }
 
 export class RegistrySkillInstallationService {

@@ -4,6 +4,7 @@ import { Plugin, lazy } from '@nocobase/client';
 import { ExecutionHistoryPage, LoopSettingsPage, SkillDefinitionsPage, SkillMetricsPage } from './SkillPages';
 import { InteractionSchemasProvider } from './skill-hub/tools/InteractionSchemasProvider';
 import { registerSkillLoopCards } from './skill-hub/tools/registerSkillLoopCards';
+import { AutoApprovalProvider } from '../client-v2/auto-approval/AutoApprovalProvider';
 
 const RulesPage = lazy(() => import('../client-v2/pages/RulesPage'));
 const TracingPage = lazy(() => import('../client-v2/pages/TracingPage'));
@@ -19,6 +20,7 @@ const MemoryInspectorPage = lazy(() => import('../client-v2/pages/MemoryInspecto
 export class PluginAgentOrchestratorClient extends Plugin {
   async load() {
     (this as any).app.use(InteractionSchemasProvider);
+    this.app.use(AutoApprovalProvider);
 
     this.app.pluginSettingsManager.add('ai-orchestrator', {
       title: this.t('Agent Orchestrator'),

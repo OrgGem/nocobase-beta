@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { z } from 'zod';
 
 export const toolDecisionSchema = z.enum(['allow', 'ask', 'deny']);
@@ -5,6 +14,13 @@ export const toolEffectSchema = z.enum(['read', 'write', 'external']);
 
 const nullableLimit = z.number().finite().nonnegative().nullable().default(null);
 const nullablePositiveLimit = z.number().finite().positive().nullable().default(null);
+
+const routingModelSchema = z
+  .object({
+    llmService: z.string().trim().min(1),
+    model: z.string().trim().min(1),
+  })
+  .strict();
 
 export const harnessSettingsSchema = z
   .object({
@@ -83,6 +99,18 @@ export const harnessSettingsSchema = z
         sharing: z.enum(['full', 'feedback-only', 'disabled']).default('full'),
       })
       .default({}),
+    routing: z
+      .object({
+        models: z
+          .object({
+            primary: routingModelSchema.nullable().optional(),
+            fallback: z.array(routingModelSchema).max(20).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -121,6 +149,7 @@ export function normalizeHarnessSettings(value: unknown): unknown {
     'limits',
     'isolation',
     'observability',
+    'routing',
     'nativeObserverEnabled',
     'memoryInjectionEnabled',
     'memoryScopes',
@@ -140,6 +169,7 @@ export function normalizeHarnessSettings(value: unknown): unknown {
 
   return {
     ...unknownSettings,
+    ...(source.routing === undefined ? {} : { routing: source.routing }),
     tools: {
       ...tools,
       allow: stringArray(tools.allow),

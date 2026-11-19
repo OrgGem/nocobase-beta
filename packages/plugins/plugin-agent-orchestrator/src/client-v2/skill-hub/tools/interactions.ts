@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { APIClient } from '@nocobase/client-v2';
 import { parseJsonText } from '../utils/jsonFields';
 
@@ -117,12 +126,12 @@ export function getToolInteraction(interactions: Map<string, SkillInteraction>, 
 export function editedSkillArgs(
   name: string,
   args: unknown,
-  schema: InteractionSchema,
+  _schema: InteractionSchema,
   values: Record<string, unknown>,
 ) {
   const original = asRecord(args);
   if (name === 'skill_hub_execute') {
-    return { ...original, input: schema.type === 'select' ? values : { ...asRecord(original.input), ...values } };
+    return { ...original, input: { ...asRecord(original.input), ...values } };
   }
-  return schema.type === 'select' ? values : { ...original, ...values };
+  return { ...original, ...values };
 }

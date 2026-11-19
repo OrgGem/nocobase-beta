@@ -1,21 +1,29 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React from 'react';
 import { Form, Input, Select, Radio, InputNumber, Button, Space, Card, Typography } from 'antd';
 import { ToolsUIProperties } from '@nocobase/client';
 import { useInteractionSchemas } from './InteractionSchemasProvider';
+import type { InteractionSchema } from './loopTemplates';
 
 export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions }) => {
   const schemas = useInteractionSchemas();
   const [form] = Form.useForm();
 
-  const sanitize = (name: string) =>
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9_]/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^_|_$/g, '');
   const isGenericExecutor = toolCall.name === 'skill_hub_execute';
-  const rawArgs = (toolCall.args as Record<string, any>) || {};
-  const skillKey = isGenericExecutor ? sanitize(rawArgs.skillName || '') : toolCall.name.replace(/^skill_hub_/, '');
+  const rawArgs = (toolCall.args as Record<string, unknown>) || {};
+  const input =
+    rawArgs.input && typeof rawArgs.input === 'object' && !Array.isArray(rawArgs.input) ? rawArgs.input : {};
+  const skillKey = isGenericExecutor
+    ? `skill:${typeof rawArgs.skillName === 'string' ? rawArgs.skillName : ''}`
+    : `tool:${toolCall.name}`;
   const schema = schemas.get(skillKey);
 
   const interrupted = toolCall.invokeStatus === 'init' || toolCall.invokeStatus === 'interrupted';
@@ -44,17 +52,15 @@ export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions 
     const args = isGenericExecutor
       ? {
           ...rawArgs,
-          input: schema.type === 'select' ? values : { ...(rawArgs.input || {}), ...values },
+          input: { ...input, ...values },
         }
-      : schema.type === 'select'
-        ? values
-        : { ...rawArgs, ...values };
+      : { ...rawArgs, ...values };
     await decisions.edit(args);
   };
 
-  const renderField = (key: string, f: any) => {
+  const renderField = (f: NonNullable<InteractionSchema['fields']>[string]) => {
     if (f?.enum) {
-      return <Select options={f.enum.map((v: any) => ({ value: v, label: String(v) }))} />;
+      return <Select options={f.enum.map((v) => ({ value: v, label: String(v) }))} />;
     }
     if (f?.type === 'number' || f?.type === 'integer') {
       return <InputNumber style={{ width: '100%' }} />;
@@ -70,7 +76,7 @@ export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions 
         <Form
           form={form}
           layout="vertical"
-          initialValues={(isGenericExecutor ? rawArgs.input : rawArgs) || {}}
+          initialValues={isGenericExecutor ? input : rawArgs}
           style={{ marginBottom: 8 }}
         >
           {schema.type === 'select' && (
@@ -87,7 +93,7 @@ export const SkillHubCard: React.FC<ToolsUIProperties> = ({ toolCall, decisions 
           {schema.type === 'form' &&
             Object.entries(schema.fields ?? {}).map(([key, f]) => (
               <Form.Item key={key} name={key} label={f.title || key} rules={[{ required: !!f.required }]}>
-                {renderField(key, f)}
+                {renderField(f)}
               </Form.Item>
             ))}
         </Form>

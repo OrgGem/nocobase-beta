@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useApp } from '@nocobase/client-v2';
 import { parseJsonText } from '../utils/jsonFields';
@@ -62,7 +71,7 @@ export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }
     };
     const schemaFromLoopConfig = (config: any): InteractionSchema | null => {
       const schema = parseJsonText<InteractionSchema | null>(config.schema, null);
-      if (schema) {
+      if (schema && typeof schema === 'object') {
         return config.prompt && !schema.prompt ? { ...schema, prompt: config.prompt } : schema;
       }
       if (config.prompt) {
@@ -80,7 +89,7 @@ export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }
         skipNotify: true,
         params: {
           filter: { enabled: true },
-          fields: ['id', 'name', 'autoCall', 'interactionSchema'],
+          fields: ['id', 'name', 'toolName', 'autoCall', 'interactionSchema'],
           pageSize: 500,
         },
       }),
@@ -91,6 +100,7 @@ export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }
           params: {
             filter: { enabled: true },
             fields: ['skillId', 'enabled', 'schema', 'prompt', 'templateKey'],
+            sort: ['-updatedAt'],
             pageSize: 500,
           },
         })
@@ -104,18 +114,23 @@ export const InteractionSchemasProvider: React.FC<{ children?: React.ReactNode }
         const skillsById = new Map(skills.map((skill: any) => [String(skill.id), skill]));
 
         for (const s of skills) {
-          if (s.autoCall) continue;
           const schema = parseJsonText<InteractionSchema | null>(s.interactionSchema, null);
           if (!schema) continue;
-          next.set(sanitize(s.name), schema);
+          next.set(`skill:${s.name}`, schema);
+          next.set(`tool:${s.toolName?.trim() || `skill_hub_${sanitize(s.name)}`}`, schema);
         }
 
+        const seenSkillIds = new Set<string>();
         for (const config of loopConfigs) {
-          const skill = skillsById.get(String(config.skillId));
+          const skillId = String(config.skillId);
+          if (seenSkillIds.has(skillId)) continue;
+          seenSkillIds.add(skillId);
+          const skill = skillsById.get(skillId);
           if (!skill?.name) continue;
           const schema = schemaFromLoopConfig(config);
           if (!schema) continue;
-          next.set(sanitize(skill.name), schema);
+          next.set(`skill:${skill.name}`, schema);
+          next.set(`tool:${skill.toolName?.trim() || `skill_hub_${sanitize(skill.name)}`}`, schema);
         }
 
         setMap(next);

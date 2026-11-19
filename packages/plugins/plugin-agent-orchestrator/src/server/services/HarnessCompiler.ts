@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { parseHarnessSettings } from './HarnessSchema';
 import type { HarnessSettings, ToolDecision, ToolEffect } from './HarnessSchema';
 
@@ -84,6 +93,8 @@ export function compileHarness(layers: HarnessLayer[]): CompiledHarness {
   }
   const parsed = layers.map((layer) => ({ source: layer.source, settings: parseHarnessSettings(layer.settings) }));
   const settings = parsed.map((layer) => layer.settings);
+  // Model preferences use the most specific supplied routing layer; limits still merge restrictively.
+  const routing = [...settings].reverse().find((layer) => layer.routing !== undefined)?.routing;
   const effectNames = union(settings.map((layer) => Object.keys(layer.tools.effects)));
   const effects = Object.fromEntries(
     effectNames.map((name) => [
@@ -98,6 +109,7 @@ export function compileHarness(layers: HarnessLayer[]): CompiledHarness {
 
   return {
     sources: parsed.map((layer) => layer.source),
+    ...(routing === undefined ? {} : { routing }),
     tools: {
       allow: intersectRestrictions(settings.map((layer) => layer.tools.allow)),
       ask: union(settings.map((layer) => layer.tools.ask)),

@@ -4,7 +4,7 @@
   "displayName.zh-CN": "代理协调器",
   "displayName.vi-VN": "Điều phối Agent",
   "description": "Native AI Employee sub-agent monitoring, policy, and memory context layer for NocoBase plugin-ai.",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [
@@ -31,8 +31,11 @@
     "editionLevel": 0
   },
   "dependencies": {
+    "acorn": "^8.10.0",
+    "acorn-walk": "8.3.4",
     "adm-zip": "^0.5.10",
     "ajv": "^6.12.6",
+    "langchain": "1.2.39",
     "zod": "^3.23.0"
   },
   "peerDependencies": {

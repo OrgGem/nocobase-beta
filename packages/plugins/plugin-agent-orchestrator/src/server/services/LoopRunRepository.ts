@@ -270,7 +270,7 @@ export class LoopRunRepository {
             payload: { decision: input.decision },
             actorType: 'human',
             actorIdentity: String(decidedById),
-            correlationKey: `approval-decided:${runId}`,
+            correlationKey: `approval-decided:${id}`,
             createdAt: now,
           },
           transaction,

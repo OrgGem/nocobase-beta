@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildInteractions,
@@ -83,7 +92,14 @@ describe('V2 Skill Hub interactions', () => {
     });
     expect(editedSkillArgs('skill_hub_execute', args, { type: 'select' }, { choice: 'yes' })).toEqual({
       ...args,
-      input: { choice: 'yes' },
+      input: { ...args.input, choice: 'yes' },
+    });
+    expect(
+      editedSkillArgs('skill_hub_test', { unchanged: 42, prior: 'kept' }, { type: 'select' }, { choice: 'yes' }),
+    ).toEqual({
+      unchanged: 42,
+      prior: 'kept',
+      choice: 'yes',
     });
   });
 

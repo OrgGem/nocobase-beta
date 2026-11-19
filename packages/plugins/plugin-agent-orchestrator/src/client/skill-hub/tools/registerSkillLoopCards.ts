@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { SkillHubCard } from './SkillHubCard';
 import { parseJsonText } from '../utils/jsonFields';
 
@@ -37,7 +46,7 @@ export async function registerSkillLoopCards(app: any) {
       skipNotify: true,
       params: {
         filter: { enabled: true },
-        fields: ['id', 'name', 'autoCall', 'interactionSchema'],
+        fields: ['id', 'name', 'toolName', 'autoCall', 'interactionSchema'],
         pageSize: 500,
       },
     });
@@ -61,9 +70,9 @@ export async function registerSkillLoopCards(app: any) {
     const skills = extractList(skillsResponse.data);
     for (const skill of skills) {
       const hasLoopConfig = loopSkillIds.has(String(skill.id));
-      const hasLegacySchema = !skill.autoCall && !!parseJsonText(skill.interactionSchema, null);
+      const hasLegacySchema = !!parseJsonText(skill.interactionSchema, null);
       if (!hasLoopConfig && !hasLegacySchema) continue;
-      registerSkillHubCard(toolsManager, `skill_hub_${sanitize(skill.name)}`);
+      registerSkillHubCard(toolsManager, skill.toolName?.trim() || `skill_hub_${sanitize(skill.name)}`);
     }
   } catch {
     // user without ACL or backend unavailable - skip silently

@@ -93,6 +93,88 @@ async function checkObservedQuota(ctx: Context, policy: Policy, userId: number, 
   if (checksCost && cost >= Number(settings.maxMonthlyCost)) quotaError(ctx, 'AI cost quota reached.');
 }
 
+/** Apply the same employee/model and managed-prompt checks to a plugin-owned child invocation. */
+export async function authorizeDelegatedEmployee(
+  context: Context,
+  employee: Model,
+  model: ModelReference,
+): Promise<{ userId: number; departmentId: string | number | null }> {
+  const userId = Number(context.auth?.user?.id);
+  if (!Number.isSafeInteger(userId) || userId <= 0) quotaError(context, 'Authentication is required.');
+  const employeeUsername = valueString(read(employee, 'username'));
+  if (!employeeUsername || !model.llmService || !model.model) {
+    quotaError(context, 'AI governance could not resolve the model.');
+  }
+  const service = new AgentGovernanceService(context.db);
+  let department;
+  try {
+    department = await resolveUserDepartment(context.db, userId);
+  } catch (error) {
+    const departmentPolicies = await context.db.getRepository('agentGovernancePolicies').count({
+      filter: { scope: 'department', currentVersionId: { $ne: null } },
+    });
+    if (departmentPolicies) throw error;
+    department = { departmentId: null, status: 'departments_unavailable' as const };
+  }
+  const policyRepo = context.db.getRepository('agentGovernancePolicies');
+  const configured = await policyRepo.count({ filter: { currentVersionId: { $ne: null } } });
+  const binding = await context.db
+    .getRepository('agentGovernancePromptBindings')
+    .findOne({ filter: { userId, employeeUsername } });
+  if (!configured && !binding) return { userId, departmentId: department.departmentId };
+  if (department.status === 'departments_unavailable') {
+    const departmentPolicies = await policyRepo.count({
+      filter: { scope: 'department', currentVersionId: { $ne: null } },
+    });
+    if (departmentPolicies) quotaError(context, 'AI governance cannot check department policies.');
+  }
+  const modelKey = `${model.llmService}:${model.model}`;
+  const policies = configured
+    ? await service.activePolicies(userId, employeeUsername, department.departmentId, undefined, modelKey)
+    : [];
+  for (const policy of policies) {
+    if (
+      policy.scope === 'employee' &&
+      policy.settings.systemPrompt !== undefined &&
+      (read(employee, 'about') ?? null) !== policy.settings.systemPrompt
+    ) {
+      quotaError(context, 'The managed AI employee prompt changed and needs administrator review.');
+    }
+    if (
+      policy.settings.allow === false ||
+      (policy.settings.allowedModels && !policy.settings.allowedModels.includes(modelKey))
+    ) {
+      quotaError(context, 'Your AI employee or model is not allowed by governance policy.');
+    }
+    await checkObservedQuota(context, policy, userId, department.departmentId);
+  }
+  const prompt = await service.preview({ userId, employeeUsername });
+  if (prompt.instruction || binding) {
+    if (!prompt.instruction || prompt.promptMode !== 'default' || !binding) {
+      quotaError(context, 'Managed AI instructions need to be applied by an administrator.');
+    }
+    const expected = createHash('sha256').update(prompt.projectedPrompt).digest('hex');
+    const native = await context.db
+      .getRepository('usersAiEmployees')
+      .findOne({ filter: { userId, aiEmployee: employeeUsername } });
+    const actual = createHash('sha256')
+      .update(valueString(read(native, 'prompt')))
+      .digest('hex');
+    const versions = prompt.policies
+      .filter((policy) => policy.settings.instruction?.trim())
+      .map((policy) => ({ id: policy.id, versionId: policy.versionId }));
+    if (
+      expected !== read(binding, 'contentHash') ||
+      expected !== actual ||
+      String(prompt.departmentId ?? '') !== String(read(binding, 'departmentId') ?? '') ||
+      JSON.stringify(versions) !== JSON.stringify(read(binding, 'policyVersions'))
+    ) {
+      quotaError(context, 'Managed AI instructions need to be applied by an administrator.');
+    }
+  }
+  return { userId, departmentId: department.departmentId };
+}
+
 export function createGovernanceAdmission(plugin: Plugin, enabled: () => boolean) {
   const service = new AgentGovernanceService(plugin.db);
   return async (context: Context, next: Next) => {

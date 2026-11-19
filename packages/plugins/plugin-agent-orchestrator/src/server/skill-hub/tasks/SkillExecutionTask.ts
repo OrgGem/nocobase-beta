@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import Application from '@nocobase/server';
 import { cpSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs';
 import { resolve, sep } from 'path';
@@ -9,6 +18,11 @@ import { spilledText } from '../../services/harness-runtime-policy';
 import { createHash } from 'crypto';
 import { assertSkillToolNameAvailable, buildSkillToolName } from '../../utils/skill-tool-name';
 import { parseJsonLike, parseJsonText, stringifyJsonText } from '../utils/json-fields';
+import {
+  registryNodeEntrypoint,
+  registryNodeWrapper,
+  validateRegistryNodePackage,
+} from '../services/registry-node-package';
 
 /**
  * Lightweight abort controller compatible with the SandboxRunner signal interface.
@@ -180,11 +194,18 @@ export class SkillExecutionTask {
         );
       }
 
+      const registryPackageId = skill.get ? skill.get('registryPackageId') : skill.registryPackageId;
+      const registryNode = storageType !== 'plugin' && language === 'node' && !!registryPackageId;
+      const translateRegistryError = (message: string) =>
+        this.app.i18n?.t?.(message, { ns: 'plugin-agent-orchestrator' }) || message;
+      const entrypoint = registryNode ? registryNodeEntrypoint(rawCodeTemplate, translateRegistryError) : null;
       if (storageType !== 'plugin') {
-        skillDir = workDir;
+        skillDir = entrypoint ? resolve(workDir, 'skill') : workDir;
       }
 
-      const code = this.renderTemplate(rawCodeTemplate, inputArgs, execId, skillDir);
+      const code = entrypoint
+        ? registryNodeWrapper(entrypoint)
+        : this.renderTemplate(rawCodeTemplate, inputArgs, execId, skillDir);
       const skillDigest = createHash('sha256').update(code, 'utf8').digest('hex');
       if (!(await this.updateIfOwned(execId, workerId, { executedCode: code, skillDigest }))) {
         abortController.abort();
@@ -260,8 +281,12 @@ export class SkillExecutionTask {
       }
 
       if (storageType !== 'plugin') {
-        this.skillRepoService.copySkillPackageTo(skillName, workDir);
-        skillDir = workDir;
+        if (entrypoint) rmSync(skillDir, { recursive: true, force: true });
+        this.skillRepoService.copySkillPackageTo(skillName, skillDir);
+      }
+
+      if (registryNode) {
+        validateRegistryNodePackage(code, workDir, skillDir, packageWhitelist, translateRegistryError);
       }
 
       const result = await this.sandboxRunner.execute({
@@ -271,6 +296,7 @@ export class SkillExecutionTask {
         timeoutSeconds: timeoutSeconds || 60,
         maxOutputSizeMb: maxOutputSizeMb || 50,
         skillDir,
+        packageSnapshotDir: entrypoint ? skillDir : undefined,
         inputArgs,
         signal: abortController.signal,
         packageWhitelist,
@@ -356,7 +382,10 @@ export class SkillExecutionTask {
           `outputSize=${this.fileManager.getTotalOutputSize(execId)}bytes`,
       );
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      let errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage === 'Invalid skill package snapshot path.') {
+        errorMessage = this.app.i18n?.t?.(errorMessage, { ns: 'plugin-agent-orchestrator' }) || errorMessage;
+      }
 
       const failed = await this.updateIfOwned(execId, workerId, {
         status: 'failed',

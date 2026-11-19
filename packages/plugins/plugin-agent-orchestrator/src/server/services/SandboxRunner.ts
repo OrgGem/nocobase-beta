@@ -1,5 +1,14 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { spawn } from 'child_process';
-import { existsSync, writeFileSync } from 'fs';
+import { chownSync, existsSync, lstatSync, readdirSync, realpathSync, writeFileSync } from 'fs';
 import { resolve, delimiter } from 'path';
 import { tmpdir } from 'os';
 import { FileManager, OutputFileInfo } from './FileManager';
@@ -39,6 +48,8 @@ export interface ExecuteOptions {
   packageWhitelist?: string[];
   /** Optional installed/copied skill package root exposed to the runtime as SKILL_DIR. */
   skillDir?: string;
+  /** Private package snapshot inside the execution directory, if it needs a privilege-drop owner. */
+  packageSnapshotDir?: string;
   /** Validated input exposed as a JSON file to avoid source-code interpolation. */
   inputArgs?: Record<string, unknown>;
 }
@@ -198,6 +209,7 @@ export class SandboxRunner {
       signal,
       packageWhitelist,
       skillDir,
+      packageSnapshotDir,
       inputArgs,
     } = options;
 
@@ -230,8 +242,30 @@ export class SandboxRunner {
         : null;
     if (identity) {
       try {
+        const snapshotPaths: string[] = [];
+        if (packageSnapshotDir) {
+          const expected = resolve(workDir, 'skill');
+          if (
+            resolve(packageSnapshotDir) !== expected ||
+            lstatSync(packageSnapshotDir).isSymbolicLink() ||
+            realpathSync(packageSnapshotDir) !== resolve(realpathSync(workDir), 'skill')
+          ) {
+            throw new Error('Invalid skill package snapshot path.');
+          }
+          const collect = (path: string) => {
+            const stat = lstatSync(path);
+            if (stat.isSymbolicLink()) throw new Error('Invalid skill package snapshot path.');
+            snapshotPaths.push(path);
+            if (stat.isDirectory()) {
+              for (const entry of readdirSync(path)) collect(resolve(path, entry));
+            }
+          };
+          collect(packageSnapshotDir);
+        }
         this.fileManager.chownExecDir(execId, identity.uid, identity.gid);
+        for (const path of snapshotPaths) chownSync(path, identity.uid, identity.gid);
       } catch (error) {
+        if (packageSnapshotDir) throw error;
         this.logger.warn(
           `[skill-hub] chown of exec dir failed for ${execId}; running without privilege drop: ${
             (error as Error).message

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import type { Model } from '@nocobase/database';
 import type { Application } from '@nocobase/server';
 import { AIEmployee } from '@nocobase/plugin-ai/server';
@@ -126,20 +135,57 @@ function textContent(messages: unknown): string {
   return '';
 }
 
-function interruptedFrom(result: Record<string, unknown>): InterruptedToolCall[] {
+function invalidInterrupt(app: Application) {
+  const message = 'Invalid AI tool interruption payload.';
+  return new Error(app.i18n?.t?.(message, { ns: 'plugin-agent-orchestrator' }) || message);
+}
+
+function interruptedFrom(result: Record<string, unknown>, app: Application): InterruptedToolCall[] {
+  const invalidPayload = () => invalidInterrupt(app);
   const interrupts = result.__interrupt__;
-  if (!Array.isArray(interrupts)) return [];
+  if (interrupts == null) return [];
+  if (!Array.isArray(interrupts) || interrupts.length > 1) throw invalidPayload();
   const calls: InterruptedToolCall[] = [];
   for (const interrupt of interrupts) {
+    if (!interrupt || typeof interrupt !== 'object') throw invalidPayload();
     const value = (interrupt as { value?: unknown }).value ?? interrupt;
+    if (!value || typeof value !== 'object') throw invalidPayload();
     const record = value as Record<string, unknown>;
+    const interruptId = String((interrupt as { id?: unknown }).id || record.interruptId || '');
+    if (Array.isArray(record.actionRequests)) {
+      if (!record.actionRequests.length || !interruptId) throw invalidPayload();
+      for (const action of record.actionRequests) {
+        if (!action || typeof action !== 'object') throw invalidPayload();
+        const request = action as Record<string, unknown>;
+        let details: Record<string, unknown>;
+        try {
+          details = JSON.parse(String(request.description));
+        } catch {
+          throw invalidPayload();
+        }
+        if (
+          !details ||
+          typeof details !== 'object' ||
+          typeof details.toolCallId !== 'string' ||
+          !details.toolCallId ||
+          typeof details.toolCallName !== 'string' ||
+          !details.toolCallName ||
+          !('args' in request)
+        ) {
+          throw invalidPayload();
+        }
+        calls.push({ toolCallId: details.toolCallId, toolName: details.toolCallName, args: request.args, interruptId });
+      }
+      continue;
+    }
     const toolCallId = String(record.toolCallId || record.tool_call_id || '');
-    if (!toolCallId) continue;
+    const toolName = String(record.name || record.toolName || '');
+    if (!toolCallId || !toolName || !interruptId) throw invalidPayload();
     calls.push({
       toolCallId,
-      toolName: String(record.name || record.toolName || ''),
+      toolName,
       args: record.args ?? record.input ?? {},
-      interruptId: String((interrupt as { id?: unknown }).id || record.interruptId || ''),
+      interruptId,
     });
   }
   return calls;
@@ -251,14 +297,16 @@ export class PluginAiRuntimeAdapter {
     const { aiEmployee } = await this.buildEmployee(input);
 
     const result = (await aiEmployee.invoke({
-      userMessages: [{ role: 'user', content: input.prompt }],
+      userMessages: [{ role: 'user', content: { type: 'text', content: input.prompt } }],
       signal: input.signal,
     })) as Record<string, unknown>;
 
+    const interrupted = interruptedFrom(result, this.app);
+    await this.repairInterruptedCalls(input, result, interrupted);
     return {
       sessionId: input.sessionId,
       messageId: String(result.messageId || ''),
-      interrupted: interruptedFrom(result),
+      interrupted,
       content: textContent(result.messages),
       tokenUsage: extractTokenUsageFromResult(result),
     };
@@ -299,18 +347,101 @@ export class PluginAiRuntimeAdapter {
     const { aiEmployee } = await this.buildEmployee(input);
 
     const result = (await aiEmployee.invoke({
-      messageId: input.messageId,
       userDecisions: userDecisions as { interruptId?: string; decisions: never[] },
       signal: input.signal,
     })) as Record<string, unknown>;
 
+    const interrupted = interruptedFrom(result, this.app);
+    await this.repairInterruptedCalls(input, result, interrupted);
     return {
       sessionId: input.sessionId,
       messageId: String(result.messageId || input.messageId),
-      interrupted: interruptedFrom(result),
+      interrupted,
       content: textContent(result.messages),
       tokenUsage: extractTokenUsageFromResult(result),
     };
+  }
+
+  private async repairInterruptedCalls(
+    input: { sessionId: string; username: string },
+    result: Record<string, unknown>,
+    calls: InterruptedToolCall[],
+  ) {
+    if (new Set(calls.map((call) => call.toolName)).size === calls.length) return;
+
+    const invalidPayload = () => invalidInterrupt(this.app);
+    const interrupt = (result.__interrupt__ as Array<{ value?: Record<string, unknown> }>)[0];
+    const requests = interrupt.value?.actionRequests;
+    const reviews = interrupt.value?.reviewConfigs;
+    const messageId = String(result.messageId || '');
+    if (!Array.isArray(requests) || requests.length !== calls.length || !messageId) throw invalidPayload();
+    if (new Set(calls.map((call) => call.toolCallId)).size !== calls.length) throw invalidPayload();
+
+    await this.app.db.sequelize.transaction(async (transaction) => {
+      const messages = this.app.db.getModel('aiMessages');
+      const toolMessages = this.app.db.getModel('aiToolMessages');
+      const message = await messages.findOne({
+        where: { sessionId: input.sessionId, messageId, role: input.username },
+        transaction,
+        lock: transaction.LOCK.UPDATE,
+      });
+      const messageCalls = read(message, 'toolCalls');
+      if (!message || !Array.isArray(messageCalls)) throw invalidPayload();
+
+      for (const [order, call] of calls.entries()) {
+        const request = requests[order] as Record<string, unknown>;
+        const description = request.description;
+        const details = JSON.parse(String(description)) as Record<string, unknown>;
+        if (
+          request.name !== call.toolName ||
+          details.sessionId !== input.sessionId ||
+          details.username !== input.username ||
+          details.from !== 'main-agent' ||
+          !messageCalls.some((item) => read(item, 'id') === call.toolCallId && read(item, 'name') === call.toolName)
+        ) {
+          throw invalidPayload();
+        }
+        const where = {
+          sessionId: input.sessionId,
+          messageId,
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+        };
+        const toolMessage = await toolMessages.findOne({ where, transaction, lock: transaction.LOCK.UPDATE });
+        const status = read(toolMessage, 'invokeStatus');
+        if (!toolMessage || (status !== 'init' && status !== 'interrupted') || read(toolMessage, 'userDecision')) {
+          throw invalidPayload();
+        }
+        const review = Array.isArray(reviews)
+          ? reviews.find((item) => read(item, 'actionName') === call.toolName)
+          : null;
+        const [updated] = await toolMessages.update(
+          {
+            invokeStatus: 'interrupted',
+            interruptActionOrder: order,
+            interruptAction: {
+              order,
+              description,
+              allowedDecisions: read(review, 'allowedDecisions'),
+              toolCall: { id: call.toolCallId, name: call.toolName },
+              currentConversation: { sessionId: input.sessionId, from: details.from, username: input.username },
+            },
+          },
+          { where: { ...where, invokeStatus: status }, transaction },
+        );
+        if (updated !== 1) throw invalidPayload();
+      }
+
+      const metadata = read(message, 'metadata');
+      const existingMetadata = metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {};
+      if (read(existingMetadata, 'interruptId') !== calls[0].interruptId) {
+        const [updated] = await messages.update(
+          { metadata: { ...existingMetadata, interruptId: calls[0].interruptId } },
+          { where: { sessionId: input.sessionId, messageId }, transaction },
+        );
+        if (updated !== 1) throw invalidPayload();
+      }
+    });
   }
 
   // The employee model is re-read per invocation and mutated only in memory. `isAutoCall` reads
