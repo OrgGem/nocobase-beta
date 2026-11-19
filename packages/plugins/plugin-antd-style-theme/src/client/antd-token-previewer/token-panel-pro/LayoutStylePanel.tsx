@@ -8,10 +8,10 @@
  */
 
 import { StablePopover } from '../../theme-compat';
-import { Collapse, Typography } from 'antd';
+import { Collapse, Input, InputNumber, Typography } from 'antd';
 import classNames from 'classnames';
 import type { FC } from 'react';
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useDebouncyFn } from 'use-debouncy';
 import { MutableTheme } from '../../../types';
 import { useTranslation } from '../../locale';
@@ -20,6 +20,7 @@ import makeStyle from '../utils/makeStyle';
 
 const { Panel } = Collapse;
 const { Text } = Typography;
+const { TextArea } = Input;
 
 const useStyle = makeStyle('LayoutStylePanel', (token) => ({
   '.layout-style-panel': {
@@ -134,6 +135,14 @@ const siderTokens = [
   { key: 'colorBgSiderMenuActive', label: 'Menu Background (Active)' },
 ];
 
+const dimensionTokens = [
+  { key: 'siderWidth', label: 'Sidebar Width (px)', min: 160, max: 360 },
+  { key: 'borderRadiusBlock', label: 'Block Border Radius', min: 0, max: 32 },
+  { key: 'paddingPageHorizontal', label: 'Page Horizontal Padding', min: 0, max: 64 },
+  { key: 'paddingPageVertical', label: 'Page Vertical Padding', min: 0, max: 64 },
+  { key: 'marginBlock', label: 'Block Spacing', min: 0, max: 48 },
+];
+
 export type LayoutStylePanelProps = {
   theme: MutableTheme;
   style?: React.CSSProperties;
@@ -143,35 +152,50 @@ const LayoutStylePanel: FC<LayoutStylePanelProps> = ({ theme, style }) => {
   const [wrapSSR, hashId] = useStyle();
   const { t } = useTranslation();
 
-  const debouncedChange = useDebouncyFn((tokenKey: string, value: string) => {
+  const tokenRecord = (theme.config.token || {}) as Record<string, unknown>;
+  const globalStyleValue = typeof tokenRecord.globalStyle === 'string' ? tokenRecord.globalStyle : '';
+  const [cssDraft, setCssDraft] = useState<string>(globalStyleValue);
+
+  useEffect(() => {
+    setCssDraft(globalStyleValue);
+  }, [globalStyleValue]);
+
+  const debouncedChange = useDebouncyFn((tokenKey: string, value: string | number | undefined) => {
+    const nextToken: Record<string, unknown> = { ...(theme.config.token || {}) };
+    if (value === undefined || value === '') {
+      delete nextToken[tokenKey];
+    } else {
+      nextToken[tokenKey] = value;
+    }
     theme.onThemeChange?.(
       {
         ...theme.config,
-        token: {
-          ...(theme.config.token || {}),
-          [tokenKey]: value,
-        },
+        token: nextToken,
       },
       ['token', tokenKey],
     );
   }, 200);
 
   const handleTokenChange = useCallback(
-    (tokenKey: string, value: string) => {
+    (tokenKey: string, value: string | number | undefined) => {
       debouncedChange(tokenKey, value);
     },
     [debouncedChange],
   );
 
   const getTokenValue = (key: string): string => {
-    const tokenRecord = theme.config.token as Record<string, unknown> | undefined;
-    const val = tokenRecord?.[key];
+    const val = tokenRecord[key];
     return typeof val === 'string' ? val : '';
+  };
+
+  const getNumberValue = (key: string): number | undefined => {
+    const val = tokenRecord[key];
+    return typeof val === 'number' && Number.isFinite(val) ? val : undefined;
   };
 
   return wrapSSR(
     <div className={classNames(hashId, 'layout-style-panel')} style={style}>
-      <Collapse defaultActiveKey={['header', 'sider']} ghost size="small">
+      <Collapse defaultActiveKey={['header', 'sider', 'dimensions']} ghost size="small">
         <Panel header={<span style={{ fontWeight: 600 }}>{t('🔝 Header / Navigation')}</span>} key="header">
           {headerTokens.map(({ key, label }) => (
             <ColorTokenEditor
@@ -192,6 +216,44 @@ const LayoutStylePanel: FC<LayoutStylePanelProps> = ({ theme, style }) => {
               onChange={(val) => handleTokenChange(key, val)}
             />
           ))}
+        </Panel>
+
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('📐 Layout Dimensions')}</span>} key="dimensions">
+          {dimensionTokens.map(({ key, label, min, max }) => {
+            const translatedLabel = t(label);
+            return (
+              <div className="layout-style-panel-item" key={key}>
+                <span className="layout-style-panel-label">{translatedLabel}</span>
+                <div className="layout-style-panel-value">
+                  <InputNumber
+                    size="small"
+                    min={min}
+                    max={max}
+                    aria-label={translatedLabel}
+                    value={getNumberValue(key)}
+                    onChange={(val) => handleTokenChange(key, val ?? undefined)}
+                    style={{ width: 92 }}
+                    placeholder={t('auto')}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </Panel>
+
+        <Panel header={<span style={{ fontWeight: 600 }}>{t('🎨 Global CSS')}</span>} key="globalStyle">
+          <TextArea
+            aria-label={t('Custom Global CSS')}
+            value={cssDraft}
+            onChange={(e) => {
+              const nextValue = e.target.value;
+              setCssDraft(nextValue);
+              handleTokenChange('globalStyle', nextValue);
+            }}
+            autoSize={{ minRows: 6, maxRows: 16 }}
+            placeholder={t('Enter custom CSS rules applied to the workspace...')}
+            style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: 12 }}
+          />
         </Panel>
       </Collapse>
     </div>,

@@ -10,6 +10,7 @@
 import { useApp } from '@nocobase/client-v2';
 import { error } from '@nocobase/utils/client';
 import { useCallback } from 'react';
+import { THEME_STORAGE_KEY } from '../../client-v2/themeApi';
 import type { ThemeId } from '../../types';
 
 export function useUpdateThemeSettings() {
@@ -23,6 +24,7 @@ export function useUpdateThemeSettings() {
             themeId,
           },
         });
+        api.auth.setOption(THEME_STORAGE_KEY, null);
         window.location.reload();
       } catch (err) {
         error(err);

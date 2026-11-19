@@ -9,11 +9,18 @@
 
 import { DeleteOutlined, EditOutlined, EllipsisOutlined } from '@ant-design/icons';
 import { defaultTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
+import { useFlowEngine } from '@nocobase/flow-engine';
 import { useToken } from '../theme-compat';
 import { error } from '@nocobase/utils/client';
 import { App, Button, Card, ConfigProvider, Dropdown, Space, Switch, Tag, message } from 'antd';
 import React, { useCallback, useMemo } from 'react';
-import { getUserThemeId, isSameThemeId, normalizeTheme, type ThemeItem } from '../../client-v2/themeApi';
+import {
+  ANTD_STYLE_THEME_REFRESH_EVENT,
+  getUserThemeId,
+  isSameThemeId,
+  normalizeTheme,
+  type ThemeItem,
+} from '../../client-v2/themeApi';
 import type { ThemeConfig } from '../../types';
 import { Primary } from '../antd-token-previewer';
 import { useUpdateThemeSettings } from '../hooks/useUpdateThemeSettings';
@@ -74,8 +81,10 @@ const ThemeCard = (props: Props) => {
   } = useGlobalTheme();
   const { setOpen } = useThemeEditorContext();
   const currentUser = useCurrentUserContext();
+  const flowEngine = useFlowEngine({ throwError: false });
+  const app = useApp();
   const { item, style = {}, onChange } = props;
-  const api = useApp().apiClient;
+  const api = app.apiClient;
   const { updateUserThemeSettings } = useUpdateThemeSettings();
   const { modal } = App.useApp();
   const [loading, setLoading] = React.useState(false);
@@ -84,7 +93,8 @@ const ThemeCard = (props: Props) => {
   const { token } = useToken();
 
   const isDefault = isSameThemeId(item.id, defaultThemeId);
-  const userThemeId = getUserThemeId(currentUser?.data?.data);
+  const resolvedUser = currentUser?.data?.data ?? flowEngine?.context?.user ?? app?.flowEngine?.context?.user;
+  const userThemeId = getUserThemeId(resolvedUser);
 
   const handleDelete = useCallback(() => {
     if (isDefault) {
@@ -134,6 +144,7 @@ const ThemeCard = (props: Props) => {
           });
         }
         message.success(t('Updated successfully'));
+        window.dispatchEvent(new Event(ANTD_STYLE_THEME_REFRESH_EVENT));
         onChange?.({ type: HandleTypes.optional, item });
       } catch (err) {
         error(err);
@@ -167,6 +178,7 @@ const ThemeCard = (props: Props) => {
           });
         }
         message.success(t('Updated successfully'));
+        window.dispatchEvent(new Event(ANTD_STYLE_THEME_REFRESH_EVENT));
         onChange?.({ type: HandleTypes.optional, item });
       } catch (err) {
         error(err);

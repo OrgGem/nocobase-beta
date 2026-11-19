@@ -2,7 +2,7 @@
 
 import { UserCenterSelectItemModel } from '@nocobase/client-v2';
 import type { ThemeId } from '../../types';
-import { getEffectiveTheme, getUserThemeId, listThemes, updateUserTheme } from '../themeApi';
+import { getEffectiveTheme, getUserThemeId, listThemes, THEME_STORAGE_KEY, updateUserTheme } from '../themeApi';
 
 export default class AntdStyleThemeUserCenterItemModel extends UserCenterSelectItemModel {
   static itemId = 'theme';
@@ -32,6 +32,7 @@ export default class AntdStyleThemeUserCenterItemModel extends UserCenterSelectI
     const rawId = this.themeIdMap.get(value);
     if (rawId === undefined) return;
     await updateUserTheme(this.context.api, rawId);
+    this.context.api.auth.setOption(THEME_STORAGE_KEY, null);
     window.location.reload();
   }
 }

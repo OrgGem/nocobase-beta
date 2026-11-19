@@ -8,6 +8,7 @@
  */
 
 import { defaultTheme as presetTheme, useApp, useCurrentUserContext, useGlobalTheme } from '@nocobase/client-v2';
+import { useFlowEngine } from '@nocobase/flow-engine';
 import { error } from '@nocobase/utils/client';
 import React, { useEffect, useMemo } from 'react';
 import {
@@ -35,12 +36,15 @@ export const useThemeId = () => {
  */
 const InitializeTheme: React.FC<React.PropsWithChildren> = ({ children }) => {
   const currentUser = useCurrentUserContext();
+  const flowEngine = useFlowEngine({ throwError: false });
+  const app = useApp();
   const { setTheme } = useGlobalTheme();
   const { run, data, loading } = useThemeListContext();
   const defaultTheme = useMemo(() => data?.find((item) => item.default), [data]);
-  const userThemeId = getUserThemeId(currentUser?.data?.data);
+  const resolvedUser = currentUser?.data?.data ?? flowEngine?.context?.user ?? app?.flowEngine?.context?.user;
+  const userThemeId = getUserThemeId(resolvedUser);
   const selectedTheme = useMemo(() => (data ? getEffectiveTheme(data, userThemeId) : undefined), [data, userThemeId]);
-  const api = useApp().apiClient;
+  const api = app.apiClient;
 
   useEffect(() => {
     const storageTheme = api.auth.getOption(THEME_STORAGE_KEY);
