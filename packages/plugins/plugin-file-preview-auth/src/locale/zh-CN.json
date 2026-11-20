@@ -42,5 +42,13 @@
   "Please try running OCR again.": "请重试运行 OCR。",
   "OCR result record not found": "未找到 OCR 结果记录",
   "Plugin OCR Verify Block is not enabled": "OCR 核验区块插件未启用",
-  "Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout.": "请启用 plugin-ocr-verify-block 插件以显示分栏核验界面。"
+  "Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout.": "请启用 plugin-ocr-verify-block 插件以显示分栏核验界面。",
+  "Please sign in to preview this file.": "请先登录以预览此文件。",
+  "You do not have permission to access this file.": "您没有权限访问此文件。",
+  "File not found.": "未找到文件。",
+  "Received an unexpected HTML response instead of the requested document.": "收到意外的 HTML 响应，而不是请求的文档。",
+  "Invalid document preview source.": "无效的文档预览来源。",
+  "Unable to render document preview": "无法渲染文档预览",
+  "The file was loaded, but its preview could not be rendered. You can still download the original file.": "文件已加载，但无法渲染预览内容。您仍可以下载原始文件。",
+  "Sheets": "工作表"
 }

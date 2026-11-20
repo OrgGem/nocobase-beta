@@ -6,7 +6,7 @@
   "description": "Preview uploaded and AI-generated attachments (Word, Excel, PDF, CSV, images) in NocoBase AI Chat with authenticated S3 support.",
   "description.vi-VN": "Preview file attachment tren AI Chat (Word, Excel, PDF, CSV...) kem S3 auth",
   "description.zh-CN": "在AI员工聊天中直接预览上传的文件附件，支持浏览器缓存。",
-  "version": "1.1.18",
+  "version": "1.2.0",
   "main": "dist/server/index.js",
   "peerDependencies": {
     "@nocobase/client": "2.x",
@@ -15,7 +15,13 @@
     "@nocobase/plugin-ai": "2.x",
     "@nocobase/plugin-file-manager": "2.x",
     "@nocobase/client-v2": "2.x",
-    "@nocobase/flow-engine": "2.x"
+    "@nocobase/flow-engine": "2.x",
+    "plugin-file-preview-auth": ">=1.4.0"
+  },
+  "peerDependenciesMeta": {
+    "plugin-file-preview-auth": {
+      "optional": true
+    }
   },
   "nocobase": {
     "supportedVersions": [

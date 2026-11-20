@@ -42,5 +42,13 @@
   "Please try running OCR again.": "Please try running OCR again.",
   "OCR result record not found": "OCR result record not found",
   "Plugin OCR Verify Block is not enabled": "Plugin OCR Verify Block is not enabled",
-  "Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout.": "Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout."
+  "Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout.": "Please enable the plugin-ocr-verify-block plugin to display the verify splitter layout.",
+  "Please sign in to preview this file.": "Please sign in to preview this file.",
+  "You do not have permission to access this file.": "You do not have permission to access this file.",
+  "File not found.": "File not found.",
+  "Received an unexpected HTML response instead of the requested document.": "Received an unexpected HTML response instead of the requested document.",
+  "Invalid document preview source.": "Invalid document preview source.",
+  "Unable to render document preview": "Unable to render document preview",
+  "The file was loaded, but its preview could not be rendered. You can still download the original file.": "The file was loaded, but its preview could not be rendered. You can still download the original file.",
+  "Sheets": "Sheets"
 }

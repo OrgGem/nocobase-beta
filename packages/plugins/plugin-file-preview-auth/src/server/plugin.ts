@@ -19,6 +19,7 @@ const FILE_PREVIEW_WORK_CONTEXT_TYPE = 'file-preview';
 const MAX_AI_CONTEXT_CHARS = 50000;
 const MAX_RAW_PARSE_UPLOAD_BYTES = 200 * 1024 * 1024;
 const OFFICE_PREVIEWER_PLUGIN_NAMES = ['file-previewer-office', '@nocobase/plugin-file-previewer-office'];
+const STREAM_DOCUMENT_COLLECTIONS = new Set(['aiFiles', 'attachments']);
 
 type DocumentParserPlugin = {
   documentParseService?: DocumentParseService;
@@ -367,6 +368,75 @@ export class PluginFilePreviewAuthServer extends Plugin {
           await next();
         },
 
+        streamDocument: async (ctx: any, next: any) => {
+          this.assertAuthenticated(ctx);
+
+          const params = ctx.action.params || {};
+          const values = params.values || {};
+          const reqQuery = ctx.request.query || {};
+          const reqBody = ctx.request.body || {};
+
+          const rawCollection = values.collection ?? params.collection ?? reqQuery.collection ?? reqBody.collection;
+          const collection = typeof rawCollection === 'string' ? rawCollection.trim() : '';
+          if (!STREAM_DOCUMENT_COLLECTIONS.has(collection)) {
+            ctx.throw(400, `Unsupported document collection: ${collection || 'missing'}`);
+          }
+
+          const rawId = values.id ?? params.id ?? reqQuery.id ?? reqBody.id;
+          const id = rawId === undefined || rawId === null ? '' : String(rawId).trim();
+          if (!id || !isLikelyRecordId(id)) {
+            ctx.throw(400, 'Document id is required');
+          }
+
+          const targetDb = ctx.db || this.db;
+          if (!targetDb?.getCollection?.(collection)) {
+            ctx.throw(404, 'Document not found');
+          }
+
+          const repo = targetDb.getRepository(collection);
+          if (!repo) {
+            ctx.throw(404, 'Document not found');
+          }
+
+          const record = await repo.findOne({ filterByTk: id });
+          if (!record) {
+            ctx.throw(404, 'Document not found');
+          }
+
+          await this.assertCanAccessAttachment(ctx, record, collection);
+
+          const fileManager = (this.pm.get('@nocobase/plugin-file-manager') || this.pm.get('file-manager')) as any;
+          if (!fileManager?.getFileStream) {
+            ctx.throw(500, 'File manager plugin not found');
+          }
+
+          let attachmentObj: any;
+          let storageModel: any;
+          try {
+            attachmentObj = await this.prepareAttachmentForFileManager(record, fileManager, collection);
+            storageModel = getStorageFromCache(fileManager.storagesCache, attachmentObj.storageId);
+            const { stream, contentType } = await fileManager.getFileStream(attachmentObj);
+            ctx.set('Cache-Control', 'private, no-store');
+            ctx.set('X-Content-Type-Options', 'nosniff');
+            ctx.type = contentType || attachmentObj.mimetype || 'application/octet-stream';
+            ctx.attachment(getSafeDocumentDownloadName(attachmentObj));
+            ctx.body = stream;
+          } catch (err: any) {
+            this.log.error(
+              `[FilePreviewAuth] Error streaming document ${safeDebugJson({
+                collection,
+                id: toDebugValue(id),
+                message: err?.message || String(err),
+                attachment: summarizeAttachmentForLog(attachmentObj || record, collection),
+                storage: summarizeStorageForLog(storageModel),
+              })}`,
+            );
+            ctx.throw(500, `Failed to fetch the file from storage: ${err?.message || 'unknown error'}`);
+          }
+
+          await next();
+        },
+
         runOcr: async (ctx: any, next: any) => {
           const params = ctx.action.params || {};
           const reqBody = ctx.request.body || {};
@@ -440,8 +510,12 @@ export class PluginFilePreviewAuthServer extends Plugin {
         },
       },
     });
-    this.app.acl.allow('filePreviewAuth', ['download', 'getContent', 'runOcr', 'getOcrStatus'], 'loggedIn');
-    this.log.info('[FilePreviewAuth] Registered /api/filePreviewAuth:download & runOcr endpoints');
+    this.app.acl.allow(
+      'filePreviewAuth',
+      ['download', 'streamDocument', 'getContent', 'runOcr', 'getOcrStatus'],
+      'loggedIn',
+    );
+    this.log.info('[FilePreviewAuth] Registered /api/filePreviewAuth:download, streamDocument & runOcr endpoints');
   }
 
   private async getOcrResultByAttachmentId(attachmentId: number | string) {
@@ -662,8 +736,54 @@ export class PluginFilePreviewAuthServer extends Plugin {
     ctx?: any,
   ): Promise<boolean> {
     const parents = this.getParentCollections(fileCollectionName);
+    let hasAnyParentLink = false;
 
-    if (parents.length === 0) {
+    for (const parent of parents) {
+      try {
+        const throughCollection = this.db.getCollection(parent.throughTable);
+        if (!throughCollection || !ctx) {
+          continue;
+        }
+        const links = await throughCollection.repository.find({
+          filter: { [parent.otherKey]: attachmentId },
+        });
+        if (links.length === 0) {
+          continue;
+        }
+        hasAnyParentLink = true;
+
+        const canView = this.app.acl.can({
+          roles: currentRoles,
+          resource: parent.collectionName,
+          action: 'view',
+        });
+        if (!canView) {
+          continue;
+        }
+
+        const parentIds = links.map((l) => l.get(parent['foreignKey'])).filter(Boolean);
+        if (parentIds.length > 0) {
+          const parentCollection = this.db.getCollection(parent.collectionName);
+          const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
+          const { mergedParams } = await this.app.acl.resolveActionParams(ctx, {
+            resourceName: parent.collectionName,
+            actionName: 'view',
+            params: {
+              filter: { [pk]: { $in: parentIds } },
+            },
+          });
+          const count = await parentCollection.repository.count({
+            ...mergedParams,
+            context: ctx,
+          });
+          if (count > 0) return true;
+        }
+      } catch (error: any) {
+        this.log?.warn?.(`[FilePreviewAuth] Failed to query through table "${parent.throughTable}":`, error.message);
+      }
+    }
+
+    if (parents.length === 0 || !hasAnyParentLink) {
       const canView = this.app.acl.can({
         roles: currentRoles,
         resource: fileCollectionName,
@@ -682,54 +802,19 @@ export class PluginFilePreviewAuthServer extends Plugin {
       return Boolean(attachment);
     }
 
-    for (const parent of parents) {
-      const canView = this.app.acl.can({
-        roles: currentRoles,
-        resource: parent.collectionName,
-        action: 'view',
-      });
-
-      if (!canView) continue;
-
-      try {
-        const throughCollection = this.db.getCollection(parent.throughTable);
-        if (throughCollection && ctx) {
-          const links = await throughCollection.repository.find({
-            filter: { [parent.otherKey]: attachmentId },
-          });
-          if (links.length > 0) {
-            const parentIds = links.map((l) => l.get(parent['foreignKey'])).filter(Boolean);
-            if (parentIds.length > 0) {
-              const parentCollection = this.db.getCollection(parent.collectionName);
-              const pk = parentCollection?.model?.primaryKeyAttribute || 'id';
-              const { mergedParams } = await this.app.acl.resolveActionParams(ctx, {
-                resourceName: parent.collectionName,
-                actionName: 'view',
-                params: {
-                  filter: { [pk]: { $in: parentIds } },
-                },
-              });
-              const count = await parentCollection.repository.count({
-                ...mergedParams,
-                context: ctx,
-              });
-              if (count > 0) return true;
-            }
-          }
-        }
-      } catch (error) {
-        this.log?.warn?.(`[FilePreviewAuth] Failed to query through table "${parent.throughTable}":`, error.message);
-      }
-    }
-
     return false;
   }
 
-  private async assertCanAccessAttachment(ctx: any, attachment: any) {
+  private async assertCanAccessAttachment(ctx: any, attachment: any, explicitCollectionName?: string) {
     const currentUser = this.assertAuthenticated(ctx);
 
     const createdById = getAttachmentValue(attachment, 'createdById');
-    const currentRoles = ctx.state.currentRoles || [];
+    const currentRoles =
+      Array.isArray(ctx.state.currentRoles) && ctx.state.currentRoles.length > 0
+        ? ctx.state.currentRoles
+        : ctx.state.currentRole
+          ? [ctx.state.currentRole]
+          : [];
     const userRoles = currentUser.roles || [];
     const isOwner = createdById != null && String(createdById) === String(currentUser.id);
     const isAdmin =
@@ -750,7 +835,10 @@ export class PluginFilePreviewAuthServer extends Plugin {
     }
 
     const collectionName =
-      attachment.constructor?.collection?.name || getAttachmentValue(attachment, 'collectionName') || 'attachments';
+      explicitCollectionName ||
+      attachment.constructor?.collection?.name ||
+      getAttachmentValue(attachment, 'collectionName') ||
+      'attachments';
     const hasParentAccess = await this.checkParentCollectionAccess(attachmentId, collectionName, currentRoles, ctx);
     if (!hasParentAccess) {
       ctx.throw(403, 'Permission denied: you do not have permission to access this attachment');
@@ -1419,6 +1507,20 @@ function getAttachmentDisplayName(attachment: any): string {
   return getAttachmentValue(attachment, 'filename') || getAttachmentValue(attachment, 'name') || 'file';
 }
 
+function getSafeDocumentDownloadName(attachment: any): string {
+  const title = String(getAttachmentValue(attachment, 'title') || '').trim();
+  const extname = String(getAttachmentValue(attachment, 'extname') || '').trim();
+  const filename = String(getAttachmentValue(attachment, 'filename') || '').trim();
+  if (title && extname) {
+    const normalizedExt = extname.startsWith('.') ? extname : `.${extname}`;
+    if (title.toLowerCase().endsWith(normalizedExt.toLowerCase())) {
+      return title;
+    }
+    return `${title}${normalizedExt}`;
+  }
+  return filename || title || 'document';
+}
+
 function isLikelyRecordId(value: any): boolean {
   if (value === undefined || value === null || value === '') return false;
   const text = String(value);
@@ -1442,7 +1544,16 @@ function isInternalStreamUrl(value: any): boolean {
   if (!value) return false;
   try {
     const parsed = new URL(decodePossiblyEncodedUrl(String(value)), 'http://local');
-    return parsed.pathname.includes('/api/attachments:stream');
+    const pathname = parsed.pathname;
+    if (
+      pathname.includes('/api/attachments:stream') ||
+      pathname.includes('/api/filePreviewAuth:') ||
+      /\/api\/[^/]+:getFile\//.test(pathname)
+    ) {
+      return true;
+    }
+    // NocoBase 2.x permanent file access route: [publicPath]/files/:appName/:dataSourceKey/:collectionName/:id[.ext]
+    return /(?:^|\/)files\/[^/]+\/[^/]+\/[^/]+\/[^/]+$/.test(pathname);
   } catch {
     return false;
   }

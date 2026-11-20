@@ -8,5 +8,6 @@
   "Open Default": "Mở mặc định",
   "Clear cache": "Xóa bộ nhớ đệm",
   "Cache cleared": "Đã xóa bộ nhớ đệm",
-  "This file type cannot be previewed. Click Download to save the file.": "Loại file này không thể xem trước. Nhấn Tải xuống để lưu file."
+  "This file type cannot be previewed. Click Download to save the file.": "Loại file này không thể xem trước. Nhấn Tải xuống để lưu file.",
+  "Please enable or update Authenticated File Previewer (plugin-file-preview-auth) to preview this document.": "Vui lòng bật hoặc cập nhật plugin Xem trước file có xác thực (plugin-file-preview-auth) để xem trước tài liệu này."
 }

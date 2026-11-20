@@ -1,521 +1,87 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { DownloadOutlined } from '@ant-design/icons';
 import type { Application } from '@nocobase/client-v2';
-import { FlowEngineProvider } from '@nocobase/flow-engine';
-import type { ChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
-import { filePreviewTypes, type FilePreviewerProps } from '@nocobase/plugin-file-manager/client-v2';
-import { Alert, App as AntdApp, Button, Modal, Space, message } from 'antd';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { message } from 'antd';
 import { getChatScope, getChatScopes } from '../shared/chatScope';
 import {
-  FILE_EXTENSION_SET,
-  findManifestEntryForName,
-  getCachedSkillHubManifestMap,
-  isKnownFileUrl,
-  resolveDownloadUrl,
-} from '../shared/fileLinks';
+  openChatDocumentPreview,
+  resolveDocumentSourceForElement,
+  type ChatPreviewAppLike,
+} from '../shared/documentResolver';
 
-type UnknownRecord = Record<string, unknown>;
-type PreviewFile = UnknownRecord;
 type I18nLike = {
   t: (key: string, options?: Record<string, unknown>) => string;
 };
-type AppLike = Application & {
-  i18n?: I18nLike;
-};
-type ChatSessionSnapshot = {
-  attachments?: unknown[];
-  messages?: unknown[];
-};
-type ChatMessagesSnapshot = {
-  getSessionState?: (sessionId?: string) => ChatSessionSnapshot;
-  sessions?: Record<string, ChatSessionSnapshot>;
-};
-type ChatConversationsSnapshot = {
-  currentConversation?: string;
-};
+type AppLike = Application &
+  ChatPreviewAppLike & {
+    i18n?: I18nLike;
+  };
 type PreviewWindow = Window & {
   __pluginAiChatFilePreviewV2Cleanup?: () => void;
 };
 
 const NAMESPACE = 'plugin-ai-chat-file-preview';
-const CHAT_DEFAULT_SESSION_KEY = '__draft__';
 
 let appRef: AppLike | null = null;
-const activePreviewCleanups = new Set<() => void>();
 
 const t = (key: string) => appRef?.i18n?.t(key, { ns: NAMESPACE }) || key;
 
-const isRecord = (value: unknown): value is UnknownRecord => typeof value === 'object' && value !== null;
-
-const getString = (record: UnknownRecord | null, key: string) => {
-  const value = record?.[key];
-  return typeof value === 'string' ? value : '';
-};
-
-const stripQueryAndHash = (value: string) => value.split('?')[0].split('#')[0];
-
-const getNameFromUrl = (url?: string) => {
-  if (!url) {
-    return '';
-  }
-  const clean = stripQueryAndHash(url);
-  const index = clean.lastIndexOf('/');
-  const name = index >= 0 ? clean.slice(index + 1) : clean;
-  try {
-    return decodeURIComponent(name);
-  } catch {
-    return name;
-  }
-};
-
-const getExtFromName = (value?: string) => {
-  if (!value) {
-    return '';
-  }
-  const clean = stripQueryAndHash(value);
-  const index = clean.lastIndexOf('.');
-  return index >= 0 ? clean.slice(index + 1).toLowerCase() : '';
-};
-
-const normalizeName = (value?: string) =>
-  (value || '')
-    .trim()
-    .replace(/^["'`]+|["'`]+$/g, '')
-    .replace(/^.*[\\/]/, '')
-    .toLowerCase();
-
-const extractFilenameFromText = (value?: string) => {
-  if (!value) {
-    return '';
-  }
-  const match = value.match(/[^\s"'<>()[\]{}]+\.([a-z0-9]{2,8})/i);
-  if (!match || !FILE_EXTENSION_SET.has(match[1].toLowerCase())) {
-    return '';
-  }
-  return match[0];
-};
-
-const resolveFileUrl = (file: unknown) => {
-  if (typeof file === 'string') {
-    return file;
-  }
-  const record = isRecord(file) ? file : null;
-  return (
-    getString(record, 'preview') ||
-    getString(record, 'url') ||
-    getString(record, 'downloadUrl') ||
-    getString(record, 'path')
-  );
-};
-
-const getDisplayName = (file: unknown) => {
-  if (typeof File !== 'undefined' && file instanceof File) {
-    return file.name;
-  }
-  const record = isRecord(file) ? file : null;
-  return (
-    getString(record, 'filename') ||
-    getString(record, 'name') ||
-    getString(record, 'title') ||
-    getNameFromUrl(resolveFileUrl(file)) ||
-    'file'
-  );
-};
-
-const getCandidateNames = (file: unknown) => {
-  const url = resolveFileUrl(file);
-  const names = new Set<string>();
-  for (const value of [getDisplayName(file), getNameFromUrl(url), extractFilenameFromText(getDisplayName(file))]) {
-    const normalized = normalizeName(value);
-    if (normalized) {
-      names.add(normalized);
-    }
-  }
-  return names;
-};
-
-const normalizeUrlForCompare = (url?: string) => {
-  if (!url) {
-    return '';
-  }
-  try {
-    const parsed = new URL(url, window.location.href);
-    return `${parsed.origin}${parsed.pathname}${parsed.search}`;
-  } catch {
-    return url;
-  }
-};
-
-const isFileLikeUrl = (url?: string) => {
-  if (!url || /^(mailto|tel|javascript):/i.test(url)) {
-    return false;
-  }
-  if (/^(blob|data):/i.test(url) || isKnownFileUrl(url)) {
-    return true;
-  }
-  return FILE_EXTENSION_SET.has(getExtFromName(url));
-};
-
-const toPreviewFile = (value: unknown): PreviewFile | null => {
-  if (!value) {
-    return null;
-  }
-  if (typeof File !== 'undefined' && value instanceof File) {
-    return {
-      originFileObj: value,
-      filename: value.name,
-      name: value.name,
-      title: value.name,
-      mimetype: value.type,
-      type: value.type,
-      collectionName: 'aiFiles',
-    };
-  }
-  if (Array.isArray(value)) {
-    return null;
-  }
-  if (!isRecord(value)) {
-    return null;
-  }
-  const url = resolveFileUrl(value);
-  const filename = getDisplayName(value);
-  if (!url && !filename && !value.id && !value.uid) {
-    return null;
-  }
-  return {
-    ...value,
-    url,
-    filename,
-    name: getString(value, 'name') || filename,
-    title: getString(value, 'title') || filename,
-    collectionName: getString(value, 'collectionName') || getString(value, 'collection') || 'aiFiles',
-  };
-};
-
-const pushPreviewFile = (files: PreviewFile[], value: unknown) => {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      pushPreviewFile(files, item);
-    }
-    return;
-  }
-  const previewFile = toPreviewFile(value);
-  if (previewFile) {
-    files.push(previewFile);
-  }
-};
-
-const collectMessageFiles = (files: PreviewFile[], message: unknown) => {
-  if (!isRecord(message)) {
-    return;
-  }
-  pushPreviewFile(files, message.attachments);
-  const content = isRecord(message.content) ? message.content : null;
-  pushPreviewFile(files, content?.attachments);
-  const subAgentConversations = content?.subAgentConversations;
-  if (Array.isArray(subAgentConversations)) {
-    for (const conversation of subAgentConversations) {
-      if (!isRecord(conversation) || !Array.isArray(conversation.messages)) {
-        continue;
-      }
-      for (const nestedMessage of conversation.messages) {
-        collectMessageFiles(files, nestedMessage);
-      }
-    }
-  }
-};
-
-const getSessionSnapshot = (state: ChatMessagesSnapshot, sessionId?: string) => {
-  if (typeof state.getSessionState === 'function') {
-    return state.getSessionState(sessionId);
-  }
-  return state.sessions?.[sessionId || CHAT_DEFAULT_SESSION_KEY] || {};
-};
-
-const getChatPreviewFiles = (runtime: ChatBoxRuntime) => {
-  const files: PreviewFile[] = [];
-  const messagesState: ChatMessagesSnapshot = runtime.chatMessageModel;
-  const conversationsState: ChatConversationsSnapshot = runtime.chatConversationModel;
-  const session = getSessionSnapshot(messagesState, conversationsState.currentConversation);
-  pushPreviewFile(files, session.attachments);
-  pushPreviewFile(files, runtime.chatSenderModel.attachments);
-  for (const chatMessage of session.messages || []) {
-    collectMessageFiles(files, chatMessage);
-  }
-  const seen = new Set<string>();
-  return files.filter((file) => {
-    const url = normalizeUrlForCompare(resolveFileUrl(file));
-    const id = file.id ?? file.uid;
-    const key = url ? `url:${url}` : id == null ? '' : `id:${String(id)}`;
-    if (!key) return true;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
-
-const findPreviewFile = (runtime: ChatBoxRuntime, label?: string, href?: string) => {
-  const files = getChatPreviewFiles(runtime);
-  const normalizedHref = normalizeUrlForCompare(href);
-  if (normalizedHref) {
-    const byUrl = files.find((file) => {
-      return ['url', 'preview', 'downloadUrl', 'path'].some(
-        (key) => normalizeUrlForCompare(getString(file, key)) === normalizedHref,
-      );
-    });
-    return byUrl;
-  }
-
-  const namesToMatch = new Set<string>();
-  for (const value of [label, href ? getNameFromUrl(href) : '', extractFilenameFromText(label)]) {
-    const normalized = normalizeName(value);
-    if (normalized) {
-      namesToMatch.add(normalized);
-    }
-  }
-
-  const matches = files.filter((file) => {
-    const candidateNames = getCandidateNames(file);
-    for (const name of namesToMatch) {
-      if (candidateNames.has(name)) {
-        return true;
-      }
-    }
-    return false;
-  });
-  if (matches.length === 1) {
-    return matches[0];
-  }
-  return undefined;
-};
-
-const getSessionMessages = (runtime: ChatBoxRuntime): unknown[] => {
-  const messagesState: ChatMessagesSnapshot = runtime.chatMessageModel;
-  const conversationsState: ChatConversationsSnapshot = runtime.chatConversationModel;
-  const session = getSessionSnapshot(messagesState, conversationsState.currentConversation);
-  return Array.isArray(session.messages) ? session.messages : [];
-};
-
-const resolveSkillHubFile = (runtime: ChatBoxRuntime, label?: string, href?: string): PreviewFile | undefined => {
-  const messages = getSessionMessages(runtime);
-  const manifestMap = getCachedSkillHubManifestMap(messages);
-  const nameCandidates = [label, extractFilenameFromText(label), href ? getNameFromUrl(href) : ''].filter(
-    (item): item is string => Boolean(item),
-  );
-
-  for (const candidate of nameCandidates) {
-    const manifestEntry = findManifestEntryForName(candidate, manifestMap);
-    if (manifestEntry) {
-      const name = manifestEntry.name || extractFilenameFromText(label) || 'attachment';
-      const ext = getExtFromName(name);
-      return {
-        url: manifestEntry.downloadUrl,
-        filename: name,
-        name,
-        title: name,
-        extname: ext ? `.${ext}` : undefined,
-        mimetype: manifestEntry.mimetype || '',
-        size: manifestEntry.size ?? undefined,
-      };
-    }
-  }
-
-  if (href && /^(?:sandbox:(?:\/\/)?|\/?download\/)/i.test(href)) {
-    const resolved = resolveDownloadUrl(href, messages);
-    if (resolved && resolved !== href) {
-      const name = extractFilenameFromText(label) || getNameFromUrl(resolved) || label?.trim() || 'attachment';
-      const ext = getExtFromName(name);
-      return {
-        url: resolved,
-        filename: name,
-        name,
-        title: name,
-        extname: ext ? `.${ext}` : undefined,
-      };
-    }
-  }
-
-  return undefined;
-};
-
-const createFallbackFile = (href: string, label?: string): PreviewFile => {
-  const rawName = extractFilenameFromText(label) || getNameFromUrl(href) || label?.trim() || 'file';
-  const ext = getExtFromName(rawName);
-  const file: PreviewFile = {
-    url: href,
-    filename: rawName,
-    name: rawName,
-    title: rawName,
-    extname: ext ? `.${ext}` : undefined,
-  };
-  if (!isKnownFileUrl(href) || href.includes('/api/attachments')) {
-    file.collectionName = 'aiFiles';
-  }
-  return file;
-};
-
-const openFallbackDownload = (file: unknown) => {
-  const url = resolveFileUrl(file);
-  if (!url) {
-    message.error(t('Failed to download file'));
-    return;
-  }
-  window.open(url, '_blank', 'noopener,noreferrer');
-};
-
-function DetachedPreviewModal(props: { file: PreviewFile; onDestroy: () => void }) {
-  const { file, onDestroy } = props;
-  const [open, setOpen] = useState(true);
-  const Previewer = useMemo(() => filePreviewTypes.getTypeByFile(file)?.Previewer, [file]);
-  const handleClose = useCallback(() => setOpen(false), []);
-  const handleDownload = useCallback(() => openFallbackDownload(file), [file]);
-
-  useEffect(() => {
-    if (!open) {
-      const timer = window.setTimeout(onDestroy, 250);
-      return () => window.clearTimeout(timer);
-    }
-    return undefined;
-  }, [onDestroy, open]);
-
-  if (Previewer) {
-    return (
-      <Previewer
-        file={file}
-        index={0}
-        list={[file]}
-        open={open}
-        onOpenChange={setOpen}
-        onClose={handleClose}
-        onDownload={handleDownload as FilePreviewerProps['onDownload']}
-      />
-    );
-  }
-
-  return (
-    <Modal
-      open={open}
-      title={getDisplayName(file)}
-      onCancel={handleClose}
-      footer={
-        <Space>
-          <Button icon={<DownloadOutlined />} onClick={handleDownload}>
-            {t('Download')}
-          </Button>
-          <Button onClick={handleClose}>{t('Close')}</Button>
-        </Space>
-      }
-      width={560}
-      centered
-    >
-      <Alert
-        type="info"
-        description={t('This file type cannot be previewed. Click Download to save the file.')}
-        showIcon
-      />
-    </Modal>
-  );
-}
-
-const mountPreview = (file: PreviewFile) => {
+const markPreviewTargets = () => {
   const app = appRef;
   if (!app) return;
-  const container = document.createElement('div');
-  document.body.appendChild(container);
-  let root: Root | null = createRoot(container);
-  const destroy = () => {
-    activePreviewCleanups.delete(destroy);
-    root?.unmount();
-    root = null;
-    container.remove();
-  };
-  activePreviewCleanups.add(destroy);
-  root.render(
-    <FlowEngineProvider engine={app.flowEngine}>
-      <AntdApp>
-        <DetachedPreviewModal file={file} onDestroy={destroy} />
-      </AntdApp>
-    </FlowEngineProvider>,
-  );
-};
-
-const findClickableFileTarget = (eventTarget: EventTarget | null) => {
-  if (!(eventTarget instanceof Element)) {
-    return null;
-  }
-  if (eventTarget.closest('button, [class*="-remove"], .ant-tag-close-icon')) return null;
-  const anchor = eventTarget.closest('a[href]') as HTMLAnchorElement | null;
-  const card = eventTarget.closest(
-    '.ant-attachment-list-card, .ant-upload-list-item, [data-ai-chat-file-preview-card]',
-  ) as HTMLElement | null;
-  if (!anchor && !card) {
-    return null;
-  }
-  const href =
-    anchor?.getAttribute('href') || card?.querySelector<HTMLAnchorElement>('a[href]')?.getAttribute('href') || '';
-  const label =
-    anchor?.textContent ||
-    card?.querySelector('[class*="-name"]')?.textContent ||
-    card?.textContent ||
-    getNameFromUrl(href);
-  return { anchor, card, href, label };
-};
-
-const markPreviewTargets = () => {
-  if (!appRef) return;
-  const scopes = getChatScopes(appRef);
+  const scopes = getChatScopes(app);
   if (scopes.length === 0) return;
-  for (const { root, runtime } of scopes) {
-    for (const anchor of Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
-      const href = anchor.getAttribute('href') || '';
-      const label = anchor.textContent || getNameFromUrl(href);
-      if (isFileLikeUrl(href) || findPreviewFile(runtime, label, href) || resolveSkillHubFile(runtime, label, href)) {
+
+  for (const scope of scopes) {
+    for (const anchor of Array.from(scope.root.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+      const source = resolveDocumentSourceForElement(app, scope, anchor);
+      if (source) {
         anchor.dataset.aiChatFilePreview = 'true';
+      } else {
+        delete anchor.dataset.aiChatFilePreview;
       }
     }
     for (const card of Array.from(
-      root.querySelectorAll<HTMLElement>('.ant-attachment-list-card, .ant-upload-list-item'),
+      scope.root.querySelectorAll<HTMLElement>('.ant-attachment-list-card, .ant-upload-list-item'),
     )) {
-      const label = card.textContent || '';
-      if (findPreviewFile(runtime, label) || resolveSkillHubFile(runtime, label)) {
+      const source = resolveDocumentSourceForElement(app, scope, card);
+      if (source) {
         card.dataset.aiChatFilePreviewCard = 'true';
+      } else {
+        delete card.dataset.aiChatFilePreviewCard;
       }
     }
   }
 };
 
 const handleClick = (event: MouseEvent) => {
+  const app = appRef;
   if (
-    !appRef ||
+    !app ||
     !(event.target instanceof Element) ||
     event.button !== 0 ||
     event.metaKey ||
     event.ctrlKey ||
     event.shiftKey ||
     event.altKey
-  )
+  ) {
     return;
-  const scope = getChatScope(appRef, event.target);
+  }
+
+  const scope = getChatScope(app, event.target);
   if (!scope) return;
-  const target = findClickableFileTarget(event.target);
-  if (!target) {
-    return;
-  }
-  if ((target.anchor && !scope.root.contains(target.anchor)) || (target.card && !scope.root.contains(target.card)))
-    return;
-  const file =
-    findPreviewFile(scope.runtime, target.label, target.href) ||
-    resolveSkillHubFile(scope.runtime, target.label, target.href) ||
-    (isFileLikeUrl(target.href) ? createFallbackFile(target.href, target.label) : null);
-  if (!file) {
-    return;
-  }
+
+  const source = resolveDocumentSourceForElement(app, scope, event.target);
+  if (!source) return;
+
   event.preventDefault();
   event.stopPropagation();
-  mountPreview(file);
+
+  openChatDocumentPreview(app, source, () => {
+    message.warning(
+      t('Please enable or update Authenticated File Previewer (plugin-file-preview-auth) to preview this document.'),
+    );
+  });
 };
 
 export function installAiChatFilePreviewEffect(app: Application) {
@@ -549,9 +115,6 @@ export function installAiChatFilePreviewEffect(app: Application) {
     document.removeEventListener('click', handleClick, true);
     window.clearInterval(interval);
     style.remove();
-    for (const cleanup of Array.from(activePreviewCleanups)) {
-      cleanup();
-    }
     appRef = null;
     delete previewWindow.__pluginAiChatFilePreviewV2Cleanup;
   };

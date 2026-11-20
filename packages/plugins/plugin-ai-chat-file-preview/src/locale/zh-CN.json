@@ -8,5 +8,6 @@
   "Open Default": "默认方式打开",
   "Clear cache": "清除缓存",
   "Cache cleared": "缓存已清除",
-  "This file type cannot be previewed. Click Download to save the file.": "此文件类型无法预览。点击下载保存文件。"
+  "This file type cannot be previewed. Click Download to save the file.": "此文件类型无法预览。点击下载保存文件。",
+  "Please enable or update Authenticated File Previewer (plugin-file-preview-auth) to preview this document.": "请启用或更新认证文件预览插件（plugin-file-preview-auth）以预览此文档。"
 }

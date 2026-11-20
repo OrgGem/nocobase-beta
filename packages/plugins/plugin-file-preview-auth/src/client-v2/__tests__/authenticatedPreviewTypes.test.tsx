@@ -64,6 +64,20 @@ describe('client-v2 authenticatedPreviewTypes', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('reuses a single fetched Blob across inline preview and attachment download in File Manager v2', async () => {
+    const okBlob = new Blob(['single-fetch'], { type: 'application/pdf' });
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, blob: async () => okBlob });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const file = { id: 99, url: '/uploads/single.pdf', filename: 'single.pdf', collectionName: 'attachments' };
+    const previewBlob = await getLoadedFileBlob(file, 'inline');
+    const downloadBlob = await getLoadedFileBlob(file, 'attachment');
+
+    expect(previewBlob).toBe(okBlob);
+    expect(downloadBlob).toBe(okBlob);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('enforces LRU size cap and clears cache on token change', async () => {
     const cache = createLruBlobCache(2);
     const loader = vi.fn(async () => new Blob(['x']));

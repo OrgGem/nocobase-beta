@@ -8,5 +8,6 @@
   "Open Default": "Open Default",
   "Clear cache": "Clear cache",
   "Cache cleared": "Cache cleared",
-  "This file type cannot be previewed. Click Download to save the file.": "This file type cannot be previewed. Click Download to save the file."
+  "This file type cannot be previewed. Click Download to save the file.": "This file type cannot be previewed. Click Download to save the file.",
+  "Please enable or update Authenticated File Previewer (plugin-file-preview-auth) to preview this document.": "Please enable or update Authenticated File Previewer (plugin-file-preview-auth) to preview this document."
 }

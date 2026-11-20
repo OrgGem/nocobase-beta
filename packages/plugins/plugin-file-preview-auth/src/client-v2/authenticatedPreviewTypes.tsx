@@ -312,9 +312,10 @@ export const getLoadedFileBlob = async (file: unknown, mode: DownloadMode = 'inl
     return directBlob;
   }
 
-  const url = buildAuthenticatedDownloadUrl(file, mode);
+  // Share a single fetched Blob across inline preview and download so the file is only transferred once.
+  const url = buildAuthenticatedDownloadUrl(file, mode === 'attachment' ? 'inline' : mode);
   const token = appRef?.apiClient?.auth?.token || '';
-  const cacheKey = `${mode}:${url}`;
+  const cacheKey = getDependencyKey(file) || url;
 
   return blobCache.getOrLoad(token, cacheKey, async () => {
     const response = await fetch(url, {

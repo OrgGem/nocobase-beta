@@ -19,12 +19,16 @@ import { Plugin, useAPIClient, attachmentFileTypes, matchMimetype, useComponent 
 import { filePreviewTypes } from '@nocobase/plugin-file-manager';
 import { useT } from './locale';
 import { AIFilePreviewAction, registerFilePreviewAIWorkContext } from './AIFilePreviewAction';
+import { DocumentPreviewController } from '../shared/DocumentPreviewModal';
+import type { DocumentPreviewHandle, DocumentPreviewSource } from '../shared/documentPreview';
 import {
   createLruBlobCache,
   isInternalAuthenticatedDownloadUrl,
   parseXlsxSheetsToRows,
   toPdfBlob,
 } from '../shared/previewHelpers';
+
+export type { DocumentPreviewHandle, DocumentPreviewSource };
 
 // ─── Supported MIME types ────────────────────────────────────────────
 
@@ -1714,7 +1718,21 @@ function AuthDownloadPreviewer({ file }: any) {
 // ─── Plugin class ───────────────────────────────────────────────────
 
 export class PluginFilePreviewAuthClient extends Plugin {
+  private documentPreviewController?: DocumentPreviewController;
+
+  private getDocumentPreviewController(): DocumentPreviewController {
+    if (!this.documentPreviewController) {
+      this.documentPreviewController = new DocumentPreviewController(this.app);
+    }
+    return this.documentPreviewController;
+  }
+
+  openDocumentPreview(source: DocumentPreviewSource): DocumentPreviewHandle {
+    return this.getDocumentPreviewController().openDocumentPreview(source);
+  }
+
   async load() {
+    this.getDocumentPreviewController();
     registerFilePreviewAIWorkContext(this.app);
 
     // ────────────────────────────────────────────────────────────────

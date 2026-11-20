@@ -8,18 +8,61 @@ export interface ChatScope {
   runtime: ChatBoxRuntime;
 }
 
-/** Find mounted AI chat boxes using the refs owned by their individual runtimes. */
+interface RawScope {
+  coreRoot: HTMLElement;
+  runtime: ChatBoxRuntime;
+}
+
+/**
+ * In AIChatBoxView (chat block mode), chatBoxRef sits on the inner AIChatBoxCoreView div,
+ * while the Messages history SidePanel (when `Show messages` is off) is mounted as a sibling
+ * inside the block's outer Ant Design Layout. Expand the scope root to that outer block Layout
+ * only when it wraps this chat block's `.ai-chat-box-header` and does not enclose another runtime.
+ */
+function resolveBlockScopeRoot(coreRoot: HTMLElement, allCoreRoots: HTMLElement[]): HTMLElement {
+  let cursor: HTMLElement | null = coreRoot.closest('.ant-layout');
+  let depth = 0;
+
+  while (cursor && depth < 6) {
+    const hasChatBlockHeader = Array.from(cursor.children).some((child) =>
+      child.classList.contains('ai-chat-box-header'),
+    );
+    if (hasChatBlockHeader) {
+      const outerLayout = cursor.parentElement;
+      if (outerLayout instanceof HTMLElement && outerLayout.classList.contains('ant-layout')) {
+        const enclosesAnotherChat = allCoreRoots.some(
+          (otherRoot) => otherRoot !== coreRoot && outerLayout.contains(otherRoot),
+        );
+        if (!enclosesAnotherChat) {
+          return outerLayout;
+        }
+      }
+      break;
+    }
+    cursor = cursor.parentElement?.closest('.ant-layout') || null;
+    depth += 1;
+  }
+
+  return coreRoot;
+}
+
+/** Find mounted AI chat boxes (global chat, chat blocks, and their Messages side panels). */
 export function getChatScopes(app: Pick<Application, 'flowEngine'>): ChatScope[] {
-  const scopes: ChatScope[] = [];
+  const rawScopes: RawScope[] = [];
   const addRuntime = (runtime: ChatBoxRuntime | undefined) => {
-    const root = runtime?.chatBoxModel?.chatBoxRef?.current;
-    if (runtime && root && !scopes.some((scope) => scope.root === root)) {
-      scopes.push({ root, runtime });
+    const coreRoot = runtime?.chatBoxModel?.chatBoxRef?.current;
+    if (runtime && coreRoot && !rawScopes.some((scope) => scope.coreRoot === coreRoot)) {
+      rawScopes.push({ coreRoot, runtime });
     }
   };
 
-  addRuntime(getGlobalChatBoxRuntime());
-  let engine: Application['flowEngine'] | undefined = app.flowEngine;
+  try {
+    addRuntime(getGlobalChatBoxRuntime());
+  } catch {
+    // Global runtime may not be initialized in isolated test harnesses.
+  }
+
+  let engine: Application['flowEngine'] | undefined = app?.flowEngine;
   while (engine?.previousEngine) engine = engine.previousEngine;
   while (engine) {
     engine.forEachModel((model) => {
@@ -28,6 +71,15 @@ export function getChatScopes(app: Pick<Application, 'flowEngine'>): ChatScope[]
       }
     });
     engine = engine.nextEngine;
+  }
+
+  const allCoreRoots = rawScopes.map((item) => item.coreRoot);
+  const scopes: ChatScope[] = [];
+  for (const { coreRoot, runtime } of rawScopes) {
+    const root = resolveBlockScopeRoot(coreRoot, allCoreRoots);
+    if (!scopes.some((scope) => scope.root === root)) {
+      scopes.push({ root, runtime });
+    }
   }
   return scopes;
 }
