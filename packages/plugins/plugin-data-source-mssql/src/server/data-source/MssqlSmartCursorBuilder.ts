@@ -5,6 +5,8 @@ import { Model } from '@nocobase/database';
 import _ from 'lodash';
 import { quoteIdentifier } from '../security/sql-quote';
 
+type SortDirection = 'ASC' | 'DESC';
+
 interface IndexInfo {
   name: string;
   columns: string[];
@@ -12,24 +14,80 @@ interface IndexInfo {
   isUnique: boolean;
 }
 
+interface CursorRow {
+  getDataValue?: (key: string) => unknown;
+  get?: (key: string) => unknown;
+  [key: string]: unknown;
+}
+
+interface CursorCollectionLike {
+  filterTargetKey: string | string[];
+  model?: {
+    rawAttributes?: Record<string, { field?: string }>;
+  };
+}
+
+interface IndexMetadataRow {
+  INDEX_NAME: string;
+  COLUMN_NAME: string;
+  SEQ_IN_INDEX: number;
+  INDEX_TYPE: number;
+  DIRECTION: string;
+}
+
 interface FindOptions {
   chunkSize?: number;
   callback?: (rows: Model[], options: FindOptions) => Promise<void>;
-  find?: (options: FindOptions) => Promise<any[]>;
+  find?: (options: FindOptions) => Promise<Model[]>;
   beforeFind?: (options: FindOptions) => Promise<void>;
   afterFind?: (rows: Model[], options: FindOptions) => Promise<void>;
-  where?: any;
-  order?: any;
+  where?: Record<string | symbol, unknown>;
+  order?: Array<[string, SortDirection]>;
   limit?: number;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 /**
  * Cursor-based pagination strategy interface
  */
 interface CursorStrategy {
-  buildWhere(baseWhere: any, record?: Model): any;
-  buildSort(): any;
+  buildWhere(
+    baseWhere: Record<string | symbol, unknown> | undefined,
+    record?: CursorRow,
+  ): Record<string | symbol, unknown> | undefined;
+  buildSort(): Array<[string, SortDirection]>;
+  hasCursorValues(record?: CursorRow): boolean;
+}
+
+function readSingleField(record: CursorRow, key: string): unknown {
+  if (typeof record.getDataValue === 'function') {
+    const raw = record.getDataValue(key);
+    if (raw !== undefined) {
+      return raw;
+    }
+  }
+  if (typeof record.get === 'function') {
+    const value = record.get(key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return record[key];
+}
+
+function readRecordField(record: CursorRow, attrName: string, physicalColumn?: string): unknown {
+  const value = readSingleField(record, attrName);
+  if (value !== undefined) {
+    return value;
+  }
+  if (physicalColumn && physicalColumn !== attrName) {
+    return readSingleField(record, physicalColumn);
+  }
+  return undefined;
+}
+
+function normalizeDirection(direction?: string): SortDirection {
+  return direction?.toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
 }
 
 /**
@@ -37,20 +95,44 @@ interface CursorStrategy {
  */
 class SingleColumnCursorStrategy implements CursorStrategy {
   public columnName: string;
+  public direction: SortDirection;
+  private physicalColumn?: string;
 
-  constructor(columnName: string) {
+  constructor(columnName: string, direction: SortDirection = 'ASC', physicalColumn?: string) {
     this.columnName = columnName;
+    this.direction = direction;
+    this.physicalColumn = physicalColumn;
   }
 
-  buildSort() {
-    return [[this.columnName, 'ASC']];
+  buildSort(): Array<[string, SortDirection]> {
+    return [[this.columnName, this.direction]];
   }
 
-  buildWhere(baseWhere: any, record?: Model): any {
+  hasCursorValues(record?: CursorRow): boolean {
+    return record !== undefined && readRecordField(record, this.columnName, this.physicalColumn) !== undefined;
+  }
+
+  buildWhere(
+    baseWhere: Record<string | symbol, unknown> | undefined,
+    record?: CursorRow,
+  ): Record<string | symbol, unknown> | undefined {
     if (!record) {
       return baseWhere;
     }
-    return { ...baseWhere, [this.columnName]: { [Op.gt]: record[this.columnName] } };
+    const op = this.direction === 'DESC' ? Op.lt : Op.gt;
+    const cursorValue = readRecordField(record, this.columnName, this.physicalColumn);
+    const cursorCondition = { [this.columnName]: { [op]: cursorValue } };
+    if (!baseWhere) {
+      return cursorCondition;
+    }
+    // Preserve any existing filter on the cursor column or symbol-keyed compound predicates (Op.and/Op.or).
+    const hasConflict =
+      Object.prototype.hasOwnProperty.call(baseWhere, this.columnName) ||
+      Object.getOwnPropertySymbols(baseWhere).length > 0;
+    if (hasConflict) {
+      return { [Op.and]: [baseWhere, cursorCondition] };
+    }
+    return { ...baseWhere, ...cursorCondition };
   }
 }
 
@@ -59,54 +141,53 @@ class SingleColumnCursorStrategy implements CursorStrategy {
  */
 class CompositeKeyCursorStrategy implements CursorStrategy {
   private columns: string[];
-  private directions: string[];
+  private directions: SortDirection[];
+  private physicalColumns: Array<string | undefined>;
 
-  constructor(columns: string[], directions?: string[]) {
+  constructor(columns: string[], directions?: string[], physicalColumns?: Array<string | undefined>) {
     this.columns = columns;
-    this.directions = directions || Array(columns.length).fill('ASC');
+    this.directions = columns.map((_, index) => normalizeDirection(directions?.[index]));
+    this.physicalColumns = columns.map((_, index) => physicalColumns?.[index]);
   }
 
-  buildSort() {
-    const orderBy = [];
+  buildSort(): Array<[string, SortDirection]> {
+    const orderBy: Array<[string, SortDirection]> = [];
     for (let i = 0; i < this.columns.length; i++) {
       orderBy.push([this.columns[i], this.directions[i]]);
     }
     return orderBy;
   }
 
-  buildWhere(baseWhere: any, record?: any): any {
+  hasCursorValues(record?: CursorRow): boolean {
+    if (!record) {
+      return false;
+    }
+    return this.columns.every((col, idx) => readRecordField(record, col, this.physicalColumns[idx]) !== undefined);
+  }
+
+  buildWhere(
+    baseWhere: Record<string | symbol, unknown> | undefined,
+    record?: CursorRow,
+  ): Record<string | symbol, unknown> | undefined {
     if (!record) {
       return baseWhere;
     }
-    const whereConditions = [];
+    const whereConditions: Array<Record<string, unknown>> = [];
 
     for (let i = 0; i < this.columns.length; i++) {
       const column = this.columns[i];
+      const op = this.directions[i] === 'DESC' ? Op.lt : Op.gt;
+      const condition: Record<string, unknown> = {};
 
-      if (i > 0) {
-        const equalConditions = {};
-        for (let j = 0; j < i; j++) {
-          equalConditions[this.columns[j]] = record[this.columns[j]];
-        }
-
-        whereConditions.push({
-          ...equalConditions,
-          [column]: {
-            [Op.gt]: record[column],
-          },
-        });
-      } else {
-        whereConditions.push({
-          [column]: {
-            [Op.gt]: record[column],
-          },
-        });
+      for (let j = 0; j < i; j++) {
+        condition[this.columns[j]] = readRecordField(record, this.columns[j], this.physicalColumns[j]);
       }
-    }
-    const cursorCondition = {
-      [Op.or]: whereConditions,
-    };
 
+      condition[column] = { [op]: readRecordField(record, column, this.physicalColumns[i]) };
+      whereConditions.push(condition);
+    }
+
+    const cursorCondition = { [Op.or]: whereConditions };
     return baseWhere ? { [Op.and]: [baseWhere, cursorCondition] } : cursorCondition;
   }
 }
@@ -118,19 +199,39 @@ class CompositeKeyCursorStrategy implements CursorStrategy {
 export class MssqlSmartCursorBuilder {
   private sequelize: Sequelize;
   private tableName: string;
-  private collection: { filterTargetKey: string | string[] };
+  private collection: CursorCollectionLike;
   private schema?: string;
+  private cachedStrategy: CursorStrategy | null = null;
 
-  constructor(
-    sequelize: Sequelize,
-    tableName: string,
-    collection: { filterTargetKey: string | string[] },
-    schema?: string,
-  ) {
+  constructor(sequelize: Sequelize, tableName: string, collection: CursorCollectionLike, schema?: string) {
     this.sequelize = sequelize;
     this.tableName = tableName;
     this.collection = collection;
     this.schema = schema;
+  }
+
+  /**
+   * Maps a physical SQL Server column name from `sys.columns` to its Sequelize model attribute name
+   * so `order`, `where`, and `record.get()` align even when `rawAttributes[attr].field !== attr`.
+   */
+  private resolveAttributeName(physicalColumn: string): string {
+    const rawAttributes = this.collection.model?.rawAttributes;
+    if (!rawAttributes) {
+      return physicalColumn;
+    }
+    if (Object.prototype.hasOwnProperty.call(rawAttributes, physicalColumn)) {
+      return physicalColumn;
+    }
+    for (const [attrName, attrDef] of Object.entries(rawAttributes)) {
+      if (attrDef?.field === physicalColumn) {
+        return attrName;
+      }
+    }
+    return physicalColumn;
+  }
+
+  private resolvePhysicalColumnName(attrName: string): string | undefined {
+    return this.collection.model?.rawAttributes?.[attrName]?.field;
   }
 
   /**
@@ -144,10 +245,14 @@ export class MssqlSmartCursorBuilder {
   }
 
   /**
-   * Auto-detect the best cursor strategy based on table structure
-   * Uses MSSQL system views to find optimal index for cursor pagination
+   * Auto-detect the best cursor strategy based on table structure.
+   * Uses MSSQL system views to find an optimal unique index for cursor pagination and caches the result.
    */
   private async getBestCursorStrategy(): Promise<CursorStrategy> {
+    if (this.cachedStrategy) {
+      return this.cachedStrategy;
+    }
+
     const indexInfoSql = `
       SELECT 
         i.name AS INDEX_NAME,
@@ -162,7 +267,7 @@ export class MssqlSmartCursorBuilder {
       FROM 
         sys.indexes i
         INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
-        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+        INNER JOIN sys.columns c ON ic.object_id = c.object_id AND c.column_id = ic.column_id
       WHERE 
         i.object_id = OBJECT_ID(?)
         AND i.type > 0
@@ -177,61 +282,75 @@ export class MssqlSmartCursorBuilder {
         type: QueryTypes.SELECT,
         replacements: [this.getQualifiedTableName()],
         raw: true,
-      })) as any[];
+      })) as IndexMetadataRow[];
 
       const indexes: Map<string, IndexInfo> = new Map();
-      const indexDirections: Map<string, Map<string, string>> = new Map();
+      const indexDirections: Map<string, Map<string, SortDirection>> = new Map();
+      const attrToPhysical = new Map<string, string>();
 
-      // If no indexes found, fallback to filterTargetKey
       if (!indexRows || indexRows.length === 0) {
-        return this.getFallbackStrategy();
+        this.cachedStrategy = this.getFallbackStrategy();
+        return this.cachedStrategy;
       }
 
-      // Parse index information
       for (const row of indexRows) {
         const indexName = row.INDEX_NAME;
-        const columnName = row.COLUMN_NAME;
+        const physicalColumnName = row.COLUMN_NAME;
+        const columnName = this.resolveAttributeName(physicalColumnName);
+        attrToPhysical.set(columnName, physicalColumnName);
         const indexType = row.INDEX_TYPE;
-        const direction = row.DIRECTION;
+        const direction = normalizeDirection(row.DIRECTION);
 
-        // Store direction info
-        if (!indexDirections.has(indexName)) {
-          indexDirections.set(indexName, new Map());
+        let dirMap = indexDirections.get(indexName);
+        if (!dirMap) {
+          dirMap = new Map();
+          indexDirections.set(indexName, dirMap);
         }
-        indexDirections.get(indexName).set(columnName, direction);
+        dirMap.set(columnName, direction);
 
-        // Build index info
-        if (!indexes.has(indexName)) {
-          indexes.set(indexName, {
+        let index = indexes.get(indexName);
+        if (!index) {
+          index = {
             name: indexName,
             columns: [],
             isPrimary: indexType === 1,
             isUnique: indexType < 3,
-          });
+          };
+          indexes.set(indexName, index);
         }
-        const seqInIndex = row.SEQ_IN_INDEX;
-        const index = indexes.get(indexName);
-        index.columns[seqInIndex - 1] = columnName;
+        index.columns[row.SEQ_IN_INDEX - 1] = columnName;
       }
 
-      // 1. First, look for primary key
+      // Remove any sparse holes defensively
       for (const index of indexes.values()) {
-        if (index.isPrimary) {
-          if (index.columns.length === 1) {
-            return new SingleColumnCursorStrategy(index.columns[0]);
-          } else {
-            const directions = index.columns.map((col) => indexDirections.get(index.name)?.get(col) || 'ASC');
-            return new CompositeKeyCursorStrategy(index.columns, directions);
-          }
+        index.columns = index.columns.filter((col): col is string => typeof col === 'string' && col.length > 0);
+      }
+
+      const buildStrategyForIndex = (index: IndexInfo): CursorStrategy => {
+        const directions = index.columns.map((col) => indexDirections.get(index.name)?.get(col) || 'ASC');
+        const physicalColumns = index.columns.map(
+          (col) => attrToPhysical.get(col) ?? this.resolvePhysicalColumnName(col),
+        );
+        if (index.columns.length === 1) {
+          return new SingleColumnCursorStrategy(index.columns[0], directions[0], physicalColumns[0]);
+        }
+        return new CompositeKeyCursorStrategy(index.columns, directions, physicalColumns);
+      };
+
+      // 1. Primary key (guaranteed unique)
+      for (const index of indexes.values()) {
+        if (index.isPrimary && index.columns.length > 0) {
+          this.cachedStrategy = buildStrategyForIndex(index);
+          return this.cachedStrategy;
         }
       }
 
-      // 2. Look for unique index (prefer single column)
-      let singleColumnUniqueIndex = null;
-      let multiColumnUniqueIndex = null;
+      // 2. Unique index (prefer single column)
+      let singleColumnUniqueIndex: IndexInfo | null = null;
+      let multiColumnUniqueIndex: IndexInfo | null = null;
 
       for (const index of indexes.values()) {
-        if (index.isUnique && !index.isPrimary) {
+        if (index.isUnique && !index.isPrimary && index.columns.length > 0) {
           if (index.columns.length === 1 && !singleColumnUniqueIndex) {
             singleColumnUniqueIndex = index;
           } else if (index.columns.length > 1 && !multiColumnUniqueIndex) {
@@ -241,35 +360,49 @@ export class MssqlSmartCursorBuilder {
       }
 
       if (singleColumnUniqueIndex) {
-        return new SingleColumnCursorStrategy(singleColumnUniqueIndex.columns[0]);
+        this.cachedStrategy = buildStrategyForIndex(singleColumnUniqueIndex);
+        return this.cachedStrategy;
       }
 
       if (multiColumnUniqueIndex) {
-        const directions = multiColumnUniqueIndex.columns.map(
-          (col) => indexDirections.get(multiColumnUniqueIndex.name)?.get(col) || 'ASC',
-        );
-        return new CompositeKeyCursorStrategy(multiColumnUniqueIndex.columns, directions);
+        this.cachedStrategy = buildStrategyForIndex(multiColumnUniqueIndex);
+        return this.cachedStrategy;
       }
 
-      // 3. Use any available index
-      let anyIndex = null;
+      // 3. Non-unique index alone would skip duplicate rows across batch boundaries; append unique
+      // filterTargetKey columns as tie-breakers when available, otherwise fall back to filterTargetKey.
+      const tieBreakers = Array.isArray(this.collection.filterTargetKey)
+        ? this.collection.filterTargetKey
+        : this.collection.filterTargetKey
+          ? [this.collection.filterTargetKey]
+          : [];
+
       for (const index of indexes.values()) {
-        if (index.columns.length > 0 && !index.isPrimary && !index.isUnique) {
-          anyIndex = index;
-          break;
+        if (index.columns.length > 0 && !index.isPrimary && !index.isUnique && tieBreakers.length > 0) {
+          const combinedCols = [...index.columns];
+          const combinedDirs: SortDirection[] = index.columns.map(
+            (col) => indexDirections.get(index.name)?.get(col) || 'ASC',
+          );
+          for (const tb of tieBreakers) {
+            const attrTb = this.resolveAttributeName(tb);
+            if (!combinedCols.includes(attrTb)) {
+              combinedCols.push(attrTb);
+              combinedDirs.push('ASC');
+            }
+          }
+          const combinedPhysical = combinedCols.map(
+            (col) => attrToPhysical.get(col) ?? this.resolvePhysicalColumnName(col),
+          );
+          this.cachedStrategy =
+            combinedCols.length === 1
+              ? new SingleColumnCursorStrategy(combinedCols[0], combinedDirs[0], combinedPhysical[0])
+              : new CompositeKeyCursorStrategy(combinedCols, combinedDirs, combinedPhysical);
+          return this.cachedStrategy;
         }
       }
 
-      if (anyIndex) {
-        if (anyIndex.columns.length === 1) {
-          return new SingleColumnCursorStrategy(anyIndex.columns[0]);
-        } else {
-          return new CompositeKeyCursorStrategy(anyIndex.columns);
-        }
-      }
-
-      // Fallback to filterTargetKey
-      return this.getFallbackStrategy();
+      this.cachedStrategy = this.getFallbackStrategy();
+      return this.cachedStrategy;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`[MssqlSmartCursorBuilder] Error getting index info: ${message}\n`);
@@ -282,54 +415,74 @@ export class MssqlSmartCursorBuilder {
    */
   private getFallbackStrategy(): CursorStrategy {
     if (Array.isArray(this.collection.filterTargetKey)) {
-      return new CompositeKeyCursorStrategy(this.collection.filterTargetKey);
+      const cols = this.collection.filterTargetKey.map((col) => this.resolveAttributeName(col));
+      return new CompositeKeyCursorStrategy(
+        cols,
+        undefined,
+        cols.map((col) => this.resolvePhysicalColumnName(col)),
+      );
     }
-    return new SingleColumnCursorStrategy(this.collection.filterTargetKey || 'id');
+    const attr = this.resolveAttributeName(this.collection.filterTargetKey || 'id');
+    return new SingleColumnCursorStrategy(attr, 'ASC', this.resolvePhysicalColumnName(attr));
   }
 
   /**
    * Cursor-based pagination query function.
-   * Ideal for large datasets (e.g., millions of rows)
-   *
-   * Note:
-   *  1. Does not support jumping to arbitrary pages (e.g., "Page 5")
-   *  2. Requires a stable, indexed sort field (e.g. ID, createdAt)
-   *  3. If custom orderBy is used, it must match the cursor field(s) and direction
-   *
-   * @param options - Query options including chunkSize, callback, and find function
+   * Honors `options.limit` (e.g. `EXPORT_LIMIT`) as an upper bound across all batches.
    */
   async chunk(options: FindOptions) {
+    const findFn = options.find;
+    const callbackFn = options.callback;
+    if (!findFn || !callbackFn) {
+      throw new Error('chunk() requires both find and callback functions');
+    }
+
+    const overallLimit = options.limit !== undefined && options.limit !== null ? Number(options.limit) : undefined;
+    if (overallLimit !== undefined && (!Number.isFinite(overallLimit) || overallLimit <= 0)) {
+      return;
+    }
+
     const cursorStrategy = await this.getBestCursorStrategy();
-    let cursorRecord = null;
-    let hasMoreData = true;
+    let cursorRecord: CursorRow | undefined;
     let isFirst = true;
 
-    options.order = cursorStrategy.buildSort();
-    options['parseSort'] = false;
-
-    // Snapshot the caller's WHERE once. The composite-key strategy wraps baseWhere in Op.and, so
-    // reusing options.where (already mutated by the previous batch) would nest one Op.and deeper on
-    // every batch and grow the generated SQL linearly. Rebuilding from baseWhere keeps it constant.
+    // Avoid mutating the caller's options object; snapshot the caller's WHERE once so composite
+    // cursors do not nest Op.and deeper on every batch.
     const baseWhere = options.where;
+    const chunkSize = options.chunkSize || 1000;
+    const runOptions: FindOptions = {
+      ...options,
+      order: cursorStrategy.buildSort(),
+      parseSort: false,
+      limit: overallLimit !== undefined ? Math.min(chunkSize, overallLimit) : chunkSize,
+    };
 
+    let totalProcessed = 0;
+    let hasMoreData = true;
     while (hasMoreData) {
-      if (!isFirst) {
-        options.where = cursorStrategy.buildWhere(baseWhere, cursorRecord);
+      const remaining = overallLimit !== undefined ? overallLimit - totalProcessed : undefined;
+      if (remaining !== undefined && remaining <= 0) {
+        break;
       }
-      if (isFirst) {
+      const currentLimit = remaining !== undefined ? Math.min(chunkSize, remaining) : chunkSize;
+
+      if (!isFirst) {
+        runOptions.where = cursorStrategy.buildWhere(baseWhere, cursorRecord);
+      } else {
+        runOptions.where = baseWhere;
         isFirst = false;
       }
 
-      options.limit = options.chunkSize || 1000;
+      runOptions.limit = currentLimit;
 
       if (options.beforeFind) {
-        await options.beforeFind(options);
+        await options.beforeFind(runOptions);
       }
 
-      const records = await options.find(_.omit(options, 'callback', 'beforeFind', 'afterFind', 'chunkSize', 'find'));
+      const records = await findFn(_.omit(runOptions, 'callback', 'beforeFind', 'afterFind', 'chunkSize', 'find'));
 
       if (options.afterFind) {
-        await options.afterFind(records, options);
+        await options.afterFind(records, runOptions);
       }
 
       if (records.length === 0) {
@@ -337,8 +490,22 @@ export class MssqlSmartCursorBuilder {
         continue;
       }
 
-      await options.callback(records, options);
-      cursorRecord = records[records.length - 1];
+      const batch = remaining !== undefined && records.length > remaining ? records.slice(0, remaining) : records;
+      await callbackFn(batch, runOptions);
+      totalProcessed += batch.length;
+
+      // Stop when overallLimit is reached or fewer than currentLimit rows were returned.
+      if ((overallLimit !== undefined && totalProcessed >= overallLimit) || records.length < currentLimit) {
+        hasMoreData = false;
+        continue;
+      }
+
+      const nextCursor = batch[batch.length - 1] as unknown as CursorRow;
+      if (!cursorStrategy.hasCursorValues(nextCursor)) {
+        hasMoreData = false;
+        continue;
+      }
+      cursorRecord = nextCursor;
     }
   }
 }

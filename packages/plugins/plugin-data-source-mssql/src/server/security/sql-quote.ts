@@ -239,6 +239,37 @@ export function quoteUnicodeStringLiteral(value: string): string {
 }
 
 /**
+ * True when `value` contains only 7-bit ASCII characters (0x00-0x7F). Safe to emit as a non-Unicode
+ * ANSI `VARCHAR` literal (`'...'`) without losing characters on non-UTF8 SQL Server collations.
+ */
+export function isPureAscii(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    if (value.charCodeAt(i) > 0x7f) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Escapes and single-quotes an ANSI (`'...'`, no `N` prefix) string literal for `char`/`varchar`
+ * columns. Avoiding the `N` prefix prevents SQL Server `CONVERT_IMPLICIT(nvarchar, col)` which
+ * otherwise forces a full scan instead of a B-tree index seek.
+ */
+export function quoteAnsiStringLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/**
+ * Formats a `Date` as ISO-8601 without timezone (`YYYY-MM-DDTHH:mm:ss.SSS[SSSS]`). The `T`
+ * separator is SQL Server's only locale-independent format for `datetime`/`datetime2`/`smalldatetime`
+ * (immune to `SET DATEFORMAT dmy`), and omitting any offset prevents Msg 241 conversion failures.
+ */
+export function formatIsoDateTimeNoTz(value: Date): string {
+  return formatDateTimeParameter(value).replace(' ', 'T');
+}
+
+/**
  * A `Date` read by tedious for a `datetime2`/`datetimeoffset` column may carry a
  * non-enumerable `nanosecondsDelta` property: the fractional-second remainder beyond
  * JS Date's millisecond precision. Absent for values from any other source.

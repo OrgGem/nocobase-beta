@@ -21,7 +21,7 @@ function toCollectionOptions(result: any): { label: string; value: string }[] {
 }
 
 export const MssqlConfigForm: React.FC<MssqlConfigFormProps> = ({ initialValues, loadCollections }) => {
-  const { t } = useTranslation();
+  const { t } = useTranslation('plugin-data-source-mssql');
   const form = Form.useFormInstance();
   const addAllCollections = Form.useWatch('addAllCollections', form);
   const [collectionOptions, setCollectionOptions] = useState<{ label: string; value: string }[]>([]);

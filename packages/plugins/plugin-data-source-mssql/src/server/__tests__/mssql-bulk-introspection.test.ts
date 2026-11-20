@@ -2,8 +2,10 @@
 
 import {
   buildBulkColumnsSql,
+  buildBulkIndexesSql,
   formatColumnType,
   groupColumnsByTable,
+  groupIndexesByTable,
   MssqlBulkColumnRow,
 } from '../data-source/mssql-bulk-introspection';
 
@@ -102,6 +104,49 @@ describe('mssql-bulk-introspection', () => {
 
     it('returns an empty map for no rows', () => {
       expect(groupColumnsByTable([]).size).toBe(0);
+    });
+  });
+
+  describe('views, alias types, and scoped tableNames in buildBulkColumnsSql', () => {
+    it('includes both user tables and views and resolves alias types via base system type', () => {
+      const sql = buildBulkColumnsSql('sales', ['Orders', 'v_Summary']);
+      expect(sql).toContain("o.type IN ('U', 'V')");
+      expect(sql).toContain('COALESCE(st.name, t.name) AS data_type');
+      expect(sql).toContain("AND o.name IN (N'Orders', N'v_Summary')");
+    });
+  });
+
+  describe('buildBulkIndexesSql & groupIndexesByTable', () => {
+    it('builds schema-scoped bulk index SQL and groups into Sequelize showIndex shape', () => {
+      const sql = buildBulkIndexesSql('dbo', ['Orders']);
+      expect(sql).toContain("u.name = N'dbo'");
+      expect(sql).toContain("AND o.name IN (N'Orders')");
+
+      const grouped = groupIndexesByTable([
+        {
+          table_name: 'Orders',
+          index_name: 'PK_Orders',
+          column_name: 'id',
+          key_ordinal: 1,
+          is_primary_key: true,
+          is_unique: true,
+          is_descending_key: false,
+        },
+        {
+          table_name: 'Orders',
+          index_name: 'UQ_Code',
+          column_name: 'code',
+          key_ordinal: 1,
+          is_primary_key: false,
+          is_unique: true,
+          is_descending_key: true,
+        },
+      ]);
+
+      expect(grouped.get('Orders')).toEqual([
+        { name: 'PK_Orders', primary: true, unique: true, fields: [{ attribute: 'id', order: 'ASC' }] },
+        { name: 'UQ_Code', primary: false, unique: true, fields: [{ attribute: 'code', order: 'DESC' }] },
+      ]);
     });
   });
 });

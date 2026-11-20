@@ -5,7 +5,10 @@ import {
   quoteIdentifier,
   quoteQualifiedIdentifier,
   quoteUnicodeStringLiteral,
+  quoteAnsiStringLiteral,
+  isPureAscii,
   formatDateTimeParameter,
+  formatIsoDateTimeNoTz,
 } from '../security/sql-quote';
 
 describe('sql-quote security helpers', () => {
@@ -91,6 +94,22 @@ describe('sql-quote security helpers', () => {
       const d = new Date(Date.UTC(2024, 0, 2, 3, 4, 5, 678)) as Date & { nanosecondsDelta?: number };
       d.nanosecondsDelta = 0;
       expect(formatDateTimeParameter(d)).toBe('2024-01-02 03:04:05.678');
+    });
+  });
+
+  describe('ANSI string helpers & ISO datetime', () => {
+    it('detects pure ASCII vs Unicode strings', () => {
+      expect(isPureAscii('ORD-001_ABC')).toBe(true);
+      expect(isPureAscii('Nguyễn Văn A')).toBe(false);
+    });
+
+    it('quotes ANSI string literals without N prefix and doubles single quotes', () => {
+      expect(quoteAnsiStringLiteral("O'Brien")).toBe("'O''Brien'");
+    });
+
+    it('formats ISO datetime without timezone using T separator', () => {
+      const d = new Date(Date.UTC(2024, 0, 2, 3, 4, 5, 678));
+      expect(formatIsoDateTimeNoTz(d)).toBe('2024-01-02T03:04:05.678');
     });
   });
 });

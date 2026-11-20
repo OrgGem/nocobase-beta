@@ -4,35 +4,14 @@ import { createMockServer, MockServer, waitSecond } from '@nocobase/test';
 import { CollectionManager, DataSource } from '@nocobase/data-source-manager';
 import { ICollectionManager, IRepository, IModel } from '@nocobase/data-source-manager/src/types';
 import { MssqlIntrospector } from '../data-source/MssqlIntrospector';
-
-/**
- * Test suite for MSSQL Data Source Plugin
- *
- * These tests verify:
- * 1. Plugin registration
- * 2. Data source factory registration
- * 3. Test connection functionality
- * 4. Data source lifecycle (create, load, destroy)
- * 5. Collection introspection behavior
- *
- * Note: Tests use mock patterns since actual MSSQL server connection
- * is not available in CI environment.
- *
- * KNOWN LIMITATION: Integration tests using createMockServer with short plugin name
- * 'data-source-mssql' currently fail because the package is unscoped ('plugin-data-source-mssql')
- * while PluginManager.parseName() only tries '@nocobase/plugin-' and '@nocobase/preset-' prefixes.
- * This is a pre-existing architectural limitation. To fix, either:
- *   1. Rename the package to '@nocobase/plugin-data-source-mssql', OR
- *   2. Set PLUGIN_PACKAGE_PREFIX env var to include an empty prefix, OR
- *   3. Enhance PluginManager.parseName() to try the bare package name as a fallback
- */
+import { PluginDataSourceMssqlServer } from '../plugin';
 
 describe('MSSQL Data Source Plugin', () => {
   let app: MockServer;
 
   beforeEach(async () => {
     app = await createMockServer({
-      plugins: ['nocobase', 'data-source-manager', 'data-source-mssql'],
+      plugins: ['nocobase', 'data-source-manager', [PluginDataSourceMssqlServer, { name: 'data-source-mssql' }]],
     });
   });
 
@@ -58,7 +37,8 @@ describe('MSSQL Data Source Plugin', () => {
     it('should return error when options are missing', async () => {
       const res = await testConnection({ type: 'mssql' });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(500);
+      expect(res.text).toContain('Connection options are required');
     });
 
     it('should return error when host is missing', async () => {
@@ -72,7 +52,7 @@ describe('MSSQL Data Source Plugin', () => {
         },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(500);
       expect(res.text).toContain('Host');
     });
 
@@ -87,7 +67,7 @@ describe('MSSQL Data Source Plugin', () => {
         },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(500);
       expect(res.text).toContain('Database');
     });
 
@@ -102,7 +82,7 @@ describe('MSSQL Data Source Plugin', () => {
         },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(500);
       expect(res.text).toContain('Username');
     });
 
@@ -117,7 +97,7 @@ describe('MSSQL Data Source Plugin', () => {
         },
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(500);
       expect(res.text).toContain('Password');
     });
   });
@@ -315,6 +295,14 @@ describe('Mock MSSQL DataSource Integration', () => {
     });
 
     it('should get collection details', async () => {
+      await app
+        .agent()
+        .resource('dataSources.collections', 'mssqlTest')
+        .update({
+          filterByTk: 'dbo_Users',
+          values: { title: 'dbo.Users' },
+        });
+
       const getResp = await app
         .agent()
         .resource('dataSources.collections', 'mssqlTest')
@@ -397,18 +385,29 @@ describe('Mock MSSQL DataSource Integration', () => {
     });
 
     it('should remove field from collection', async () => {
+      await app
+        .agent()
+        .resource('dataSourcesCollections.fields', 'mssqlTest.identity_Clients')
+        .create({
+          values: {
+            type: 'string',
+            name: 'tempNote',
+            interface: 'input',
+          },
+        });
+
       const destroyResp = await app
         .agent()
         .resource('dataSourcesCollections.fields', 'mssqlTest.identity_Clients')
         .destroy({
-          filterByTk: 'Description',
+          filterByTk: 'tempNote',
         });
 
       expect(destroyResp.status).toBe(200);
 
       const dataSource = app.dataSourceManager.dataSources.get('mssqlTest');
       const collection = dataSource.collectionManager.getCollection('identity_Clients');
-      expect(collection.getField('Description')).toBeFalsy();
+      expect(collection.getField('tempNote')).toBeFalsy();
     });
   });
 

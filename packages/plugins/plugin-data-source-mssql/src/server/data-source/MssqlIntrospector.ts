@@ -6,10 +6,16 @@ import { QueryTypes } from 'sequelize';
 import { quoteIdentifier } from '../security/sql-quote';
 import {
   buildBulkColumnsSql,
+  buildBulkIndexesSql,
   groupColumnsByTable,
+  groupIndexesByTable,
   type MssqlBulkColumnRow,
+  type MssqlBulkIndexRow,
+  type MssqlShowIndexEntry,
   type MssqlTableColumns,
 } from './mssql-bulk-introspection';
+
+const ANSI_STRING_TYPE_RE = /^(?:VAR)?CHAR(?:\(|$)/i;
 
 /**
  * MSSQL field type → NocoBase field type mapping.
@@ -59,36 +65,82 @@ const mssqlFieldTypeMap: Record<string, string | string[]> = {
   xml: 'text',
 };
 
+interface PrimaryKeyRow {
+  table_name: string;
+  column_name: string;
+}
+
+interface FtsColumnRow {
+  table_name: string;
+  column_name: string;
+}
+
 export class MssqlIntrospector extends DatabaseIntrospector {
   /** Cache of { tableName → pk column names[] } loaded by preloadAllPrimaryKeys() */
   private primaryKeyCache: Map<string, string[]> | null = null;
+  private primaryKeyCacheFullSchema = false;
+  private primaryKeyCacheSchema: string | null = null;
 
   /**
    * Cache of { tableName → describeTable-compatible column map } loaded in ONE
-   * schema-wide query by preloadAllColumns(). When present, getTableColumnsInfo()
-   * serves column metadata from memory instead of a per-table describeTable() call,
-   * eliminating the N+1 introspection round trips. null = not preloaded (fall back
-   * to per-table describeTable).
+   * query by preloadAllColumns(). When present, getTableColumnsInfo() serves column
+   * metadata from memory instead of a per-table describeTable() call.
    */
   private columnsCache: Map<string, MssqlTableColumns> | null = null;
+  private columnsCacheSchema: string | null = null;
 
   /**
-   * Cache of { tableName → Set<columnName> } for columns with Full-Text Search indexes.
+   * Cache of { tableName → Sequelize showIndex-compatible entries } loaded in ONE
+   * query by preloadAllIndexes(). Eliminates per-table EXEC sys.sp_helpindex calls.
+   */
+  private indexesCache: Map<string, MssqlShowIndexEntry[]> | null = null;
+  private indexesCacheFullSchema = false;
+  private indexesCacheSchema: string | null = null;
+
+  /**
+   * Cache of { tableName → Set<columnName> } for columns with enabled Full-Text Search indexes.
    * null = not yet loaded; empty Map = loaded but no FTS columns found (or FTS not installed).
    */
   private ftsColumnCache: Map<string, Set<string>> | null = null;
+
+  /**
+   * Cache of { tableName → Set<columnName> } for non-Unicode ANSI string columns (`VARCHAR`, `CHAR`).
+   * Used by MSSQL filter operators to avoid `N'...'` literals that trigger `CONVERT_IMPLICIT` scans.
+   */
+  private ansiStringColumnsCache: Map<string, Set<string>> = new Map();
 
   protected getFieldTypeMap(): Record<string, string | string[]> {
     return mssqlFieldTypeMap;
   }
 
+  private recordAnsiStringColumns(tableName: string, columns: Record<string, { type?: string }>): void {
+    const ansiCols = new Set<string>();
+    for (const [colName, colMeta] of Object.entries(columns)) {
+      if (typeof colMeta?.type === 'string' && ANSI_STRING_TYPE_RE.test(colMeta.type.trim())) {
+        ansiCols.add(colName);
+      }
+    }
+    this.ansiStringColumnsCache.set(tableName, ansiCols);
+  }
+
   /**
-   * Load primary key info for ALL tables in one query and cache the result.
-   * Call this once before starting the parallel introspection loop so that
-   * getTableColumnsInfo() can use the cache instead of querying sys.indexes per table.
+   * Returns true if the given physical column is a non-Unicode `VARCHAR` or `CHAR` column.
    */
-  async preloadAllPrimaryKeys(schemaName = 'dbo'): Promise<void> {
+  isAnsiStringColumn(tableName: string, columnName: string): boolean {
+    return this.ansiStringColumnsCache.get(tableName)?.has(columnName) ?? false;
+  }
+
+  /**
+   * Load primary key info for tables in one query and cache the result.
+   */
+  async preloadAllPrimaryKeys(schemaName = 'dbo', tableNames?: string[]): Promise<void> {
+    if (tableNames && !tableNames.length) {
+      return;
+    }
     try {
+      const tableFilter = tableNames?.length
+        ? `AND o.name IN (${tableNames.map((name) => this.db.sequelize.escape(name)).join(', ')})`
+        : '';
       const sql = `
         SELECT o.name AS table_name, c.name AS column_name
         FROM sys.indexes i
@@ -98,84 +150,175 @@ export class MssqlIntrospector extends DatabaseIntrospector {
         INNER JOIN sys.schemas s ON o.schema_id = s.schema_id
         WHERE i.is_primary_key = 1
           AND s.name = ${this.db.sequelize.escape(schemaName)}
+          ${tableFilter}
         ORDER BY o.name, ic.key_ordinal
       `;
-      const rows = (await this.db.sequelize.query(sql, { type: 'SELECT' })) as any[];
+      const rows = (await this.db.sequelize.query(sql, { type: QueryTypes.SELECT })) as PrimaryKeyRow[];
 
-      const cache = new Map<string, string[]>();
+      const canMerge = Boolean(tableNames && this.primaryKeyCache && this.primaryKeyCacheSchema === schemaName);
+      const cache = canMerge && this.primaryKeyCache ? new Map(this.primaryKeyCache) : new Map<string, string[]>();
+      if (tableNames) {
+        for (const name of tableNames) {
+          cache.set(name, []);
+        }
+      }
       for (const row of rows) {
-        const tbl = row.table_name as string;
-        if (!cache.has(tbl)) cache.set(tbl, []);
-        cache.get(tbl).push(row.column_name as string);
+        const tbl = row.table_name;
+        const list = cache.get(tbl) ?? [];
+        list.push(row.column_name);
+        cache.set(tbl, list);
       }
       this.primaryKeyCache = cache;
-      this.db.logger.debug(`[MSSQL] Preloaded PK info for ${cache.size} tables`);
+      this.primaryKeyCacheSchema = schemaName;
+      if (!tableNames) {
+        this.primaryKeyCacheFullSchema = true;
+      } else if (!canMerge) {
+        this.primaryKeyCacheFullSchema = false;
+      }
+      this.db.logger?.debug?.(`[MSSQL] Preloaded PK info for ${cache.size} tables`);
     } catch (err) {
-      this.db.logger.warn('[MSSQL] Failed to preload primary keys, will fall back to per-table query:', err);
-      this.primaryKeyCache = null;
+      this.db.logger?.warn?.('[MSSQL] Failed to preload primary keys, will fall back to per-table query:', err);
+      if (!tableNames) {
+        this.primaryKeyCache = null;
+        this.primaryKeyCacheFullSchema = false;
+        this.primaryKeyCacheSchema = null;
+      }
     }
   }
 
   /**
-   * Load column metadata for ALL tables in the schema in ONE bulk query and cache it.
-   * This is the anti-N+1 path: instead of Sequelize's describeTable() issuing a
-   * per-table `sp_columns`-style round trip, the whole catalog is fetched once and
-   * grouped in memory. Call before the parallel introspection loop; getTableColumnsInfo()
-   * then serves from `columnsCache` and falls back to describeTable() only if the
-   * preload failed.
+   * Load column metadata for tables and views in the schema in ONE bulk query and cache it.
    */
-  async preloadAllColumns(schemaName = 'dbo'): Promise<void> {
+  async preloadAllColumns(schemaName = 'dbo', tableNames?: string[]): Promise<void> {
+    if (tableNames && !tableNames.length) {
+      return;
+    }
     try {
-      const rows = (await this.db.sequelize.query(buildBulkColumnsSql(schemaName), {
-        type: 'SELECT',
+      const rows = (await this.db.sequelize.query(buildBulkColumnsSql(schemaName, tableNames), {
+        type: QueryTypes.SELECT,
       })) as MssqlBulkColumnRow[];
 
-      this.columnsCache = groupColumnsByTable(rows);
-      this.db.logger.debug(`[MSSQL] Preloaded column metadata for ${this.columnsCache.size} tables`);
+      const grouped = groupColumnsByTable(rows);
+      if (tableNames && this.columnsCache && this.columnsCacheSchema === schemaName) {
+        for (const [tbl, cols] of grouped.entries()) {
+          this.columnsCache.set(tbl, cols);
+          this.recordAnsiStringColumns(tbl, cols);
+        }
+      } else {
+        this.columnsCache = grouped;
+        this.columnsCacheSchema = schemaName;
+        for (const [tbl, cols] of grouped.entries()) {
+          this.recordAnsiStringColumns(tbl, cols);
+        }
+      }
+      this.db.logger?.debug?.(`[MSSQL] Preloaded column metadata for ${grouped.size} objects`);
     } catch (err) {
-      this.db.logger.warn('[MSSQL] Failed to bulk-preload columns, will fall back to per-table describeTable:', err);
-      this.columnsCache = null;
+      this.db.logger?.warn?.('[MSSQL] Failed to bulk-preload columns, will fall back to per-table describeTable:', err);
+      if (!tableNames) {
+        this.columnsCache = null;
+        this.columnsCacheSchema = null;
+      }
     }
   }
 
   /**
-   * Load Full-Text Search index info for ALL columns in one query and cache the result.
-   * Call this once before queries run so that text operators can route to CONTAINS() vs LIKE.
+   * Load index metadata for tables and views in ONE query so getTableConstraints() does not run
+   * per-table `EXEC sys.sp_helpindex` round trips.
    */
-  async preloadFTSIndexedColumns(schemaName = 'dbo', tableNames?: string[]): Promise<void> {
+  async preloadAllIndexes(schemaName = 'dbo', tableNames?: string[]): Promise<void> {
     if (tableNames && !tableNames.length) {
-      this.ftsColumnCache = new Map();
+      return;
+    }
+    try {
+      const rows = (await this.db.sequelize.query(buildBulkIndexesSql(schemaName, tableNames), {
+        type: QueryTypes.SELECT,
+      })) as MssqlBulkIndexRow[];
+
+      const grouped = groupIndexesByTable(rows);
+      const canMerge = Boolean(tableNames && this.indexesCache && this.indexesCacheSchema === schemaName);
+      const cache =
+        canMerge && this.indexesCache ? new Map(this.indexesCache) : new Map<string, MssqlShowIndexEntry[]>();
+      if (tableNames) {
+        for (const name of tableNames) {
+          cache.set(name, grouped.get(name) ?? []);
+        }
+      } else {
+        for (const [tbl, entries] of grouped.entries()) {
+          cache.set(tbl, entries);
+        }
+      }
+      this.indexesCache = cache;
+      this.indexesCacheSchema = schemaName;
+      if (!tableNames) {
+        this.indexesCacheFullSchema = true;
+      } else if (!canMerge) {
+        this.indexesCacheFullSchema = false;
+      }
+      this.db.logger?.debug?.(`[MSSQL] Preloaded index metadata for ${grouped.size} tables`);
+    } catch (err) {
+      this.db.logger?.warn?.('[MSSQL] Failed to bulk-preload indexes, will fall back to sp_helpindex:', err);
+      if (!tableNames) {
+        this.indexesCache = null;
+        this.indexesCacheFullSchema = false;
+        this.indexesCacheSchema = null;
+      }
+    }
+  }
+
+  /**
+   * Load enabled Full-Text Search index info in one query and cache the result.
+   * Joins `sys.fulltext_indexes` with `is_enabled = 1` so disabled FTS indexes never trigger Msg 7601.
+   */
+  async preloadFTSIndexedColumns(
+    schemaName = 'dbo',
+    tableNames?: string[],
+    options: { merge?: boolean } = {},
+  ): Promise<void> {
+    if (tableNames && !tableNames.length) {
+      if (!options.merge) {
+        this.ftsColumnCache = new Map();
+      }
       return;
     }
     try {
       const sql = `
         SELECT t.name AS table_name, c.name AS column_name
         FROM sys.fulltext_index_columns fic
+        INNER JOIN sys.fulltext_indexes fi ON fic.object_id = fi.object_id AND fi.is_enabled = 1
         INNER JOIN sys.columns c ON fic.object_id = c.object_id AND fic.column_id = c.column_id
         INNER JOIN sys.tables t ON fic.object_id = t.object_id
         INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
         WHERE s.name = ${this.db.sequelize.escape(schemaName)}
         ${tableNames ? `AND t.name IN (${tableNames.map((name) => this.db.sequelize.escape(name)).join(', ')})` : ''}
       `;
-      const rows = (await this.db.sequelize.query(sql, { type: 'SELECT' })) as any[];
+      const rows = (await this.db.sequelize.query(sql, { type: QueryTypes.SELECT })) as FtsColumnRow[];
 
-      const cache = new Map<string, Set<string>>();
+      const cache =
+        options.merge && this.ftsColumnCache ? new Map(this.ftsColumnCache) : new Map<string, Set<string>>();
+      if (options.merge && tableNames) {
+        for (const name of tableNames) {
+          cache.delete(name);
+        }
+      }
       for (const row of rows) {
-        const tbl = row.table_name as string;
-        if (!cache.has(tbl)) cache.set(tbl, new Set<string>());
-        cache.get(tbl).add(row.column_name as string);
+        const tbl = row.table_name;
+        const set = cache.get(tbl) ?? new Set<string>();
+        set.add(row.column_name);
+        cache.set(tbl, set);
       }
       this.ftsColumnCache = cache;
-      this.db.logger.debug(`[MSSQL] Preloaded FTS index info for ${cache.size} tables`);
+      this.db.logger?.debug?.(`[MSSQL] Preloaded enabled FTS index info for ${cache.size} tables`);
     } catch (err) {
       // FTS may not be installed on this SQL Server instance — that's fine, fall back to LIKE
-      this.db.logger.debug('[MSSQL] FTS preload skipped (FTS not installed or insufficient permissions):', err);
-      this.ftsColumnCache = new Map(); // empty = no FTS columns
+      this.db.logger?.debug?.('[MSSQL] FTS preload skipped (FTS not installed or insufficient permissions):', err);
+      if (!options.merge) {
+        this.ftsColumnCache = new Map();
+      }
     }
   }
 
   /**
-   * Returns true if the given column has a Full-Text Search index.
+   * Returns true if the given column has an enabled Full-Text Search index.
    * Used by text operators to decide between CONTAINS() and LIKE.
    */
   hasFTSIndex(tableName: string, columnName: string): boolean {
@@ -194,11 +337,13 @@ export class MssqlIntrospector extends DatabaseIntrospector {
 
   /**
    * Override getTableColumnsInfo to handle MSSQL-specific column metadata.
-   * Adds PK detection fallback via sys.indexes query.
+   * Adds PK detection fallback via sys.indexes query and records ANSI string columns.
    */
   async getTableColumnsInfo(tableInfo: tableInfo) {
     const tableName = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
-    const cached = this.columnsCache?.get(tableName);
+    const defaultSchema = this.db.options?.schema || 'dbo';
+    const schemaName = typeof tableInfo === 'string' ? defaultSchema : tableInfo.schema || defaultSchema;
+    const cached = this.columnsCacheSchema === schemaName ? this.columnsCache?.get(tableName) : undefined;
 
     // Serve from the bulk-preloaded cache when available (anti-N+1 path); otherwise
     // fall back to a per-table describeTable() call. Clone the cached map so per-table
@@ -207,18 +352,23 @@ export class MssqlIntrospector extends DatabaseIntrospector {
       ? (Object.fromEntries(Object.entries(cached).map(([k, v]) => [k, { ...v }])) as typeof cached)
       : await this.db.sequelize.getQueryInterface().describeTable(tableInfo);
 
+    this.recordAnsiStringColumns(tableName, columns as Record<string, { type?: string }>);
+
     // Check if any column is already marked as PK
-    let hasPrimaryKey = Object.values(columns).some((col: any) => col.primaryKey);
+    const hasPrimaryKey = Object.values(columns).some((col) => Boolean((col as { primaryKey?: boolean }).primaryKey));
 
     if (!hasPrimaryKey) {
-      const schemaName = typeof tableInfo === 'string' ? 'dbo' : tableInfo.schema || 'dbo';
       let pkColumns: string[] | undefined;
 
-      if (this.primaryKeyCache !== null) {
-        // Use bulk-loaded cache (no extra query per table)
-        pkColumns = this.primaryKeyCache.get(tableName);
+      const primaryKeyCache = this.primaryKeyCache;
+      const hasCachedPk =
+        primaryKeyCache !== null &&
+        this.primaryKeyCacheSchema === schemaName &&
+        (this.primaryKeyCacheFullSchema || primaryKeyCache.has(tableName));
+
+      if (hasCachedPk) {
+        pkColumns = primaryKeyCache.get(tableName);
       } else {
-        // No cache available — fall back to per-table sys.indexes query
         try {
           const pkSql = `
             SELECT c.name AS column_name
@@ -231,34 +381,37 @@ export class MssqlIntrospector extends DatabaseIntrospector {
               AND o.name = ${this.db.sequelize.escape(tableName)}
               AND s.name = ${this.db.sequelize.escape(schemaName)}
           `;
-          const pkResult = (await this.db.sequelize.query(pkSql, { type: 'SELECT' })) as any[];
-          pkColumns = pkResult?.map((row) => row.column_name as string);
+          const pkResult = (await this.db.sequelize.query(pkSql, { type: QueryTypes.SELECT })) as Array<{
+            column_name: string;
+          }>;
+          pkColumns = pkResult?.map((row) => row.column_name);
+          if (this.primaryKeyCache && this.primaryKeyCacheSchema === schemaName) {
+            this.primaryKeyCache.set(tableName, pkColumns ?? []);
+          }
         } catch (err) {
-          this.db.logger.warn(`[MSSQL] Failed to query PK for ${tableName}:`, err);
+          this.db.logger?.warn?.(`[MSSQL] Failed to query PK for ${tableName}:`, err);
         }
       }
 
       if (pkColumns?.length) {
         for (const colName of pkColumns) {
           if (columns[colName]) {
-            (columns[colName] as any).primaryKey = true;
-            hasPrimaryKey = true;
+            (columns[colName] as { primaryKey: boolean }).primaryKey = true;
           }
         }
       }
     }
 
-    // If still no PK, try 'id' column as fallback
-    if (!hasPrimaryKey && columns['id']) {
-      (columns['id'] as any).primaryKey = true;
-    }
+    // Do NOT synthesize a fake PK on a non-unique `id` column: core DatabaseIntrospector already
+    // handles view filterTargetKey separately, and fabricating primaryKey=true on a physical table
+    // without a real PK allows update/destroy by filterByTk to mutate multiple rows.
 
     // Clean up MSSQL-specific default values (SQL expressions like (newid()), ((0)))
-    for (const [name, col] of Object.entries(columns)) {
-      const rawDefault = (col as any).defaultValue;
+    for (const col of Object.values(columns)) {
+      const typedCol = col as { defaultValue?: unknown };
+      const rawDefault = typedCol.defaultValue;
       if (rawDefault && typeof rawDefault === 'string' && rawDefault.startsWith('(') && rawDefault.endsWith(')')) {
-        // SQL expression default — clear it so Sequelize doesn't try to use it as a literal
-        (col as any).defaultValue = undefined;
+        typedCol.defaultValue = undefined;
       }
     }
 
@@ -266,22 +419,33 @@ export class MssqlIntrospector extends DatabaseIntrospector {
   }
 
   /**
-   * Override getTableConstraints to handle MSSQL-specific index format.
+   * Override getTableConstraints to serve from the bulk-preloaded index cache when available,
+   * falling back to EXEC sys.sp_helpindex only when not preloaded.
    */
   async getTableConstraints(tableInfo: tableInfo) {
+    const name = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
+    const defaultSchema = this.db.options?.schema || 'dbo';
+    const schema = typeof tableInfo === 'string' ? defaultSchema : tableInfo.schema || defaultSchema;
+    const indexesCache = this.indexesCache;
+    const hasCachedIndexes =
+      indexesCache !== null &&
+      this.indexesCacheSchema === schema &&
+      (this.indexesCacheFullSchema || indexesCache.has(name));
+    if (hasCachedIndexes) {
+      return indexesCache.get(name) ?? [];
+    }
+
     try {
-      const name = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
-      const schema = typeof tableInfo === 'string' ? this.db.options.schema || 'dbo' : tableInfo.schema || 'dbo';
-      return await this.db.sequelize.query('EXEC sys.sp_helpindex @objname = :name', {
+      const indexes = (await this.db.sequelize.query('EXEC sys.sp_helpindex @objname = :name', {
         replacements: { name: `${quoteIdentifier(schema)}.${quoteIdentifier(name)}` },
         type: QueryTypes.SHOWINDEXES,
-      });
+      })) as MssqlShowIndexEntry[];
+      if (this.indexesCache && this.indexesCacheSchema === schema) {
+        this.indexesCache.set(name, indexes ?? []);
+      }
+      return indexes;
     } catch (err) {
-      // MSSQL may not support showIndex well for all table types
-      this.db.logger.warn(
-        `[MSSQL] Failed to get indexes for ${typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName}:`,
-        err,
-      );
+      this.db.logger?.warn?.(`[MSSQL] Failed to get indexes for ${name}:`, err);
       return [];
     }
   }

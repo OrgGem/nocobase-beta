@@ -38,7 +38,14 @@ export class PluginDataSourceMssqlServer extends Plugin {
       }
 
       const manager = this.app.dataSourceManager;
-      const probe = manager.factory.create('mssql', { name: dataSourceKey, ...dbOptions }) as MssqlExternalDataSource;
+      const probe = manager.factory.create('mssql', {
+        name: dataSourceKey,
+        ...dbOptions,
+        connectTimeout: dbOptions.connectTimeout ?? 10000,
+        requestTimeout: dbOptions.requestTimeout ?? 15000,
+        slowQueryThresholdMs: 0,
+        pool: { max: 1, min: 0, acquire: 15000, idle: 1000, ...(dbOptions.pool || {}) },
+      }) as MssqlExternalDataSource;
       const owned = ![...manager.dataSources.values()].includes(probe);
       let requestFailed = false;
       let requestError: unknown;
@@ -277,14 +284,19 @@ export class PluginDataSourceMssqlServer extends Plugin {
         (dataSource.options as MssqlDataSourceOptions).selectedCollections = [...selected];
         if (!targets.length) return;
         const localData = await model.loadLocalData();
-        await dataSource.introspector.preloadFTSIndexedColumns(
-          dataSource.collectionManager.db.options.schema || 'dbo',
-          [...selected],
-        );
+        const schema = dataSource.collectionManager.db.options.schema || 'dbo';
+        await dataSource.introspector.preloadFTSIndexedColumns(schema, [...selected]);
+        const unpreparedTargets = targets.filter((name) => !prepared.has(name));
+        if (unpreparedTargets.length > 1) {
+          await dataSource.introspector.preloadAllColumns?.(schema, unpreparedTargets);
+          await dataSource.introspector.preloadAllPrimaryKeys?.(schema, unpreparedTargets);
+          await dataSource.introspector.preloadAllIndexes?.(schema, unpreparedTargets);
+        }
         for (const name of targets) {
           const wasPrepared = prepared.has(name);
           try {
-            const collection = prepared.get(name) || (await dataSource.prepareTables([name], localData))[0];
+            const collection =
+              prepared.get(name) || (await dataSource.prepareTables([name], localData, { skipFtsPreload: true }))[0];
             const [merged] = dataSource.mergeWithLoadedCollections([collection], localData);
             if (this.app.dataSourceManager.get(dataSourceKey) !== dataSource) return;
             const previous = existing.find((item) => physicalName(item) === name);

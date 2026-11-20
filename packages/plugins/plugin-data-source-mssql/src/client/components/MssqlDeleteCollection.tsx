@@ -31,6 +31,7 @@ export const MssqlDeleteCollection = (props: any) => {
 const useDestroyActionForExternalDS = () => {
   const { refresh } = useResourceActionContext();
   const { name: dataSourceKey } = useParams<{ name: string }>();
+  const { t } = useTranslation('plugin-data-source-mssql');
   const record = useRecord();
   const api = useAPIClient();
   const form = useForm();
@@ -40,23 +41,25 @@ const useDestroyActionForExternalDS = () => {
   return {
     async run() {
       if (!collectionName) {
-        message.error('Collection name is missing');
+        message.error(t('Collection name is missing'));
         return;
       }
 
       try {
         await api.request({
-          url: `dataSources/${dataSourceKey}/collections:destroy`,
+          url: `dataSources/${encodeURIComponent(dataSourceKey || '')}/collections:destroy`,
           method: 'post',
           params: {
             filterByTk: collectionName,
             cascade,
           },
         });
-        message.success('Collection deleted successfully');
+        message.success(t('Collection deleted successfully'));
         refresh();
-      } catch (error: any) {
-        message.error(error?.response?.data?.errors?.[0]?.message || 'Failed to delete collection');
+      } catch (error: unknown) {
+        const errMsg = (error as { response?: { data?: { errors?: Array<{ message?: string }> } } })?.response?.data
+          ?.errors?.[0]?.message;
+        message.error(errMsg || t('Failed to delete collection'));
         throw error;
       }
     },
@@ -76,7 +79,7 @@ const useDestroyActionAndRefreshCMForExternalDS = () => {
 
 export const MssqlDeleteCollectionAction = (props: any) => {
   const { scope, getContainer, item: record, children, isBulk, useAction, ...otherProps } = props;
-  const { t } = useTranslation();
+  const { t } = useTranslation('plugin-data-source-mssql');
   const [visible, setVisible] = useState(false);
 
   const getDestroyCollectionAction = () => {
@@ -103,9 +106,9 @@ export const MssqlDeleteCollectionAction = (props: any) => {
             {children || t('Delete')}
           </Button>
         ) : (
-          <a onClick={() => setVisible(true)} {...otherProps}>
+          <Button type="link" style={{ padding: 0 }} onClick={() => setVisible(true)} {...otherProps}>
             {children || t('Delete')}
-          </a>
+          </Button>
         )}
         <SchemaComponent
           schema={{

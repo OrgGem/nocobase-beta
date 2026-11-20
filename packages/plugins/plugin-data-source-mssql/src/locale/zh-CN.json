@@ -1,4 +1,5 @@
 {
+  "External MSSQL": "外部 MSSQL",
   "Host": "主机",
   "Port": "端口",
   "Database": "数据库",
@@ -16,5 +17,23 @@
   "Collection name is missing": "缺少数据表名称",
   "Collection deleted successfully": "数据表删除成功",
   "Failed to delete collection": "删除数据表失败",
-  "Unable to load collections": "无法加载数据表"
+  "Unable to load collections": "无法加载数据表",
+  "Advanced performance & connection settings": "高级性能与连接设置",
+  "Trust server certificate": "信任服务器证书",
+  "Read-only intent": "只读意图 (ReadOnly)",
+  "Route read queries to AlwaysOn Availability Group secondary replicas when configured": "配置 AlwaysOn 可用性组时将只读查询路由至只读副本",
+  "Read uncommitted (avoid writer lock waits)": "读未提交（避免写锁阻塞）",
+  "Prevents read timeouts caused by write locks on non-RCSI databases, but may return uncommitted data": "避免未开启 RCSI 的数据库因写锁导致查询超时，但可能读取未提交数据",
+  "Request timeout (ms)": "查询超时时间（毫秒）",
+  "Maximum time per SQL query before cancelling (default: 120000 ms)": "单条 SQL 查询取消前的最大等待时间（默认：120000 毫秒）",
+  "Lock timeout (ms)": "锁等待超时时间（毫秒）",
+  "Fail fast when blocked by locks instead of waiting until request timeout (0 = unlimited)": "被锁阻塞时快速失败，而不是一直等待到查询超时（0 = 不限制）",
+  "Full-text search mode": "全文检索模式",
+  "Use SQL Server CONTAINS() on FTS-indexed columns for $includes, or disable to always use substring LIKE": "对启用全文索引的列使用 CONTAINS() 执行包含查询，或关闭以始终使用 LIKE 子串匹配",
+  "Auto (use FTS when indexed)": "自动（存在全文索引时使用 FTS）",
+  "Off (always use LIKE)": "关闭（始终使用 LIKE）",
+  "Fast unfiltered count": "快速无条件计数",
+  "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables": "无筛选条件时使用 sys.partitions 元数据替代大表 COUNT(*)",
+  "Slow query warning threshold (ms)": "慢查询告警阈值（毫秒）",
+  "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "记录超过该耗时的 SQL 查询以辅助排查缺失索引（0 = 关闭，默认：2000 毫秒）"
 }

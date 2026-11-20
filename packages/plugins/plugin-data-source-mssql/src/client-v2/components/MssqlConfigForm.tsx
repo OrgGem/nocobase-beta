@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Checkbox, Form, Input, InputNumber, Select } from 'antd';
+import { Checkbox, Collapse, Form, Input, InputNumber, Radio, Select } from 'antd';
 import { useFlowContext } from '@nocobase/flow-engine';
 import type { DataSourceSettingsFormProps } from '@nocobase/plugin-data-source-manager/client-v2';
 import { useTranslation } from 'react-i18next';
@@ -14,6 +14,7 @@ const CONNECTION_FIELDS = [
   'username',
   'password',
   'encrypt',
+  'trustServerCertificate',
   'tablePrefix',
 ] as const;
 
@@ -31,7 +32,7 @@ export function toCollectionOptions(result: unknown): { label: string; value: st
 }
 
 export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, initialValues, loadCollections }) => {
-  const { t } = useTranslation();
+  const { t } = useTranslation('plugin-data-source-mssql');
   const form = Form.useFormInstance();
   const ctx = useFlowContext();
   const addAllCollections = Form.useWatch(['options', 'addAllCollections'], form);
@@ -42,6 +43,7 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
   const username = Form.useWatch(['options', 'username'], form);
   const password = Form.useWatch(['options', 'password'], form);
   const encrypt = Form.useWatch(['options', 'encrypt'], form);
+  const trustServerCertificate = Form.useWatch(['options', 'trustServerCertificate'], form);
   const tablePrefix = Form.useWatch(['options', 'tablePrefix'], form);
   const [collectionOptions, setCollectionOptions] = useState<{ label: string; value: string }[]>([]);
   const [loading, setLoading] = useState(false);
@@ -66,7 +68,7 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
     cachedConnection.current = undefined;
     setCollectionOptions([]);
     setLoading(false);
-  }, [host, port, database, schema, username, password, encrypt, tablePrefix]);
+  }, [host, port, database, schema, username, password, encrypt, trustServerCertificate, tablePrefix]);
 
   const handleLoadCollections = useCallback(async () => {
     const values = form.getFieldsValue(true);
@@ -82,8 +84,10 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
     const generation = requestGeneration.current;
     setLoading(true);
     try {
+      const readConnectionField = (field: (typeof CONNECTION_FIELDS)[number], opts?: Record<string, unknown>) =>
+        field === 'trustServerCertificate' ? opts?.[field] ?? true : opts?.[field];
       const connectionChanged = CONNECTION_FIELDS.some(
-        (field) => values.options?.[field] !== initialValues?.options?.[field],
+        (field) => readConnectionField(field, values.options) !== readConnectionField(field, initialValues?.options),
       );
       const result =
         mode === 'create' || connectionChanged
@@ -108,6 +112,88 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
       }
     }
   }, [ctx, form, loadCollections, initialValues, mode, t]);
+
+  const advancedItems = [
+    {
+      key: 'advanced',
+      label: t('Advanced performance & connection settings'),
+      forceRender: true,
+      children: (
+        <>
+          <Form.Item
+            name={['options', 'trustServerCertificate']}
+            label={t('Trust server certificate')}
+            valuePropName="checked"
+            initialValue={initialValues?.options?.trustServerCertificate ?? true}
+          >
+            <Checkbox />
+          </Form.Item>
+          <Form.Item
+            name={['options', 'readOnlyIntent']}
+            label={t('Read-only intent')}
+            extra={t('Route read queries to AlwaysOn Availability Group secondary replicas when configured')}
+            valuePropName="checked"
+          >
+            <Checkbox />
+          </Form.Item>
+          <Form.Item
+            name={['options', 'readUncommitted']}
+            label={t('Read uncommitted (avoid writer lock waits)')}
+            extra={t(
+              'Prevents read timeouts caused by write locks on non-RCSI databases, but may return uncommitted data',
+            )}
+            valuePropName="checked"
+          >
+            <Checkbox />
+          </Form.Item>
+          <Form.Item
+            name={['options', 'requestTimeout']}
+            label={t('Request timeout (ms)')}
+            extra={t('Maximum time per SQL query before cancelling (default: 120000 ms)')}
+          >
+            <InputNumber min={1000} max={600000} step={1000} placeholder="120000" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name={['options', 'lockTimeout']}
+            label={t('Lock timeout (ms)')}
+            extra={t('Fail fast when blocked by locks instead of waiting until request timeout (0 = unlimited)')}
+          >
+            <InputNumber min={0} max={300000} step={1000} placeholder="0" style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item
+            name={['options', 'fullTextSearchMode']}
+            label={t('Full-text search mode')}
+            extra={t(
+              'Use SQL Server CONTAINS() on FTS-indexed columns for $includes, or disable to always use substring LIKE',
+            )}
+            initialValue={initialValues?.options?.fullTextSearchMode ?? 'auto'}
+          >
+            <Radio.Group>
+              <Radio value="auto">{t('Auto (use FTS when indexed)')}</Radio>
+              <Radio value="off">{t('Off (always use LIKE)')}</Radio>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item
+            name={['options', 'fastCount']}
+            label={t('Fast unfiltered count')}
+            extra={t('Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables')}
+            valuePropName="checked"
+          >
+            <Checkbox />
+          </Form.Item>
+          <Form.Item
+            name={['options', 'slowQueryThresholdMs']}
+            label={t('Slow query warning threshold (ms)')}
+            extra={t(
+              'Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)',
+            )}
+          >
+            <InputNumber min={0} max={60000} step={500} placeholder="2000" style={{ width: '100%' }} />
+          </Form.Item>
+        </>
+      ),
+    },
+  ];
 
   return (
     <>
@@ -159,6 +245,7 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
           />
         </Form.Item>
       ) : null}
+      <Collapse ghost items={advancedItems} />
     </>
   );
 };
