@@ -43,6 +43,7 @@ import { validateRoutingBindingAction } from './services/RoutingBindingValidatio
 import { initializeRoutingGraphLock, RoutingBindingRepository } from './services/RoutingBindingRepository';
 import { guardHierarchyEnrollment, guardManagedChildActions } from './services/HierarchyEnrollmentGuard';
 import { HierarchyRequestCancellation } from './services/HierarchyRequestCancellation';
+import { installParallelInterruptActionsPatch } from './services/ParallelInterruptActionsPatch';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -172,6 +173,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   private removeNativeMonitorHook?: () => void;
   private removeManagedPromptProtection?: () => void;
   private removeNativeUsageAttribution?: () => void;
+  private removeParallelInterruptActionsPatch?: () => void;
   private governanceEnabled = true;
   loopScheduler: LoopSchedulerService;
   loopWorker: LoopWorkerService;
@@ -264,6 +266,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.app.acl.allow('agentAutoApproval', ['get', 'set', 'eligible'], 'loggedIn');
 
     this.installGovernanceHooks();
+    this.installParallelInterruptActionsFix();
     this.app.resourceManager.use(
       async (ctx, next) => {
         if (
@@ -653,6 +656,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   async afterEnable() {
     this.governanceEnabled = true;
     this.installGovernanceHooks();
+    this.installParallelInterruptActionsFix();
     this.installNativeMonitorHook();
   }
   async afterDisable() {
@@ -662,6 +666,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.removeManagedPromptProtection = undefined;
     this.removeNativeUsageAttribution?.();
     this.removeNativeUsageAttribution = undefined;
+    this.removeParallelInterruptActionsPatch?.();
+    this.removeParallelInterruptActionsPatch = undefined;
     this.nativeObserver?.uninstall();
     this.removeNativeMonitorHook?.();
     this.removeNativeMonitorHook = undefined;
@@ -675,6 +681,8 @@ export class PluginAgentOrchestratorServer extends Plugin {
     this.removeManagedPromptProtection = undefined;
     this.removeNativeUsageAttribution?.();
     this.removeNativeUsageAttribution = undefined;
+    this.removeParallelInterruptActionsPatch?.();
+    this.removeParallelInterruptActionsPatch = undefined;
     this.app.off?.('afterStart', this.installNativeObserver);
     this.app.removeListener?.('afterStart', this.installNativeObserver);
     this.app.off?.('afterStart', this.startLoopWorker);
@@ -702,6 +710,12 @@ export class PluginAgentOrchestratorServer extends Plugin {
     if (!this.removeManagedPromptProtection)
       this.removeManagedPromptProtection = installManagedPromptProtection(this.db);
     if (!this.removeNativeUsageAttribution) this.removeNativeUsageAttribution = installNativeUsageAttribution(this);
+  }
+
+  private installParallelInterruptActionsFix() {
+    if (!this.removeParallelInterruptActionsPatch) {
+      this.removeParallelInterruptActionsPatch = installParallelInterruptActionsPatch();
+    }
   }
 
   private installNativeMonitorHook() {
