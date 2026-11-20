@@ -19,18 +19,26 @@ function ApprovalDetailView() {
   const t = useT();
   const { record, refresh } = useWorkflowTaskRecord();
   const [detail, setDetail] = useState<ApprovalDetail | null>(null);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    setDetail(null);
-    app.apiClient
-      .request({ url: 'workflowGitReview:approval', params: { filterByTk: record.id } })
-      .then((response) => {
+    const loadDetail = async () => {
+      setDetail(null);
+      setLoading(true);
+      try {
+        const response = await app.apiClient.request({
+          url: 'workflowGitReview:approval',
+          params: { filterByTk: record.id },
+        });
         if (!cancelled) setDetail(response.data?.data ?? null);
-      })
-      .catch(() => {
+      } catch (_error) {
         if (!cancelled) message.error(t('Review task is unavailable'));
-      });
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    loadDetail();
     return () => {
       cancelled = true;
     };
@@ -56,6 +64,12 @@ function ApprovalDetailView() {
     }
   };
 
+  if (loading)
+    return (
+      <Spin spinning>
+        <div style={{ minHeight: 120 }} />
+      </Spin>
+    );
   if (!detail)
     return (
       <Spin spinning={busy}>
@@ -102,6 +116,7 @@ export const reviewApprovalTaskType: TaskTypeOptions = {
   collection: 'workflowGitReview',
   action: 'approvals',
   alwaysShow: true,
+  useActionParams: (status) => (status === 'completed' ? { status: 'completed' } : {}),
   Item: ApprovalItem,
   Detail: ApprovalDetailView,
   getPopupRecord: async (api, { params }) => api.resource('workflowGitReview').approval?.(params),

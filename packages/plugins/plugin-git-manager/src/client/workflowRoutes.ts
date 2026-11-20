@@ -1,11 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-  getModernClientPrefix,
-  getRouteRuntimeVersion,
-  getV2EffectiveBasePath,
-  stripModernClientPrefix,
-} from '@nocobase/client-v2';
+import { getRouteRuntimeVersion, getV2EffectiveBasePath, stripModernClientPrefix } from '@nocobase/client-v2';
 
 type App = Parameters<typeof getV2EffectiveBasePath>[0];
 
@@ -27,9 +22,6 @@ export function workflowHref(app: App, type: 'workflow' | 'execution', id: strin
 }
 
 export function reviewApprovalHref(app: App) {
-  const base =
-    getRouteRuntimeVersion() === 'modern'
-      ? getV2EffectiveBasePath(app)
-      : join(legacyBase(app), getModernClientPrefix());
+  const base = getRouteRuntimeVersion() === 'modern' ? getV2EffectiveBasePath(app) : legacyBase(app);
   return join(base, '/admin/workflow/tasks/git-review-approval/pending');
 }

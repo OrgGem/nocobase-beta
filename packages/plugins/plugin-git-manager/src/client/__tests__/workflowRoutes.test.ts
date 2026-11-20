@@ -33,7 +33,7 @@ describe('Git review workflow route resolution', () => {
     else routeWindow.__nocobase_modern_client_prefix__ = originalModernPrefix;
   });
 
-  it('keeps workflow links in the legacy shell and sends approval tasks through the modern prefix', () => {
+  it('keeps workflow and approval task links in the legacy shell without forcing a modern prefix', () => {
     routeWindow.__nocobase_modern_client_prefix__ = 'v3-custom';
     routeWindow.__nocobase_public_path__ = '/tenant/app/v3-custom/';
     window.history.replaceState({}, '', '/tenant/app/admin/settings/workflow');
@@ -41,7 +41,7 @@ describe('Git review workflow route resolution', () => {
 
     expect(workflowHref(app, 'workflow', 'flow/42')).toBe('/tenant/app/admin/settings/workflow/workflows/flow%2F42');
     expect(workflowHref(app, 'execution', 73)).toBe('/tenant/app/admin/settings/workflow/executions/73');
-    expect(reviewApprovalHref(app)).toBe('/tenant/app/v3-custom/admin/workflow/tasks/git-review-approval/pending');
+    expect(reviewApprovalHref(app)).toBe('/tenant/app/admin/workflow/tasks/git-review-approval/pending');
   });
 
   it('uses the effective modern basename and custom modern prefix for v2 workflow links', () => {

@@ -3,23 +3,34 @@
 import React from 'react';
 import { Plugin } from '@nocobase/client';
 import { registerInstructions, type ReviewWorkflowClient } from './instructions';
-import { reviewRequestCollection } from '../common/review-request-collection';
+import { reviewApprovalTaskType, type V1TaskTypeOptions } from './Approvals';
+import { reviewApprovalCollection, reviewRequestCollection } from '../common/review-request-collection';
 
 const Settings = React.lazy(() => import('../client-v2/Settings'));
+
+type V1WorkflowClient = ReviewWorkflowClient & {
+  registerTaskType?: (key: string, option: V1TaskTypeOptions) => void;
+};
 
 export default class PluginWorkflowGitReviewClient extends Plugin {
   async load() {
     const dataSource = this.app.dataSourceManager.getDataSource('main');
-    const registerReviewRequest = () => {
-      if (!dataSource.collectionManager.getCollection(reviewRequestCollection.name)) {
-        dataSource.collectionManager.addCollections([reviewRequestCollection]);
+    const registerCollections = () => {
+      const missing = [reviewRequestCollection, reviewApprovalCollection].filter(
+        (collection) => !dataSource.collectionManager.getCollection(collection.name),
+      );
+      if (missing.length) {
+        dataSource.collectionManager.addCollections(missing);
       }
     };
-    registerReviewRequest();
-    dataSource.addReloadCallback(registerReviewRequest);
+    registerCollections();
+    dataSource.addReloadCallback(registerCollections);
 
-    const workflow = this.app.pm.get<ReviewWorkflowClient>('workflow');
-    if (workflow) registerInstructions(workflow);
+    const workflow = this.app.pm.get<V1WorkflowClient>('workflow');
+    if (workflow) {
+      registerInstructions(workflow);
+      workflow.registerTaskType?.('git-review-approval', reviewApprovalTaskType);
+    }
     this.app.pluginSettingsManager.add('workflow-git-review', {
       title: this.t('Git Review Workflows'),
       icon: 'BranchesOutlined',

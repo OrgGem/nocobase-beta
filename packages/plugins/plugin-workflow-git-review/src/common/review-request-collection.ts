@@ -38,3 +38,51 @@ export const reviewRequestCollection = {
     })),
   ],
 };
+
+// Client metadata for the virtual workflowGitReview approval task resource so v1 List.Decorator resolves the collection.
+export const reviewApprovalCollection = {
+  name: 'workflowGitReview',
+  title: `{{t("Git review approvals", { ns: "${namespace}" })}}`,
+  hidden: true,
+  filterTargetKey: 'id',
+  titleField: 'title',
+  fields: [
+    {
+      name: 'id',
+      type: 'integer',
+      primaryKey: true,
+      interface: 'id',
+      uiSchema: { type: 'number', title: '{{t("ID")}}', 'x-component': 'InputNumber' },
+    },
+    {
+      name: 'title',
+      type: 'string',
+      interface: 'input',
+      uiSchema: {
+        type: 'string',
+        title: `{{t("Review approval", { ns: "${namespace}" })}}`,
+        'x-component': 'Input',
+      },
+    },
+    {
+      name: 'executionId',
+      type: 'bigInt',
+      interface: 'integer',
+      uiSchema: {
+        type: 'number',
+        title: `{{t("Execution ID", { ns: "${namespace}" })}}`,
+        'x-component': 'InputNumber',
+      },
+    },
+    {
+      name: 'reviewId',
+      type: 'integer',
+      interface: 'integer',
+      uiSchema: {
+        type: 'number',
+        title: `{{t("Review ID", { ns: "${namespace}" })}}`,
+        'x-component': 'InputNumber',
+      },
+    },
+  ],
+};

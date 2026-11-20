@@ -185,9 +185,11 @@ export async function readPinnedReviewSource(
       content = files
         .map((item) => {
           const file = object(item);
-          if (typeof file.filename !== 'string' || typeof file.patch !== 'string')
-            throw new Error('GitHub comparison contains an unavailable patch');
+          if (typeof file.filename !== 'string') throw new Error('GitHub comparison contains an unavailable patch');
           if (/[\r\n]/.test(file.filename)) throw new Error('GitHub comparison has an unsupported filename');
+          if (typeof file.patch !== 'string') {
+            return `Binary files a/${file.filename} and b/${file.filename} differ (patch omitted by provider)`;
+          }
           return `--- a/${file.filename}\n+++ b/${file.filename}\n${file.patch}`;
         })
         .join('\n');
@@ -202,11 +204,12 @@ export async function readPinnedReviewSource(
       content = comparison.diffs
         .map((item) => {
           const file = object(item);
-          if (file.too_large || file.collapsed || typeof file.diff !== 'string')
-            throw new Error('GitLab comparison contains an unavailable patch');
           const oldPath = String(file.old_path || '');
           const newPath = String(file.new_path || '');
           if (/[\r\n]/.test(oldPath + newPath)) throw new Error('GitLab comparison has an unsupported filename');
+          if (file.too_large || file.collapsed || typeof file.diff !== 'string') {
+            return `Binary files a/${oldPath} and b/${newPath} differ (patch omitted by provider)`;
+          }
           return `--- a/${oldPath}\n+++ b/${newPath}\n${file.diff}`;
         })
         .join('\n');

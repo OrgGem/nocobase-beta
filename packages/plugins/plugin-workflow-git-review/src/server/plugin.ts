@@ -288,7 +288,18 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
         setup: async (ctx, next) => this.setupAction(ctx as unknown as Context, next, false),
         repair: async (ctx, next) => this.setupAction(ctx as unknown as Context, next, true),
         approvals: async (ctx, next) => {
-          ctx.body = await listApprovals(ctx as unknown as Context);
+          const status = String(ctx.action?.params?.status ?? '');
+          const allRows = status === 'completed' ? [] : await listApprovals(ctx as unknown as Context);
+          const page = Math.max(1, Number(ctx.action?.params?.page) || 1);
+          const pageSize = Math.min(200, Math.max(1, Number(ctx.action?.params?.pageSize) || 20));
+          const start = (page - 1) * pageSize;
+          ctx.body = {
+            rows: allRows.slice(start, start + pageSize),
+            count: allRows.length,
+            page,
+            pageSize,
+            totalPage: Math.ceil(allRows.length / pageSize),
+          };
           await next();
         },
         approval: async (ctx, next) => {

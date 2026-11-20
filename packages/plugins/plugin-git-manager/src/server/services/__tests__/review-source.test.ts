@@ -216,4 +216,36 @@ describe('pinned Git review source', () => {
       `https://gitlab.test/api/v4/projects/team%2Fproject/repository/compare?from=${projectBase}&to=${projectHead}`,
     );
   });
+
+  it('marks collapsed or binary merge-request patches as omitted instead of failing the review context', async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      const body = url.includes('/repository/compare')
+        ? {
+            compare_timeout: false,
+            overflow: false,
+            diffs: [
+              { old_path: 'src/action.ts', new_path: 'src/action.ts', diff: '@@ -1 +1 @@\n-old()\n+new()' },
+              { old_path: 'yarn.lock', new_path: 'yarn.lock', collapsed: true, too_large: true, diff: '' },
+            ],
+          }
+        : url.includes('/merge_requests/9')
+          ? { sha: projectHead, diff_refs: { base_sha: projectBase }, source_branch: 'feature/review' }
+          : { id: 71, web_url: 'https://gitlab.test/team/project' };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const database = createDatabase();
+    const repository = createRepository(1, 'https://gitlab.test/team/project.git');
+    const source = await resolveReviewSource(database, repository, {
+      targetType: 'mr',
+      mrIid: 9,
+      headSha: projectHead,
+    });
+
+    const diff = await readPinnedReviewSource(database, repository, source);
+
+    expect(diff).toContain('+new()');
+    expect(diff).toContain('Binary files a/yarn.lock and b/yarn.lock differ (patch omitted by provider)');
+  });
 });

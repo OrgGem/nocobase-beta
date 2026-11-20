@@ -30,7 +30,8 @@ vi.mock('antd', () => ({
   Input: () => null,
   Typography: { Text: () => null },
 }));
-vi.mock('../../client-v2/Approvals', () => ({ reviewApprovalTaskType: {} }));
+vi.mock('../Approvals', () => ({ reviewApprovalTaskType: { key: 'git-review-approval' } }));
+vi.mock('../../client-v2/Approvals', () => ({ reviewApprovalTaskType: { key: 'git-review-approval' } }));
 
 function strictWorkflow(instructionBase: new (...args: never[]) => object) {
   const entries = new Map<string, object>();
@@ -91,10 +92,17 @@ describe('Git Review workflow instruction runtime registration', () => {
     await PluginWorkflowGitReviewClient.prototype.load.call(context as unknown as PluginWorkflowGitReviewClient);
 
     expect(context.collections.has('gitReviewRequests')).toBe(true);
+    expect(context.collections.has('workflowGitReview')).toBe(true);
     expect(context.reloadCallbacks).toHaveLength(1);
     context.collections.delete('gitReviewRequests');
+    context.collections.delete('workflowGitReview');
     context.reloadCallbacks[0]();
     expect(context.collections.has('gitReviewRequests')).toBe(true);
+    expect(context.collections.has('workflowGitReview')).toBe(true);
+    expect(workflow.registerTaskType).toHaveBeenCalledWith(
+      'git-review-approval',
+      expect.objectContaining({ key: 'git-review-approval' }),
+    );
 
     expect([...workflow.entries.keys()].filter((type) => type.startsWith('git-review-'))).toEqual([
       'git-review-llm',
