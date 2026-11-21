@@ -8,6 +8,7 @@
  */
 
 import { createMockServer, type MockServer } from '@nocobase/test';
+import { QueryTypes } from 'sequelize';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { PluginAgentOrchestratorServer } from '../plugin';
 import {
@@ -17,6 +18,22 @@ import {
 } from '../services/HierarchyInvocationJournal';
 
 const suffix = `${process.pid}-${Date.now()}`;
+const pluginOptions = {
+  name: 'plugin-agent-orchestrator',
+  packageName: 'plugin-agent-orchestrator',
+};
+
+type DatabaseIndex = {
+  name?: string;
+  unique?: boolean;
+  fields?: Array<string | { attribute?: string; name?: string }>;
+};
+
+function indexFieldNames(index: DatabaseIndex) {
+  return (index.fields || [])
+    .map((field) => (typeof field === 'string' ? field : field.attribute || field.name || ''))
+    .join(',');
+}
 
 function invocation(overrides: Partial<ReserveHierarchyInvocation> = {}): ReserveHierarchyInvocation {
   return {
@@ -54,7 +71,7 @@ describe('hierarchy invocation journal persistence', () => {
 
   beforeAll(async () => {
     app = await createMockServer({
-      plugins: ['nocobase', PluginAgentOrchestratorServer],
+      plugins: ['nocobase', [PluginAgentOrchestratorServer, pluginOptions]],
       name: `hierarchy-invocation-journal-${suffix}`,
       skipSupervisor: true,
     });
@@ -63,6 +80,53 @@ describe('hierarchy invocation journal persistence', () => {
 
   afterAll(async () => {
     await app?.destroy();
+  });
+
+  it('keeps the persisted hierarchy unique index stable through repeated model syncs', async () => {
+    const collection = app.db.getCollection('agentHierarchyInvocations');
+    const fieldNames = collection.underscored
+      ? 'parent_session_id,parent_tool_call_id'
+      : 'parentSessionId,parentToolCallId';
+    const configuredIndex = collection.model.options.indexes?.find(
+      (index) => index.unique && indexFieldNames(index as DatabaseIndex) === fieldNames,
+    );
+    const readIndexOid = async () => {
+      const rows = await app.db.sequelize.query<{ index_oid: string }>(
+        `SELECT c.oid::text AS index_oid
+           FROM pg_class AS c
+           JOIN pg_namespace AS n ON n.oid = c.relnamespace
+           JOIN pg_index AS i ON i.indexrelid = c.oid
+          WHERE n.nspname = ? AND c.relname = ?`,
+        {
+          replacements: [collection.collectionSchema() || 'public', configuredIndex?.name],
+          type: QueryTypes.SELECT,
+        },
+      );
+      return rows[0]?.index_oid;
+    };
+
+    expect(configuredIndex).toBeTruthy();
+    let initialIndexOid: string | undefined;
+    if (app.db.inDialect('postgres')) {
+      expect(Buffer.byteLength(configuredIndex?.name || '', 'utf8')).toBeLessThanOrEqual(63);
+      initialIndexOid = await readIndexOid();
+      expect(initialIndexOid).toBeTruthy();
+    }
+
+    await collection.sync();
+    await collection.sync();
+
+    if (app.db.inDialect('postgres')) {
+      expect(await readIndexOid()).toBe(initialIndexOid);
+    }
+
+    const indexes = (await app.db.sequelize
+      .getQueryInterface()
+      .showIndex(collection.getTableNameWithSchema())) as DatabaseIndex[];
+    const matchingIndexes = indexes.filter((index) => index.unique && indexFieldNames(index) === fieldNames);
+
+    expect(matchingIndexes).toHaveLength(1);
+    expect(matchingIndexes[0].name).toBe(configuredIndex?.name);
   });
 
   it('reserves one owner-scoped idempotency key and rejects conflicting reuse', async () => {

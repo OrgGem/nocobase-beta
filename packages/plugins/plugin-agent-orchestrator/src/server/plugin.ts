@@ -44,6 +44,7 @@ import { initializeRoutingGraphLock, RoutingBindingRepository } from './services
 import { guardHierarchyEnrollment, guardManagedChildActions } from './services/HierarchyEnrollmentGuard';
 import { HierarchyRequestCancellation } from './services/HierarchyRequestCancellation';
 import { installParallelInterruptActionsPatch } from './services/ParallelInterruptActionsPatch';
+import { normalizeHierarchyInvocationIndex } from './utils/normalize-hierarchy-invocation-index';
 
 function normalizeOptionalString(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -202,7 +203,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   async beforeLoad() {
     this.db.registerRepositories({ RoutingBindingRepository });
     // Import collection definitions
-    this.db.import({ directory: path.resolve(__dirname, 'collections') });
+    await this.db.import({ directory: path.resolve(__dirname, 'collections') });
 
     this.db.addMigrations({
       namespace: this.name,
@@ -212,6 +213,7 @@ export class PluginAgentOrchestratorServer extends Plugin {
   }
 
   async load() {
+    normalizeHierarchyInvocationIndex(this.db);
     await this.skillHub.load();
 
     // --- ACL ---
