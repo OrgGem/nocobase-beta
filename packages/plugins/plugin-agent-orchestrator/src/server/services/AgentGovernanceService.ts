@@ -3,6 +3,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
 import type { Database, Filter, Model, Transaction } from '@nocobase/database';
+import { Op, cast, col, fn, where, type WhereOptions } from 'sequelize';
 import { z } from 'zod';
 import { read } from '../utils/record-utils';
 import { resolveUserDepartment } from './DepartmentAttribution';
@@ -111,6 +112,65 @@ export class AgentGovernanceService {
       filter: { policyId: id },
       sort: ['-version'],
       limit: 500,
+    });
+  }
+
+  async listTargets(input: { target?: unknown; search?: unknown; id?: unknown }) {
+    if (input.target !== 'user' && input.target !== 'department') {
+      throw new Error('Policy scope is invalid.');
+    }
+    const collectionName = input.target === 'user' ? 'users' : 'departments';
+    if (!this.db.hasCollection(collectionName)) return [];
+    const model = this.db.getRepository(collectionName).model;
+    const dialect = this.db.sequelize.getDialect();
+    const castType = ['mysql', 'mariadb'].includes(dialect) ? 'CHAR' : 'TEXT';
+    const likeOp = dialect === 'postgres' ? Op.iLike : Op.like;
+    const idField = model.rawAttributes.id?.field || 'id';
+    const textAttrs = (input.target === 'user' ? ['nickname', 'username', 'email'] : ['title']).filter((name) =>
+      Boolean(model.rawAttributes[name]),
+    );
+    const attributes: Array<string | [ReturnType<typeof cast>, string]> = [
+      [cast(col(idField), castType), 'id'],
+      ...textAttrs,
+    ];
+    if (input.target === 'department' && model.rawAttributes.parentId) {
+      attributes.push([cast(col(model.rawAttributes.parentId.field || 'parentId'), castType), 'parentId']);
+    }
+    const keyword = typeof input.search === 'string' ? input.search.trim().slice(0, 200) : '';
+    const targetId = typeof input.id === 'string' || typeof input.id === 'number' ? String(input.id).trim() : '';
+    if (targetId && !keyword) {
+      if (!/^[1-9]\d{0,18}$/.test(targetId) || BigInt(targetId) > 9223372036854775807n) return [];
+      const selected = await model.findOne({
+        attributes,
+        where: { id: targetId },
+        raw: true,
+      });
+      return selected ? [selected] : [];
+    }
+    const conditions: WhereOptions[] = [];
+    if (keyword) {
+      const lowerKeyword = keyword.toLowerCase();
+      const pattern = `%${keyword.replace(/[\\%_]/g, '\\$&')}%`;
+      for (const name of textAttrs) {
+        const fieldName = model.rawAttributes[name]?.field || name;
+        if (dialect === 'sqlite') {
+          conditions.push(where(fn('INSTR', fn('LOWER', col(fieldName)), lowerKeyword), { [Op.gt]: 0 }));
+        } else {
+          conditions.push({ [name]: { [likeOp]: pattern } });
+        }
+      }
+      const digits = keyword.replace(/^#/, '');
+      if (/^\d+$/.test(digits)) {
+        conditions.push(where(cast(col(idField), castType), Op.like, `%${digits}%`));
+      }
+      if (!conditions.length) return [];
+    }
+    return model.findAll({
+      attributes,
+      ...(conditions.length ? { where: { [Op.or]: conditions } } : {}),
+      order: [[col(idField), 'ASC']],
+      limit: 200,
+      raw: true,
     });
   }
 

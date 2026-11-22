@@ -41,6 +41,19 @@ export function registerAgentGovernanceResource(plugin: Plugin) {
         }
         await next();
       },
+      async listTargets(ctx, next) {
+        try {
+          requireAdminActor(ctx as Context);
+          const input = { ...(ctx.action?.params || {}), ...valuesFromCtx(ctx) };
+          if (input.target !== 'user' && input.target !== 'department') {
+            throw new GovernanceValidationError('Policy scope is invalid.');
+          }
+          ctx.body = { data: await service.listTargets(input) };
+        } catch (error) {
+          governanceError(ctx as Context, error);
+        }
+        await next();
+      },
       async saveDraft(ctx, next) {
         try {
           const actor = requireAdminActor(ctx as Context);

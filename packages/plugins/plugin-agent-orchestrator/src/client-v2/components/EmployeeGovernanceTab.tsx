@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -67,6 +67,22 @@ type PolicyValues = {
   maxMonthlyCost?: number | null;
 };
 type TargetValues = { userId: string; employeeUsername: string; modelKey?: string };
+type UserTarget = {
+  id: string | number;
+  nickname?: string | null;
+  username?: string | null;
+  email?: string | null;
+};
+type DepartmentTarget = {
+  id: string | number;
+  title?: string | null;
+  parentId?: string | number | null;
+};
+type TargetOption = {
+  value: string;
+  label: string;
+  searchText: string;
+};
 type AuditEvent = {
   id: number | string;
   action: string;
@@ -116,6 +132,120 @@ function errorText(error: unknown, fallback: string) {
   return result?.response?.data?.errors?.[0]?.message || result?.message || fallback;
 }
 
+const TARGET_PAGE_LIMIT = 200;
+
+function mergeById<T extends { id: string | number }>(primary: T[], extra: T[]): T[] {
+  if (!extra.length) return primary;
+  const map = new Map<string, T>();
+  for (const item of primary) map.set(String(item.id), item);
+  for (const item of extra) {
+    const key = String(item.id);
+    if (!map.has(key)) map.set(key, item);
+  }
+  return Array.from(map.values());
+}
+
+function formatUserOption(user: UserTarget): TargetOption {
+  const id = String(user.id);
+  const primary = user.nickname?.trim() || user.username?.trim() || user.email?.trim() || '';
+  const label = primary ? `${primary} (#${id})` : `#${id}`;
+  const searchText = [label, id, user.nickname, user.username, user.email].filter(Boolean).join(' ').toLowerCase();
+  return { value: id, label, searchText };
+}
+
+function formatDepartmentOption(department: DepartmentTarget, byId: Map<string, DepartmentTarget>): TargetOption {
+  const id = String(department.id);
+  const parts: string[] = [];
+  const seen = new Set<string>();
+  let current: DepartmentTarget | undefined = department;
+  while (current) {
+    const currentId = String(current.id);
+    if (seen.has(currentId)) break;
+    seen.add(currentId);
+    if (current.title?.trim()) parts.unshift(current.title.trim());
+    const parentKey = current.parentId != null && current.parentId !== '' ? String(current.parentId) : '';
+    current = parentKey ? byId.get(parentKey) : undefined;
+  }
+  const title = parts.join(' / ');
+  const label = title ? `${title} (#${id})` : `#${id}`;
+  return { value: id, label, searchText: `${label} ${id}`.toLowerCase() };
+}
+
+function withFallbackOption(options: TargetOption[], currentValue?: string): TargetOption[] {
+  const trimmed = currentValue?.trim();
+  if (!trimmed || options.some((option) => option.value === trimmed)) return options;
+  return [{ value: trimmed, label: `#${trimmed}`, searchText: `#${trimmed} ${trimmed}` }, ...options];
+}
+
+function filterTargetOption(input: string, option?: TargetOption): boolean {
+  const query = input.trim().toLowerCase();
+  if (!query) return true;
+  return Boolean(option?.searchText.includes(query));
+}
+
+function useGovernanceTargetList<T extends { id: string | number }>(
+  api: ReturnType<typeof useApiClient>,
+  target: 'user' | 'department',
+) {
+  const params = useMemo(() => ({ target }), [target]);
+  const request = useRequest<ListResult<T>>({ url: 'agentGovernance:listTargets', params });
+  const [extra, setExtra] = useState<T[]>([]);
+  const [searching, setSearching] = useState(false);
+  const mountedRef = useRef(true);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seqRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const initial = useMemo(() => (Array.isArray(request.data?.data) ? request.data.data : []), [request.data]);
+  const items = useMemo(() => mergeById(initial, extra), [initial, extra]);
+
+  const fetchTargets = async (query: { search?: string; id?: string }) => {
+    const seq = ++seqRef.current;
+    setSearching(true);
+    try {
+      const response = await api.request({ url: 'agentGovernance:listTargets', params: { target, ...query } });
+      const rows = responseData<T[]>(response);
+      if (mountedRef.current && Array.isArray(rows) && rows.length) {
+        setExtra((prev) => mergeById(prev, rows));
+      }
+    } catch {
+      // Keep currently loaded options when background lookup fails.
+    } finally {
+      if (mountedRef.current && seq === seqRef.current) setSearching(false);
+    }
+  };
+
+  const onSearch = (value: string) => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    const keyword = value.trim();
+    if (!keyword || (initial.length < TARGET_PAGE_LIMIT && !request.error)) return;
+    timerRef.current = setTimeout(() => {
+      fetchTargets({ search: keyword });
+    }, 250);
+  };
+
+  const ensureLoaded = (id?: string) => {
+    if (request.error) request.refresh();
+    const trimmed = id?.trim();
+    if (trimmed && !items.some((item) => String(item.id) === trimmed)) {
+      fetchTargets({ id: trimmed });
+    }
+  };
+
+  const refreshIfError = () => {
+    if (request.error) request.refresh();
+  };
+
+  return { items, loading: request.loading || searching, onSearch, ensureLoaded, refreshIfError };
+}
+
 export const EmployeeGovernanceTab: React.FC = () => {
   const api = useApiClient();
   const t = useT();
@@ -131,9 +261,11 @@ export const EmployeeGovernanceTab: React.FC = () => {
   const [page, setPage] = useState(1);
   const [auditPage, setAuditPage] = useState(1);
   const scope = Form.useWatch('scope', form);
+  const scopeId = Form.useWatch('scopeId', form);
   const modelKey = Form.useWatch('modelKey', form);
   const restrictModels = Form.useWatch('restrictModels', form);
   const systemPromptMode = Form.useWatch('systemPromptMode', form);
+  const targetUserId = Form.useWatch('userId', targetForm);
 
   const listParams = useMemo(() => ({ page, pageSize: 20 }), [page]);
   const { data, loading, error, refresh } = useRequest<ListResult<PolicyRecord>>(
@@ -145,9 +277,29 @@ export const EmployeeGovernanceTab: React.FC = () => {
     { url: 'agentGovernance:events', params: auditParams },
     { refreshDeps: [auditParams] },
   );
+  const usersTarget = useGovernanceTargetList<UserTarget>(api, 'user');
+  const departmentsTarget = useGovernanceTargetList<DepartmentTarget>(api, 'department');
   const employeeOptions = useMemo(
     () => employees.map((employee) => ({ value: employee.username, label: employee.nickname || employee.username })),
     [employees],
+  );
+  const baseUserOptions = useMemo(() => usersTarget.items.map(formatUserOption), [usersTarget.items]);
+  const baseDepartmentOptions = useMemo(() => {
+    const byId = new Map<string, DepartmentTarget>();
+    for (const department of departmentsTarget.items) byId.set(String(department.id), department);
+    return departmentsTarget.items.map((department) => formatDepartmentOption(department, byId));
+  }, [departmentsTarget.items]);
+  const targetUserOptions = useMemo(
+    () => withFallbackOption(baseUserOptions, targetUserId),
+    [baseUserOptions, targetUserId],
+  );
+  const scopeUserOptions = useMemo(
+    () => withFallbackOption(baseUserOptions, scope === 'user' ? scopeId : undefined),
+    [baseUserOptions, scope, scopeId],
+  );
+  const scopeDepartmentOptions = useMemo(
+    () => withFallbackOption(baseDepartmentOptions, scope === 'department' ? scopeId : undefined),
+    [baseDepartmentOptions, scope, scopeId],
   );
 
   const loadVersions = async (policyId: string | number) => {
@@ -171,7 +323,7 @@ export const EmployeeGovernanceTab: React.FC = () => {
     form.resetFields();
     form.setFieldsValue({
       scope: record?.scope || 'department',
-      scopeId: record?.scopeId || '',
+      scopeId: record?.scopeId || undefined,
       employeeUsername: record?.employeeUsername || undefined,
       modelKey: record?.modelKey || undefined,
       instruction: settings.instruction || '',
@@ -185,7 +337,13 @@ export const EmployeeGovernanceTab: React.FC = () => {
       maxMonthlyCost: settings.maxMonthlyCost,
     });
     setDrawerOpen(true);
-    if (record) loadVersions(record.id);
+    usersTarget.refreshIfError();
+    departmentsTarget.refreshIfError();
+    if (record) {
+      loadVersions(record.id);
+      if (record.scope === 'user') usersTarget.ensureLoaded(record.scopeId);
+      if (record.scope === 'department') departmentsTarget.ensureLoaded(record.scopeId);
+    }
   };
 
   const saveDraft = async (values: PolicyValues) => {
@@ -441,14 +599,22 @@ export const EmployeeGovernanceTab: React.FC = () => {
           description={t('Managed instruction visibility description')}
           style={{ marginBottom: 16 }}
         />
-        <Form form={targetForm} layout="vertical" onValuesChange={() => setPreview(null)}>
+        <Form name="governanceTarget" form={targetForm} layout="vertical" onValuesChange={() => setPreview(null)}>
           <Space wrap align="start">
             <Form.Item
               name="userId"
               label={t('User ID')}
-              rules={[{ required: true, whitespace: true, pattern: /^\d+$/, message: t('Enter a user ID') }]}
+              rules={[{ required: true, pattern: /^\d+$/, message: t('Select a user') }]}
             >
-              <Input inputMode="numeric" />
+              <Select
+                showSearch
+                placeholder={t('Select a user')}
+                loading={usersTarget.loading}
+                filterOption={filterTargetOption}
+                onSearch={usersTarget.onSearch}
+                options={targetUserOptions}
+                style={{ minWidth: 240 }}
+              />
             </Form.Item>
             <Form.Item
               name="employeeUsername"
@@ -573,10 +739,16 @@ export const EmployeeGovernanceTab: React.FC = () => {
         onClose={() => setDrawerOpen(false)}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" onFinish={saveDraft}>
+        <Form name="governancePolicy" form={form} layout="vertical" onFinish={saveDraft}>
           <Form.Item name="scope" label={t('Scope')} rules={[{ required: true }]}>
             <Select
               disabled={Boolean(editing)}
+              onChange={(nextScope: PolicyScope) =>
+                form.setFieldsValue({
+                  scopeId: undefined,
+                  ...(nextScope === 'employee' ? { employeeUsername: undefined } : {}),
+                })
+              }
               options={[
                 { value: 'department', label: t('Governance scope: department') },
                 { value: 'user', label: t('Governance scope: user') },
@@ -590,15 +762,45 @@ export const EmployeeGovernanceTab: React.FC = () => {
               label={t('Employee')}
               rules={[{ required: true, message: t('Select an employee') }]}
             >
-              <Select disabled={Boolean(editing)} showSearch optionFilterProp="label" options={employeeOptions} />
+              <Select
+                disabled={Boolean(editing)}
+                showSearch
+                placeholder={t('Select an employee')}
+                optionFilterProp="label"
+                options={employeeOptions}
+              />
+            </Form.Item>
+          ) : scope === 'user' ? (
+            <Form.Item
+              name="scopeId"
+              label={t('User ID')}
+              rules={[{ required: true, pattern: /^\d+$/, message: t('Select a user') }]}
+            >
+              <Select
+                disabled={Boolean(editing)}
+                showSearch
+                placeholder={t('Select a user')}
+                loading={usersTarget.loading}
+                filterOption={filterTargetOption}
+                onSearch={usersTarget.onSearch}
+                options={scopeUserOptions}
+              />
             </Form.Item>
           ) : (
             <Form.Item
               name="scopeId"
-              label={scope === 'user' ? t('User ID') : t('Department ID')}
-              rules={[{ required: true, whitespace: true, pattern: /^\d+$/, message: t('Enter a scope ID') }]}
+              label={t('Department ID')}
+              rules={[{ required: true, pattern: /^\d+$/, message: t('Select a department') }]}
             >
-              <Input disabled={Boolean(editing)} inputMode="numeric" />
+              <Select
+                disabled={Boolean(editing)}
+                showSearch
+                placeholder={t('Select a department')}
+                loading={departmentsTarget.loading}
+                filterOption={filterTargetOption}
+                onSearch={departmentsTarget.onSearch}
+                options={scopeDepartmentOptions}
+              />
             </Form.Item>
           )}
           {scope !== 'employee' && (

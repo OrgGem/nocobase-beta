@@ -208,6 +208,62 @@ describe('agent governance HTTP and prompt admission', () => {
     expect(list.status).toBe(200);
     const rows = list.body.data.data as Array<Record<string, unknown>>;
     expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ scopeId: LARGE_DEPARTMENT_ID })]));
+
+    expect((await memberAgent.resource('agentGovernance').listTargets({ target: 'user' })).status).toBe(403);
+    expect((await adminAgent.resource('agentGovernance').listTargets({ target: 'invalid' })).status).toBe(400);
+
+    await app.db.getRepository('departments').create({
+      values: { id: '9007199254740995', title: 'Platform_Ops_100%' },
+    });
+
+    const singleDepartment = await adminAgent.resource('agentGovernance').listTargets({
+      target: 'department',
+      id: LARGE_DEPARTMENT_ID,
+    });
+    expect(singleDepartment.status).toBe(200);
+    expect(singleDepartment.body.data.data).toEqual([
+      expect.objectContaining({ id: LARGE_DEPARTMENT_ID, title: 'Large department identifier' }),
+    ]);
+
+    const invalidDepartmentId = await adminAgent.resource('agentGovernance').listTargets({
+      target: 'department',
+      id: 'invalid',
+    });
+    expect(invalidDepartmentId.status).toBe(200);
+    expect(invalidDepartmentId.body.data.data).toEqual([]);
+
+    const underscoreTargets = await adminAgent.resource('agentGovernance').listTargets({
+      target: 'department',
+      search: 'platform_ops_100%',
+    });
+    expect(underscoreTargets.status).toBe(200);
+    expect(underscoreTargets.body.data.data).toEqual([
+      expect.objectContaining({ id: '9007199254740995', title: 'Platform_Ops_100%' }),
+    ]);
+
+    const departmentTargets = await adminAgent.resource('agentGovernance').listTargets({
+      target: 'department',
+      search: '#9007199254740993',
+    });
+    expect(departmentTargets.status).toBe(200);
+    expect(departmentTargets.body.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: LARGE_DEPARTMENT_ID, title: 'Large department identifier' }),
+      ]),
+    );
+
+    const userTargets = await adminAgent.resource('agentGovernance').listTargets({
+      target: 'user',
+      search: 'governance-member',
+    });
+    expect(userTargets.status).toBe(200);
+    const matchedUsers = userTargets.body.data.data as Array<Record<string, unknown>>;
+    expect(matchedUsers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: String(memberId), username: `governance-member-${process.pid}` }),
+      ]),
+    );
+    expect(matchedUsers[0]).not.toHaveProperty('password');
   });
 
   it('denies raw/none prompt modes, leaves reconnect available, and restores the old native prompt', async () => {
