@@ -5,20 +5,25 @@ import { EmbedSettingsBlockModel } from './models/EmbedSettingsBlockModel';
 
 export class PluginBlockEmbedSettingsClient extends Plugin<Record<string, never>, Application> {
   async load() {
+    const pluginName = this.options.name || 'plugin-block-embed-settings';
+    const aclSnippet = `pm.${pluginName}`;
+
     this.pluginSettingsManager.addMenuItem({
       key: 'block-embed-settings',
       title: this.t('Embed Settings Block'),
       icon: 'BlockOutlined',
-      aclSnippet: `pm.${this.options.name || 'block-embed-settings'}`,
+      aclSnippet,
     });
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'block-embed-settings',
       key: 'index',
       title: this.t('Embed Settings Block'),
-      aclSnippet: `pm.${this.options.name || 'block-embed-settings'}`,
+      aclSnippet,
       componentLoader: () => import('./EmbedSettingsManager').then((m) => ({ default: m.EmbedSettingsManager })),
     });
+
+    this.pluginSettingsManager.setPluginSettingsLink(pluginName, 'block-embed-settings');
 
     this.app.flowEngine.registerModels({
       EmbedSettingsBlockModel,

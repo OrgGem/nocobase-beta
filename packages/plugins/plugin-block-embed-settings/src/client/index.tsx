@@ -40,7 +40,7 @@ export class PluginBlockEmbedSettingsClient extends Plugin {
       title: this.t('Embed Settings Block'),
       icon: 'BlockOutlined',
       Component: EmbedSettingsManager,
-      aclSnippet: `pm.${this.options.name || 'block-embed-settings'}`,
+      aclSnippet: `pm.${this.options.name || 'plugin-block-embed-settings'}`,
     });
 
     const title = `{{t("Plugin Settings", { ns: ["${NAMESPACE}", "client"], nsMode: "fallback" })}}`;

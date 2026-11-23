@@ -1,50 +1,60 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { vi, describe, it, expect } from 'vitest';
 import { decodeCollectionPath, encodeCollectionPath } from '../EmbedSettingsCollectionSelect';
+import { EmbedSettingsBlockModel } from '../models/EmbedSettingsBlockModel';
 
-// Test the model's handler logic in isolation by testing the encode/decode integration
-// and the setProps behavior that the model handler performs.
+const getSelectPluginStep = () => {
+  const modelClass = EmbedSettingsBlockModel as typeof EmbedSettingsBlockModel & {
+    globalFlowRegistry: {
+      getFlow: (key: string) => {
+        steps: {
+          selectPlugin: {
+            handler: (
+              ctx: { model: { setProps: (props: Record<string, unknown>) => void }; app?: unknown },
+              params: Record<string, unknown>,
+            ) => Promise<void>;
+          };
+        };
+      };
+    };
+  };
+  return modelClass.globalFlowRegistry.getFlow('embedSettingsBlockSettings').steps.selectPlugin;
+};
 
 describe('EmbedSettingsBlockModel - handler logic', () => {
-  describe('setProps logic (mirrors handler behavior)', () => {
-    it('sets pluginName and enabledTabKeys correctly', () => {
-      const params = {
+  describe('setProps logic', () => {
+    it('sets pluginName and enabledTabKeys without polluting dataSourceName when no collection is set', async () => {
+      const setProps = vi.fn();
+      await getSelectPluginStep().handler(
+        { model: { setProps } },
+        {
+          pluginName: 'demo',
+          enabledTabKeys: ['demo.tab1', 'demo.tab2'],
+          collectionPath: undefined,
+        },
+      );
+
+      expect(setProps).toHaveBeenCalledWith({
         pluginName: 'demo',
         enabledTabKeys: ['demo.tab1', 'demo.tab2'],
-        collectionPath: undefined,
-      };
-
-      const { dataSourceName, collectionName } = decodeCollectionPath(params.collectionPath);
-      const result = {
-        pluginName: params.pluginName,
-        enabledTabKeys: Array.isArray(params.enabledTabKeys) ? params.enabledTabKeys : undefined,
-        dataSourceName,
-        collectionName,
-      };
-
-      expect(result).toEqual({
-        pluginName: 'demo',
-        enabledTabKeys: ['demo.tab1', 'demo.tab2'],
-        dataSourceName: 'main',
+        dataSourceName: undefined,
         collectionName: undefined,
       });
     });
 
-    it('handles collectionPath with valid data source and collection', () => {
-      const params = {
-        pluginName: 'demo',
-        enabledTabKeys: undefined,
-        collectionPath: 'custom-ds::orders',
-      };
+    it('handles collectionPath with valid data source and collection', async () => {
+      const setProps = vi.fn();
+      await getSelectPluginStep().handler(
+        { model: { setProps } },
+        {
+          pluginName: 'demo',
+          enabledTabKeys: undefined,
+          collectionPath: 'custom-ds::orders',
+        },
+      );
 
-      const { dataSourceName, collectionName } = decodeCollectionPath(params.collectionPath);
-      const result = {
-        pluginName: params.pluginName,
-        enabledTabKeys: Array.isArray(params.enabledTabKeys) ? params.enabledTabKeys : undefined,
-        dataSourceName,
-        collectionName,
-      };
-
-      expect(result).toEqual({
+      expect(setProps).toHaveBeenCalledWith({
         pluginName: 'demo',
         enabledTabKeys: undefined,
         dataSourceName: 'custom-ds',
@@ -52,22 +62,18 @@ describe('EmbedSettingsBlockModel - handler logic', () => {
       });
     });
 
-    it('handles empty enabledTabKeys as undefined', () => {
-      const params = {
-        pluginName: 'demo',
-        enabledTabKeys: 'not-an-array',
-        collectionPath: undefined,
-      };
+    it('handles non-array enabledTabKeys as undefined', async () => {
+      const setProps = vi.fn();
+      await getSelectPluginStep().handler(
+        { model: { setProps } },
+        {
+          pluginName: 'demo',
+          enabledTabKeys: 'not-an-array',
+          collectionPath: undefined,
+        },
+      );
 
-      const { dataSourceName, collectionName } = decodeCollectionPath(params.collectionPath);
-      const result = {
-        pluginName: params.pluginName,
-        enabledTabKeys: Array.isArray(params.enabledTabKeys) ? params.enabledTabKeys : undefined,
-        dataSourceName,
-        collectionName,
-      };
-
-      expect(result.enabledTabKeys).toBeUndefined();
+      expect(setProps).toHaveBeenCalledWith(expect.objectContaining({ enabledTabKeys: undefined }));
     });
   });
 

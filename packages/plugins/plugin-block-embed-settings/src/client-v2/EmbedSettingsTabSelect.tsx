@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import React, { useEffect, useMemo, useRef } from 'react';
-import { useForm } from '@formily/react';
-import { observer } from '@formily/reactive-react';
+import { observer, useForm } from '@formily/react';
 import { Checkbox, Empty, Space, Typography } from 'antd';
 import { useApp } from '@nocobase/client-v2';
 import { useT } from './locale';

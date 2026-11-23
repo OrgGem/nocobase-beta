@@ -9,10 +9,6 @@ import { EmbedSettingsTabSelect } from '../EmbedSettingsTabSelect';
 vi.mock('@formily/react', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@formily/react')>()),
   useForm: () => ({ values: { pluginName: 'demo' } }),
-}));
-
-vi.mock('@formily/reactive-react', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@formily/reactive-react')>()),
   observer: (comp: unknown) => comp,
 }));
 

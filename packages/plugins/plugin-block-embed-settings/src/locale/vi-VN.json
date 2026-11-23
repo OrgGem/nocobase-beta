@@ -21,5 +21,9 @@
   "Actions": "Thao tác",
   "Edit embed settings": "Chỉnh sửa cài đặt nhúng",
   "Select tabs": "Chọn tab",
-  "Embed Settings Block": "Khối nhúng cài đặt"
+  "Embed Settings Block": "Khối nhúng cài đặt",
+  "Embed settings block setting": "Cấu hình khối nhúng cài đặt",
+  "Unable to render embedded settings": "Không thể hiển thị cài đặt nhúng",
+  "Open the full settings page to use this feature": "Mở trang cài đặt đầy đủ để sử dụng tính năng này",
+  "Retry": "Thử lại"
 }
