@@ -1,0 +1,41 @@
+{
+  "name": "plugin-data-source-postgres",
+  "displayName": "Data Source: External PostgreSQL",
+  "displayName.zh-CN": "数据源：外部PostgreSQL",
+  "description": "Connect to external PostgreSQL databases as data sources",
+  "description.zh-CN": "连接外部PostgreSQL数据库作为数据源",
+  "version": "2.0.0",
+  "license": "AGPL-3.0",
+  "main": "dist/server/index.js",
+  "nocobase": {
+    "supportedVersions": ["2.x"],
+    "editionLevel": 0
+  },
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "client-v2.js",
+    "server.js",
+    "README.md"
+  ],
+  "homepage": "https://docs.nocobase.com/handbook/data-source-postgres",
+  "keywords": [
+    "data-sources",
+    "PostgreSQL",
+    "External Database"
+  ],
+  "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/data-source-manager": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/plugin-data-source-manager": "2.x",
+    "@nocobase/server": "2.x"
+  },
+  "dependencies": {
+    "pg": "^8.16.3"
+  }
+}
