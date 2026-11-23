@@ -47,11 +47,14 @@ describe('MssqlSmartCursorBuilder', () => {
       await builder.chunk({ chunkSize: 10, callback: async () => {}, find: async () => [] } as any);
       expect(sequelize.calls[0].replacements).toEqual(['[sch]]ema].[we]]ird]']);
     });
-    it('ORDER BY index name (alphabetical), not by primary/unique priority', async () => {
+    it('ORDER BY index name (alphabetical) and excludes filtered or disabled indexes', async () => {
       const sequelize = makeSequelize([]);
       const builder = new MssqlSmartCursorBuilder(sequelize, 'Users', collection);
       await builder.chunk({ chunkSize: 10, callback: async () => {}, find: async () => [] } as any);
       expect(sequelize.calls[0].sql).toMatch(/ORDER BY\s+i\.name/i);
+      expect(sequelize.calls[0].sql).toContain('i.has_filter = 0');
+      expect(sequelize.calls[0].sql).toContain('i.is_disabled = 0');
+      expect(sequelize.calls[0].sql).toContain('c.is_nullable AS IS_NULLABLE');
     });
 
     it('still picks the PRIMARY KEY index even when a non-PK index sorts first alphabetically', async () => {
@@ -273,6 +276,258 @@ describe('MssqlSmartCursorBuilder', () => {
       expect(seenOpts).toHaveLength(2);
       expect(seenOpts[0].order).toEqual([['orderId', 'ASC']]);
       expect(seenOpts[1].where).toEqual({ orderId: { [Op.gt]: 20 } });
+    });
+
+    it('continues past NULL groups in composite ASC cursor without skipping rows', async () => {
+      const sequelize = makeSequelize([
+        {
+          INDEX_NAME: 'ix_status_id',
+          COLUMN_NAME: 'status',
+          SEQ_IN_INDEX: 1,
+          INDEX_TYPE: 2,
+          DIRECTION: 'ASC',
+          IS_NULLABLE: true,
+        },
+        {
+          INDEX_NAME: 'ix_status_id',
+          COLUMN_NAME: 'id',
+          SEQ_IN_INDEX: 2,
+          INDEX_TYPE: 2,
+          DIRECTION: 'ASC',
+          IS_NULLABLE: false,
+        },
+      ]);
+      const builder = new MssqlSmartCursorBuilder(sequelize, 'Orders', collection);
+
+      const seenWheres: any[] = [];
+      const delivered: Array<{ status: string | null; id: number }> = [];
+      const batches = [
+        [
+          { status: null, id: 1 },
+          { status: null, id: 2 },
+        ],
+        [
+          { status: null, id: 3 },
+          { status: 'active', id: 4 },
+        ],
+        [{ status: 'closed', id: 5 }],
+      ];
+      let call = 0;
+
+      await builder.chunk({
+        chunkSize: 2,
+        callback: async (rows: any[]) => {
+          delivered.push(...rows);
+        },
+        find: async (opts: any) => {
+          seenWheres.push(opts.where);
+          return batches[call++] ?? [];
+        },
+      } as any);
+
+      expect(seenWheres[1]).toEqual({
+        [Op.or]: [{ status: { [Op.not]: null } }, { status: { [Op.is]: null }, id: { [Op.gt]: 2 } }],
+      });
+      expect(seenWheres[2]).toEqual({
+        [Op.or]: [{ status: { [Op.gt]: 'active' } }, { status: 'active', id: { [Op.gt]: 4 } }],
+      });
+      expect(delivered.map((r) => r.id)).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it('handles NULL ordering cleanly in DESC composite and single nullable cursors', async () => {
+      const sequelize = makeSequelize([
+        {
+          INDEX_NAME: 'ix_status_desc',
+          COLUMN_NAME: 'status',
+          SEQ_IN_INDEX: 1,
+          INDEX_TYPE: 2,
+          DIRECTION: 'DESC',
+          IS_NULLABLE: true,
+        },
+        {
+          INDEX_NAME: 'ix_status_desc',
+          COLUMN_NAME: 'id',
+          SEQ_IN_INDEX: 2,
+          INDEX_TYPE: 2,
+          DIRECTION: 'ASC',
+          IS_NULLABLE: false,
+        },
+      ]);
+      const builder = new MssqlSmartCursorBuilder(sequelize, 'Orders', collection);
+      const strategy = await (builder as any).getBestCursorStrategy();
+
+      // In DESC with nullable leading column, non-null cursor must still allow trailing NULL rows.
+      const afterNonNull = strategy.buildWhere(undefined, { status: 'active', id: 2 });
+      expect(afterNonNull).toEqual({
+        [Op.or]: [
+          { status: { [Op.or]: [{ [Op.lt]: 'active' }, { [Op.is]: null }] } },
+          { status: 'active', id: { [Op.gt]: 2 } },
+        ],
+      });
+
+      // In DESC at NULL group, impossible `status < null` branch is omitted and only `status IS NULL AND id > 2` remains.
+      const afterNull = strategy.buildWhere(undefined, { status: null, id: 2 });
+      expect(afterNull).toEqual({ status: { [Op.is]: null }, id: { [Op.gt]: 2 } });
+
+      // Single nullable DESC column ending at NULL must stop cleanly without issuing another query.
+      const singleDescSeq = makeSequelize([
+        {
+          INDEX_NAME: 'uq_email_desc',
+          COLUMN_NAME: 'email',
+          SEQ_IN_INDEX: 1,
+          INDEX_TYPE: 2,
+          DIRECTION: 'DESC',
+          IS_NULLABLE: true,
+        },
+      ]);
+      const singleBuilder = new MssqlSmartCursorBuilder(singleDescSeq, 'Users', collection);
+      const findSpy = vi.fn(async () => [{ email: null }]);
+      await singleBuilder.chunk({
+        chunkSize: 1,
+        callback: async () => {},
+        find: findSpy,
+      } as any);
+      expect(findSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('temporarily selects omitted or excluded cursor columns across all batches and strips them before callback', async () => {
+      const sequelize = makeSequelize([
+        { INDEX_NAME: 'pk_orders', COLUMN_NAME: 'id', SEQ_IN_INDEX: 1, INDEX_TYPE: 1, DIRECTION: 'ASC' },
+      ]);
+      const builder = new MssqlSmartCursorBuilder(sequelize, 'Orders', collection);
+
+      const allRows = [
+        { id: 1, title: 'one' },
+        { id: 2, title: 'two' },
+        { id: 3, title: 'three' },
+        { id: 4, title: 'four' },
+        { id: 5, title: 'five' },
+      ];
+
+      const makeModelRow = (row: Record<string, unknown>) => {
+        const dataValues = { ...row };
+        const _previousDataValues = { ...row };
+        return {
+          dataValues,
+          _previousDataValues,
+          getDataValue: (k: string) => dataValues[k],
+          get: (k: string) => dataValues[k],
+        };
+      };
+
+      const simulateFind = (opts: {
+        fields?: string[];
+        except?: string[];
+        attributes?: string[] | { exclude?: string[] };
+        where?: { id?: Record<symbol, number> };
+        limit?: number;
+      }) => {
+        const afterId = opts.where?.id?.[Op.gt] ?? 0;
+        const selected = allRows.filter((r) => r.id > afterId).slice(0, opts.limit ?? 2);
+        return selected.map((row) => {
+          const picked: Record<string, unknown> = {};
+          const keys = Array.isArray(opts.attributes)
+            ? opts.attributes
+            : Array.isArray(opts.fields)
+              ? opts.fields
+              : Object.keys(row).filter(
+                  (k) =>
+                    !(Array.isArray(opts.except) && opts.except.includes(k)) &&
+                    !(
+                      opts.attributes &&
+                      !Array.isArray(opts.attributes) &&
+                      Array.isArray(opts.attributes.exclude) &&
+                      opts.attributes.exclude.includes(k)
+                    ),
+                );
+          for (const k of keys) {
+            if (k in row) picked[k] = row[k as keyof typeof row];
+          }
+          return makeModelRow(picked);
+        });
+      };
+
+      // Case 1: fields omits cursor column `id`
+      const deliveredFromFields: Array<Record<string, unknown>> = [];
+      const seenFieldsOpts: Array<Record<string, unknown>> = [];
+      await builder.chunk({
+        chunkSize: 2,
+        fields: ['title'],
+        find: async (opts: any) => {
+          seenFieldsOpts.push(opts);
+          return simulateFind(opts);
+        },
+        callback: async (rows: any[]) => {
+          deliveredFromFields.push(...rows.map((r) => ({ ...r.dataValues })));
+        },
+      } as any);
+      expect(seenFieldsOpts[0].fields).toEqual(['title', 'id']);
+      expect(deliveredFromFields).toEqual([
+        { title: 'one' },
+        { title: 'two' },
+        { title: 'three' },
+        { title: 'four' },
+        { title: 'five' },
+      ]);
+
+      // Case 2: except excludes cursor column `id`
+      const deliveredFromExcept: Array<Record<string, unknown>> = [];
+      await builder.chunk({
+        chunkSize: 2,
+        except: ['id'],
+        find: async (opts: any) => simulateFind(opts),
+        callback: async (rows: any[]) => {
+          deliveredFromExcept.push(...rows.map((r) => ({ ...r.dataValues })));
+        },
+      } as any);
+      expect(deliveredFromExcept).toEqual([
+        { title: 'one' },
+        { title: 'two' },
+        { title: 'three' },
+        { title: 'four' },
+        { title: 'five' },
+      ]);
+
+      // Case 3: attributes array omits `id` and attributes.exclude omits `id`
+      const deliveredFromAttrArray: Array<Record<string, unknown>> = [];
+      await builder.chunk({
+        chunkSize: 2,
+        attributes: ['title'],
+        find: async (opts: any) => simulateFind(opts),
+        callback: async (rows: any[]) => {
+          deliveredFromAttrArray.push(...rows.map((r) => ({ ...r.dataValues })));
+        },
+      } as any);
+      expect(deliveredFromAttrArray).toHaveLength(5);
+      expect(deliveredFromAttrArray.every((r) => !('id' in r))).toBe(true);
+
+      const deliveredFromAttrExclude: Array<Record<string, unknown>> = [];
+      await builder.chunk({
+        chunkSize: 2,
+        attributes: { exclude: ['id'] },
+        find: async (opts: any) => simulateFind(opts),
+        callback: async (rows: any[]) => {
+          deliveredFromAttrExclude.push(...rows.map((r) => ({ ...r.dataValues })));
+        },
+      } as any);
+      expect(deliveredFromAttrExclude).toHaveLength(5);
+      expect(deliveredFromAttrExclude.every((r) => !('id' in r))).toBe(true);
+    });
+
+    it('falls back to the first model attribute on PK-less tables without an id column', async () => {
+      const sequelize = makeSequelize([]);
+      const pkLessCollection = {
+        filterTargetKey: undefined as unknown as string,
+        model: {
+          rawAttributes: {
+            code: { field: 'ItemCode' },
+            title: { field: 'ItemTitle' },
+          },
+        },
+      };
+      const builder = new MssqlSmartCursorBuilder(sequelize, 'AuditItems', pkLessCollection);
+      const strategy = await (builder as any).getBestCursorStrategy();
+      expect(strategy.buildSort()).toEqual([['code', 'ASC']]);
     });
   });
 });

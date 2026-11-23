@@ -108,8 +108,9 @@ describe('mssql-bulk-introspection', () => {
   });
 
   describe('views, alias types, and scoped tableNames in buildBulkColumnsSql', () => {
-    it('includes both user tables and views and resolves alias types via base system type', () => {
+    it('includes both user tables and views, selects object_type, and resolves alias types via base system type', () => {
       const sql = buildBulkColumnsSql('sales', ['Orders', 'v_Summary']);
+      expect(sql).toContain('o.type AS object_type');
       expect(sql).toContain("o.type IN ('U', 'V')");
       expect(sql).toContain('COALESCE(st.name, t.name) AS data_type');
       expect(sql).toContain("AND o.name IN (N'Orders', N'v_Summary')");
@@ -117,9 +118,11 @@ describe('mssql-bulk-introspection', () => {
   });
 
   describe('buildBulkIndexesSql & groupIndexesByTable', () => {
-    it('builds schema-scoped bulk index SQL and groups into Sequelize showIndex shape', () => {
+    it('builds schema-scoped bulk index SQL excluding filtered and disabled indexes and groups into Sequelize showIndex shape', () => {
       const sql = buildBulkIndexesSql('dbo', ['Orders']);
       expect(sql).toContain("u.name = N'dbo'");
+      expect(sql).toContain('AND i.has_filter = 0');
+      expect(sql).toContain('AND i.is_disabled = 0');
       expect(sql).toContain("AND o.name IN (N'Orders')");
 
       const grouped = groupIndexesByTable([

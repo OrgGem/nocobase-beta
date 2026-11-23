@@ -17,6 +17,13 @@ export interface MssqlOperatorIntrospector {
 }
 
 export interface MssqlOperatorContext {
+  app?: {
+    ctx?: {
+      action?: {
+        actionName?: string;
+      };
+    };
+  };
   db?: {
     getFieldByPath?: (fieldPath: string) => { type?: string } | undefined;
   };
@@ -29,6 +36,13 @@ export interface MssqlOperatorContext {
   fieldName?: string;
   fullName?: string;
   fieldPath?: string;
+}
+
+const WRITE_ACTION_NAMES = new Set(['update', 'destroy', 'updateMany', 'destroyMany']);
+
+function isWriteActionContext(ctx?: MssqlOperatorContext): boolean {
+  const actionName = ctx?.app?.ctx?.action?.actionName;
+  return typeof actionName === 'string' && WRITE_ACTION_NAMES.has(actionName);
 }
 
 export interface ResolvedOperatorTarget {
@@ -153,6 +167,7 @@ function isStringField(ctx?: MssqlOperatorContext): boolean {
 export function createMssqlOperators(
   introspector: MssqlOperatorIntrospector,
   getFtsMode: () => FullTextSearchMode = () => 'auto',
+  isFtsSuspended: () => boolean = () => false,
 ) {
   const shouldUseAnsi = (target: ResolvedOperatorTarget): boolean => {
     if (!target.tableName || !target.columnName) {
@@ -189,6 +204,8 @@ export function createMssqlOperators(
     const target = resolveOperatorTarget(ctx);
     if (
       getFtsMode() !== 'off' &&
+      !isFtsSuspended() &&
+      !isWriteActionContext(ctx) &&
       target.tableName &&
       target.columnName &&
       introspector.hasFTSIndex(target.tableName, target.columnName)

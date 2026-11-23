@@ -9,7 +9,10 @@ export interface MssqlRepositoryRuntimeOptions {
   fastCount?: boolean;
   deferredJoinThreshold?: number;
   isAnsiStringColumn?: (tableName: string, columnName: string) => boolean;
+  ftsSuspendCount?: number;
 }
+
+const DISABLE_FTS_FILTER = Symbol('mssqlDisableFtsFilter');
 
 const DEFAULT_DEFERRED_JOIN_THRESHOLD = 200;
 const MAX_DEFERRED_JOIN_LIMIT = 1000;
@@ -119,6 +122,14 @@ function normalizePkKey(value: unknown): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
+function hasWhereConditions(where: unknown): boolean {
+  return Boolean(
+    where &&
+      typeof where === 'object' &&
+      (Object.keys(where).length > 0 || Object.getOwnPropertySymbols(where).length > 0),
+  );
+}
+
 function isUnfilteredCount(countOptions?: CountOptions & { where?: unknown; include?: unknown[] }): boolean {
   if (!countOptions) {
     return true;
@@ -139,6 +150,23 @@ function isUnfilteredCount(countOptions?: CountOptions & { where?: unknown; incl
 
 function isPkOnlyAttributes(attributes: unknown, pkAttr: string): boolean {
   return Array.isArray(attributes) && attributes.length === 1 && attributes[0] === pkAttr;
+}
+
+function hasExplicitOrder(options: FindOptions): boolean {
+  const order = (options as { order?: unknown }).order;
+  if (order) {
+    if (!Array.isArray(order) || order.length > 0) {
+      return true;
+    }
+  }
+  const sort = options.sort;
+  if (typeof sort === 'string') {
+    return sort.split(',').some((item) => item.trim().length > 0);
+  }
+  if (Array.isArray(sort)) {
+    return sort.some((item) => typeof item === 'string' && item.trim().length > 0);
+  }
+  return false;
 }
 
 /**
@@ -302,6 +330,25 @@ export class MssqlRepository<
       model.primaryKeyAttributes.length === 1;
 
     if (!canDeferJoin) {
+      const hasNoPrimaryKey =
+        model.primaryKeyField === null ||
+        (Array.isArray(model.primaryKeyAttributes) && model.primaryKeyAttributes.length === 0);
+      const isPaginated =
+        (rawLimit !== undefined && Number.isFinite(rawLimit) && rawLimit > 0) ||
+        (Number.isFinite(rawOffset) && rawOffset > 0);
+      if (hasNoPrimaryKey && isPaginated) {
+        const nextOptions: FindOptions & { order?: unknown; include?: unknown } = { ...options };
+        if (!hasExplicitOrder(options)) {
+          // Sequelize's MSSQL addLimitAndOffset quotes model.primaryKeyField when no ORDER BY is
+          // present, throwing TypeError on PK-less tables/views. `(SELECT NULL)` satisfies T-SQL's
+          // mandatory ORDER BY for OFFSET/FETCH without sorting or assuming any column type.
+          nextOptions.order = [literal('(SELECT NULL)')];
+        }
+        if (Array.isArray(nextOptions.include) && nextOptions.include.length === 0) {
+          delete nextOptions.include;
+        }
+        return await super.find(nextOptions);
+      }
       return await super.find(options);
     }
 
@@ -359,8 +406,11 @@ export class MssqlRepository<
           ? pkValues.map((value) => literal(quoteAnsiStringLiteral(value)))
           : pkValues;
 
+      const pkWhere = { [pkAttr]: { [Op.in]: inValues } };
+      const hydrateWhere = hasWhereConditions(opts.where) ? { [Op.and]: [opts.where, pkWhere] } : pkWhere;
+
       const hydrated = (await model.findAll({
-        where: { [pkAttr]: { [Op.in]: inValues } },
+        where: hydrateWhere,
         attributes: attrPlan.attributes as FindOptions['attributes'],
         transaction,
       })) as Model[];
@@ -388,6 +438,48 @@ export class MssqlRepository<
     });
 
     return rows;
+  }
+
+  public buildQueryOptions(options: Record<string, unknown>) {
+    if (!options?.[DISABLE_FTS_FILTER]) {
+      return super.buildQueryOptions(options);
+    }
+    const dbOpts = this.database?.options as { mssqlRuntimeOptions?: MssqlRepositoryRuntimeOptions } | undefined;
+    const runtimeOpts = dbOpts?.mssqlRuntimeOptions;
+    if (runtimeOpts) {
+      runtimeOpts.ftsSuspendCount = (runtimeOpts.ftsSuspendCount ?? 0) + 1;
+    }
+    try {
+      return super.buildQueryOptions(options);
+    } finally {
+      if (runtimeOpts) {
+        runtimeOpts.ftsSuspendCount = Math.max(0, (runtimeOpts.ftsSuspendCount ?? 1) - 1);
+      }
+    }
+  }
+
+  /**
+   * For collections without a single PK / `filterTargetKey`, core's `Repository.destroy()` passes
+   * the parsed filter directly to `model.destroy()` (`DELETE FROM [schema].[table] WHERE ...`,
+   * with no `AS [model.name]` alias). Suspend FTS `CONTAINS([alias].[col], ...)` during that
+   * filter parse so SQL Server never fails with Msg 4104 when `model.name !== tableName`.
+   */
+  async destroy(options?: Parameters<Repository<TModelAttributes, TCreationAttributes>['destroy']>[0]) {
+    if (
+      options &&
+      typeof options === 'object' &&
+      !Array.isArray(options) &&
+      'filter' in options &&
+      options.filter &&
+      this.collection.model.primaryKeyAttributes.length !== 1 &&
+      !this.collection.options?.filterTargetKey
+    ) {
+      return await super.destroy({
+        ...options,
+        [DISABLE_FTS_FILTER]: true,
+      } as typeof options);
+    }
+    return await super.destroy(options);
   }
 
   /**

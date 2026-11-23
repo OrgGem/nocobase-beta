@@ -114,4 +114,56 @@ describe('MSSQL V2 native datasource settings', () => {
       slowQueryThresholdMs: 1000,
     });
   });
+
+  it('preserves legacy dialectOptions.options.trustServerCertificate=false on edit without triggering false connection change', async () => {
+    const app = createMockClient();
+    app.flowEngine.context.defineProperty('message', { value: { error: vi.fn() } });
+    const loadCollections = vi.fn().mockResolvedValue([{ name: 'orders' }]);
+    let formRef!: ReturnType<typeof Form.useForm>[0];
+
+    const legacyInitial = {
+      key: 'legacy',
+      options: {
+        host: 'db.test',
+        port: 1433,
+        database: 'sales',
+        username: 'sa',
+        addAllCollections: false,
+        dialectOptions: {
+          options: {
+            trustServerCertificate: false,
+          },
+        },
+      },
+    };
+
+    function Harness() {
+      const [form] = Form.useForm();
+      formRef = form;
+      return (
+        <Form form={form} initialValues={legacyInitial}>
+          <MssqlConfigForm
+            mode="edit"
+            type={{ label: 'MSSQL' }}
+            initialValues={legacyInitial}
+            loadCollections={loadCollections}
+          />
+        </Form>
+      );
+    }
+
+    render(
+      <FlowEngineProvider engine={app.flowEngine}>
+        <Harness />
+      </FlowEngineProvider>,
+    );
+
+    const validated = await formRef.validateFields();
+    expect(validated.options.trustServerCertificate).toBe(false);
+
+    // Focusing collections picker without editing fields must use loadCollections (not readTables as a false connection change).
+    fireEvent.focus(await screen.findByRole('combobox'));
+    await waitFor(() => expect(loadCollections).toHaveBeenCalledWith('legacy'));
+    expect(app.apiMock.history.post).toHaveLength(0);
+  });
 });

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MssqlExternalDataSource, type MssqlDataSourceOptions } from '../data-source/MssqlExternalDataSource';
+import { MssqlIntrospector } from '../data-source/MssqlIntrospector';
 import { PluginDataSourceMssqlServer } from '../plugin';
 
 function createRuntimeSource(readTables: () => Promise<Array<{ name: string }>>) {
@@ -107,6 +108,29 @@ function createSelectionRuntimeSource(options: MssqlDataSourceOptions, initially
   };
 }
 
+async function createDataSourceRecord(
+  app: MockServer,
+  values: {
+    key: string;
+    type: string;
+    displayName: string;
+    enabled: boolean;
+    options: MssqlDataSourceOptions;
+  },
+) {
+  const DataSourceModel = app.db.getModel('dataSources') as unknown as {
+    prototype: { loadIntoApplication: () => Promise<void> };
+  };
+  const testConnection = vi.spyOn(MssqlExternalDataSource, 'testConnection').mockResolvedValue(true);
+  const loadIntoApplication = vi.spyOn(DataSourceModel.prototype, 'loadIntoApplication').mockResolvedValue(undefined);
+  try {
+    await app.db.getRepository('dataSources').create({ values });
+  } finally {
+    loadIntoApplication.mockRestore();
+    testConnection.mockRestore();
+  }
+}
+
 async function seedSelectedDataSource(
   app: MockServer,
   dataSourceKey: string,
@@ -124,20 +148,13 @@ async function seedSelectedDataSource(
     ...persistedOptionOverrides,
   };
   const runtimeOptions: MssqlDataSourceOptions = { ...persistedOptions, ...runtimeOptionOverrides };
-  const testConnection = vi.spyOn(MssqlExternalDataSource, 'testConnection').mockResolvedValue(true);
-  try {
-    await app.db.getRepository('dataSources').create({
-      values: {
-        key: dataSourceKey,
-        type: 'mssql',
-        displayName: dataSourceKey,
-        enabled: false,
-        options: persistedOptions,
-      },
-    });
-  } finally {
-    testConnection.mockRestore();
-  }
+  await createDataSourceRecord(app, {
+    key: dataSourceKey,
+    type: 'mssql',
+    displayName: dataSourceKey,
+    enabled: false,
+    options: persistedOptions,
+  });
 
   const runtime = createSelectionRuntimeSource(runtimeOptions, selectedCollections);
   app.dataSourceManager.dataSources.set(dataSourceKey, runtime.source);
@@ -251,20 +268,13 @@ describe('MSSQL readTables datasource lifecycle through the core API', () => {
       addAllCollections: false,
       selectedCollections: ['customers'],
     };
-    const testConnection = vi.spyOn(MssqlExternalDataSource, 'testConnection').mockResolvedValue(true);
-    try {
-      await app.db.getRepository('dataSources').create({
-        values: {
-          key: dataSourceKey,
-          type: 'mssql',
-          displayName: 'MSSQL direct load test',
-          enabled: false,
-          options: initialOptions,
-        },
-      });
-    } finally {
-      testConnection.mockRestore();
-    }
+    await createDataSourceRecord(app, {
+      key: dataSourceKey,
+      type: 'mssql',
+      displayName: 'MSSQL direct load test',
+      enabled: false,
+      options: initialOptions,
+    });
     const runtime = createSelectionRuntimeSource(initialOptions, ['customers']);
     app.dataSourceManager.dataSources.set(dataSourceKey, runtime.source);
     const plugin = app.pm.get(PluginDataSourceMssqlServer) as PluginDataSourceMssqlServer;
@@ -501,6 +511,380 @@ describe('MSSQL readTables datasource lifecycle through the core API', () => {
       expect(sendSyncMessage).not.toHaveBeenCalled();
     } else {
       expect(sendSyncMessage).toHaveBeenCalledWith({ type: 'selectionChanged', dataSourceKey });
+    }
+  });
+
+  it('closes tracked MSSQL datasource pools on dataSources:destroy and peer dataSourceRemoved sync messages', async () => {
+    const dataSourceKey = 'mssql-destroy-cleanup';
+    const runtime = await seedSelectedDataSource(app, dataSourceKey, ['orders']);
+    const closeSpy = vi.spyOn(runtime.source, 'close');
+    const plugin = app.pm.get(PluginDataSourceMssqlServer) as PluginDataSourceMssqlServer;
+    const sendSyncMessage = vi.spyOn(plugin, 'sendSyncMessage').mockResolvedValue(undefined);
+
+    // Register via trackedSources just as afterAddDataSource does on load.
+    (plugin as unknown as { trackedSources: Map<string, MssqlExternalDataSource> }).trackedSources.set(
+      dataSourceKey,
+      runtime.source,
+    );
+
+    const response = await app.agent().resource('dataSources').destroy({
+      filterByTk: dataSourceKey,
+    });
+
+    expect(response.status).toBe(200);
+    expect(closeSpy).toHaveBeenCalledOnce();
+    expect(runtime.source.collectionManager.db.close).toHaveBeenCalledOnce();
+    expect(sendSyncMessage).toHaveBeenCalledWith(
+      { type: 'dataSourceRemoved', dataSourceKey },
+      expect.objectContaining({ transaction: expect.anything() }),
+    );
+
+    // Peer node receives dataSourceRemoved after core already removed the key from dataSources.
+    const peerSource = createRuntimeSource(async () => []);
+    (plugin as unknown as { trackedSources: Map<string, MssqlExternalDataSource> }).trackedSources.set(
+      'mssql-peer-removed',
+      peerSource,
+    );
+    await plugin.handleSyncMessage({ type: 'dataSourceRemoved', dataSourceKey: 'mssql-peer-removed' });
+    expect(peerSource.close).toHaveBeenCalledOnce();
+  });
+
+  it('preserves FTS index cache when peer reconcileSelection refreshes one or multiple selected tables', async () => {
+    const dataSourceKey = 'mssql-peer-fts-sync';
+    const runtime = await seedSelectedDataSource(app, dataSourceKey, ['orders', 'customers']);
+    const plugin = app.pm.get(PluginDataSourceMssqlServer) as PluginDataSourceMssqlServer;
+
+    const fakeDb = {
+      options: { schema: 'dbo' },
+      fieldTypes: new Map(),
+      logger: { debug: vi.fn(), warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+      sequelize: {
+        escape: (v: unknown) => `'${String(v).replace(/'/g, "''")}'`,
+        query: vi.fn(async (sql: string) => {
+          if (sql.includes('sys.fulltext_index_columns')) {
+            return [
+              { table_name: 'orders', column_name: 'OrderTitle' },
+              { table_name: 'customers', column_name: 'FullName' },
+            ];
+          }
+          if (sql.includes('sys.default_constraints')) {
+            return [
+              {
+                table_name: 'orders',
+                object_type: 'U ',
+                column_name: 'OrderTitle',
+                data_type: 'nvarchar',
+                max_length: 200,
+                is_nullable: true,
+                is_identity: false,
+                default_value: null,
+                column_comment: null,
+              },
+              {
+                table_name: 'customers',
+                object_type: 'U ',
+                column_name: 'FullName',
+                data_type: 'nvarchar',
+                max_length: 200,
+                is_nullable: true,
+                is_identity: false,
+                default_value: null,
+                column_comment: null,
+              },
+            ];
+          }
+          return [];
+        }),
+        getQueryInterface: () => ({
+          describeTable: vi.fn(async () => ({
+            OrderTitle: {
+              type: 'NVARCHAR(100)',
+              allowNull: true,
+              defaultValue: null,
+              primaryKey: false,
+              autoIncrement: false,
+            },
+          })),
+        }),
+      },
+    };
+    const realIntrospector = new MssqlIntrospector({ db: fakeDb as never });
+    (runtime.source as unknown as { introspector: MssqlIntrospector }).introspector = realIntrospector;
+
+    // Single-table refresh (unpreparedTargets.length === 1) must not wipe FTS cache.
+    await plugin.handleSyncMessage({ type: 'selectionChanged', dataSourceKey, refreshTables: ['orders'] });
+    expect(realIntrospector.hasFTSIndex('orders', 'OrderTitle')).toBe(true);
+    expect(realIntrospector.hasFTSIndex('customers', 'FullName')).toBe(true);
+
+    // Multi-table refresh (unpreparedTargets.length > 1) must also keep FTS cache populated.
+    await plugin.handleSyncMessage({
+      type: 'selectionChanged',
+      dataSourceKey,
+      refreshTables: ['orders', 'customers'],
+    });
+    expect(realIntrospector.hasFTSIndex('orders', 'OrderTitle')).toBe(true);
+    expect(realIntrospector.hasFTSIndex('customers', 'FullName')).toBe(true);
+  });
+
+  it('renders environment variable templates in dbOptions during temporary readTables probes', async () => {
+    const env = app.environment;
+    env.setVariable('MSSQL_READ_HOST', 'resolved-read-host');
+    env.setVariable('MSSQL_READ_PASSWORD', 'resolved-read-secret', { isSecret: true });
+    env.setVariable('MSSQL_READ_SCHEMA', 'resolved-read-schema');
+
+    try {
+      const probe = createRuntimeSource(async () => [{ name: 'orders' }]);
+      const createSpy = vi.spyOn(app.dataSourceManager.factory, 'create').mockReturnValueOnce(probe);
+
+      const response = await app
+        .agent()
+        .resource('dataSources')
+        .readTables({
+          values: {
+            dataSourceKey: 'mssql-probe-env-template',
+            dbOptions: {
+              type: 'mssql',
+              host: '{{$env.MSSQL_READ_HOST}}',
+              password: '{{$env.MSSQL_READ_PASSWORD}}',
+              schema: '{{$env.MSSQL_READ_SCHEMA}}',
+              database: 'mock-db',
+            },
+          },
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toEqual([{ name: 'orders' }]);
+      expect(createSpy).toHaveBeenCalledWith(
+        'mssql',
+        expect.objectContaining({
+          name: 'mssql-probe-env-template',
+          host: 'resolved-read-host',
+          password: 'resolved-read-secret',
+          schema: 'resolved-read-schema',
+          database: 'mock-db',
+        }),
+      );
+      expect(probe.close).toHaveBeenCalledOnce();
+    } finally {
+      env.removeVariable('MSSQL_READ_HOST');
+      env.removeVariable('MSSQL_READ_PASSWORD');
+      env.removeVariable('MSSQL_READ_SCHEMA');
+    }
+  });
+
+  it('broadcasts tablesLoaded in addAllCollections mode and syncs loaded tables on peer nodes', async () => {
+    const dataSourceKey = 'mssql-all-tables-sync';
+    const initialOptions: MssqlDataSourceOptions = {
+      host: 'mock-host',
+      database: 'mock-db',
+      schema: 'dbo',
+      addAllCollections: true,
+    };
+    await createDataSourceRecord(app, {
+      key: dataSourceKey,
+      type: 'mssql',
+      displayName: 'MSSQL all tables sync test',
+      enabled: false,
+      options: initialOptions,
+    });
+
+    try {
+      const primaryRuntime = createSelectionRuntimeSource(initialOptions, ['customers']);
+      app.dataSourceManager.dataSources.set(dataSourceKey, primaryRuntime.source);
+      const plugin = app.pm.get(PluginDataSourceMssqlServer) as PluginDataSourceMssqlServer;
+      const sendSyncMessage = vi.spyOn(plugin, 'sendSyncMessage').mockResolvedValue(undefined);
+
+      const response = await app
+        .agent()
+        .resource('dataSources')
+        .loadTables({
+          values: { dataSourceKey, tables: ['orders', 'orders'] },
+        });
+
+      expect(response.status).toBe(200);
+      expect(primaryRuntime.loaded.has('orders')).toBe(true);
+      expect(sendSyncMessage).toHaveBeenCalledWith({
+        type: 'tablesLoaded',
+        dataSourceKey,
+        tableNames: ['orders'],
+      });
+
+      // Simulate a peer node whose runtime initially has customers + an older orders definition.
+      const peerRuntime = createSelectionRuntimeSource(initialOptions, ['customers', 'orders']);
+      app.dataSourceManager.dataSources.set(dataSourceKey, peerRuntime.source);
+
+      await plugin.handleSyncMessage({
+        type: 'tablesLoaded',
+        dataSourceKey,
+        tableNames: ['orders'],
+      });
+
+      expect(peerRuntime.getCollectionFromSchema).toHaveBeenCalledOnce();
+      expect(peerRuntime.removeCollection).toHaveBeenCalledWith('orders');
+      expect(peerRuntime.defineCollection).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'orders', tableName: 'orders', introspected: true }),
+      );
+      expect(peerRuntime.loaded.has('orders')).toBe(true);
+    } finally {
+      app.dataSourceManager.dataSources.delete(dataSourceKey);
+    }
+  });
+
+  it('unloads introspected collections, cleans orphan field metadata, and broadcasts removal in addAllCollections mode', async () => {
+    const dataSourceKey = 'mssql-delete-default-mode';
+    const initialOptions: MssqlDataSourceOptions = {
+      host: 'mock-host',
+      database: 'mock-db',
+      schema: 'dbo',
+      addAllCollections: true,
+    };
+    await createDataSourceRecord(app, {
+      key: dataSourceKey,
+      type: 'mssql',
+      displayName: 'MSSQL default mode delete test',
+      enabled: false,
+      options: initialOptions,
+    });
+
+    try {
+      // Simulate freshly introspected collections with NO rows in dataSourcesCollections, plus an applied field row.
+      const runtime = createSelectionRuntimeSource(initialOptions, ['orders', 'customers']);
+      app.dataSourceManager.dataSources.set(dataSourceKey, runtime.source);
+      await app.db.getRepository('dataSourcesFields').create({
+        values: {
+          key: 'f_orders_customer_ref',
+          name: 'customerRef',
+          type: 'belongsTo',
+          target: 'customers',
+          foreignKey: 'customerId',
+          targetKey: 'id',
+          collectionName: 'orders',
+          dataSourceKey,
+        },
+        hooks: false,
+      });
+
+      const dsmPlugin = app.pm.get('data-source-manager') as { sendSyncMessage: (...args: unknown[]) => Promise<void> };
+      const dsmSyncSpy = vi.spyOn(dsmPlugin, 'sendSyncMessage').mockResolvedValue(undefined);
+
+      const response = await app
+        .agent()
+        .resource('dataSources.collections', dataSourceKey)
+        .destroy({
+          filterByTk: ['orders'],
+        });
+
+      expect(response.status).toBe(200);
+      expect(runtime.removeCollection).toHaveBeenCalledWith('orders');
+      expect([...runtime.loaded.keys()]).toEqual(['customers']);
+      expect(dsmSyncSpy).toHaveBeenCalledWith({
+        type: 'removeDataSourceCollection',
+        dataSourceKey,
+        collectionName: 'orders',
+      });
+
+      const remainingFields = await app.db.getRepository('dataSourcesFields').find({
+        filter: { dataSourceKey, collectionName: 'orders' },
+      });
+      expect(remainingFields).toHaveLength(0);
+    } finally {
+      app.dataSourceManager.dataSources.delete(dataSourceKey);
+    }
+  });
+
+  it('matches in-memory introspected collections when deleting with an ACL filter and no dataSourcesCollections rows', async () => {
+    const dataSourceKey = 'mssql-delete-inmemory-acl';
+    // Pass loadedCollections = [] so NO rows exist in dataSourcesCollections, then populate runtime.loaded in memory.
+    const runtime = await seedSelectedDataSource(app, dataSourceKey, ['orders', 'invoices'], []);
+    const ordersInit = createSelectionRuntimeSource({ addAllCollections: false }, ['orders', 'invoices']);
+    for (const [name, col] of ordersInit.loaded.entries()) {
+      runtime.loaded.set(name, col);
+    }
+    const plugin = app.pm.get(PluginDataSourceMssqlServer) as PluginDataSourceMssqlServer;
+    vi.spyOn(plugin, 'sendSyncMessage').mockResolvedValue(undefined);
+
+    const response = await app
+      .agent()
+      .resource('dataSources.collections', dataSourceKey)
+      .destroy({
+        filterByTk: 'orders',
+        filter: { name: 'orders' },
+      });
+
+    expect(response.status).toBe(200);
+    const model = await app.db.getRepository('dataSources').findOne({ filterByTk: dataSourceKey });
+    expect(model.get('options').selectedCollections).toEqual(['invoices']);
+    expect([...runtime.loaded.keys()]).toEqual(['invoices']);
+  });
+
+  it('restores the existing live collection when loadTables defineCollection throws and keeps repository=mssql-repo', async () => {
+    const dataSourceKey = 'mssql-loadtables-rollback';
+    const initialOptions: MssqlDataSourceOptions = {
+      host: 'mock-host',
+      database: 'mock-db',
+      schema: 'dbo',
+      addAllCollections: true,
+    };
+    await createDataSourceRecord(app, {
+      key: dataSourceKey,
+      type: 'mssql',
+      displayName: 'MSSQL loadTables rollback test',
+      enabled: false,
+      options: initialOptions,
+    });
+    await app.db.getRepository('dataSourcesCollections').create({
+      values: {
+        name: 'orders',
+        dataSourceKey,
+        options: { title: 'Custom Orders', repository: 'Repository' },
+      },
+      hooks: false,
+    });
+
+    try {
+      const runtime = createSelectionRuntimeSource(initialOptions, ['orders']);
+      app.dataSourceManager.dataSources.set(dataSourceKey, runtime.source);
+
+      // First verify repository='mssql-repo' is enforced even when localData stored repository='Repository'.
+      const okResponse = await app
+        .agent()
+        .resource('dataSources')
+        .loadTables({
+          values: { dataSourceKey, tables: ['orders'] },
+        });
+      expect(okResponse.status).toBe(200);
+      expect(runtime.loaded.get('orders')?.options).toMatchObject({
+        name: 'orders',
+        title: 'Custom Orders',
+        repository: 'mssql-repo',
+        introspected: true,
+      });
+
+      // Now inject a defineCollection failure on the new definition and confirm the previous live collection survives.
+      const baseDefine = runtime.defineCollection.getMockImplementation();
+      let failedOnce = false;
+      runtime.defineCollection.mockImplementationOnce((col) => {
+        if (!failedOnce) {
+          failedOnce = true;
+          throw new Error('broken association target');
+        }
+        baseDefine?.(col);
+      });
+
+      const failResponse = await app
+        .agent()
+        .resource('dataSources')
+        .loadTables({
+          values: { dataSourceKey, tables: ['orders'] },
+        });
+      expect(failResponse.status).toBe(500);
+      expect(runtime.loaded.has('orders')).toBe(true);
+      expect(runtime.loaded.get('orders')?.options).toMatchObject({
+        name: 'orders',
+        title: 'Custom Orders',
+      });
+    } finally {
+      app.dataSourceManager.dataSources.delete(dataSourceKey);
     }
   });
 });

@@ -10,6 +10,7 @@ import { quoteUnicodeStringLiteral } from '../security/sql-quote';
  */
 export interface MssqlBulkColumnRow {
   table_name: string;
+  object_type?: string;
   column_name: string;
   data_type: string;
   max_length: number;
@@ -73,6 +74,7 @@ export function buildBulkColumnsSql(schemaName: string, tableNames?: string[]): 
   return `
 SELECT
   o.name AS table_name,
+  o.type AS object_type,
   c.name AS column_name,
   COALESCE(st.name, t.name) AS data_type,
   c.max_length AS max_length,
@@ -130,6 +132,8 @@ WHERE u.name = ${schema}
   AND o.is_ms_shipped = 0
   AND i.type > 0
   AND i.name IS NOT NULL
+  AND i.has_filter = 0
+  AND i.is_disabled = 0
   AND ic.is_included_column = 0${tableFilter}
 ORDER BY o.name, i.name, ic.key_ordinal
 `;

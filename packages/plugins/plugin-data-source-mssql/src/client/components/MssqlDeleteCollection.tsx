@@ -1,15 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Custom DeleteCollection component for MSSQL data source plugin.
- * This component handles the delete action properly for external data sources
- * by using the correct API endpoint with the data source key.
+ * Custom DeleteCollection component for MSSQL data source plugin (legacy v1 client).
+ * Supports both single-row and bulk deletion through the scoped external datasource endpoint.
  */
 
 import { DeleteOutlined, ExclamationCircleFilled } from '@ant-design/icons';
 import { css } from '@emotion/css';
 import { useForm } from '@formily/react';
-import { Button, Modal, message } from 'antd';
+import { Button, message } from 'antd';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
@@ -17,31 +16,62 @@ import {
   ActionContextProvider,
   RecordProvider,
   SchemaComponent,
+  useActionContext,
   useAPIClient,
+  useCancelAction,
+  useCollectionManager_deprecated,
   useRecord,
   useResourceActionContext,
 } from '@nocobase/client';
-import { useCancelAction, useCollectionManager_deprecated } from '@nocobase/client';
 
-export const MssqlDeleteCollection = (props: any) => {
+export interface MssqlDeleteCollectionActionProps {
+  scope?: Record<string, unknown>;
+  getContainer?: () => HTMLElement;
+  item?: { name?: string; [key: string]: unknown };
+  children?: React.ReactNode;
+  isBulk?: boolean;
+  useAction?: () => { run: () => Promise<void> };
+  [key: string]: unknown;
+}
+
+export function extractBulkSelectedNames(state: unknown): string[] {
+  if (!state || typeof state !== 'object') {
+    return [];
+  }
+  const typedState = state as { selectedRowKeys?: unknown };
+  const raw = Array.isArray(typedState.selectedRowKeys)
+    ? typedState.selectedRowKeys
+    : typedState.selectedRowKeys && typeof typedState.selectedRowKeys === 'object'
+      ? Object.values(typedState.selectedRowKeys).flat()
+      : [];
+  return raw.filter((key): key is string => typeof key === 'string' && key.length > 0);
+}
+
+export const MssqlDeleteCollection: React.FC<MssqlDeleteCollectionActionProps> = (props) => {
   const record = useRecord();
   return <MssqlDeleteCollectionAction item={record} {...props} />;
 };
 
-const useDestroyActionForExternalDS = () => {
-  const { refresh } = useResourceActionContext();
+const useDestroyActionForExternalDS = (isBulk?: boolean) => {
+  const { state, setState, refresh } = useResourceActionContext();
+  const actionCtx = useActionContext();
   const { name: dataSourceKey } = useParams<{ name: string }>();
   const { t } = useTranslation('plugin-data-source-mssql');
   const record = useRecord();
   const api = useAPIClient();
   const form = useForm();
-  const { cascade } = form?.values || {};
-  const collectionName = record?.name;
+  const { cascade } = (form?.values as { cascade?: boolean } | undefined) || {};
 
   return {
     async run() {
-      if (!collectionName) {
-        message.error(t('Collection name is missing'));
+      const targetKeys = isBulk
+        ? extractBulkSelectedNames(state)
+        : typeof record?.name === 'string' && record.name
+          ? [record.name]
+          : [];
+
+      if (!targetKeys.length) {
+        message.error(isBulk ? t('Please select the collections you want to delete') : t('Collection name is missing'));
         return;
       }
 
@@ -50,12 +80,17 @@ const useDestroyActionForExternalDS = () => {
           url: `dataSources/${encodeURIComponent(dataSourceKey || '')}/collections:destroy`,
           method: 'post',
           params: {
-            filterByTk: collectionName,
+            filterByTk: isBulk ? targetKeys : targetKeys[0],
             cascade,
           },
         });
         message.success(t('Collection deleted successfully'));
-        refresh();
+        form?.reset?.();
+        actionCtx?.setVisible?.(false);
+        if (isBulk) {
+          setState?.({ ...(state || {}), selectedRowKeys: [] });
+        }
+        refresh?.();
       } catch (error: unknown) {
         const errMsg = (error as { response?: { data?: { errors?: Array<{ message?: string }> } } })?.response?.data
           ?.errors?.[0]?.message;
@@ -67,7 +102,7 @@ const useDestroyActionForExternalDS = () => {
 };
 
 const useDestroyActionAndRefreshCMForExternalDS = () => {
-  const { run } = useDestroyActionForExternalDS();
+  const { run } = useDestroyActionForExternalDS(false);
   const { refreshCM } = useCollectionManager_deprecated();
   return {
     async run() {
@@ -77,7 +112,18 @@ const useDestroyActionAndRefreshCMForExternalDS = () => {
   };
 };
 
-export const MssqlDeleteCollectionAction = (props: any) => {
+const useBulkDestroyActionAndRefreshCMForExternalDS = () => {
+  const { run } = useDestroyActionForExternalDS(true);
+  const { refreshCM } = useCollectionManager_deprecated();
+  return {
+    async run() {
+      await run();
+      await refreshCM();
+    },
+  };
+};
+
+export const MssqlDeleteCollectionAction: React.FC<MssqlDeleteCollectionActionProps> = (props) => {
   const { scope, getContainer, item: record, children, isBulk, useAction, ...otherProps } = props;
   const { t } = useTranslation('plugin-data-source-mssql');
   const [visible, setVisible] = useState(false);
@@ -86,7 +132,7 @@ export const MssqlDeleteCollectionAction = (props: any) => {
     if (useAction) {
       return useAction;
     }
-    return useDestroyActionAndRefreshCMForExternalDS;
+    return isBulk ? useBulkDestroyActionAndRefreshCMForExternalDS : useDestroyActionAndRefreshCMForExternalDS;
   };
 
   const Title = () => {

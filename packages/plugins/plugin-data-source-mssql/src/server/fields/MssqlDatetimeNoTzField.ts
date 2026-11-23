@@ -2,9 +2,10 @@
 
 import { DatetimeNoTzField } from '@nocobase/database';
 import { DataTypes } from 'sequelize';
-import { formatDateTimeParameter, formatIsoDateTimeNoTz } from '../security/sql-quote';
+import { formatDateTimeParameter, formatIsoDateTimeNoTz, type DateWithNanosecondsDelta } from '../security/sql-quote';
 
-const LOCAL_DATETIME_NO_TZ_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/;
+const LOCAL_DATETIME_NO_TZ_RE = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(?:\.(\d+))?$/;
+const ISO_FRACTION_RE = /\d{2}:\d{2}:\d{2}\.(\d+)/;
 const UTC_OFFSET_RE = /^([+-])(\d{2}):?(\d{2})$/;
 
 function parseUtcOffsetMinutes(timezone: string): number {
@@ -14,6 +15,43 @@ function parseUtcOffsetMinutes(timezone: string): number {
   }
   const sign = match[1] === '-' ? -1 : 1;
   return sign * (Number(match[2]) * 60 + Number(match[3]));
+}
+
+function parseFractionalDigits(fraction?: string): { ms: number; extraTicks: number } {
+  if (!fraction) {
+    return { ms: 0, extraTicks: 0 };
+  }
+  const padded = fraction.padEnd(7, '0').slice(0, 7);
+  return {
+    ms: Number(padded.slice(0, 3)),
+    extraTicks: Number(padded.slice(3, 7)),
+  };
+}
+
+function readExistingExtraTicks(date: Date): number {
+  const typed = date as DateWithNanosecondsDelta;
+  const delta = typed.nanosecondsDelta ?? typed.nanosecondDelta;
+  if (typeof delta !== 'number' || !Number.isFinite(delta) || delta <= 0) {
+    return 0;
+  }
+  return Math.min(9999, Math.max(0, Math.round(delta * 1e7)));
+}
+
+function attachNanosecondsDelta(date: Date, extraTicks: number): Date {
+  if (extraTicks > 0) {
+    const delta = extraTicks / 1e7;
+    Object.defineProperty(date, 'nanosecondsDelta', {
+      value: delta,
+      enumerable: false,
+      configurable: true,
+    });
+    Object.defineProperty(date, 'nanosecondDelta', {
+      value: delta,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return date;
 }
 
 /**
@@ -30,10 +68,13 @@ export function stringifyMssqlDatetimeNoTz(value: unknown): string {
     const trimmed = value.trim();
     const localMatch = LOCAL_DATETIME_NO_TZ_RE.exec(trimmed);
     if (localMatch) {
-      return `${localMatch[1]}T${localMatch[2]}`;
+      return `${localMatch[1]}T${localMatch[2]}${localMatch[3] ? `.${localMatch[3]}` : ''}`;
     }
     const parsed = new Date(trimmed);
     if (!Number.isNaN(parsed.getTime())) {
+      const fracMatch = ISO_FRACTION_RE.exec(trimmed);
+      const extraTicks = parseFractionalDigits(fracMatch?.[1]).extraTicks;
+      attachNanosecondsDelta(parsed, extraTicks);
       return formatIsoDateTimeNoTz(parsed);
     }
     return trimmed;
@@ -43,29 +84,41 @@ export function stringifyMssqlDatetimeNoTz(value: unknown): string {
 
 /**
  * Converts a wall-clock datetime input into a UTC `Date` whose UTC fields equal the exact wall-clock
- * time. Because tedious runs with `useUTC: true`, storing wall-clock components in UTC ensures
- * identical reads and writes regardless of the Node.js host timezone (e.g. UTC+7 vs UTC).
+ * time while preserving SQL Server `datetime2(7)` sub-millisecond precision via `nanosecondsDelta` /
+ * `nanosecondDelta`. Because tedious runs with `useUTC: true`, storing wall-clock components in UTC
+ * ensures identical reads and writes regardless of the Node.js host timezone.
  */
 export function parseWallClockToUtcDate(val: unknown, timezone = '+00:00'): Date | unknown {
   if (val == null) {
     return null;
   }
+  let extraTicks = 0;
   if (typeof val === 'string') {
     const trimmed = val.trim();
     const localMatch = LOCAL_DATETIME_NO_TZ_RE.exec(trimmed);
     if (localMatch) {
-      const utcDate = new Date(`${localMatch[1]}T${localMatch[2]}Z`);
+      const parsedFrac = parseFractionalDigits(localMatch[3]);
+      extraTicks = parsedFrac.extraTicks;
+      const msStr = String(parsedFrac.ms).padStart(3, '0');
+      const utcDate = new Date(`${localMatch[1]}T${localMatch[2]}.${msStr}Z`);
       if (!Number.isNaN(utcDate.getTime())) {
-        return utcDate;
+        return attachNanosecondsDelta(utcDate, extraTicks);
       }
     }
+    const isoFracMatch = ISO_FRACTION_RE.exec(trimmed);
+    if (isoFracMatch) {
+      extraTicks = parseFractionalDigits(isoFracMatch[1]).extraTicks;
+    }
+  } else if (val instanceof Date) {
+    extraTicks = readExistingExtraTicks(val);
   }
   const parsed = val instanceof Date ? val : new Date(String(val));
   if (Number.isNaN(parsed.getTime())) {
     return val;
   }
   const offsetMinutes = parseUtcOffsetMinutes(timezone);
-  return new Date(parsed.getTime() + offsetMinutes * 60_000);
+  const adjusted = new Date(parsed.getTime() + offsetMinutes * 60_000);
+  return attachNanosecondsDelta(adjusted, extraTicks);
 }
 
 // Sequelize v6 wraps DataTypes.ABSTRACT in a classToInvokable Proxy whose constructor returns a
@@ -110,7 +163,8 @@ export class MssqlDatetimeNoTzField extends DatetimeNoTzField {
       get(this: { getDataValue(key: string): unknown }) {
         const val = this.getDataValue(name);
         if (val instanceof Date && !Number.isNaN(val.getTime())) {
-          return formatDateTimeParameter(val).slice(0, 19);
+          const formatted = formatDateTimeParameter(val);
+          return formatted.length === 23 && formatted.endsWith('.000') ? formatted.slice(0, 19) : formatted;
         }
         return val;
       },

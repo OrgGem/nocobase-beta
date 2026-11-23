@@ -82,12 +82,15 @@ describe('sql-quote security helpers', () => {
       expect(formatDateTimeParameter(d)).toBe('2024-01-02 03:04:05.678');
     });
 
-    it('recovers sub-millisecond precision from tedious nanosecondsDelta', () => {
+    it('recovers sub-millisecond precision from tedious nanosecondsDelta (fraction of a second)', () => {
       const d = new Date(Date.UTC(2024, 0, 2, 3, 4, 5, 678)) as Date & { nanosecondsDelta?: number };
-      d.nanosecondsDelta = 0.5; // half a millisecond -> 5000 extra 100ns ticks
-      const text = formatDateTimeParameter(d);
-      expect(text.startsWith('2024-01-02 03:04:05.678')).toBe(true);
-      expect(text.length).toBeGreaterThan('2024-01-02 03:04:05.678'.length);
+      // Tedious encodes extra 100ns ticks beyond milliseconds as ticks100ns / 1e7 seconds (max 0.0009999).
+      d.nanosecondsDelta = 4567 / 1e7;
+      expect(formatDateTimeParameter(d)).toBe('2024-01-02 03:04:05.6784567');
+
+      const dHalfMs = new Date(Date.UTC(2024, 0, 2, 3, 4, 5, 678)) as Date & { nanosecondsDelta?: number };
+      dHalfMs.nanosecondsDelta = 5000 / 1e7;
+      expect(formatDateTimeParameter(dHalfMs)).toBe('2024-01-02 03:04:05.6785000');
     });
 
     it('ignores a zero/negative nanosecondsDelta', () => {

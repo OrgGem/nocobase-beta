@@ -33,6 +33,7 @@ interface IndexMetadataRow {
   SEQ_IN_INDEX: number;
   INDEX_TYPE: number;
   DIRECTION: string;
+  IS_NULLABLE?: boolean | number;
 }
 
 interface FindOptions {
@@ -51,12 +52,122 @@ interface FindOptions {
  * Cursor-based pagination strategy interface
  */
 interface CursorStrategy {
+  getColumns(): string[];
   buildWhere(
     baseWhere: Record<string | symbol, unknown> | undefined,
     record?: CursorRow,
-  ): Record<string | symbol, unknown> | undefined;
+  ): Record<string | symbol, unknown> | null | undefined;
   buildSort(): Array<[string, SortDirection]>;
   hasCursorValues(record?: CursorRow): boolean;
+  snapshotCursor(record: CursorRow): CursorRow;
+}
+
+interface CursorProjectionPlan {
+  queryOptions: FindOptions;
+  injectedColumns: string[];
+}
+
+function hasAttributeEntry(attributes: unknown[], column: string): boolean {
+  return attributes.some((entry) => entry === column || (Array.isArray(entry) && entry[entry.length - 1] === column));
+}
+
+function prepareCursorProjection(options: FindOptions, cursorColumns: string[]): CursorProjectionPlan {
+  if (cursorColumns.length === 0) {
+    return { queryOptions: options, injectedColumns: [] };
+  }
+
+  // `attributes` takes precedence over `fields`/`except` in NocoBase OptionsParser.parseFields().
+  const rawAttributes = options.attributes;
+  if (rawAttributes !== undefined) {
+    if (Array.isArray(rawAttributes)) {
+      const missing = cursorColumns.filter((col) => !hasAttributeEntry(rawAttributes, col));
+      if (missing.length > 0) {
+        return {
+          queryOptions: { ...options, attributes: [...rawAttributes, ...missing] },
+          injectedColumns: missing,
+        };
+      }
+      return { queryOptions: options, injectedColumns: [] };
+    }
+    if (rawAttributes && typeof rawAttributes === 'object') {
+      const attrObj = rawAttributes as { include?: unknown[]; exclude?: unknown[] };
+      if (Array.isArray(attrObj.exclude)) {
+        const excludeList = attrObj.exclude;
+        const excludedCursor = cursorColumns.filter((col) => excludeList.includes(col));
+        if (excludedCursor.length > 0) {
+          return {
+            queryOptions: {
+              ...options,
+              attributes: {
+                ...attrObj,
+                exclude: excludeList.filter((col) => !excludedCursor.includes(String(col))),
+              },
+            },
+            injectedColumns: excludedCursor,
+          };
+        }
+      }
+    }
+    return { queryOptions: options, injectedColumns: [] };
+  }
+
+  let nextOptions: FindOptions = options;
+  const injectedSet = new Set<string>();
+
+  if (Array.isArray(options.fields)) {
+    const fieldsList = options.fields as unknown[];
+    const missing = cursorColumns.filter((col) => !fieldsList.includes(col));
+    if (missing.length > 0) {
+      nextOptions = { ...nextOptions, fields: [...fieldsList, ...missing] };
+      for (const col of missing) {
+        injectedSet.add(col);
+      }
+    }
+  }
+
+  if (Array.isArray(options.except)) {
+    const exceptList = options.except as unknown[];
+    const excludedCursor = cursorColumns.filter((col) => exceptList.includes(col));
+    if (excludedCursor.length > 0) {
+      nextOptions = {
+        ...nextOptions,
+        except: exceptList.filter((col) => !excludedCursor.includes(String(col))),
+      };
+      for (const col of excludedCursor) {
+        injectedSet.add(col);
+      }
+    }
+  }
+
+  return { queryOptions: nextOptions, injectedColumns: [...injectedSet] };
+}
+
+function stripInjectedColumnsFromRows(rows: Model[], columns: string[]): void {
+  if (columns.length === 0) {
+    return;
+  }
+  for (const row of rows) {
+    const typedRow = row as unknown as {
+      dataValues?: Record<string, unknown>;
+      _previousDataValues?: Record<string, unknown>;
+      [key: string]: unknown;
+    };
+    const dataValues = typedRow.dataValues && typeof typedRow.dataValues === 'object' ? typedRow.dataValues : undefined;
+    const prevDataValues =
+      typedRow._previousDataValues && typeof typedRow._previousDataValues === 'object'
+        ? typedRow._previousDataValues
+        : undefined;
+    for (const col of columns) {
+      if (dataValues) {
+        delete dataValues[col];
+        if (prevDataValues) {
+          delete prevDataValues[col];
+        }
+      } else if (Object.prototype.hasOwnProperty.call(typedRow, col)) {
+        delete typedRow[col];
+      }
+    }
+  }
 }
 
 function readSingleField(record: CursorRow, key: string): unknown {
@@ -91,17 +202,46 @@ function normalizeDirection(direction?: string): SortDirection {
 }
 
 /**
+ * Builds a three-valued SQL Server strict comparison for a single cursor column, accounting for
+ * `NULL` ordering (`NULL` sorts first in `ASC` and last in `DESC`). Returns `null` when no rows can
+ * strictly follow `value` along `direction` (e.g. `DESC` at `NULL`).
+ */
+function buildStrictCursorCondition(
+  column: string,
+  direction: SortDirection,
+  value: unknown,
+  isNullable: boolean,
+): Record<string | symbol, unknown> | null {
+  if (value === null) {
+    return direction === 'ASC' ? { [column]: { [Op.not]: null } } : null;
+  }
+  if (direction === 'ASC') {
+    return { [column]: { [Op.gt]: value } };
+  }
+  if (isNullable) {
+    return { [column]: { [Op.or]: [{ [Op.lt]: value }, { [Op.is]: null }] } };
+  }
+  return { [column]: { [Op.lt]: value } };
+}
+
+/**
  * Single column cursor strategy - for tables with single-column primary key or unique index
  */
 class SingleColumnCursorStrategy implements CursorStrategy {
   public columnName: string;
   public direction: SortDirection;
   private physicalColumn?: string;
+  private isNullable: boolean;
 
-  constructor(columnName: string, direction: SortDirection = 'ASC', physicalColumn?: string) {
+  constructor(columnName: string, direction: SortDirection = 'ASC', physicalColumn?: string, isNullable = false) {
     this.columnName = columnName;
     this.direction = direction;
     this.physicalColumn = physicalColumn;
+    this.isNullable = isNullable;
+  }
+
+  getColumns(): string[] {
+    return [this.columnName];
   }
 
   buildSort(): Array<[string, SortDirection]> {
@@ -112,16 +252,24 @@ class SingleColumnCursorStrategy implements CursorStrategy {
     return record !== undefined && readRecordField(record, this.columnName, this.physicalColumn) !== undefined;
   }
 
+  snapshotCursor(record: CursorRow): CursorRow {
+    return {
+      [this.columnName]: readRecordField(record, this.columnName, this.physicalColumn),
+    };
+  }
+
   buildWhere(
     baseWhere: Record<string | symbol, unknown> | undefined,
     record?: CursorRow,
-  ): Record<string | symbol, unknown> | undefined {
+  ): Record<string | symbol, unknown> | null | undefined {
     if (!record) {
       return baseWhere;
     }
-    const op = this.direction === 'DESC' ? Op.lt : Op.gt;
     const cursorValue = readRecordField(record, this.columnName, this.physicalColumn);
-    const cursorCondition = { [this.columnName]: { [op]: cursorValue } };
+    const cursorCondition = buildStrictCursorCondition(this.columnName, this.direction, cursorValue, this.isNullable);
+    if (!cursorCondition) {
+      return null;
+    }
     if (!baseWhere) {
       return cursorCondition;
     }
@@ -143,11 +291,22 @@ class CompositeKeyCursorStrategy implements CursorStrategy {
   private columns: string[];
   private directions: SortDirection[];
   private physicalColumns: Array<string | undefined>;
+  private nullables: boolean[];
 
-  constructor(columns: string[], directions?: string[], physicalColumns?: Array<string | undefined>) {
+  constructor(
+    columns: string[],
+    directions?: string[],
+    physicalColumns?: Array<string | undefined>,
+    nullables?: boolean[],
+  ) {
     this.columns = columns;
     this.directions = columns.map((_, index) => normalizeDirection(directions?.[index]));
     this.physicalColumns = columns.map((_, index) => physicalColumns?.[index]);
+    this.nullables = columns.map((_, index) => Boolean(nullables?.[index]));
+  }
+
+  getColumns(): string[] {
+    return [...this.columns];
   }
 
   buildSort(): Array<[string, SortDirection]> {
@@ -165,29 +324,48 @@ class CompositeKeyCursorStrategy implements CursorStrategy {
     return this.columns.every((col, idx) => readRecordField(record, col, this.physicalColumns[idx]) !== undefined);
   }
 
+  snapshotCursor(record: CursorRow): CursorRow {
+    const snapshot: CursorRow = {};
+    for (let i = 0; i < this.columns.length; i++) {
+      const col = this.columns[i];
+      snapshot[col] = readRecordField(record, col, this.physicalColumns[i]);
+    }
+    return snapshot;
+  }
+
   buildWhere(
     baseWhere: Record<string | symbol, unknown> | undefined,
     record?: CursorRow,
-  ): Record<string | symbol, unknown> | undefined {
+  ): Record<string | symbol, unknown> | null | undefined {
     if (!record) {
       return baseWhere;
     }
-    const whereConditions: Array<Record<string, unknown>> = [];
+    const whereConditions: Array<Record<string | symbol, unknown>> = [];
 
     for (let i = 0; i < this.columns.length; i++) {
       const column = this.columns[i];
-      const op = this.directions[i] === 'DESC' ? Op.lt : Op.gt;
-      const condition: Record<string, unknown> = {};
-
-      for (let j = 0; j < i; j++) {
-        condition[this.columns[j]] = readRecordField(record, this.columns[j], this.physicalColumns[j]);
+      const colVal = readRecordField(record, column, this.physicalColumns[i]);
+      const strictCond = buildStrictCursorCondition(column, this.directions[i], colVal, this.nullables[i]);
+      if (!strictCond) {
+        continue;
       }
 
-      condition[column] = { [op]: readRecordField(record, column, this.physicalColumns[i]) };
+      const condition: Record<string | symbol, unknown> = {};
+      for (let j = 0; j < i; j++) {
+        const prefixCol = this.columns[j];
+        const prefixVal = readRecordField(record, prefixCol, this.physicalColumns[j]);
+        condition[prefixCol] = prefixVal === null ? { [Op.is]: null } : prefixVal;
+      }
+
+      condition[column] = strictCond[column];
       whereConditions.push(condition);
     }
 
-    const cursorCondition = { [Op.or]: whereConditions };
+    if (whereConditions.length === 0) {
+      return null;
+    }
+
+    const cursorCondition = whereConditions.length === 1 ? whereConditions[0] : { [Op.or]: whereConditions };
     return baseWhere ? { [Op.and]: [baseWhere, cursorCondition] } : cursorCondition;
   }
 }
@@ -263,7 +441,8 @@ export class MssqlSmartCursorBuilder {
           WHEN i.is_unique = 1 THEN 2
           ELSE 3 
         END as INDEX_TYPE,
-        CASE WHEN ic.is_descending_key = 1 THEN 'DESC' ELSE 'ASC' END as DIRECTION
+        CASE WHEN ic.is_descending_key = 1 THEN 'DESC' ELSE 'ASC' END as DIRECTION,
+        c.is_nullable AS IS_NULLABLE
       FROM 
         sys.indexes i
         INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -271,6 +450,8 @@ export class MssqlSmartCursorBuilder {
       WHERE 
         i.object_id = OBJECT_ID(?)
         AND i.type > 0
+        AND i.has_filter = 0
+        AND i.is_disabled = 0
         AND ic.is_included_column = 0
       ORDER BY 
         i.name, 
@@ -286,6 +467,7 @@ export class MssqlSmartCursorBuilder {
 
       const indexes: Map<string, IndexInfo> = new Map();
       const indexDirections: Map<string, Map<string, SortDirection>> = new Map();
+      const indexNullables: Map<string, Map<string, boolean>> = new Map();
       const attrToPhysical = new Map<string, string>();
 
       if (!indexRows || indexRows.length === 0) {
@@ -300,6 +482,8 @@ export class MssqlSmartCursorBuilder {
         attrToPhysical.set(columnName, physicalColumnName);
         const indexType = row.INDEX_TYPE;
         const direction = normalizeDirection(row.DIRECTION);
+        const isPrimary = indexType === 1;
+        const isNullable = isPrimary ? false : Boolean(row.IS_NULLABLE);
 
         let dirMap = indexDirections.get(indexName);
         if (!dirMap) {
@@ -308,12 +492,19 @@ export class MssqlSmartCursorBuilder {
         }
         dirMap.set(columnName, direction);
 
+        let nullMap = indexNullables.get(indexName);
+        if (!nullMap) {
+          nullMap = new Map();
+          indexNullables.set(indexName, nullMap);
+        }
+        nullMap.set(columnName, isNullable);
+
         let index = indexes.get(indexName);
         if (!index) {
           index = {
             name: indexName,
             columns: [],
-            isPrimary: indexType === 1,
+            isPrimary,
             isUnique: indexType < 3,
           };
           indexes.set(indexName, index);
@@ -331,10 +522,13 @@ export class MssqlSmartCursorBuilder {
         const physicalColumns = index.columns.map(
           (col) => attrToPhysical.get(col) ?? this.resolvePhysicalColumnName(col),
         );
+        const nullables = index.columns.map((col) =>
+          index.isPrimary ? false : indexNullables.get(index.name)?.get(col) ?? false,
+        );
         if (index.columns.length === 1) {
-          return new SingleColumnCursorStrategy(index.columns[0], directions[0], physicalColumns[0]);
+          return new SingleColumnCursorStrategy(index.columns[0], directions[0], physicalColumns[0], nullables[0]);
         }
-        return new CompositeKeyCursorStrategy(index.columns, directions, physicalColumns);
+        return new CompositeKeyCursorStrategy(index.columns, directions, physicalColumns, nullables);
       };
 
       // 1. Primary key (guaranteed unique)
@@ -393,10 +587,16 @@ export class MssqlSmartCursorBuilder {
           const combinedPhysical = combinedCols.map(
             (col) => attrToPhysical.get(col) ?? this.resolvePhysicalColumnName(col),
           );
+          const combinedNullables = combinedCols.map((col) => indexNullables.get(index.name)?.get(col) ?? false);
           this.cachedStrategy =
             combinedCols.length === 1
-              ? new SingleColumnCursorStrategy(combinedCols[0], combinedDirs[0], combinedPhysical[0])
-              : new CompositeKeyCursorStrategy(combinedCols, combinedDirs, combinedPhysical);
+              ? new SingleColumnCursorStrategy(
+                  combinedCols[0],
+                  combinedDirs[0],
+                  combinedPhysical[0],
+                  combinedNullables[0],
+                )
+              : new CompositeKeyCursorStrategy(combinedCols, combinedDirs, combinedPhysical, combinedNullables);
           return this.cachedStrategy;
         }
       }
@@ -414,7 +614,7 @@ export class MssqlSmartCursorBuilder {
    * Fallback strategy when no index information is available
    */
   private getFallbackStrategy(): CursorStrategy {
-    if (Array.isArray(this.collection.filterTargetKey)) {
+    if (Array.isArray(this.collection.filterTargetKey) && this.collection.filterTargetKey.length > 0) {
       const cols = this.collection.filterTargetKey.map((col) => this.resolveAttributeName(col));
       return new CompositeKeyCursorStrategy(
         cols,
@@ -422,7 +622,13 @@ export class MssqlSmartCursorBuilder {
         cols.map((col) => this.resolvePhysicalColumnName(col)),
       );
     }
-    const attr = this.resolveAttributeName(this.collection.filterTargetKey || 'id');
+    let fallbackColumn = typeof this.collection.filterTargetKey === 'string' ? this.collection.filterTargetKey : '';
+    if (!fallbackColumn) {
+      const rawAttributes = this.collection.model?.rawAttributes;
+      const attrNames = rawAttributes ? Object.keys(rawAttributes) : [];
+      fallbackColumn = attrNames.includes('id') ? 'id' : attrNames[0] || 'id';
+    }
+    const attr = this.resolveAttributeName(fallbackColumn);
     return new SingleColumnCursorStrategy(attr, 'ASC', this.resolvePhysicalColumnName(attr));
   }
 
@@ -467,7 +673,12 @@ export class MssqlSmartCursorBuilder {
       const currentLimit = remaining !== undefined ? Math.min(chunkSize, remaining) : chunkSize;
 
       if (!isFirst) {
-        runOptions.where = cursorStrategy.buildWhere(baseWhere, cursorRecord);
+        const nextWhere = cursorStrategy.buildWhere(baseWhere, cursorRecord);
+        if (nextWhere === null) {
+          hasMoreData = false;
+          break;
+        }
+        runOptions.where = nextWhere;
       } else {
         runOptions.where = baseWhere;
         isFirst = false;
@@ -479,7 +690,8 @@ export class MssqlSmartCursorBuilder {
         await options.beforeFind(runOptions);
       }
 
-      const records = await findFn(_.omit(runOptions, 'callback', 'beforeFind', 'afterFind', 'chunkSize', 'find'));
+      const { queryOptions, injectedColumns } = prepareCursorProjection(runOptions, cursorStrategy.getColumns());
+      const records = await findFn(_.omit(queryOptions, 'callback', 'beforeFind', 'afterFind', 'chunkSize', 'find'));
 
       if (options.afterFind) {
         await options.afterFind(records, runOptions);
@@ -491,6 +703,12 @@ export class MssqlSmartCursorBuilder {
       }
 
       const batch = remaining !== undefined && records.length > remaining ? records.slice(0, remaining) : records;
+      const lastRecord = batch[batch.length - 1] as unknown as CursorRow;
+      const nextCursor = cursorStrategy.hasCursorValues(lastRecord)
+        ? cursorStrategy.snapshotCursor(lastRecord)
+        : undefined;
+
+      stripInjectedColumnsFromRows(batch, injectedColumns);
       await callbackFn(batch, runOptions);
       totalProcessed += batch.length;
 
@@ -500,8 +718,7 @@ export class MssqlSmartCursorBuilder {
         continue;
       }
 
-      const nextCursor = batch[batch.length - 1] as unknown as CursorRow;
-      if (!cursorStrategy.hasCursorValues(nextCursor)) {
+      if (!nextCursor) {
         hasMoreData = false;
         continue;
       }

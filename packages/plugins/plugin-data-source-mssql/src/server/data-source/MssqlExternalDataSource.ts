@@ -7,6 +7,7 @@ import { MssqlCollectionManager } from './MssqlCollectionManager';
 import { MssqlIntrospector } from './MssqlIntrospector';
 import { type MssqlRepositoryRuntimeOptions } from './MssqlRepository';
 import { MssqlDatetimeNoTzField } from '../fields/MssqlDatetimeNoTzField';
+import { MssqlDateOnlyField, registerMssqlUtcDateOnlyParser } from '../fields/MssqlDateOnlyField';
 import { createMssqlOperators, type FullTextSearchMode } from '../operators/mssql-operators';
 import type { Context } from '@nocobase/actions';
 import { type Dialect } from 'sequelize';
@@ -15,6 +16,7 @@ import path from 'path';
 
 const MSSQL_DRIVER_NAME = 'tedious';
 const DEFAULT_SLOW_QUERY_THRESHOLD_MS = 2000;
+const SESSION_INIT_HOOK_NAME = 'mssqlSessionInit';
 // Native tedious ISOLATION_LEVEL.READ_UNCOMMITTED value (persists across transactions via connectionIsolationLevel).
 const TEDIOUS_ISOLATION_READ_UNCOMMITTED = 0x01;
 
@@ -262,30 +264,32 @@ export type MssqlDataSourceOptions = {
   name?: string;
   cache?: unknown;
   storagePath?: string;
+  databaseInstance?: Database;
   addAllCollections?: boolean;
   selectedCollections?: string[];
 };
 
 export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospector> {
-  /**
-   * Override createCollectionManager to provide MssqlCollectionManager, register MSSQL-specific
-   * field types (`MssqlDatetimeNoTzField`), and configure session-level connection hooks.
-   */
-  createCollectionManager(options: MssqlDataSourceOptions = {}) {
-    const databaseOptions = formatDatabaseOptions(options);
-    const collectionOptions = options.collectionManager || {};
-    const database =
-      collectionOptions.database instanceof Database ? collectionOptions.database : new Database(databaseOptions);
+  private isLoaded = false;
+  private isClosed = false;
+  private reusedDatabase = false;
 
-    if (typeof database.registerFieldTypes === 'function') {
-      database.registerFieldTypes({
-        datetimeNoTz: MssqlDatetimeNoTzField,
-      });
-    }
-
+  private registerSessionInitHook(database: Database, options: MssqlDataSourceOptions): void {
     const sessionInitSql = buildSessionInitSql(options);
-    if (sessionInitSql && database.sequelize) {
-      database.sequelize.addHook('afterConnect', async (connection: unknown) => {
+    if (!database.sequelize) {
+      return;
+    }
+    const seqWithHooks = database.sequelize as typeof database.sequelize & {
+      removeHook?: (hookType: string, name: string) => void;
+      addHook: (
+        hookType: string,
+        nameOrFn: string | ((conn: unknown) => Promise<void>),
+        fn?: (conn: unknown) => Promise<void>,
+      ) => void;
+    };
+    seqWithHooks.removeHook?.('afterConnect', SESSION_INIT_HOOK_NAME);
+    if (sessionInitSql) {
+      seqWithHooks.addHook('afterConnect', SESSION_INIT_HOOK_NAME, async (connection: unknown) => {
         const tediousConn = connection as TediousConnectionLike;
         try {
           await executeOnTediousConnection(tediousConn, sessionInitSql);
@@ -296,6 +300,62 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
         }
       });
     }
+  }
+
+  private applyDatabaseRuntimeConfig(options: MssqlDataSourceOptions): void {
+    const database = this.collectionManager.db;
+    if (!database) {
+      return;
+    }
+    const databaseOptions = formatDatabaseOptions(options);
+    if (database.options && typeof database.options === 'object') {
+      const dbOpts = database.options as { mssqlRuntimeOptions?: MssqlRepositoryRuntimeOptions };
+      dbOpts.mssqlRuntimeOptions = {
+        ...(databaseOptions.mssqlRuntimeOptions || {}),
+        ...(this.introspector
+          ? {
+              isAnsiStringColumn: (tableName: string, columnName: string) =>
+                this.introspector.isAnsiStringColumn(tableName, columnName),
+            }
+          : {}),
+      };
+    }
+    this.registerSessionInitHook(database, options);
+    this.registerMssqlTextOperators();
+  }
+
+  /**
+   * Override createCollectionManager to provide MssqlCollectionManager, reuse an existing
+   * `databaseInstance` on refresh (`reuseDB: true`) to avoid leaking connection pools, register
+   * MSSQL field types, and configure idempotent session-level connection hooks.
+   */
+  createCollectionManager(options: MssqlDataSourceOptions = {}) {
+    const databaseOptions = formatDatabaseOptions(options);
+    const collectionOptions = options.collectionManager || {};
+    const existingDatabase =
+      options.databaseInstance instanceof Database
+        ? options.databaseInstance
+        : collectionOptions.database instanceof Database
+          ? collectionOptions.database
+          : undefined;
+    const database = existingDatabase ?? new Database(databaseOptions);
+
+    if (typeof database.registerFieldTypes === 'function') {
+      database.registerFieldTypes({
+        datetimeNoTz: MssqlDatetimeNoTzField,
+        dateOnly: MssqlDateOnlyField,
+      });
+    }
+
+    registerMssqlUtcDateOnlyParser(
+      database.sequelize as unknown as Parameters<typeof registerMssqlUtcDateOnlyParser>[0],
+    );
+
+    // For a reused Database (`reuseDB: true`), defer updating runtime options, hooks, and operators
+    // until `load()` succeeds so a slow or failed refresh never wipes the live datasource's state.
+    if (!existingDatabase) {
+      this.registerSessionInitHook(database, options);
+    }
 
     return new MssqlCollectionManager({
       ...collectionOptions,
@@ -304,22 +364,42 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
   }
 
   /**
-   * Override createDatabaseIntrospector to provide MSSQL-specific introspection.
+   * Override createDatabaseIntrospector to provide MSSQL-specific introspection and ensure
+   * temporary unloaded instances created by core's `loadDataSourceTablesIntoCollections`
+   * middleware close their pools after `getTables()`.
    */
   createDatabaseIntrospector(db: Database): MssqlIntrospector {
-    return new MssqlIntrospector({ db });
+    const introspector = new MssqlIntrospector({ db });
+    const baseGetTables = introspector.getTables.bind(introspector);
+    introspector.getTables = async () => {
+      try {
+        return await baseGetTables();
+      } finally {
+        if (!this.isLoaded && !this.reusedDatabase) {
+          await this.close();
+        }
+      }
+    };
+    return introspector;
   }
 
   constructor(options: MssqlDataSourceOptions) {
     super(options);
-    const dbOpts = this.collectionManager.db?.options as
-      | { mssqlRuntimeOptions?: MssqlRepositoryRuntimeOptions }
-      | undefined;
-    if (dbOpts?.mssqlRuntimeOptions && this.introspector) {
-      dbOpts.mssqlRuntimeOptions.isAnsiStringColumn = (tableName, columnName) =>
-        this.introspector.isAnsiStringColumn(tableName, columnName);
+    this.reusedDatabase =
+      options?.databaseInstance instanceof Database || options?.collectionManager?.database instanceof Database;
+    if (!this.reusedDatabase) {
+      const dbOpts = this.collectionManager.db?.options as
+        | { mssqlRuntimeOptions?: MssqlRepositoryRuntimeOptions }
+        | undefined;
+      if (dbOpts && this.introspector) {
+        if (!dbOpts.mssqlRuntimeOptions) {
+          dbOpts.mssqlRuntimeOptions = {};
+        }
+        dbOpts.mssqlRuntimeOptions.isAnsiStringColumn = (tableName, columnName) =>
+          this.introspector.isAnsiStringColumn(tableName, columnName);
+      }
+      this.registerMssqlTextOperators();
     }
-    this.registerMssqlTextOperators();
   }
 
   /**
@@ -337,8 +417,37 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
     const operators = createMssqlOperators(
       introspector,
       () => (this.options as MssqlDataSourceOptions)?.fullTextSearchMode ?? 'auto',
+      () => {
+        const runtimeOpts = (db.options as { mssqlRuntimeOptions?: MssqlRepositoryRuntimeOptions } | undefined)
+          ?.mssqlRuntimeOptions;
+        return Boolean(runtimeOpts?.ftsSuspendCount && runtimeOpts.ftsSuspendCount > 0);
+      },
     );
     db.registerOperators(operators);
+  }
+
+  /**
+   * Preserve SQL Server view flags across merges with persisted collection metadata so existing
+   * views always instantiate as read-only `ViewCollection`s (unless `writableView: true` is saved).
+   */
+  mergeWithLoadedCollections(
+    collections: CollectionOptions[],
+    loadedCollections: LoadedCollections,
+  ): CollectionOptions[] {
+    const merged = super.mergeWithLoadedCollections(collections, loadedCollections);
+    return merged.map((collection, index) => {
+      const incoming = collections[index];
+      if (!incoming?.view) {
+        return collection;
+      }
+      return {
+        ...collection,
+        view: true,
+        viewName: incoming.viewName ?? incoming.tableName ?? collection.name,
+        template: 'view',
+        writableView: Boolean(collection.writableView),
+      };
+    });
   }
 
   /**
@@ -346,86 +455,121 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
    */
   async load(options: { localData?: LoadedCollections } = {}) {
     const { localData = {} } = options;
+    this.isLoaded = true;
 
     try {
-      await this.collectionManager.db.sequelize.authenticate();
-      this.logger?.info?.('[MSSQL] Database connection established successfully');
-    } catch (error) {
-      this.logger?.error?.('[MSSQL] Failed to authenticate database connection', error);
-      throw error;
-    }
-
-    try {
-      await this.collectionManager.db.checkVersion();
-    } catch (error) {
-      this.logger?.warn?.('[MSSQL] Database version check failed or not supported', error);
-    }
-
-    try {
-      const dataSourceOptions = this.options as MssqlDataSourceOptions;
-      // Existing sources may have addAllCollections=false without a stored selection: keep loading
-      // all tables until an explicit selection is saved.
-      const selectedTables =
-        dataSourceOptions.addAllCollections === false && Array.isArray(dataSourceOptions.selectedCollections)
-          ? [...new Set(dataSourceOptions.selectedCollections.filter((name) => typeof name === 'string' && name))]
-          : undefined;
-      const tables = selectedTables ?? (await this.introspector.getTables());
-      this.logger?.info?.(`[MSSQL] Loading ${tables.length} tables in database`);
-
-      const schema = this.collectionManager.db.options.schema || 'dbo';
-      const total = tables.length;
-      let loaded = 0;
-
-      // Bulk-preload column metadata, PKs, and indexes in one query each when loading the full
-      // schema or multiple selected tables (eliminates N+1 describeTable / sp_helpindex round trips).
-      if (!selectedTables) {
-        await this.introspector.preloadAllColumns(schema);
-        await this.introspector.preloadAllPrimaryKeys(schema);
-        await this.introspector.preloadAllIndexes?.(schema);
-      } else if (selectedTables.length > 1) {
-        await this.introspector.preloadAllColumns(schema, selectedTables);
-        await this.introspector.preloadAllPrimaryKeys(schema, selectedTables);
-        await this.introspector.preloadAllIndexes?.(schema, selectedTables);
+      try {
+        await this.collectionManager.db.sequelize.authenticate();
+        this.logger?.info?.('[MSSQL] Database connection established successfully');
+      } catch (error) {
+        this.logger?.error?.('[MSSQL] Failed to authenticate database connection', error);
+        throw error;
       }
 
-      if (tables.length) {
-        await this.introspector.preloadFTSIndexedColumns(schema, selectedTables);
+      try {
+        await this.collectionManager.db.checkVersion();
+      } catch (error) {
+        this.logger?.warn?.('[MSSQL] Database version check failed or not supported', error);
       }
-      this.registerMssqlTextOperators();
 
-      const BATCH_SIZE = 5;
-      for (let i = 0; i < tables.length; i += BATCH_SIZE) {
-        const batch = tables.slice(i, i + BATCH_SIZE);
+      try {
+        const dataSourceOptions = this.options as MssqlDataSourceOptions;
+        // Existing sources may have addAllCollections=false without a stored selection: keep loading
+        // all tables until an explicit selection is saved.
+        const selectedTables =
+          dataSourceOptions.addAllCollections === false && Array.isArray(dataSourceOptions.selectedCollections)
+            ? [...new Set(dataSourceOptions.selectedCollections.filter((name) => typeof name === 'string' && name))]
+            : undefined;
+        this.introspector.clearCache?.();
+        const tables = selectedTables ?? (await this.introspector.getTables());
+        this.logger?.info?.(`[MSSQL] Loading ${tables.length} tables in database`);
 
-        await Promise.all(
-          batch.map(async (tableName) => {
-            const tableInfo = { tableName, schema };
-            try {
-              const name = this.introspector.tableInfoToCollectionOptions(tableInfo).name;
-              const introspected = await this.introspector.getCollection({
-                tableInfo,
-                localOptions: localData[name] || localData[tableName] || {},
-              });
-              const [collectionOptions] = this.mergeWithLoadedCollections([introspected], localData);
+        const schema = this.collectionManager.db.options.schema || 'dbo';
+        const total = tables.length;
+        let loaded = 0;
 
-              collectionOptions.introspected = true;
-              collectionOptions.repository = 'mssql-repo';
-              // Skip COUNT(*) for external MSSQL tables — use LIMIT+1 pagination instead
-              collectionOptions.simplePaginate = true;
+        // Bulk-preload column metadata, PKs, and indexes in one query each when loading the full
+        // schema or multiple selected tables (eliminates N+1 describeTable / sp_helpindex round trips).
+        if (!selectedTables) {
+          await this.introspector.preloadAllColumns(schema);
+          await this.introspector.preloadAllPrimaryKeys(schema);
+          await this.introspector.preloadAllIndexes?.(schema);
+        } else if (selectedTables.length > 1) {
+          await this.introspector.preloadAllColumns(schema, selectedTables);
+          await this.introspector.preloadAllPrimaryKeys(schema, selectedTables);
+          await this.introspector.preloadAllIndexes?.(schema, selectedTables);
+        }
 
-              this.collectionManager.defineCollection(collectionOptions);
-              loaded++;
-              this.emitLoadingProgress({ total, loaded });
-            } catch (error) {
-              this.logger?.error?.(`[MSSQL] Failed to introspect table ${tableName}:`, error);
+        if (tables.length) {
+          await this.introspector.preloadFTSIndexedColumns(schema, selectedTables);
+        }
+        if (!this.reusedDatabase) {
+          this.registerMssqlTextOperators();
+        }
+
+        const BATCH_SIZE = 5;
+        for (let i = 0; i < tables.length; i += BATCH_SIZE) {
+          const batch = tables.slice(i, i + BATCH_SIZE);
+
+          await Promise.all(
+            batch.map(async (tableName) => {
+              const tableInfo = { tableName, schema };
+              try {
+                const name = this.introspector.tableInfoToCollectionOptions(tableInfo).name;
+                const introspected = await this.introspector.getCollection({
+                  tableInfo,
+                  localOptions: localData[name] || localData[tableName] || {},
+                });
+                const [collectionOptions] = this.mergeWithLoadedCollections([introspected], localData);
+
+                collectionOptions.introspected = true;
+                collectionOptions.repository = 'mssql-repo';
+                // Skip COUNT(*) for external MSSQL tables — use LIMIT+1 pagination instead
+                collectionOptions.simplePaginate = true;
+
+                if (this.collectionManager.hasCollection?.(collectionOptions.name)) {
+                  this.collectionManager.removeCollection?.(collectionOptions.name);
+                }
+                this.collectionManager.defineCollection(collectionOptions);
+                loaded++;
+                this.emitLoadingProgress({ total, loaded });
+              } catch (error) {
+                this.logger?.error?.(`[MSSQL] Failed to introspect table ${tableName}:`, error);
+              }
+            }),
+          );
+        }
+
+        if (this.reusedDatabase) {
+          this.applyDatabaseRuntimeConfig(dataSourceOptions);
+        }
+
+        // When reusing a Database instance across refreshes, prune previously introspected collections
+        // that were dropped in SQL Server or removed from selectedCollections.
+        if (
+          typeof this.collectionManager.getCollections === 'function' &&
+          typeof this.collectionManager.removeCollection === 'function'
+        ) {
+          const expectedNames = new Set(
+            tables.map((tableName) => this.introspector.tableInfoToCollectionOptions({ tableName, schema }).name),
+          );
+          for (const existing of this.collectionManager.getCollections()) {
+            if (existing?.options?.introspected === true && !expectedNames.has(existing.name)) {
+              this.collectionManager.removeCollection(existing.name);
             }
-          }),
-        );
-      }
+          }
+        }
 
-      this.logger?.info?.(`[MSSQL] Successfully loaded ${loaded}/${total} collections`);
+        this.logger?.info?.(`[MSSQL] Successfully loaded ${loaded}/${total} collections`);
+      } catch (error) {
+        this.logger?.error?.('[MSSQL] Failed to introspect database', error);
+        throw error;
+      }
     } catch (error) {
-      this.logger?.error?.('[MSSQL] Failed to introspect database', error);
+      this.isLoaded = false;
+      if (!this.reusedDatabase) {
+        await this.close().catch(() => undefined);
+      }
       throw error;
     }
   }
@@ -457,20 +601,33 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       }
     }
 
-    const collections = await this.prepareTables(tables, options.localData);
-    for (const collection of collections) {
-      this.collectionManager.defineCollection(collection);
+    try {
+      const collections = await this.prepareTables(tables, options.localData);
+      for (const collection of collections) {
+        if (this.collectionManager.hasCollection?.(collection.name)) {
+          this.collectionManager.removeCollection?.(collection.name);
+        }
+        this.collectionManager.defineCollection(collection);
+      }
+    } finally {
+      if (!this.isLoaded && !this.reusedDatabase) {
+        await this.close();
+      }
     }
   }
 
   async prepareTables(
     tables: string[],
     localData: LoadedCollections = {},
-    options: { skipFtsPreload?: boolean } = {},
+    options: { skipFtsPreload?: boolean; skipCacheInvalidation?: boolean } = {},
   ): Promise<CollectionOptions[]> {
     const collections: CollectionOptions[] = [];
     const schema = this.collectionManager.db.options.schema || 'dbo';
     this.logger?.info?.(`[MSSQL] Loading ${tables.length} specific tables:`, tables);
+
+    if (tables.length > 0 && !options.skipCacheInvalidation) {
+      this.introspector.invalidateTables?.(tables);
+    }
 
     if (tables.length > 1) {
       await this.introspector.preloadAllColumns?.(schema, tables);
@@ -513,6 +670,7 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
    */
   publicOptions() {
     const opts = (this.options as MssqlDataSourceOptions) || {};
+    const nestedTrustServerCert = opts.dialectOptions?.options?.trustServerCertificate;
     return {
       host: opts.host,
       port: opts.port,
@@ -521,7 +679,8 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       schema: opts.schema,
       tablePrefix: opts.tablePrefix,
       encrypt: opts.encrypt,
-      trustServerCertificate: opts.trustServerCertificate,
+      trustServerCertificate:
+        opts.trustServerCertificate ?? (typeof nestedTrustServerCert === 'boolean' ? nestedTrustServerCert : undefined),
       readOnlyIntent: opts.readOnlyIntent,
       requestTimeout: opts.requestTimeout,
       connectTimeout: opts.connectTimeout,
@@ -539,7 +698,11 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
   }
 
   async close() {
-    await this.collectionManager.db?.close();
+    if (this.isClosed) {
+      return;
+    }
+    this.isClosed = true;
+    await this.collectionManager?.db?.close?.();
   }
 
   static async testConnection(options?: MssqlDataSourceOptions): Promise<boolean> {
@@ -564,6 +727,9 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
     }
 
     const database = new Database(formatProbeDatabaseOptions(options));
+    registerMssqlUtcDateOnlyParser(
+      database.sequelize as unknown as Parameters<typeof registerMssqlUtcDateOnlyParser>[0],
+    );
 
     try {
       await database.sequelize.authenticate();

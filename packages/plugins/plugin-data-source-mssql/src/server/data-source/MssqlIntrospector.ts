@@ -3,7 +3,6 @@
 import { DatabaseIntrospector } from '@nocobase/data-source-manager';
 import { tableInfo } from '@nocobase/data-source-manager';
 import { QueryTypes } from 'sequelize';
-import { quoteIdentifier } from '../security/sql-quote';
 import {
   buildBulkColumnsSql,
   buildBulkIndexesSql,
@@ -109,6 +108,14 @@ export class MssqlIntrospector extends DatabaseIntrospector {
    */
   private ansiStringColumnsCache: Map<string, Set<string>> = new Map();
 
+  /**
+   * Cache of { objectName → isView } populated from `getViewList()`, bulk `preloadAllColumns()`,
+   * or single-object `sys.views` lookups so views are registered as read-only `ViewCollection`s.
+   */
+  private viewStatusCache: Map<string, boolean> | null = null;
+  private viewStatusCacheFullSchema = false;
+  private viewStatusCacheSchema: string | null = null;
+
   protected getFieldTypeMap(): Record<string, string | string[]> {
     return mssqlFieldTypeMap;
   }
@@ -128,6 +135,47 @@ export class MssqlIntrospector extends DatabaseIntrospector {
    */
   isAnsiStringColumn(tableName: string, columnName: string): boolean {
     return this.ansiStringColumnsCache.get(tableName)?.has(columnName) ?? false;
+  }
+
+  /**
+   * Clear all introspected schema caches (called on full data source reload/refresh).
+   */
+  clearCache(): void {
+    this.primaryKeyCache = null;
+    this.primaryKeyCacheFullSchema = false;
+    this.primaryKeyCacheSchema = null;
+    this.columnsCache = null;
+    this.columnsCacheSchema = null;
+    this.indexesCache = null;
+    this.indexesCacheFullSchema = false;
+    this.indexesCacheSchema = null;
+    this.ftsColumnCache = null;
+    this.ansiStringColumnsCache.clear();
+    this.viewStatusCache = null;
+    this.viewStatusCacheFullSchema = false;
+    this.viewStatusCacheSchema = null;
+  }
+
+  /**
+   * Invalidate cached metadata for specific tables so reloading a single table picks up altered
+   * columns/PKs/indexes and newly created tables are never masked by a prior full-schema snapshot.
+   */
+  invalidateTables(tableNames?: string[]): void {
+    if (!tableNames) {
+      this.clearCache();
+      return;
+    }
+    for (const name of tableNames) {
+      this.columnsCache?.delete(name);
+      this.primaryKeyCache?.delete(name);
+      this.indexesCache?.delete(name);
+      this.ftsColumnCache?.delete(name);
+      this.ansiStringColumnsCache.delete(name);
+      this.viewStatusCache?.delete(name);
+    }
+    this.primaryKeyCacheFullSchema = false;
+    this.indexesCacheFullSchema = false;
+    this.viewStatusCacheFullSchema = false;
   }
 
   /**
@@ -209,6 +257,27 @@ export class MssqlIntrospector extends DatabaseIntrospector {
         this.columnsCacheSchema = schemaName;
         for (const [tbl, cols] of grouped.entries()) {
           this.recordAnsiStringColumns(tbl, cols);
+        }
+      }
+
+      const hasObjectType = rows.some(
+        (row) => typeof row.object_type === 'string' && row.object_type.trim().length > 0,
+      );
+      if (hasObjectType) {
+        const canMergeView = Boolean(tableNames && this.viewStatusCache && this.viewStatusCacheSchema === schemaName);
+        const viewCache =
+          canMergeView && this.viewStatusCache ? new Map(this.viewStatusCache) : new Map<string, boolean>();
+        for (const row of rows) {
+          if (typeof row.object_type === 'string') {
+            viewCache.set(row.table_name, row.object_type.trim().toUpperCase() === 'V');
+          }
+        }
+        this.viewStatusCache = viewCache;
+        this.viewStatusCacheSchema = schemaName;
+        if (!tableNames) {
+          this.viewStatusCacheFullSchema = true;
+        } else if (!canMergeView) {
+          this.viewStatusCacheFullSchema = false;
         }
       }
       this.db.logger?.debug?.(`[MSSQL] Preloaded column metadata for ${grouped.size} objects`);
@@ -406,11 +475,16 @@ export class MssqlIntrospector extends DatabaseIntrospector {
     // handles view filterTargetKey separately, and fabricating primaryKey=true on a physical table
     // without a real PK allows update/destroy by filterByTk to mutate multiple rows.
 
-    // Clean up MSSQL-specific default values (SQL expressions like (newid()), ((0)))
+    // Clean up MSSQL-specific default values (SQL expressions like `(newid())`, `(getdate())`, `((0))`) while
+    // preserving database-default optionality (`allowNull = true`) before `DatabaseIntrospector.columnAttribute` runs.
     for (const col of Object.values(columns)) {
-      const typedCol = col as { defaultValue?: unknown };
+      const typedCol = col as { defaultValue?: unknown; allowNull?: boolean };
       const rawDefault = typedCol.defaultValue;
       if (rawDefault && typeof rawDefault === 'string' && rawDefault.startsWith('(') && rawDefault.endsWith(')')) {
+        const innerDefault = rawDefault.replace(/^\(+|\)+$/g, '').trim();
+        if (innerDefault.length > 0 && innerDefault.toUpperCase() !== 'NULL') {
+          typedCol.allowNull = true;
+        }
         typedCol.defaultValue = undefined;
       }
     }
@@ -420,7 +494,8 @@ export class MssqlIntrospector extends DatabaseIntrospector {
 
   /**
    * Override getTableConstraints to serve from the bulk-preloaded index cache when available,
-   * falling back to EXEC sys.sp_helpindex only when not preloaded.
+   * falling back to a single-table `sys.indexes` query (excluding filtered and disabled indexes)
+   * when not preloaded.
    */
   async getTableConstraints(tableInfo: tableInfo) {
     const name = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
@@ -436,12 +511,12 @@ export class MssqlIntrospector extends DatabaseIntrospector {
     }
 
     try {
-      const indexes = (await this.db.sequelize.query('EXEC sys.sp_helpindex @objname = :name', {
-        replacements: { name: `${quoteIdentifier(schema)}.${quoteIdentifier(name)}` },
-        type: QueryTypes.SHOWINDEXES,
-      })) as MssqlShowIndexEntry[];
+      const rows = (await this.db.sequelize.query(buildBulkIndexesSql(schema, [name]), {
+        type: QueryTypes.SELECT,
+      })) as MssqlBulkIndexRow[];
+      const indexes = groupIndexesByTable(rows).get(name) ?? [];
       if (this.indexesCache && this.indexesCacheSchema === schema) {
-        this.indexesCache.set(name, indexes ?? []);
+        this.indexesCache.set(name, indexes);
       }
       return indexes;
     } catch (err) {
@@ -452,10 +527,77 @@ export class MssqlIntrospector extends DatabaseIntrospector {
 
   /** List only views in the configured schema; the generic MSSQL query interface has no listViews. */
   async getViewList(): Promise<string[]> {
+    const schema = this.db.options.schema || 'dbo';
     const rows = await this.db.sequelize.query<{ name: string }>(
       'SELECT v.name AS name FROM sys.views v INNER JOIN sys.schemas s ON s.schema_id = v.schema_id WHERE s.name = :schema',
-      { replacements: { schema: this.db.options.schema || 'dbo' }, type: QueryTypes.SELECT },
+      { replacements: { schema }, type: QueryTypes.SELECT },
     );
-    return rows.map((row) => row.name);
+    const names = rows.map((row) => row.name);
+    this.viewStatusCache = new Map(names.map((name) => [name, true]));
+    this.viewStatusCacheSchema = schema;
+    this.viewStatusCacheFullSchema = true;
+    return names;
+  }
+
+  /**
+   * Returns true if the given SQL Server object is a view (`sys.views`), using the cached schema
+   * metadata when available and falling back to a lightweight single-object query otherwise.
+   */
+  async isView(tableInfo: tableInfo): Promise<boolean> {
+    const tableName = typeof tableInfo === 'string' ? tableInfo : tableInfo.tableName;
+    const defaultSchema = this.db.options?.schema || 'dbo';
+    const schema = typeof tableInfo === 'string' ? defaultSchema : tableInfo.schema || defaultSchema;
+
+    if (this.viewStatusCache && this.viewStatusCacheSchema === schema) {
+      if (this.viewStatusCache.has(tableName)) {
+        return this.viewStatusCache.get(tableName) ?? false;
+      }
+      if (this.viewStatusCacheFullSchema) {
+        return false;
+      }
+    }
+
+    try {
+      const rows = (await this.db.sequelize.query(
+        'SELECT 1 AS is_view FROM sys.views v INNER JOIN sys.schemas s ON s.schema_id = v.schema_id WHERE s.name = :schema AND v.name = :tableName',
+        { replacements: { schema, tableName }, type: QueryTypes.SELECT },
+      )) as Array<{ is_view?: number }>;
+      const result = Array.isArray(rows) && rows.length > 0;
+      if (!this.viewStatusCache || this.viewStatusCacheSchema !== schema) {
+        this.viewStatusCache = new Map();
+        this.viewStatusCacheSchema = schema;
+        this.viewStatusCacheFullSchema = false;
+      }
+      this.viewStatusCache.set(tableName, result);
+      return result;
+    } catch (err) {
+      this.db.logger?.debug?.(`[MSSQL] Failed to check whether ${tableName} is a view:`, err);
+      return false;
+    }
+  }
+
+  /**
+   * Override getCollection so SQL Server views carry view metadata (`view: true`, `viewName`,
+   * `template: 'view'`, `writableView: false` unless explicitly enabled) and instantiate core's
+   * read-only `ViewCollection`.
+   */
+  async getCollection(options: Parameters<DatabaseIntrospector['getCollection']>[0]) {
+    const isViewObject = await this.isView(options.tableInfo);
+    if (!isViewObject) {
+      return await super.getCollection(options);
+    }
+
+    const tableName = typeof options.tableInfo === 'string' ? options.tableInfo : options.tableInfo.tableName;
+    const localWritable = Boolean((options.localOptions as { writableView?: boolean } | undefined)?.writableView);
+    return await super.getCollection({
+      ...options,
+      mergedOptions: {
+        ...(options.mergedOptions || {}),
+        view: true,
+        viewName: tableName,
+        template: 'view',
+        writableView: localWritable,
+      },
+    });
   }
 }

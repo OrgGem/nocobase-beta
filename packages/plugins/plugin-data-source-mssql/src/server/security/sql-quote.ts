@@ -276,18 +276,20 @@ export function formatIsoDateTimeNoTz(value: Date): string {
  */
 export interface DateWithNanosecondsDelta extends Date {
   readonly nanosecondsDelta?: number;
+  readonly nanosecondDelta?: number;
 }
 
 function readNanosecondsDelta(value: Date): number | undefined {
-  const delta = (value as DateWithNanosecondsDelta).nanosecondsDelta;
+  const typed = value as DateWithNanosecondsDelta;
+  const delta = typed.nanosecondsDelta ?? typed.nanosecondDelta;
   return typeof delta === 'number' && Number.isFinite(delta) ? delta : undefined;
 }
 
 /**
  * Formats a `Date` as the `YYYY-MM-DD HH:mm:ss.SSS[SSSS]` text SQL Server expects for
  * `datetime`/`datetime2` parameters. Unlike `Date#toISOString().slice(0, 23)`, this
- * recovers sub-millisecond precision from tedious's `nanosecondsDelta` (up to 7
- * fractional digits) instead of silently truncating to milliseconds. When no delta is
+ * recovers sub-millisecond precision from tedious's `nanosecondsDelta` (fraction of a second,
+ * up to 7 fractional digits total) instead of silently truncating to milliseconds. When no delta is
  * present the result matches the plain millisecond form.
  *
  * Note: this keeps the space-separated form (not ISO-8601 `T`) because the value is
@@ -300,9 +302,9 @@ export function formatDateTimeParameter(value: Date): string {
 
   const nanosecondsDelta = readNanosecondsDelta(value);
   if (nanosecondsDelta !== undefined && nanosecondsDelta > 0) {
-    // nanosecondsDelta is a fraction of a millisecond; convert to up to 4 extra digits
-    // (100ns ticks) appended after the millisecond part.
-    const extraTicks = Math.min(9999, Math.max(0, Math.round(nanosecondsDelta * 1e4)));
+    // Tedious computes nanosecondsDelta = (ticks100ns % 10000) / 1e7 (a fraction of one second,
+    // range [0, 0.0009999]), so multiplying by 1e7 yields the 4 sub-millisecond 100ns ticks.
+    const extraTicks = Math.min(9999, Math.max(0, Math.round(nanosecondsDelta * 1e7)));
     if (extraTicks > 0) {
       text += String(extraTicks).padStart(4, '0');
     }

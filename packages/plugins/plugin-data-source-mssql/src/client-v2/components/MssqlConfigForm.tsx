@@ -21,6 +21,26 @@ const CONNECTION_FIELDS = [
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
+
+/**
+ * Resolves `trustServerCertificate` preferring top-level `options.trustServerCertificate`, falling back to legacy
+ * `options.dialectOptions.options.trustServerCertificate` before defaulting to `true`.
+ */
+export function resolveTrustServerCertificate(opts?: unknown): boolean {
+  if (!isRecord(opts)) {
+    return true;
+  }
+  if (typeof opts.trustServerCertificate === 'boolean') {
+    return opts.trustServerCertificate;
+  }
+  if (isRecord(opts.dialectOptions) && isRecord(opts.dialectOptions.options)) {
+    const legacyValue = opts.dialectOptions.options.trustServerCertificate;
+    if (typeof legacyValue === 'boolean') {
+      return legacyValue;
+    }
+  }
+  return true;
+}
 export function toCollectionOptions(result: unknown): { label: string; value: string }[] {
   const data = isRecord(result) ? result.data : result;
   const list = isRecord(data) ? data.data : data;
@@ -85,7 +105,7 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
     setLoading(true);
     try {
       const readConnectionField = (field: (typeof CONNECTION_FIELDS)[number], opts?: Record<string, unknown>) =>
-        field === 'trustServerCertificate' ? opts?.[field] ?? true : opts?.[field];
+        field === 'trustServerCertificate' ? resolveTrustServerCertificate(opts) : opts?.[field];
       const connectionChanged = CONNECTION_FIELDS.some(
         (field) => readConnectionField(field, values.options) !== readConnectionField(field, initialValues?.options),
       );
@@ -124,7 +144,7 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
             name={['options', 'trustServerCertificate']}
             label={t('Trust server certificate')}
             valuePropName="checked"
-            initialValue={initialValues?.options?.trustServerCertificate ?? true}
+            initialValue={resolveTrustServerCertificate(initialValues?.options)}
           >
             <Checkbox />
           </Form.Item>

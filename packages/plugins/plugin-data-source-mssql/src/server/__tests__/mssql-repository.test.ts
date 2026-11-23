@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { Database } from '@nocobase/database';
 import { Op } from 'sequelize';
 import { describe, expect, it, vi } from 'vitest';
 import { MssqlRepository } from '../data-source/MssqlRepository';
+import { MssqlDialect } from '../dialects/mssql-dialect';
+import { createMssqlOperators } from '../operators/mssql-operators';
+
+Database.registerDialect(MssqlDialect);
 
 function createRepoHarness(
   options: {
@@ -276,6 +281,29 @@ describe('MssqlRepository performance optimizations', () => {
       const secondWhere = findAll.mock.calls[1][0].where as { code: { [Op.in]: Array<{ val?: string }> } };
       expect(secondWhere.code[Op.in].map((v) => v.val)).toEqual(["'ORD-1'", "'ORD-2'"]);
     });
+
+    it('preserves original WHERE filters in query 2 so rows modified out of the filter between queries are not returned', async () => {
+      let call = 0;
+      const { repo, findAll } = createRepoHarness({
+        deferredJoinThreshold: 200,
+        findAllImpl: async () => {
+          call++;
+          return call === 1
+            ? [{ id: 10 }, { id: 20 }]
+            : // DB returns only id:20 in query 2 because id:10 changed status out of the filter.
+              [{ get: (k: string) => (k === 'id' ? 20 : 'still-open') }];
+        },
+      });
+
+      const originalWhere = { status: 'open' };
+      const rows = await repo.find({ offset: 500, limit: 2, where: originalWhere });
+
+      expect(findAll).toHaveBeenCalledTimes(2);
+      expect(findAll.mock.calls[1][0].where).toEqual({
+        [Op.and]: [originalWhere, { id: { [Op.in]: [10, 20] } }],
+      });
+      expect(rows.map((r) => r.get('id'))).toEqual([20]);
+    });
   });
 
   describe('Schema-qualified getEstimatedRowCount & fastCount', () => {
@@ -311,6 +339,99 @@ describe('MssqlRepository performance optimizations', () => {
       });
       expect(await repo.count({ filter: { status: 'open' } })).toBe(42);
       expect(modelCount).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('PK-less paginated queries and composite/PK-less destroy FTS safety', () => {
+    it('adds ORDER BY (SELECT NULL) on paginated find() for PK-less MSSQL models instead of crashing in Sequelize', async () => {
+      const db = new Database({ dialect: 'mssql', logging: false });
+      db.registerRepositories({ 'mssql-repo': MssqlRepository });
+      const capturedSql: string[] = [];
+      (db.sequelize as unknown as { query: (sql: unknown) => Promise<unknown[]> }).query = async (sql) => {
+        capturedSql.push(typeof sql === 'string' ? sql : String((sql as { query?: string })?.query ?? sql));
+        return [];
+      };
+
+      const collection = db.collection({
+        name: 'v_summary',
+        tableName: 'v_summary',
+        autoGenId: false,
+        timestamps: false,
+        repository: 'mssql-repo',
+        fields: [
+          { name: 'code', type: 'string' },
+          { name: 'title', type: 'string' },
+        ],
+      });
+
+      expect(collection.model.primaryKeyField).toBeNull();
+      expect(collection.model.primaryKeyAttributes).toEqual([]);
+
+      await collection.repository.find({ limit: 21, offset: 0 });
+      expect(capturedSql[0]).toContain('ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 21 ROWS ONLY');
+
+      // Explicit sort must still take precedence over the fallback ORDER BY.
+      await collection.repository.find({ limit: 20, offset: 0, sort: ['title'] });
+      expect(capturedSql[1]).toContain('ORDER BY [v_summary].[title] ASC OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY');
+      expect(capturedSql[1]).not.toContain('(SELECT NULL)');
+
+      await db.close();
+    });
+
+    it('suspends FTS CONTAINS() during direct model.destroy() on PK-less/composite-PK collections when model.name !== tableName', async () => {
+      const runtimeOpts: { ftsSuspendCount?: number } = {};
+      const db = new Database({
+        dialect: 'mssql',
+        schema: 'sales',
+        logging: false,
+        mssqlRuntimeOptions: runtimeOpts,
+      } as ConstructorParameters<typeof Database>[0]);
+      db.registerRepositories({ 'mssql-repo': MssqlRepository });
+      db.registerOperators(
+        createMssqlOperators(
+          { hasFTSIndex: (table, col) => table === 'nb_Orders' && col === 'OrderTitle' },
+          () => 'auto',
+          () => Boolean(runtimeOpts.ftsSuspendCount && runtimeOpts.ftsSuspendCount > 0),
+        ),
+      );
+
+      const capturedSql: string[] = [];
+      (db.sequelize as unknown as { query: (sql: unknown) => Promise<unknown[]> }).query = async (sql) => {
+        capturedSql.push(typeof sql === 'string' ? sql : String((sql as { query?: string })?.query ?? sql));
+        return [];
+      };
+
+      const collection = db.collection({
+        name: 'orders',
+        tableName: 'nb_Orders',
+        schema: 'sales',
+        autoGenId: false,
+        timestamps: false,
+        repository: 'mssql-repo',
+        fields: [{ name: 'title', type: 'string', field: 'OrderTitle' }],
+      });
+
+      await collection.repository.find({ filter: { title: { $includes: 'fast search' } } });
+      expect(capturedSql[0]).toContain(`CONTAINS([orders].[OrderTitle], N'"fast*" AND "search*"')`);
+
+      // Direct destroy without HTTP context must emit valid T-SQL without unbound `[orders].[OrderTitle]` alias.
+      await collection.repository.destroy({
+        filter: { title: { $includes: 'fast search' } },
+        transaction: { afterCommit: () => undefined } as never,
+      });
+      const deleteSql = capturedSql.find((sql) => sql.startsWith('DELETE FROM'));
+      expect(deleteSql).toBeDefined();
+      expect(deleteSql).toContain(`[OrderTitle] LIKE N'%fast search%'`);
+      expect(deleteSql).not.toContain('CONTAINS');
+      expect(deleteSql).not.toContain('[orders].');
+
+      // Counter must be restored after destroy so subsequent SELECT queries still use FTS.
+      await collection.repository.find({ filter: { title: { $includes: 'fast search' } } });
+      expect(capturedSql[capturedSql.length - 1]).toContain(
+        `CONTAINS([orders].[OrderTitle], N'"fast*" AND "search*"')`,
+      );
+
+      await db.close();
     });
   });
 });

@@ -225,5 +225,41 @@ describe('MSSQL filter & search operators', () => {
       await Order.findAll({ where: { title: ops.$eq('Hello', ctx) } as Record<string, unknown> });
       expect(String(captured[0])).toContain(`[orders].[OrderTitle] = N'Hello'`);
     });
+
+    it('falls back from CONTAINS() to LIKE during write actions so UPDATE/DELETE never emit unbound SELECT aliases', async () => {
+      const { Order, captured } = setupSequelize();
+      const ops = createMssqlOperators(introspector, () => 'auto');
+
+      const updateCtx: MssqlOperatorContext = {
+        app: { ctx: { action: { actionName: 'update' } } },
+        model: Order as unknown as MssqlOperatorContext['model'],
+        fieldName: 'title',
+        fullName: 'title',
+      };
+      const destroyCtx: MssqlOperatorContext = {
+        app: { ctx: { action: { actionName: 'destroy' } } },
+        model: Order as unknown as MssqlOperatorContext['model'],
+        fieldName: 'title',
+        fullName: 'title',
+      };
+
+      await Order.update(
+        { code: 'X' },
+        { where: { title: ops.$includes('fast search', updateCtx) } as Record<string, unknown> },
+      ).catch(() => undefined);
+      await Order.destroy({
+        where: { title: ops.$includes('fast search', destroyCtx) } as Record<string, unknown>,
+      }).catch(() => undefined);
+
+      const updateSql = (captured[0] as { query: string }).query;
+      const deleteSql = String(captured[1]);
+      expect(updateSql).toContain(`WHERE [OrderTitle] LIKE N'%fast search%'`);
+      expect(updateSql).not.toContain('CONTAINS');
+      expect(updateSql).not.toContain('[orders].');
+
+      expect(deleteSql).toContain(`WHERE [OrderTitle] LIKE N'%fast search%'`);
+      expect(deleteSql).not.toContain('CONTAINS');
+      expect(deleteSql).not.toContain('[orders].');
+    });
   });
 });
