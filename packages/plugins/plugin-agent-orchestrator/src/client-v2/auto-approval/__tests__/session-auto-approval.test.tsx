@@ -4,7 +4,13 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as ClientV2 from '@nocobase/client-v2';
-import { FlowEngineProvider, observer, useFlowEngineContext, type FlowModel } from '@nocobase/flow-engine';
+import {
+  FlowContextProvider,
+  FlowEngineProvider,
+  observer,
+  useFlowEngineContext,
+  type FlowModel,
+} from '@nocobase/flow-engine';
 import {
   ChatBoxRuntimeProvider,
   getGlobalChatBoxRuntime,
@@ -14,8 +20,11 @@ import {
 import type { ToolCall } from '@nocobase/client-v2';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createChatBoxRuntime } from '../../../../../@nocobase/plugin-ai/src/client-v2/ai-employees/chatbox/stores/runtime';
+import { CompactSenderOptions } from '../../../../../@nocobase/plugin-ai/src/client-v2/ai-employees/chatbox/components/CompactSenderOptions';
+import { AddContextButton } from '../../../../../@nocobase/plugin-ai/src/client-v2/ai-employees/AddContextButton';
+import { AIManager } from '../../../../../@nocobase/plugin-ai/src/client-v2/manager/ai-manager';
 import { useToolCallActions } from '../../../../../@nocobase/plugin-ai/src/client-v2/ai-employees/chatbox/hooks/useToolCallActions';
-import { AutoApprovalProvider } from '../AutoApprovalProvider';
+import { AutoApprovalMenu, AutoApprovalProvider, registerAutoApprovalWorkContext } from '../AutoApprovalProvider';
 import {
   AutoApprovalBridge,
   AutoApprovalRequests,
@@ -158,6 +167,69 @@ function renderProvider(app: ReturnType<typeof ClientV2.createMockClient>, child
   );
 }
 
+type WorkContextModel = {
+  use?: string;
+  parent?: { chatBoxRuntime?: ChatBoxRuntime };
+};
+
+function WorkContextHarness({
+  runtime,
+  model,
+  toolbarClassName,
+  testId,
+  children,
+}: {
+  runtime: ChatBoxRuntime;
+  model?: WorkContextModel;
+  toolbarClassName?: string;
+  testId?: string;
+  children?: React.ReactNode;
+}) {
+  const context = model ? { model } : {};
+  return (
+    <FlowContextProvider context={context as never}>
+      <ChatBoxRuntimeProvider runtime={runtime}>
+        <div ref={toolbarClassName ? (element) => element && attachRoot(runtime, element) : undefined}>
+          <div className={toolbarClassName} data-testid={testId}>
+            <AddContextButton runtime={runtime} onAdd={() => undefined} onRemove={() => undefined} />
+            {children}
+          </div>
+        </div>
+      </ChatBoxRuntimeProvider>
+    </FlowContextProvider>
+  );
+}
+
+function CompactSenderHarness({
+  runtime,
+  model,
+  testId,
+}: {
+  runtime: ChatBoxRuntime;
+  model?: WorkContextModel;
+  testId: string;
+}) {
+  const context = model ? { model } : {};
+  return (
+    <FlowContextProvider context={context as never}>
+      <ChatBoxRuntimeProvider runtime={runtime}>
+        <div ref={(element) => element && attachRoot(runtime, element)}>
+          <div className="ai-chat-sender-compact-toolbar" data-testid={testId}>
+            <CompactSenderOptions
+              options={{ showEmployeeSelect: false, showModelSelect: false, showWebSearch: false }}
+            />
+          </div>
+        </div>
+      </ChatBoxRuntimeProvider>
+    </FlowContextProvider>
+  );
+}
+
+function pressSwitchArrow(control: HTMLElement, key: 'ArrowLeft' | 'ArrowRight') {
+  const code = key === 'ArrowLeft' ? 37 : 39;
+  act(() => fireEvent.keyDown(control, { key, keyCode: code, which: code }));
+}
+
 function makeDecisionBody(sessionId: string, messageId: string, call: ToolCall) {
   return {
     values: {
@@ -171,11 +243,15 @@ function makeDecisionBody(sessionId: string, messageId: string, call: ToolCall) 
 
 let app: ReturnType<typeof ClientV2.createMockClient>;
 let globalRuntime: ChatBoxRuntime;
+let aiManager: AIManager;
 const additionalApps: ReturnType<typeof ClientV2.createMockClient>[] = [];
 const additionalRuntimes: ChatBoxRuntime[] = [];
 
 beforeEach(() => {
   app = ClientV2.createMockClient();
+  aiManager = new AIManager();
+  registerAutoApprovalWorkContext(aiManager);
+  vi.spyOn(app.pm, 'get').mockReturnValue({ aiManager, toolsManager: { registerTools: vi.fn() } } as never);
   globalRuntime = getGlobalChatBoxRuntime();
   resetRuntime(globalRuntime);
   vi.spyOn(ClientV2, 'useApp').mockReturnValue(app);
@@ -213,15 +289,21 @@ afterEach(() => {
 describe('session automatic approval UI and native approval bridge', () => {
   it('registers the provider from both client plugin entries', async () => {
     const use = vi.spyOn(app, 'use');
+    const v2Manager = new AIManager();
+    vi.mocked(app.pm.get).mockReturnValue({ aiManager: v2Manager, toolsManager: { registerTools: vi.fn() } } as never);
     await new V2PluginAgentOrchestratorClient({}, app).load();
     expect(use).toHaveBeenCalledWith(AutoApprovalProvider);
+    expect(v2Manager.getWorkContext('agent-auto-approval')?.menu?.Component).toBe(AutoApprovalMenu);
 
     const legacyUse = vi.fn();
+    const legacyManager = new AIManager();
+    const legacyAIPlugin = { aiManager: legacyManager, toolsManager: { registerTools: vi.fn() } };
     const legacyApp = {
       use: legacyUse,
+      pm: { get: vi.fn().mockReturnValue(legacyAIPlugin) },
       pluginSettingsManager: { add: vi.fn() },
       eventBus: { addEventListener: vi.fn() },
-      aiManager: { toolsManager: { registerTools: vi.fn() } },
+      aiManager: legacyManager,
       apiClient: { auth: { getToken: () => '' } },
     } as unknown as ConstructorParameters<typeof V1PluginAgentOrchestratorClient>[1];
     const legacyPlugin = Object.assign(Object.create(V1PluginAgentOrchestratorClient.prototype), {
@@ -230,9 +312,10 @@ describe('session automatic approval UI and native approval bridge', () => {
     }) as V1PluginAgentOrchestratorClient;
     await legacyPlugin.load();
     expect(legacyUse).toHaveBeenCalledWith(AutoApprovalProvider);
+    expect(legacyManager.getWorkContext('agent-auto-approval')?.menu?.Component).toBe(AutoApprovalMenu);
   });
 
-  it('portals independent global and block controls into normal and compact native toolbars', async () => {
+  it('shows a session-scoped switch in chat Work context and hides it in other contexts', async () => {
     const blockRuntime = createChatBoxRuntime({ mode: 'block' });
     resetRuntime(blockRuntime);
     globalRuntime.chatConversationModel.setCurrentConversation('session-global');
@@ -240,70 +323,97 @@ describe('session automatic approval UI and native approval bridge', () => {
     globalRuntime.chatBoxModel.setCurrentEmployee({ username: 'global-agent' });
     blockRuntime.chatBoxModel.setCurrentEmployee({ username: 'block-agent' });
 
-    const globalRoot = document.createElement('div');
-    const globalToolbar = makeToolbar('ai-chat-sender-tools');
-    const blockRoot = document.createElement('div');
-    const blockToolbar = makeToolbar('ai-chat-sender-compact-toolbar', false);
-    globalRoot.append(globalToolbar, blockRoot);
-    blockRoot.append(blockToolbar);
-    document.body.append(globalRoot);
-    attachRoot(globalRuntime, globalRoot);
-    attachRoot(blockRuntime, blockRoot);
-
     vi.spyOn(app.flowEngine, 'forEachModel').mockImplementation((visit) => {
       visit({ chatBoxRuntime: blockRuntime } as unknown as FlowModel);
     });
 
+    const persisted = new Map([
+      ['session-global', true],
+      ['session-block', false],
+      ['session-next', true],
+    ]);
+    const setRequests: RequestBody[] = [];
     app.apiMock.onPost(/agentAutoApproval:get/).reply((config) => {
       const { sessionId } = readRequestBody(config.data);
-      return [200, { data: { enabled: sessionId === 'session-global' || sessionId === 'session-next' } }];
+      return [200, { data: { enabled: typeof sessionId === 'string' && persisted.get(sessionId) === true } }];
     });
-    const setRequests: RequestBody[] = [];
     app.apiMock.onPost(/agentAutoApproval:set/).reply((config) => {
       const body = readRequestBody(config.data);
       setRequests.push(body);
+      if (typeof body.sessionId === 'string') persisted.set(body.sessionId, body.enabled === true);
       return [200, { data: { enabled: body.enabled === true } }];
     });
 
-    renderProvider(app);
-
-    await within(globalToolbar).findByRole('button', { name: 'Disable automatic approval' });
-    await within(blockToolbar).findByRole('button', { name: 'Enable automatic approval' });
-    expect(
-      within(globalToolbar).getByRole('button', { name: 'Disable automatic approval' }).getAttribute('aria-pressed'),
-    ).toBe('true');
-    expect(
-      within(blockToolbar).getByRole('button', { name: 'Enable automatic approval' }).getAttribute('aria-pressed'),
-    ).toBe('false');
-    expect(globalToolbar.children[1]?.getAttribute('data-agent-auto-approval')).toBe('true');
-    expect(blockToolbar.children[0]?.getAttribute('data-agent-auto-approval')).toBe('true');
+    const blockModel: WorkContextModel = { use: 'AIChatBoxCoreModel', parent: { chatBoxRuntime: blockRuntime } };
+    renderProvider(
+      app,
+      <>
+        <WorkContextHarness runtime={globalRuntime} toolbarClassName="ai-chat-sender-tools" testId="global-chat" />
+        <CompactSenderHarness runtime={blockRuntime} model={blockModel} testId="block-chat" />
+        <WorkContextHarness
+          runtime={globalRuntime}
+          model={{ use: 'AIEmployeeShortcutModel' }}
+          testId="shortcut-settings"
+        />
+      </>,
+    );
+    const globalToolbar = screen.getByTestId('global-chat');
+    const blockToolbar = screen.getByTestId('block-chat');
+    expect(within(globalToolbar).queryByRole('switch')).toBeNull();
+    expect(within(blockToolbar).queryByRole('switch')).toBeNull();
+    expect(globalToolbar.querySelector('[data-agent-auto-approval]')).toBeNull();
+    expect(blockToolbar.querySelector('[data-agent-auto-approval]')).toBeNull();
 
     const user = userEvent.setup();
-    await user.tab();
-    await user.tab();
-    expect(document.activeElement).toBe(
-      within(globalToolbar).getByRole('button', { name: 'Disable automatic approval' }),
-    );
-    act(() => fireEvent.click(within(globalToolbar).getByRole('button', { name: 'Disable automatic approval' })));
-    await waitFor(() =>
-      expect(
-        within(globalToolbar).getByRole('button', { name: 'Enable automatic approval' }).getAttribute('aria-pressed'),
-      ).toBe('false'),
-    );
-    expect(setRequests).toContainEqual({ sessionId: 'session-global', enabled: false });
+    await user.click(within(globalToolbar).getByRole('button', { name: 'Work context' }));
+    let menu = await screen.findByRole('menu');
+    const globalSwitch = await within(menu).findByRole('switch', { name: 'Disable automatic approval' });
+    expect(globalSwitch.getAttribute('aria-checked')).toBe('true');
+    await user.click(within(menu).getByText('Automatic tool approval'));
+    await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-global', enabled: false }));
+    expect(globalSwitch.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    pressSwitchArrow(globalSwitch, 'ArrowRight');
+    await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-global', enabled: true }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    pressSwitchArrow(globalSwitch, 'ArrowLeft');
+    await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-global', enabled: false }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+
+    await user.click(within(blockToolbar).getByRole('button', { name: 'Chat options' }));
+    const blockDrawer = await screen.findByRole('dialog', { name: 'Chat options' });
+    await user.click(within(blockDrawer).getByRole('button', { name: 'Work context' }));
+    menu = await screen.findByRole('menu');
+    const blockSwitch = await within(menu).findByRole('switch', { name: 'Enable automatic approval' });
+    expect(blockSwitch.getAttribute('aria-checked')).toBe('false');
+    await user.click(within(menu).getByText('Automatic tool approval'));
+    await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-block', enabled: true }));
+    expect(blockSwitch.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBe(blockDrawer);
+    pressSwitchArrow(blockSwitch, 'ArrowLeft');
+    await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-block', enabled: false }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBe(blockDrawer);
 
     act(() => blockRuntime.chatConversationModel.setCurrentConversation('session-next'));
-    await within(blockToolbar).findByRole('button', {
-      name: 'Disable automatic approval',
-    });
-    expect(
-      within(blockToolbar).getByRole('button', { name: 'Disable automatic approval' }).getAttribute('aria-pressed'),
-    ).toBe('true');
-    await waitFor(() => {
-      expect(
-        app.apiMock.history.post.some((request) => readRequestBody(request.data).sessionId === 'session-next'),
-      ).toBe(true);
-    });
+    await waitFor(() => expect(blockSwitch.getAttribute('aria-checked')).toBe('true'));
+    fireEvent.keyDown(blockDrawer, { key: 'Escape', keyCode: 27 });
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(screen.getByRole('dialog', { name: 'Chat options' })).toBe(blockDrawer);
+    const drawerMask = document.querySelector('.ant-drawer-mask');
+    if (!(drawerMask instanceof HTMLElement)) throw new Error('Expected the compact options drawer backdrop');
+    await user.click(drawerMask);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Chat options' })).toBeNull());
+
+    const shortcut = screen.getByTestId('shortcut-settings');
+    await user.click(within(shortcut).getByRole('button', { name: 'Work context' }));
+    menu = await screen.findByRole('menu');
+    const marker = menu.querySelector('[data-agent-auto-approval-menu="true"]');
+    expect(marker?.closest('.ant-dropdown-menu-item')?.getAttribute('style')).toContain('display: none');
+    expect(within(menu).queryByRole('switch')).toBeNull();
   });
 
   it('creates a conversation from the draft before persisting automatic approval', async () => {
@@ -311,11 +421,6 @@ describe('session automatic approval UI and native approval bridge', () => {
     globalRuntime.chatMessageModel.setSessionSystemMessage(undefined, 'Draft system prompt');
     globalRuntime.chatMessageModel.setSessionSkillSettings(undefined, { tools: ['read_file'], skills: [] });
     globalRuntime.chatBoxModel.setModel({ llmService: 'openai', model: 'gpt-fast' });
-    const root = document.createElement('div');
-    const toolbar = makeToolbar('ai-chat-sender-compact-toolbar', false);
-    root.append(toolbar);
-    document.body.append(root);
-    attachRoot(globalRuntime, root);
 
     let createdValues: RequestBody | undefined;
     app.apiMock.onPost(/aiConversations:create/).reply((config) => {
@@ -334,9 +439,20 @@ describe('session automatic approval UI and native approval bridge', () => {
       return [200, { data: { enabled: automaticApprovalEnabled } }];
     });
 
-    renderProvider(app);
-    await within(toolbar).findByRole('button', { name: 'Enable automatic approval' });
-    act(() => fireEvent.click(within(toolbar).getByRole('button', { name: 'Enable automatic approval' })));
+    renderProvider(
+      app,
+      <WorkContextHarness
+        runtime={globalRuntime}
+        toolbarClassName="ai-chat-sender-compact-toolbar"
+        testId="draft-chat"
+      />,
+    );
+    const toolbar = screen.getByTestId('draft-chat');
+    const user = userEvent.setup();
+    await user.click(within(toolbar).getByRole('button', { name: 'Work context' }));
+    const menu = await screen.findByRole('menu');
+    const automaticApprovalSwitch = await within(menu).findByRole('switch', { name: 'Enable automatic approval' });
+    await user.click(automaticApprovalSwitch);
 
     await waitFor(() => expect(globalRuntime.chatConversationModel.currentConversation).toBe('draft-session-created'));
     expect(createdValues).toMatchObject({
@@ -347,13 +463,7 @@ describe('session automatic approval UI and native approval bridge', () => {
     });
     expect(setRequests).toContainEqual({ sessionId: 'draft-session-created', enabled: true });
     expect(globalRuntime.chatMessageModel.sessions['draft-session-created']?.systemMessage).toBe('Draft system prompt');
-    await waitFor(
-      () =>
-        expect(
-          within(toolbar).getByRole('button', { name: 'Disable automatic approval' }).getAttribute('aria-pressed'),
-        ).toBe('true'),
-      { timeout: 2000 },
-    );
+    await waitFor(() => expect(automaticApprovalSwitch.getAttribute('aria-checked')).toBe('true'), { timeout: 2000 });
   });
 
   it('refreshes same-session runtimes together while keeping another session isolated and refreshing on focus', async () => {
@@ -367,20 +477,6 @@ describe('session automatic approval UI and native approval bridge', () => {
     for (const runtime of [globalRuntime, sameSessionRuntime, otherSessionRuntime]) {
       runtime.chatBoxModel.setCurrentEmployee({ username: 'test-agent' });
     }
-
-    const sharedRoot = document.createElement('div');
-    const sameSessionRoot = document.createElement('div');
-    const otherSessionRoot = document.createElement('div');
-    const globalToolbar = makeToolbar('ai-chat-sender-tools');
-    const sameSessionToolbar = makeToolbar('ai-chat-sender-compact-toolbar', false);
-    const otherSessionToolbar = makeToolbar('ai-chat-sender-tools');
-    sharedRoot.append(globalToolbar);
-    sameSessionRoot.append(sameSessionToolbar);
-    otherSessionRoot.append(otherSessionToolbar);
-    document.body.append(sharedRoot, sameSessionRoot, otherSessionRoot);
-    attachRoot(globalRuntime, sharedRoot);
-    attachRoot(sameSessionRuntime, sameSessionRoot);
-    attachRoot(otherSessionRuntime, otherSessionRoot);
 
     vi.spyOn(app.flowEngine, 'forEachModel').mockImplementation((visit) => {
       visit({ chatBoxRuntime: sameSessionRuntime } as unknown as FlowModel);
@@ -406,48 +502,59 @@ describe('session automatic approval UI and native approval bridge', () => {
       return [200, { data: { enabled: persisted.get(sessionId) === true } }];
     });
 
-    renderProvider(app);
-    await within(globalToolbar).findByRole('button', { name: 'Enable automatic approval' });
-    await within(sameSessionToolbar).findByRole('button', {
-      name: 'Enable automatic approval',
+    renderProvider(
+      app,
+      <>
+        <WorkContextHarness runtime={globalRuntime} toolbarClassName="ai-chat-sender-tools" testId="global-chat" />
+        <WorkContextHarness
+          runtime={sameSessionRuntime}
+          model={{ use: 'AIChatBoxCoreModel', parent: { chatBoxRuntime: sameSessionRuntime } }}
+          toolbarClassName="ai-chat-sender-compact-toolbar"
+          testId="same-session-chat"
+        />
+        <WorkContextHarness
+          runtime={otherSessionRuntime}
+          model={{ use: 'AIChatBoxCoreModel', parent: { chatBoxRuntime: otherSessionRuntime } }}
+          toolbarClassName="ai-chat-sender-tools"
+          testId="other-session-chat"
+        />
+      </>,
+    );
+    const globalToolbar = screen.getByTestId('global-chat');
+    const sameSessionToolbar = screen.getByTestId('same-session-chat');
+    const otherSessionToolbar = screen.getByTestId('other-session-chat');
+    await waitFor(() => {
+      expect(reads.get('shared-session')).toBeGreaterThan(0);
+      expect(reads.get('other-session')).toBeGreaterThan(0);
     });
-    await within(otherSessionToolbar).findByRole('button', {
-      name: 'Enable automatic approval',
-    });
+    const initialSharedReads = reads.get('shared-session');
     const initialOtherReads = reads.get('other-session');
-
-    await userEvent.setup().click(within(globalToolbar).getByRole('button', { name: 'Enable automatic approval' }));
-    await waitFor(() =>
-      expect(
-        within(globalToolbar).getByRole('button', { name: 'Disable automatic approval' }).getAttribute('aria-pressed'),
-      ).toBe('true'),
-    );
-    await waitFor(() =>
-      expect(
-        within(sameSessionToolbar)
-          .getByRole('button', { name: 'Disable automatic approval' })
-          .getAttribute('aria-pressed'),
-      ).toBe('true'),
-    );
-    expect(
-      within(otherSessionToolbar)
-        .getByRole('button', { name: 'Enable automatic approval' })
-        .getAttribute('aria-pressed'),
-    ).toBe('false');
+    const user = userEvent.setup();
+    await user.click(within(globalToolbar).getByRole('button', { name: 'Work context' }));
+    let menu = await screen.findByRole('menu');
+    const globalSwitch = await within(menu).findByRole('switch', { name: 'Enable automatic approval' });
+    await user.click(globalSwitch);
+    await waitFor(() => expect(globalSwitch.getAttribute('aria-checked')).toBe('true'));
+    await waitFor(() => expect(reads.get('shared-session')).toBeGreaterThan(initialSharedReads ?? 0));
     expect(reads.get('other-session')).toBe(initialOtherReads);
+    await user.keyboard('{Escape}');
 
+    await user.click(within(sameSessionToolbar).getByRole('button', { name: 'Work context' }));
+    menu = await screen.findByRole('menu');
+    const sameSessionSwitch = await within(menu).findByRole('switch', { name: 'Disable automatic approval' });
+    expect(sameSessionSwitch.getAttribute('aria-checked')).toBe('true');
+    await user.keyboard('{Escape}');
+
+    await user.click(within(otherSessionToolbar).getByRole('button', { name: 'Work context' }));
+    menu = await screen.findByRole('menu');
+    const otherSessionSwitch = await within(menu).findByRole('switch', { name: 'Enable automatic approval' });
+    expect(otherSessionSwitch.getAttribute('aria-checked')).toBe('false');
     persisted.set('other-session', true);
     act(() => window.dispatchEvent(new Event('focus')));
-    await waitFor(() =>
-      expect(
-        within(otherSessionToolbar)
-          .getByRole('button', { name: 'Disable automatic approval' })
-          .getAttribute('aria-pressed'),
-      ).toBe('true'),
-    );
+    await waitFor(() => expect(otherSessionSwitch.getAttribute('aria-checked')).toBe('true'));
   });
 
-  it('runs the native sequential approval effect through the real bridge request identity', async () => {
+  it('keeps the native approval bridge active while Work context is closed', async () => {
     const sessionId = 'session-native-approval';
     const messageId = 'message-native-approval';
     const toolCallId = 'tool-call-native-approval';
@@ -467,12 +574,6 @@ describe('session automatic approval UI and native approval bridge', () => {
     };
     globalRuntime.chatMessageModel.setSessionMessages(sessionId, [message]);
     globalRuntime.chatToolCallModel.updateToolCallInvokeStatus(sessionId, messageId, toolCallId, 'interrupted');
-
-    const root = document.createElement('div');
-    const toolbar = makeToolbar('ai-chat-sender-tools');
-    root.append(toolbar);
-    document.body.append(root);
-    attachRoot(globalRuntime, root);
 
     app.apiMock.onPost(/agentAutoApproval:get/).reply(200, { data: { enabled: true } });
     app.apiMock.onPost(/agentAutoApproval:eligible/).reply(200, { data: { eligible: true } });
@@ -502,11 +603,12 @@ describe('session automatic approval UI and native approval bridge', () => {
 
     renderProvider(
       app,
-      <ChatBoxRuntimeProvider runtime={globalRuntime}>
+      <WorkContextHarness runtime={globalRuntime} toolbarClassName="ai-chat-sender-tools" testId="bridge-chat">
         <NativeToolCardHarness />
-      </ChatBoxRuntimeProvider>,
+      </WorkContextHarness>,
     );
 
+    expect(screen.queryByRole('menu')).toBeNull();
     await waitFor(() =>
       expect(decisionRequest).toMatchObject({
         sessionId,
@@ -655,12 +757,6 @@ describe('session automatic approval UI and native approval bridge', () => {
       globalRuntime.chatToolCallModel.updateToolCallInvokeStatus(sessionId, messageId, call.id, 'interrupted');
     }
 
-    const root = document.createElement('div');
-    const toolbar = makeToolbar('ai-chat-sender-tools');
-    root.append(toolbar);
-    document.body.append(root);
-    attachRoot(globalRuntime, root);
-
     let enabled = true;
     app.apiMock.onPost(/agentAutoApproval:get/).reply(() => [200, { data: { enabled } }]);
     app.apiMock.onPost(/agentAutoApproval:set/).reply((config) => {
@@ -723,12 +819,15 @@ describe('session automatic approval UI and native approval bridge', () => {
 
     renderProvider(
       app,
-      <ChatBoxRuntimeProvider runtime={globalRuntime}>
+      <WorkContextHarness runtime={globalRuntime} toolbarClassName="ai-chat-sender-tools" testId="midflight-chat">
         <NativeToolCardHarness />
-      </ChatBoxRuntimeProvider>,
+      </WorkContextHarness>,
     );
-
-    await within(toolbar).findByRole('button', { name: 'Disable automatic approval' });
+    const toolbar = screen.getByTestId('midflight-chat');
+    const user = userEvent.setup();
+    await user.click(within(toolbar).getByRole('button', { name: 'Work context' }));
+    const menu = await screen.findByRole('menu');
+    const automaticApprovalSwitch = await within(menu).findByRole('switch', { name: 'Disable automatic approval' });
     await waitFor(() => {
       const marked = globalRuntime.chatMessageModel.sessions[sessionId]?.messages[0]?.content.tool_calls ?? [];
       expect(marked.find((call) => call.id === 'call-a')?.auto).toBe(true);
@@ -736,15 +835,8 @@ describe('session automatic approval UI and native approval bridge', () => {
     });
     await waitFor(() => expect(releaseFirstRequest).toBeDefined());
 
-    const user = userEvent.setup();
-    await user.click(within(toolbar).getByRole('button', { name: 'Disable automatic approval' }));
-    await waitFor(
-      () =>
-        expect(
-          within(toolbar).getByRole('button', { name: 'Enable automatic approval' }).getAttribute('aria-pressed'),
-        ).toBe('false'),
-      { timeout: 2000 },
-    );
+    await user.click(automaticApprovalSwitch);
+    await waitFor(() => expect(automaticApprovalSwitch.getAttribute('aria-checked')).toBe('false'), { timeout: 2000 });
     await waitFor(() => {
       const restored = globalRuntime.chatMessageModel.sessions[sessionId]?.messages[0]?.content.tool_calls ?? [];
       expect(restored.every((call) => call.auto === false)).toBe(true);

@@ -527,6 +527,7 @@
   "A single conversation identifier is required.": "必须提供单个会话标识符。",
   "A single message identifier is required.": "必须提供单个消息标识符。",
   "A single tool call identifier is required.": "必须提供单个工具调用标识符。",
+  "Automatic tool approval": "自动批准工具使用",
   "Enable automatic approval": "开启自动批准",
   "Disable automatic approval": "关闭自动批准",
   "Could not update automatic approval": "无法更新自动批准设置",

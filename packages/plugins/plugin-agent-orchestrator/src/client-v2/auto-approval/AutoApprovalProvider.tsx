@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCircleOutlined } from '@ant-design/icons';
-import { Button, Tooltip, message } from 'antd';
+import { Switch, message } from 'antd';
 import { useApp } from '@nocobase/client-v2';
-import { observer } from '@nocobase/flow-engine';
-import { getGlobalChatBoxRuntime, type ChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
+import { observer, useFlowContext } from '@nocobase/flow-engine';
+import { getGlobalChatBoxRuntime, type AIManager, type ChatBoxRuntime } from '@nocobase/plugin-ai/client-v2';
 import { useT } from '../skill-hub/locale';
 import {
   AutoApprovalBridge,
@@ -15,17 +14,88 @@ import {
   useAutoApprovalInterceptor,
 } from './AutoApprovalBridge';
 
-type Mount = { element: HTMLElement; runtime: ChatBoxRuntime; defaultSystemMessage?: () => string | undefined };
+type Mount = { key: number; runtime: ChatBoxRuntime; defaultSystemMessage?: () => string | undefined };
+type MenuTargets = { targets: Map<HTMLElement, ChatBoxRuntime>; listeners: Set<() => void> };
+type ContextModel = {
+  use?: string;
+  constructor?: { name?: string };
+  parent?: { chatBoxRuntime?: ChatBoxRuntime };
+};
 
-/** The chat sender has no extension registry; attach a React portal to the sender belonging to each live runtime. */
+const menuTargetsByApp = new WeakMap<object, MenuTargets>();
+
+function getMenuTargets(app: object) {
+  let menuTargets = menuTargetsByApp.get(app);
+  if (!menuTargets) {
+    menuTargets = { targets: new Map(), listeners: new Set() };
+    menuTargetsByApp.set(app, menuTargets);
+  }
+  return menuTargets;
+}
+
+export function registerAutoApprovalWorkContext(manager?: Pick<AIManager, 'getWorkContext' | 'registerWorkContext'>) {
+  if (manager && !manager.getWorkContext('agent-auto-approval')) {
+    manager.registerWorkContext('agent-auto-approval', { menu: { Component: AutoApprovalMenu } });
+  }
+}
+
+export function AutoApprovalMenu() {
+  const app = useApp();
+  const context = useFlowContext<{ model?: ContextModel }>();
+  const model = context?.model;
+  const isChatCore = model?.use === 'AIChatBoxCoreModel' || model?.constructor?.name === 'AIChatBoxCoreModel';
+  const runtime = model ? (isChatCore ? model.parent?.chatBoxRuntime : undefined) : getGlobalChatBoxRuntime();
+  const menuTargets = useMemo(() => getMenuTargets(app), [app]);
+  const id = React.useId();
+  const currentElement = useRef<HTMLElement | null>(null);
+  const hiddenItem = useRef<{ item: HTMLElement; display: string }>();
+  const setElement = useCallback(
+    (element: HTMLSpanElement | null) => {
+      if (currentElement.current) {
+        menuTargets.targets.delete(currentElement.current);
+      }
+      if (hiddenItem.current) {
+        hiddenItem.current.item.style.display = hiddenItem.current.display;
+        hiddenItem.current = undefined;
+      }
+      currentElement.current = element;
+      if (element && runtime) {
+        menuTargets.targets.set(element, runtime);
+      } else if (element) {
+        const item = element.closest<HTMLElement>('.ant-dropdown-menu-item');
+        if (item) {
+          hiddenItem.current = { item, display: item.style.display };
+          item.style.display = 'none';
+        }
+      }
+      menuTargets.listeners.forEach((listener) => listener());
+    },
+    [menuTargets, runtime],
+  );
+  return <span id={id} ref={setElement} data-agent-auto-approval-menu="true" />;
+}
+
+/** Keep the approval bridge active for each live chat runtime, including when its menu is closed. */
 export function AutoApprovalProvider({ children }: React.PropsWithChildren) {
   const app = useApp();
   const [mounts, setMounts] = useState<Mount[]>([]);
+  const [targets, setTargets] = useState<Map<HTMLElement, ChatBoxRuntime>>(new Map());
   const requests = useMemo(() => new AutoApprovalRequests(), []);
   useAutoApprovalInterceptor(requests);
 
   useEffect(() => {
-    const active = new Map<HTMLElement, Mount>();
+    const menuTargets = getMenuTargets(app);
+    const update = () => setTargets(new Map(menuTargets.targets));
+    menuTargets.listeners.add(update);
+    update();
+    return () => {
+      menuTargets.listeners.delete(update);
+    };
+  }, [app]);
+
+  useEffect(() => {
+    const active = new Map<ChatBoxRuntime, Mount>();
+    let nextKey = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let retries = 0;
     const selector = '.ai-chat-sender-tools, .ai-chat-sender-compact-toolbar';
@@ -45,7 +115,8 @@ export function AutoApprovalProvider({ children }: React.PropsWithChildren) {
         engine = engine.nextEngine;
       }
 
-      const next = new Map<HTMLElement, { runtime: ChatBoxRuntime; defaultSystemMessage?: () => string | undefined }>();
+      const next = new Map<ChatBoxRuntime, { defaultSystemMessage?: () => string | undefined }>();
+      let ownedToolbars = 0;
       const roots = [...runtimes]
         .map(([runtime, defaultSystemMessage]) => ({
           root: runtime.chatBoxModel.chatBoxRef?.current,
@@ -66,31 +137,24 @@ export function AutoApprovalProvider({ children }: React.PropsWithChildren) {
           if (roots.some((other) => other.root !== root && root.contains(other.root) && other.root.contains(toolbar))) {
             continue;
           }
-          next.set(toolbar, { runtime, defaultSystemMessage });
+          next.set(runtime, { defaultSystemMessage });
+          ownedToolbars += 1;
         }
       }
       let changed = false;
-      for (const [toolbar, mount] of active) {
-        if (next.get(toolbar)?.runtime !== mount.runtime || !mount.element.isConnected) {
-          mount.element.remove();
-          active.delete(toolbar);
+      for (const runtime of active.keys()) {
+        if (!next.has(runtime)) {
+          active.delete(runtime);
           changed = true;
         }
       }
-      for (const [toolbar, { runtime, defaultSystemMessage }] of next) {
-        if (active.has(toolbar) || toolbar.querySelector('[data-agent-auto-approval]')) continue;
-        const element = document.createElement('span');
-        element.dataset.agentAutoApproval = 'true';
-        const searchButton = toolbar.querySelector('.anticon-global')?.closest('button');
-        const submit = toolbar.querySelector('.ai-chat-sender-submit');
-        if (searchButton?.parentElement === toolbar) searchButton.after(element);
-        else if (submit?.parentElement === toolbar) toolbar.insertBefore(element, submit);
-        else toolbar.append(element);
-        active.set(toolbar, { element, runtime, defaultSystemMessage });
+      for (const [runtime, { defaultSystemMessage }] of next) {
+        if (active.has(runtime)) continue;
+        active.set(runtime, { key: nextKey++, runtime, defaultSystemMessage });
         changed = true;
       }
       if (changed) setMounts([...active.values()]);
-      if (document.querySelectorAll(selector).length > next.size && retries < 5) {
+      if (document.querySelectorAll(selector).length > ownedToolbars && retries < 5) {
         retries += 1;
         timer = setTimeout(discover, 50);
       }
@@ -111,22 +175,34 @@ export function AutoApprovalProvider({ children }: React.PropsWithChildren) {
     return () => {
       observer.disconnect();
       if (timer) clearTimeout(timer);
-      for (const mount of active.values()) mount.element.remove();
     };
   }, [app]);
 
   return (
     <AutoApprovalRequestsContext.Provider value={requests}>
       {children}
-      {mounts.map(({ element, runtime, defaultSystemMessage }) =>
-        createPortal(<AutoApprovalToggle runtime={runtime} defaultSystemMessage={defaultSystemMessage} />, element),
-      )}
+      {mounts.map(({ key, runtime, defaultSystemMessage }) => (
+        <AutoApprovalToggle
+          key={key}
+          runtime={runtime}
+          defaultSystemMessage={defaultSystemMessage}
+          targets={[...targets].filter(([, targetRuntime]) => targetRuntime === runtime).map(([target]) => target)}
+        />
+      ))}
     </AutoApprovalRequestsContext.Provider>
   );
 }
 
 export const AutoApprovalToggle = observer(
-  ({ runtime, defaultSystemMessage }: { runtime: ChatBoxRuntime; defaultSystemMessage?: () => string | undefined }) => {
+  ({
+    runtime,
+    defaultSystemMessage,
+    targets = [],
+  }: {
+    runtime: ChatBoxRuntime;
+    defaultSystemMessage?: () => string | undefined;
+    targets?: HTMLElement[];
+  }) => {
     const app = useApp();
     const t = useT();
     const { chatBoxModel, chatConversationModel, chatMessageModel, chatToolCallModel } = runtime;
@@ -287,12 +363,11 @@ export const AutoApprovalToggle = observer(
       };
     }, [app.apiClient, chatConversationModel, sessionId, syncScope]);
 
-    const toggle = async () => {
-      if (loading || !available || chatBoxModel.readonly || !chatBoxModel.currentEmployee) return;
+    const toggle = async (next: boolean) => {
+      if (loading || !available || chatBoxModel.readonly || !chatBoxModel.currentEmployee || next === enabled) return;
       let target = sessionId;
       const employee = chatBoxModel.currentEmployee;
       const draftState = chatMessageModel.sessions.__draft__;
-      const next = !enabled;
       if (!next) setSetting({ sessionId, enabled: false });
       setLoading(true);
       generation.current += 1;
@@ -381,18 +456,30 @@ export const AutoApprovalToggle = observer(
     return (
       <>
         <AutoApprovalBridge runtime={runtime} enabled={enabled} />
-        <Tooltip title={label} arrow={false}>
-          <Button
-            type={enabled ? 'default' : 'text'}
-            color={enabled ? 'primary' : undefined}
-            variant={enabled ? 'filled' : undefined}
-            icon={<CheckCircleOutlined />}
-            aria-label={label}
-            aria-pressed={enabled}
-            onClick={toggle}
-            disabled={loading || !available || !chatBoxModel.currentEmployee || chatBoxModel.readonly}
-          />
-        </Tooltip>
+        {targets.map((target) =>
+          createPortal(
+            <label
+              htmlFor={`${target.id}-switch`}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+              onClick={(event) => event.stopPropagation()}
+              onKeyDown={(event) => {
+                if (['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.stopPropagation();
+              }}
+            >
+              <span>{t('Automatic tool approval')}</span>
+              <Switch
+                id={`${target.id}-switch`}
+                size="small"
+                aria-label={label}
+                checked={enabled}
+                onChange={toggle}
+                disabled={loading || !available || !chatBoxModel.currentEmployee || chatBoxModel.readonly}
+              />
+            </label>,
+            target,
+            target.id,
+          ),
+        )}
       </>
     );
   },

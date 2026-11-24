@@ -527,6 +527,7 @@
   "A single conversation identifier is required.": "A single conversation identifier is required.",
   "A single message identifier is required.": "A single message identifier is required.",
   "A single tool call identifier is required.": "A single tool call identifier is required.",
+  "Automatic tool approval": "Automatic tool approval",
   "Enable automatic approval": "Enable automatic approval",
   "Disable automatic approval": "Disable automatic approval",
   "Could not update automatic approval": "Could not update automatic approval",

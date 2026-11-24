@@ -4,7 +4,8 @@ import { Plugin, lazy } from '@nocobase/client';
 import { ExecutionHistoryPage, LoopSettingsPage, SkillDefinitionsPage, SkillMetricsPage } from './SkillPages';
 import { InteractionSchemasProvider } from './skill-hub/tools/InteractionSchemasProvider';
 import { registerSkillLoopCards } from './skill-hub/tools/registerSkillLoopCards';
-import { AutoApprovalProvider } from '../client-v2/auto-approval/AutoApprovalProvider';
+import { AutoApprovalProvider, registerAutoApprovalWorkContext } from '../client-v2/auto-approval/AutoApprovalProvider';
+import type { AIManager } from '@nocobase/plugin-ai/client-v2';
 
 const RulesPage = lazy(() => import('../client-v2/pages/RulesPage'));
 const TracingPage = lazy(() => import('../client-v2/pages/TracingPage'));
@@ -21,6 +22,10 @@ export class PluginAgentOrchestratorClient extends Plugin {
   async load() {
     (this as any).app.use(InteractionSchemasProvider);
     this.app.use(AutoApprovalProvider);
+    const aiPlugin = (this.app.pm?.get?.('ai') || this.app.pm?.get?.('@nocobase/plugin-ai')) as
+      | { aiManager?: AIManager }
+      | undefined;
+    registerAutoApprovalWorkContext(aiPlugin?.aiManager);
 
     this.app.pluginSettingsManager.add('ai-orchestrator', {
       title: this.t('Agent Orchestrator'),
