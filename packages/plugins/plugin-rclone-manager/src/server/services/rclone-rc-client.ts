@@ -6,7 +6,6 @@ import { SUPPORTS_ABOUT_BACKENDS } from '../../shared/constants';
 import {
   extractRemoteName,
   extractWrapperTargets,
-  isLocalFsTarget,
   isSyntacticLocalFs,
   WRAPPER_REMOTE_TYPES,
 } from '../../shared/fs-guard';
@@ -15,6 +14,7 @@ import type {
   RcloneAuthType,
   RcloneCoreStats,
   RcloneDiskInfo,
+  RcloneFsLocality,
   RcloneJobStatusResponse,
   RcloneListItem,
   RcloneMountPoint,
@@ -97,52 +97,127 @@ function encodePathSegments(remotePath: string): string {
     .join('/');
 }
 
-function isDumpEntryLocal(
+function classifyDumpEntry(
   remoteName: string,
   dumpRes: Readonly<Record<string, Record<string, unknown>>> | null | undefined,
   visiting = new Set<string>(),
-): boolean {
+): RcloneFsLocality {
   if (!dumpRes || visiting.has(remoteName)) {
-    return false;
+    return 'unknown';
   }
   const entry = dumpRes[remoteName];
   if (!entry || typeof entry !== 'object') {
-    return false;
+    return 'unknown';
   }
-  visiting.add(remoteName);
-  const entryType = String(entry.type ?? '').toLowerCase();
+  const entryType = String(entry.type ?? '')
+    .trim()
+    .toLowerCase();
+  if (!entryType) {
+    return 'unknown';
+  }
   if (entryType === 'local') {
-    return true;
+    return 'local';
   }
   if (WRAPPER_REMOTE_TYPES.has(entryType)) {
-    for (const target of extractWrapperTargets(entry)) {
+    const targets = extractWrapperTargets(entry);
+    if (targets.length === 0) {
+      return 'unknown';
+    }
+    visiting.add(remoteName);
+    let hasUnknown = false;
+    for (const target of targets) {
       if (isSyntacticLocalFs(target)) {
-        return true;
+        return 'local';
       }
       const nestedRemote = extractRemoteName(target);
-      if (nestedRemote && isDumpEntryLocal(nestedRemote, dumpRes, visiting)) {
-        return true;
+      if (!nestedRemote) {
+        hasUnknown = true;
+        continue;
+      }
+      const nestedLocality = classifyDumpEntry(nestedRemote, dumpRes, new Set(visiting));
+      if (nestedLocality === 'local') {
+        return 'local';
+      }
+      if (nestedLocality === 'unknown') {
+        hasUnknown = true;
       }
     }
+    return hasUnknown ? 'unknown' : 'remote';
   }
-  return false;
+  return 'remote';
+}
+
+function inferVerifiedCloudBackendFromFsInfo(fsInfo: RcloneFsInfoResponse | null): string | null {
+  if (!fsInfo || fsInfo.Features?.IsLocal !== false) {
+    return null;
+  }
+  const desc = String(fsInfo.String ?? '')
+    .trim()
+    .toLowerCase();
+  if (!desc) {
+    return null;
+  }
+  // Composite/wrapper backends must never be classified as cloud from fsinfo alone because Rclone ANDs boolean features across upstreams.
+  if (
+    desc.startsWith('combine root') ||
+    desc.startsWith('union root') ||
+    desc.startsWith('encrypted drive') ||
+    desc.startsWith('chunked ') ||
+    desc.startsWith('compressed ') ||
+    desc.startsWith('hasher::') ||
+    desc.startsWith('local file system')
+  ) {
+    return null;
+  }
+  if (desc.startsWith('s3 ')) return 's3';
+  if (desc.includes('google drive')) return 'drive';
+  if (desc.startsWith('gcs ') || desc.includes('google cloud storage')) return 'google cloud storage';
+  if (desc.includes('onedrive')) return 'onedrive';
+  if (desc.includes('dropbox')) return 'dropbox';
+  if (desc.startsWith('sftp ') || desc.startsWith('sftp://')) return 'sftp';
+  if (desc.startsWith('webdav ')) return 'webdav';
+  if (desc.startsWith('azure container')) return 'azureblob';
+  if (desc.startsWith('b2 ')) return 'b2';
+  if (desc.startsWith('box root')) return 'box';
+  if (desc.startsWith('ftp://')) return 'ftp';
+  if (desc.startsWith('swift ')) return 'swift';
+  if (desc.startsWith('in memory')) return 'memory';
+  return null;
 }
 
 function inferTypeFromFsInfo(fsInfo: RcloneFsInfoResponse | null): string {
   if (!fsInfo) return 'unknown';
   if (fsInfo.Features?.IsLocal) return 'local';
-  const desc = String(fsInfo.String ?? '').toLowerCase();
-  if (desc.startsWith('s3 ')) return 's3';
-  if (desc.includes('google drive')) return 'drive';
-  if (desc.includes('onedrive')) return 'onedrive';
-  if (desc.includes('dropbox')) return 'dropbox';
-  if (desc.includes('sftp')) return 'sftp';
-  if (desc.includes('webdav')) return 'webdav';
-  if (desc.includes('in memory')) return 'memory';
-  const cleanName = String(fsInfo.Name ?? '')
-    .replace(/\{.*\}$/, '')
-    .trim();
-  return cleanName || 'remote';
+  const verifiedCloud = inferVerifiedCloudBackendFromFsInfo(fsInfo);
+  if (verifiedCloud) return verifiedCloud;
+  const desc = String(fsInfo.String ?? '')
+    .trim()
+    .toLowerCase();
+  if (desc.startsWith('combine root')) return 'combine';
+  if (desc.startsWith('union root')) return 'union';
+  if (desc.startsWith('encrypted drive')) return 'crypt';
+  if (desc.startsWith('chunked ')) return 'chunker';
+  if (desc.startsWith('compressed ')) return 'compress';
+  if (desc.startsWith('hasher::')) return 'hasher';
+  return 'unknown';
+}
+
+export interface RcloneJobIdentity {
+  executeId?: string | null;
+  group?: string | null;
+}
+
+function normalizeJobIdentity(identity?: string | RcloneJobIdentity | null): { executeId: string; group: string } {
+  if (typeof identity === 'string') {
+    return { executeId: identity.trim(), group: '' };
+  }
+  if (identity && typeof identity === 'object') {
+    return {
+      executeId: typeof identity.executeId === 'string' ? identity.executeId.trim() : '',
+      group: typeof identity.group === 'string' ? identity.group.trim() : '',
+    };
+  }
+  return { executeId: '', group: '' };
 }
 
 function parseByteRange(rangeHeader: string | undefined, totalSize: number): { start: number; end: number } | null {
@@ -275,12 +350,96 @@ export class RcloneRcClient {
     return parsed as T;
   }
 
-  async postAsync(rcPath: string, body?: Record<string, unknown>): Promise<{ jobid: number }> {
-    const data = await this.postJson<{ jobid?: number }>(rcPath, { ...(body ?? {}), _async: true });
+  async postAsync(
+    rcPath: string,
+    body?: Record<string, unknown>,
+    options?: { group?: string },
+  ): Promise<{ jobid: number; executeId?: string; group?: string }> {
+    const customGroup =
+      options?.group?.trim() || (typeof body?._group === 'string' ? body._group.trim() : '') || undefined;
+    const data = await this.postJson<{ jobid?: number; executeId?: unknown }>(rcPath, {
+      ...(body ?? {}),
+      ...(customGroup ? { _group: customGroup } : {}),
+      _async: true,
+    });
     if (typeof data.jobid !== 'number' || !Number.isFinite(data.jobid)) {
       throw this.safeError(`Rclone async call ${rcPath} did not return a numeric jobid`, 502);
     }
-    return { jobid: data.jobid };
+    const executeId = typeof data.executeId === 'string' && data.executeId.trim() ? data.executeId.trim() : undefined;
+    return {
+      jobid: data.jobid,
+      ...(executeId ? { executeId } : {}),
+      ...(customGroup ? { group: customGroup } : {}),
+    };
+  }
+
+  async getJobList(): Promise<{
+    executeId?: string;
+    jobids: number[];
+    runningIds?: number[];
+    finishedIds?: number[];
+  }> {
+    const res = await this.postJson<{
+      executeId?: unknown;
+      jobids?: unknown;
+      runningIds?: unknown;
+      finishedIds?: unknown;
+    }>('/job/list', {}, { timeoutMs: 10_000 });
+    const executeId = typeof res.executeId === 'string' && res.executeId.trim() ? res.executeId.trim() : undefined;
+    return {
+      ...(executeId ? { executeId } : {}),
+      jobids: Array.isArray(res.jobids) ? res.jobids.map(Number).filter(Number.isFinite) : [],
+      runningIds: Array.isArray(res.runningIds) ? res.runningIds.map(Number).filter(Number.isFinite) : undefined,
+      finishedIds: Array.isArray(res.finishedIds) ? res.finishedIds.map(Number).filter(Number.isFinite) : undefined,
+    };
+  }
+
+  async getStatsGroups(): Promise<string[] | null> {
+    try {
+      const res = await this.postJson<{ groups?: unknown }>('/core/group-list', {}, { timeoutMs: 10_000 });
+      return Array.isArray(res.groups) ? res.groups.map((item) => String(item ?? '')) : [];
+    } catch (err) {
+      if (err instanceof RcloneRcError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  async findJobByGroup(group: string): Promise<{ job: RcloneJobStatusResponse; executeId?: string } | null> {
+    const targetGroup = String(group ?? '').trim();
+    if (!targetGroup) {
+      return null;
+    }
+    const list = await this.getJobList();
+    const sortedIds = [...list.jobids].sort((a, b) => b - a);
+    for (const jid of sortedIds) {
+      const res = await this.postJson<Partial<RcloneJobStatusResponse> & { error?: string }>(
+        '/job/status',
+        { jobid: jid },
+        { timeoutMs: 10_000, allowErrorPayload: true },
+      );
+      if (typeof res.finished === 'boolean' && String(res.group ?? '').trim() === targetGroup) {
+        const statusExec =
+          typeof res.executeId === 'string' && res.executeId.trim() ? res.executeId.trim() : list.executeId;
+        return {
+          job: {
+            id: typeof res.id === 'number' ? res.id : jid,
+            ...(statusExec ? { executeId: statusExec } : {}),
+            finished: res.finished,
+            success: Boolean(res.success),
+            error: res.error ?? '',
+            duration: res.duration ?? 0,
+            startTime: res.startTime ?? '',
+            endTime: res.endTime ?? '',
+            group: targetGroup,
+            output: res.output,
+          },
+          ...(statusExec ? { executeId: statusExec } : {}),
+        };
+      }
+    }
+    return null;
   }
 
   async testConnection(): Promise<RcloneVersionInfo> {
@@ -302,7 +461,35 @@ export class RcloneRcClient {
     });
   }
 
-  async getJobStatus(jobid: number): Promise<RcloneJobStatusResponse | null> {
+  async getJobStatus(
+    jobid: number,
+    identity?: string | RcloneJobIdentity | null,
+  ): Promise<RcloneJobStatusResponse | null> {
+    const { executeId: expectedExec, group: expectedGroup } = normalizeJobIdentity(identity);
+    if (!expectedExec && !expectedGroup) {
+      throw this.safeError(
+        `Unverified rclone job identity for job #${jobid} (missing executeId and group); refusing to accept status`,
+        409,
+      );
+    }
+
+    let verifiedByList = false;
+    if (expectedExec) {
+      try {
+        const list = await this.getJobList();
+        if (list.executeId) {
+          if (list.executeId !== expectedExec) {
+            return null;
+          }
+          verifiedByList = true;
+        }
+      } catch (err) {
+        if (!(err instanceof RcloneRcError && err.status === 404)) {
+          throw err;
+        }
+      }
+    }
+
     const result = await this.postJson<Partial<RcloneJobStatusResponse> & { error?: string }>(
       '/job/status',
       { jobid },
@@ -312,15 +499,36 @@ export class RcloneRcClient {
       return null;
     }
     if (typeof result.finished === 'boolean') {
+      const statusExecuteId =
+        typeof result.executeId === 'string' && result.executeId.trim() ? result.executeId.trim() : undefined;
+      const statusGroup = typeof result.group === 'string' && result.group.trim() ? result.group.trim() : undefined;
+      if (expectedExec) {
+        if (statusExecuteId && statusExecuteId !== expectedExec) {
+          return null;
+        }
+        if (!verifiedByList && !statusExecuteId && !(expectedGroup && statusGroup === expectedGroup)) {
+          throw this.safeError(`Unable to verify rclone daemon executeId for job #${jobid}`, 502);
+        }
+      }
+      if (expectedGroup) {
+        if (statusGroup && statusGroup !== expectedGroup) {
+          return null;
+        }
+        if (!statusGroup && !verifiedByList && !statusExecuteId) {
+          throw this.safeError(`Unable to verify rclone job group for job #${jobid}`, 502);
+        }
+      }
+      const resolvedExecuteId = statusExecuteId ?? (verifiedByList ? expectedExec : undefined);
       return {
         id: typeof result.id === 'number' ? result.id : jobid,
+        ...(resolvedExecuteId ? { executeId: resolvedExecuteId } : {}),
         finished: result.finished,
         success: Boolean(result.success),
         error: result.error ?? '',
         duration: result.duration ?? 0,
         startTime: result.startTime ?? '',
         endTime: result.endTime ?? '',
-        group: result.group ?? `job/${jobid}`,
+        group: statusGroup ?? (expectedGroup || `job/${jobid}`),
         output: result.output,
       };
     }
@@ -332,7 +540,64 @@ export class RcloneRcClient {
     );
   }
 
-  async stopJob(jobid: number): Promise<void> {
+  async stopJobGroup(group: string): Promise<void> {
+    const trimmed = String(group ?? '').trim();
+    if (!trimmed) {
+      throw this.safeError('Rclone job group is required to stop group', 400);
+    }
+    await this.postJson('/job/stopgroup', { group: trimmed });
+  }
+
+  async stopJob(jobid: number, identity?: string | RcloneJobIdentity | null): Promise<void> {
+    const { executeId: expectedExec, group: expectedGroup } = normalizeJobIdentity(identity);
+    if (expectedGroup) {
+      await this.stopJobGroup(expectedGroup);
+      return;
+    }
+    if (!expectedExec) {
+      throw this.safeError(
+        `Unverified rclone job identity for job #${jobid} (missing executeId and group); refusing to stop by bare jobid`,
+        409,
+      );
+    }
+
+    let verified = false;
+    try {
+      const list = await this.getJobList();
+      if (list.executeId) {
+        if (list.executeId !== expectedExec) {
+          throw this.safeError(
+            `Rclone daemon restarted (executeId mismatch); refusing to stop job #${jobid} on new daemon instance`,
+            409,
+          );
+        }
+        verified = true;
+      }
+    } catch (err) {
+      if (err instanceof RcloneRcError && err.status === 409) {
+        throw err;
+      }
+      if (!(err instanceof RcloneRcError && err.status === 404)) {
+        throw err;
+      }
+    }
+    if (!verified) {
+      const status = await this.postJson<Partial<RcloneJobStatusResponse> & { error?: string }>(
+        '/job/status',
+        { jobid },
+        { timeoutMs: 10_000, allowErrorPayload: true },
+      );
+      const statusExec = typeof status.executeId === 'string' ? status.executeId.trim() : '';
+      if (!statusExec) {
+        throw this.safeError(`Unable to verify rclone daemon executeId before stopping job #${jobid}`, 502);
+      }
+      if (statusExec !== expectedExec) {
+        throw this.safeError(
+          `Rclone daemon restarted (executeId mismatch); refusing to stop job #${jobid} on new daemon instance`,
+          409,
+        );
+      }
+    }
     await this.postJson('/job/stop', { jobid });
   }
 
@@ -353,21 +618,78 @@ export class RcloneRcClient {
   }
 
   /**
+   * Classify whether `fs` targets a host local filesystem (`local`), a verified
+   * non-local cloud backend (`remote`), or cannot be determined due to missing/failed
+   * daemon metadata (`unknown`).
+   */
+  async classifyFsLocality(
+    fs: string,
+    preloadedRemoteTypes?: Readonly<Record<string, string>>,
+  ): Promise<RcloneFsLocality> {
+    const trimmed = String(fs ?? '').trim();
+    if (isSyntacticLocalFs(trimmed)) {
+      return 'local';
+    }
+    const remoteName = extractRemoteName(trimmed);
+    if (!remoteName) {
+      return 'remote';
+    }
+    if (preloadedRemoteTypes) {
+      const preloaded = preloadedRemoteTypes[remoteName]?.toLowerCase();
+      if (preloaded === 'local') {
+        return 'local';
+      }
+      if (preloaded && preloaded !== 'unknown') {
+        return 'remote';
+      }
+    }
+
+    let summaries: RcloneRemoteSummary[] | null = null;
+    try {
+      summaries = await this.inspectRemotes();
+    } catch {
+      summaries = null;
+    }
+
+    if (summaries) {
+      const match = summaries.find((item) => item.name === remoteName);
+      if (match) {
+        return match.locality ?? (match.isLocal ? 'local' : 'remote');
+      }
+      const info = await this.getFsInfo(trimmed);
+      if (!info) {
+        return 'unknown';
+      }
+      if (info.Features?.IsLocal) {
+        return 'local';
+      }
+      return inferVerifiedCloudBackendFromFsInfo(info) ? 'remote' : 'unknown';
+    }
+
+    const info = await this.getFsInfo(trimmed);
+    if (info?.Features?.IsLocal) {
+      return 'local';
+    }
+    return 'unknown';
+  }
+
+  /**
    * Authoritatively check whether `fs` resolves to a host local filesystem
    * (covering literal paths, Windows drives, `:local:`, `type=local` remotes,
    * AND `type=alias` or `RCLONE_CONFIG_*` env remotes backed by host paths).
+   * Throws when daemon metadata is unavailable so indeterminate remotes fail closed.
    */
   async isFsLocal(fs: string, preloadedRemoteTypes?: Readonly<Record<string, string>>): Promise<boolean> {
-    const trimmed = String(fs ?? '').trim();
-    if (isLocalFsTarget(trimmed, preloadedRemoteTypes)) {
-      return true;
+    const locality = await this.classifyFsLocality(fs, preloadedRemoteTypes);
+    if (locality === 'unknown') {
+      throw this.safeError(
+        `Unable to classify remote backend for "${String(
+          fs ?? '',
+        ).trim()}"; refusing operation until remote metadata is available`,
+        502,
+      );
     }
-    const types = preloadedRemoteTypes ?? (await this.listRemoteTypes().catch(() => ({})));
-    if (isLocalFsTarget(trimmed, types)) {
-      return true;
-    }
-    const info = await this.getFsInfo(trimmed);
-    return Boolean(info?.Features?.IsLocal);
+    return locality === 'local';
   }
 
   /**
@@ -401,6 +723,11 @@ export class RcloneRcClient {
     return Array.isArray(res.providers) ? res.providers : [];
   }
 
+  async listRemoteNames(): Promise<string[]> {
+    const res = await this.postJson<{ remotes?: string[] }>('/config/listremotes');
+    return Array.isArray(res.remotes) ? res.remotes : [];
+  }
+
   async inspectRemotes(): Promise<RcloneRemoteSummary[]> {
     if (this.remotesCache && Date.now() < this.remotesCache.expiresAt) {
       return this.remotesCache.data;
@@ -417,10 +744,22 @@ export class RcloneRcClient {
         const dumpEntry = dumpRes?.[name];
         const dumpType = typeof dumpEntry?.type === 'string' ? dumpEntry.type : '';
         const envDefined = !dumpEntry || typeof dumpEntry !== 'object' || !dumpType;
+        const dumpLocality = classifyDumpEntry(name, dumpRes);
         const fsInfo = await this.getFsInfo(`${name}:`);
         const rawType = dumpType || inferTypeFromFsInfo(fsInfo);
-        const isLocal =
-          Boolean(fsInfo?.Features?.IsLocal) || rawType.toLowerCase() === 'local' || isDumpEntryLocal(name, dumpRes);
+
+        let locality: RcloneFsLocality;
+        if (Boolean(fsInfo?.Features?.IsLocal) || dumpLocality === 'local' || rawType.toLowerCase() === 'local') {
+          locality = 'local';
+        } else if (dumpLocality === 'remote') {
+          locality = 'remote';
+        } else if (envDefined && inferVerifiedCloudBackendFromFsInfo(fsInfo) !== null) {
+          locality = 'remote';
+        } else {
+          locality = 'unknown';
+        }
+
+        const isLocal = locality === 'local';
         const bucketBased = Boolean(fsInfo?.Features?.BucketBased && !fsInfo?.Root);
         const supportsAbout =
           typeof fsInfo?.Features?.About === 'boolean'
@@ -432,13 +771,16 @@ export class RcloneRcClient {
           type: rawType,
           supportsAbout,
           isLocal,
+          locality,
           bucketBased,
           envDefined,
         };
       }),
     );
 
-    this.remotesCache = { expiresAt: Date.now() + METADATA_CACHE_TTL_MS, data: result };
+    if (result.every((item) => item.locality !== 'unknown')) {
+      this.remotesCache = { expiresAt: Date.now() + METADATA_CACHE_TTL_MS, data: result };
+    }
     return result;
   }
 
@@ -446,7 +788,11 @@ export class RcloneRcClient {
     const summaries = await this.inspectRemotes();
     const map: Record<string, string> = {};
     for (const item of summaries) {
-      map[item.name] = item.isLocal ? 'local' : item.type;
+      if (item.locality === 'unknown') {
+        map[item.name] = 'unknown';
+      } else {
+        map[item.name] = item.isLocal ? 'local' : item.type;
+      }
     }
     return map;
   }
@@ -759,8 +1105,18 @@ export class RcloneRcClient {
     try {
       response = await fetch(uploadUrl.toString(), requestInit);
     } catch (error) {
+      if (error instanceof RcloneRcError) {
+        throw error;
+      }
+      if (signal?.aborted && signal.reason instanceof RcloneRcError) {
+        throw signal.reason;
+      }
       const msg = error instanceof Error ? error.message : String(error);
       throw this.safeError(`Streaming upload to rclone failed: ${msg}`, 502);
+    }
+
+    if (signal?.aborted && signal.reason instanceof RcloneRcError) {
+      throw signal.reason;
     }
 
     const text = await response.text();

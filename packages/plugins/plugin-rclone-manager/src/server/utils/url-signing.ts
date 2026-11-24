@@ -96,8 +96,14 @@ export interface RcloneSignedStreamPayload {
   expires: number;
 }
 
-function serializePayload(payload: RcloneSignedStreamPayload): string {
+function normalizeSigningAppName(appName?: string | null): string {
+  const trimmed = typeof appName === 'string' ? appName.trim() : '';
+  return trimmed || 'main';
+}
+
+function serializePayload(payload: RcloneSignedStreamPayload, appName?: string | null): string {
   return JSON.stringify([
+    normalizeSigningAppName(appName),
     payload.connectionId,
     payload.fs,
     payload.remote,
@@ -111,9 +117,10 @@ export function signStreamPayload(
   payload: RcloneSignedStreamPayload,
   options?: { appSecret?: string | Buffer | null; appName?: string },
 ): string {
+  const resolvedAppName = normalizeSigningAppName(options?.appName);
   return crypto
-    .createHmac('sha256', resolveSigningSecret(options?.appSecret, options?.appName))
-    .update(serializePayload(payload), 'utf8')
+    .createHmac('sha256', resolveSigningSecret(options?.appSecret, resolvedAppName))
+    .update(serializePayload(payload, resolvedAppName), 'utf8')
     .digest('hex');
 }
 

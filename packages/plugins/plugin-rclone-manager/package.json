@@ -6,7 +6,7 @@
   "description": "Manage Rclone RC connections, cloud remotes, workflow-driven sync/copy transfers, mounts, and serve endpoints from NocoBase.",
   "description.zh-CN": "在 NocoBase 中管理 Rclone RC 连接、云端存储、基于工作流的同步复制任务、挂载与服务终端。",
   "description.vi-VN": "Quản lý kết nối Rclone RC, kho lưu trữ đám mây, đồng bộ/sao chép qua Workflow, mount và serve ngay trong NocoBase.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

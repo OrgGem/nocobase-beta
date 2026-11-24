@@ -246,41 +246,41 @@ const ExplorerPane: React.FC<ExplorerPaneProps> = ({
       width: 100,
       render: (size: number, record: RcloneListItem) => (record.IsDir ? '—' : formatBytes(size)),
     },
-    {
-      title: t('Actions'),
-      key: 'actions',
-      width: 150,
-      render: (_v: unknown, record: RcloneListItem) => (
-        <Space size={4}>
-          <Button
-            size="small"
-            icon={<DownloadOutlined />}
-            title={record.IsDir ? t('Download as ZIP') : t('Download')}
-            aria-label={`${t('Download')} ${record.Name}`}
-            onClick={() => handleDownload(record)}
-          />
-          {canTransfer && (
-            <>
-              <Button
-                size="small"
-                icon={<EditOutlined />}
-                aria-label={`${t('Rename')} ${record.Name}`}
-                onClick={() => {
-                  setRenameTarget(record);
-                  setRenameValue(record.Name);
-                }}
-              />
-              <Popconfirm
-                title={record.IsDir ? t('Purge entire directory?') : t('Delete file?')}
-                onConfirm={() => handleDelete(record)}
-              >
-                <Button size="small" danger icon={<DeleteOutlined />} aria-label={`${t('Delete')} ${record.Name}`} />
-              </Popconfirm>
-            </>
-          )}
-        </Space>
-      ),
-    },
+    ...(canTransfer
+      ? [
+          {
+            title: t('Actions'),
+            key: 'actions',
+            width: 150,
+            render: (_v: unknown, record: RcloneListItem) => (
+              <Space size={4}>
+                <Button
+                  size="small"
+                  icon={<DownloadOutlined />}
+                  title={record.IsDir ? t('Download as ZIP') : t('Download')}
+                  aria-label={`${t('Download')} ${record.Name}`}
+                  onClick={() => handleDownload(record)}
+                />
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  aria-label={`${t('Rename')} ${record.Name}`}
+                  onClick={() => {
+                    setRenameTarget(record);
+                    setRenameValue(record.Name);
+                  }}
+                />
+                <Popconfirm
+                  title={record.IsDir ? t('Purge entire directory?') : t('Delete file?')}
+                  onConfirm={() => handleDelete(record)}
+                >
+                  <Button size="small" danger icon={<DeleteOutlined />} aria-label={`${t('Delete')} ${record.Name}`} />
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (

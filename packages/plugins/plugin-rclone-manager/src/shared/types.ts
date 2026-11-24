@@ -140,11 +140,14 @@ export interface RcloneProviderInfo {
   Hide?: boolean;
 }
 
+export type RcloneFsLocality = 'local' | 'remote' | 'unknown';
+
 export interface RcloneRemoteSummary {
   name: string;
   type: string;
   supportsAbout: boolean;
   isLocal?: boolean;
+  locality?: RcloneFsLocality;
   bucketBased?: boolean;
   envDefined?: boolean;
 }
@@ -198,7 +201,14 @@ export interface RcloneRuntimeOptionsSummary {
   logFile: string;
 }
 
-export type RcloneTransferTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
+export type RcloneTransferTaskStatus =
+  | 'queued'
+  | 'starting'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'stopped'
+  | 'unverified';
 
 export interface RcloneTransferTaskRecord {
   id: number;
@@ -218,9 +228,15 @@ export interface RcloneTransferTaskRecord {
   localAuthorized?: boolean;
   status: RcloneTransferTaskStatus;
   rcloneJobId?: number | null;
+  rcloneExecuteId?: string | null;
+  rcloneGroup?: string | null;
   workflowId?: number | null;
   executionId?: number | null;
   workflowJobId?: string | null;
+  workflowJobMeta?: RcloneWorkflowJobMeta | null;
+  resumePending?: boolean;
+  resumeToken?: string | null;
+  resumeConsumedToken?: string | null;
   bytes?: number;
   totalBytes?: number;
   speed?: number;
@@ -250,10 +266,29 @@ export interface RcloneTransferNodeConfig {
   allowLocalPaths?: boolean;
 }
 
+export interface RcloneWorkflowJobMeta {
+  workflowJobId: string;
+  workflowId?: number | null;
+  executionId: number | string;
+  nodeId: number | string;
+  nodeKey: string;
+  upstreamId?: number | string | null;
+  failOnError: boolean;
+  connectionId: number;
+  operation: RcloneTransferOperation;
+  srcFs: string;
+  srcRemote: string;
+  dstFs: string;
+  dstRemote: string;
+}
+
 export interface RcloneTransferJobState {
   taskId: number;
   connectionId: number;
   rcloneJobId: number;
+  rcloneExecuteId?: string | null;
+  rcloneGroup?: string | null;
+  resumeToken?: string | null;
   operation: RcloneTransferOperation;
   srcFs: string;
   srcRemote: string;

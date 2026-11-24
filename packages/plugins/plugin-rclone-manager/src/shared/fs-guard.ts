@@ -163,9 +163,7 @@ export function extractWrapperTargets(params: Readonly<Record<string, unknown>>)
  * and reject `..` traversal segments when operating inside a bounded remote path.
  */
 export function normalizeRemoteSubPath(subPath: string | null | undefined): string {
-  const raw = String(subPath ?? '')
-    .trim()
-    .replace(/\\/g, '/');
+  const raw = String(subPath ?? '').replace(/\\/g, '/');
   if (!raw || raw === '/') {
     return '';
   }

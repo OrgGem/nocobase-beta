@@ -3,7 +3,7 @@
 import type { Context } from '@nocobase/actions';
 import { RCLONE_SNIPPETS, RESOURCE_NAME } from '../shared/constants';
 import { isConnectionStringOverride, isLocalFsTarget } from '../shared/fs-guard';
-import type { RcloneUserPermissions } from '../shared/types';
+import type { RcloneFsLocality, RcloneUserPermissions } from '../shared/types';
 
 export const RCLONE_ACTIONS = {
   read: [
@@ -15,13 +15,13 @@ export const RCLONE_ACTIONS = {
     `${RESOURCE_NAME}:listProviders`,
     `${RESOURCE_NAME}:listFiles`,
     `${RESOURCE_NAME}:listJobs`,
-    `${RESOURCE_NAME}:signDownload`,
   ],
   transfer: [
     `${RESOURCE_NAME}:mkdir`,
     `${RESOURCE_NAME}:deleteItem`,
     `${RESOURCE_NAME}:renameItem`,
     `${RESOURCE_NAME}:uploadFile`,
+    `${RESOURCE_NAME}:signDownload`,
     `${RESOURCE_NAME}:triggerTransferWorkflow`,
     `${RESOURCE_NAME}:stopJob`,
   ],
@@ -170,7 +170,10 @@ export function assertLocalFsPermitted(
 
 export async function assertFsTargetsPermitted(
   ctx: Context,
-  client: { isFsLocal: (fs: string) => Promise<boolean> },
+  client: {
+    classifyFsLocality?: (fs: string) => Promise<RcloneFsLocality>;
+    isFsLocal: (fs: string) => Promise<boolean>;
+  },
   fsList: readonly string[],
 ): Promise<void> {
   const perms = resolveContextPermissions(ctx as unknown as PermissionCheckContext);
@@ -186,6 +189,16 @@ export async function assertFsTargetsPermitted(
     return;
   }
   for (const fs of fsList) {
+    if (typeof client.classifyFsLocality === 'function') {
+      const locality = await client.classifyFsLocality(fs);
+      if (locality === 'local') {
+        ctx.throw(403, 'High-privilege permission "local-fs" is required to access host local disks');
+      }
+      if (locality === 'unknown') {
+        ctx.throw(403, `Unable to classify remote "${fs}"; operation denied until remote type can be verified`);
+      }
+      continue;
+    }
     if (await client.isFsLocal(fs)) {
       ctx.throw(403, 'High-privilege permission "local-fs" is required to access host local disks');
     }

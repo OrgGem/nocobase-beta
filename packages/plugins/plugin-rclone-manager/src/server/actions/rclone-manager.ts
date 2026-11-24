@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { Transform } from 'node:stream';
 import type { Context, Next } from '@nocobase/actions';
 import type { Model } from '@nocobase/database';
 import type WorkflowPlugin from '@nocobase/plugin-workflow';
@@ -20,6 +21,7 @@ import {
 import type PluginRcloneManagerServer from '../plugin';
 import { assertValidRcBaseUrl, RcloneRcClient, RcloneRcError } from '../services/rclone-rc-client';
 import { maskRemoteConfig, mergeRemoteConfigForUpdate } from '../utils/secret-redactor';
+import { isLockContentionError, runWithAppLock, type LockableAppLike } from '../utils/distributed-lock';
 import {
   buildContentDisposition,
   createSignedDownloadQuery,
@@ -46,6 +48,39 @@ function getParamRecord(ctx: Context): Record<string, unknown> {
     values = { ...values, ...(values.values as Record<string, unknown>) };
   }
   return { ...params, ...values };
+}
+
+function extractDaemonJobError(output: unknown, directError?: string): string {
+  if (directError && directError.trim()) {
+    return directError.trim();
+  }
+  if (!output || typeof output !== 'object' || !('results' in output)) {
+    return '';
+  }
+  const results = (output as { results?: unknown }).results;
+  if (!Array.isArray(results)) {
+    return '';
+  }
+  const messages: string[] = [];
+  for (const item of results) {
+    if (item && typeof item === 'object' && 'error' in item) {
+      const msg = String((item as { error?: unknown }).error ?? '').trim();
+      if (msg) {
+        messages.push(msg);
+      }
+    }
+  }
+  return messages.join('\n');
+}
+
+function isCancellationJobError(errorText: string): boolean {
+  const normalized = errorText.trim();
+  if (!normalized) {
+    return true;
+  }
+  return /context cancel(?:ed|led)|job.*(?:stopped|cancel(?:ed|led))|stopped by user|operation cancel(?:ed|led)|interrupted/i.test(
+    normalized,
+  );
 }
 
 function rethrowRcError(ctx: Context, error: unknown): never {
@@ -284,13 +319,15 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
           plugin.db.getRepository(COLLECTIONS.tasks).count({
             filter: {
               connectionId: Number(model.get('id')),
-              status: ['queued', 'running'],
+              status: ['queued', 'starting', 'running'],
               ...(!perms.canLocalFs ? { localAuthorized: { $isFalsy: true } } : {}),
             },
           }),
         ]);
 
-        const remotes: RcloneRemoteSummary[] = allRemotes.filter((item) => perms.canLocalFs || !item.isLocal);
+        const remotes: RcloneRemoteSummary[] = allRemotes.filter(
+          (item) => perms.canLocalFs || (!item.isLocal && item.locality !== 'unknown'),
+        );
 
         await model.update({
           lastCheckAt: new Date(),
@@ -349,7 +386,7 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
       try {
         const { client } = await connectionManager.getClient(String(input.connectionId ?? ''));
         const allRemotes = await client.inspectRemotes();
-        ctx.body = allRemotes.filter((item) => perms.canLocalFs || !item.isLocal);
+        ctx.body = allRemotes.filter((item) => perms.canLocalFs || (!item.isLocal && item.locality !== 'unknown'));
       } catch (error) {
         rethrowRcError(ctx, error);
       }
@@ -404,7 +441,28 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
         if (wrapperTargets.length > 0) {
           await assertFsTargetsPermitted(ctx, client, wrapperTargets);
         }
-        await client.createRemote(name, type, parameters, { nonInteractive: true });
+        // Lock by remote name across the application so two connections referencing the same rclone daemon via
+        // different URLs (e.g. localhost vs 127.0.0.1 or DNS alias) still serialize check-then-create cleanly.
+        const createLockKey = `rclone-manager:create-remote:${name.toLowerCase()}`;
+        try {
+          await runWithAppLock(
+            plugin.app as unknown as LockableAppLike,
+            createLockKey,
+            async () => {
+              const existingRemotes = await client.listRemoteNames();
+              if (existingRemotes.includes(name)) {
+                ctx.throw(409, `Remote "${name}" already exists`);
+              }
+              await client.createRemote(name, type, parameters, { nonInteractive: true });
+            },
+            { timeoutMs: 15_000, ttlMs: 35_000 },
+          );
+        } catch (lockErr) {
+          if (isLockContentionError(lockErr)) {
+            ctx.throw(409, `Another request is already creating remote "${name}"`);
+          }
+          throw lockErr;
+        }
         ctx.body = { created: true, name, type };
       } catch (error) {
         rethrowRcError(ctx, error);
@@ -561,7 +619,7 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
         const { client } = await connectionManager.getClient(String(input.connectionId ?? ''));
         await assertFsTargetsPermitted(ctx, client, [fs]);
 
-        const existingDest = await client.statItem(fs, dstRemote).catch(() => null);
+        const existingDest = await client.statItem(fs, dstRemote);
         if (existingDest) {
           ctx.throw(409, `Destination "${dstRemote}" already exists`);
         }
@@ -592,14 +650,38 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
       }
 
       const maxBytes = getMaxUploadBytes();
-      const declaredLength = Number(ctx.request.headers['content-length'] ?? 0);
-      if (declaredLength > maxBytes) {
-        ctx.throw(413, `Upload exceeds maximum size of ${Math.floor(maxBytes / (1024 * 1024))} MB`);
+      const formatMaxLabel = () =>
+        maxBytes >= 1024 * 1024 ? `${Math.round((maxBytes / (1024 * 1024)) * 100) / 100} MB` : `${maxBytes} bytes`;
+      const rawContentLength = ctx.request.headers['content-length'];
+      const declaredLength = rawContentLength !== undefined ? Number(rawContentLength) : Number.NaN;
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        ctx.throw(413, `Upload exceeds maximum size of ${formatMaxLabel()}`);
       }
 
       const abortController = new AbortController();
       const onAborted = () => abortController.abort();
       ctx.req.once('aborted', onAborted);
+
+      let bytesRead = 0;
+      const limitedStream = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          bytesRead += chunk.length;
+          if (bytesRead > maxBytes) {
+            const limitErr = new RcloneRcError(`Upload exceeds maximum size of ${formatMaxLabel()}`, 413);
+            abortController.abort(limitErr);
+            callback(limitErr);
+            return;
+          }
+          callback(null, chunk);
+        },
+      });
+      limitedStream.on('error', () => {});
+      const onReqError = (err: Error) => {
+        if (!limitedStream.destroyed) {
+          limitedStream.destroy(err);
+        }
+      };
+      ctx.req.once('error', onReqError);
 
       try {
         const remote = normalizeRemoteSubPath(rawRemote);
@@ -612,19 +694,32 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
           );
         }
 
+        ctx.req.pipe(limitedStream);
         await client.uploadMultipartStream(
           fs,
           remote,
-          ctx.req,
+          limitedStream,
           contentType,
-          declaredLength > 0 ? String(declaredLength) : undefined,
+          Number.isFinite(declaredLength) && declaredLength > 0 ? String(declaredLength) : undefined,
           abortController.signal,
         );
         ctx.body = { ok: true };
       } catch (error) {
+        ctx.req.unpipe(limitedStream);
+        if (abortController.signal.aborted && abortController.signal.reason instanceof RcloneRcError) {
+          if (abortController.signal.reason.status === 413) {
+            ctx.set?.('Connection', 'close');
+          }
+          rethrowRcError(ctx, abortController.signal.reason);
+        }
         rethrowRcError(ctx, error);
       } finally {
+        ctx.req.unpipe(limitedStream);
         ctx.req.off('aborted', onAborted);
+        ctx.req.off('error', onReqError);
+        if (!limitedStream.destroyed) {
+          limitedStream.destroy();
+        }
       }
       await next();
     },
@@ -863,22 +958,233 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
       const perms = resolveContextPermissions(ctx as unknown as PermissionCheckContext);
       try {
         const taskRepo = plugin.db.getRepository(COLLECTIONS.tasks);
-        const task = await taskRepo.findOne({ filterByTk: taskId });
+        let task = await taskRepo.findOne({ filterByTk: taskId });
         if (!task) {
           ctx.throw(404, `Transfer task #${taskId} not found`);
         }
         if (Boolean(task.get('localAuthorized')) && !perms.canLocalFs) {
           ctx.throw(403, 'High-privilege permission "local-fs" is required to stop host local disk transfer jobs');
         }
-        const connectionId = Number(task.get('connectionId'));
-        const rcloneJobId = Number(task.get('rcloneJobId'));
 
-        if (Number.isFinite(rcloneJobId) && rcloneJobId > 0) {
-          const { client } = await connectionManager.getClient(connectionId, false);
-          await client.stopJob(rcloneJobId).catch(() => {});
+        const currentStatus = String(task.get('status') ?? '');
+        if (currentStatus === 'stopped') {
+          ctx.body = { stopped: true, status: 'stopped', taskId };
+          await next();
+          return;
+        }
+        if (currentStatus === 'completed' || currentStatus === 'failed') {
+          ctx.throw(409, `Transfer task #${taskId} is already ${currentStatus}`);
+        }
+        if (currentStatus === 'unverified') {
+          ctx.throw(409, `Transfer task #${taskId} has unverified job identity and cannot be stopped safely`);
+        }
+        if (currentStatus === 'starting') {
+          ctx.throw(409, `Transfer task #${taskId} is currently starting on daemon; retry stopping in a moment`);
+        }
+
+        const connectionId = Number(task.get('connectionId'));
+        let rcloneJobId = Number(task.get('rcloneJobId'));
+        let rcloneExecuteId = String(task.get('rcloneExecuteId') ?? '').trim() || undefined;
+        let rcloneGroup = String(task.get('rcloneGroup') ?? '').trim() || undefined;
+
+        const taskCollection = plugin.db?.getCollection?.(COLLECTIONS.tasks);
+        const taskModelUpdate = (taskCollection?.model as { update?: typeof Model.update } | undefined)?.update;
+        if (!(Number.isFinite(rcloneJobId) && rcloneJobId > 0)) {
+          if (currentStatus !== 'queued') {
+            plugin.reconciler.kick(0);
+            ctx.throw(409, `Transfer task #${taskId} has no verified daemon job ID yet; cannot confirm stop`);
+          }
+          if (typeof taskModelUpdate === 'function') {
+            const [stoppedQueued] = await taskModelUpdate.call(
+              taskCollection.model,
+              {
+                status: 'stopped',
+                eta: null,
+                errorText: 'Stopped by user',
+                completedAt: new Date(),
+              },
+              { where: { id: taskId, status: 'queued' } },
+            );
+            if (stoppedQueued > 0) {
+              ctx.body = { stopped: true, status: 'stopped', taskId };
+              await next();
+              return;
+            }
+            task = await taskRepo.findOne({ filterByTk: taskId });
+            if (!task) {
+              ctx.throw(404, `Transfer task #${taskId} not found`);
+            }
+            const racedStatus = String(task.get('status') ?? '');
+            if (racedStatus === 'stopped') {
+              ctx.body = { stopped: true, status: 'stopped', taskId };
+              await next();
+              return;
+            }
+            if (racedStatus === 'completed' || racedStatus === 'failed') {
+              ctx.throw(409, `Transfer task #${taskId} is already ${racedStatus}`);
+            }
+            if (racedStatus === 'unverified') {
+              ctx.throw(409, `Transfer task #${taskId} has unverified job identity and cannot be stopped safely`);
+            }
+            rcloneJobId = Number(task.get('rcloneJobId'));
+            rcloneExecuteId = String(task.get('rcloneExecuteId') ?? '').trim() || undefined;
+            rcloneGroup = String(task.get('rcloneGroup') ?? '').trim() || undefined;
+            if (!(Number.isFinite(rcloneJobId) && rcloneJobId > 0)) {
+              ctx.throw(409, `Transfer task #${taskId} is currently starting on daemon; retry stopping in a moment`);
+            }
+          }
         }
 
         const workflowPlugin = plugin.app.pm.get('workflow') as WorkflowPlugin | undefined;
+
+        if (Number.isFinite(rcloneJobId) && rcloneJobId > 0) {
+          if (!rcloneGroup && !rcloneExecuteId) {
+            ctx.throw(
+              409,
+              `Transfer task #${taskId} has unverified job identity (missing executeId and group) and cannot be stopped safely`,
+            );
+          }
+
+          const { client } = await connectionManager.getClient(connectionId, false);
+          const hasGetJobStatus = typeof (client as { getJobStatus?: unknown }).getJobStatus === 'function';
+
+          let finalJobStatus: Awaited<ReturnType<typeof client.getJobStatus>> | undefined;
+          let alreadyFinishedBeforeStop = false;
+
+          if (hasGetJobStatus) {
+            const preStopStatus = await client.getJobStatus(rcloneJobId, {
+              executeId: rcloneExecuteId,
+              group: rcloneGroup,
+            });
+            if (!preStopStatus || preStopStatus.finished) {
+              finalJobStatus = preStopStatus;
+              alreadyFinishedBeforeStop = true;
+            }
+          }
+
+          if (!alreadyFinishedBeforeStop) {
+            try {
+              await client.stopJob(rcloneJobId, { executeId: rcloneExecuteId, group: rcloneGroup });
+            } catch (stopError) {
+              if (stopError instanceof RcloneRcError && stopError.status === 409) {
+                plugin.reconciler.kick(0);
+              }
+              throw stopError;
+            }
+
+            try {
+              finalJobStatus = await client.getJobStatus(rcloneJobId, {
+                executeId: rcloneExecuteId,
+                group: rcloneGroup,
+              });
+              for (let attempt = 0; attempt < 5 && finalJobStatus && !finalJobStatus.finished; attempt++) {
+                await new Promise<void>((resolve) => setTimeout(resolve, 50));
+                finalJobStatus = await client.getJobStatus(rcloneJobId, {
+                  executeId: rcloneExecuteId,
+                  group: rcloneGroup,
+                });
+              }
+            } catch (verifyError) {
+              plugin.reconciler.kick(250);
+              throw verifyError;
+            }
+          }
+
+          if (!finalJobStatus) {
+            const resumed = await plugin.reconciler.finalizeTaskAndWorkflowJob(task, new Map(), workflowPlugin, {
+              status: 'unverified',
+              success: false,
+              errorText: 'Rclone job outcome could not be verified (job history expired on daemon or daemon restarted)',
+            });
+            if (!resumed) {
+              plugin.reconciler.kick(400);
+            }
+            ctx.body = { stopped: false, status: 'unverified', taskId };
+            await next();
+            return;
+          }
+
+          if (!finalJobStatus.finished) {
+            plugin.reconciler.kick(250);
+            ctx.throw(
+              409,
+              `Stop signal sent for transfer task #${taskId}, but daemon has not confirmed termination yet`,
+            );
+          }
+
+          const groupName = rcloneGroup || finalJobStatus.group || `job/${rcloneJobId}`;
+          const groupStats =
+            typeof (client as { getStats?: unknown }).getStats === 'function'
+              ? await client.getStats(groupName).catch(() => null)
+              : null;
+          let finalBytes = Number(groupStats?.bytes ?? task.get('bytes') ?? 0);
+          let finalTotalBytes = Number(groupStats?.totalBytes ?? task.get('totalBytes') ?? 0);
+
+          if (finalJobStatus.success) {
+            if (
+              finalBytes === 0 &&
+              finalTotalBytes === 0 &&
+              typeof (client as { getTransferred?: unknown }).getTransferred === 'function'
+            ) {
+              const transferredRes = await client.getTransferred(groupName).catch(() => null);
+              const items = transferredRes?.transferred ?? [];
+              if (items.length > 0) {
+                const summed = items.reduce((acc, item) => acc + Number(item.bytes ?? item.size ?? 0), 0);
+                finalBytes = summed;
+                finalTotalBytes = summed;
+              }
+            }
+            const resumed = await plugin.reconciler.finalizeTaskAndWorkflowJob(task, new Map(), workflowPlugin, {
+              status: 'completed',
+              success: true,
+              bytes: finalBytes,
+              totalBytes: finalTotalBytes,
+              duration: finalJobStatus.duration ?? 0,
+              errorText: '',
+            });
+            if (!resumed) {
+              plugin.reconciler.kick(400);
+            }
+            ctx.body = { stopped: false, status: 'completed', taskId };
+            await next();
+            return;
+          }
+
+          const daemonError = extractDaemonJobError(finalJobStatus.output, finalJobStatus.error);
+          if (alreadyFinishedBeforeStop || !isCancellationJobError(daemonError)) {
+            const preservedError = daemonError || 'Rclone transfer job failed';
+            const resumed = await plugin.reconciler.finalizeTaskAndWorkflowJob(task, new Map(), workflowPlugin, {
+              status: 'failed',
+              success: false,
+              bytes: finalBytes,
+              totalBytes: finalTotalBytes,
+              duration: finalJobStatus.duration ?? 0,
+              errorText: preservedError,
+            });
+            if (!resumed) {
+              plugin.reconciler.kick(400);
+            }
+            ctx.body = { stopped: false, status: 'failed', taskId };
+            await next();
+            return;
+          }
+
+          const resumed = await plugin.reconciler.finalizeTaskAndWorkflowJob(task, new Map(), workflowPlugin, {
+            status: 'stopped',
+            success: false,
+            bytes: finalBytes,
+            totalBytes: finalTotalBytes,
+            duration: finalJobStatus.duration ?? 0,
+            errorText: 'Stopped by user',
+          });
+          if (!resumed) {
+            plugin.reconciler.kick(400);
+          }
+          ctx.body = { stopped: true, status: 'stopped', taskId };
+          await next();
+          return;
+        }
+
         const resumed = await plugin.reconciler.finalizeTaskAndWorkflowJob(task, new Map(), workflowPlugin, {
           status: 'stopped',
           success: false,
@@ -887,7 +1193,7 @@ export function createRcloneManagerActions(plugin: PluginRcloneManagerServer) {
         if (!resumed) {
           plugin.reconciler.kick(400);
         }
-        ctx.body = { stopped: true, taskId };
+        ctx.body = { stopped: true, status: 'stopped', taskId };
       } catch (error) {
         rethrowRcError(ctx, error);
       }

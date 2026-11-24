@@ -94,7 +94,7 @@ export const RcloneTransfers: React.FC = () => {
   }, [loadJobs]);
 
   const hasRunning = useMemo(
-    () => tasks.some((item) => item.status === 'queued' || item.status === 'running'),
+    () => tasks.some((item) => item.status === 'queued' || item.status === 'starting' || item.status === 'running'),
     [tasks],
   );
 
@@ -112,11 +112,22 @@ export const RcloneTransfers: React.FC = () => {
 
   const handleStop = async (taskId: number) => {
     try {
-      await api.stopJob(taskId);
-      message.success(t('Transfer job stopped'));
+      const res = await api.stopJob(taskId);
+      if (res.stopped) {
+        message.success(t('Transfer job stopped'));
+      } else if (res.status === 'completed') {
+        message.info(t('Transfer already completed'));
+      } else if (res.status === 'failed') {
+        message.warning(t('Transfer already failed'));
+      } else if (res.status === 'unverified') {
+        message.warning(t('Transfer outcome could not be verified'));
+      } else {
+        message.warning(t('Failed to stop transfer job'));
+      }
       await loadJobs(false);
     } catch (err) {
       message.error(getErrorMessage(err, t('Failed to stop transfer job')));
+      await loadJobs(true);
     }
   };
 
@@ -199,7 +210,7 @@ export const RcloneTransfers: React.FC = () => {
                 ? 'exception'
                 : row.status === 'completed'
                   ? 'success'
-                  : row.status === 'running'
+                  : row.status === 'running' || row.status === 'starting'
                     ? 'active'
                     : 'normal'
             }
@@ -225,7 +236,7 @@ export const RcloneTransfers: React.FC = () => {
             </Space>
           );
         }
-        if (row.status === 'queued') {
+        if (row.status === 'queued' || row.status === 'starting') {
           return <Typography.Text type="secondary">{t('Waiting for worker...')}</Typography.Text>;
         }
         const elapsedSec = getElapsedSeconds(row.startedAt, row.completedAt);
@@ -249,11 +260,13 @@ export const RcloneTransfers: React.FC = () => {
         const color =
           status === 'completed'
             ? 'success'
-            : status === 'running' || status === 'queued'
+            : status === 'running' || status === 'starting' || status === 'queued'
               ? 'processing'
-              : status === 'failed'
-                ? 'error'
-                : 'default';
+              : status === 'unverified'
+                ? 'warning'
+                : status === 'failed'
+                  ? 'error'
+                  : 'default';
         return (
           <Space size={4}>
             <Tag color={color}>{t(status)}</Tag>
@@ -282,25 +295,30 @@ export const RcloneTransfers: React.FC = () => {
           >
             {t('Details')}
           </Button>
-          {permissions.canTransfer && (row.status === 'running' || row.status === 'queued') && (
-            <Popconfirm title={t('Stop this running transfer?')} onConfirm={() => handleStop(row.id)}>
-              <Button size="small" danger icon={<StopOutlined />}>
-                {t('Stop')}
-              </Button>
-            </Popconfirm>
-          )}
-          {permissions.canTransfer && row.status !== 'running' && row.status !== 'queued' && (
-            <Popconfirm title={t('Re-run this transfer workflow?')} onConfirm={() => handleRerun(row)}>
-              <Button
-                size="small"
-                icon={<RedoOutlined />}
-                loading={rerunningId === row.id}
-                aria-label={`${t('Re-run')} #${row.id}`}
-              >
-                {t('Re-run')}
-              </Button>
-            </Popconfirm>
-          )}
+          {permissions.canTransfer &&
+            (row.status === 'running' || row.status === 'starting' || row.status === 'queued') && (
+              <Popconfirm title={t('Stop this running transfer?')} onConfirm={() => handleStop(row.id)}>
+                <Button size="small" danger icon={<StopOutlined />}>
+                  {t('Stop')}
+                </Button>
+              </Popconfirm>
+            )}
+          {permissions.canTransfer &&
+            row.status !== 'running' &&
+            row.status !== 'starting' &&
+            row.status !== 'queued' &&
+            row.status !== 'unverified' && (
+              <Popconfirm title={t('Re-run this transfer workflow?')} onConfirm={() => handleRerun(row)}>
+                <Button
+                  size="small"
+                  icon={<RedoOutlined />}
+                  loading={rerunningId === row.id}
+                  aria-label={`${t('Re-run')} #${row.id}`}
+                >
+                  {t('Re-run')}
+                </Button>
+              </Popconfirm>
+            )}
         </Space>
       ),
     },
@@ -351,9 +369,13 @@ export const RcloneTransfers: React.FC = () => {
                       ? 'success'
                       : detailTask.status === 'failed'
                         ? 'error'
-                        : detailTask.status === 'running' || detailTask.status === 'queued'
-                          ? 'processing'
-                          : 'default'
+                        : detailTask.status === 'unverified'
+                          ? 'warning'
+                          : detailTask.status === 'running' ||
+                              detailTask.status === 'starting' ||
+                              detailTask.status === 'queued'
+                            ? 'processing'
+                            : 'default'
                   }
                 >
                   {t(detailTask.status)}

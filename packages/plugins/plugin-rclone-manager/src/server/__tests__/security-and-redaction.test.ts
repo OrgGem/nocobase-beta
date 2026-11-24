@@ -54,9 +54,12 @@ describe('Filesystem guard & traversal protection', () => {
     expect(isConnectionStringOverride('C:/backups')).toBe(false);
   });
 
-  it('normalizes relative remote sub-paths and blocks .. traversal', () => {
+  it('normalizes relative remote sub-paths while preserving component whitespace and blocking .. traversal', () => {
     expect(normalizeRemoteSubPath('/reports\\2026/./q4/')).toBe('reports/2026/q4');
     expect(normalizeRemoteSubPath('/')).toBe('');
+    expect(normalizeRemoteSubPath('report.txt ')).toBe('report.txt ');
+    expect(normalizeRemoteSubPath(' report.txt')).toBe(' report.txt');
+    expect(normalizeRemoteSubPath('/folder /report.txt ')).toBe('folder /report.txt ');
     expect(() => normalizeRemoteSubPath('reports/../../etc/shadow')).toThrow(/traversal/i);
   });
 
@@ -186,10 +189,15 @@ describe('Secret masking, signed URLs, and resource guard middleware', () => {
       expires: Date.now() + 60_000,
     };
 
-    const sig = signStreamPayload(validPayload);
-    expect(verifyStreamSignature(validPayload, sig)).toBe(true);
-    expect(verifyStreamSignature({ ...validPayload, fs: 's3-prod:other' }, sig)).toBe(false);
-    expect(verifyStreamSignature({ ...validPayload, expires: Date.now() - 1000 }, sig)).toBe(false);
+    const sig = signStreamPayload(validPayload, { appName: 'app-alpha' });
+    expect(verifyStreamSignature(validPayload, sig, { appName: 'app-alpha' })).toBe(true);
+    // Shared signing key must NOT validate across different NocoBase applications
+    expect(verifyStreamSignature(validPayload, sig, { appName: 'app-beta' })).toBe(false);
+    expect(verifyStreamSignature(validPayload, sig)).toBe(false);
+    expect(verifyStreamSignature({ ...validPayload, fs: 's3-prod:other' }, sig, { appName: 'app-alpha' })).toBe(false);
+    expect(verifyStreamSignature({ ...validPayload, expires: Date.now() - 1000 }, sig, { appName: 'app-alpha' })).toBe(
+      false,
+    );
 
     const disposition = buildContentDisposition('Báo cáo quý 4.pdf', 'attachment');
     expect(disposition).toContain('attachment; filename="B_o c_o qu_ 4.pdf"');
@@ -334,12 +342,25 @@ describe('Secret masking, signed URLs, and resource guard middleware', () => {
       get: (k: string) => (savedConn as Record<string, unknown>)[k],
       update: vi.fn(async () => {}),
     };
+    let job15Stopped = false;
     const fakeRcClient = {
       isFsLocal: vi.fn(async (fsPath: string) => fsPath.startsWith('workspace:') || fsPath.startsWith('/')),
+      listRemoteNames: vi.fn(async () => ['existing-s3']),
       createRemote: vi.fn(async () => ({})),
       getRemoteRaw: vi.fn(async () => ({ type: 'combine', upstreams: 's3=minio:bucket' })),
       listProviders: vi.fn(async () => []),
       updateRemote: vi.fn(async () => ({})),
+      stopJob: vi.fn(async () => {
+        job15Stopped = true;
+      }),
+      getJobStatus: vi.fn(async () => ({
+        id: 15,
+        finished: job15Stopped,
+        success: false,
+        error: job15Stopped ? 'context canceled' : '',
+        group: 'nb-task-55-g',
+        duration: 0.2,
+      })),
     };
     const mockApp = {
       db: {
@@ -461,7 +482,8 @@ describe('Secret masking, signed URLs, and resource guard middleware', () => {
       db: {
         getRepository: vi.fn(() => ({
           findOne: vi.fn(async () => ({
-            get: (k: string) => ({ id: 55, connectionId: 1, rcloneJobId: null })[k],
+            get: (k: string) =>
+              ({ id: 55, connectionId: 1, status: 'running', rcloneJobId: 15, rcloneGroup: 'nb-task-55-g' })[k],
           })),
         })),
       },
@@ -822,5 +844,421 @@ describe('Secret masking, signed URLs, and resource guard middleware', () => {
     await expect(
       actions.setRuntimeOptions(makeOpCtx({ connectionId: 1, logFile: '/etc/cron.d/pwn' }, false), async () => {}),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('enforces transfer ACL for signDownload, preserves trailing-space deleteItem names, rejects duplicate createRemote, aborts renameItem on stat errors, fails stopJob on daemon errors, and caps chunked uploads', async () => {
+    expect(RCLONE_ACTIONS.read).not.toContain(`${RESOURCE_NAME}:signDownload`);
+    expect(RCLONE_ACTIONS.transfer).toContain(`${RESOURCE_NAME}:signDownload`);
+
+    const deleteFileSpy = vi.fn(async () => {});
+    const moveFileSpy = vi.fn(async () => {});
+    const createRemoteSpy = vi.fn(async () => ({}));
+    const stopJobSpy = vi.fn(async () => {
+      throw new Error('daemon unreachable');
+    });
+    const finalizeSpy = vi.fn(async () => true);
+
+    let statShouldTimeout = true;
+    const statItemSpy = vi.fn(async () => {
+      if (statShouldTimeout) {
+        throw Object.assign(new Error('Failed to reach rclone rcd (/operations/stat): timeout'), { status: 502 });
+      }
+      return null;
+    });
+
+    let capturedUploadBytes = 0;
+    let capturedAbortSignal: AbortSignal | undefined;
+    const uploadMultipartStreamSpy = vi.fn(
+      async (
+        _fs: string,
+        _remote: string,
+        stream: NodeJS.ReadableStream,
+        _contentType: string,
+        _contentLength?: string,
+        signal?: AbortSignal,
+      ) => {
+        capturedAbortSignal = signal;
+        for await (const chunk of stream) {
+          capturedUploadBytes += Buffer.isBuffer(chunk) ? chunk.length : Buffer.from(chunk as string).length;
+        }
+      },
+    );
+
+    const fakeClient = {
+      classifyFsLocality: vi.fn(async (fsPath: string) => (fsPath === 'mystery:' ? 'unknown' : 'remote')),
+      isFsLocal: vi.fn(async () => false),
+      isUnrootedBucketFs: vi.fn(async () => false),
+      listRemoteNames: vi.fn(async () => ['prod-s3']),
+      createRemote: createRemoteSpy,
+      deleteFile: deleteFileSpy,
+      statItem: statItemSpy,
+      moveFileSync: moveFileSpy,
+      stopJob: stopJobSpy,
+      uploadMultipartStream: uploadMultipartStreamSpy,
+    };
+
+    const runningTaskState: Record<string, unknown> = {
+      id: 77,
+      connectionId: 1,
+      status: 'running',
+      rcloneJobId: 9,
+      rcloneExecuteId: 'exec-abc',
+      localAuthorized: false,
+    };
+
+    const actions = createRcloneManagerActions({
+      app: { name: 'sub-app-1', pm: { get: vi.fn() } },
+      db: {
+        getRepository: vi.fn(() => ({
+          findOne: vi.fn(async () => ({ get: (k: string) => runningTaskState[k] })),
+        })),
+      },
+      connectionManager: { getClient: vi.fn(async () => ({ model: {}, client: fakeClient })) },
+      reconciler: { finalizeTaskAndWorkflowJob: finalizeSpy, kick: vi.fn() },
+    } as unknown as PluginRcloneManagerServer);
+
+    const makeCtx = (values: Record<string, unknown>) =>
+      ({
+        state: { currentRoles: ['operator'] },
+        can: ({ resource, action }: { resource: string; action: string }) =>
+          resource === RESOURCE_NAME && action !== 'listDisks' && action !== 'saveRawConfig',
+        action: { params: { values } },
+        body: undefined,
+        throw: (status: number, msg: string) => {
+          throw Object.assign(new Error(msg), { status });
+        },
+      }) as unknown as Context;
+
+    // 1. deleteItem preserves trailing spaces on filenames ("report.txt " !== "report.txt")
+    await actions.deleteItem(
+      makeCtx({ connectionId: 1, fs: 'prod-s3:bucket', remote: 'report.txt ', isDir: false }),
+      async () => {},
+    );
+    expect(deleteFileSpy).toHaveBeenCalledWith('prod-s3:bucket', 'report.txt ');
+
+    // 2. createRemote returns 409 when daemon already has a remote of the same name
+    await expect(
+      actions.createRemote(
+        makeCtx({ connectionId: 1, name: 'prod-s3', type: 's3', parameters: { provider: 'Minio' } }),
+        async () => {},
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(createRemoteSpy).not.toHaveBeenCalled();
+
+    // 3. renameItem aborts before moveFileSync when statItem times out or errors
+    await expect(
+      actions.renameItem(
+        makeCtx({ connectionId: 1, fs: 'prod-s3:bucket', srcRemote: 'a.txt', dstRemote: 'b.txt', isDir: false }),
+        async () => {},
+      ),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(moveFileSpy).not.toHaveBeenCalled();
+
+    statShouldTimeout = false;
+    await actions.renameItem(
+      makeCtx({ connectionId: 1, fs: 'prod-s3:bucket', srcRemote: 'a.txt', dstRemote: 'b.txt', isDir: false }),
+      async () => {},
+    );
+    expect(moveFileSpy).toHaveBeenCalledWith('prod-s3:bucket', 'a.txt', 'prod-s3:bucket', 'b.txt');
+
+    // 4. Indeterminate ('unknown') remote locality denies access (403) until metadata can classify it
+    await expect(
+      actions.listFiles(makeCtx({ connectionId: 1, fs: 'mystery:', remote: '' }), async () => {}),
+    ).rejects.toMatchObject({ status: 403 });
+
+    // 5. stopJob propagates daemon failure and keeps task in running state instead of reporting stopped=true
+    await expect(actions.stopJob(makeCtx({ taskId: 77 }), async () => {})).rejects.toThrow(/daemon unreachable/);
+    expect(finalizeSpy).not.toHaveBeenCalled();
+    expect(runningTaskState.status).toBe('running');
+
+    // 6. downloadStream rejects signatures issued by a different NocoBase app even with shared key
+    const prevSecret = process.env.RCLONE_STREAM_URL_SECRET;
+    process.env.RCLONE_STREAM_URL_SECRET = 'shared-multi-app-secret';
+    __resetSigningSecretForTest();
+    try {
+      const foreignPayload = {
+        connectionId: 1,
+        fs: 'prod-s3:bucket',
+        remote: 'secret.pdf',
+        isDir: false,
+        mode: 'attachment' as const,
+        expires: Date.now() + 60_000,
+      };
+      const foreignSig = signStreamPayload(foreignPayload, { appName: 'sub-app-2' });
+      const dlCtx = {
+        request: {
+          query: {
+            connectionId: '1',
+            fs: foreignPayload.fs,
+            remote: foreignPayload.remote,
+            isDir: '0',
+            mode: 'attachment',
+            expires: String(foreignPayload.expires),
+            sig: foreignSig,
+          },
+          headers: {},
+        },
+        throw: (status: number, msg: string) => {
+          throw Object.assign(new Error(msg), { status });
+        },
+      } as unknown as Context;
+      await expect(actions.downloadStream(dlCtx)).rejects.toMatchObject({ status: 403 });
+    } finally {
+      if (prevSecret !== undefined) process.env.RCLONE_STREAM_URL_SECRET = prevSecret;
+      else delete process.env.RCLONE_STREAM_URL_SECRET;
+      __resetSigningSecretForTest();
+    }
+
+    // 7. Chunked upload without Content-Length enforces RCLONE_MAX_UPLOAD_MB on actual bytes read and aborts upstream
+    const prevMaxMb = process.env.RCLONE_MAX_UPLOAD_MB;
+    process.env.RCLONE_MAX_UPLOAD_MB = '0.001'; // ~1048 bytes
+    try {
+      const chunkedReq = new PassThrough();
+      const uploadCtx = {
+        state: { currentRoles: ['operator'] },
+        can: () => true,
+        action: { params: {} },
+        request: {
+          query: { connectionId: '1', fs: 'prod-s3:bucket', remote: 'uploads' },
+          headers: { 'content-type': 'multipart/form-data; boundary=---test' },
+        },
+        req: chunkedReq,
+        set: vi.fn(),
+        throw: (status: number, msg: string) => {
+          throw Object.assign(new Error(msg), { status });
+        },
+      } as unknown as Context;
+
+      const uploadPromise = actions.uploadFile(uploadCtx, async () => {});
+      chunkedReq.write(Buffer.alloc(600, 0x61));
+      chunkedReq.write(Buffer.alloc(600, 0x62));
+      chunkedReq.write(Buffer.alloc(600, 0x63));
+      chunkedReq.end();
+
+      await expect(uploadPromise).rejects.toMatchObject({ status: 413 });
+      expect(capturedAbortSignal?.aborted).toBe(true);
+      expect(capturedUploadBytes).toBeLessThanOrEqual(1048);
+    } finally {
+      if (prevMaxMb !== undefined) process.env.RCLONE_MAX_UPLOAD_MB = prevMaxMb;
+      else delete process.env.RCLONE_MAX_UPLOAD_MB;
+    }
+  });
+
+  it('serializes concurrent createRemote calls, reconciles already-completed jobs on late stopJob, and blocks unverified legacy stopJob', async () => {
+    const existingRemotes = new Set<string>(['prod-s3']);
+    const createRemoteSpy = vi.fn(async (name: string) => {
+      existingRemotes.add(name);
+      return {};
+    });
+    const listRemoteNamesSpy = vi.fn(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 15));
+      return [...existingRemotes];
+    });
+
+    const taskRows: Record<number, Record<string, unknown>> = {
+      90: {
+        id: 90,
+        connectionId: 1,
+        status: 'running',
+        rcloneJobId: 45,
+        rcloneExecuteId: 'exec-1',
+        rcloneGroup: 'nb-task-90-g1',
+        localAuthorized: false,
+      },
+      91: {
+        id: 91,
+        connectionId: 1,
+        status: 'running',
+        rcloneJobId: 46,
+        rcloneExecuteId: 'exec-1',
+        rcloneGroup: 'nb-task-91-g2',
+        localAuthorized: false,
+      },
+      92: {
+        id: 92,
+        connectionId: 1,
+        status: 'running',
+        rcloneJobId: 47,
+        rcloneExecuteId: 'exec-1',
+        rcloneGroup: 'nb-task-92-g3',
+        localAuthorized: false,
+      },
+      93: {
+        id: 93,
+        connectionId: 1,
+        status: 'running',
+        rcloneJobId: 48,
+        rcloneExecuteId: null,
+        rcloneGroup: null,
+        localAuthorized: false,
+      },
+      94: {
+        id: 94,
+        connectionId: 1,
+        status: 'running',
+        rcloneJobId: 49,
+        rcloneExecuteId: 'exec-1',
+        rcloneGroup: 'nb-task-94-g4',
+        localAuthorized: false,
+      },
+    };
+
+    let job47Stopped = false;
+    const stopJobSpy = vi.fn(async (jobid: number) => {
+      if (jobid === 47) {
+        job47Stopped = true;
+      }
+    });
+    const getJobStatusSpy = vi.fn(async (jobid: number) => {
+      if (jobid === 45) {
+        return {
+          id: 45,
+          finished: true,
+          success: true,
+          duration: 1.8,
+          group: 'nb-task-90-g1',
+          executeId: 'exec-1',
+        };
+      }
+      if (jobid === 46) {
+        return {
+          id: 46,
+          finished: false,
+          success: false,
+          duration: 0.4,
+          group: 'nb-task-91-g2',
+          executeId: 'exec-1',
+        };
+      }
+      if (jobid === 49) {
+        return {
+          id: 49,
+          finished: true,
+          success: false,
+          error: 'directory not found',
+          duration: 0.3,
+          group: 'nb-task-94-g4',
+          executeId: 'exec-1',
+        };
+      }
+      return {
+        id: 47,
+        finished: job47Stopped,
+        success: false,
+        error: job47Stopped ? 'context canceled' : '',
+        duration: 0.6,
+        group: 'nb-task-92-g3',
+        executeId: 'exec-1',
+      };
+    });
+    const getStatsSpy = vi.fn(async (group?: string) =>
+      group === 'nb-task-90-g1' ? { bytes: 4096, totalBytes: 4096 } : { bytes: 512, totalBytes: 1024 },
+    );
+    const finalizeSpy = vi.fn(async () => true);
+    const kickSpy = vi.fn();
+
+    const makeFakeClient = (baseUrl: string) => ({
+      baseUrl,
+      classifyFsLocality: vi.fn(async () => 'remote' as const),
+      isFsLocal: vi.fn(async () => false),
+      listRemoteNames: listRemoteNamesSpy,
+      createRemote: createRemoteSpy,
+      stopJob: stopJobSpy,
+      getJobStatus: getJobStatusSpy,
+      getStats: getStatsSpy,
+    });
+    const fakeClientLoopbackIp = makeFakeClient('http://127.0.0.1:5572');
+    const fakeClientLocalhost = makeFakeClient('http://localhost:5572');
+
+    const actions = createRcloneManagerActions({
+      app: { name: 'main', pm: { get: vi.fn() } },
+      db: {
+        getRepository: vi.fn(() => ({
+          findOne: vi.fn(async ({ filterByTk }: { filterByTk: number }) =>
+            taskRows[filterByTk] ? { get: (k: string) => taskRows[filterByTk][k] } : null,
+          ),
+        })),
+      },
+      connectionManager: {
+        getClient: vi.fn(async (connId: string | number) => ({
+          model: {},
+          client: String(connId) === '2' ? fakeClientLocalhost : fakeClientLoopbackIp,
+        })),
+      },
+      reconciler: { finalizeTaskAndWorkflowJob: finalizeSpy, kick: kickSpy },
+    } as unknown as PluginRcloneManagerServer);
+
+    const makeCtx = (values: Record<string, unknown>) =>
+      ({
+        state: { currentRoles: ['operator'] },
+        can: ({ resource, action }: { resource: string; action: string }) =>
+          resource === RESOURCE_NAME && action !== 'listDisks' && action !== 'saveRawConfig',
+        action: { params: { values } },
+        body: undefined,
+        throw: (status: number, msg: string) => {
+          throw Object.assign(new Error(msg), { status });
+        },
+      }) as unknown as Context;
+
+    // 1. Concurrent createRemote requests with the same remote name serialize even across localhost vs 127.0.0.1 URLs
+    const ctxCreateA = makeCtx({ connectionId: 1, name: 'race-s3', type: 's3', parameters: { provider: 'Minio' } });
+    const ctxCreateB = makeCtx({ connectionId: 2, name: 'race-s3', type: 's3', parameters: { provider: 'AWS' } });
+    const [resA, resB] = await Promise.allSettled([
+      actions.createRemote(ctxCreateA, async () => {}),
+      actions.createRemote(ctxCreateB, async () => {}),
+    ]);
+    expect(createRemoteSpy).toHaveBeenCalledTimes(1);
+    const fulfilled = [resA, resB].filter((r) => r.status === 'fulfilled');
+    const rejected = [resA, resB].filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0]?.reason as { status?: number }).status).toBe(409);
+
+    // 2. Late stopJob on a job that already finished with success=true records completed (not stopped/failed)
+    const ctxCompleted = makeCtx({ taskId: 90 });
+    await actions.stopJob(ctxCompleted, async () => {});
+    expect(ctxCompleted.body).toEqual({ stopped: false, status: 'completed', taskId: 90 });
+    expect(finalizeSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Map),
+      undefined,
+      expect.objectContaining({ status: 'completed', success: true, bytes: 4096, totalBytes: 4096 }),
+    );
+
+    // 3. stopJob when daemon has not yet confirmed finished=true rejects 409 without prematurely finalizing
+    finalizeSpy.mockClear();
+    await expect(actions.stopJob(makeCtx({ taskId: 91 }), async () => {})).rejects.toMatchObject({ status: 409 });
+    expect(finalizeSpy).not.toHaveBeenCalled();
+    expect(kickSpy).toHaveBeenCalledWith(250);
+
+    // 4. stopJob when daemon confirms cancellation (finished=true, success=false, context canceled) records stopped=true
+    const ctxStopped = makeCtx({ taskId: 92 });
+    await actions.stopJob(ctxStopped, async () => {});
+    expect(ctxStopped.body).toEqual({ stopped: true, status: 'stopped', taskId: 92 });
+    expect(finalizeSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Map),
+      undefined,
+      expect.objectContaining({ status: 'stopped', success: false }),
+    );
+
+    // 5. Pre-upgrade running task missing both rcloneExecuteId and rcloneGroup refuses stopJob with 409
+    stopJobSpy.mockClear();
+    await expect(actions.stopJob(makeCtx({ taskId: 93 }), async () => {})).rejects.toMatchObject({ status: 409 });
+    expect(stopJobSpy).not.toHaveBeenCalled();
+
+    // 6. Late stopJob on a job that already failed ("directory not found") preserves status='failed' and root cause
+    finalizeSpy.mockClear();
+    stopJobSpy.mockClear();
+    const ctxAlreadyFailed = makeCtx({ taskId: 94 });
+    await actions.stopJob(ctxAlreadyFailed, async () => {});
+    expect(stopJobSpy).not.toHaveBeenCalled();
+    expect(ctxAlreadyFailed.body).toEqual({ stopped: false, status: 'failed', taskId: 94 });
+    expect(finalizeSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(Map),
+      undefined,
+      expect.objectContaining({ status: 'failed', success: false, errorText: 'directory not found' }),
+    );
   });
 });

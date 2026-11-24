@@ -240,7 +240,7 @@ export function createRcloneApi(ctx: FlowEngineContext) {
       }),
 
     stopJob: (taskId: number) =>
-      callAction<{ stopped: boolean }>(ctx, {
+      callAction<{ stopped: boolean; status?: string }>(ctx, {
         url: `${RESOURCE_NAME}:stopJob`,
         method: 'post',
         data: { values: { taskId } },

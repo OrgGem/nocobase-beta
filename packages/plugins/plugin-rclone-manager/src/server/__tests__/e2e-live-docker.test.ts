@@ -53,6 +53,7 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
     const dynamicRemoteName = `nb-e2e-s3-${Date.now().toString(36)}`;
     const mountPoint = `/tmp/nb-e2e-mnt-${Date.now().toString(36)}`;
     let originalRawConfig: { content: string; configDisabled: boolean } | null = null;
+    let initialBwLimit: { captured: boolean; value: string } = { captured: false, value: '' };
     const cleanupClient = new RcloneRcClient({
       baseUrl: LIVE_RCD_URL,
       authType: 'basic',
@@ -61,6 +62,13 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
     });
 
     beforeAll(async () => {
+      const initialOpts = await cleanupClient.getOptions().catch(() => null);
+      if (initialOpts?.main && Object.prototype.hasOwnProperty.call(initialOpts.main, 'BwLimit')) {
+        initialBwLimit = {
+          captured: true,
+          value: String(initialOpts.main.BwLimit ?? '').trim(),
+        };
+      }
       app = await createMockServer({
         name: 'main',
         acl: true,
@@ -115,7 +123,9 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
         await cleanupClient.purgeDir('/tmp', mountPoint.replace(/^\/tmp\//, '')).catch(() => {});
         await cleanupClient.purgeDir(`minio:${LIVE_BUCKET}`, runId).catch(() => {});
         await cleanupClient.deleteRemote(dynamicRemoteName).catch(() => {});
-        await cleanupClient.setOptions({ main: { BwLimit: 'off' } }).catch(() => {});
+        if (initialBwLimit.captured) {
+          await cleanupClient.setOptions({ main: { BwLimit: initialBwLimit.value || 'off' } }).catch(() => {});
+        }
         if (originalRawConfig && !originalRawConfig.configDisabled) {
           await cleanupClient.writeRawConfigFile(originalRawConfig.content).catch(() => {});
         }
@@ -269,6 +279,15 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
         },
       });
       expect(createRemoteRes.status).toBe(200);
+
+      // Creating a remote with an existing name on the daemon must return 409 without wiping the existing section
+      const duplicateRemoteRes = await postAction(operatorAgent, 'createRemote', {
+        connectionId,
+        name: dynamicRemoteName,
+        type: 's3',
+        parameters: { provider: 'AWS' },
+      });
+      expect(duplicateRemoteRes.status).toBe(409);
 
       const getCfgRes = await getAction(operatorAgent, 'getRemoteConfig', {
         connectionId,
@@ -447,6 +466,7 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
       expect(completedTask?.progress).toBe(100);
       expect(Number(completedTask?.executionId)).toBeGreaterThan(0);
       expect(Number(completedTask?.rcloneJobId)).toBeGreaterThan(0);
+      expect(String(completedTask?.rcloneExecuteId ?? '').length).toBeGreaterThan(0);
 
       // Wait briefly for the workflow memory queue to process the resume poke and settle execution status
       if (!app) throw new Error('MockServer not initialized');
@@ -462,6 +482,14 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
         await sleep(100);
       }
       expect(executionStatus).toBe(EXECUTION_STATUS.RESOLVED);
+
+      const settledTask = await app.db.getRepository('rcloneTransferTasks').findOne({ filterByTk: taskId });
+      expect(Boolean(settledTask?.get('resumePending'))).toBe(false);
+      const settledWfJobId = String(settledTask?.get('workflowJobId') ?? '');
+      expect(settledWfJobId.length).toBeGreaterThan(0);
+      const settledWfJob = await app.db.getRepository('jobs').findOne({ filterByTk: settledWfJobId });
+      const settledWfResult = (settledWfJob?.get('result') ?? {}) as Record<string, unknown>;
+      expect(Number(settledWfResult.rcloneJobId)).toBe(Number(completedTask?.rcloneJobId));
 
       const dstFilesRes = await getAction(operatorAgent, 'listFiles', {
         connectionId,
@@ -514,20 +542,38 @@ describe('End-to-End Integration against Live Docker rclone-rcd + MinIO + NocoBa
         expect(restoreRes.status).toBe(200);
       }
 
-      const setOptsRes = await postAction(rootAgent, 'setRuntimeOptions', {
-        connectionId,
-        bwLimit: '128M',
-      });
-      expect(setOptsRes.status).toBe(200);
+      if (!initialBwLimit.captured) {
+        const snapshotOptsRes = await getAction(rootAgent, 'getRuntimeOptions', { connectionId });
+        expect(snapshotOptsRes.status).toBe(200);
+        if (
+          snapshotOptsRes.status === 200 &&
+          snapshotOptsRes.body?.data?.options &&
+          Object.prototype.hasOwnProperty.call(snapshotOptsRes.body.data.options, 'bwLimit')
+        ) {
+          initialBwLimit = {
+            captured: true,
+            value: String(snapshotOptsRes.body.data.options.bwLimit ?? '').trim(),
+          };
+        }
+      }
 
-      const getOptsRes = await getAction(rootAgent, 'getRuntimeOptions', { connectionId });
-      expect(getOptsRes.status).toBe(200);
-      expect(getOptsRes.body.data.options.bwLimit).toMatch(/^128Mi?$/);
+      if (initialBwLimit.captured) {
+        const setOptsRes = await postAction(rootAgent, 'setRuntimeOptions', {
+          connectionId,
+          bwLimit: '128M',
+        });
+        expect(setOptsRes.status).toBe(200);
 
-      await postAction(rootAgent, 'setRuntimeOptions', {
-        connectionId,
-        bwLimit: '',
-      });
+        const getOptsRes = await getAction(rootAgent, 'getRuntimeOptions', { connectionId });
+        expect(getOptsRes.status).toBe(200);
+        expect(getOptsRes.body.data.options.bwLimit).toMatch(/^128Mi?$/);
+
+        const restoreOptsRes = await postAction(rootAgent, 'setRuntimeOptions', {
+          connectionId,
+          bwLimit: initialBwLimit.value || 'off',
+        });
+        expect(restoreOptsRes.status).toBe(200);
+      }
 
       const startServeRes = await postAction(rootAgent, 'startServe', {
         connectionId,

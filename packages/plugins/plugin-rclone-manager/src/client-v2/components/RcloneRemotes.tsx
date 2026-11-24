@@ -318,6 +318,14 @@ export const RcloneRemotes: React.FC = () => {
                 pattern: /^[a-zA-Z0-9._-]{1,64}$/,
                 message: t('Use letters, numbers, dots, hyphens, or underscores'),
               },
+              {
+                validator: async (_rule, value) => {
+                  const candidate = String(value ?? '').trim();
+                  if (!editingName && candidate && remotes.some((r) => r.name === candidate)) {
+                    throw new Error(t('Remote name already exists'));
+                  }
+                },
+              },
             ]}
           >
             <Input disabled={Boolean(editingName)} placeholder="e.g. s3-backup" />
