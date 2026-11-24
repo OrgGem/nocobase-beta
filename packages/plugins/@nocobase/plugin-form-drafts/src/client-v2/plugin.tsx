@@ -12,9 +12,15 @@ import { FormBlockModel, Plugin } from '@nocobase/client-v2';
 import type { FlowModelContext } from '@nocobase/flow-engine';
 import { Alert, Button, theme } from 'antd';
 import React from 'react';
-import { FormDraftRepository, type FormDraftValuePatch, type FormDraftValues } from './formDraftRepository';
+import {
+  FormDraftRepository,
+  type FormDraft,
+  type FormDraftValuePatch,
+  type FormDraftValues,
+} from './formDraftRepository';
 import { NAMESPACE, tExpr } from './locale';
 
+const UNAVAILABLE_DRAFT_MESSAGE = 'Drafts cannot be saved this time. You can still fill out and submit the form.';
 const RESTORED_DRAFT_MESSAGE =
   'This is an unsubmitted draft. You can continue editing and submit it, or click “Delete draft” to start over.';
 const SAVED_DRAFT_MESSAGE =
@@ -62,6 +68,29 @@ function setBeforeContent(model: DecoratedFormModel, beforeContent: React.ReactN
   if (model.decoratorProps) {
     model.decoratorProps.beforeContent = beforeContent;
   }
+}
+
+function disableDrafts(ctx: DraftFlowContext, repository: FormDraftRepository, message = UNAVAILABLE_DRAFT_MESSAGE) {
+  if (repository !== ctx.draftRepository) {
+    return;
+  }
+  repository.disable();
+  const beforeContent = ctx.model.decoratorProps?.beforeContent;
+  if (React.isValidElement(beforeContent) && beforeContent.type === DraftAlert) {
+    setBeforeContent(ctx.model, null);
+  }
+  ctx.message.warning(ctx.t(message, { ns: NAMESPACE }));
+}
+
+async function deleteDraft(ctx: DraftFlowContext, options?: { afterSubmit: boolean }) {
+  const repository = ctx.draftRepository;
+  try {
+    await repository.delete(options);
+  } catch {
+    disableDrafts(ctx, repository, 'The local draft could not be deleted.');
+    return false;
+  }
+  return !repository.disabled && repository === ctx.draftRepository;
 }
 
 function buildDraftValuePatches(values: FormDraftValues) {
@@ -171,7 +200,9 @@ FormBlockModel.registerFlow({
               message={message}
               t={draftCtx.t}
               onDelete={async () => {
-                await draftCtx.draftRepository.delete();
+                if (!(await deleteDraft(draftCtx))) {
+                  return;
+                }
                 draftCtx.form.resetFields();
                 draftCtx.model.formValueRuntime?.resetAfterFormReset?.();
                 setBeforeContent(draftCtx.model, null);
@@ -183,14 +214,20 @@ FormBlockModel.registerFlow({
           draftCtx.draftRepository.disable();
           return;
         }
-        await draftCtx.draftRepository.connect();
-        const draft = await draftCtx.draftRepository.get();
-        const patches = draft?.patches?.length ? draft.patches : undefined;
-        if (!patches?.length && (!draft?.values || Object.keys(draft.values).length === 0)) {
-          await draftCtx.draftRepository.create();
+        const repository = draftCtx.draftRepository;
+        let draft: FormDraft | undefined;
+        try {
+          await repository.connect();
+          draft = await repository.get();
+          if (!draft?.patches?.length && (!draft?.values || Object.keys(draft.values).length === 0)) {
+            await repository.create();
+            return;
+          }
+        } catch {
+          disableDrafts(draftCtx, repository);
           return;
         }
-        await draftCtx.setFormValues(patches ?? buildDraftValuePatches(draft.values), {
+        await draftCtx.setFormValues(draft.patches?.length ? draft.patches : buildDraftValuePatches(draft.values), {
           source: 'user',
           triggerEvent: false,
         });
@@ -207,12 +244,23 @@ FormBlockModel.registerFlow({
     saveDraft: {
       async handler(ctx) {
         const draftCtx = ctx as unknown as DraftFlowContext;
-        if (draftCtx.draftRepository.disabled) {
+        const repository = draftCtx.draftRepository;
+        if (repository.disabled) {
           return;
         }
         const patches = draftCtx.model.formValueRuntime?.getUserEditedValuePatches?.();
         const values = patches ? buildDraftValuesFromPatches(patches) : draftCtx.form.getFieldsValue();
-        await draftCtx.draftRepository.save(values, patches);
+        try {
+          await repository.save(values, patches);
+        } catch {
+          if (!repository.disabled) {
+            disableDrafts(draftCtx, repository);
+          }
+          return;
+        }
+        if (repository.disabled || repository !== draftCtx.draftRepository) {
+          return;
+        }
         if (patches ? patches.length === 0 : Object.keys(values).length === 0) {
           return;
         }
@@ -229,11 +277,9 @@ FormBlockModel.registerFlow({
     deleteDraft: {
       async handler(ctx) {
         const draftCtx = ctx as unknown as DraftFlowContext;
-        if (draftCtx.draftRepository.disabled) {
-          return;
+        if (await deleteDraft(draftCtx, { afterSubmit: true })) {
+          setBeforeContent(draftCtx.model, null);
         }
-        await draftCtx.draftRepository.delete();
-        setBeforeContent(draftCtx.model, null);
       },
     },
   },

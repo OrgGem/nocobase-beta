@@ -62,6 +62,38 @@ import {
 } from '../frontend-tools';
 import { isReasoningFinishChunk, ReasoningStreamState, StreamConversation } from './reasoning-stream-state';
 
+function getNestedRangeErrorStack(error: unknown) {
+  if (!(error instanceof Error) || error.name !== 'RangeError') {
+    return;
+  }
+
+  const seen = new Set<Error>([error]);
+  let cause = error;
+  let causeDepth = 0;
+  while (cause.cause instanceof Error && !seen.has(cause.cause) && causeDepth < 16) {
+    cause = cause.cause;
+    seen.add(cause);
+    causeDepth++;
+  }
+
+  // The system logger already records the error and its immediate cause.
+  if (causeDepth < 2 || typeof cause.stack !== 'string') {
+    return;
+  }
+
+  // Skip the entire V8 error header, including multiline provider messages.
+  const header = Error.prototype.toString.call(cause) + '\n';
+  if (cause.stack.startsWith(header)) {
+    const stackFrames = cause.stack
+      .slice(header.length)
+      .split('\n', 20)
+      .filter((line) => /^\s+at /.test(line));
+    if (stackFrames.length) {
+      return { causeDepth, stackFrames };
+    }
+  }
+}
+
 export interface ModelRef {
   llmService: string;
   model: string;
@@ -504,7 +536,10 @@ export class AIEmployee {
     if (this.from === 'sub-agent') {
       delete config.configurable;
     }
-    return agent.stream(input, this.withRunMetadata(config));
+    // The agent wrapper can spread a Command from another LangGraph installation into ordinary input. Resume the graph
+    // directly so it keeps the command and continues the interrupted tool call.
+    const runner = input instanceof Command ? agent.graph : agent;
+    return runner.stream(input, this.withRunMetadata(config));
   }
 
   async agentInvoke(provider: LLMProvider, context: AIChatContext, config?: any, state?: any): Promise<any> {
@@ -514,7 +549,8 @@ export class AIEmployee {
     if (this.from === 'sub-agent') {
       delete config.configurable;
     }
-    return agent.invoke(input, this.withRunMetadata(config));
+    const runner = input instanceof Command ? agent.graph : agent;
+    return runner.invoke(input, this.withRunMetadata(config));
   }
 
   async prepareChatStream({
@@ -829,6 +865,10 @@ export class AIEmployee {
     } catch (err) {
       await stopAllReasoning();
       this.ctx.log.error(err);
+      const nestedStack = getNestedRangeErrorStack(err);
+      if (nestedStack) {
+        this.ctx.log.error('AI employee stream nested RangeError stack', nestedStack);
+      }
       if (err.name === 'GraphRecursionError') {
         this.sendSpecificError({ name: err.name, message: err.message });
       } else {
