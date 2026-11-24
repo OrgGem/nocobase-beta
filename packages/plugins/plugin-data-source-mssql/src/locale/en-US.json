@@ -30,11 +30,12 @@
   "Lock timeout (ms)": "Lock timeout (ms)",
   "Fail fast when blocked by locks instead of waiting until request timeout (0 = unlimited)": "Fail fast when blocked by locks instead of waiting until request timeout (0 = unlimited)",
   "Full-text search mode": "Full-text search mode",
-  "Use SQL Server CONTAINS() on FTS-indexed columns for $includes, or disable to always use substring LIKE": "Use SQL Server CONTAINS() on FTS-indexed columns for $includes, or disable to always use substring LIKE",
-  "Auto (use FTS when indexed)": "Auto (use FTS when indexed)",
-  "Off (always use LIKE)": "Off (always use LIKE)",
+  "Substring filters ($includes / $notIncludes) always use LIKE so read and write results match; Auto only preloads full-text index metadata, while Off skips full-text catalog queries": "Substring filters ($includes / $notIncludes) always use LIKE so read and write results match; Auto only preloads full-text index metadata, while Off skips full-text catalog queries",
+  "Auto (preload FTS metadata, filter with LIKE)": "Auto (preload FTS metadata, filter with LIKE)",
+  "Off (skip FTS metadata, filter with LIKE)": "Off (skip FTS metadata, filter with LIKE)",
   "Fast unfiltered count": "Fast unfiltered count",
   "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables": "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables",
   "Slow query warning threshold (ms)": "Slow query warning threshold (ms)",
-  "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)"
+  "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)",
+  "This collection is read-only": "This collection is read-only"
 }

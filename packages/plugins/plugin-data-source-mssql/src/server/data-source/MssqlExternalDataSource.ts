@@ -6,6 +6,7 @@ import type { CollectionOptions, LoadedCollections, LoadTablesOptions } from '@n
 import { MssqlCollectionManager } from './MssqlCollectionManager';
 import { MssqlIntrospector } from './MssqlIntrospector';
 import { type MssqlRepositoryRuntimeOptions } from './MssqlRepository';
+import { createReadOnlyViewMiddleware, installMssqlReadOnlyViewGuard } from './mssql-read-only-view';
 import { MssqlDatetimeNoTzField } from '../fields/MssqlDatetimeNoTzField';
 import { MssqlDateOnlyField, registerMssqlUtcDateOnlyParser } from '../fields/MssqlDateOnlyField';
 import { createMssqlOperators, type FullTextSearchMode } from '../operators/mssql-operators';
@@ -350,6 +351,7 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
     registerMssqlUtcDateOnlyParser(
       database.sequelize as unknown as Parameters<typeof registerMssqlUtcDateOnlyParser>[0],
     );
+    installMssqlReadOnlyViewGuard(database);
 
     // For a reused Database (`reuseDB: true`), defer updating runtime options, hooks, and operators
     // until `load()` succeeds so a slow or failed refresh never wipes the live datasource's state.
@@ -385,6 +387,12 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
 
   constructor(options: MssqlDataSourceOptions) {
     super(options);
+    if (typeof this.resourceManager?.use === 'function') {
+      this.resourceManager.use(
+        createReadOnlyViewMiddleware(() => this.collectionManager),
+        { tag: 'mssql-read-only-views', after: ['acl'] },
+      );
+    }
     this.reusedDatabase =
       options?.databaseInstance instanceof Database || options?.collectionManager?.database instanceof Database;
     if (!this.reusedDatabase) {
@@ -469,6 +477,12 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       try {
         await this.collectionManager.db.checkVersion();
       } catch (error) {
+        if (
+          error instanceof Error &&
+          /^to use mssql, please ensure the version is .+, current version is \d+\.\d+\.\d+$/.test(error.message)
+        ) {
+          throw error;
+        }
         this.logger?.warn?.('[MSSQL] Database version check failed or not supported', error);
       }
 
@@ -500,7 +514,7 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
           await this.introspector.preloadAllIndexes?.(schema, selectedTables);
         }
 
-        if (tables.length) {
+        if (tables.length && dataSourceOptions?.fullTextSearchMode !== 'off') {
           await this.introspector.preloadFTSIndexedColumns(schema, selectedTables);
         }
         if (!this.reusedDatabase) {
@@ -634,7 +648,8 @@ export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospect
       await this.introspector.preloadAllPrimaryKeys?.(schema, tables);
       await this.introspector.preloadAllIndexes?.(schema, tables);
     }
-    if (tables.length > 0 && !options.skipFtsPreload) {
+    const dataSourceOptions = this.options as MssqlDataSourceOptions | undefined;
+    if (tables.length > 0 && !options.skipFtsPreload && dataSourceOptions?.fullTextSearchMode !== 'off') {
       await this.introspector.preloadFTSIndexedColumns?.(schema, tables, { merge: true });
     }
 

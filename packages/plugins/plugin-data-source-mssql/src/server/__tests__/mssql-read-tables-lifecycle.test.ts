@@ -378,6 +378,28 @@ describe('MSSQL readTables datasource lifecycle through the core API', () => {
     expect(runtime.loaded.has('orders')).toBe(true);
   });
 
+  it('skips FTS catalog preloading during loadTables and selectionChanged sync when fullTextSearchMode is off', async () => {
+    const dataSourceKey = 'mssql-fts-off-selected';
+    const runtime = await seedSelectedDataSource(app, dataSourceKey, ['customers'], ['customers'], {
+      fullTextSearchMode: 'off',
+    });
+    const plugin = app.pm.get(PluginDataSourceMssqlServer) as PluginDataSourceMssqlServer;
+    vi.spyOn(plugin, 'sendSyncMessage').mockResolvedValue(undefined);
+
+    const response = await app
+      .agent()
+      .resource('dataSources')
+      .loadTables({
+        values: { dataSourceKey, tables: ['orders'] },
+      });
+
+    expect(response.status).toBe(200);
+    await plugin.handleSyncMessage({ type: 'selectionChanged', dataSourceKey, refreshTables: ['orders'] });
+    expect(runtime.preloadFTSIndexedColumns).not.toHaveBeenCalled();
+
+    app.dataSourceManager.dataSources.delete(dataSourceKey);
+  });
+
   it('serializes concurrent collection deletions and publishes committed selection state', async () => {
     transactionTrace.length = 0;
     const dataSourceKey = 'mssql-concurrent-delete';

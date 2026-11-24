@@ -3,9 +3,11 @@
 import { createForm } from '@formily/core';
 import { FormProvider } from '@formily/react';
 import { Checkbox, FormItem, Input, InputNumber, Password, SchemaComponentOptions } from '@nocobase/client';
+import PluginDataSourceManagerClient from '@nocobase/plugin-data-source-manager/client';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PluginDataSourceMssqlClient } from '../index';
 import { MssqlConfigForm, normalizeLoadedCollectionsForV1 } from '../components/MssqlConfigForm';
 import { extractBulkSelectedNames } from '../components/MssqlDeleteCollection';
 
@@ -83,5 +85,29 @@ describe('MSSQL legacy client v1 components', () => {
       'invoices',
     ]);
     expect(extractBulkSelectedNames(undefined)).toEqual([]);
+  });
+
+  it('registers mssql type against @nocobase/plugin-data-source-manager/client in v1 client plugin', async () => {
+    const registerType = vi.fn();
+    const mockApp = {
+      pm: {
+        get: vi.fn((pluginClass: unknown) =>
+          pluginClass === PluginDataSourceManagerClient ? { registerType } : undefined,
+        ),
+      },
+    };
+    const plugin = new PluginDataSourceMssqlClient({} as never, mockApp as never);
+
+    expect(typeof PluginDataSourceManagerClient).toBe('function');
+    await plugin.load();
+
+    expect(mockApp.pm.get).toHaveBeenCalledWith(PluginDataSourceManagerClient);
+    expect(registerType).toHaveBeenCalledWith(
+      'mssql',
+      expect.objectContaining({
+        name: 'mssql',
+        DataSourceSettingsForm: MssqlConfigForm,
+      }),
+    );
   });
 });

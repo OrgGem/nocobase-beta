@@ -10,12 +10,17 @@
 import { Collection } from '@nocobase/database';
 import { Transaction, Utils } from 'sequelize';
 import { isEqual } from 'lodash';
-import { PostgresCollectionManager } from '../postgres-collection-manager';
+import {
+  applyPostgresArrayDataType,
+  isPostgresPhysicalArrayRawType,
+  PostgresCollectionManager,
+} from '../postgres-collection-manager';
 import { PostgresValidationError } from '../utils/validation-error';
 
 type FieldValues = {
   name?: string;
   type?: string;
+  dataType?: string;
   field?: string;
   interface?: string;
   allowNull?: boolean;
@@ -437,6 +442,13 @@ export async function syncFieldAction(
       await ensureBelongsToArray(manager, collectionName, name, values, input, transaction);
       return;
     }
+    applyPostgresArrayDataType(values);
+    if (values.dataType === 'array') {
+      input.dataType = 'array';
+      if (input.elementType === undefined && typeof values.elementType === 'string') {
+        input.elementType = values.elementType;
+      }
+    }
     await manager.addField(collectionName, { ...values, name }, transaction);
     return;
   }
@@ -490,12 +502,34 @@ export async function syncFieldAction(
     return;
   }
 
+  const effectiveType = values.type ?? field.options.type;
+  const effectiveElementType = values.elementType ?? field.options.elementType;
+  const effectiveDataType = values.dataType !== undefined ? values.dataType : field.options.dataType;
+  if (
+    (effectiveType === 'array' || effectiveType === 'set') &&
+    typeof effectiveElementType === 'string' &&
+    effectiveElementType.trim().length > 0 &&
+    (effectiveDataType === undefined || effectiveDataType === null || effectiveDataType === '')
+  ) {
+    const rawTypeIsArray =
+      field.options.rawType === undefined ? undefined : isPostgresPhysicalArrayRawType(field.options.rawType);
+    const columnIsArray =
+      rawTypeIsArray !== undefined
+        ? rawTypeIsArray
+        : await manager.isPhysicalArrayColumn(collectionName, field.columnName(), transaction);
+    if (columnIsArray !== false) {
+      values.dataType = 'array';
+      input.dataType = 'array';
+    }
+  }
+
   const changes: Pick<
     FieldValues,
-    'type' | 'allowNull' | 'defaultValue' | 'unique' | 'length' | 'precision' | 'scale' | 'elementType'
+    'type' | 'dataType' | 'allowNull' | 'defaultValue' | 'unique' | 'length' | 'precision' | 'scale' | 'elementType'
   > = {};
   for (const key of [
     'type',
+    'dataType',
     'allowNull',
     'defaultValue',
     'unique',

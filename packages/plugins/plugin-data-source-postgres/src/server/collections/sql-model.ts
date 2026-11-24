@@ -42,7 +42,7 @@ type SqlGenerator = {
 // Mirrors the host SQL collection's query generator, retaining its filter, order and pagination options.
 function selectQuery(this: SqlGenerator, _tableName: string, options: SelectOptions, model: typeof SQLModel): string {
   const queryOptions = options || {};
-  if (isEmpty(queryOptions)) return `${model.sql};`;
+  if (isEmpty(queryOptions)) return `${model.sql}\n;`;
 
   let attributes = queryOptions.attributes?.slice();
   if (attributes) {
@@ -70,7 +70,7 @@ function selectQuery(this: SqlGenerator, _tableName: string, options: SelectOpti
   }
   const limit = this.addLimitAndOffset(queryOptions, model);
   if (limit) clauses.push(limit);
-  return `SELECT ${selected.join(', ')} FROM (${model.sql}) ${this.getAliasToken()} ${this.quoteIdentifier(
+  return `SELECT ${selected.join(', ')} FROM (${model.sql}\n) ${this.getAliasToken()} ${this.quoteIdentifier(
     model.name,
   )}${clauses.join('')};`;
 }

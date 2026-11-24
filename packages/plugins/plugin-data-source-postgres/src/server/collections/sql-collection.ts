@@ -10,6 +10,7 @@
 import { Collection, CollectionContext, CollectionOptions } from '@nocobase/database';
 import { ModelStatic, QueryInterfaceDropTableOptions } from 'sequelize';
 import type { Model } from '@nocobase/database';
+import { normalizeSqlCollectionQuery } from '../utils/sql-validator';
 import { SQLModel } from './sql-model';
 
 export class PostgresSQLCollection extends Collection {
@@ -40,8 +41,7 @@ export class PostgresSQLCollection extends Collection {
   }
 
   modelInit() {
-    const sql = String(this.options.sql || '').trim();
-    const normalizedSql = sql.endsWith(';') ? sql.slice(0, -1) : sql;
+    const normalizedSql = normalizeSqlCollectionQuery(String(this.options.sql || ''));
     if (this.model) {
       (this.model as unknown as typeof SQLModel).sql = normalizedSql;
       return;

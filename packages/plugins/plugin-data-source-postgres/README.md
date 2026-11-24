@@ -1,6 +1,6 @@
 # External PostgreSQL data source
 
-Version 2.0.0 targets NocoBase 2.2.x and provides configuration for both the v1 and v2 clients. Enable the Data Source Manager and this plugin, then add an external PostgreSQL connection in Data Source Manager.
+Version 2.0.1 targets NocoBase 2.2.x and provides configuration for both the v1 and v2 clients. Enable the Data Source Manager and this plugin, then add an external PostgreSQL connection in Data Source Manager.
 
 The connection form accepts a PostgreSQL schema and can load all collections or selected tables and views. Loading a table or view registers its schema for use in NocoBase without changing the PostgreSQL object. Existing datasource configurations keep the `postgres-external` type.
 

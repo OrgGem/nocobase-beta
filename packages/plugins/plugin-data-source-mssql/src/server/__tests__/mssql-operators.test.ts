@@ -94,11 +94,17 @@ describe('MSSQL filter & search operators', () => {
         (tableName === 'nb_Customers' && columnName === 'CustCode'),
     };
 
-    it('qualifies CONTAINS() with table alias and physical column name AND pairs with exact LIKE post-filter', async () => {
+    it('uses uniform LIKE substring predicates on FTS-indexed columns so reads include infix matches and match writes', async () => {
       const { Order, captured } = setupSequelize();
       const ops = createMssqlOperators(introspector, () => 'auto');
 
       const rootWhere = ops.$includes('fast search', {
+        model: Order as unknown as MssqlOperatorContext['model'],
+        fieldName: 'title',
+        fullName: 'title',
+      });
+
+      const infixWhere = ops.$includes('bar', {
         model: Order as unknown as MssqlOperatorContext['model'],
         fieldName: 'title',
         fullName: 'title',
@@ -117,11 +123,18 @@ describe('MSSQL filter & search operators', () => {
         include: [{ association: 'customer', attributes: [] }],
       });
 
+      await Order.findAll({
+        where: { title: infixWhere } as Record<string, unknown>,
+      });
+
       const sql = String(captured[0]);
-      expect(sql).toContain(`CONTAINS([orders].[OrderTitle], N'"fast*" AND "search*"')`);
+      expect(sql).not.toContain('CONTAINS');
       expect(sql).toContain(`[orders].[OrderTitle] LIKE N'%fast search%'`);
-      expect(sql).toContain(`CONTAINS([customer].[FullName], N'"acme*" AND "corp*"')`);
       expect(sql).toContain(`[customer].[FullName] LIKE N'%acme corp%'`);
+
+      const infixSql = String(captured[1]);
+      expect(infixSql).not.toContain('CONTAINS');
+      expect(infixSql).toContain(`[orders].[OrderTitle] LIKE N'%bar%'`);
     });
 
     it('never routes $notIncludes through NOT (CONTAINS(...)) even on FTS-indexed columns', async () => {
@@ -141,7 +154,7 @@ describe('MSSQL filter & search operators', () => {
       expect(sql).toContain(`[orders].[OrderTitle] NOT LIKE N'%bar%'`);
     });
 
-    it('pairs array $includes FTS CONTAINS() with an OR-ed LIKE post-filter', async () => {
+    it('combines array $includes values with OR-ed LIKE substring predicates without CONTAINS()', async () => {
       const { Order, captured } = setupSequelize();
       const ops = createMssqlOperators(introspector, () => 'auto');
 
@@ -154,7 +167,7 @@ describe('MSSQL filter & search operators', () => {
       await Order.findAll({ where: { title: arrayWhere } as Record<string, unknown> });
 
       const sql = String(captured[0]);
-      expect(sql).toContain(`CONTAINS([orders].[OrderTitle], N'"foo*" OR ("bar*" AND "baz*")')`);
+      expect(sql).not.toContain('CONTAINS');
       expect(sql).toContain(`[orders].[OrderTitle] LIKE N'%foo%'`);
       expect(sql).toContain(`[orders].[OrderTitle] LIKE N'%bar baz%'`);
     });
@@ -226,10 +239,16 @@ describe('MSSQL filter & search operators', () => {
       expect(String(captured[0])).toContain(`[orders].[OrderTitle] = N'Hello'`);
     });
 
-    it('falls back from CONTAINS() to LIKE during write actions so UPDATE/DELETE never emit unbound SELECT aliases', async () => {
+    it('keeps identical LIKE substring semantics across read and write actions without unbound aliases on UPDATE/DELETE', async () => {
       const { Order, captured } = setupSequelize();
       const ops = createMssqlOperators(introspector, () => 'auto');
 
+      const readCtx: MssqlOperatorContext = {
+        app: { ctx: { action: { actionName: 'list' } } },
+        model: Order as unknown as MssqlOperatorContext['model'],
+        fieldName: 'title',
+        fullName: 'title',
+      };
       const updateCtx: MssqlOperatorContext = {
         app: { ctx: { action: { actionName: 'update' } } },
         model: Order as unknown as MssqlOperatorContext['model'],
@@ -243,21 +262,28 @@ describe('MSSQL filter & search operators', () => {
         fullName: 'title',
       };
 
+      await Order.findAll({
+        where: { title: ops.$includes('bar', readCtx) } as Record<string, unknown>,
+      });
       await Order.update(
         { code: 'X' },
-        { where: { title: ops.$includes('fast search', updateCtx) } as Record<string, unknown> },
+        { where: { title: ops.$includes('bar', updateCtx) } as Record<string, unknown> },
       ).catch(() => undefined);
       await Order.destroy({
-        where: { title: ops.$includes('fast search', destroyCtx) } as Record<string, unknown>,
+        where: { title: ops.$includes('bar', destroyCtx) } as Record<string, unknown>,
       }).catch(() => undefined);
 
-      const updateSql = (captured[0] as { query: string }).query;
-      const deleteSql = String(captured[1]);
-      expect(updateSql).toContain(`WHERE [OrderTitle] LIKE N'%fast search%'`);
+      const readSql = String(captured[0]);
+      const updateSql = (captured[1] as { query: string }).query;
+      const deleteSql = String(captured[2]);
+      expect(readSql).toContain(`WHERE [orders].[OrderTitle] LIKE N'%bar%'`);
+      expect(readSql).not.toContain('CONTAINS');
+
+      expect(updateSql).toContain(`WHERE [OrderTitle] LIKE N'%bar%'`);
       expect(updateSql).not.toContain('CONTAINS');
       expect(updateSql).not.toContain('[orders].');
 
-      expect(deleteSql).toContain(`WHERE [OrderTitle] LIKE N'%fast search%'`);
+      expect(deleteSql).toContain(`WHERE [OrderTitle] LIKE N'%bar%'`);
       expect(deleteSql).not.toContain('CONTAINS');
       expect(deleteSql).not.toContain('[orders].');
     });

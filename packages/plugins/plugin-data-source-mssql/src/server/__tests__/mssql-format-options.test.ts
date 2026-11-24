@@ -189,13 +189,14 @@ describe('formatDatabaseOptions', () => {
     const includesOp = db.operators.get('$includes') as (
       v: unknown,
       ctx: Record<string, unknown>,
-    ) => Record<symbol, Array<{ val?: string }>>;
-    const ftsClauseAfterFailure = includesOp('fast', {
-      model: { name: 'orders', tableName: 'orders', rawAttributes: { title: { field: 'title' } } },
-      fieldName: 'title',
-      fullName: 'title',
+    ) => Record<symbol, { val?: string }>;
+    const ansiClauseAfterFailure = includesOp('fast', {
+      model: { name: 'orders', tableName: 'orders', rawAttributes: { code: { field: 'code' } } },
+      fieldName: 'code',
+      fullName: 'code',
     });
-    expect(ftsClauseAfterFailure[Op.and]?.[0]?.val).toContain('CONTAINS([orders].[title]');
+    expect(ansiClauseAfterFailure[Op.like]?.val).toContain("'%fast%'");
+    expect(ansiClauseAfterFailure[Op.like]?.val).not.toContain("N'%fast%'");
 
     // Successful refresh with ds2 updates runtime options, replaces the named hook, prunes dropped_tbl,
     // and replaces orders without duplicating models in Sequelize's modelManager.
@@ -343,5 +344,56 @@ describe('formatDatabaseOptions', () => {
     expect(sharedCloseSpy).not.toHaveBeenCalled();
 
     await sharedDb.close();
+  });
+
+  it('rethrows explicit SQL Server version-guard failures during load() instead of warning and continuing', async () => {
+    const db = new Database({ dialect: 'sqlite', storage: ':memory:', logging: false });
+    const warnSpy = vi.spyOn(db.logger, 'warn');
+    const ds = new MssqlExternalDataSource({ databaseInstance: db });
+    const getTablesSpy = vi.spyOn(ds.introspector, 'getTables');
+
+    vi.spyOn(db.sequelize, 'authenticate').mockResolvedValue(undefined);
+    vi.spyOn(db, 'checkVersion').mockRejectedValueOnce(
+      new Error('to use mssql, please ensure the version is >=12.0.0, current version is 11.0.2100'),
+    );
+
+    await expect(ds.load()).rejects.toThrow(
+      'to use mssql, please ensure the version is >=12.0.0, current version is 11.0.2100',
+    );
+    expect(getTablesSpy).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      '[MSSQL] Database version check failed or not supported',
+      expect.anything(),
+    );
+
+    await db.close();
+  });
+
+  it('skips FTS catalog preloading during load() and prepareTables() when fullTextSearchMode is off', async () => {
+    const db = new Database({ dialect: 'sqlite', storage: ':memory:', logging: false });
+    const ds = new MssqlExternalDataSource({
+      databaseInstance: db,
+      fullTextSearchMode: 'off',
+    });
+
+    vi.spyOn(db.sequelize, 'authenticate').mockResolvedValue(undefined);
+    vi.spyOn(db, 'checkVersion').mockResolvedValue(true);
+    vi.spyOn(ds.introspector, 'clearCache').mockImplementation(() => undefined);
+    vi.spyOn(ds.introspector, 'getTables').mockResolvedValue(['orders']);
+    vi.spyOn(ds.introspector, 'preloadAllColumns').mockResolvedValue(undefined);
+    vi.spyOn(ds.introspector, 'preloadAllPrimaryKeys').mockResolvedValue(undefined);
+    vi.spyOn(ds.introspector, 'preloadAllIndexes').mockResolvedValue(undefined);
+    const ftsSpy = vi.spyOn(ds.introspector, 'preloadFTSIndexedColumns').mockResolvedValue(undefined);
+    vi.spyOn(ds.introspector, 'getCollection').mockResolvedValue({
+      name: 'orders',
+      tableName: 'orders',
+      fields: [{ name: 'id', type: 'integer' }],
+    } as never);
+
+    await ds.load();
+    await ds.prepareTables(['orders']);
+
+    expect(ftsSpy).not.toHaveBeenCalled();
+    await db.close();
   });
 });

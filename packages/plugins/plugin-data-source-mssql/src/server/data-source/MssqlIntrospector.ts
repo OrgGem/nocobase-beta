@@ -388,7 +388,7 @@ export class MssqlIntrospector extends DatabaseIntrospector {
 
   /**
    * Returns true if the given column has an enabled Full-Text Search index.
-   * Used by text operators to decide between CONTAINS() and LIKE.
+   * Preserved for introspection diagnostics; `$includes` / `$notIncludes` always use substring LIKE so reads and writes match.
    */
   hasFTSIndex(tableName: string, columnName: string): boolean {
     if (!this.ftsColumnCache) return false;

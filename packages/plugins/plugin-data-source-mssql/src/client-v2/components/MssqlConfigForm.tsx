@@ -184,13 +184,13 @@ export const MssqlConfigForm: React.FC<DataSourceSettingsFormProps> = ({ mode, i
             name={['options', 'fullTextSearchMode']}
             label={t('Full-text search mode')}
             extra={t(
-              'Use SQL Server CONTAINS() on FTS-indexed columns for $includes, or disable to always use substring LIKE',
+              'Substring filters ($includes / $notIncludes) always use LIKE so read and write results match; Auto only preloads full-text index metadata, while Off skips full-text catalog queries',
             )}
             initialValue={initialValues?.options?.fullTextSearchMode ?? 'auto'}
           >
             <Radio.Group>
-              <Radio value="auto">{t('Auto (use FTS when indexed)')}</Radio>
-              <Radio value="off">{t('Off (always use LIKE)')}</Radio>
+              <Radio value="auto">{t('Auto (preload FTS metadata, filter with LIKE)')}</Radio>
+              <Radio value="off">{t('Off (skip FTS metadata, filter with LIKE)')}</Radio>
             </Radio.Group>
           </Form.Item>
           <Form.Item

@@ -30,11 +30,12 @@
   "Lock timeout (ms)": "锁等待超时时间（毫秒）",
   "Fail fast when blocked by locks instead of waiting until request timeout (0 = unlimited)": "被锁阻塞时快速失败，而不是一直等待到查询超时（0 = 不限制）",
   "Full-text search mode": "全文检索模式",
-  "Use SQL Server CONTAINS() on FTS-indexed columns for $includes, or disable to always use substring LIKE": "对启用全文索引的列使用 CONTAINS() 执行包含查询，或关闭以始终使用 LIKE 子串匹配",
-  "Auto (use FTS when indexed)": "自动（存在全文索引时使用 FTS）",
-  "Off (always use LIKE)": "关闭（始终使用 LIKE）",
+  "Substring filters ($includes / $notIncludes) always use LIKE so read and write results match; Auto only preloads full-text index metadata, while Off skips full-text catalog queries": "子串筛选（$includes / $notIncludes）始终使用 LIKE 以保证读写结果一致；自动模式仅预加载全文索引元数据，关闭模式跳过全文目录查询",
+  "Auto (preload FTS metadata, filter with LIKE)": "自动（预加载全文元数据，使用 LIKE 筛选）",
+  "Off (skip FTS metadata, filter with LIKE)": "关闭（跳过全文元数据，使用 LIKE 筛选）",
   "Fast unfiltered count": "快速无条件计数",
   "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables": "无筛选条件时使用 sys.partitions 元数据替代大表 COUNT(*)",
   "Slow query warning threshold (ms)": "慢查询告警阈值（毫秒）",
-  "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "记录超过该耗时的 SQL 查询以辅助排查缺失索引（0 = 关闭，默认：2000 毫秒）"
+  "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "记录超过该耗时的 SQL 查询以辅助排查缺失索引（0 = 关闭，默认：2000 毫秒）",
+  "This collection is read-only": "此数据表为只读"
 }

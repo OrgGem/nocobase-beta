@@ -61,7 +61,7 @@ describe('SQLModel selectQuery', () => {
       model,
     );
 
-    expect(sql).toContain('SELECT "id" FROM (SELECT id, name FROM orders)');
+    expect(sql).toContain('SELECT "id" FROM (SELECT id, name FROM orders\n)');
     expect(sql).toContain('WHERE "order_summary"."id" = 10');
     expect(sql).toContain('ORDER BY "order_summary"."id" DESC');
     expect(sql).toContain('LIMIT 5 OFFSET 10');
@@ -77,7 +77,7 @@ describe('SQLModel selectQuery', () => {
       model,
     );
 
-    expect(sql).toContain('SELECT * FROM (SELECT id, name FROM orders)');
+    expect(sql).toContain('SELECT * FROM (SELECT id, name FROM orders\n)');
     expect(sql).not.toMatch(/SELECT\s+FROM/);
   });
 
@@ -109,7 +109,51 @@ describe('SQLModel selectQuery', () => {
       { attributes: ['id'], where: { id: 42 } },
       updatable.model as unknown as typeof SQLModel,
     );
-    expect(updatedQuery).toContain('SELECT "id" FROM (SELECT id, name FROM updated_orders)');
+    expect(updatedQuery).toContain('SELECT "id" FROM (SELECT id, name FROM updated_orders\n)');
     expect(updatedQuery).toContain('WHERE "updatable_summary"."id" = 42');
+  });
+
+  it('normalizes trailing semicolons before comments and isolates trailing line comments from closing parenthesis', () => {
+    const withBlockComment = db.collection({
+      name: 'commented_block_summary',
+      sql: 'SELECT id FROM orders; /* trailing note */',
+      fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+    }) as PostgresSQLCollection;
+
+    const withLineComment = db.collection({
+      name: 'commented_line_summary',
+      sql: "SELECT id, ';' AS sep FROM orders; -- trailing line comment",
+      fields: [
+        { name: 'id', type: 'integer', primaryKey: true },
+        { name: 'sep', type: 'string' },
+      ],
+    }) as PostgresSQLCollection;
+
+    const blockSql = (
+      withBlockComment.model.queryInterface as unknown as { queryGenerator: SqlGeneratorStub }
+    ).queryGenerator.selectQuery(
+      'commented_block_summary',
+      { attributes: ['id'], where: { id: 1 }, limit: 10, offset: 0 },
+      withBlockComment.model as unknown as typeof SQLModel,
+    );
+    expect(blockSql).toBe(
+      'SELECT "id" FROM (SELECT id FROM orders /* trailing note */\n) AS "commented_block_summary" WHERE "commented_block_summary"."id" = 1 LIMIT 10 OFFSET 0;',
+    );
+
+    const lineSql = (
+      withLineComment.model.queryInterface as unknown as { queryGenerator: SqlGeneratorStub }
+    ).queryGenerator.selectQuery(
+      'commented_line_summary',
+      { attributes: ['id', 'sep'], where: { id: 1 }, limit: 5 },
+      withLineComment.model as unknown as typeof SQLModel,
+    );
+    expect(lineSql).toBe(
+      `SELECT "id", "sep" FROM (SELECT id, ';' AS sep FROM orders -- trailing line comment\n) AS "commented_line_summary" WHERE "commented_line_summary"."id" = 1 LIMIT 5;`,
+    );
+
+    const emptyOptsSql = (
+      withLineComment.model.queryInterface as unknown as { queryGenerator: SqlGeneratorStub }
+    ).queryGenerator.selectQuery('commented_line_summary', {}, withLineComment.model as unknown as typeof SQLModel);
+    expect(emptyOptsSql).toBe("SELECT id, ';' AS sep FROM orders -- trailing line comment\n;");
   });
 });

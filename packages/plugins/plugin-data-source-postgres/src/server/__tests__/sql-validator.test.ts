@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { checkSQL } from '../utils/sql-validator';
+import { checkSQL, normalizeSqlCollectionQuery } from '../utils/sql-validator';
 import { PostgresValidationError } from '../utils/validation-error';
 
 function expectValidationError(fn: () => void, message?: string) {
@@ -115,5 +115,12 @@ describe('checkSQL', () => {
     ]) {
       expectValidationError(() => checkSQL(sql), 'SQL statement contains dangerous keyword');
     }
+  });
+
+  it('normalizes trailing semicolons across comments without altering semicolons inside literals', () => {
+    expect(normalizeSqlCollectionQuery('SELECT 1; /* note */')).toBe('SELECT 1 /* note */');
+    expect(normalizeSqlCollectionQuery('SELECT 1; -- note\n')).toBe('SELECT 1 -- note');
+    expect(normalizeSqlCollectionQuery("SELECT ';' AS sep; /* note */")).toBe("SELECT ';' AS sep /* note */");
+    expect(normalizeSqlCollectionQuery('SELECT $$a;b$$;')).toBe('SELECT $$a;b$$');
   });
 });

@@ -18,7 +18,7 @@ import {
 } from '@nocobase/data-source-manager';
 import { QueryTypes } from 'sequelize';
 import { NAMESPACE } from '../constants';
-import { PostgresCollectionManager } from './postgres-collection-manager';
+import { isPostgresPhysicalArrayRawType, PostgresCollectionManager } from './postgres-collection-manager';
 import { PostgresValidationError } from './utils/validation-error';
 
 interface PostgresOptions {
@@ -99,7 +99,7 @@ export class PostgresDataSource extends SequelizeDataSource {
       try {
         return await this.collectionManager.discoverTables();
       } finally {
-        if (!this.isLoaded) await this.close();
+        if (!this.isLoaded && !this.reusedDatabase) await this.close();
       }
     };
     introspector.getTableColumnsInfo = async (tableInfo: { tableName: string; schema?: string }) => {
@@ -188,23 +188,31 @@ export class PostgresDataSource extends SequelizeDataSource {
 
   async loadTables(ctx: Context, tables: string[] = [], options: LoadTablesOptions = {}): Promise<void> {
     const names = selectedTables(tables);
-    const { actionName, resourceName, params } = ctx.action || {};
+    const { actionName, resourceName, params } = ctx?.action || {};
+    const values =
+      params?.values && typeof params.values === 'object' && !Array.isArray(params.values)
+        ? (params.values as Record<string, unknown>)
+        : undefined;
     const isSettingsAction = resourceName === 'dataSources' && ['create', 'update'].includes(actionName);
     const isLoadTablesAction = resourceName === 'dataSources' && actionName === 'loadTables';
-    const preserveSelection = Boolean(params.values?.__postgresPreserveSelection);
-    if (params.values && '__postgresPreserveSelection' in params.values) {
-      delete params.values.__postgresPreserveSelection;
+    const preserveSelection = Boolean(values?.__postgresPreserveSelection);
+    if (values && '__postgresPreserveSelection' in values) {
+      delete values.__postgresPreserveSelection;
     }
-    if (isSettingsAction && Array.isArray(params.values?.collections) && !preserveSelection) {
-      params.values.options = {
-        ...params.values.options,
+    if (isSettingsAction && values && Array.isArray(values.collections) && !preserveSelection) {
+      const currentOptions =
+        values.options && typeof values.options === 'object' && !Array.isArray(values.options)
+          ? (values.options as Record<string, unknown>)
+          : {};
+      values.options = {
+        ...currentOptions,
         addAllCollections: false,
         selectedCollections: names,
       };
     }
     try {
       let localData = options.localData;
-      if (!localData && isLoadTablesAction && ctx.db) {
+      if (!localData && isLoadTablesAction && ctx?.db) {
         const record = (await ctx.db.getRepository('dataSources').findOne({
           filterByTk: this.name,
         })) as { loadLocalData?: () => Promise<LoadedCollections> } | null;
@@ -214,7 +222,7 @@ export class PostgresDataSource extends SequelizeDataSource {
       }
       const collections = await this.prepareTables(names, localData || {});
       this.collectionManager.replaceCollections(collections);
-      if (isLoadTablesAction) {
+      if (isLoadTablesAction && ctx?.db) {
         const updatedSelection = await this.addSelectedTables(ctx, names, names);
         if (!updatedSelection && names.length) {
           const plugin = ctx.app?.pm?.get(NAMESPACE) || ctx.app?.pm?.get('data-source-postgres');
@@ -228,7 +236,7 @@ export class PostgresDataSource extends SequelizeDataSource {
         }
       }
     } finally {
-      if (!this.isLoaded) await this.close();
+      if (!this.isLoaded && !this.reusedDatabase) await this.close();
     }
   }
 
@@ -275,6 +283,43 @@ export class PostgresDataSource extends SequelizeDataSource {
           [inferred],
           saved ? { ...localData, [inferred.name]: saved } : localData,
         );
+        const inferredByColumn = new Map<string, Record<string, unknown>>();
+        const inferredByName = new Map<string, Record<string, unknown>>();
+        for (const field of inferred.fields || []) {
+          const record = field as unknown as Record<string, unknown>;
+          const colKey = String(record.columnName || record.field || record.name || '');
+          if (colKey && !inferredByColumn.has(colKey)) {
+            inferredByColumn.set(colKey, record);
+          }
+          if (typeof record.name === 'string' && !inferredByName.has(record.name)) {
+            inferredByName.set(record.name, record);
+          }
+        }
+        for (const field of merged.fields || []) {
+          const fieldRecord = field as unknown as Record<string, unknown>;
+          const colKey = String(fieldRecord.columnName || fieldRecord.field || fieldRecord.name || '');
+          const inferredField =
+            (colKey ? inferredByColumn.get(colKey) : undefined) || inferredByName.get(String(field.name || ''));
+          if (inferredField) {
+            if (inferredField.rawType !== undefined) {
+              fieldRecord.rawType = inferredField.rawType;
+            }
+            if (field.type === 'array' || field.type === 'set') {
+              if (inferredField.dataType === 'array' || isPostgresPhysicalArrayRawType(inferredField.rawType)) {
+                fieldRecord.dataType = 'array';
+                if (
+                  (typeof fieldRecord.elementType !== 'string' || !fieldRecord.elementType.trim()) &&
+                  typeof inferredField.elementType === 'string'
+                ) {
+                  fieldRecord.elementType = inferredField.elementType;
+                }
+              } else {
+                // Keep JSONB storage for legacy array fields backed by JSON/JSONB columns in PostgreSQL.
+                fieldRecord.dataType = 'json';
+              }
+            }
+          }
+        }
         const identityNames = identityByTable.get(tableName);
         if (identityNames?.size) {
           for (const field of merged.fields || []) {

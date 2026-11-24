@@ -58,6 +58,14 @@ describe('MSSQL V2 native datasource settings', () => {
     expect(screen.getByText('Request timeout (ms)')).toBeTruthy();
     expect(screen.getByText('Lock timeout (ms)')).toBeTruthy();
     expect(screen.getByText('Full-text search mode')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Substring filters ($includes / $notIncludes) always use LIKE so read and write results match; Auto only preloads full-text index metadata, while Off skips full-text catalog queries',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Auto (preload FTS metadata, filter with LIKE)')).toBeTruthy();
+    expect(screen.getByText('Off (skip FTS metadata, filter with LIKE)')).toBeTruthy();
+    expect(screen.queryByText('Auto (use FTS when indexed)')).toBeNull();
     expect(screen.getByText('Fast unfiltered count')).toBeTruthy();
     expect(screen.getByText('Slow query warning threshold (ms)')).toBeTruthy();
   });

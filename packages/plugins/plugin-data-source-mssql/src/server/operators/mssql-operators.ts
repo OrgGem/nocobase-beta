@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Op, literal, type ModelStatic } from 'sequelize';
-import {
-  isPureAscii,
-  quoteAnsiStringLiteral,
-  quoteIdentifier,
-  quoteQualifiedIdentifier,
-  quoteUnicodeStringLiteral,
-} from '../security/sql-quote';
+import { isPureAscii, quoteAnsiStringLiteral } from '../security/sql-quote';
 
 export type FullTextSearchMode = 'auto' | 'off';
 
@@ -36,13 +30,6 @@ export interface MssqlOperatorContext {
   fieldName?: string;
   fullName?: string;
   fieldPath?: string;
-}
-
-const WRITE_ACTION_NAMES = new Set(['update', 'destroy', 'updateMany', 'destroyMany']);
-
-function isWriteActionContext(ctx?: MssqlOperatorContext): boolean {
-  const actionName = ctx?.app?.ctx?.action?.actionName;
-  return typeof actionName === 'string' && WRITE_ACTION_NAMES.has(actionName);
 }
 
 export interface ResolvedOperatorTarget {
@@ -143,13 +130,6 @@ export function resolveOperatorTarget(ctx?: MssqlOperatorContext): ResolvedOpera
   return { tableName, columnName, qualifier };
 }
 
-function formatQualifiedColumn(target: ResolvedOperatorTarget): string {
-  if (target.qualifier) {
-    return quoteQualifiedIdentifier([target.qualifier, target.columnName]);
-  }
-  return quoteIdentifier(target.columnName);
-}
-
 function toSargableStringValue(value: unknown, useAnsi: boolean): unknown {
   if (useAnsi && typeof value === 'string' && isPureAscii(value)) {
     return literal(quoteAnsiStringLiteral(value));
@@ -166,8 +146,8 @@ function isStringField(ctx?: MssqlOperatorContext): boolean {
 
 export function createMssqlOperators(
   introspector: MssqlOperatorIntrospector,
-  getFtsMode: () => FullTextSearchMode = () => 'auto',
-  isFtsSuspended: () => boolean = () => false,
+  _getFtsMode: () => FullTextSearchMode = () => 'auto',
+  _isFtsSuspended: () => boolean = () => false,
 ) {
   const shouldUseAnsi = (target: ResolvedOperatorTarget): boolean => {
     if (!target.tableName || !target.columnName) {
@@ -196,31 +176,13 @@ export function createMssqlOperators(
     return { [op]: toSargableStringValue(pattern(escapeMssqlLike(value)), useAnsi) };
   };
 
+  // Use substring LIKE identically for reads and writes; CONTAINS() prefix matching misses infix substrings such as
+  // 'foobar' for 'bar' and can diverge between read results and update/delete targets.
   const buildIncludesClause = (value: unknown, ctx: MssqlOperatorContext) => {
     if (value === null) {
       return { [Op.is]: null };
     }
-    const likeClause = buildLikeClause(value, ctx, (escaped) => `%${escaped}%`, false);
-    const target = resolveOperatorTarget(ctx);
-    if (
-      getFtsMode() !== 'off' &&
-      !isFtsSuspended() &&
-      !isWriteActionContext(ctx) &&
-      target.tableName &&
-      target.columnName &&
-      introspector.hasFTSIndex(target.tableName, target.columnName)
-    ) {
-      const ftsCondition = buildFtsSearchCondition(value);
-      if (ftsCondition) {
-        // Combine CONTAINS() (uses the FTS index to narrow candidates) with an exact LIKE post-filter
-        // so multi-word ordering and punctuation match strictly with zero false positives.
-        const containsLiteral = literal(
-          `CONTAINS(${formatQualifiedColumn(target)}, ${quoteUnicodeStringLiteral(ftsCondition)})`,
-        );
-        return { [Op.and]: [containsLiteral, likeClause] };
-      }
-    }
-    return likeClause;
+    return buildLikeClause(value, ctx, (escaped) => `%${escaped}%`, false);
   };
 
   return {

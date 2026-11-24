@@ -62,95 +62,150 @@ function consumeDoubleQuotedIdentifier(sql: string, start: number): { nextIndex:
   return { nextIndex: i, sanitized: `"${raw.replace(/[^A-Za-z0-9_]/g, ' ')}"` };
 }
 
-function sanitizeSQL(sql: string): string {
+function scanSqlTokens(sql: string, strict: boolean): { sanitized: string; trailingSemicolonIndices: number[] } | null {
   const out: string[] = [];
+  const nonTrivia: Array<'code' | number> = [];
   let i = 0;
 
-  while (i < sql.length) {
-    const ch = sql[i];
-    const next = sql[i + 1];
+  try {
+    while (i < sql.length) {
+      const ch = sql[i];
+      const next = sql[i + 1];
 
-    if (ch === '-' && next === '-') {
-      i += 2;
-      while (i < sql.length && sql[i] !== '\n') i += 1;
-      out.push(' ');
-      continue;
-    }
+      if (ch === '-' && next === '-') {
+        i += 2;
+        while (i < sql.length && sql[i] !== '\n') i += 1;
+        out.push(' ');
+        continue;
+      }
 
-    if (ch === '/' && next === '*') {
-      let depth = 1;
-      i += 2;
-      while (i < sql.length && depth > 0) {
-        if (sql[i] === '/' && sql[i + 1] === '*') {
-          depth += 1;
-          i += 2;
-        } else if (sql[i] === '*' && sql[i + 1] === '/') {
-          depth -= 1;
-          i += 2;
-        } else {
-          i += 1;
+      if (ch === '/' && next === '*') {
+        let depth = 1;
+        i += 2;
+        while (i < sql.length && depth > 0) {
+          if (sql[i] === '/' && sql[i + 1] === '*') {
+            depth += 1;
+            i += 2;
+          } else if (sql[i] === '*' && sql[i + 1] === '/') {
+            depth -= 1;
+            i += 2;
+          } else {
+            i += 1;
+          }
+        }
+        if (depth > 0) throw new PostgresValidationError('Invalid or unsupported SQL syntax');
+        out.push(' ');
+        continue;
+      }
+
+      if (/\s/.test(ch)) {
+        out.push(ch);
+        i += 1;
+        continue;
+      }
+
+      if ((ch === 'u' || ch === 'U') && next === '&' && (sql[i + 2] === "'" || sql[i + 2] === '"')) {
+        if (strict) throw new PostgresValidationError('Invalid or unsupported SQL syntax');
+        out.push(sql.slice(i, i + 2));
+        nonTrivia.push('code');
+        i += 2;
+        continue;
+      }
+
+      if ((ch === 'e' || ch === 'E') && next === "'" && (i === 0 || !/[A-Za-z0-9\x80-\uffff_$]/.test(sql[i - 1]))) {
+        i = consumeQuotedLiteral(sql, i + 2, true);
+        out.push("''");
+        nonTrivia.push('code');
+        continue;
+      }
+
+      if (/[A-Za-z\x80-\uffff_]/.test(ch)) {
+        const start = i;
+        i += 1;
+        while (i < sql.length && /[A-Za-z0-9\x80-\uffff_$]/.test(sql[i])) i += 1;
+        out.push(sql.slice(start, i));
+        nonTrivia.push('code');
+        continue;
+      }
+
+      if (ch === "'") {
+        i = consumeQuotedLiteral(sql, i + 1, false);
+        out.push("''");
+        nonTrivia.push('code');
+        continue;
+      }
+
+      if (ch === '"') {
+        const parsed = consumeDoubleQuotedIdentifier(sql, i);
+        out.push(parsed.sanitized);
+        nonTrivia.push('code');
+        i = parsed.nextIndex;
+        continue;
+      }
+
+      if (ch === '$') {
+        const tail = sql.slice(i);
+        const paramMatch = tail.match(/^\$[0-9]+/);
+        if (paramMatch) {
+          out.push(paramMatch[0]);
+          nonTrivia.push('code');
+          i += paramMatch[0].length;
+          continue;
+        }
+        const tagMatch = tail.match(/^\$(?:[A-Za-z\x80-\uffff_][A-Za-z0-9\x80-\uffff_]*)?\$/);
+        if (tagMatch) {
+          const tag = tagMatch[0];
+          const end = sql.indexOf(tag, i + tag.length);
+          if (end === -1) throw new PostgresValidationError('Invalid or unsupported SQL syntax');
+          i = end + tag.length;
+          out.push("''");
+          nonTrivia.push('code');
+          continue;
         }
       }
-      if (depth > 0) throw new PostgresValidationError('Invalid or unsupported SQL syntax');
-      out.push(' ');
-      continue;
-    }
 
-    if ((ch === 'u' || ch === 'U') && next === '&' && (sql[i + 2] === "'" || sql[i + 2] === '"')) {
-      throw new PostgresValidationError('Invalid or unsupported SQL syntax');
-    }
+      if (ch === ';') {
+        out.push(';');
+        nonTrivia.push(i);
+        i += 1;
+        continue;
+      }
 
-    if ((ch === 'e' || ch === 'E') && next === "'" && (i === 0 || !/[A-Za-z0-9\x80-\uffff_$]/.test(sql[i - 1]))) {
-      i = consumeQuotedLiteral(sql, i + 2, true);
-      out.push("''");
-      continue;
-    }
-
-    if (/[A-Za-z\x80-\uffff_]/.test(ch)) {
-      const start = i;
+      out.push(ch);
+      nonTrivia.push('code');
       i += 1;
-      while (i < sql.length && /[A-Za-z0-9\x80-\uffff_$]/.test(sql[i])) i += 1;
-      out.push(sql.slice(start, i));
-      continue;
     }
-
-    if (ch === "'") {
-      i = consumeQuotedLiteral(sql, i + 1, false);
-      out.push("''");
-      continue;
-    }
-
-    if (ch === '"') {
-      const parsed = consumeDoubleQuotedIdentifier(sql, i);
-      out.push(parsed.sanitized);
-      i = parsed.nextIndex;
-      continue;
-    }
-
-    if (ch === '$') {
-      const tail = sql.slice(i);
-      const paramMatch = tail.match(/^\$[0-9]+/);
-      if (paramMatch) {
-        out.push(paramMatch[0]);
-        i += paramMatch[0].length;
-        continue;
-      }
-      const tagMatch = tail.match(/^\$(?:[A-Za-z\x80-\uffff_][A-Za-z0-9\x80-\uffff_]*)?\$/);
-      if (tagMatch) {
-        const tag = tagMatch[0];
-        const end = sql.indexOf(tag, i + tag.length);
-        if (end === -1) throw new PostgresValidationError('Invalid or unsupported SQL syntax');
-        i = end + tag.length;
-        out.push("''");
-        continue;
-      }
-    }
-
-    out.push(ch);
-    i += 1;
+  } catch (error) {
+    if (strict) throw error;
+    return null;
   }
 
-  return out.join('').trim();
+  const trailingSemicolonIndices: number[] = [];
+  for (let idx = nonTrivia.length - 1; idx >= 0; idx -= 1) {
+    const token = nonTrivia[idx];
+    if (typeof token !== 'number') break;
+    trailingSemicolonIndices.push(token);
+  }
+  return { sanitized: out.join('').trim(), trailingSemicolonIndices };
+}
+
+function sanitizeSQL(sql: string): string {
+  const scanned = scanSqlTokens(sql, true);
+  if (!scanned) throw new PostgresValidationError('Invalid or unsupported SQL syntax');
+  return scanned.sanitized;
+}
+
+/**
+ * Strip trailing statement semicolons after any comments/whitespace so subquery wrapping stays valid.
+ */
+export function normalizeSqlCollectionQuery(sql: string): string {
+  const scanned = scanSqlTokens(sql, false);
+  if (!scanned) return sql.trim();
+  let working = sql;
+  for (const semiIndex of scanned.trailingSemicolonIndices) {
+    working = working.slice(0, semiIndex) + working.slice(semiIndex + 1);
+  }
+  return working.trim();
 }
 
 /**

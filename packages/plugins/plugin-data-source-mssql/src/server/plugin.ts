@@ -447,7 +447,12 @@ export class PluginDataSourceMssqlServer extends Plugin {
       if (unpreparedTargets.length > 0) {
         dataSource.introspector.invalidateTables?.(unpreparedTargets);
       }
-      await dataSource.introspector.preloadFTSIndexedColumns(schema, [...selected]);
+      const ftsMode =
+        (resolvedConfiguration as MssqlDataSourceOptions | undefined)?.fullTextSearchMode ??
+        (dataSource.options as MssqlDataSourceOptions | undefined)?.fullTextSearchMode;
+      if (ftsMode !== 'off') {
+        await dataSource.introspector.preloadFTSIndexedColumns(schema, [...selected]);
+      }
       if (unpreparedTargets.length > 1) {
         await dataSource.introspector.preloadAllColumns?.(schema, unpreparedTargets);
         await dataSource.introspector.preloadAllPrimaryKeys?.(schema, unpreparedTargets);

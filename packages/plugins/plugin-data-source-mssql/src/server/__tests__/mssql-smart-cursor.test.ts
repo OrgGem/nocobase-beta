@@ -147,32 +147,39 @@ describe('MssqlSmartCursorBuilder', () => {
       expect(nextWhere[Op.and]).toEqual([{ id: { [Op.lte]: 1000 } }, { id: { [Op.gt]: 100 } }]);
     });
 
-    it('appends filterTargetKey tie-breaker to non-unique index and stops early when batch < chunkSize', async () => {
+    it('uses single non-offset query with non-unique index ordering when no unique index exists', async () => {
       const sequelize = makeSequelize([
         { INDEX_NAME: 'idx_status', COLUMN_NAME: 'status', SEQ_IN_INDEX: 1, INDEX_TYPE: 3, DIRECTION: 'ASC' },
       ]);
       const builder = new MssqlSmartCursorBuilder(sequelize, 'Users', { filterTargetKey: 'id' });
-      const calls: any[] = [];
+      const strategy = await (
+        builder as unknown as { getBestCursorStrategy(): Promise<unknown> }
+      ).getBestCursorStrategy();
+      expect(strategy).toBeNull();
 
+      const calls: Array<{ offset?: number; limit?: number; order?: unknown }> = [];
+      const delivered: Array<{ status: string; id: number }> = [];
       await builder.chunk({
         chunkSize: 3,
-        callback: async () => {},
-        find: async (opts: any) => {
-          calls.push(opts);
-          return calls.length === 1
-            ? [
-                { status: 'a', id: 1 },
-                { status: 'a', id: 2 },
-              ]
-            : [];
+        callback: async (rows: Array<{ status: string; id: number }>) => {
+          delivered.push(...rows);
         },
-      } as any);
+        find: async (opts: { offset?: number; limit?: number; order?: unknown }) => {
+          calls.push(opts);
+          return [
+            { status: 'a', id: 1 },
+            { status: 'a', id: 2 },
+          ];
+        },
+      } as never);
 
-      // Should stop after 1st batch (2 < chunkSize 3) without issuing a redundant 2nd query
       expect(calls).toHaveLength(1);
-      expect(calls[0].order).toEqual([
-        ['status', 'ASC'],
-        ['id', 'ASC'],
+      expect(calls[0].offset).toBeUndefined();
+      expect(calls[0].limit).toBeUndefined();
+      expect(calls[0].order).toEqual([['status', 'ASC']]);
+      expect(delivered).toEqual([
+        { status: 'a', id: 1 },
+        { status: 'a', id: 2 },
       ]);
     });
 
@@ -514,7 +521,7 @@ describe('MssqlSmartCursorBuilder', () => {
       expect(deliveredFromAttrExclude.every((r) => !('id' in r))).toBe(true);
     });
 
-    it('falls back to the first model attribute on PK-less tables without an id column', async () => {
+    it('avoids multi-query OFFSET drift on duplicate rows by reading once without offset when no unique key exists', async () => {
       const sequelize = makeSequelize([]);
       const pkLessCollection = {
         filterTargetKey: undefined as unknown as string,
@@ -526,8 +533,101 @@ describe('MssqlSmartCursorBuilder', () => {
         },
       };
       const builder = new MssqlSmartCursorBuilder(sequelize, 'AuditItems', pkLessCollection);
-      const strategy = await (builder as any).getBestCursorStrategy();
-      expect(strategy.buildSort()).toEqual([['code', 'ASC']]);
+      const strategy = await builder.getBestCursorStrategy();
+      expect(strategy).toBeNull();
+
+      // Adversarial mock simulating unstable scan order across separate SQL queries on duplicate keys:
+      // if chunk() ever re-queries with OFFSET, it throws or permutes duplicate 'A' rows.
+      const scanSnapshot = [
+        { code: 'A', title: 'first' },
+        { code: 'A', title: 'second' },
+        { code: 'A', title: 'third' },
+        { code: 'B', title: 'fourth' },
+        { code: 'B', title: 'fifth' },
+      ];
+      let findCallCount = 0;
+      const seenOffsets: Array<number | undefined> = [];
+      const batchSizes: number[] = [];
+      const delivered: Array<{ code: string; title: string }> = [];
+
+      await builder.chunk({
+        chunkSize: 2,
+        find: async (opts: { offset?: number; limit?: number }) => {
+          findCallCount += 1;
+          seenOffsets.push(opts.offset);
+          if (opts.offset !== undefined) {
+            throw new Error(`Unexpected OFFSET query (offset=${opts.offset}) on unique-less table`);
+          }
+          if (findCallCount === 1) {
+            return scanSnapshot;
+          }
+          // Simulated shifted duplicate order if a 2nd scan had occurred
+          return [scanSnapshot[2], scanSnapshot[0], scanSnapshot[1], scanSnapshot[4], scanSnapshot[3]];
+        },
+        callback: async (rows: Array<{ code: string; title: string }>) => {
+          batchSizes.push(rows.length);
+          delivered.push(...rows);
+        },
+      } as never);
+
+      expect(findCallCount).toBe(1);
+      expect(seenOffsets).toEqual([undefined]);
+      expect(batchSizes).toEqual([2, 2, 1]);
+      expect(delivered).toEqual(scanSnapshot);
+    });
+
+    it('delegates single-query execution to options.stream and honors overall limit when no unique key exists', async () => {
+      const sequelize = makeSequelize([]);
+      const pkLessCollection = {
+        filterTargetKey: undefined as unknown as string,
+        model: {
+          rawAttributes: {
+            code: { field: 'ItemCode' },
+            title: { field: 'ItemTitle' },
+          },
+        },
+      };
+      const builder = new MssqlSmartCursorBuilder(sequelize, 'AuditItems', pkLessCollection);
+      const findSpy = vi.fn();
+      const streamCalls: Array<{ offset?: number; limit?: number }> = [];
+      const hookOrder: string[] = [];
+      const delivered: Array<{ code: string; title: string }> = [];
+
+      await builder.chunk({
+        chunkSize: 2,
+        limit: 3,
+        find: findSpy,
+        beforeFind: async () => {
+          hookOrder.push('beforeFind');
+        },
+        afterFind: async (rows: Array<{ code: string; title: string }>) => {
+          hookOrder.push(`afterFind:${rows.length}`);
+        },
+        stream: async (queryOpts, onBatch) => {
+          streamCalls.push({ offset: queryOpts.offset, limit: queryOpts.limit });
+          await onBatch(
+            [
+              { code: 'A', title: 'first' },
+              { code: 'A', title: 'second' },
+            ] as never,
+            queryOpts,
+          );
+          await onBatch([{ code: 'A', title: 'third' }] as never, queryOpts);
+        },
+        callback: async (rows: Array<{ code: string; title: string }>) => {
+          hookOrder.push(`callback:${rows.length}`);
+          delivered.push(...rows);
+        },
+      });
+
+      expect(findSpy).not.toHaveBeenCalled();
+      expect(streamCalls).toEqual([{ offset: undefined, limit: 3 }]);
+      expect(delivered).toEqual([
+        { code: 'A', title: 'first' },
+        { code: 'A', title: 'second' },
+        { code: 'A', title: 'third' },
+      ]);
+      expect(hookOrder).toEqual(['beforeFind', 'afterFind:2', 'callback:2', 'beforeFind', 'afterFind:1', 'callback:1']);
     });
   });
 });

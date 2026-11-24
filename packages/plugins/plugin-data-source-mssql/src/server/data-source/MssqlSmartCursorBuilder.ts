@@ -48,6 +48,13 @@ interface FindOptions {
   [key: string]: unknown;
 }
 
+export interface MssqlChunkOptions extends FindOptions {
+  stream?: (
+    queryOptions: FindOptions,
+    onBatch: (rows: Model[], queryOptions: FindOptions) => Promise<void>,
+  ) => Promise<void>;
+}
+
 /**
  * Cursor-based pagination strategy interface
  */
@@ -379,7 +386,9 @@ export class MssqlSmartCursorBuilder {
   private tableName: string;
   private collection: CursorCollectionLike;
   private schema?: string;
+  private strategyResolved = false;
   private cachedStrategy: CursorStrategy | null = null;
+  private cachedFallbackOrder?: Array<[string, SortDirection]>;
 
   constructor(sequelize: Sequelize, tableName: string, collection: CursorCollectionLike, schema?: string) {
     this.sequelize = sequelize;
@@ -424,10 +433,11 @@ export class MssqlSmartCursorBuilder {
 
   /**
    * Auto-detect the best cursor strategy based on table structure.
-   * Uses MSSQL system views to find an optimal unique index for cursor pagination and caches the result.
+   * Uses keyset pagination only when a primary key or unique index guarantees strict row uniqueness;
+   * otherwise returns `null` so `chunk()` uses single-query streaming without multi-query OFFSET drift.
    */
-  private async getBestCursorStrategy(): Promise<CursorStrategy> {
-    if (this.cachedStrategy) {
+  public async getBestCursorStrategy(): Promise<CursorStrategy | null> {
+    if (this.strategyResolved) {
       return this.cachedStrategy;
     }
 
@@ -471,8 +481,9 @@ export class MssqlSmartCursorBuilder {
       const attrToPhysical = new Map<string, string>();
 
       if (!indexRows || indexRows.length === 0) {
-        this.cachedStrategy = this.getFallbackStrategy();
-        return this.cachedStrategy;
+        this.strategyResolved = true;
+        this.cachedStrategy = null;
+        return null;
       }
 
       for (const row of indexRows) {
@@ -531,10 +542,16 @@ export class MssqlSmartCursorBuilder {
         return new CompositeKeyCursorStrategy(index.columns, directions, physicalColumns, nullables);
       };
 
+      const rawAttributes = this.collection.model?.rawAttributes;
+      const isUsableIndex = (index: IndexInfo): boolean =>
+        index.columns.length > 0 &&
+        (!rawAttributes || index.columns.every((col) => Object.prototype.hasOwnProperty.call(rawAttributes, col)));
+
       // 1. Primary key (guaranteed unique)
       for (const index of indexes.values()) {
-        if (index.isPrimary && index.columns.length > 0) {
+        if (index.isPrimary && isUsableIndex(index)) {
           this.cachedStrategy = buildStrategyForIndex(index);
+          this.strategyResolved = true;
           return this.cachedStrategy;
         }
       }
@@ -544,7 +561,7 @@ export class MssqlSmartCursorBuilder {
       let multiColumnUniqueIndex: IndexInfo | null = null;
 
       for (const index of indexes.values()) {
-        if (index.isUnique && !index.isPrimary && index.columns.length > 0) {
+        if (index.isUnique && !index.isPrimary && isUsableIndex(index)) {
           if (index.columns.length === 1 && !singleColumnUniqueIndex) {
             singleColumnUniqueIndex = index;
           } else if (index.columns.length > 1 && !multiColumnUniqueIndex) {
@@ -555,88 +572,116 @@ export class MssqlSmartCursorBuilder {
 
       if (singleColumnUniqueIndex) {
         this.cachedStrategy = buildStrategyForIndex(singleColumnUniqueIndex);
+        this.strategyResolved = true;
         return this.cachedStrategy;
       }
 
       if (multiColumnUniqueIndex) {
         this.cachedStrategy = buildStrategyForIndex(multiColumnUniqueIndex);
+        this.strategyResolved = true;
         return this.cachedStrategy;
       }
 
-      // 3. Non-unique index alone would skip duplicate rows across batch boundaries; append unique
-      // filterTargetKey columns as tie-breakers when available, otherwise fall back to filterTargetKey.
-      const tieBreakers = Array.isArray(this.collection.filterTargetKey)
-        ? this.collection.filterTargetKey
-        : this.collection.filterTargetKey
-          ? [this.collection.filterTargetKey]
-          : [];
-
+      // No guaranteed-unique index exists; preserve any usable non-unique index ordering for offset fallback
+      // rather than risking silent row loss across batch boundaries with keyset pagination.
       for (const index of indexes.values()) {
-        if (index.columns.length > 0 && !index.isPrimary && !index.isUnique && tieBreakers.length > 0) {
-          const combinedCols = [...index.columns];
-          const combinedDirs: SortDirection[] = index.columns.map(
-            (col) => indexDirections.get(index.name)?.get(col) || 'ASC',
+        if (!index.isPrimary && !index.isUnique && isUsableIndex(index)) {
+          this.cachedFallbackOrder = index.columns.map(
+            (col) => [col, indexDirections.get(index.name)?.get(col) || 'ASC'] as [string, SortDirection],
           );
-          for (const tb of tieBreakers) {
-            const attrTb = this.resolveAttributeName(tb);
-            if (!combinedCols.includes(attrTb)) {
-              combinedCols.push(attrTb);
-              combinedDirs.push('ASC');
-            }
-          }
-          const combinedPhysical = combinedCols.map(
-            (col) => attrToPhysical.get(col) ?? this.resolvePhysicalColumnName(col),
-          );
-          const combinedNullables = combinedCols.map((col) => indexNullables.get(index.name)?.get(col) ?? false);
-          this.cachedStrategy =
-            combinedCols.length === 1
-              ? new SingleColumnCursorStrategy(
-                  combinedCols[0],
-                  combinedDirs[0],
-                  combinedPhysical[0],
-                  combinedNullables[0],
-                )
-              : new CompositeKeyCursorStrategy(combinedCols, combinedDirs, combinedPhysical, combinedNullables);
-          return this.cachedStrategy;
+          break;
         }
       }
 
-      this.cachedStrategy = this.getFallbackStrategy();
-      return this.cachedStrategy;
+      this.strategyResolved = true;
+      this.cachedStrategy = null;
+      return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`[MssqlSmartCursorBuilder] Error getting index info: ${message}\n`);
-      return this.getFallbackStrategy();
+      return null;
     }
   }
 
   /**
-   * Fallback strategy when no index information is available
+   * Executes one single non-offset query when no unique index exists, avoiding row drift across
+   * repeated OFFSET scans on SQL Server tables/views with duplicate keys or heap ordering.
    */
-  private getFallbackStrategy(): CursorStrategy {
-    if (Array.isArray(this.collection.filterTargetKey) && this.collection.filterTargetKey.length > 0) {
-      const cols = this.collection.filterTargetKey.map((col) => this.resolveAttributeName(col));
-      return new CompositeKeyCursorStrategy(
-        cols,
-        undefined,
-        cols.map((col) => this.resolvePhysicalColumnName(col)),
-      );
+  private async chunkWithoutUniqueKey(
+    options: MssqlChunkOptions,
+    overallLimit: number | undefined,
+    findFn: NonNullable<FindOptions['find']>,
+    callbackFn: NonNullable<FindOptions['callback']>,
+  ): Promise<void> {
+    const chunkSize = options.chunkSize || 1000;
+    const hasCallerSort = Boolean(
+      (Array.isArray(options.order) ? options.order.length > 0 : options.order) ||
+        (typeof options.sort === 'string'
+          ? options.sort.trim().length > 0
+          : Array.isArray(options.sort) && options.sort.length > 0),
+    );
+
+    const singleQueryOptions = _.omit(
+      options,
+      'callback',
+      'beforeFind',
+      'afterFind',
+      'chunkSize',
+      'find',
+      'stream',
+      'offset',
+    ) as FindOptions;
+    singleQueryOptions.where = options.where;
+    if (overallLimit !== undefined) {
+      singleQueryOptions.limit = overallLimit;
+    } else {
+      delete singleQueryOptions.limit;
     }
-    let fallbackColumn = typeof this.collection.filterTargetKey === 'string' ? this.collection.filterTargetKey : '';
-    if (!fallbackColumn) {
-      const rawAttributes = this.collection.model?.rawAttributes;
-      const attrNames = rawAttributes ? Object.keys(rawAttributes) : [];
-      fallbackColumn = attrNames.includes('id') ? 'id' : attrNames[0] || 'id';
+    delete singleQueryOptions.offset;
+    if (!hasCallerSort && this.cachedFallbackOrder) {
+      singleQueryOptions.order = this.cachedFallbackOrder;
+      singleQueryOptions.parseSort = false;
     }
-    const attr = this.resolveAttributeName(fallbackColumn);
-    return new SingleColumnCursorStrategy(attr, 'ASC', this.resolvePhysicalColumnName(attr));
+
+    if (typeof options.stream === 'function') {
+      let firstBatch = true;
+      if (options.beforeFind) {
+        await options.beforeFind(singleQueryOptions);
+      }
+      await options.stream(singleQueryOptions, async (batch, batchOptions) => {
+        if (!firstBatch && options.beforeFind) {
+          await options.beforeFind(batchOptions);
+        }
+        firstBatch = false;
+        if (options.afterFind) {
+          await options.afterFind(batch, batchOptions);
+        }
+        if (batch.length > 0) {
+          await callbackFn(batch, batchOptions);
+        }
+      });
+      return;
+    }
+
+    if (options.beforeFind) {
+      await options.beforeFind(singleQueryOptions);
+    }
+    const records = await findFn(singleQueryOptions);
+    if (options.afterFind) {
+      await options.afterFind(records, singleQueryOptions);
+    }
+    const bounded =
+      overallLimit !== undefined && records.length > overallLimit ? records.slice(0, overallLimit) : records;
+    for (let offset = 0; offset < bounded.length; offset += chunkSize) {
+      await callbackFn(bounded.slice(offset, offset + chunkSize), singleQueryOptions);
+    }
   }
 
   /**
    * Cursor-based pagination query function.
    * Honors `options.limit` (e.g. `EXPORT_LIMIT`) as an upper bound across all batches.
    */
-  async chunk(options: FindOptions) {
+  async chunk(options: MssqlChunkOptions) {
     const findFn = options.find;
     const callbackFn = options.callback;
     if (!findFn || !callbackFn) {
@@ -649,6 +694,10 @@ export class MssqlSmartCursorBuilder {
     }
 
     const cursorStrategy = await this.getBestCursorStrategy();
+    if (!cursorStrategy) {
+      await this.chunkWithoutUniqueKey(options, overallLimit, findFn, callbackFn);
+      return;
+    }
     let cursorRecord: CursorRow | undefined;
     let isFirst = true;
 

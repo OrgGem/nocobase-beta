@@ -17,6 +17,7 @@ interface FieldOptions {
   name: string;
   field?: string;
   type?: string;
+  dataType?: string;
   allowNull?: boolean;
   defaultValue?: unknown;
   unique?: boolean;
@@ -26,7 +27,49 @@ interface FieldOptions {
   precision?: number;
   scale?: number;
   elementType?: string;
+  [key: string]: unknown;
 }
+
+const POSTGRES_BUILD_FIELD_NORMALIZED = Symbol('postgresBuildFieldNormalized');
+
+export function isPostgresPhysicalArrayRawType(rawType: unknown): boolean {
+  if (typeof rawType !== 'string') return false;
+  const trimmed = rawType.trim();
+  return trimmed.toUpperCase() === 'ARRAY' || trimmed.endsWith('[]');
+}
+
+export function applyPostgresArrayDataType<T extends Record<string, unknown>>(field: T): T {
+  const type = field.type;
+  if (type !== 'array' && type !== 'set') {
+    return field;
+  }
+  const hasRawType = typeof field.rawType === 'string' && field.rawType.trim().length > 0;
+  if (hasRawType && !isPostgresPhysicalArrayRawType(field.rawType)) {
+    if (field.dataType === undefined || field.dataType === null || field.dataType === '') {
+      Object.assign(field, { dataType: 'json' });
+    }
+    return field;
+  }
+  const elementType = field.elementType;
+  if (
+    typeof elementType === 'string' &&
+    elementType.trim().length > 0 &&
+    (field.dataType === undefined || field.dataType === null || field.dataType === '')
+  ) {
+    Object.assign(field, { dataType: 'array' });
+  }
+  return field;
+}
+
+type SequelizeWithNormalize = {
+  normalizeDataType?: (type: unknown) => { toSql?: () => string; key?: string };
+};
+
+const SAFE_ARRAY_TYPE_RE =
+  /^[a-zA-Z_][a-zA-Z0-9_]*(?:\(\d+(?:\s*,\s*\d+)?\))?(?:\s+[a-zA-Z_][a-zA-Z0-9_]*)*(?:\(\d+(?:\s*,\s*\d+)?\))?(?:\[\])+$/;
+const INTEGER_ELEMENT_TYPES = new Set(['smallint', 'integer', 'int', 'int2', 'int4', 'bigint', 'int8']);
+const NUMERIC_ELEMENT_TYPES = new Set(['real', 'float', 'float4', 'float8', 'double precision', 'numeric', 'decimal']);
+const BOOLEAN_ELEMENT_TYPES = new Set(['boolean', 'bool']);
 
 interface UniqueIndex {
   indexName: string;
@@ -45,12 +88,51 @@ interface ForeignKeyOptions {
 }
 
 export class PostgresCollectionManager extends SequelizeCollectionManager {
-  defineCollection(options: CollectionOptions) {
-    if (options.tree) {
-      const { tree, ...rest } = options;
-      return super.defineCollection({ ...rest, postgresTree: tree, template: options.template || 'tree' });
+  constructor(options?: ConstructorParameters<typeof SequelizeCollectionManager>[0]) {
+    super(options);
+    this.installArrayFieldNormalizer();
+  }
+
+  private installArrayFieldNormalizer(): void {
+    const dbRecord = this.db as unknown as {
+      buildField?: ((options: Record<string, unknown>, context: unknown) => unknown) & {
+        [POSTGRES_BUILD_FIELD_NORMALIZED]?: boolean;
+      };
+    };
+    const originalBuildField = dbRecord?.buildField;
+    if (typeof originalBuildField !== 'function' || originalBuildField[POSTGRES_BUILD_FIELD_NORMALIZED]) {
+      return;
     }
-    return super.defineCollection(options);
+    const wrappedBuildField = function (this: unknown, fieldOptions: Record<string, unknown>, context: unknown) {
+      if (fieldOptions && typeof fieldOptions === 'object') {
+        applyPostgresArrayDataType(fieldOptions);
+      }
+      return originalBuildField.call(this, fieldOptions, context);
+    } as typeof originalBuildField;
+    wrappedBuildField[POSTGRES_BUILD_FIELD_NORMALIZED] = true;
+    dbRecord.buildField = wrappedBuildField;
+  }
+
+  defineCollection(options: CollectionOptions) {
+    const normalizedOptions = Array.isArray(options.fields)
+      ? {
+          ...options,
+          fields: options.fields.map((field) =>
+            field && typeof field === 'object'
+              ? applyPostgresArrayDataType({ ...(field as Record<string, unknown>) })
+              : field,
+          ),
+        }
+      : options;
+    if (normalizedOptions.tree) {
+      const { tree, ...rest } = normalizedOptions;
+      return super.defineCollection({
+        ...rest,
+        postgresTree: tree,
+        template: normalizedOptions.template || 'tree',
+      } as CollectionOptions);
+    }
+    return super.defineCollection(normalizedOptions as CollectionOptions);
   }
 
   replaceCollections(collections: CollectionOptions[]): void {
@@ -112,23 +194,23 @@ export class PostgresCollectionManager extends SequelizeCollectionManager {
   private fieldType(collectionName: string, options: FieldOptions): string {
     const collection = this.getCollection(collectionName);
     if (!collection) throw new PostgresValidationError('Collection {{name}} does not exist', { name: collectionName });
-    const field = this.db.buildField({ ...options }, { collection, database: this.db });
+    const buildOptions: FieldOptions = applyPostgresArrayDataType({ ...options });
+    const field = this.db.buildField(buildOptions, { collection, database: this.db });
     if (field.isRelationField() || !field.dataType) {
       throw new PostgresValidationError('Field type {{type}} does not represent a PostgreSQL column', {
         type: options.type || '',
       });
     }
     const sequelizeField = field.toSequelize() as { type?: { toSql?: () => string; key?: string } };
-    if (
-      !sequelizeField.type ||
-      sequelizeField.type.key === 'VIRTUAL' ||
-      typeof sequelizeField.type.toSql !== 'function'
-    ) {
+    const normalizedType =
+      (this.db.sequelize as unknown as SequelizeWithNormalize).normalizeDataType?.(sequelizeField.type) ??
+      sequelizeField.type;
+    if (!normalizedType || normalizedType.key === 'VIRTUAL' || typeof normalizedType.toSql !== 'function') {
       throw new PostgresValidationError('Field type {{type}} does not represent a PostgreSQL column', {
         type: options.type || '',
       });
     }
-    const sqlType = sequelizeField.type.toSql();
+    const sqlType = normalizedType.toSql();
     if (!sqlType || sqlType.toUpperCase() === 'VIRTUAL') {
       throw new PostgresValidationError('Field type {{type}} does not represent a PostgreSQL column', {
         type: options.type || '',
@@ -159,6 +241,17 @@ export class PostgresCollectionManager extends SequelizeCollectionManager {
     return columns[0]?.dataType;
   }
 
+  async isPhysicalArrayColumn(
+    collectionName: string,
+    columnName: string,
+    transaction?: Transaction,
+  ): Promise<boolean | undefined> {
+    const { schema, tableName } = this.tableInfo(collectionName);
+    const columnType = await this.getColumnDataType(schema, tableName, columnName, transaction);
+    if (columnType === undefined) return undefined;
+    return isPostgresPhysicalArrayRawType(columnType);
+  }
+
   private async isColumnNotNull(
     schema: string,
     tableName: string,
@@ -181,14 +274,105 @@ export class PostgresCollectionManager extends SequelizeCollectionManager {
     return columns[0]?.notNull === true;
   }
 
-  private defaultSql(value: unknown): string {
-    const literal =
-      typeof value === 'object' && value !== null && !(value instanceof Date) ? JSON.stringify(value) : value;
-    if (literal === null) return 'NULL';
-    if (typeof literal === 'boolean') return literal ? 'TRUE' : 'FALSE';
-    if (typeof literal === 'bigint') return String(literal);
-    if (typeof literal === 'string' || typeof literal === 'number' || literal instanceof Date) {
-      return this.db.sequelize.escape(literal);
+  private formatArrayDefaultElement(element: unknown, elementType: string): string {
+    if (element === null) return 'NULL';
+    if (element === undefined || typeof element === 'function' || typeof element === 'symbol') {
+      throw new PostgresValidationError('Unsupported PostgreSQL default value');
+    }
+    if (elementType.endsWith('[]')) {
+      if (!Array.isArray(element)) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+      if (!element.length) return `ARRAY[]::${elementType}`;
+      const innerType = elementType.slice(0, -2);
+      return `ARRAY[${element.map((item) => this.formatArrayDefaultElement(item, innerType)).join(', ')}]`;
+    }
+    const baseType = elementType
+      .replace(/\([^)]*\)/g, '')
+      .trim()
+      .toLowerCase();
+    if (baseType === 'json' || baseType === 'jsonb') {
+      const encoded = JSON.stringify(element);
+      if (encoded === undefined) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+      return `${this.db.sequelize.escape(encoded)}::${baseType}`;
+    }
+    if (INTEGER_ELEMENT_TYPES.has(baseType)) {
+      if (typeof element === 'bigint') return String(element);
+      if (typeof element === 'number') {
+        if (!Number.isSafeInteger(element)) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+        return String(element);
+      }
+      if (typeof element === 'string' && /^[+-]?\d+$/.test(element.trim())) return element.trim();
+      throw new PostgresValidationError('Unsupported PostgreSQL default value');
+    }
+    if (NUMERIC_ELEMENT_TYPES.has(baseType)) {
+      if (typeof element === 'bigint') return String(element);
+      if (typeof element === 'number') {
+        if (!Number.isFinite(element)) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+        return String(element);
+      }
+      if (typeof element === 'string' && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(element.trim())) {
+        return element.trim();
+      }
+      throw new PostgresValidationError('Unsupported PostgreSQL default value');
+    }
+    if (BOOLEAN_ELEMENT_TYPES.has(baseType)) {
+      if (typeof element === 'boolean') return element ? 'TRUE' : 'FALSE';
+      throw new PostgresValidationError('Unsupported PostgreSQL default value');
+    }
+    if (typeof element === 'boolean') return element ? 'TRUE' : 'FALSE';
+    if (typeof element === 'bigint') return String(element);
+    if (typeof element === 'number') {
+      if (!Number.isFinite(element)) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+      return this.db.sequelize.escape(element);
+    }
+    if (typeof element === 'string' || element instanceof Date) {
+      return this.db.sequelize.escape(element);
+    }
+    throw new PostgresValidationError('Unsupported PostgreSQL default value');
+  }
+
+  private defaultSql(value: unknown, columnType?: string): string {
+    if (value === null) return 'NULL';
+    const rawType = (columnType || '').trim();
+    const lowerType = rawType.toLowerCase();
+
+    if (lowerType.endsWith('[]')) {
+      if (!SAFE_ARRAY_TYPE_RE.test(rawType)) {
+        throw new PostgresValidationError('Unsupported PostgreSQL default value');
+      }
+      if (Array.isArray(value)) {
+        if (!value.length) return `ARRAY[]::${rawType}`;
+        const innerType = rawType.slice(0, -2);
+        return `ARRAY[${value.map((item) => this.formatArrayDefaultElement(item, innerType)).join(', ')}]::${rawType}`;
+      }
+      if (typeof value === 'string') {
+        return `${this.db.sequelize.escape(value)}::${rawType}`;
+      }
+      throw new PostgresValidationError('Unsupported PostgreSQL default value');
+    }
+
+    if (lowerType === 'json' || lowerType === 'jsonb') {
+      if (typeof value === 'string') return this.db.sequelize.escape(value);
+      if (
+        typeof value === 'boolean' ||
+        (typeof value === 'number' && Number.isFinite(value)) ||
+        value instanceof Date ||
+        (typeof value === 'object' && value !== null)
+      ) {
+        const encoded = JSON.stringify(value);
+        if (encoded === undefined) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+        return this.db.sequelize.escape(encoded);
+      }
+      throw new PostgresValidationError('Unsupported PostgreSQL default value');
+    }
+
+    if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+    if (typeof value === 'bigint') return String(value);
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw new PostgresValidationError('Unsupported PostgreSQL default value');
+      return this.db.sequelize.escape(value);
+    }
+    if (typeof value === 'string' || value instanceof Date) {
+      return this.db.sequelize.escape(value);
     }
     throw new PostgresValidationError('Unsupported PostgreSQL default value');
   }
@@ -398,15 +582,14 @@ export class PostgresCollectionManager extends SequelizeCollectionManager {
       throw new PostgresValidationError('Field name and type are required');
     }
     const columnName = field.field || field.name;
-    let sql = `ALTER TABLE ${this.tableSql(collectionName)} ADD COLUMN ${this.quoteIdentifier(
-      columnName,
-    )} ${this.fieldType(collectionName, field)}`;
+    const sqlType = this.fieldType(collectionName, field);
+    let sql = `ALTER TABLE ${this.tableSql(collectionName)} ADD COLUMN ${this.quoteIdentifier(columnName)} ${sqlType}`;
     if (field.autoIncrement && field.defaultValue !== undefined) {
       throw new PostgresValidationError('A generated field cannot also have a default value');
     }
     if (field.autoIncrement) sql += ' GENERATED BY DEFAULT AS IDENTITY';
     if (field.allowNull === false) sql += ' NOT NULL';
-    if (field.defaultValue !== undefined) sql += ` DEFAULT ${this.defaultSql(field.defaultValue)}`;
+    if (field.defaultValue !== undefined) sql += ` DEFAULT ${this.defaultSql(field.defaultValue, sqlType)}`;
     if (field.primaryKey) sql += ' PRIMARY KEY';
     await this.db.sequelize.query(sql, { transaction });
     if (field.unique && !field.primaryKey) await this.setUnique(collectionName, columnName, true, transaction);
@@ -426,10 +609,11 @@ export class PostgresCollectionManager extends SequelizeCollectionManager {
     const table = this.tableSql(collectionName);
     const columnName = this.getCollection(collectionName)?.getField(fieldName)?.columnName() || fieldName;
     const column = this.quoteIdentifier(columnName);
-    if (['type', 'length', 'precision', 'scale', 'elementType'].some((key) => key in options)) {
+    let alteredType: string | undefined;
+    if (['type', 'dataType', 'length', 'precision', 'scale', 'elementType'].some((key) => key in options)) {
       const existing = this.getCollection(collectionName)?.getField(fieldName)?.options || {};
-      const type = this.fieldType(collectionName, { ...existing, ...options, name: fieldName });
-      await this.db.sequelize.query(`ALTER TABLE ${table} ALTER COLUMN ${column} TYPE ${type}`, {
+      alteredType = this.fieldType(collectionName, { ...existing, ...options, name: fieldName });
+      await this.db.sequelize.query(`ALTER TABLE ${table} ALTER COLUMN ${column} TYPE ${alteredType}`, {
         transaction,
       });
     }
@@ -442,8 +626,24 @@ export class PostgresCollectionManager extends SequelizeCollectionManager {
       );
     }
     if (options.defaultValue !== undefined) {
-      const clause =
-        options.defaultValue === null ? 'DROP DEFAULT' : `SET DEFAULT ${this.defaultSql(options.defaultValue)}`;
+      let clause: string;
+      if (options.defaultValue === null) {
+        clause = 'DROP DEFAULT';
+      } else {
+        let columnType = alteredType;
+        if (!columnType) {
+          const { schema, tableName } = this.tableInfo(collectionName);
+          columnType = await this.getColumnDataType(schema, tableName, columnName, transaction);
+          if (!columnType) {
+            const existing = this.getCollection(collectionName)?.getField(fieldName)?.options || {};
+            const merged = { ...existing, ...options, name: fieldName };
+            if (merged.type) {
+              columnType = this.fieldType(collectionName, merged);
+            }
+          }
+        }
+        clause = `SET DEFAULT ${this.defaultSql(options.defaultValue, columnType)}`;
+      }
       await this.db.sequelize.query(`ALTER TABLE ${table} ALTER COLUMN ${column} ${clause}`, { transaction });
     }
     if (options.unique !== undefined) {

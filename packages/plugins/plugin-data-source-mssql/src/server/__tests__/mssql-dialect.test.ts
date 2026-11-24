@@ -31,24 +31,44 @@ describe('MssqlDialect', () => {
       expect(typeof guard.get).toBe('function');
     });
 
-    it('should extract version number correctly', () => {
+    it('normalizes 4-part SQL Server ProductVersion strings to 3-part SemVer', () => {
       const guard = dialect.getVersionGuard();
 
       // SQL Server 2019 example
-      expect(guard.get('15.0.2000.5')).toBe('15.0.2000.5');
+      expect(guard.get('15.0.2000.5')).toBe('15.0.2000');
 
-      // SQL Server 2017 example
-      expect(guard.get('14.0.3445.2')).toBe('14.0.3445.2');
+      // SQL Server 2017 RTM example reported by review
+      expect(guard.get('14.0.1000.169')).toBe('14.0.1000');
+
+      // SQL Server 2017 CU example
+      expect(guard.get('14.0.3445.2')).toBe('14.0.3445');
 
       // SQL Server 2014 example (minimum supported)
-      expect(guard.get('12.0.6024.0')).toBe('12.0.6024.0');
+      expect(guard.get('12.0.6024.0')).toBe('12.0.6024');
     });
 
-    it('should handle version string with prefix', () => {
+    it('handles version strings with text prefixes', () => {
       const guard = dialect.getVersionGuard();
 
-      // Sometimes version might have extra text
-      expect(guard.get('Version 15.0.2000.5')).toBe('15.0.2000.5');
+      expect(guard.get('Version 15.0.2000.5')).toBe('15.0.2000');
+    });
+
+    it('validates 4-part ProductVersion strings against >=12.0.0 in checkDatabaseVersion', async () => {
+      const supportedDb = {
+        sequelize: {
+          query: async () => [{ version: '14.0.1000.169' }],
+        },
+      };
+      await expect(dialect.checkDatabaseVersion(supportedDb)).resolves.toBe(true);
+
+      const unsupportedDb = {
+        sequelize: {
+          query: async () => [{ version: '11.0.2100.60' }],
+        },
+      };
+      await expect(dialect.checkDatabaseVersion(unsupportedDb)).rejects.toThrow(
+        /ensure the version is >=12\.0\.0, current version is 11\.0\.2100/,
+      );
     });
   });
 

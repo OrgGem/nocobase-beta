@@ -51,6 +51,58 @@ describe('PostgresDataSource unit behavior', () => {
     expect(ds.publicOptions()).toBeNull();
   });
 
+  it('supports direct loadTables calls without ctx.action or params and preserves reusedDatabase', async () => {
+    const ds = createDataSource({ selectedCollections: [], autoDiscover: false });
+    vi.spyOn(ds.collectionManager.db.sequelize, 'authenticate').mockResolvedValue(undefined);
+    vi.spyOn(ds.introspector, 'getTables').mockResolvedValue(['orders']);
+    vi.spyOn(ds, 'prepareTables').mockImplementation(async (tables) =>
+      tables.map((name) => ({
+        name,
+        tableName: name,
+        introspected: true,
+        fields: [{ name: 'id', type: 'bigInt', primaryKey: true }],
+      })),
+    );
+    const closeSpy = vi.spyOn(ds, 'close');
+
+    await ds.load();
+    expect(ds.collectionManager.getCollections()).toHaveLength(0);
+
+    await ds.loadTables({} as never, ['orders']);
+    expect(ds.collectionManager.getCollections().map((c) => c.name)).toEqual(['orders']);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    await ds.loadTables({ action: {} } as never, ['orders']);
+    expect(ds.collectionManager.getCollections().map((c) => c.name)).toEqual(['orders']);
+
+    const sharedDb = new Database({
+      dialect: 'postgres',
+      host: '127.0.0.1',
+      port: 5432,
+      database: 'sales',
+      username: 'postgres',
+      logging: false,
+    });
+    try {
+      const reused = new PostgresDataSource({
+        name: 'pg-reused',
+        databaseInstance: sharedDb,
+        addAllCollections: false,
+        autoDiscover: false,
+      });
+      vi.spyOn(reused, 'prepareTables').mockResolvedValue([
+        { name: 'orders', tableName: 'orders', introspected: true, fields: [] },
+      ]);
+      const sharedCloseSpy = vi.spyOn(sharedDb, 'close');
+
+      await reused.loadTables(undefined as never, ['orders']);
+      expect(reused.collectionManager.getCollections().map((c) => c.name)).toEqual(['orders']);
+      expect(sharedCloseSpy).not.toHaveBeenCalled();
+    } finally {
+      await sharedDb.close();
+    }
+  });
+
   it('batches identity and relkind queries in prepareTables instead of running N+1 queries', async () => {
     const ds = createDataSource();
     const querySpy = vi.spyOn(ds.collectionManager.db.sequelize, 'query').mockImplementation(async (sql) => {
@@ -1534,5 +1586,838 @@ describe('PluginDataSourcePostgresServer middleware and sync', () => {
     dataSourcesRepo.findOne.mockResolvedValueOnce({ key: 'pg-ext' });
     await plugin.handleSyncMessage({ type: 'dataSourceRemoved', dataSourceKey: 'pg-ext' });
     expect(replacementCloseSpy).not.toHaveBeenCalled();
+  });
+
+  it('filters collections consistently across DROP TABLE and metadata destroy for filterByTk, filter, and ACL scope', async () => {
+    const { plugin, ds, middlewares, fieldsRepo, collectionsRepo, sendSyncMessage } = createPluginHarness();
+    ds.collectionManager.defineCollection({
+      name: 'invoices',
+      tableName: 'invoices',
+      fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+    });
+    await plugin.load();
+    const schemaMiddleware = middlewares[1];
+
+    vi.spyOn(ds.collectionManager.db.sequelize, 'transaction').mockImplementation((async (
+      cb: (tx: unknown) => Promise<unknown>,
+    ) => cb({})) as never);
+    vi.spyOn(ds.collectionManager.db.sequelize, 'query').mockResolvedValue([] as never);
+    const dropSpy = vi.spyOn(ds.collectionManager, 'dropTable').mockResolvedValue(undefined);
+    vi.spyOn(ds, 'removeSelectedTables').mockResolvedValue(false);
+
+    // 1. Non-matching filter with filterByTk must drop nothing and skip next().
+    const nextUnmatched = vi.fn().mockResolvedValue(undefined);
+    const unmatchedCtx: Record<string, unknown> = {
+      action: {
+        resourceName: 'dataSources.collections',
+        actionName: 'destroy',
+        params: { associatedIndex: 'pg-ext', filterByTk: 'orders', filter: { name: 'invoices' } },
+      },
+    };
+    await schemaMiddleware(unmatchedCtx, nextUnmatched);
+    expect(dropSpy).not.toHaveBeenCalled();
+    expect(nextUnmatched).not.toHaveBeenCalled();
+    expect(ds.collectionManager.hasCollection('orders')).toBe(true);
+    expect(unmatchedCtx.body).toBe(true);
+
+    // 2. Partial match via persisted collectionsRepo.find + ACL scope filter drops only the matched table
+    // and passes the exact matched names (without filter) to next().
+    (collectionsRepo as Record<string, unknown>).find = vi
+      .fn()
+      .mockResolvedValueOnce([{ get: () => 'orders' }, { get: () => 'invoices' }])
+      .mockResolvedValueOnce([{ get: () => 'orders' }]);
+    const partialParams: Record<string, unknown> = {
+      associatedIndex: 'pg-ext',
+      filterByTk: ['orders', 'invoices'],
+      filter: { name: { $in: ['orders', 'invoices'] } },
+    };
+    const nextPartial = vi.fn().mockImplementation(async () => {
+      expect(partialParams.filterByTk).toEqual(['orders']);
+      expect(partialParams.filter).toBeUndefined();
+    });
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: partialParams,
+        },
+        permission: {
+          can: { params: { filter: { name: 'orders' } } },
+        },
+      },
+      nextPartial,
+    );
+    expect(dropSpy).toHaveBeenCalledTimes(1);
+    expect(dropSpy).toHaveBeenCalledWith('orders', false, expect.anything());
+    expect(nextPartial).toHaveBeenCalledOnce();
+    expect(fieldsRepo.destroy).toHaveBeenCalledWith({
+      filter: { dataSourceKey: 'pg-ext', collectionName: { $in: ['orders'] } },
+      individualHooks: false,
+      hooks: false,
+    });
+    expect(ds.collectionManager.hasCollection('orders')).toBe(false);
+    expect(ds.collectionManager.hasCollection('invoices')).toBe(true);
+    expect(sendSyncMessage).toHaveBeenLastCalledWith({
+      type: 'collectionRemoved',
+      dataSourceKey: 'pg-ext',
+      collectionNames: ['orders'],
+    });
+
+    // 3. Filter-only destroy (without filterByTk) resolves matched collections via filter.
+    dropSpy.mockClear();
+    (collectionsRepo as Record<string, unknown>).find = vi
+      .fn()
+      .mockResolvedValueOnce([{ get: () => 'invoices' }])
+      .mockResolvedValueOnce([{ get: () => 'invoices' }]);
+    const nextFilterOnly = vi.fn().mockResolvedValue(undefined);
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: { associatedIndex: 'pg-ext', filter: { name: 'invoices' } },
+        },
+      },
+      nextFilterOnly,
+    );
+    expect(dropSpy).toHaveBeenCalledTimes(1);
+    expect(dropSpy).toHaveBeenCalledWith('invoices', false, expect.anything());
+    expect(nextFilterOnly).toHaveBeenCalledOnce();
+    expect(ds.collectionManager.hasCollection('invoices')).toBe(false);
+
+    // 4. Runtime-only collections (not yet persisted in dataSourcesCollections) must bind nested field
+    // filters to the SAME field element instead of matching across different fields.
+    ds.collectionManager.defineCollection({
+      name: 'runtime_audit',
+      tableName: 'runtime_audit',
+      fields: [
+        { name: 'id', type: 'integer', primaryKey: true },
+        { name: 'code', type: 'string' },
+      ],
+    });
+
+    for (const crossFieldFilter of [
+      { 'fields.name': 'code', 'fields.type': 'integer' },
+      { $and: [{ 'fields.name': 'code' }, { 'fields.type': 'integer' }] },
+      { $and: [{ fields: { name: 'code' } }, { fields: { type: 'integer' } }] },
+      { 'fields.name': { $startsWith: 'co', $endWith: 'id' } },
+    ]) {
+      dropSpy.mockClear();
+      (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+      const crossCtx: Record<string, unknown> = {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: { associatedIndex: 'pg-ext', filterByTk: 'runtime_audit', filter: crossFieldFilter },
+        },
+      };
+      const crossNext = vi.fn().mockResolvedValue(undefined);
+      await schemaMiddleware(crossCtx, crossNext);
+      expect(dropSpy).not.toHaveBeenCalled();
+      expect(crossNext).not.toHaveBeenCalled();
+      expect(crossCtx.body).toBe(true);
+      expect(ds.collectionManager.hasCollection('runtime_audit')).toBe(true);
+    }
+
+    // Separate filter vs ACL scope across different fields on runtime_audit must also fail to match,
+    // including when both sides contain $or groups or nested fields.$or conditions, and $ne array
+    // operands must follow core notIn semantics.
+    for (const { filter, scope } of [
+      {
+        filter: { 'fields.name': 'code' },
+        scope: { 'fields.type': 'integer' },
+      },
+      {
+        filter: { $or: [{ 'fields.name': 'code' }, { 'fields.name': 'slug' }] },
+        scope: { $or: [{ 'fields.type': 'integer' }, { 'fields.type': 'bigInt' }] },
+      },
+      {
+        filter: { fields: { $or: [{ name: 'code' }, { name: 'slug' }] } },
+        scope: { fields: { $or: [{ type: 'integer' }, { type: 'bigInt' }] } },
+      },
+      {
+        filter: { name: { $ne: ['runtime_audit', 'orders'] } },
+        scope: undefined,
+      },
+      {
+        filter: { 'fields.name': { $ne: ['id', 'code'] } },
+        scope: undefined,
+      },
+    ]) {
+      dropSpy.mockClear();
+      (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+      const scopedCrossNext = vi.fn().mockResolvedValue(undefined);
+      await schemaMiddleware(
+        {
+          action: {
+            resourceName: 'dataSources.collections',
+            actionName: 'destroy',
+            params: { associatedIndex: 'pg-ext', filterByTk: 'runtime_audit', filter },
+          },
+          ...(scope ? { permission: { can: { params: { filter: scope } } } } : {}),
+        },
+        scopedCrossNext,
+      );
+      expect(dropSpy).not.toHaveBeenCalled();
+      expect(scopedCrossNext).not.toHaveBeenCalled();
+      expect(ds.collectionManager.hasCollection('runtime_audit')).toBe(true);
+    }
+
+    // Same-field filter + ACL $or groups and $ne exclusion list mismatch DO match runtime_audit and drop it.
+    dropSpy.mockClear();
+    (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+    const matchedOrAndNeNext = vi.fn().mockResolvedValue(undefined);
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: {
+            associatedIndex: 'pg-ext',
+            filterByTk: 'runtime_audit',
+            filter: {
+              $and: [
+                { name: { $ne: ['other_table'] } },
+                { $or: [{ 'fields.name': 'code' }, { 'fields.name': 'slug' }] },
+              ],
+            },
+          },
+        },
+        permission: {
+          can: { params: { filter: { $or: [{ 'fields.type': 'string' }, { 'fields.type': 'text' }] } } },
+        },
+      },
+      matchedOrAndNeNext,
+    );
+    expect(dropSpy).toHaveBeenCalledTimes(1);
+    expect(dropSpy).toHaveBeenCalledWith('runtime_audit', false, expect.anything());
+    expect(matchedOrAndNeNext).toHaveBeenCalledOnce();
+    expect(ds.collectionManager.hasCollection('runtime_audit')).toBe(false);
+
+    // Same-field direct property filter ({ name: 'code', type: 'string' }) also matches and drops runtime_audit.
+    ds.collectionManager.defineCollection({
+      name: 'runtime_audit',
+      tableName: 'runtime_audit',
+      fields: [
+        { name: 'id', type: 'integer', primaryKey: true },
+        { name: 'code', type: 'string' },
+      ],
+    });
+    dropSpy.mockClear();
+    (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+    const matchedRuntimeNext = vi.fn().mockResolvedValue(undefined);
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: {
+            associatedIndex: 'pg-ext',
+            filterByTk: 'runtime_audit',
+            filter: { 'fields.name': 'code', 'fields.type': 'string' },
+          },
+        },
+      },
+      matchedRuntimeNext,
+    );
+    expect(dropSpy).toHaveBeenCalledTimes(1);
+    expect(dropSpy).toHaveBeenCalledWith('runtime_audit', false, expect.anything());
+    expect(matchedRuntimeNext).toHaveBeenCalledOnce();
+    expect(ds.collectionManager.hasCollection('runtime_audit')).toBe(false);
+
+    // Case-insensitive $notIncludes / $includes / $startsWith / $notStartsWith / $endWith / $notEndWith
+    // must match PostgreSQL metadata DB ILIKE/NOT ILIKE semantics so mixed-case runtime tables are never dropped
+    // by lowercase exclusion filters while non-matching tables ARE dropped.
+    ds.collectionManager.defineCollection({
+      name: 'Runtime_Audit',
+      tableName: 'Runtime_Audit',
+      fields: [
+        { name: 'id', type: 'integer', primaryKey: true },
+        { name: 'secretCode', type: 'string' },
+      ],
+    });
+    ds.collectionManager.defineCollection({
+      name: 'public_items',
+      tableName: 'public_items',
+      fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+    });
+
+    for (const exclusionCase of [
+      { filter: { name: { $notIncludes: 'audit' } }, scope: undefined },
+      { filter: { name: { $notIncludes: ['audit', 'temp'] } }, scope: undefined },
+      { filter: { name: { $notStartsWith: ['runtime_', 'internal_'] } }, scope: undefined },
+      { filter: { name: { $notEndWith: ['_AUDIT', '_LOG'] } }, scope: undefined },
+      {
+        filter: { name: { $notIncludes: 'temp' } },
+        scope: { 'fields.name': { $notIncludes: ['id', 'secret'] } },
+      },
+      { filter: { 'fields.name': { $notIncludes: null } }, scope: { description: { $notIncludes: 'audit' } } },
+    ]) {
+      dropSpy.mockClear();
+      (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+      const nextExclusion = vi.fn().mockResolvedValue(undefined);
+      await schemaMiddleware(
+        {
+          action: {
+            resourceName: 'dataSources.collections',
+            actionName: 'destroy',
+            params: { associatedIndex: 'pg-ext', filterByTk: 'Runtime_Audit', filter: exclusionCase.filter },
+          },
+          ...(exclusionCase.scope ? { permission: { can: { params: { filter: exclusionCase.scope } } } } : {}),
+        },
+        nextExclusion,
+      );
+      expect(dropSpy).not.toHaveBeenCalled();
+      expect(nextExclusion).not.toHaveBeenCalled();
+      expect(ds.collectionManager.hasCollection('Runtime_Audit')).toBe(true);
+    }
+
+    // Conversely, mixed-case exclusion on filter-only destroy drops only public_items and retains Runtime_Audit,
+    // and positive case-insensitive $includes matches Runtime_Audit.
+    dropSpy.mockClear();
+    (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+    const nextNonAuditOnly = vi.fn().mockResolvedValue(undefined);
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: {
+            associatedIndex: 'pg-ext',
+            filterByTk: ['Runtime_Audit', 'public_items'],
+            filter: { name: { $notIncludes: 'audit' } },
+          },
+        },
+      },
+      nextNonAuditOnly,
+    );
+    expect(dropSpy).toHaveBeenCalledTimes(1);
+    expect(dropSpy).toHaveBeenCalledWith('public_items', false, expect.anything());
+    expect(nextNonAuditOnly).toHaveBeenCalledOnce();
+    expect(ds.collectionManager.hasCollection('public_items')).toBe(false);
+    expect(ds.collectionManager.hasCollection('Runtime_Audit')).toBe(true);
+
+    dropSpy.mockClear();
+    (collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+    const nextCaseMatched = vi.fn().mockResolvedValue(undefined);
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSources.collections',
+          actionName: 'destroy',
+          params: {
+            associatedIndex: 'pg-ext',
+            filterByTk: 'Runtime_Audit',
+            filter: { name: { $includes: 'audit' }, 'fields.name': { $startsWith: ['SECRET', 'OTHER'] } },
+          },
+        },
+      },
+      nextCaseMatched,
+    );
+    expect(dropSpy).toHaveBeenCalledTimes(1);
+    expect(dropSpy).toHaveBeenCalledWith('Runtime_Audit', false, expect.anything());
+    expect(nextCaseMatched).toHaveBeenCalledOnce();
+    expect(ds.collectionManager.hasCollection('Runtime_Audit')).toBe(false);
+  });
+
+  it('matches core SQLite metadata LIKE semantics for _ and % so runtime-only tables match persisted results', async () => {
+    const sqliteMetaDb = new Database({
+      dialect: 'sqlite',
+      storage: ':memory:',
+      logging: false,
+    });
+    try {
+      sqliteMetaDb.collection({
+        name: 'dataSourcesCollections',
+        autoGenId: false,
+        fields: [
+          { name: 'name', type: 'string', primaryKey: true },
+          { name: 'dataSourceKey', type: 'string', primaryKey: true },
+        ],
+      });
+      await sqliteMetaDb.sync();
+      const sqliteCollectionsRepo = sqliteMetaDb.getRepository('dataSourcesCollections');
+
+      const candidateNames = ['order_items', 'order\\xitems', 'foo%bar', 'foo\\abcbar', 'Plain_Table'];
+      for (const name of candidateNames) {
+        await sqliteCollectionsRepo.create({ values: { name, dataSourceKey: 'pg-sqlite-meta' } });
+      }
+
+      const filtersToVerify = [
+        { name: { $includes: 'order_' } },
+        { name: { $notIncludes: 'order_' } },
+        { name: { $startsWith: 'order_' } },
+        { name: { $notStartsWith: 'order_' } },
+        { name: { $endWith: '_items' } },
+        { name: { $notEndWith: '_items' } },
+        { name: { $includes: 'foo%bar' } },
+        { name: { $notIncludes: 'foo%bar' } },
+        { name: { $includes: ['order_', 'foo%bar'] } },
+      ];
+
+      for (const filter of filtersToVerify) {
+        // 1. Query real SQLite metadata repository directly via core operators.
+        const coreMatchedRows = await sqliteCollectionsRepo.find({
+          filter: { $and: [{ dataSourceKey: 'pg-sqlite-meta' }, filter] },
+        });
+        const coreMatchedNames = coreMatchedRows.map((row) => String(row.get('name'))).sort();
+
+        // 2. Run pre-DROP resolution when all candidate collections exist ONLY at runtime (zero persisted rows).
+        const harness = createPluginHarness();
+        (harness.app as { db: unknown }).db = {
+          sequelize: sqliteMetaDb.sequelize,
+          getRepository: (repoName: string) => {
+            if (repoName === 'dataSourcesCollections') {
+              return { find: vi.fn().mockResolvedValue([]) };
+            }
+            if (repoName === 'dataSourcesFields') return harness.fieldsRepo;
+            return harness.dataSourcesRepo;
+          },
+          on: () => undefined,
+        };
+        for (const existing of [...harness.ds.collectionManager.getCollections()]) {
+          harness.ds.collectionManager.removeCollection(existing.name);
+        }
+        for (const name of candidateNames) {
+          harness.ds.collectionManager.defineCollection({
+            name,
+            tableName: name,
+            fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+          });
+        }
+        vi.spyOn(harness.ds.collectionManager.db.sequelize, 'transaction').mockImplementation((async (
+          cb: (tx: unknown) => Promise<unknown>,
+        ) => cb({})) as never);
+        vi.spyOn(harness.ds.collectionManager.db.sequelize, 'query').mockResolvedValue([] as never);
+        const droppedRuntime: string[] = [];
+        vi.spyOn(harness.ds.collectionManager, 'dropTable').mockImplementation(async (name) => {
+          droppedRuntime.push(name);
+        });
+        vi.spyOn(harness.ds, 'removeSelectedTables').mockResolvedValue(false);
+
+        await harness.plugin.load();
+        const destroyMiddleware = harness.middlewares[1];
+        await destroyMiddleware(
+          {
+            action: {
+              resourceName: 'dataSources.collections',
+              actionName: 'destroy',
+              params: { associatedIndex: 'pg-ext', filter },
+            },
+          },
+          vi.fn().mockResolvedValue(undefined),
+        );
+
+        expect(droppedRuntime.sort(), `SQLite parity mismatch for filter ${JSON.stringify(filter)}`).toEqual(
+          coreMatchedNames,
+        );
+      }
+
+      // Specifically confirm `order_items` is NOT matched by `{ name: { $includes: 'order_' } }` on SQLite,
+      // whereas on PostgreSQL metadata DB (`ILIKE` with default `\` escape) `order_items` IS matched.
+      const pgHarness = createPluginHarness();
+      (pgHarness.app.db as Record<string, unknown>).sequelize = { getDialect: () => 'postgres' };
+      (pgHarness.collectionsRepo as Record<string, unknown>).find = vi.fn().mockResolvedValue([]);
+      pgHarness.ds.collectionManager.defineCollection({
+        name: 'order_items',
+        tableName: 'order_items',
+        fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+      });
+      pgHarness.ds.collectionManager.defineCollection({
+        name: 'orderxitems',
+        tableName: 'orderxitems',
+        fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+      });
+      vi.spyOn(pgHarness.ds.collectionManager.db.sequelize, 'transaction').mockImplementation((async (
+        cb: (tx: unknown) => Promise<unknown>,
+      ) => cb({})) as never);
+      vi.spyOn(pgHarness.ds.collectionManager.db.sequelize, 'query').mockResolvedValue([] as never);
+      const pgDropped: string[] = [];
+      vi.spyOn(pgHarness.ds.collectionManager, 'dropTable').mockImplementation(async (name) => {
+        pgDropped.push(name);
+      });
+      vi.spyOn(pgHarness.ds, 'removeSelectedTables').mockResolvedValue(false);
+      await pgHarness.plugin.load();
+      await pgHarness.middlewares[1](
+        {
+          action: {
+            resourceName: 'dataSources.collections',
+            actionName: 'destroy',
+            params: { associatedIndex: 'pg-ext', filter: { name: { $includes: 'order_' } } },
+          },
+        },
+        vi.fn().mockResolvedValue(undefined),
+      );
+      expect(pgDropped).toEqual(['order_items']);
+    } finally {
+      await sqliteMetaDb.close();
+    }
+  });
+
+  it('emits valid PostgreSQL ARRAY literals for ARRAY columns while keeping JSON encoding for JSON/JSONB', async () => {
+    const ds = createDataSource({ name: 'pg-array-defaults' });
+    ds.collectionManager.defineCollection({
+      name: 'items',
+      tableName: 'items',
+      fields: [
+        { name: 'id', type: 'bigInt', primaryKey: true },
+        { name: 'tags', type: 'array', dataType: 'array', elementType: 'integer' },
+        { name: 'flags', type: 'array', dataType: 'array', elementType: 'boolean' },
+        { name: 'meta', type: 'jsonb' },
+      ],
+    });
+
+    const executed: string[] = [];
+    vi.spyOn(ds.collectionManager.db.sequelize, 'query').mockImplementation(async (sql, opts) => {
+      const text = String(sql);
+      executed.push(text);
+      const colName = (opts as { replacements?: { columnName?: string } } | undefined)?.replacements?.columnName;
+      if (text.includes('pg_catalog.format_type')) {
+        if (colName === 'tags') return [{ dataType: 'integer[]' }] as never;
+        if (colName === 'flags') return [{ dataType: 'boolean[]' }] as never;
+        if (colName === 'meta') return [{ dataType: 'jsonb' }] as never;
+      }
+      return [] as never;
+    });
+
+    await ds.collectionManager.addField(
+      'items',
+      { name: 'scores', type: 'array', elementType: 'integer', defaultValue: [1, 2] },
+      {} as never,
+    );
+    expect(executed[executed.length - 1]).toBe(
+      'ALTER TABLE "public"."items" ADD COLUMN "scores" INTEGER[] DEFAULT ARRAY[1, 2]::INTEGER[]',
+    );
+
+    await ds.collectionManager.addField(
+      'items',
+      { name: 'labels', type: 'array', dataType: 'array', elementType: 'text', defaultValue: [] },
+      {} as never,
+    );
+    expect(executed[executed.length - 1]).toBe(
+      'ALTER TABLE "public"."items" ADD COLUMN "labels" TEXT[] DEFAULT ARRAY[]::TEXT[]',
+    );
+
+    await ds.collectionManager.addField(
+      'items',
+      { name: 'json_arr', type: 'array', defaultValue: [1, 2] },
+      {} as never,
+    );
+    expect(executed[executed.length - 1]).toBe(
+      `ALTER TABLE "public"."items" ADD COLUMN "json_arr" JSONB DEFAULT '[1,2]'`,
+    );
+
+    await ds.collectionManager.updateField('items', 'tags', { defaultValue: [3, 4] }, {} as never);
+    expect(executed[executed.length - 1]).toBe(
+      'ALTER TABLE "public"."items" ALTER COLUMN "tags" SET DEFAULT ARRAY[3, 4]::integer[]',
+    );
+
+    await ds.collectionManager.updateField('items', 'flags', { defaultValue: [true, false] }, {} as never);
+    expect(executed[executed.length - 1]).toBe(
+      'ALTER TABLE "public"."items" ALTER COLUMN "flags" SET DEFAULT ARRAY[TRUE, FALSE]::boolean[]',
+    );
+
+    await ds.collectionManager.updateField('items', 'meta', { defaultValue: { a: 1 } }, {} as never);
+    expect(executed[executed.length - 1]).toBe(
+      `ALTER TABLE "public"."items" ALTER COLUMN "meta" SET DEFAULT '{"a":1}'`,
+    );
+
+    await expect(
+      ds.collectionManager.updateField('items', 'tags', { defaultValue: ['not-an-int'] }, {} as never),
+    ).rejects.toThrow('Unsupported PostgreSQL default value');
+  });
+
+  it('persists dataType: array when elementType is given and keeps model ARRAY typing across write, reload, and read', async () => {
+    const { plugin, ds, middlewares } = createPluginHarness();
+    await plugin.load();
+    const schemaMiddleware = middlewares[1];
+    const itemsCollection = ds.collectionManager.defineCollection({
+      name: 'items',
+      tableName: 'items',
+      autoGenId: false,
+      timestamps: false,
+      fields: [{ name: 'id', type: 'integer', primaryKey: true }],
+    });
+
+    const capturedInserts: Array<{ sql: string; bind?: unknown[] }> = [];
+    const storedRows = new Map<number, { id: number; scores: number[] }>();
+    const bindMockQuery = (targetDs: PostgresDataSource) => {
+      const fakeTx = {
+        commit: async () => undefined,
+        rollback: async () => undefined,
+        afterCommit: () => undefined,
+      };
+      vi.spyOn(targetDs.collectionManager.db.sequelize, 'transaction').mockImplementation((async (
+        cbOrOpts?: unknown,
+        maybeCb?: unknown,
+      ) => {
+        const cb = typeof cbOrOpts === 'function' ? cbOrOpts : typeof maybeCb === 'function' ? maybeCb : null;
+        return cb ? await (cb as (tx: unknown) => Promise<unknown>)(fakeTx) : fakeTx;
+      }) as never);
+      vi.spyOn(targetDs.collectionManager.db.sequelize, 'query').mockImplementation(async (sql, opts) => {
+        const sqlObj = typeof sql === 'object' && sql !== null ? (sql as { query?: unknown; bind?: unknown[] }) : null;
+        const text = sqlObj ? String(sqlObj.query ?? '') : String(sql);
+        const queryOpts = (opts || {}) as {
+          type?: string;
+          bind?: unknown[];
+          instance?: { isNewRecord?: boolean; dataValues?: Record<string, unknown> };
+          model?: { bulkBuild: (rows: unknown[], buildOpts: Record<string, unknown>) => unknown[] };
+          raw?: boolean;
+          attributes?: unknown[];
+          originalAttributes?: unknown[];
+        };
+        const bind = sqlObj?.bind ?? queryOpts.bind;
+        if (text.startsWith('INSERT INTO') || queryOpts.type === 'INSERT') {
+          capturedInserts.push({ sql: text, bind });
+          // Reject JSONB-encoded array strings on an INTEGER[] column just like PostgreSQL does.
+          if (
+            text.includes(`'[`) ||
+            (Array.isArray(bind) && bind.some((item) => typeof item === 'string' && item.startsWith('[')))
+          ) {
+            throw new Error('malformed array literal: JSON string passed to integer[]');
+          }
+          if (Array.isArray(bind) && bind.length >= 2 && Array.isArray(bind[1])) {
+            const id = Number(bind[0]);
+            const nums = bind[1].map((item) => Number(item));
+            storedRows.set(id, { id, scores: nums });
+          } else {
+            const arrayMatch = text.match(/VALUES\s*\((\d+),\s*ARRAY\[([^\]]+)\]/);
+            if (arrayMatch) {
+              const id = Number(arrayMatch[1]);
+              const nums = arrayMatch[2].split(',').map((part) => Number(part.trim()));
+              storedRows.set(id, { id, scores: nums });
+            }
+          }
+          return [queryOpts.instance, 1] as never;
+        }
+        if (text.startsWith('SELECT') && text.includes('FROM "public"."items"')) {
+          const latest = [...storedRows.values()][storedRows.size - 1];
+          const rawRows = latest ? [latest] : [];
+          if (queryOpts.model && !queryOpts.raw) {
+            return queryOpts.model.bulkBuild(rawRows, {
+              isNewRecord: false,
+              raw: true,
+              attributes: queryOpts.originalAttributes || queryOpts.attributes,
+            }) as never;
+          }
+          return rawRows as never;
+        }
+        return [] as never;
+      });
+    };
+    bindMockQuery(ds);
+
+    // 1. Add array field via schema action without explicit dataType.
+    const fieldValues: Record<string, unknown> = {
+      name: 'scores',
+      type: 'array',
+      elementType: 'integer',
+      defaultValue: [1, 2],
+    };
+    await schemaMiddleware(
+      {
+        action: {
+          resourceName: 'dataSourcesCollections.fields',
+          actionName: 'create',
+          params: { associatedIndex: 'pg-ext.items', values: fieldValues },
+        },
+      },
+      async () => {
+        itemsCollection.setField('scores', fieldValues);
+      },
+    );
+
+    expect(fieldValues.dataType).toBe('array');
+    expect(itemsCollection.getField('scores')?.options.dataType).toBe('array');
+    expect((itemsCollection.model.rawAttributes.scores.type as { key?: string }).key).toBe('ARRAY');
+
+    // 2. Writing via Sequelize repository must serialize ARRAY column cleanly, not JSONB string '[3,9]'.
+    await itemsCollection.repository.create({ values: { id: 1, scores: [9, 3] } });
+    const firstInsert = capturedInserts[capturedInserts.length - 1];
+    expect(
+      firstInsert.sql.includes('ARRAY[3,9]') ||
+        (Array.isArray(firstInsert.bind?.[1]) && firstInsert.bind?.[1].join(',') === '3,9'),
+    ).toBe(true);
+    expect(storedRows.get(1)?.scores).toEqual([3, 9]);
+
+    // 3. Reload into a fresh PostgresDataSource using persisted metadata (even if dataType were omitted in legacy JSON).
+    const persistedLocalData = {
+      items: {
+        name: 'items',
+        tableName: 'items',
+        autoGenId: false,
+        timestamps: false,
+        fields: [
+          { name: 'id', type: 'integer', primaryKey: true },
+          { name: 'scores', type: 'array', dataType: fieldValues.dataType, elementType: 'integer' },
+        ],
+      },
+    };
+    const reloaded = createDataSource({ name: 'pg-ext-reloaded' });
+    vi.spyOn(reloaded.collectionManager.db.sequelize, 'authenticate').mockResolvedValue(undefined);
+    vi.spyOn(reloaded.introspector, 'getTables').mockResolvedValue(['items']);
+    vi.spyOn(reloaded, 'prepareTables').mockImplementation(async () => [
+      {
+        name: 'items',
+        tableName: 'items',
+        autoGenId: false,
+        timestamps: false,
+        introspected: true,
+        fields: persistedLocalData.items.fields.map((f) => ({ ...f })),
+      },
+    ]);
+    await reloaded.load({ localData: persistedLocalData });
+    bindMockQuery(reloaded);
+
+    const reloadedItems = reloaded.collectionManager.getCollection('items');
+    expect(reloadedItems.getField('scores')?.options.dataType).toBe('array');
+    expect((reloadedItems.model.rawAttributes.scores.type as { key?: string }).key).toBe('ARRAY');
+
+    await reloadedItems.repository.create({ values: { id: 2, scores: [7, 1] } });
+    const secondInsert = capturedInserts[capturedInserts.length - 1];
+    expect(
+      secondInsert.sql.includes('ARRAY[1,7]') ||
+        (Array.isArray(secondInsert.bind?.[1]) && secondInsert.bind?.[1].join(',') === '1,7'),
+    ).toBe(true);
+    expect(storedRows.get(2)?.scores).toEqual([1, 7]);
+
+    const loadedRecord = await reloadedItems.repository.findOne({ filterByTk: 2 });
+    expect(loadedRecord?.get('scores')).toEqual([1, 7]);
+
+    // Also verify buildField normalizes legacy field metadata defined without dataType when not backed by JSON/JSONB.
+    const legacyCollection = reloaded.collectionManager.defineCollection({
+      name: 'legacy_items',
+      tableName: 'legacy_items',
+      fields: [{ name: 'nums', type: 'array', elementType: 'integer' }],
+    });
+    expect(legacyCollection.getField('nums')?.options.dataType).toBe('array');
+    expect((legacyCollection.model.rawAttributes.nums.type as { key?: string }).key).toBe('ARRAY');
+
+    // Legacy field metadata saved as { type: 'array', elementType: 'string' } without dataType over an
+    // existing PostgreSQL JSONB column must keep JSONB typing through real prepareTables() reload & writes,
+    // while a sibling physical ARRAY column in the same table resolves to ARRAY.
+    const legacyHarness = createPluginHarness();
+    await legacyHarness.plugin.load();
+    const legacyMiddleware = legacyHarness.middlewares[1];
+    const legacyDs = legacyHarness.ds;
+    vi.spyOn(legacyDs.collectionManager.db.sequelize.getQueryInterface(), 'describeTable').mockResolvedValue({
+      id: { type: 'INTEGER', allowNull: false, defaultValue: '', primaryKey: true },
+      tags: { type: 'JSONB', allowNull: true, defaultValue: null, primaryKey: false },
+      scores: { type: 'ARRAY', allowNull: true, defaultValue: null, primaryKey: false },
+    } as never);
+    vi.spyOn(legacyDs.introspector, 'getTableConstraints').mockResolvedValue([]);
+    vi.spyOn(legacyDs.collectionManager, 'getTableKinds').mockResolvedValue(new Map([['legacy_orders', 'r']]));
+    const executedDefaults: string[] = [];
+    const legacyInserts: Array<{ sql: string; bind?: unknown[] }> = [];
+    const legacyRows = new Map<number, { id: number; tags: unknown; scores: number[] }>();
+    const legacyTx = {
+      commit: async () => undefined,
+      rollback: async () => undefined,
+      afterCommit: () => undefined,
+    };
+    vi.spyOn(legacyDs.collectionManager.db.sequelize, 'transaction').mockImplementation((async (
+      cbOrOpts?: unknown,
+      maybeCb?: unknown,
+    ) => {
+      const cb = typeof cbOrOpts === 'function' ? cbOrOpts : typeof maybeCb === 'function' ? maybeCb : null;
+      return cb ? await (cb as (tx: unknown) => Promise<unknown>)(legacyTx) : legacyTx;
+    }) as never);
+    vi.spyOn(legacyDs.collectionManager.db.sequelize, 'query').mockImplementation(async (sql, opts) => {
+      const sqlObj = typeof sql === 'object' && sql !== null ? (sql as { query?: unknown; bind?: unknown[] }) : null;
+      const text = sqlObj ? String(sqlObj.query ?? '') : String(sql);
+      const queryOpts = (opts || {}) as {
+        type?: string;
+        bind?: unknown[];
+        replacements?: { columnName?: string };
+        instance?: unknown;
+        model?: { bulkBuild: (rows: unknown[], buildOpts: Record<string, unknown>) => unknown[] };
+        raw?: boolean;
+        attributes?: unknown[];
+        originalAttributes?: unknown[];
+      };
+      if (text.includes('information_schema.element_types')) {
+        return [{ column_name: 'scores', element_type: 'integer' }] as never;
+      }
+      if (text.includes('pg_catalog.format_type')) {
+        if (queryOpts.replacements?.columnName === 'tags') return [{ dataType: 'jsonb' }] as never;
+        if (queryOpts.replacements?.columnName === 'scores') return [{ dataType: 'integer[]' }] as never;
+      }
+      if (text.startsWith('ALTER TABLE')) {
+        executedDefaults.push(text);
+        return [] as never;
+      }
+      if (text.startsWith('INSERT INTO') || queryOpts.type === 'INSERT') {
+        const bind = sqlObj?.bind ?? queryOpts.bind;
+        legacyInserts.push({ sql: text, bind });
+        if (!Array.isArray(bind) || typeof bind[1] !== 'string' || !Array.isArray(bind[2])) {
+          throw new Error(`Expected JSONB string bind[1] and ARRAY bind[2], got: ${JSON.stringify(bind)}`);
+        }
+        legacyRows.set(Number(bind[0]), {
+          id: Number(bind[0]),
+          tags: JSON.parse(bind[1]),
+          scores: bind[2].map((v) => Number(v)),
+        });
+        return [queryOpts.instance, 1] as never;
+      }
+      if (text.startsWith('SELECT') && text.includes('FROM "public"."legacy_orders"')) {
+        const row = legacyRows.get(1);
+        const rawRows = row ? [row] : [];
+        if (queryOpts.model && !queryOpts.raw) {
+          return queryOpts.model.bulkBuild(rawRows, {
+            isNewRecord: false,
+            raw: true,
+            attributes: queryOpts.originalAttributes || queryOpts.attributes,
+          }) as never;
+        }
+        return rawRows as never;
+      }
+      return [] as never;
+    });
+
+    const prepared = await legacyDs.prepareTables(['legacy_orders'], {
+      legacy_orders: {
+        name: 'legacy_orders',
+        tableName: 'legacy_orders',
+        autoGenId: false,
+        timestamps: false,
+        fields: [
+          { name: 'id', type: 'integer', primaryKey: true },
+          { name: 'tags', type: 'array', elementType: 'string' },
+          { name: 'scores', type: 'array', elementType: 'integer' },
+        ],
+      },
+    });
+    legacyDs.collectionManager.replaceCollections(prepared);
+
+    const legacyOrders = legacyDs.collectionManager.getCollection('legacy_orders');
+    expect(legacyOrders.getField('tags')?.options.dataType).toBe('json');
+    expect(legacyOrders.getField('tags')?.options.rawType).toBe('JSONB');
+    expect((legacyOrders.model.rawAttributes.tags.type as { key?: string }).key).toBe('JSONB');
+    expect(legacyOrders.getField('scores')?.options.dataType).toBe('array');
+    expect((legacyOrders.model.rawAttributes.scores.type as { key?: string }).key).toBe('ARRAY');
+
+    await legacyOrders.repository.create({ values: { id: 1, tags: ['b', 'a'], scores: [7, 1] } });
+    expect(legacyInserts).toHaveLength(1);
+    const reloadedLegacy = await legacyOrders.repository.findOne({ filterByTk: 1 });
+    expect(reloadedLegacy?.get('tags')).toEqual(['a', 'b']);
+    expect(reloadedLegacy?.get('scores')).toEqual([1, 7]);
+
+    // Updating the legacy JSONB-backed field must emit JSON default instead of promoting to ARRAY.
+    const updateValues: Record<string, unknown> = { type: 'array', elementType: 'string', defaultValue: ['x', 'y'] };
+    await legacyMiddleware(
+      {
+        action: {
+          resourceName: 'dataSourcesCollections.fields',
+          actionName: 'update',
+          params: { associatedIndex: 'pg-ext.legacy_orders', filterByTk: 'tags', values: updateValues },
+        },
+      },
+      vi.fn().mockResolvedValue(undefined),
+    );
+    expect(updateValues.dataType).toBeUndefined();
+    expect(executedDefaults[executedDefaults.length - 1]).toBe(
+      `ALTER TABLE "public"."legacy_orders" ALTER COLUMN "tags" SET DEFAULT '["x","y"]'`,
+    );
   });
 });
