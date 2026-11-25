@@ -5,5 +5,8 @@
   "Help": "Trợ giúp",
   "Search settings...": "Tìm kiếm cài đặt...",
   "Advance Settings": "Cài đặt nâng cao",
-  "Show help button in header": "Hiển thị nút trợ giúp trên thanh đầu trang"
+  "Show help button in header": "Hiển thị nút trợ giúp trên thanh đầu trang",
+  "AI Chat": "Chat AI",
+  "Enable AI chat resizing": "Cho phép thay đổi chiều rộng khung chat AI",
+  "Resize AI chat": "Thay đổi chiều rộng khung chat AI"
 }

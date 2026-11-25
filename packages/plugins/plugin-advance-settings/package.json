@@ -1,9 +1,9 @@
 {
-  "version": "1.0.1",
+  "version": "1.1.0",
   "license": "Apache-2.0",
   "displayName.vi-VN": "Cài đặt nâng cao",
   "displayName.zh-CN": "高级设置",
-  "description": "Advanced settings utilities: sidebar search and header help control",
+  "description": "Advanced settings utilities: sidebar search, header help control, and AI chat resizing",
   "nocobase": {
     "supportedVersions": [
       "2.x"
@@ -11,7 +11,7 @@
     "editionLevel": 0
   },
   "name": "plugin-advance-settings",
-  "description.vi-VN": "Tiện ích cài đặt nâng cao: tìm kiếm sidebar và kiểm soát trợ giúp tiêu đề",
+  "description.vi-VN": "Tiện ích cài đặt nâng cao: tìm kiếm sidebar, kiểm soát trợ giúp tiêu đề và thay đổi chiều rộng chat AI",
   "keywords": [
     "System management"
   ],
@@ -33,7 +33,7 @@
     "client-v2.d.ts",
     "server.d.ts"
   ],
-  "description.zh-CN": "高级设置工具：侧边栏搜索和页眉帮助控制",
+  "description.zh-CN": "高级设置工具：侧边栏搜索、页眉帮助控制和 AI 聊天窗口宽度调整",
   "displayName": "Advance Settings"
 }
 

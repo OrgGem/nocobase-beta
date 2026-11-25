@@ -23,7 +23,17 @@ export class PluginAdvanceSettingsClient extends Plugin<Record<string, never>, A
       menuKey: 'advance-settings',
       key: 'help',
       title: this.t('Help'),
+      sort: 10,
       componentLoader: () => import('./HelpSettingsPage').then((m) => ({ default: m.HelpSettingsPage })),
+      aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'advance-settings',
+      key: 'ai-chat',
+      title: this.t('AI Chat'),
+      sort: 20,
+      componentLoader: () => import('./AIChatSettingsPage').then((m) => ({ default: m.AIChatSettingsPage })),
       aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
     });
   }

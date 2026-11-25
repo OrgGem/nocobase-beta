@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useState } from 'react';
 import { Card, Space, Switch, message } from 'antd';
 import { useAPIClient, useSystemSettings } from '@nocobase/client';
@@ -8,14 +17,15 @@ export const HelpSettingsPage: React.FC = () => {
   const t = useT();
   const systemSettings = useSystemSettings();
   const showHelp = systemSettings?.data?.data?.options?.showHelp !== false;
+  const enableAIChatResize = systemSettings?.data?.data?.options?.enableAIChatResize === true;
   const [saving, setSaving] = useState(false);
 
-  const handleToggleHelp = async (checked: boolean) => {
+  const handleToggle = async (key: 'showHelp' | 'enableAIChatResize', checked: boolean) => {
     setSaving(true);
     try {
       const options = {
         ...systemSettings?.data?.data?.options,
-        showHelp: checked,
+        [key]: checked,
       };
 
       await api.request({
@@ -35,7 +45,7 @@ export const HelpSettingsPage: React.FC = () => {
 
       message.success(t('Saved successfully'));
     } catch (error) {
-      console.error('[HelpSettings] Failed to save help setting:', error);
+      console.error('[AdvanceSettings] Failed to save setting:', error);
       message.error(t('Save failed'));
     } finally {
       setSaving(false);
@@ -47,7 +57,24 @@ export const HelpSettingsPage: React.FC = () => {
       <Card title={t('Help')} style={{ marginBottom: 24 }}>
         <Space size="middle" align="center">
           <span>{t('Show help button in header')}</span>
-          <Switch checked={showHelp} loading={saving} onChange={handleToggleHelp} />
+          <Switch
+            aria-label={t('Show help button in header')}
+            checked={showHelp}
+            loading={saving}
+            onChange={(checked) => handleToggle('showHelp', checked)}
+          />
+        </Space>
+      </Card>
+      <Card title={t('AI Chat')}>
+        <Space size="middle" align="center">
+          <span>{t('Enable AI chat resizing')}</span>
+          <Switch
+            aria-label={t('Enable AI chat resizing')}
+            checked={enableAIChatResize}
+            disabled={!systemSettings?.data?.data}
+            loading={saving}
+            onChange={(checked) => handleToggle('enableAIChatResize', checked)}
+          />
         </Space>
       </Card>
     </div>

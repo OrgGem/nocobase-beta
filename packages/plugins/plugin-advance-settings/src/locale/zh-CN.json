@@ -5,5 +5,8 @@
   "Help": "帮助",
   "Search settings...": "搜索设置...",
   "Advance Settings": "高级设置",
-  "Show help button in header": "在顶部页眉中显示帮助按钮"
+  "Show help button in header": "在顶部页眉中显示帮助按钮",
+  "AI Chat": "AI 聊天",
+  "Enable AI chat resizing": "允许调整 AI 聊天窗口宽度",
+  "Resize AI chat": "调整 AI 聊天窗口宽度"
 }

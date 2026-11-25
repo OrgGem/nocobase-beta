@@ -54,5 +54,8 @@ describe('Advance Settings V2 search registration', () => {
     await new PluginAdvanceSettingsClient({}, app).load();
 
     expect(app.use).toHaveBeenCalledWith(SettingsSearchInjector);
+    expect(app.pluginSettingsManager.addPageTabItem).toHaveBeenCalledWith(
+      expect.objectContaining({ menuKey: 'advance-settings', key: 'ai-chat', title: 'AI Chat', sort: 20 }),
+    );
   });
 });
