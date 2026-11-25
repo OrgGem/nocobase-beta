@@ -3,7 +3,7 @@
 import { Plugin } from '@nocobase/client';
 import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
 import React from 'react';
-import { GitRepositoryWorkContext, GitMergeRequestWorkContext, GitCommitWorkContext } from './ai-context';
+import { registerGitWorkContexts } from './ai-context';
 
 const GitManagerSettings = React.lazy(() =>
   import('./components/GitManagerSettings').then((m) => ({ default: m.GitManagerSettings })),
@@ -70,10 +70,8 @@ export class PluginGitManagerClient extends Plugin {
     });
 
     const aiManager = this.app.pm.get<PluginAIClientV2>('ai')?.aiManager;
-    if (aiManager?.registerWorkContext) {
-      aiManager.registerWorkContext('git-repository', GitRepositoryWorkContext);
-      aiManager.registerWorkContext('git-merge-request', GitMergeRequestWorkContext);
-      aiManager.registerWorkContext('git-commit', GitCommitWorkContext);
+    if (aiManager) {
+      await registerGitWorkContexts(this.app, aiManager);
     }
 
     const aclPlugin = this.app.pm.get<PluginACLClient>('acl');

@@ -5,14 +5,12 @@ import type PluginAIClientV2 from '@nocobase/plugin-ai/client-v2';
 import type PluginAclClientV2 from '@nocobase/plugin-acl/client-v2';
 import type { PermissionTabProps } from '@nocobase/plugin-acl/client-v2';
 import React from 'react';
-import { GitRepositoryWorkContext, GitMergeRequestWorkContext, GitCommitWorkContext } from './ai-context';
+import { registerGitWorkContexts } from './ai-context';
 
 export class PluginGitManagerClient extends Plugin<Record<string, never>, Application> {
   async load() {
     const aiManager = this.app.pm.get<PluginAIClientV2>('ai')?.aiManager;
-    aiManager?.registerWorkContext('git-repository', GitRepositoryWorkContext);
-    aiManager?.registerWorkContext('git-merge-request', GitMergeRequestWorkContext);
-    aiManager?.registerWorkContext('git-commit', GitCommitWorkContext);
+    if (aiManager) await registerGitWorkContexts(this.app, aiManager);
     this.app.pm.get<PluginAclClientV2>('acl')?.settingsUI.addPermissionsTab({
       key: 'git-manager',
       label: this.t('Git Manager'),

@@ -31,15 +31,21 @@ async function gitlabFetch(apiBase: string, endpoint: string, pat: string, param
   // Extract pagination info from response headers
   const totalPages = response.headers.get('x-total-pages');
   const total = response.headers.get('x-total');
+  const nextPage = response.headers.get('x-next-page');
 
   const data = await response.json();
-  return { data, totalPages: totalPages ? parseInt(totalPages, 10) : null, total: total ? parseInt(total, 10) : null };
+  return {
+    data,
+    totalPages: totalPages ? parseInt(totalPages, 10) : null,
+    total: total ? parseInt(total, 10) : null,
+    hasMore: nextPage !== null ? Boolean(nextPage) : null,
+  };
 }
 
-async function getRepoApiContext(ctx: Context) {
+async function getRepoApiContext(ctx: Context, requestedRepositoryId?: number | string) {
   // Fix for POST requests where data might be in ctx.request.body
   const params = getEffectiveActionParams(ctx);
-  const { repositoryId } = params;
+  const repositoryId = requestedRepositoryId ?? params.repositoryId;
   if (typeof repositoryId !== 'string' && typeof repositoryId !== 'number') ctx.throw(400, 'repositoryId is required');
 
   const repo = await ctx.db.getRepository('gitRepositories').findOne({
@@ -92,7 +98,8 @@ async function githubFetch(endpoint: string, pat: string, params?: Record<string
   }
 
   const data = await response.json();
-  return { data, totalPages, total: null };
+  const hasMore = linkHeader ? linkHeader.split(',').some((link) => link.includes('rel="next"')) : false;
+  return { data, totalPages, total: null, hasMore };
 }
 
 export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
@@ -215,6 +222,11 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
       perPage: parseInt(String(perPage), 10),
       total: result.total,
       totalPages: result.totalPages,
+      hasMore:
+        result.hasMore ??
+        (result.totalPages !== null
+          ? Number(page) < result.totalPages
+          : result.data.length >= Math.min(parseInt(String(perPage), 10) || 20, 100)),
     },
   };
   await next();
@@ -348,6 +360,87 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
     data,
   };
   await next();
+}
+
+/** Read enough provider data to detect omitted files without hiding provider errors. */
+export async function readChatMergeRequest(ctx: Context, mrIid: number, repositoryId?: number | string) {
+  const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx, repositoryId);
+  if (isGitHub) {
+    const [request, fileResult] = await Promise.all([
+      githubFetch(`/repos/${projectPath}/pulls/${mrIid}`, pat),
+      githubFetch(`/repos/${projectPath}/pulls/${mrIid}/files`, pat, { page: 1, per_page: 51 }),
+    ]);
+    const item = request.data;
+    if (!Array.isArray(fileResult.data)) throw new Error('Unable to read merge request changes');
+    const files = fileResult.data.map(
+      (file: { filename: string; previous_filename?: string; status?: string; patch?: string }) => ({
+        oldPath: file.previous_filename || file.filename,
+        newPath: file.filename,
+        status: file.status,
+        diff: file.patch,
+      }),
+    );
+    const limitations: string[] = [];
+    if (typeof item.changed_files === 'number' && item.changed_files > files.length) {
+      limitations.push('Additional changed files were omitted by the provider.');
+    }
+    if (files.some((file: { diff?: string }) => !file.diff)) {
+      limitations.push('The provider omitted patches for one or more files, including binary or large files.');
+    }
+    return {
+      title: item.title,
+      description: item.body,
+      state: item.state === 'open' ? 'opened' : item.merged_at ? 'merged' : 'closed',
+      sourceBranch: item.head?.ref,
+      targetBranch: item.base?.ref,
+      author: item.user?.login,
+      files,
+      limitations,
+    };
+  }
+
+  if (!pat) ctx.throw(400, 'Personal Access Token is required for GitLab API access');
+  const [request, changeResult] = await Promise.all([
+    gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}`, pat),
+    gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}/changes`, pat),
+  ]);
+  const item = request.data;
+  const changeData = changeResult.data || {};
+  if (!Array.isArray(changeData.changes)) throw new Error('Unable to read merge request changes');
+  const files = changeData.changes.map(
+    (file: {
+      old_path?: string;
+      new_path?: string;
+      new_file?: boolean;
+      deleted_file?: boolean;
+      renamed_file?: boolean;
+      diff?: string;
+      collapsed?: boolean;
+      too_large?: boolean;
+      binary?: boolean;
+    }) => ({
+      oldPath: file.old_path,
+      newPath: file.new_path,
+      status: file.new_file ? 'added' : file.deleted_file ? 'removed' : file.renamed_file ? 'renamed' : 'modified',
+      diff: file.diff,
+      unavailable: file.collapsed || file.too_large || file.binary || !file.diff,
+    }),
+  );
+  const limitations: string[] = [];
+  if (changeData.overflow) limitations.push('The provider omitted additional changed files or patches.');
+  if (files.some((file: { unavailable?: boolean }) => file.unavailable)) {
+    limitations.push('The provider omitted patches for one or more files, including binary or large files.');
+  }
+  return {
+    title: item.title,
+    description: item.description,
+    state: item.state,
+    sourceBranch: item.source_branch,
+    targetBranch: item.target_branch,
+    author: item.author?.username || item.author?.name,
+    files,
+    limitations,
+  };
 }
 
 export async function mergeRequestNotes(ctx: Context, next: () => Promise<void>) {

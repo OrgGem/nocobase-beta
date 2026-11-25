@@ -13,6 +13,8 @@ const READ_ACTIONS = new Set([
   'mergeRequests',
   'mergeRequestDetail',
   'mergeRequestNotes',
+  'chatContextOptions',
+  'chatContextContent',
   'pollerStatus',
   'rolePermissions',
   'reviewCutoverStatus',

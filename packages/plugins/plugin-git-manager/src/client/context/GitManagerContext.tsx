@@ -1,5 +1,15 @@
-import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { useApp } from '@nocobase/client-v2';
+import { setCurrentGitRepository } from '../../client-v2/git-context-api';
 
 interface Repository {
   id: number;
@@ -34,7 +44,8 @@ export function useGitManager() {
 }
 
 export const GitManagerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const api = useApp().apiClient;
+  const app = useApp();
+  const api = app.apiClient;
   const [repos, setRepos] = useState<Repository[]>([]);
   const [selectedRepo, setSelectedRepo] = useState<Repository | null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,6 +53,11 @@ export const GitManagerProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [currentBranch, setCurrentBranch] = useState('');
   const selectedRepoRef = useRef(selectedRepo);
   selectedRepoRef.current = selectedRepo;
+
+  useEffect(() => {
+    setCurrentGitRepository(app, selectedRepo?.id);
+    return () => setCurrentGitRepository(app);
+  }, [app, selectedRepo?.id]);
 
   const refreshBranches = useCallback(async () => {
     const repo = selectedRepoRef.current;

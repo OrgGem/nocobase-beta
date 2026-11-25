@@ -71,6 +71,58 @@ describe('Git credential destination', () => {
     await mergeRequests({ db, action: { params: { repositoryId: 1 } } } as unknown as Context, async () => {});
     expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ redirect: 'error' }));
   });
+
+  it('preserves GitHub next-page state when a merged-state page filters to no results', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([{ number: 42, state: 'closed', merged_at: null }]), {
+        status: 200,
+        headers: {
+          link: '<https://api.github.com/repos/team/r/pulls?page=2>; rel="next", <https://api.github.com/repos/team/r/pulls?page=4>; rel="last"',
+        },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { db } = database('https://github.com/team/r', null, 'github');
+    const context = {
+      db,
+      action: { params: { repositoryId: 1, state: 'merged', page: 1, perPage: 20 } },
+      body: undefined as unknown,
+    };
+
+    await mergeRequests(context as unknown as Context, async () => {});
+
+    expect(fetchMock.mock.calls[0][0]).toContain('state=closed');
+    expect(context.body).toMatchObject({
+      success: true,
+      data: [],
+      pagination: { page: 1, perPage: 20, total: null, totalPages: null, hasMore: true },
+    });
+  });
+
+  it('uses GitLab next-page headers to preserve hasMore', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([{ id: 42, iid: 7, title: 'MR', state: 'opened' }]), {
+        status: 200,
+        headers: { 'x-next-page': '2', 'x-total-pages': '5', 'x-total': '81' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { db } = database();
+    const context = {
+      db,
+      action: { params: { repositoryId: 1, page: 1, perPage: 20 } },
+      body: undefined as unknown,
+    };
+
+    await mergeRequests(context as unknown as Context, async () => {});
+
+    expect(fetchMock.mock.calls[0][0]).toContain('page=1');
+    expect(context.body).toMatchObject({
+      success: true,
+      data: [{ id: 42, iid: 7, title: 'MR' }],
+      pagination: { page: 1, perPage: 20, total: 81, totalPages: 5, hasMore: true },
+    });
+  });
 });
 
 describe('Git filesystem and process credentials', () => {

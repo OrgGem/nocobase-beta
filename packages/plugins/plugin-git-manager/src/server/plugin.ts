@@ -12,6 +12,7 @@ import * as reviewCutoverActions from './actions/review-cutover';
 import * as pollerActions from './actions/poller';
 import * as rolePermissionsActions from './actions/role-permissions';
 import * as subtreeActions from './actions/subtree';
+import * as chatContextActions from './actions/chat-context';
 import { unregisterReviewQueue } from './actions/review';
 import { registerGitReviewAiTools } from './ai-tools';
 import { enforceGitRequestMethod } from './request-method-policy';
@@ -21,6 +22,7 @@ import { GitReviewService } from './services/review-service';
 import { LegacyPostService } from './services/legacy-post-service';
 import { enforceReviewControlAccess } from './review-control-access';
 import { enforceRepositoryAccess, enforceRepositoryCollectionAccess } from './repository-access';
+import { enforceGitChatAdmission, registerGitChatContextStrategies } from './chat-context-admission';
 import { isGitManagerResourceResponse, redactCredentialFields } from './utils/redact';
 import { containsCredentialBearingUrlField, URL_USERINFO_NOT_ALLOWED } from './utils/url-security';
 
@@ -111,6 +113,8 @@ export class PluginGitManagerServer extends Plugin {
         mergeRequests: gitlabApi.mergeRequests,
         mergeRequestDetail: gitlabApi.mergeRequestDetail,
         mergeRequestNotes: gitlabApi.mergeRequestNotes,
+        chatContextOptions: chatContextActions.chatContextOptions,
+        chatContextContent: chatContextActions.chatContextContent,
         triggerReview: reviewActions.triggerReview,
         reviewApprovePost: reviewActions.reviewApprovePost,
         reviewLegacyPostStatus: reviewActions.reviewLegacyPostStatus,
@@ -134,6 +138,10 @@ export class PluginGitManagerServer extends Plugin {
         subtreeReplace: subtreeActions.subtreeRunOnAppProcess,
       },
     });
+
+    // These actions perform their own checks against the caller's existing Git and collection permissions.
+    this.app.acl.allow('gitManager', 'chatContextOptions', 'loggedIn');
+    this.app.acl.allow('gitManager', 'chatContextContent', 'loggedIn');
 
     const legacyApprovalAction = this.app.acl.getAvailableAction('reviewApprovePost');
     const priorAliases = legacyApprovalAction?.options?.aliases;
@@ -186,6 +194,7 @@ export class PluginGitManagerServer extends Plugin {
     }
 
     this.app.resourceManager.use(enforceGitRequestMethod);
+    this.app.resourceManager.use(enforceGitChatAdmission);
     this.app.resourceManager.use(enforceReviewControlAccess);
     (this as any).app.resourceManager.use(enforceRepositoryAccess);
     (this as any).app.resourceManager.use(enforceRepositoryCollectionAccess);
@@ -210,6 +219,8 @@ export class PluginGitManagerServer extends Plugin {
     });
 
     registerGitReviewAiTools((this as any).app);
+
+    this.app.on('afterLoad', () => registerGitChatContextStrategies(this.app));
 
     (this as any).app.on('afterStart', async () => {
       await ensureAutoReviewFlowSchema((this as any).app).catch(

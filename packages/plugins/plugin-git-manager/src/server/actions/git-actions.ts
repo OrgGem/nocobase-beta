@@ -4,7 +4,7 @@ import simpleGit, { SimpleGit } from 'simple-git';
 import { Context } from '@nocobase/actions';
 import * as path from 'path';
 import * as fs from 'fs';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { getEffectiveActionParams } from '../repository-access';
 import { redactError } from '../utils/redact';
 import { getRepoAccount } from '../utils/get-repo-account';
@@ -25,6 +25,7 @@ interface GitActionParams {
   commitHash?: string;
   compareHash?: string;
   maxCount?: number | string;
+  skip?: number | string;
   branch?: string;
   ref?: string;
   treePath?: string;
@@ -205,8 +206,8 @@ function getGit(ctx: Context, localPath: string): SimpleGit {
   return createGit(localPath);
 }
 
-export async function getRepo(ctx: Context) {
-  const { repositoryId } = getGitActionParams(ctx);
+export async function getRepo(ctx: Context, requestedRepositoryId?: number | string) {
+  const repositoryId = requestedRepositoryId ?? getGitActionParams(ctx).repositoryId;
   const repo = await ctx.db.getRepository('gitRepositories').findOne({
     filterByTk: repositoryId,
   });
@@ -379,16 +380,31 @@ export async function status(ctx: Context, next: () => Promise<void>) {
 export async function log(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const { maxCount = 50, file } = getGitActionParams(ctx);
+  const { maxCount = 50, file, branch, skip } = getGitActionParams(ctx);
 
   const parsed = Number.parseInt(String(maxCount), 10);
-  const options: Record<string, any> = { maxCount: Math.min(Math.max(parsed || 50, 1), 500) };
+  const options: { maxCount: number; file?: string } = { maxCount: Math.min(Math.max(parsed || 50, 1), 500) };
   if (file) {
     if (file.includes('..')) ctx.throw(400, 'Invalid file path');
     options.file = file;
   }
 
-  const result = await getGit(ctx, localPath).log(options);
+  const args: string[] = [];
+  if (branch) args.push(validateBranch(branch));
+  if (skip !== undefined) {
+    const parsedSkip = Number(skip);
+    if (!Number.isSafeInteger(parsedSkip) || parsedSkip < 0 || parsedSkip > 1000000) {
+      ctx.throw(400, 'Invalid history offset');
+    }
+    args.push(`--skip=${parsedSkip}`);
+  }
+  const result = args.length
+    ? await getGit(ctx, localPath).log([
+        ...args,
+        `--max-count=${options.maxCount}`,
+        ...(file ? ['--follow', '--', file] : []),
+      ])
+    : await getGit(ctx, localPath).log(options);
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -530,4 +546,101 @@ export async function commitDetail(ctx: Context, next: () => Promise<void>) {
     },
   };
   await next();
+}
+
+async function readLimitedGitOutput(localPath: string, args: string[], maxBytes: number) {
+  return new Promise<{ text: string; truncated: boolean }>((resolve, reject) => {
+    const process = spawn(GIT_BINARY, args, {
+      cwd: localPath,
+      env: gitProcessEnvironment(),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let truncated = false;
+    process.stdout.on('data', (chunk: Buffer) => {
+      const remaining = maxBytes - size;
+      if (remaining > 0) {
+        const data = chunk.subarray(0, remaining);
+        chunks.push(data);
+        size += data.length;
+      }
+      if (chunk.length > remaining) {
+        truncated = true;
+        process.kill();
+      }
+    });
+    process.on('error', reject);
+    process.on('close', (code) => {
+      if (code !== 0 && !truncated) {
+        reject(new Error('Unable to read commit diff'));
+        return;
+      }
+      const text = Buffer.concat(chunks)
+        .toString('utf8')
+        .replace(/\uFFFD$/, '');
+      resolve({ text, truncated });
+    });
+  });
+}
+
+/** Build a bounded commit context, comparing merge commits with their first parent. */
+export async function readChatCommit(
+  ctx: Context,
+  commitHash: string,
+  maxFiles: number,
+  maxBytes: number,
+  repositoryId?: number | string,
+) {
+  if (!/^[a-f\d]{4,64}$/i.test(commitHash)) ctx.throw(400, 'Invalid commit hash');
+  const repo = await getRepo(ctx, repositoryId);
+  const localPath = validateLocalPath(repo.get('localPath'));
+  const git = getGit(ctx, localPath);
+  const hash = (await git.raw(['rev-parse', '--verify', `${commitHash}^{commit}`])).trim();
+  const [metadata, parentLine] = await Promise.all([
+    git.raw(['show', '-s', '--format=%H%x00%an%x00%aI%x00%s%x00%b', hash]),
+    git.raw(['rev-list', '--parents', '-n', '1', hash]),
+  ]);
+  const [, author, date, subject, body] = metadata.split('\0');
+  const parent = parentLine.trim().split(/\s+/)[1];
+  const namesArgs = parent
+    ? ['diff', '--name-status', '-z', '-M', parent, hash, '--']
+    : ['diff-tree', '--root', '--no-commit-id', '-r', '--name-status', '-z', '-M', hash, '--'];
+  const tokens = (await git.raw(namesArgs)).split('\0');
+  const files: Array<{ oldPath: string; newPath: string; status: string }> = [];
+  for (let index = 0; index < tokens.length && tokens[index]; ) {
+    const status = tokens[index++];
+    const oldPath = tokens[index++];
+    const newPath = /^[RC]/.test(status) ? tokens[index++] : oldPath;
+    if (!oldPath || !newPath) break;
+    files.push({ oldPath, newPath, status });
+  }
+  const selectedFiles = files.slice(0, maxFiles);
+  const paths = Array.from(new Set(selectedFiles.flatMap((file) => [file.oldPath, file.newPath]))).map(
+    (file) => `:(literal)${file}`,
+  );
+  const patchArgs = parent
+    ? ['diff', '--no-ext-diff', '--no-textconv', '--no-color', parent, hash, '--', ...paths]
+    : ['show', '--format=', '--no-ext-diff', '--no-textconv', '--no-color', hash, '--', ...paths];
+  const patch = paths.length
+    ? await readLimitedGitOutput(localPath, patchArgs, maxBytes)
+    : { text: '', truncated: false };
+  const limitations: string[] = [];
+  if (files.length > maxFiles) limitations.push('Additional changed files were omitted.');
+  if (patch.truncated) limitations.push('The diff was truncated to the configured limit.');
+  if (/^Binary files .* differ$|^GIT binary patch$/m.test(patch.text)) {
+    limitations.push('Binary file contents are not included in the diff.');
+  }
+  return {
+    commitSha: hash,
+    author,
+    date,
+    subject,
+    body: body?.trim(),
+    files: selectedFiles,
+    diff: patch.text,
+    truncated: patch.truncated || files.length > maxFiles,
+    limitations,
+  };
 }
