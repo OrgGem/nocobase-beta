@@ -37,5 +37,11 @@
   "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables": "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables",
   "Slow query warning threshold (ms)": "Slow query warning threshold (ms)",
   "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)",
-  "This collection is read-only": "This collection is read-only"
+  "This collection is read-only": "This collection is read-only",
+  "Load tables": "Load tables",
+  "Select tables to load": "Select tables to load",
+  "Please select at least one table": "Please select at least one table",
+  "Tables loaded successfully": "Tables loaded successfully",
+  "Failed to load tables": "Failed to load tables",
+  "All tables are already loaded": "All tables are already loaded"
 }

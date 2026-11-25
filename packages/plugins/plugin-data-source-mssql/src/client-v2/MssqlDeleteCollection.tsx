@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import React, { useState } from 'react';
-import { Button, Checkbox, Modal } from 'antd';
+import { App, Button, Checkbox, Modal } from 'antd';
 import { useFlowContext } from '@nocobase/flow-engine';
 import type { DataSourceCollectionActionProps } from '@nocobase/plugin-data-source-manager/client-v2';
 import { useTranslation } from 'react-i18next';
@@ -15,6 +15,8 @@ export function MssqlDeleteCollection({
   isBulk,
 }: DataSourceCollectionActionProps) {
   const ctx = useFlowContext();
+  const { message: appMessage } = App.useApp();
+  const notify = ctx?.message ?? appMessage;
   const { t } = useTranslation('plugin-data-source-mssql');
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
@@ -33,7 +35,7 @@ export function MssqlDeleteCollection({
       ctx.dataSourceManager.getDataSource(dataSourceKey)?.reload();
       onSubmitted?.();
     } catch {
-      ctx.message.error(t('Failed to delete collection'));
+      notify?.error?.(t('Failed to delete collection'));
     } finally {
       setPending(false);
     }

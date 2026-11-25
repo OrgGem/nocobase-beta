@@ -8,14 +8,23 @@ import { isValidFilter } from '@nocobase/utils';
 import { cloneDeep, isEqual, omit, pick } from 'lodash';
 import type { CollectionOptions, LoadedCollections } from '@nocobase/data-source-manager';
 import type { Model } from '@nocobase/database';
-import type { Transaction } from 'sequelize';
+import { Op, type Transaction } from 'sequelize';
 import { withLockedDataSource } from './selection';
 
-type DataSourceRecord = Model & { loadLocalData(): Promise<LoadedCollections> };
+type DataSourceRecord = Model & {
+  loadLocalData(): Promise<LoadedCollections>;
+  loadIntoApplication?(options: { app: unknown; refresh?: boolean; reuseDB?: boolean }): Promise<void>;
+};
 type MssqlSyncMessage =
   | { type: 'selectionChanged'; dataSourceKey: string; refreshTables?: string[] }
   | { type: 'tablesLoaded'; dataSourceKey: string; tableNames?: string[] }
   | { type: 'dataSourceRemoved'; dataSourceKey: string };
+
+const CLOSE_REMOVED_TIMEOUT_MS = 2000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 
 export class PluginDataSourceMssqlServer extends Plugin {
   private selectionSyncs = new Map<string, Promise<void>>();
@@ -23,10 +32,100 @@ export class PluginDataSourceMssqlServer extends Plugin {
 
   async beforeLoad() {
     Database.registerDialect(MssqlDialect);
+    MssqlExternalDataSource.setTemplateRenderer((value) =>
+      this.app.environment?.renderJsonTemplate ? this.app.environment.renderJsonTemplate(value) : value,
+    );
     this.app.dataSourceManager.factory.register('mssql', MssqlExternalDataSource);
   }
 
+  private clearRuntimeStatus(dataSourceKey: string): void {
+    const dsmPlugin = this.app.pm.get('data-source-manager') as
+      | {
+          dataSourceStatus?: Record<string, unknown>;
+          dataSourceErrors?: Record<string, unknown>;
+          dataSourceLoadingProgress?: Record<string, unknown>;
+        }
+      | undefined;
+    if (!dsmPlugin) {
+      return;
+    }
+    if (dsmPlugin.dataSourceStatus) {
+      delete dsmPlugin.dataSourceStatus[dataSourceKey];
+    }
+    if (dsmPlugin.dataSourceErrors) {
+      delete dsmPlugin.dataSourceErrors[dataSourceKey];
+    }
+    if (dsmPlugin.dataSourceLoadingProgress) {
+      delete dsmPlugin.dataSourceLoadingProgress[dataSourceKey];
+    }
+  }
+
+  private async cleanupDestroyedDataSourceMetadata(dataSourceKey: string, transaction?: Transaction): Promise<void> {
+    const db = this.app.db;
+    const hasCollection = (name: string) =>
+      typeof db.hasCollection === 'function' ? db.hasCollection(name) : Boolean(db.getCollection?.(name));
+
+    let rolesResourceIds: Array<string | number> = [];
+    let scopeIds: Array<string | number> = [];
+
+    if (hasCollection('dataSourcesRolesResources')) {
+      const resources = await db.getRepository('dataSourcesRolesResources').find({
+        filter: { dataSourceKey },
+        transaction,
+      });
+      rolesResourceIds = resources
+        .map((record) => record.get('id'))
+        .filter((id): id is string | number => typeof id === 'string' || typeof id === 'number');
+    }
+
+    if (hasCollection('dataSourcesRolesResourcesScopes')) {
+      const scopes = await db.getRepository('dataSourcesRolesResourcesScopes').find({
+        filter: { dataSourceKey },
+        transaction,
+      });
+      scopeIds = scopes
+        .map((record) => record.get('id'))
+        .filter((id): id is string | number => typeof id === 'string' || typeof id === 'number');
+    }
+
+    if (hasCollection('dataSourcesRolesResourcesActions') && (rolesResourceIds.length > 0 || scopeIds.length > 0)) {
+      const orClauses: Array<Record<string, unknown>> = [];
+      if (rolesResourceIds.length > 0) {
+        orClauses.push({ rolesResourceId: { [Op.in]: rolesResourceIds } });
+      }
+      if (scopeIds.length > 0) {
+        orClauses.push({ scopeId: { [Op.in]: scopeIds } });
+      }
+      await db.getModel('dataSourcesRolesResourcesActions').destroy({
+        where: { [Op.or]: orClauses },
+        transaction,
+        hooks: false,
+        individualHooks: false,
+      });
+    }
+
+    const dependentCollections = [
+      'dataSourcesRolesResources',
+      'dataSourcesRolesResourcesScopes',
+      'dataSourcesRoles',
+      'dataSourcesFields',
+      'dataSourcesCollections',
+    ] as const;
+
+    for (const collectionName of dependentCollections) {
+      if (hasCollection(collectionName)) {
+        await db.getModel(collectionName).destroy({
+          where: { dataSourceKey },
+          transaction,
+          hooks: false,
+          individualHooks: false,
+        });
+      }
+    }
+  }
+
   private async closeRemovedDataSource(dataSourceKey: string, target?: MssqlExternalDataSource): Promise<void> {
+    this.clearRuntimeStatus(dataSourceKey);
     const tracked = target ?? this.trackedSources.get(dataSourceKey);
     const active = this.app.dataSourceManager.get(dataSourceKey);
     const candidate = tracked ?? (active instanceof MssqlExternalDataSource ? active : undefined);
@@ -39,10 +138,22 @@ export class PluginDataSourceMssqlServer extends Plugin {
     if (active === candidate) {
       this.app.dataSourceManager.dataSources.delete(dataSourceKey);
     }
+    const closePromise = Promise.resolve()
+      .then(() => candidate.close())
+      .catch(() => {
+        this.app.log.warn(`[MSSQL] Failed to close removed datasource ${dataSourceKey}`);
+      });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, CLOSE_REMOVED_TIMEOUT_MS);
+      timer.unref?.();
+    });
     try {
-      await candidate.close();
-    } catch {
-      this.app.log.warn(`[MSSQL] Failed to close removed datasource ${dataSourceKey}`);
+      await Promise.race([closePromise, timeoutPromise]);
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 
@@ -66,6 +177,21 @@ export class PluginDataSourceMssqlServer extends Plugin {
       }
     });
 
+    this.app.db.on('dataSources.beforeDestroy', async (model: Model, options?: { transaction?: Transaction }) => {
+      const dataSourceKey = model.get('key');
+      const type = model.get('type');
+      if (typeof dataSourceKey !== 'string' || !dataSourceKey) {
+        return;
+      }
+      const active = this.app.dataSourceManager.get(dataSourceKey);
+      const isMssql =
+        type === 'mssql' || this.trackedSources.has(dataSourceKey) || active instanceof MssqlExternalDataSource;
+      if (!isMssql) {
+        return;
+      }
+      await this.cleanupDestroyedDataSourceMetadata(dataSourceKey, options?.transaction);
+    });
+
     this.app.db.on('dataSources.afterDestroy', async (model: Model, options?: { transaction?: Transaction }) => {
       const dataSourceKey = model.get('key');
       const type = model.get('type');
@@ -79,27 +205,85 @@ export class PluginDataSourceMssqlServer extends Plugin {
         return;
       }
 
-      const closeOnDestroy = () => this.closeRemovedDataSource(dataSourceKey, target);
       if (options?.transaction && typeof options.transaction.afterCommit === 'function') {
-        options.transaction.afterCommit(closeOnDestroy);
+        options.transaction.afterCommit(() => this.closeRemovedDataSource(dataSourceKey, target));
+        this.sendSyncMessage({ type: 'dataSourceRemoved', dataSourceKey }, { transaction: options.transaction }).catch(
+          () => {
+            this.app.log.warn(`[MSSQL] Failed to publish removed datasource sync message for ${dataSourceKey}`);
+          },
+        );
       } else {
-        await closeOnDestroy();
+        await this.closeRemovedDataSource(dataSourceKey, target);
+        await this.sendSyncMessage({ type: 'dataSourceRemoved', dataSourceKey }).catch(() => {
+          this.app.log.warn(`[MSSQL] Failed to publish removed datasource sync message for ${dataSourceKey}`);
+        });
       }
-
-      await this.sendSyncMessage({ type: 'dataSourceRemoved', dataSourceKey }, { transaction: options?.transaction });
     });
+
+    this.app.resourceManager.use(
+      async (ctx, next) => {
+        const { resourceName, actionName, params } = ctx.action || {};
+        if (resourceName === 'dataSources' && (actionName === 'create' || actionName === 'update')) {
+          const values = isRecord(params?.values) ? params.values : undefined;
+          const incomingOptions = isRecord(values?.options) ? values.options : undefined;
+          if (actionName === 'create' && values?.type === 'mssql' && incomingOptions?.addAllCollections === true) {
+            delete incomingOptions.selectedCollections;
+          }
+          if (actionName === 'update' && typeof params?.filterByTk === 'string' && params.filterByTk) {
+            const filterByTk = params.filterByTk;
+            const model = (await this.app.db.getRepository('dataSources').findOne({
+              filterByTk,
+            })) as DataSourceRecord | null;
+            if (model && model.get('type') === 'mssql') {
+              if (incomingOptions?.addAllCollections === true && 'selectedCollections' in incomingOptions) {
+                delete incomingOptions.selectedCollections;
+              }
+              if (!this.app.dataSourceManager.get(filterByTk) && isEqual(model.get('options'), incomingOptions)) {
+                if (typeof model.loadIntoApplication === 'function') {
+                  await model.loadIntoApplication({ app: this.app, refresh: true });
+                }
+                if (!this.app.dataSourceManager.get(filterByTk)) {
+                  const dsmPlugin = this.app.pm.get('data-source-manager') as
+                    | { dataSourceErrors?: Record<string, { message?: string } | undefined> }
+                    | undefined;
+                  const errorMessage =
+                    dsmPlugin?.dataSourceErrors?.[filterByTk]?.message ||
+                    `MSSQL data source "${filterByTk}" is not connected`;
+                  ctx.throw(400, errorMessage);
+                }
+              }
+            }
+          }
+        }
+        await next();
+      },
+      { tag: 'mssql-prepare-datasource-save', before: ['default'] },
+    );
 
     this.app.resourceManager.registerPreActionHandler('dataSources:readTables', async (ctx, next) => {
       const { dataSourceKey, dbOptions } = ctx.action.params.values || {};
-      if (dbOptions?.type !== 'mssql') {
+      let effectiveDbOptions = dbOptions;
+      if (
+        !effectiveDbOptions &&
+        typeof dataSourceKey === 'string' &&
+        dataSourceKey &&
+        !this.app.dataSourceManager.get(dataSourceKey)
+      ) {
+        const stored = await this.app.db.getRepository('dataSources').findOne({ filterByTk: dataSourceKey });
+        if (stored && stored.get('type') === 'mssql') {
+          const storedOpts = isRecord(stored.get('options')) ? stored.get('options') : {};
+          effectiveDbOptions = { ...storedOpts, type: 'mssql' };
+        }
+      }
+      if (effectiveDbOptions?.type !== 'mssql') {
         await next();
         return;
       }
 
       const manager = this.app.dataSourceManager;
       const resolvedDbOptions = this.app.environment?.renderJsonTemplate
-        ? this.app.environment.renderJsonTemplate(dbOptions)
-        : dbOptions;
+        ? this.app.environment.renderJsonTemplate(effectiveDbOptions)
+        : effectiveDbOptions;
       const probe = manager.factory.create('mssql', {
         name: dataSourceKey,
         ...resolvedDbOptions,

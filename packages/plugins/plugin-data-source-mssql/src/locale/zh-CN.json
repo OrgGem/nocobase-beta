@@ -37,5 +37,11 @@
   "Use sys.partitions metadata instead of COUNT(*) for unfiltered total counts on large tables": "无筛选条件时使用 sys.partitions 元数据替代大表 COUNT(*)",
   "Slow query warning threshold (ms)": "慢查询告警阈值（毫秒）",
   "Log SQL queries exceeding this duration to help diagnose missing indexes (0 = disabled, default: 2000 ms)": "记录超过该耗时的 SQL 查询以辅助排查缺失索引（0 = 关闭，默认：2000 毫秒）",
-  "This collection is read-only": "此数据表为只读"
+  "This collection is read-only": "此数据表为只读",
+  "Load tables": "加载数据表",
+  "Select tables to load": "选择要加载的数据表",
+  "Please select at least one table": "请至少选择一个数据表",
+  "Tables loaded successfully": "数据表加载成功",
+  "Failed to load tables": "加载数据表失败",
+  "All tables are already loaded": "所有数据表均已加载"
 }

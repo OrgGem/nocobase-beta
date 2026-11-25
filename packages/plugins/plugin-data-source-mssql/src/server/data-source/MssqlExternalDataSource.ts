@@ -104,7 +104,49 @@ function executeOnTediousConnection(connection: TediousConnectionLike, sql: stri
   return connection.queue ? connection.queue.enqueue(run) : run();
 }
 
-export const formatDatabaseOptions = (options: MssqlDataSourceOptions = {}) => {
+let mssqlTemplateRenderer: (<T>(value: T) => T) | undefined;
+
+function renderScalarConnectionOptions(options: MssqlDataSourceOptions): MssqlDataSourceOptions {
+  if (!mssqlTemplateRenderer) {
+    return options;
+  }
+  const renderable = {
+    host: options.host,
+    port: options.port,
+    username: options.username,
+    password: options.password,
+    database: options.database,
+    schema: options.schema,
+    tablePrefix: options.tablePrefix,
+    dialectOptions: options.dialectOptions,
+    encrypt: options.encrypt,
+    trustServerCertificate: options.trustServerCertificate,
+    readOnlyIntent: options.readOnlyIntent,
+    requestTimeout: options.requestTimeout,
+    connectTimeout: options.connectTimeout,
+    lockTimeout: options.lockTimeout,
+    readUncommitted: options.readUncommitted,
+    fastCount: options.fastCount,
+    deferredJoinThreshold: options.deferredJoinThreshold,
+    slowQueryThresholdMs: options.slowQueryThresholdMs,
+    timezone: options.timezone,
+    pool: options.pool,
+    underscored: options.underscored,
+  };
+  const rendered = mssqlTemplateRenderer(renderable);
+  const coercedPort =
+    typeof rendered.port === 'string' && /^\d+$/.test((rendered.port as string).trim())
+      ? Number((rendered.port as string).trim())
+      : rendered.port;
+  return {
+    ...options,
+    ...rendered,
+    port: coercedPort,
+  };
+}
+
+export const formatDatabaseOptions = (rawOptions: MssqlDataSourceOptions = {}) => {
+  const options = renderScalarConnectionOptions(rawOptions);
   const {
     host,
     port,
@@ -271,6 +313,10 @@ export type MssqlDataSourceOptions = {
 };
 
 export class MssqlExternalDataSource extends SequelizeDataSource<MssqlIntrospector> {
+  static setTemplateRenderer(renderer?: <T>(value: T) => T): void {
+    mssqlTemplateRenderer = renderer;
+  }
+
   private isLoaded = false;
   private isClosed = false;
   private reusedDatabase = false;
