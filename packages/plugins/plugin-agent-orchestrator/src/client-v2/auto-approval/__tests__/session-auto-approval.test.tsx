@@ -369,7 +369,15 @@ describe('session automatic approval UI and native approval bridge', () => {
     let menu = await screen.findByRole('menu');
     const globalSwitch = await within(menu).findByRole('switch', { name: 'Disable automatic approval' });
     expect(globalSwitch.getAttribute('aria-checked')).toBe('true');
-    await user.click(within(menu).getByText('Automatic tool approval'));
+    const globalLabel = within(menu).getByText('Auto accept').closest('label');
+    expect(globalLabel?.querySelector('.anticon-thunderbolt')).not.toBeNull();
+    await user.hover(within(menu).getByText('Auto accept'));
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    await user.hover(globalSwitch);
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    await user.click(within(menu).getByText('Auto accept'));
     await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-global', enabled: false }));
     expect(globalSwitch.getAttribute('aria-checked')).toBe('false');
     expect(screen.getByRole('menu')).toBeInTheDocument();
@@ -388,7 +396,7 @@ describe('session automatic approval UI and native approval bridge', () => {
     menu = await screen.findByRole('menu');
     const blockSwitch = await within(menu).findByRole('switch', { name: 'Enable automatic approval' });
     expect(blockSwitch.getAttribute('aria-checked')).toBe('false');
-    await user.click(within(menu).getByText('Automatic tool approval'));
+    await user.click(within(menu).getByText('Auto accept'));
     await waitFor(() => expect(setRequests).toContainEqual({ sessionId: 'session-block', enabled: true }));
     expect(blockSwitch.getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('menu')).toBeInTheDocument();

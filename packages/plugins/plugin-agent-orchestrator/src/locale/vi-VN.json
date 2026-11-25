@@ -226,6 +226,7 @@
   "Total Executions (Recent)": "Tổng số lần thực thi (gần đây)",
   "Succeeded": "Thành công",
   "Timeout/Canceled": "Hết thời gian/Đã hủy",
+  "Auto accept": "Auto accept",
   "Enable automatic approval": "Bật tự động phê duyệt",
   "Disable automatic approval": "Tắt tự động phê duyệt",
   "Could not update automatic approval": "Không thể cập nhật tự động phê duyệt",

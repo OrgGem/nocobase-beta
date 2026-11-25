@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ThunderboltOutlined } from '@ant-design/icons';
 import { Switch, message } from 'antd';
 import { useApp } from '@nocobase/client-v2';
 import { observer, useFlowContext } from '@nocobase/flow-engine';
@@ -15,22 +15,28 @@ import {
 } from './AutoApprovalBridge';
 
 type Mount = { key: number; runtime: ChatBoxRuntime; defaultSystemMessage?: () => string | undefined };
-type MenuTargets = { targets: Map<HTMLElement, ChatBoxRuntime>; listeners: Set<() => void> };
+type MenuControl = {
+  enabled: boolean;
+  disabled: boolean;
+  label: string;
+  toggle: (next: boolean) => void;
+};
+type MenuStore = { controls: Map<ChatBoxRuntime, MenuControl>; listeners: Set<() => void> };
 type ContextModel = {
   use?: string;
   constructor?: { name?: string };
   parent?: { chatBoxRuntime?: ChatBoxRuntime };
 };
 
-const menuTargetsByApp = new WeakMap<object, MenuTargets>();
+const menuStoresByApp = new WeakMap<object, MenuStore>();
 
-function getMenuTargets(app: object) {
-  let menuTargets = menuTargetsByApp.get(app);
-  if (!menuTargets) {
-    menuTargets = { targets: new Map(), listeners: new Set() };
-    menuTargetsByApp.set(app, menuTargets);
+function getMenuStore(app: object) {
+  let store = menuStoresByApp.get(app);
+  if (!store) {
+    store = { controls: new Map(), listeners: new Set() };
+    menuStoresByApp.set(app, store);
   }
-  return menuTargets;
+  return store;
 }
 
 export function registerAutoApprovalWorkContext(manager?: Pick<AIManager, 'getWorkContext' | 'registerWorkContext'>) {
@@ -41,57 +47,91 @@ export function registerAutoApprovalWorkContext(manager?: Pick<AIManager, 'getWo
 
 export function AutoApprovalMenu() {
   const app = useApp();
+  const t = useT();
   const context = useFlowContext<{ model?: ContextModel }>();
   const model = context?.model;
   const isChatCore = model?.use === 'AIChatBoxCoreModel' || model?.constructor?.name === 'AIChatBoxCoreModel';
   const runtime = model ? (isChatCore ? model.parent?.chatBoxRuntime : undefined) : getGlobalChatBoxRuntime();
-  const menuTargets = useMemo(() => getMenuTargets(app), [app]);
+  const menuStore = useMemo(() => getMenuStore(app), [app]);
+  const [control, setControl] = useState<MenuControl | undefined>(() =>
+    runtime ? menuStore.controls.get(runtime) : undefined,
+  );
+  const visible = !!runtime && !!control;
   const id = React.useId();
-  const currentElement = useRef<HTMLElement | null>(null);
   const hiddenItem = useRef<{ item: HTMLElement; display: string }>();
+
+  useLayoutEffect(() => {
+    const sync = () => setControl(runtime ? menuStore.controls.get(runtime) : undefined);
+    menuStore.listeners.add(sync);
+    sync();
+    return () => {
+      menuStore.listeners.delete(sync);
+    };
+  }, [menuStore, runtime]);
+
   const setElement = useCallback(
-    (element: HTMLSpanElement | null) => {
-      if (currentElement.current) {
-        menuTargets.targets.delete(currentElement.current);
-      }
+    (element: HTMLElement | null) => {
       if (hiddenItem.current) {
         hiddenItem.current.item.style.display = hiddenItem.current.display;
         hiddenItem.current = undefined;
       }
-      currentElement.current = element;
-      if (element && runtime) {
-        menuTargets.targets.set(element, runtime);
-      } else if (element) {
+      if (element && !visible) {
         const item = element.closest<HTMLElement>('.ant-dropdown-menu-item');
         if (item) {
           hiddenItem.current = { item, display: item.style.display };
           item.style.display = 'none';
         }
       }
-      menuTargets.listeners.forEach((listener) => listener());
     },
-    [menuTargets, runtime],
+    [visible],
   );
-  return <span id={id} ref={setElement} data-agent-auto-approval-menu="true" />;
+
+  if (!control) {
+    return <span id={id} ref={setElement} data-agent-auto-approval-menu="true" />;
+  }
+
+  return (
+    <label
+      id={id}
+      ref={setElement}
+      data-agent-auto-approval-menu="true"
+      htmlFor={`${id}-switch`}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        margin: '-5px -12px',
+        padding: '5px 12px',
+        cursor: control.disabled ? 'not-allowed' : 'pointer',
+      }}
+      onClick={(event) => event.stopPropagation()}
+      onKeyDown={(event) => {
+        if (['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.stopPropagation();
+      }}
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+        <ThunderboltOutlined aria-hidden="true" />
+        <span>{t('Auto accept')}</span>
+      </span>
+      <Switch
+        id={`${id}-switch`}
+        size="small"
+        aria-label={control.label}
+        checked={control.enabled}
+        onChange={control.toggle}
+        disabled={control.disabled}
+      />
+    </label>
+  );
 }
 
 /** Keep the approval bridge active for each live chat runtime, including when its menu is closed. */
 export function AutoApprovalProvider({ children }: React.PropsWithChildren) {
   const app = useApp();
   const [mounts, setMounts] = useState<Mount[]>([]);
-  const [targets, setTargets] = useState<Map<HTMLElement, ChatBoxRuntime>>(new Map());
   const requests = useMemo(() => new AutoApprovalRequests(), []);
   useAutoApprovalInterceptor(requests);
-
-  useEffect(() => {
-    const menuTargets = getMenuTargets(app);
-    const update = () => setTargets(new Map(menuTargets.targets));
-    menuTargets.listeners.add(update);
-    update();
-    return () => {
-      menuTargets.listeners.delete(update);
-    };
-  }, [app]);
 
   useEffect(() => {
     const active = new Map<ChatBoxRuntime, Mount>();
@@ -182,27 +222,14 @@ export function AutoApprovalProvider({ children }: React.PropsWithChildren) {
     <AutoApprovalRequestsContext.Provider value={requests}>
       {children}
       {mounts.map(({ key, runtime, defaultSystemMessage }) => (
-        <AutoApprovalToggle
-          key={key}
-          runtime={runtime}
-          defaultSystemMessage={defaultSystemMessage}
-          targets={[...targets].filter(([, targetRuntime]) => targetRuntime === runtime).map(([target]) => target)}
-        />
+        <AutoApprovalToggle key={key} runtime={runtime} defaultSystemMessage={defaultSystemMessage} />
       ))}
     </AutoApprovalRequestsContext.Provider>
   );
 }
 
 export const AutoApprovalToggle = observer(
-  ({
-    runtime,
-    defaultSystemMessage,
-    targets = [],
-  }: {
-    runtime: ChatBoxRuntime;
-    defaultSystemMessage?: () => string | undefined;
-    targets?: HTMLElement[];
-  }) => {
+  ({ runtime, defaultSystemMessage }: { runtime: ChatBoxRuntime; defaultSystemMessage?: () => string | undefined }) => {
     const app = useApp();
     const t = useT();
     const { chatBoxModel, chatConversationModel, chatMessageModel, chatToolCallModel } = runtime;
@@ -446,6 +473,7 @@ export const AutoApprovalToggle = observer(
       }
     };
 
+    const disabled = loading || !available || !chatBoxModel.currentEmployee || chatBoxModel.readonly;
     const label = t(
       !available
         ? 'Automatic approval unavailable'
@@ -453,34 +481,26 @@ export const AutoApprovalToggle = observer(
           ? 'Disable automatic approval'
           : 'Enable automatic approval',
     );
-    return (
-      <>
-        <AutoApprovalBridge runtime={runtime} enabled={enabled} />
-        {targets.map((target) =>
-          createPortal(
-            <label
-              htmlFor={`${target.id}-switch`}
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
-              onClick={(event) => event.stopPropagation()}
-              onKeyDown={(event) => {
-                if (['Enter', ' ', 'ArrowLeft', 'ArrowRight'].includes(event.key)) event.stopPropagation();
-              }}
-            >
-              <span>{t('Automatic tool approval')}</span>
-              <Switch
-                id={`${target.id}-switch`}
-                size="small"
-                aria-label={label}
-                checked={enabled}
-                onChange={toggle}
-                disabled={loading || !available || !chatBoxModel.currentEmployee || chatBoxModel.readonly}
-              />
-            </label>,
-            target,
-            target.id,
-          ),
-        )}
-      </>
-    );
+    const toggleRef = useRef(toggle);
+    toggleRef.current = toggle;
+    const stableToggle = useCallback((next: boolean) => {
+      toggleRef.current(next);
+    }, []);
+
+    useLayoutEffect(() => {
+      const store = getMenuStore(app);
+      return () => {
+        store.controls.delete(runtime);
+        store.listeners.forEach((listener) => listener());
+      };
+    }, [app, runtime]);
+
+    useLayoutEffect(() => {
+      const store = getMenuStore(app);
+      store.controls.set(runtime, { enabled, disabled, label, toggle: stableToggle });
+      store.listeners.forEach((listener) => listener());
+    }, [app, disabled, enabled, label, runtime, stableToggle]);
+
+    return <AutoApprovalBridge runtime={runtime} enabled={enabled} />;
   },
 );
