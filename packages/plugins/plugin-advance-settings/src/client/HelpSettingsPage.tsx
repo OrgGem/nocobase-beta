@@ -7,7 +7,7 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React from 'react';
+import React, { useId } from 'react';
 import { Card, Space, Switch } from 'antd';
 import { IconPicker, useAPIClient, useSystemSettings } from '@nocobase/client';
 import { resolveSettingsSearchIcon } from '../shared/SettingsSearchInjector';
@@ -18,6 +18,7 @@ export const HelpSettingsPage: React.FC = () => {
   const api = useAPIClient();
   const t = useT();
   const systemSettings = useSystemSettings();
+  const leftNavLabelId = useId();
   const { currentOptions, loaded, saving, saveOptions } = useSaveSystemSettingsOptions(
     (config) => api.request(config),
     systemSettings,
@@ -25,11 +26,13 @@ export const HelpSettingsPage: React.FC = () => {
   );
   const showHelp = currentOptions?.showHelp !== false;
   const enableAIChatResize = currentOptions?.enableAIChatResize === true;
+  const enableLeftNavResize = currentOptions?.enableLeftNavResize === true;
   const enableSettingsSearch = currentOptions?.enableSettingsSearch !== false;
   const searchIcon = resolveSettingsSearchIcon(currentOptions?.settingsSearchIcon);
 
   const handleToggleHelp = (checked: boolean) => saveOptions({ showHelp: checked });
   const handleToggleAIChatResize = (checked: boolean) => saveOptions({ enableAIChatResize: checked });
+  const handleToggleLeftNavResize = (checked: boolean) => saveOptions({ enableLeftNavResize: checked });
   const handleToggleSettingsSearch = (checked: boolean) => saveOptions({ enableSettingsSearch: checked });
   const handleSearchIconChange = (nextIcon?: string | null) => saveOptions({ settingsSearchIcon: nextIcon ?? '' });
 
@@ -56,6 +59,18 @@ export const HelpSettingsPage: React.FC = () => {
             disabled={!loaded}
             loading={saving}
             onChange={handleToggleAIChatResize}
+          />
+        </Space>
+      </Card>
+      <Card title={t('Left Navigator')} style={{ marginBottom: 24 }}>
+        <Space size="middle" align="center">
+          <span id={leftNavLabelId}>{t('Enable left navigator resizing')}</span>
+          <Switch
+            aria-labelledby={leftNavLabelId}
+            checked={enableLeftNavResize}
+            disabled={!loaded}
+            loading={saving}
+            onChange={handleToggleLeftNavResize}
           />
         </Space>
       </Card>

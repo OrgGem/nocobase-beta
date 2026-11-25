@@ -49,6 +49,13 @@ describe.each(providers)('$name AI chat resize provider', ({ Component }) => {
     dialog.style.right = '-450px';
     dialog.append(chatRef);
     document.body.append(dialog);
+
+    const sider = document.createElement('aside');
+    sider.className = 'ant-layout-sider ant-pro-sider';
+    sider.dataset.providerTestFixture = '';
+    sider.style.width = '200px';
+    document.body.append(sider);
+
     Object.defineProperty(globalThis, '__nocobasePluginAIStores', {
       configurable: true,
       value: {
@@ -64,7 +71,9 @@ describe.each(providers)('$name AI chat resize provider', ({ Component }) => {
     document.querySelectorAll('[data-provider-test-fixture]').forEach((fixture) => fixture.remove());
     delete (globalThis as typeof globalThis & { __nocobasePluginAIStores?: unknown }).__nocobasePluginAIStores;
     document.documentElement.removeAttribute('data-advance-ai-chat-resize');
+    document.documentElement.removeAttribute('data-advance-left-nav-resize');
     document.documentElement.style.removeProperty('--advance-settings-ai-chat-width');
+    document.documentElement.style.removeProperty('--advance-settings-left-nav-width');
   });
 
   it('keeps resizing off when the system option is missing and enables it after settings load', async () => {
@@ -75,8 +84,9 @@ describe.each(providers)('$name AI chat resize provider', ({ Component }) => {
     );
 
     expect(screen.queryByTestId('ai-chat-resize-handle')).toBeNull();
+    expect(screen.queryByTestId('left-nav-resize-handle')).toBeNull();
 
-    testState.options = { enableAIChatResize: true };
+    testState.options = { enableAIChatResize: true, enableLeftNavResize: true };
     view.rerender(
       <Component>
         <div>Application</div>
@@ -85,6 +95,8 @@ describe.each(providers)('$name AI chat resize provider', ({ Component }) => {
 
     const handle = await screen.findByTestId('ai-chat-resize-handle');
     expect(handle.getAttribute('aria-label')).toBe('Resize AI chat');
+    const leftNavHandle = await screen.findByTestId('left-nav-resize-handle');
+    expect(leftNavHandle.getAttribute('aria-label')).toBe('Resize left navigator');
   });
 
   it('provides settings search visibility and selected icon to SettingsSearchInjector', async () => {

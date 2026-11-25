@@ -62,6 +62,14 @@ describe('Advance Settings V2 search registration', () => {
     expect(app.pluginSettingsManager.addPageTabItem).toHaveBeenCalledWith(
       expect.objectContaining({
         menuKey: 'advance-settings',
+        key: 'left-navigator',
+        title: 'Left Navigator',
+        sort: 25,
+      }),
+    );
+    expect(app.pluginSettingsManager.addPageTabItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        menuKey: 'advance-settings',
         key: 'settings-search',
         title: 'Settings Search',
         sort: 30,

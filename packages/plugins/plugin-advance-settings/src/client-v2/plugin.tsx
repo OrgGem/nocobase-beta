@@ -39,6 +39,15 @@ export class PluginAdvanceSettingsClient extends Plugin<Record<string, never>, A
 
     this.pluginSettingsManager.addPageTabItem({
       menuKey: 'advance-settings',
+      key: 'left-navigator',
+      title: this.t('Left Navigator'),
+      sort: 25,
+      componentLoader: () => import('./LeftNavSettingsPage').then((m) => ({ default: m.LeftNavSettingsPage })),
+      aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'advance-settings',
       key: 'settings-search',
       title: this.t('Settings Search'),
       sort: 30,

@@ -6,7 +6,7 @@ import { SettingsSearchInjector } from '../shared/SettingsSearchInjector';
 import { HelpVisibilityProvider } from './HelpVisibilityProvider';
 import { HelpSettingsPage } from './HelpSettingsPage';
 
-export class PluginAdvanceSettingsClient extends Plugin {
+export class PluginAdvanceSettingsClient extends Plugin<{ name?: string }> {
   async load() {
     this.app.use(HelpVisibilityProvider);
     this.app.use(SettingsSearchInjector);
@@ -15,7 +15,7 @@ export class PluginAdvanceSettingsClient extends Plugin {
       title: this.t('Advance Settings'),
       icon: 'SettingOutlined',
       Component: HelpSettingsPage,
-      aclSnippet: 'pm.plugin-advance-settings',
+      aclSnippet: `pm.${this.options?.name || 'plugin-advance-settings'}`,
       sort: 1000,
     });
   }

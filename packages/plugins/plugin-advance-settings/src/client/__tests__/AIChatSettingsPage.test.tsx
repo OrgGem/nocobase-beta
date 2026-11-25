@@ -6,6 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { HelpSettingsPage } from '../HelpSettingsPage';
 import { HelpSettingsPage as HelpSettingsPageV2 } from '../../client-v2/HelpSettingsPage';
 import { AIChatSettingsPage } from '../../client-v2/AIChatSettingsPage';
+import { LeftNavSettingsPage } from '../../client-v2/LeftNavSettingsPage';
 import { SettingsSearchSettingsPage } from '../../client-v2/SettingsSearchSettingsPage';
 
 type SystemSettingsEnvelope = {
@@ -163,6 +164,41 @@ describe('Advance Settings pages (stateful systemSettings.mutate)', () => {
     await waitFor(() => {
       expect(helpSwitch.getAttribute('aria-checked')).toBe('false');
       expect(helpSwitch.disabled).toBe(false);
+    });
+  });
+
+  it('defaults left navigator resizing to disabled and saves toggles in V1 and V2', async () => {
+    testState.setEnvelope({ data: { id: 1, options: { showHelp: true, retainOtherSetting: 'keep' } } });
+    const view = render(<HelpSettingsPage />);
+
+    const v1Switch = screen.getByRole('switch', { name: 'Enable left navigator resizing' }) as HTMLButtonElement;
+    expect(v1Switch.getAttribute('aria-checked')).toBe('false');
+    expect(v1Switch.disabled).toBe(false);
+
+    fireEvent.click(v1Switch);
+    await waitFor(() => {
+      expect(testState.apiRequest).toHaveBeenCalledWith({
+        url: 'systemSettings:put',
+        method: 'post',
+        data: {
+          options: {
+            showHelp: true,
+            retainOtherSetting: 'keep',
+            enableLeftNavResize: true,
+          },
+        },
+      });
+      expect(v1Switch.getAttribute('aria-checked')).toBe('true');
+    });
+
+    view.unmount();
+    render(<LeftNavSettingsPage />);
+    const v2Switch = screen.getByRole('switch', { name: 'Enable left navigator resizing' }) as HTMLButtonElement;
+    expect(v2Switch.getAttribute('aria-checked')).toBe('true');
+
+    fireEvent.click(v2Switch);
+    await waitFor(() => {
+      expect(v2Switch.getAttribute('aria-checked')).toBe('false');
     });
   });
 

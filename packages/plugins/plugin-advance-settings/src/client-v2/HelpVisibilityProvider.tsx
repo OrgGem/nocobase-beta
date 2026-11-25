@@ -11,14 +11,16 @@ import React, { useMemo } from 'react';
 import { Icon, hasIcon, useSystemSettings } from '@nocobase/client-v2';
 import { useTranslation } from 'react-i18next';
 import { AIChatResize } from '../shared/AIChatResize';
+import { LeftNavResize } from '../shared/LeftNavResize';
 import { SettingsSearchConfigContext, resolveSettingsSearchIcon } from '../shared/SettingsSearchInjector';
 
 export const HelpVisibilityProviderV2: React.FC<React.PropsWithChildren<{}>> = (props) => {
   const systemSettings = useSystemSettings();
-  const { t } = useTranslation('plugin-advance-settings');
+  const { t } = useTranslation('plugin-advance-settings', { nsMode: 'fallback' });
   const options = systemSettings?.data?.data?.options;
   const showHelp = options?.showHelp !== false;
   const enableAIChatResize = options?.enableAIChatResize === true;
+  const enableLeftNavResize = options?.enableLeftNavResize === true;
   const enableSettingsSearch = options?.enableSettingsSearch !== false;
   const searchIcon = resolveSettingsSearchIcon(options?.settingsSearchIcon);
   const searchConfig = useMemo(
@@ -32,14 +34,16 @@ export const HelpVisibilityProviderV2: React.FC<React.PropsWithChildren<{}>> = (
   return (
     <SettingsSearchConfigContext.Provider value={searchConfig}>
       <AIChatResize enabled={enableAIChatResize} label={t('Resize AI chat')}>
-        {!showHelp && (
-          <style>{`
-            div:has(> [data-testid="help-button"]) {
-              display: none !important;
-            }
-          `}</style>
-        )}
-        {props.children}
+        <LeftNavResize enabled={enableLeftNavResize} label={t('Resize left navigator')}>
+          {!showHelp && (
+            <style>{`
+              div:has(> [data-testid="help-button"]) {
+                display: none !important;
+              }
+            `}</style>
+          )}
+          {props.children}
+        </LeftNavResize>
       </AIChatResize>
     </SettingsSearchConfigContext.Provider>
   );

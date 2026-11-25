@@ -41,9 +41,17 @@ describe('Advance Settings V1 search registration', () => {
       },
     } as unknown as Application;
 
-    await new PluginAdvanceSettingsClient({}, app).load();
+    await new PluginAdvanceSettingsClient({ name: 'advance-settings' }, app).load();
 
     expect(app.use).toHaveBeenNthCalledWith(1, HelpVisibilityProvider);
     expect(app.use).toHaveBeenNthCalledWith(2, SettingsSearchInjector);
+    expect(app.pluginSettingsManager.add).toHaveBeenCalledWith(
+      'advance-settings',
+      expect.objectContaining({
+        title: 'Advance Settings',
+        aclSnippet: 'pm.advance-settings',
+        sort: 1000,
+      }),
+    );
   });
 });
