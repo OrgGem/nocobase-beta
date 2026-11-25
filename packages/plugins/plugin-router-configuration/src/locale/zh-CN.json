@@ -22,6 +22,7 @@
   "Path renamed successfully": "路径重命名成功",
   "URL alias saved successfully": "URL 别名保存成功",
   "Failed to save URL alias": "保存 URL 别名失败",
+  "The page content could not be recovered safely. Check the route and page models.": "无法安全恢复页面内容。请检查路由和页面模型。",
   "Failed to rename path": "重命名路径失败",
   "Failed to load routes": "加载路由失败",
   "Please enter a new path": "请输入新路径",

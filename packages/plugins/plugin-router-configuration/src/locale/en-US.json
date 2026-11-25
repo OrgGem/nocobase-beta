@@ -22,6 +22,7 @@
   "Path renamed successfully": "Path renamed successfully",
   "URL alias saved successfully": "URL alias saved successfully",
   "Failed to save URL alias": "Failed to save URL alias",
+  "The page content could not be recovered safely. Check the route and page models.": "The page content could not be recovered safely. Check the route and page models.",
   "Failed to rename path": "Failed to rename path",
   "Failed to load routes": "Failed to load routes",
   "Please enter a new path": "Please enter a new path",

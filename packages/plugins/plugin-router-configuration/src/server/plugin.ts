@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Plugin } from '@nocobase/server';
+import { repairRouteContent, RouteContentRepairError } from './route-content-repair';
 
 const PATH_ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
 const RESERVED_PATH_ALIASES = new Set([
@@ -344,8 +345,9 @@ export class PluginRouterConfigurationServer extends Plugin {
         ctx.throw(400, 'Missing required parameter: id');
       }
 
-      const pathAlias = pathAliasValue == null ? '' : typeof pathAliasValue === 'string' ? pathAliasValue.trim() : null;
-      if (pathAlias === null) {
+      const requestedAlias =
+        pathAliasValue == null ? '' : typeof pathAliasValue === 'string' ? pathAliasValue.trim() : null;
+      if (requestedAlias === null) {
         ctx.throw(400, 'Path alias must be a string.');
       }
 
@@ -354,7 +356,19 @@ export class PluginRouterConfigurationServer extends Plugin {
         ctx.throw(404, `Route with id ${id} not found.`);
       }
 
-      if (!pathAlias) {
+      const isFlowPage = getRecordValue(route, 'type') === 'flowPage';
+      const schemaUid = getRecordValue(route, 'schemaUid');
+      const layouts = getRecordValue(route, 'uiLayouts');
+      const hasDesktopLayout =
+        Array.isArray(layouts) && layouts.some((layout) => getRecordValue(layout, 'layoutType') === 'desktop');
+      const canRepairPage =
+        isFlowPage &&
+        hasDesktopLayout &&
+        typeof ctx.db.hasCollection === 'function' &&
+        ctx.db.hasCollection('flowModels') &&
+        ctx.db.hasCollection('flowModelTreePath');
+
+      if (!requestedAlias && !canRepairPage) {
         const currentAlias = await aliasRepo.findOne({ filter: { desktopRouteId: id } });
         if (currentAlias) {
           await aliasRepo.destroy({ filterByTk: getRecordValue(currentAlias, 'id') });
@@ -363,50 +377,65 @@ export class PluginRouterConfigurationServer extends Plugin {
         return next();
       }
 
-      if (getRecordValue(route, 'type') !== 'flowPage') {
-        ctx.throw(400, 'Only V2 pages can have a friendly URL alias.');
-      }
-      const layouts = getRecordValue(route, 'uiLayouts');
-      if (!Array.isArray(layouts) || !layouts.some((layout) => getRecordValue(layout, 'layoutType') === 'desktop')) {
-        ctx.throw(400, 'Friendly URL aliases are supported only for routes assigned to a desktop layout.');
-      }
+      if (requestedAlias) {
+        if (!isFlowPage) {
+          ctx.throw(400, 'Only V2 pages can have a friendly URL alias.');
+        }
+        if (!hasDesktopLayout) {
+          ctx.throw(400, 'Friendly URL aliases are supported only for routes assigned to a desktop layout.');
+        }
+        if (!PATH_ALIAS_PATTERN.test(requestedAlias)) {
+          ctx.throw(400, 'Invalid path alias. Use lowercase letters, numbers, and hyphens only.');
+        }
+        if (requestedAlias.length > 100) {
+          ctx.throw(400, 'Path alias too long. Maximum 100 characters.');
+        }
+        if (RESERVED_PATH_ALIASES.has(requestedAlias)) {
+          ctx.throw(400, `The path alias "${requestedAlias}" is reserved and cannot be used.`);
+        }
 
-      const currentAlias = await aliasRepo.findOne({ filter: { desktopRouteId: id } });
-      if (!PATH_ALIAS_PATTERN.test(pathAlias)) {
-        ctx.throw(400, 'Invalid path alias. Use lowercase letters, numbers, and hyphens only.');
-      }
-      if (pathAlias.length > 100) {
-        ctx.throw(400, 'Path alias too long. Maximum 100 characters.');
-      }
-      if (RESERVED_PATH_ALIASES.has(pathAlias)) {
-        ctx.throw(400, `The path alias "${pathAlias}" is reserved and cannot be used.`);
-      }
+        const existingSchemaUid = await repo.findOne({
+          filter: { schemaUid: requestedAlias, id: { $ne: id } },
+        });
+        if (existingSchemaUid) {
+          ctx.throw(409, `The path alias "${requestedAlias}" conflicts with an existing route path.`);
+        }
+        if (canMatchDesktopRouteId(requestedAlias)) {
+          const existingRouteId = await repo.findOne({ filter: { id: requestedAlias } });
+          if (
+            existingRouteId &&
+            (requestedAlias !== schemaUid || String(getRecordValue(existingRouteId, 'id')) !== String(id))
+          ) {
+            ctx.throw(409, `The path alias "${requestedAlias}" conflicts with an existing route id.`);
+          }
+        }
 
-      const existingSchemaUid = await repo.findOne({ filter: { schemaUid: pathAlias } });
-      if (existingSchemaUid) {
-        ctx.throw(409, `The path alias "${pathAlias}" conflicts with an existing route path.`);
-      }
-      if (canMatchDesktopRouteId(pathAlias)) {
-        const existingRouteId = await repo.findOne({ filter: { id: pathAlias } });
-        if (existingRouteId) {
-          ctx.throw(409, `The path alias "${pathAlias}" conflicts with an existing route id.`);
+        const existingAlias = await aliasRepo.findOne({ filter: { pathAlias: requestedAlias } });
+        if (existingAlias && String(getRecordValue(existingAlias, 'desktopRouteId')) !== String(id)) {
+          ctx.throw(409, `The path alias "${requestedAlias}" is already in use by another route.`);
         }
       }
 
-      const existingAlias = await aliasRepo.findOne({ filter: { pathAlias } });
-      if (existingAlias && String(getRecordValue(existingAlias, 'desktopRouteId')) !== String(id)) {
-        ctx.throw(409, `The path alias "${pathAlias}" is already in use by another route.`);
-      }
-
+      const pathAlias = requestedAlias === schemaUid ? '' : requestedAlias;
       const transaction = await ctx.db.sequelize.transaction();
       try {
-        if (currentAlias) {
+        if (canRepairPage) {
+          if (typeof schemaUid !== 'string' || !schemaUid) {
+            throw new RouteContentRepairError('The route has no schema uid.');
+          }
+          await repairRouteContent(ctx.db, String(id), schemaUid, transaction);
+        }
+
+        const currentAlias = await aliasRepo.findOne({ filter: { desktopRouteId: id }, transaction });
+        if (!pathAlias && currentAlias) {
+          await aliasRepo.destroy({ filterByTk: getRecordValue(currentAlias, 'id'), transaction });
+        } else if (pathAlias && currentAlias) {
           await aliasRepo.update({
             filterByTk: getRecordValue(currentAlias, 'id'),
             values: { pathAlias },
             transaction,
           });
-        } else {
+        } else if (pathAlias) {
           await aliasRepo.create({
             values: { desktopRouteId: id, pathAlias },
             transaction,
@@ -415,13 +444,24 @@ export class PluginRouterConfigurationServer extends Plugin {
         await transaction.commit();
       } catch (error) {
         await transaction.rollback();
+        if (error instanceof RouteContentRepairError) {
+          ctx.app.log.warn(`[plugin-router-configuration] ${error.message}`);
+          ctx.throw(
+            409,
+            ctx.t('The page content could not be recovered safely. Check the route and page models.', {
+              ns: 'plugin-router-configuration',
+            }),
+          );
+        }
         if (isUniqueConstraintError(error)) {
           ctx.throw(409, `The path alias "${pathAlias}" is already in use by another route.`);
         }
         throw error;
       }
 
-      ctx.body = { success: true, pathAlias, message: 'Path alias saved successfully' };
+      ctx.body = pathAlias
+        ? { success: true, pathAlias, message: 'Path alias saved successfully' }
+        : { success: true, pathAlias: null, message: 'Path alias removed' };
       return next();
     });
 
