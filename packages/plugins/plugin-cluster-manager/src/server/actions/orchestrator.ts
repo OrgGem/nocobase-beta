@@ -1,4 +1,13 @@
 /**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+/**
  * Orchestrator Actions
  *
  * API endpoints for container management. Write operations (scale, start, stop, remove)
@@ -15,13 +24,28 @@ type QueueMappingRecord = {
   get: (key: string) => unknown;
 };
 
+type OrchestratorPluginInstance = {
+  orchestrator?: IOrchestratorAdapter | null;
+  leaderElection?: {
+    isLeader: boolean;
+    leaderId?: string;
+    disabledReason?: string;
+    verifyLeadership: () => Promise<boolean>;
+  } | null;
+};
+
+function getOptionalAdapter(ctx: Context): IOrchestratorAdapter | null {
+  const plugin = ctx.app.pm.get('plugin-cluster-manager') as OrchestratorPluginInstance | undefined;
+  return plugin?.orchestrator ?? null;
+}
+
 /** Helper: get orchestrator adapter from plugin instance */
 function getAdapter(ctx: Context): IOrchestratorAdapter {
-  const plugin = ctx.app.pm.get('plugin-cluster-manager') as any;
-  if (!plugin?.orchestrator) {
+  const adapter = getOptionalAdapter(ctx);
+  if (!adapter) {
     ctx.throw(503, 'Orchestrator adapter not configured. Configure it in Cluster Manager settings.');
   }
-  return plugin.orchestrator;
+  return adapter;
 }
 
 /** Helper: check if this node is the leader (fresh Redis check for fencing) */
@@ -119,14 +143,15 @@ export const orchestratorActions = {
    * Test connectivity to the container runtime
    */
   async ping(ctx: Context, next: () => Promise<void>) {
-    const adapter = getAdapter(ctx);
-    const ok = await adapter.ping();
+    const plugin = ctx.app.pm.get('plugin-cluster-manager') as OrchestratorPluginInstance | undefined;
+    const adapter = plugin?.orchestrator ?? null;
+    const ok = adapter ? await adapter.ping() : false;
     ctx.body = {
-      adapter: adapter.name,
+      adapter: adapter?.name || 'none',
       connected: ok,
-      leader: (ctx.app.pm.get('plugin-cluster-manager') as any)?.leaderElection?.isLeader ?? false,
-      leaderId: (ctx.app.pm.get('plugin-cluster-manager') as any)?.leaderElection?.leaderId,
-      leaderDisabledReason: (ctx.app.pm.get('plugin-cluster-manager') as any)?.leaderElection?.disabledReason,
+      leader: plugin?.leaderElection?.isLeader ?? false,
+      leaderId: plugin?.leaderElection?.leaderId,
+      leaderDisabledReason: plugin?.leaderElection?.disabledReason,
     };
     await next();
   },
@@ -364,15 +389,16 @@ export const orchestratorActions = {
    * List available networks (if supported by adapter)
    */
   async networks(ctx: Context, next: () => Promise<void>) {
-    const adapter = getAdapter(ctx);
-    if (!adapter.listNetworks) {
+    const adapter = getOptionalAdapter(ctx);
+    if (!adapter?.listNetworks) {
       ctx.body = { data: [] };
     } else {
       try {
         const networks = await adapter.listNetworks();
         ctx.body = { data: networks };
-      } catch (err: any) {
-        ctx.app.logger.warn(`Failed to list networks: ${err.message}`);
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        ctx.app.logger.warn(`Failed to list networks: ${errorMessage}`);
         ctx.body = { data: [] };
       }
     }

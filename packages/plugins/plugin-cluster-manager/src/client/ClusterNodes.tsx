@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Alert,
@@ -272,19 +281,26 @@ export function ClusterNodes() {
 
   const handleRestartNode = async (hostname: string, mode: 'soft' | 'hard') => {
     try {
-      await api.request({
+      const res = await api.request({
         url: 'clusterManagerCluster:restart',
         method: 'POST',
         data: { hostname, mode },
       });
-      message.success(
-        t('[{mode}] Restart signal sent to {target}')
-          .replace('{mode}', mode)
-          .replace('{target}', hostname === '*' ? t('All nodes') : hostname),
-      );
+      const payload = res?.data?.data || res?.data;
+      if (payload?.singleNodeWarning && payload?.warning) {
+        message.warning(payload.warning);
+      } else {
+        message.success(
+          t('[{mode}] Restart signal sent to {target}')
+            .replace('{mode}', mode)
+            .replace('{target}', hostname === '*' ? t('All nodes') : hostname),
+        );
+      }
       setTimeout(fetchData, 3000);
-    } catch {
-      message.error(t('Failed to send restart signal to {hostname}').replace('{hostname}', hostname));
+    } catch (err: unknown) {
+      const apiErr = (err as { response?: { data?: { errors?: Array<{ message?: string }> } } })?.response?.data
+        ?.errors?.[0]?.message;
+      message.error(apiErr || t('Failed to send restart signal to {hostname}').replace('{hostname}', hostname));
     }
   };
 
@@ -321,6 +337,8 @@ export function ClusterNodes() {
   }, [autoRefresh, fetchData]);
 
   const onlineCount = environments.filter((e) => e.status === 'online').length;
+  const onlineAppCount = environments.filter((e) => e.status === 'online' && getNodeRole(e) === 'app').length;
+  const isSingleAppServer = onlineAppCount <= 1;
 
   const nodeColumns = [
     { title: t('Name'), dataIndex: 'name', key: 'name', width: 200 },
@@ -450,7 +468,21 @@ export function ClusterNodes() {
             </Popconfirm>
             <Popconfirm
               title={t('Hard Restart ALL Nodes?')}
-              description={t('Sends a lethal signal. Docker will reboot ALL container infrastructure.')}
+              description={
+                <Space direction="vertical" size={8} style={{ maxWidth: 360 }}>
+                  <span>{t('Sends a lethal signal. Docker will reboot ALL container infrastructure.')}</span>
+                  {isSingleAppServer && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={t(
+                        'Only 1 app server is active. Hard restarting will cause temporary downtime until the server comes back online.',
+                      )}
+                    />
+                  )}
+                </Space>
+              }
+              okButtonProps={{ danger: true }}
               onConfirm={() => handleRestartNode('*', 'hard')}
             >
               <Button danger icon={<ReloadOutlined />}>

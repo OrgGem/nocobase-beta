@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { describe, expect, it, vi } from 'vitest';
 import {
   RollingRestartError,
@@ -118,6 +127,45 @@ describe('runRollingRestartSequence', () => {
         now: () => 1_000_000,
       }),
     ).rejects.toMatchObject<Partial<RollingRestartError>>({ code: 'generation-unavailable' });
+    expect(restartNode).not.toHaveBeenCalled();
+  });
+
+  it('allows restarting a single app server with singleNodeWarning when allowSingleAppNode is true', async () => {
+    const state = [appNode('main', 'app-main')];
+    const restartNode = vi.fn(async () => undefined);
+
+    const result = await runRollingRestartSequence(
+      { ...options(state), allowSingleAppNode: true },
+      {
+        listNodes: async () => state,
+        probeNode: async () => true,
+        restartNode,
+        sleep: async () => undefined,
+        now: () => 1_000_000,
+      },
+    );
+
+    expect(result.coordinator?.id).toBe('main');
+    expect(result.singleNodeWarning).toBe(true);
+    expect(restartNode).not.toHaveBeenCalled();
+  });
+
+  it('still blocks multi-server clusters when peer is unhealthy even with allowSingleAppNode', async () => {
+    const state = [appNode('main', 'app-main'), appNode('backup-1', 'app-backup-1')];
+    const restartNode = vi.fn(async () => undefined);
+
+    await expect(
+      runRollingRestartSequence(
+        { ...options(state), allowSingleAppNode: true },
+        {
+          listNodes: async () => state,
+          probeNode: async () => false,
+          restartNode,
+          sleep: async () => undefined,
+          now: () => 1_000_000,
+        },
+      ),
+    ).rejects.toMatchObject<Partial<RollingRestartError>>({ code: 'no-ready-peer' });
     expect(restartNode).not.toHaveBeenCalled();
   });
 });

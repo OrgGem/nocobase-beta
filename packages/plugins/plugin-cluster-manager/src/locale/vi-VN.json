@@ -353,6 +353,7 @@
   "OS packages (APT)": "Gói hệ điều hành (APT)",
   "Older than 30 days": "Quá 30 ngày",
   "Older than 7 days": "Quá 7 ngày",
+  "Only 1 app server is active. Hard restarting will cause temporary downtime until the server comes back online.": "Hiện chỉ có 1 app server đang hoạt động. Khởi động lại cứng sẽ gây gián đoạn tạm thời cho đến khi server hoạt động trở lại.",
   "Only containers with this label will be managed. Example: role=worker": "Chỉ container có nhãn này mới được quản lý. Ví dụ: role=worker",
   "Ops/sec": "Lệnh/giây",
   "Orchestrator Not Connected": "Chưa kết nối orchestrator",

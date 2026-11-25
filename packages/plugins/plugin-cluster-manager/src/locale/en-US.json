@@ -353,6 +353,7 @@
   "OS packages (APT)": "OS packages (APT)",
   "Older than 30 days": "Older than 30 days",
   "Older than 7 days": "Older than 7 days",
+  "Only 1 app server is active. Hard restarting will cause temporary downtime until the server comes back online.": "Only 1 app server is active. Hard restarting will cause temporary downtime until the server comes back online.",
   "Only containers with this label will be managed. Example: role=worker": "Only containers with this label will be managed. Example: role=worker",
   "Ops/sec": "Ops/sec",
   "Orchestrator Not Connected": "Orchestrator Not Connected",

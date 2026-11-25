@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context } from '@nocobase/actions';
 import os from 'os';
 import { promises as fsp } from 'fs';
@@ -265,6 +274,7 @@ type RollingRestartPayload = {
   delayMs?: unknown;
   recoveryTimeoutMs?: unknown;
   nodeIds?: unknown;
+  allowSingleAppNode?: boolean;
 };
 
 type RollingRestartActionResult = {
@@ -275,6 +285,7 @@ type RollingRestartActionResult = {
   recoveryTimeoutMs: number;
   published: Array<Record<string, unknown>>;
   coordinator?: RollingRestartNode;
+  singleNodeWarning?: boolean;
 };
 
 function toRollingRestartNode(node: ClusterNodeRecord): RollingRestartNode | null {
@@ -380,11 +391,46 @@ async function performRollingRestart(
     if (requestedNodeIds.length > 0) return requestedNodeIds.includes(node.id);
     return role === 'all' || node.role === role;
   });
+  const redis = getRedis(ctx);
+  if (payload.allowSingleAppNode && (!redis || nodes.length === 0)) {
+    const coordinatorId = getLocalNodeId(ctx.app);
+    const appName = process.env.APP_NAME || (ctx.app as { name?: string }).name || 'main';
+    const coordinator: RollingRestartNode = nodes[0] || {
+      id: coordinatorId,
+      name: `${appName} (${os.hostname()})`,
+      hostname: os.hostname(),
+      role: 'app',
+      status: 'online',
+    };
+    const restartId = crypto.randomBytes(8).toString('hex');
+    ctx.app.logger.warn(
+      `[ClusterManager] Proceeding with single-node ${mode} restart on ${coordinator.hostname || coordinator.id}.`,
+    );
+    return {
+      restartId,
+      mode,
+      role,
+      stabilizationMs,
+      recoveryTimeoutMs,
+      published: [
+        {
+          id: coordinator.id,
+          name: coordinator.name,
+          hostname: coordinator.hostname,
+          role: coordinator.role,
+          mode,
+          scheduled: true,
+          coordinator: true,
+        },
+      ],
+      coordinator,
+      singleNodeWarning: true,
+    };
+  }
   if (nodes.length === 0) {
     ctx.throw(404, 'No online nodes match the rolling restart target.');
   }
 
-  const redis = getRedis(ctx);
   if (!redis) {
     ctx.throw(503, 'Redis is required for safe rolling restart coordination.');
   }
@@ -407,6 +453,7 @@ async function performRollingRestart(
             recoveryTimeoutMs,
             pollIntervalMs: 2000,
             heartbeatMaxAgeMs: 25000,
+            allowSingleAppNode: Boolean(payload.allowSingleAppNode),
           },
           {
             listNodes: () => listRollingRestartNodes(ctx),
@@ -444,6 +491,14 @@ async function performRollingRestart(
       });
     }
 
+    if (result.singleNodeWarning) {
+      ctx.app.logger.warn(
+        `[ClusterManager] Proceeding with single-node ${mode} restart on ${
+          result.coordinator?.hostname || result.coordinator?.id || 'local'
+        }; temporary downtime is expected.`,
+      );
+    }
+
     return {
       restartId,
       mode,
@@ -452,6 +507,7 @@ async function performRollingRestart(
       recoveryTimeoutMs,
       published,
       coordinator: result.coordinator,
+      singleNodeWarning: result.singleNodeWarning,
     };
   } catch (error: unknown) {
     if (error instanceof RollingRestartError) {
@@ -981,7 +1037,17 @@ export const clusterActions = {
     if (!hostname) ctx.throw(400, 'Hostname required');
 
     if (hostname === '*') {
-      const result = await performRollingRestart(ctx, { role: 'app', mode }, 'app');
+      const result = await performRollingRestart(
+        ctx,
+        { role: 'app', mode, allowSingleAppNode: mode === 'hard' },
+        'app',
+      );
+      const warning = result.singleNodeWarning
+        ? ctx.t(
+            'Only 1 app server is active. Hard restarting will cause temporary downtime until the server comes back online.',
+            { ns: 'cluster-manager' },
+          )
+        : undefined;
       ctx.body = {
         success: true,
         restartId: result.restartId,
@@ -989,6 +1055,7 @@ export const clusterActions = {
         role: result.role,
         published: result.published,
         coordinatorRestartScheduled: Boolean(result.coordinator),
+        ...(warning ? { singleNodeWarning: true, warning } : {}),
       };
       await next();
       scheduleCoordinatorRestart(ctx, result);

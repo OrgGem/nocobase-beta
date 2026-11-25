@@ -353,6 +353,7 @@
   "OS packages (APT)": "操作系统软件包（APT）",
   "Older than 30 days": "超过 30 天",
   "Older than 7 days": "超过 7 天",
+  "Only 1 app server is active. Hard restarting will cause temporary downtime until the server comes back online.": "当前仅有 1 个活跃的应用节点。硬重启将导致服务短暂中断，直到服务器恢复在线。",
   "Only containers with this label will be managed. Example: role=worker": "仅管理带有此标签的容器。示例：role=worker",
   "Ops/sec": "操作/秒",
   "Orchestrator Not Connected": "编排器未连接",

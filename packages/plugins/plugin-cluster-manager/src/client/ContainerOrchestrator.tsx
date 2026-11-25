@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
@@ -94,6 +103,27 @@ interface DiscoveredQueue {
   type: 'event-queue' | 'redis-list' | 'db-poll';
   pending: number | null;
   workerProcessName?: string;
+}
+
+interface OrchestratorSettingsValues {
+  adapterType?: string;
+  dockerSocketPath?: string;
+  dockerHost?: string;
+  k8sNamespace?: string;
+  k8sKubeconfig?: string;
+  workerLabelSelector?: string;
+}
+
+interface PingResult {
+  adapter: string;
+  connected: boolean;
+  leader?: boolean;
+  leaderId?: string;
+  leaderDisabledReason?: string;
+}
+
+export function isAdapterConfigured(adapterType?: string): boolean {
+  return Boolean(adapterType && adapterType !== 'none');
 }
 
 const DEFAULT_WORKER_MODE = '*';
@@ -284,13 +314,18 @@ export function ContainerOrchestrator() {
     containerName: '',
     logs: '',
   });
-  const [pingResult, setPingResult] = useState<any>(null);
+  const [pingResult, setPingResult] = useState<PingResult | null>(null);
+  const [settingsValues, setSettingsValues] = useState<OrchestratorSettingsValues>({
+    adapterType: 'none',
+    k8sNamespace: 'nocobase',
+    workerLabelSelector: 'role=worker',
+  });
   const [settingsModal, setSettingsModal] = useState(false);
   const [stackModal, setStackModal] = useState<{ visible: boolean; stack?: StackInfo | null }>({
     visible: false,
     stack: null,
   });
-  const [settingsForm] = Form.useForm();
+  const [settingsForm] = Form.useForm<OrchestratorSettingsValues>();
   const [stackForm] = Form.useForm();
   const [dockerNetworks, setDockerNetworks] = useState<{ id: string; name: string }[]>([]);
   const [queueOptions, setQueueOptions] = useState<DiscoveredQueue[]>([]);
@@ -299,7 +334,7 @@ export function ContainerOrchestrator() {
   const fetchQueues = useCallback(async () => {
     setQueuesLoading(true);
     try {
-      const res = await api.request({ url: '/workerQueueMappings:scanQueues' });
+      const res = await api.request({ url: '/workerQueueMappings:scanQueues', skipNotify: true });
       const data = res.data?.data || res.data;
       setQueueOptions(Array.isArray(data?.discovered) ? data.discovered : []);
     } catch {
@@ -312,7 +347,7 @@ export function ContainerOrchestrator() {
   // Fetch Docker networks
   const fetchNetworks = useCallback(async () => {
     try {
-      const res = await api.request({ url: '/workerOrchestrator:networks' });
+      const res = await api.request({ url: '/workerOrchestrator:networks', skipNotify: true });
       let networks = res.data?.data || res.data;
       if (!Array.isArray(networks)) networks = [];
       setDockerNetworks(networks);
@@ -321,10 +356,10 @@ export function ContainerOrchestrator() {
     }
   }, [api]);
 
-  // Ping the orchestrator adapter
+  // Ping the orchestrator adapter (only invoked when an adapter is configured)
   const fetchPing = useCallback(async () => {
     try {
-      const res = await api.request({ url: '/workerOrchestrator:ping' });
+      const res = await api.request({ url: '/workerOrchestrator:ping', skipNotify: true });
       setPingResult(res.data?.data || res.data);
     } catch {
       setPingResult({ connected: false, adapter: 'unknown' });
@@ -334,7 +369,7 @@ export function ContainerOrchestrator() {
   // Load stacks from DB
   const fetchStacks = useCallback(async () => {
     try {
-      const res = await api.request({ url: '/orchestratorStacks:list', params: { pageSize: 50 } });
+      const res = await api.request({ url: '/orchestratorStacks:list', params: { pageSize: 50 }, skipNotify: true });
       const data = res.data?.data || [];
       setStacks(data);
       // Init scale values
@@ -359,25 +394,45 @@ export function ContainerOrchestrator() {
         const data = res.data?.data || res.data;
         setContainers((prev) => ({ ...prev, [stackId]: data.data || [] }));
         setContainerMeta((prev) => ({ ...prev, [stackId]: data.meta || {} }));
-      } catch (err: any) {
-        message.error(t('Failed to load containers: {error}').replace('{error}', err.message));
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        message.error(t('Failed to load containers: {error}').replace('{error}', errMsg));
       }
     },
     [api, t],
   );
 
-  // Load settings
-  const fetchSettings = useCallback(async () => {
+  // Load settings first; skip redundant adapter connection check when config is not set up
+  const refreshOrchestrator = useCallback(async () => {
+    let adapterType = 'none';
     try {
-      const res = await api.request({ url: '/workerOrchestrator:getSettings' });
-      settingsForm.setFieldsValue(res.data?.data || res.data);
+      const res = await api.request({ url: '/workerOrchestrator:getSettings', skipNotify: true });
+      const data = (res.data?.data || res.data) as OrchestratorSettingsValues | undefined;
+      if (data && typeof data === 'object') {
+        adapterType = data.adapterType || 'none';
+        setSettingsValues((prev) => ({ ...prev, ...data }));
+      }
     } catch {
-      // Settings not yet available — leave form at defaults
+      // Settings not yet available — leave at defaults
     }
-  }, [api, settingsForm]);
+
+    if (!isAdapterConfigured(adapterType)) {
+      setPingResult({ connected: false, adapter: 'none' });
+      return;
+    }
+
+    await fetchPing();
+    await fetchStacks();
+  }, [api, fetchPing, fetchStacks]);
+
+  useEffect(() => {
+    if (settingsModal) {
+      settingsForm.setFieldsValue(settingsValues);
+    }
+  }, [settingsModal, settingsValues, settingsForm]);
 
   // Save settings
-  const handleSaveSettings = async (values: any) => {
+  const handleSaveSettings = async (values: OrchestratorSettingsValues) => {
     setLoading(true);
     try {
       await api.request({
@@ -385,12 +440,19 @@ export function ContainerOrchestrator() {
         method: 'POST',
         data: values,
       });
-      message.success(t('Settings saved successfully. Reconnecting...'));
+      setSettingsValues((prev) => ({ ...prev, ...values }));
       setSettingsModal(false);
-      await fetchPing();
-      await fetchStacks();
-    } catch (err: any) {
-      message.error(t('Failed to save settings: {error}').replace('{error}', err.message));
+      if (!isAdapterConfigured(values.adapterType)) {
+        message.success(t('Config saved'));
+        setPingResult({ connected: false, adapter: 'none' });
+      } else {
+        message.success(t('Settings saved successfully. Reconnecting...'));
+        await fetchPing();
+        await fetchStacks();
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      message.error(t('Failed to save settings: {error}').replace('{error}', errMsg));
     } finally {
       setLoading(false);
     }
@@ -399,7 +461,11 @@ export function ContainerOrchestrator() {
   const openStackModal = (stack?: StackInfo) => {
     setStackModal({ visible: true, stack: stack || null });
     stackForm.setFieldsValue(stackToFormValues(stack));
-    fetchNetworks();
+    if (pingResult?.connected && pingResult.adapter === 'docker') {
+      fetchNetworks();
+    } else {
+      setDockerNetworks([]);
+    }
     fetchQueues();
   };
 
@@ -408,7 +474,7 @@ export function ContainerOrchestrator() {
     stackForm.resetFields();
   };
 
-  const handleSaveStack = async (values: any) => {
+  const handleSaveStack = async (values: Record<string, unknown>) => {
     setLoading(true);
     try {
       const payload = formValuesToStack(values);
@@ -432,8 +498,7 @@ export function ContainerOrchestrator() {
       await fetchStacks();
     } catch (err: any) {
       message.error(
-        err?.response?.data?.errors?.[0]?.message ||
-          (err?.message ? t(err.message) : t('Failed to save worker stack')),
+        err?.response?.data?.errors?.[0]?.message || (err?.message ? t(err.message) : t('Failed to save worker stack')),
       );
     } finally {
       setLoading(false);
@@ -442,13 +507,11 @@ export function ContainerOrchestrator() {
 
   // Initial load
   useEffect(() => {
-    fetchPing();
-    fetchStacks();
-    fetchSettings();
+    refreshOrchestrator();
     fetchQueues();
-  }, [fetchPing, fetchStacks, fetchSettings, fetchQueues]);
+  }, [refreshOrchestrator, fetchQueues]);
 
-  // Load containers for each stack and poll every 10s.
+  // Load containers for each stack and poll every 10s when orchestrator is connected.
   // Keyed on the stack IDs (not the stacks array, which gets a new identity on
   // every poll) so the interval is not torn down and re-fired each cycle.
   const stacksRef = useRef(stacks);
@@ -456,6 +519,9 @@ export function ContainerOrchestrator() {
   const stackIds = stacks.map((s) => s.id).join(',');
 
   useEffect(() => {
+    if (!pingResult?.connected) {
+      return;
+    }
     const doFetch = () => {
       stacksRef.current.forEach((s) => fetchContainers(s.id));
     };
@@ -467,7 +533,7 @@ export function ContainerOrchestrator() {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [stackIds, fetchContainers, fetchStacks]);
+  }, [pingResult?.connected, stackIds, fetchContainers, fetchStacks]);
 
   // Scale action
   const handleScale = async (stackId: number) => {
@@ -727,8 +793,7 @@ export function ContainerOrchestrator() {
               <Button
                 icon={<ReloadOutlined />}
                 onClick={() => {
-                  fetchPing();
-                  fetchStacks();
+                  refreshOrchestrator();
                 }}
               >
                 {t('Refresh')}
@@ -1214,7 +1279,9 @@ export function ContainerOrchestrator() {
                     <Form.Item
                       name="k8sKubeconfig"
                       label={t('Kubeconfig')}
-                      extra={t('Paste kubeconfig YAML or enter a file path. Leave empty to use in-cluster ServiceAccount.')}
+                      extra={t(
+                        'Paste kubeconfig YAML or enter a file path. Leave empty to use in-cluster ServiceAccount.',
+                      )}
                     >
                       <Input.TextArea rows={4} />
                     </Form.Item>

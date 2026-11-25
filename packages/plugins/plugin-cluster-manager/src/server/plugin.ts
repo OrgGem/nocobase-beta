@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Plugin } from '@nocobase/server';
 import * as os from 'os';
 import path from 'path';
@@ -510,13 +519,8 @@ export class PluginClusterManagerServer extends Plugin {
         async getSettings(ctx: any, next: () => Promise<void>) {
           try {
             const repo = ctx.db.getRepository('orchestratorSettings');
-            let settings = await repo.findOne();
-            if (!settings) {
-              settings = await repo.create({
-                values: { adapterType: process.env.ORCHESTRATOR_ADAPTER || 'none' },
-              });
-            }
-            ctx.body = settings.toJSON();
+            const settings = await repo.findOne();
+            ctx.body = settings ? settings.toJSON() : { adapterType: process.env.ORCHESTRATOR_ADAPTER || 'none' };
           } catch {
             // Table may not exist during migration window
             ctx.body = { adapterType: 'none', _note: 'Settings table not yet ready.' };

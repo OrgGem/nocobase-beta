@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 export type RollingRestartMode = 'soft' | 'hard';
 export type RollingRestartRole = 'app' | 'worker' | 'sandbox';
 
@@ -43,6 +52,7 @@ export interface RollingRestartOptions {
   recoveryTimeoutMs: number;
   pollIntervalMs: number;
   heartbeatMaxAgeMs: number;
+  allowSingleAppNode?: boolean;
 }
 
 export interface RestartedNodeResult {
@@ -59,6 +69,7 @@ export interface RestartedNodeResult {
 export interface RollingRestartResult {
   published: RestartedNodeResult[];
   coordinator?: RollingRestartNode;
+  singleNodeWarning?: boolean;
 }
 
 function isFreshOnline(node: RollingRestartNode, now: number, heartbeatMaxAgeMs: number): boolean {
@@ -141,6 +152,31 @@ async function waitForReplacement(
   throw new RollingRestartError('node-recovery-timeout', target);
 }
 
+async function ensureAppPeerOrSingleNodeAllowed(
+  target: RollingRestartNode,
+  orderedNodes: RollingRestartNode[],
+  options: RollingRestartOptions,
+  dependencies: RollingRestartDependencies,
+): Promise<boolean> {
+  if (await hasReadyAppPeer(target, options, dependencies)) {
+    return false;
+  }
+
+  if (options.allowSingleAppNode) {
+    const now = dependencies.now();
+    const otherOnlineAppNodes = (await dependencies.listNodes()).filter(
+      (node) =>
+        node.role === 'app' && !matchesNode(node, target) && isFreshOnline(node, now, options.heartbeatMaxAgeMs),
+    );
+    const appTargetCount = orderedNodes.filter((node) => node.role === 'app').length;
+    if (appTargetCount <= 1 && otherOnlineAppNodes.length === 0) {
+      return true;
+    }
+  }
+
+  throw new RollingRestartError('no-ready-peer', target);
+}
+
 export async function runRollingRestartSequence(
   options: RollingRestartOptions,
   dependencies: RollingRestartDependencies,
@@ -149,13 +185,15 @@ export async function runRollingRestartSequence(
   const coordinator = orderedNodes.find((node) => node.id === options.coordinatorId);
   const remoteNodes = orderedNodes.filter((node) => node.id !== options.coordinatorId);
   const published: RestartedNodeResult[] = [];
+  let singleNodeWarning = false;
 
   for (const target of remoteNodes) {
     if (!target.generationId) {
       throw new RollingRestartError('generation-unavailable', target);
     }
-    if (target.role === 'app' && !(await hasReadyAppPeer(target, options, dependencies))) {
-      throw new RollingRestartError('no-ready-peer', target);
+    if (target.role === 'app') {
+      singleNodeWarning =
+        (await ensureAppPeerOrSingleNodeAllowed(target, orderedNodes, options, dependencies)) || singleNodeWarning;
     }
 
     const restartedAt = dependencies.now();
@@ -174,9 +212,10 @@ export async function runRollingRestartSequence(
     });
   }
 
-  if (coordinator?.role === 'app' && !(await hasReadyAppPeer(coordinator, options, dependencies))) {
-    throw new RollingRestartError('no-ready-peer', coordinator);
+  if (coordinator?.role === 'app') {
+    singleNodeWarning =
+      (await ensureAppPeerOrSingleNodeAllowed(coordinator, orderedNodes, options, dependencies)) || singleNodeWarning;
   }
 
-  return { published, coordinator };
+  return { published, coordinator, ...(singleNodeWarning ? { singleNodeWarning: true } : {}) };
 }
