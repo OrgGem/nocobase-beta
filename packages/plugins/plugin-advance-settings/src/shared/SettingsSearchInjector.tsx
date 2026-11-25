@@ -1,12 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { theme } from 'antd';
-import React, { useEffect, useRef } from 'react';
+import React, { useContext, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
 
 const SETTINGS_SEARCH_ID = 'settings-sidebar-search';
 const MENU_ITEM_SELECTOR = '.ant-menu-item, .ant-menu-submenu';
+export const DEFAULT_SETTINGS_SEARCH_ICON = 'SearchOutlined';
+
+export function resolveSettingsSearchIcon(rawIcon: unknown): string {
+  if (rawIcon === null) {
+    return '';
+  }
+  return typeof rawIcon === 'string' ? rawIcon : DEFAULT_SETTINGS_SEARCH_ICON;
+}
+
+export type SettingsSearchConfig = {
+  enabled?: boolean;
+  icon?: React.ReactNode;
+};
+
+export const SettingsSearchConfigContext = React.createContext<SettingsSearchConfig | undefined>(undefined);
 
 /** Both client runtimes render the settings menu next to the settings page header. */
 function findSettingsMenu(): HTMLElement | null {
@@ -35,24 +51,39 @@ function findSettingsMenu(): HTMLElement | null {
 type DisplayStyle = { value: string; priority: string };
 
 /** Adds a search input to the settings menu without changing the host's components. */
-export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ children }) => {
+export const SettingsSearchInjector: React.FC<React.PropsWithChildren<SettingsSearchConfig>> = ({
+  children,
+  enabled: enabledProp,
+  icon: iconProp,
+}) => {
+  const context = useContext(SettingsSearchConfigContext);
+  const enabled = enabledProp ?? context?.enabled ?? true;
+  const resolvedIcon = iconProp !== undefined ? iconProp : context !== undefined ? context.icon : '🔍';
+  const showIcon = resolvedIcon !== null && resolvedIcon !== undefined && resolvedIcon !== false && resolvedIcon !== '';
+  const showIconRef = useRef(showIcon);
+  showIconRef.current = showIcon;
+
   const { pathname } = useLocation();
   const { token } = theme.useToken();
   const { t } = useTranslation('plugin-advance-settings', { nsMode: 'fallback' });
   const placeholder = t('Search settings...');
   const label = t('Settings Search');
   const searchTermRef = useRef('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [iconSlot, setIconSlot] = useState<HTMLSpanElement | null>(null);
   const isSettingsPage = pathname === '/admin/settings' || pathname.startsWith('/admin/settings/');
-  const { paddingSM, colorBorder, colorBgContainer, colorText, colorPrimary } = token;
+  const { paddingSM, colorBorder, colorBgContainer, colorText, colorTextSecondary, colorPrimary } = token;
 
   useEffect(() => {
-    if (!isSettingsPage) {
+    if (!isSettingsPage || !enabled) {
       searchTermRef.current = '';
+      inputRef.current = null;
+      setIconSlot(null);
       return;
     }
 
     let menu: HTMLElement | null = null;
-    let container: HTMLDivElement | null = null;
+    let container: HTMLElement | null = null;
     const originalDisplay = new Map<HTMLElement, DisplayStyle>();
 
     const restoreDisplay = () => {
@@ -106,7 +137,7 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ 
     };
 
     const createSearchBox = () => {
-      const box = document.createElement('div');
+      const box = document.createElement('search');
       box.id = SETTINGS_SEARCH_ID;
       box.style.padding = `${paddingSM}px ${paddingSM}px 0`;
       box.style.boxSizing = 'border-box';
@@ -118,10 +149,13 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ 
       input.type = 'search';
       input.placeholder = placeholder;
       input.setAttribute('aria-label', label);
+      input.setAttribute('autocorrect', 'off');
+      input.setAttribute('autocapitalize', 'none');
+      input.spellcheck = false;
       input.value = searchTermRef.current;
       input.style.cssText = [
         'width: 100%',
-        'padding: 4px 28px 4px 8px',
+        showIconRef.current ? 'padding: 4px 28px 4px 8px' : 'padding: 4px 8px',
         'border: 1px solid',
         'border-radius: 6px',
         'outline: none',
@@ -133,17 +167,23 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ 
       input.style.color = colorText;
       input.addEventListener('focus', () => {
         input.style.borderColor = colorPrimary;
+        input.style.outline = `2px solid ${colorPrimary}`;
+        input.style.outlineOffset = '-1px';
       });
       input.addEventListener('blur', () => {
         input.style.borderColor = colorBorder;
+        input.style.outline = 'none';
+        input.style.outlineOffset = '';
       });
       input.addEventListener('input', () => {
         searchTermRef.current = input.value;
         filterMenuItems();
       });
+      inputRef.current = input;
       wrapper.appendChild(input);
 
       const icon = document.createElement('span');
+      icon.dataset.testid = 'settings-search-icon';
       icon.setAttribute('aria-hidden', 'true');
       icon.style.cssText = [
         'position: absolute',
@@ -152,10 +192,14 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ 
         'transform: translateY(-50%)',
         'pointer-events: none',
         'font-size: 14px',
+        'line-height: 1',
+        'align-items: center',
       ].join(';');
-      icon.textContent = '🔍';
+      icon.style.color = colorTextSecondary || colorText;
+      icon.style.display = showIconRef.current ? 'inline-flex' : 'none';
       wrapper.appendChild(icon);
       box.appendChild(wrapper);
+      setIconSlot(icon);
       return box;
     };
 
@@ -166,7 +210,11 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ 
         restoreDisplay();
         container?.remove();
         container = null;
+        inputRef.current = null;
         menu = nextMenu;
+        if (!nextMenu) {
+          setIconSlot(null);
+        }
       }
       const currentMenu = menu;
       if (!currentMenu?.parentElement) return;
@@ -184,14 +232,43 @@ export const SettingsSearchInjector: React.FC<React.PropsWithChildren<{}>> = ({ 
     };
 
     reconcile();
+    if (!menu) {
+      setIconSlot(null);
+    }
     const observer = new MutationObserver(reconcile);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => {
       observer.disconnect();
       restoreDisplay();
       container?.remove();
+      inputRef.current = null;
     };
-  }, [isSettingsPage, paddingSM, colorBorder, colorBgContainer, colorText, colorPrimary, placeholder, label]);
+  }, [
+    enabled,
+    isSettingsPage,
+    paddingSM,
+    colorBorder,
+    colorBgContainer,
+    colorText,
+    colorTextSecondary,
+    colorPrimary,
+    placeholder,
+    label,
+  ]);
 
-  return <>{children}</>;
+  useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.style.padding = showIcon ? '4px 28px 4px 8px' : '4px 8px';
+    }
+    if (iconSlot) {
+      iconSlot.style.display = showIcon ? 'inline-flex' : 'none';
+    }
+  }, [iconSlot, showIcon]);
+
+  return (
+    <>
+      {children}
+      {isSettingsPage && enabled && iconSlot && showIcon ? createPortal(resolvedIcon, iconSlot) : null}
+    </>
+  );
 };

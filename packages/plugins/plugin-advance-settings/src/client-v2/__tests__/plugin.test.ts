@@ -39,10 +39,11 @@ vi.mock('../HelpSettingsPage', () => ({ HelpSettingsPage: function HelpSettingsP
 
 import type { Application } from '@nocobase/client-v2';
 import { SettingsSearchInjector } from '../../shared/SettingsSearchInjector';
+import { HelpVisibilityProviderV2 } from '../HelpVisibilityProvider';
 import { PluginAdvanceSettingsClient } from '../plugin';
 
 describe('Advance Settings V2 search registration', () => {
-  it('registers the shared Settings search provider in the V2 application', async () => {
+  it('registers HelpVisibilityProviderV2 before SettingsSearchInjector and adds the Settings Search tab', async () => {
     const app = {
       use: vi.fn(),
       pluginSettingsManager: {
@@ -53,9 +54,18 @@ describe('Advance Settings V2 search registration', () => {
 
     await new PluginAdvanceSettingsClient({}, app).load();
 
-    expect(app.use).toHaveBeenCalledWith(SettingsSearchInjector);
+    expect(app.use).toHaveBeenNthCalledWith(1, HelpVisibilityProviderV2);
+    expect(app.use).toHaveBeenNthCalledWith(2, SettingsSearchInjector);
     expect(app.pluginSettingsManager.addPageTabItem).toHaveBeenCalledWith(
       expect.objectContaining({ menuKey: 'advance-settings', key: 'ai-chat', title: 'AI Chat', sort: 20 }),
+    );
+    expect(app.pluginSettingsManager.addPageTabItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        menuKey: 'advance-settings',
+        key: 'settings-search',
+        title: 'Settings Search',
+        sort: 30,
+      }),
     );
   });
 });

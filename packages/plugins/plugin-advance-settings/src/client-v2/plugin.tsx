@@ -8,8 +8,8 @@ import { HelpSettingsPage } from './HelpSettingsPage';
 
 export class PluginAdvanceSettingsClient extends Plugin<Record<string, never>, Application> {
   async load() {
-    this.app.use(SettingsSearchInjector);
     this.app.use(HelpVisibilityProviderV2);
+    this.app.use(SettingsSearchInjector);
 
     this.pluginSettingsManager.addMenuItem({
       key: 'advance-settings',
@@ -34,6 +34,16 @@ export class PluginAdvanceSettingsClient extends Plugin<Record<string, never>, A
       title: this.t('AI Chat'),
       sort: 20,
       componentLoader: () => import('./AIChatSettingsPage').then((m) => ({ default: m.AIChatSettingsPage })),
+      aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
+    });
+
+    this.pluginSettingsManager.addPageTabItem({
+      menuKey: 'advance-settings',
+      key: 'settings-search',
+      title: this.t('Settings Search'),
+      sort: 30,
+      componentLoader: () =>
+        import('./SettingsSearchSettingsPage').then((m) => ({ default: m.SettingsSearchSettingsPage })),
       aclSnippet: `pm.${this.options.name || 'plugin-advance-settings'}`,
     });
   }

@@ -7,28 +7,41 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React from 'react';
-import { useSystemSettings } from '@nocobase/client';
+import React, { useMemo } from 'react';
+import { Icon, hasIcon, useSystemSettings } from '@nocobase/client';
 import { AIChatResize } from '../shared/AIChatResize';
+import { SettingsSearchConfigContext, resolveSettingsSearchIcon } from '../shared/SettingsSearchInjector';
 import { useT } from './locale';
 
 export const HelpVisibilityProvider: React.FC<React.PropsWithChildren<{}>> = (props) => {
   const systemSettings = useSystemSettings();
   const t = useT();
-  const showHelp = systemSettings?.data?.data?.options?.showHelp !== false;
-  const enableAIChatResize = systemSettings?.data?.data?.options?.enableAIChatResize === true;
+  const options = systemSettings?.data?.data?.options;
+  const showHelp = options?.showHelp !== false;
+  const enableAIChatResize = options?.enableAIChatResize === true;
+  const enableSettingsSearch = options?.enableSettingsSearch !== false;
+  const searchIcon = resolveSettingsSearchIcon(options?.settingsSearchIcon);
+  const searchConfig = useMemo(
+    () => ({
+      enabled: enableSettingsSearch,
+      icon: searchIcon && hasIcon(searchIcon) ? <Icon type={searchIcon} /> : null,
+    }),
+    [enableSettingsSearch, searchIcon],
+  );
 
   return (
-    <AIChatResize enabled={enableAIChatResize} label={t('Resize AI chat')}>
-      {!showHelp && (
-        <style>{`
-          div:has(> [data-testid="help-button"]) {
-            display: none !important;
-          }
-        `}</style>
-      )}
-      {props.children}
-    </AIChatResize>
+    <SettingsSearchConfigContext.Provider value={searchConfig}>
+      <AIChatResize enabled={enableAIChatResize} label={t('Resize AI chat')}>
+        {!showHelp && (
+          <style>{`
+            div:has(> [data-testid="help-button"]) {
+              display: none !important;
+            }
+          `}</style>
+        )}
+        {props.children}
+      </AIChatResize>
+    </SettingsSearchConfigContext.Provider>
   );
 };
 

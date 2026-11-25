@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+import { ConfigProvider } from 'antd';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React, { useState } from 'react';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -280,5 +281,124 @@ describe('SettingsSearchInjector', () => {
     expect(usersItem.isConnected).toBe(true);
     expect(usersItem.style.display).toBe('inline-flex');
     expect(document.getElementById('settings-sidebar-search')).toBeNull();
+  });
+
+  it('toggles search visibility and restores filtered menu items when disabled', async () => {
+    function ToggleHarness() {
+      const [enabled, setEnabled] = useState(true);
+
+      return (
+        <SettingsSearchInjector enabled={enabled}>
+          <button type="button" onClick={() => setEnabled((prev) => !prev)}>
+            Toggle search
+          </button>
+          <SettingsLayout>
+            <SettingsMenu entries={['Mail', 'Users']} />
+          </SettingsLayout>
+        </SettingsSearchInjector>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/admin/settings/general']}>
+        <ToggleHarness />
+      </MemoryRouter>,
+    );
+
+    const usersItem = await screen.findByText('Users');
+    const search = await screen.findByRole('searchbox', { name: 'Settings Search' });
+    fireEvent.input(search, { target: { value: 'mail' } });
+    expect(usersItem.style.display).toBe('none');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle search' }));
+    await waitFor(() => expect(document.getElementById('settings-sidebar-search')).toBeNull());
+    expect(usersItem.style.display).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle search' }));
+    const reopenedSearch = (await screen.findByRole('searchbox', { name: 'Settings Search' })) as HTMLInputElement;
+    expect(reopenedSearch.value).toBe('');
+  });
+
+  it('renders a custom search icon without resetting the active filter and supports clearing the icon', async () => {
+    function IconHarness() {
+      const [iconKey, setIconKey] = useState<'first' | 'second' | 'none'>('first');
+      const iconNode =
+        iconKey === 'none' ? null : <span data-testid={`custom-icon-${iconKey}`}>{iconKey.toUpperCase()}</span>;
+
+      return (
+        <SettingsSearchInjector icon={iconNode}>
+          <button type="button" onClick={() => setIconKey('second')}>
+            Switch icon
+          </button>
+          <button type="button" onClick={() => setIconKey('none')}>
+            Clear icon
+          </button>
+          <SettingsLayout>
+            <SettingsMenu entries={['Mail', 'Users']} />
+          </SettingsLayout>
+        </SettingsSearchInjector>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/admin/settings/general']}>
+        <IconHarness />
+      </MemoryRouter>,
+    );
+
+    const search = (await screen.findByRole('searchbox', { name: 'Settings Search' })) as HTMLInputElement;
+    expect(await screen.findByTestId('custom-icon-first')).toBeTruthy();
+    expect(search.style.paddingRight).toBe('28px');
+
+    fireEvent.input(search, { target: { value: 'mail' } });
+    expect(screen.getByText('Users').style.display).toBe('none');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch icon' }));
+    expect(await screen.findByTestId('custom-icon-second')).toBeTruthy();
+    expect(search.value).toBe('mail');
+    expect(screen.getByText('Users').style.display).toBe('none');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear icon' }));
+    await waitFor(() => expect(screen.queryByTestId('custom-icon-second')).toBeNull());
+    expect(screen.getByTestId('settings-search-icon').style.display).toBe('none');
+    expect(search.style.paddingRight).toBe('8px');
+  });
+
+  it('drops the detached icon slot if theme tokens change while the Settings menu is temporarily absent', async () => {
+    function ThemeAndMenuHarness() {
+      const [showMenu, setShowMenu] = useState(true);
+      const [primary, setPrimary] = useState('#1677ff');
+
+      return (
+        <ConfigProvider theme={{ token: { colorPrimary: primary } }}>
+          <SettingsSearchInjector icon={<span data-testid="portal-search-icon">ICON</span>}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowMenu(false);
+                setPrimary('#00b96b');
+              }}
+            >
+              Unmount menu and switch theme
+            </button>
+            <SettingsLayout>{showMenu && <SettingsMenu entries={['General']} />}</SettingsLayout>
+          </SettingsSearchInjector>
+        </ConfigProvider>
+      );
+    }
+
+    render(
+      <MemoryRouter initialEntries={['/admin/settings/general']}>
+        <ThemeAndMenuHarness />
+      </MemoryRouter>,
+    );
+
+    const mountedIcon = await screen.findByTestId('portal-search-icon');
+    expect(document.body.contains(mountedIcon)).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unmount menu and switch theme' }));
+    await waitFor(() => expect(document.getElementById('settings-sidebar-search')).toBeNull());
+    expect(mountedIcon.isConnected).toBe(false);
+    expect(mountedIcon.parentElement?.childElementCount ?? 0).toBe(0);
   });
 });

@@ -8,8 +8,8 @@ import { HelpSettingsPage } from './HelpSettingsPage';
 
 export class PluginAdvanceSettingsClient extends Plugin {
   async load() {
-    this.app.use(SettingsSearchInjector);
     this.app.use(HelpVisibilityProvider);
+    this.app.use(SettingsSearchInjector);
 
     this.app.pluginSettingsManager.add('advance-settings', {
       title: this.t('Advance Settings'),

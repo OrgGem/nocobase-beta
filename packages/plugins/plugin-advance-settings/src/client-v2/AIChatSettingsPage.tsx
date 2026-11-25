@@ -1,42 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import React, { useState } from 'react';
-import { Card, Space, Switch, message } from 'antd';
+import React from 'react';
+import { Card, Space, Switch } from 'antd';
 import { useApp, useSystemSettings } from '@nocobase/client-v2';
+import { useSaveSystemSettingsOptions } from '../shared/useSaveSystemSettingsOptions';
 
 export const AIChatSettingsPage: React.FC = () => {
   const app = useApp();
   const t = (key: string) => app.i18n.t(key, { ns: 'plugin-advance-settings' });
   const systemSettings = useSystemSettings();
-  const enableAIChatResize = systemSettings?.data?.data?.options?.enableAIChatResize === true;
-  const [saving, setSaving] = useState(false);
-
-  const handleToggle = async (checked: boolean) => {
-    setSaving(true);
-    try {
-      const options = {
-        ...systemSettings?.data?.data?.options,
-        enableAIChatResize: checked,
-      };
-      await app.apiClient.request({
-        url: 'systemSettings:put',
-        method: 'post',
-        data: { options },
-      });
-      systemSettings?.mutate?.({
-        data: {
-          ...systemSettings.data?.data,
-          options,
-        },
-      });
-      message.success(t('Saved successfully'));
-    } catch (error) {
-      console.error('[AdvanceSettings] Failed to save AI chat setting:', error);
-      message.error(t('Save failed'));
-    } finally {
-      setSaving(false);
-    }
-  };
+  const { currentOptions, loaded, saving, saveOptions } = useSaveSystemSettingsOptions(
+    (config) => app.apiClient.request(config),
+    systemSettings,
+    t,
+  );
+  const enableAIChatResize = currentOptions?.enableAIChatResize === true;
+  const handleToggle = (checked: boolean) => saveOptions({ enableAIChatResize: checked });
 
   return (
     <div style={{ padding: 24 }}>
@@ -46,7 +25,7 @@ export const AIChatSettingsPage: React.FC = () => {
           <Switch
             aria-label={t('Enable AI chat resizing')}
             checked={enableAIChatResize}
-            disabled={!systemSettings?.data?.data}
+            disabled={!loaded}
             loading={saving}
             onChange={handleToggle}
           />

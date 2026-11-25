@@ -29,10 +29,11 @@ vi.mock('../HelpSettingsPage', () => ({ HelpSettingsPage: function HelpSettingsP
 
 import type { Application } from '@nocobase/client';
 import { SettingsSearchInjector } from '../../shared/SettingsSearchInjector';
+import { HelpVisibilityProvider } from '../HelpVisibilityProvider';
 import { PluginAdvanceSettingsClient } from '../plugin';
 
 describe('Advance Settings V1 search registration', () => {
-  it('registers the shared Settings search provider in the V1 application', async () => {
+  it('registers HelpVisibilityProvider before SettingsSearchInjector so search config context is available', async () => {
     const app = {
       use: vi.fn(),
       pluginSettingsManager: {
@@ -42,6 +43,7 @@ describe('Advance Settings V1 search registration', () => {
 
     await new PluginAdvanceSettingsClient({}, app).load();
 
-    expect(app.use).toHaveBeenCalledWith(SettingsSearchInjector);
+    expect(app.use).toHaveBeenNthCalledWith(1, HelpVisibilityProvider);
+    expect(app.use).toHaveBeenNthCalledWith(2, SettingsSearchInjector);
   });
 });

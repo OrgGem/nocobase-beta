@@ -7,50 +7,31 @@
  * For more information, please refer to: https://www.nocobase.com/agreement.
  */
 
-import React, { useState } from 'react';
-import { Card, Space, Switch, message } from 'antd';
-import { useAPIClient, useSystemSettings } from '@nocobase/client';
+import React from 'react';
+import { Card, Space, Switch } from 'antd';
+import { IconPicker, useAPIClient, useSystemSettings } from '@nocobase/client';
+import { resolveSettingsSearchIcon } from '../shared/SettingsSearchInjector';
+import { useSaveSystemSettingsOptions } from '../shared/useSaveSystemSettingsOptions';
 import { useT } from './locale';
 
 export const HelpSettingsPage: React.FC = () => {
   const api = useAPIClient();
   const t = useT();
   const systemSettings = useSystemSettings();
-  const showHelp = systemSettings?.data?.data?.options?.showHelp !== false;
-  const enableAIChatResize = systemSettings?.data?.data?.options?.enableAIChatResize === true;
-  const [saving, setSaving] = useState(false);
+  const { currentOptions, loaded, saving, saveOptions } = useSaveSystemSettingsOptions(
+    (config) => api.request(config),
+    systemSettings,
+    t,
+  );
+  const showHelp = currentOptions?.showHelp !== false;
+  const enableAIChatResize = currentOptions?.enableAIChatResize === true;
+  const enableSettingsSearch = currentOptions?.enableSettingsSearch !== false;
+  const searchIcon = resolveSettingsSearchIcon(currentOptions?.settingsSearchIcon);
 
-  const handleToggle = async (key: 'showHelp' | 'enableAIChatResize', checked: boolean) => {
-    setSaving(true);
-    try {
-      const options = {
-        ...systemSettings?.data?.data?.options,
-        [key]: checked,
-      };
-
-      await api.request({
-        url: 'systemSettings:put',
-        method: 'post',
-        data: { options },
-      });
-
-      if (systemSettings?.mutate) {
-        systemSettings.mutate({
-          data: {
-            ...systemSettings.data?.data,
-            options,
-          },
-        });
-      }
-
-      message.success(t('Saved successfully'));
-    } catch (error) {
-      console.error('[AdvanceSettings] Failed to save setting:', error);
-      message.error(t('Save failed'));
-    } finally {
-      setSaving(false);
-    }
-  };
+  const handleToggleHelp = (checked: boolean) => saveOptions({ showHelp: checked });
+  const handleToggleAIChatResize = (checked: boolean) => saveOptions({ enableAIChatResize: checked });
+  const handleToggleSettingsSearch = (checked: boolean) => saveOptions({ enableSettingsSearch: checked });
+  const handleSearchIconChange = (nextIcon?: string | null) => saveOptions({ settingsSearchIcon: nextIcon ?? '' });
 
   return (
     <div style={{ padding: 24 }}>
@@ -60,21 +41,44 @@ export const HelpSettingsPage: React.FC = () => {
           <Switch
             aria-label={t('Show help button in header')}
             checked={showHelp}
+            disabled={!loaded}
             loading={saving}
-            onChange={(checked) => handleToggle('showHelp', checked)}
+            onChange={handleToggleHelp}
           />
         </Space>
       </Card>
-      <Card title={t('AI Chat')}>
+      <Card title={t('AI Chat')} style={{ marginBottom: 24 }}>
         <Space size="middle" align="center">
           <span>{t('Enable AI chat resizing')}</span>
           <Switch
             aria-label={t('Enable AI chat resizing')}
             checked={enableAIChatResize}
-            disabled={!systemSettings?.data?.data}
+            disabled={!loaded}
             loading={saving}
-            onChange={(checked) => handleToggle('enableAIChatResize', checked)}
+            onChange={handleToggleAIChatResize}
           />
+        </Space>
+      </Card>
+      <Card title={t('Settings Search')}>
+        <Space direction="vertical" size="middle">
+          <Space size="middle" align="center">
+            <span>{t('Enable settings search')}</span>
+            <Switch
+              aria-label={t('Enable settings search')}
+              checked={enableSettingsSearch}
+              disabled={!loaded}
+              loading={saving}
+              onChange={handleToggleSettingsSearch}
+            />
+          </Space>
+          <Space size="middle" align="center">
+            <span>{t('Search icon')}</span>
+            <IconPicker
+              value={searchIcon || undefined}
+              disabled={!loaded || saving}
+              onChange={handleSearchIconChange}
+            />
+          </Space>
         </Space>
       </Card>
     </div>
