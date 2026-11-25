@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Plugin } from '@nocobase/server';
-import { repairRouteContent, RouteContentRepairError } from './route-content-repair';
+import { repairAllLegacyRouteContents, repairRouteContent, RouteContentRepairError } from './route-content-repair';
 
 const PATH_ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/;
 const RESERVED_PATH_ALIASES = new Set([
@@ -131,6 +131,18 @@ export const canMatchDesktopRouteId = (pathAlias: string) => {
 };
 
 export class PluginRouterConfigurationServer extends Plugin {
+  private runStartupRouteRepair = async () => {
+    if (!this.db) {
+      return;
+    }
+    try {
+      await repairAllLegacyRouteContents(this.db, this.app?.log);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.app?.log?.warn?.(`[plugin-router-configuration] Legacy route auto-repair skipped: ${message}`);
+    }
+  };
+
   async afterAdd() {}
 
   async beforeLoad() {}
@@ -149,15 +161,33 @@ export class PluginRouterConfigurationServer extends Plugin {
     this.registerRenameAction();
     this.registerPathAliasActions();
     this.registerAccessiblePathAliasMiddleware();
+    this.app.off?.('afterStart', this.runStartupRouteRepair);
+    this.app.on?.('afterStart', this.runStartupRouteRepair);
   }
 
-  async install() {}
+  async install() {
+    await this.runStartupRouteRepair();
+  }
 
-  async afterEnable() {}
+  async upgrade() {
+    await this.runStartupRouteRepair();
+  }
 
-  async afterDisable() {}
+  async afterEnable() {
+    await this.runStartupRouteRepair();
+  }
 
-  async remove() {}
+  async afterDisable() {
+    this.app.off?.('afterStart', this.runStartupRouteRepair);
+  }
+
+  async afterRemove() {
+    this.app.off?.('afterStart', this.runStartupRouteRepair);
+  }
+
+  async remove() {
+    this.app.off?.('afterStart', this.runStartupRouteRepair);
+  }
 
   private registerRenameAction() {
     this.app.resourceManager.registerActionHandler('desktopRoutes:renamePath', async (ctx, next) => {

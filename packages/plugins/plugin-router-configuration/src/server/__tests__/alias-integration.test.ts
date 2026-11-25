@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMockServer, type MockServer } from '@nocobase/test';
 import RouterPlugin from '../plugin';
 import aliasCollection from '../collections/desktop-route-path-aliases';
+import { repairAllLegacyRouteContents } from '../route-content-repair';
 import FlowModelRepository from '../../../../@nocobase/plugin-flow-engine/src/server/repository';
 
 class TestRouterPlugin extends RouterPlugin {
@@ -249,7 +250,7 @@ describe('friendly aliases with ACL and UI Layout', () => {
     }
   }, 300000);
 
-  it('rejects recovery when multiple detached pages claim the same route and rolls back the alias', async () => {
+  it('selects the best detached page when multiple legacy pages claim the same route', async () => {
     const routes = app.db.getRepository('desktopRoutes');
     const flowModels = app.db.getRepository('flowModels') as FlowModelRepository;
     const routeUid = 'vpb-ambiguous';
@@ -263,13 +264,17 @@ describe('friendly aliases with ACL and UI Layout', () => {
     });
     const routeId = String(route.get('id'));
     await flowModels.remove(routeUid);
-    for (const pageUid of ['ambiguous-page-a', 'ambiguous-page-b']) {
-      await flowModels.upsertModel({
-        uid: pageUid,
-        use: 'RootPageModel',
-        props: { routeId },
-      });
-    }
+    await flowModels.upsertModel({
+      uid: 'ambiguous-page-a',
+      use: 'RootPageModel',
+      props: { routeId },
+    });
+    await flowModels.upsertModel({
+      uid: 'ambiguous-page-b',
+      use: 'RootPageModel',
+      props: { routeId, enableTabs: true },
+      stepParams: { pageSettings: { general: { displayTitle: true } } },
+    });
 
     const root = await app.db.getRepository('users').findOne({ filter: { 'roles.name': 'root' } });
     const rootAgent = await app.agent().login(root);
@@ -277,15 +282,254 @@ describe('friendly aliases with ACL and UI Layout', () => {
       values: { id: route.get('id'), pathAlias: 'ambiguous-friendly' },
     });
 
-    expect(response.status).toBe(409);
-    expect(await flowModels.model.findByPk(routeUid)).toBeNull();
-    expect(
-      await app.db.getRepository('desktopRoutePathAliases').findOne({ filter: { desktopRouteId: route.get('id') } }),
-    ).toBeNull();
+    expect(response.status).toBe(200);
+    expect(await flowModels.findModelNodeSnapshotById('ambiguous-page-b')).toMatchObject({
+      uid: 'ambiguous-page-b',
+      parentId: routeUid,
+      subKey: 'page',
+      async: true,
+    });
     expect(await flowModels.findModelNodeSnapshotById('ambiguous-page-a')).toMatchObject({
       parentId: null,
       subKey: null,
     });
+    expect(
+      await flowModels.ensureRouteContent({
+        parentId: routeUid,
+        subKey: 'page',
+        use: 'RootPageModel',
+        uid: 'must-not-create-third-page',
+      }),
+    ).toBe('ambiguous-page-b');
+  }, 300000);
+
+  it('rejects recovery when the matching page still belongs to another live route and rolls back the alias', async () => {
+    const routes = app.db.getRepository('desktopRoutes');
+    const flowModels = app.db.getRepository('flowModels') as FlowModelRepository;
+    const liveOwnerUid = 'vpb-live-owner';
+    const brokenRouteUid = 'vpb-conflicting-claim';
+    const liveOwner = await routes.create({
+      values: {
+        type: 'flowPage',
+        title: 'Live owner V2 page',
+        schemaUid: liveOwnerUid,
+        uiLayouts: ['admin-layout-model'],
+      },
+    });
+    expect(liveOwner.get('schemaUid')).toBe(liveOwnerUid);
+    const brokenRoute = await routes.create({
+      values: {
+        type: 'flowPage',
+        title: 'Broken claiming V2 page',
+        schemaUid: brokenRouteUid,
+        uiLayouts: ['admin-layout-model'],
+      },
+    });
+    await flowModels.remove(brokenRouteUid);
+    await flowModels.upsertModel({
+      uid: 'shared-live-root-page',
+      parentId: liveOwnerUid,
+      subKey: 'page',
+      subType: 'object',
+      async: true,
+      use: 'RootPageModel',
+      props: { routeId: String(brokenRoute.get('id')) },
+    });
+
+    const root = await app.db.getRepository('users').findOne({ filter: { 'roles.name': 'root' } });
+    const rootAgent = await app.agent().login(root);
+    const response = await rootAgent.post('/desktopRoutes:setPathAlias').send({
+      values: { id: brokenRoute.get('id'), pathAlias: 'conflicting-friendly' },
+    });
+
+    expect(response.status).toBe(409);
+    expect(await flowModels.model.findByPk(brokenRouteUid)).toBeNull();
+    expect(
+      await app.db
+        .getRepository('desktopRoutePathAliases')
+        .findOne({ filter: { desktopRouteId: brokenRoute.get('id') } }),
+    ).toBeNull();
+    expect(await flowModels.findModelNodeSnapshotById('shared-live-root-page')).toMatchObject({
+      parentId: liveOwnerUid,
+      subKey: 'page',
+    });
+  }, 300000);
+
+  it('recreates missing RouteModel anchors for legacy pages without a persisted RootPageModel and broken child tabs', async () => {
+    const routes = app.db.getRepository('desktopRoutes');
+    const flowModels = app.db.getRepository('flowModels') as FlowModelRepository;
+    const treePaths = app.db.getRepository('flowModelTreePath');
+    const routeUid = 'vpb-no-root-page';
+    const emptyTabUid = 'vpb-empty-tab';
+    const contentTabUid = 'vpb-content-tab';
+    const detachedGridUid = 'detached-tab-grid';
+    const detachedBlockUid = 'detached-tab-block';
+
+    const route = await routes.create({
+      values: {
+        type: 'flowPage',
+        title: 'Legacy page without persisted RootPageModel',
+        schemaUid: routeUid,
+        uiLayouts: ['admin-layout-model'],
+      },
+    });
+    const routeId = route.get('id') as string | number;
+    await routes.create({
+      values: {
+        type: 'tabs',
+        title: 'Empty tab',
+        schemaUid: emptyTabUid,
+        parentId: routeId,
+      },
+    });
+    await routes.create({
+      values: {
+        type: 'tabs',
+        title: 'Tab with detached grid',
+        schemaUid: contentTabUid,
+        parentId: routeId,
+      },
+    });
+
+    await flowModels.ensureRouteContent({
+      uid: detachedGridUid,
+      parentId: contentTabUid,
+      subKey: 'grid',
+      use: 'BlockGridModel',
+    });
+    await flowModels.upsertModel({
+      uid: detachedBlockUid,
+      parentId: detachedGridUid,
+      subKey: 'items',
+      subType: 'array',
+      use: 'TableBlockModel',
+    });
+
+    // Simulate missing RouteModels on the page and both child tabs while keeping the tab grid and block rows.
+    await flowModels.remove(routeUid);
+    await flowModels.remove(emptyTabUid);
+    await treePaths.destroy({ filter: { ancestor: contentTabUid } });
+    await flowModels.model.destroy({ where: { uid: contentTabUid }, hooks: false });
+
+    const root = await app.db.getRepository('users').findOne({ filter: { 'roles.name': 'root' } });
+    const rootAgent = await app.agent().login(root);
+    const response = await rootAgent.post('/desktopRoutes:setPathAlias').send({
+      values: { id: routeId, pathAlias: null },
+    });
+
+    expect(response.status).toBe(200);
+    expect(
+      await flowModels.ensureRouteContent({
+        parentId: routeUid,
+        subKey: 'page',
+        use: 'RootPageModel',
+        uid: 'first-edit-root-page',
+      }),
+    ).toBe('first-edit-root-page');
+    expect(
+      await flowModels.ensureRouteContent({
+        parentId: emptyTabUid,
+        subKey: 'grid',
+        use: 'BlockGridModel',
+        uid: 'first-edit-empty-tab-grid',
+      }),
+    ).toBe('first-edit-empty-tab-grid');
+    expect(
+      await flowModels.ensureRouteContent({
+        parentId: contentTabUid,
+        subKey: 'grid',
+        use: 'BlockGridModel',
+        uid: 'must-not-replace-detached-grid',
+      }),
+    ).toBe(detachedGridUid);
+    expect(
+      await flowModels.findModelByParentId(contentTabUid, { subKey: 'grid', includeAsyncNode: true }),
+    ).toMatchObject({
+      uid: detachedGridUid,
+      subModels: { items: [{ uid: detachedBlockUid }] },
+    });
+  }, 300000);
+
+  it('reclaims a RootPageModel from an orphaned pre-rename RouteModel and repairs broken routes on startup scan', async () => {
+    const routes = app.db.getRepository('desktopRoutes');
+    const flowModels = app.db.getRepository('flowModels') as FlowModelRepository;
+    const oldRouteUid = 'legacy-pre-rename-uid';
+    const renamedRouteUid = 'vpb-rpa-ops';
+    const preRenamePageUid = 'pre-rename-root-page';
+    const unvisitedEmptyUid = 'vpb-unvisited-empty';
+    const nonDesktopSkipUid = 'vpb-non-desktop-skip';
+
+    const route = await routes.create({
+      values: {
+        type: 'flowPage',
+        title: 'Edited before legacy rename',
+        schemaUid: oldRouteUid,
+        uiLayouts: ['admin-layout-model'],
+      },
+    });
+    const routeId = route.get('id') as string | number;
+    await flowModels.upsertModel({
+      uid: preRenamePageUid,
+      parentId: oldRouteUid,
+      subKey: 'page',
+      subType: 'object',
+      async: true,
+      use: 'RootPageModel',
+      props: { routeId: String(routeId) },
+    });
+
+    // Simulate legacy Rename Path updating desktopRoutes.schemaUid without moving RouteModel in flowModels.
+    await routes.update({ filterByTk: routeId, values: { schemaUid: renamedRouteUid } });
+    expect(await flowModels.model.findByPk(renamedRouteUid)).toBeNull();
+    expect(await flowModels.model.findByPk(oldRouteUid)).not.toBeNull();
+
+    const emptyRoute = await routes.create({
+      values: {
+        type: 'flowPage',
+        title: 'Never persisted RootPageModel',
+        schemaUid: unvisitedEmptyUid,
+        uiLayouts: ['admin-layout-model'],
+      },
+    });
+    expect(emptyRoute.get('schemaUid')).toBe(unvisitedEmptyUid);
+    await flowModels.remove(unvisitedEmptyUid);
+
+    await routes.create({
+      values: {
+        type: 'flowPage',
+        title: 'Non-desktop route that startup scan must skip',
+        schemaUid: nonDesktopSkipUid,
+      },
+    });
+    await flowModels.remove(nonDesktopSkipUid);
+
+    const repairedCount = await repairAllLegacyRouteContents(app.db);
+    expect(repairedCount).toBeGreaterThanOrEqual(2);
+
+    expect(await flowModels.model.findByPk(oldRouteUid)).toBeNull();
+    expect(await flowModels.findModelNodeSnapshotById(preRenamePageUid)).toMatchObject({
+      uid: preRenamePageUid,
+      parentId: renamedRouteUid,
+      subKey: 'page',
+      async: true,
+    });
+    expect(
+      await flowModels.ensureRouteContent({
+        parentId: renamedRouteUid,
+        subKey: 'page',
+        use: 'RootPageModel',
+        uid: 'must-not-replace-reclaimed-page',
+      }),
+    ).toBe(preRenamePageUid);
+    expect(
+      await flowModels.ensureRouteContent({
+        parentId: unvisitedEmptyUid,
+        subKey: 'page',
+        use: 'RootPageModel',
+        uid: 'first-edit-after-startup-repair',
+      }),
+    ).toBe('first-edit-after-startup-repair');
+    expect(await flowModels.model.findByPk(nonDesktopSkipUid)).toBeNull();
   }, 300000);
 
   it('does not allow a path alias to collide with its own numeric route id', async () => {

@@ -322,4 +322,37 @@ describe('V2 route identity and friendly URL protection', () => {
       },
     ]);
   });
+
+  it('registers and cleans up startup route repair hooks safely across lifecycle transitions', async () => {
+    const on = vi.fn();
+    const off = vi.fn();
+    const warn = vi.fn();
+    const app = {
+      acl: { registerSnippet: vi.fn() },
+      resourceManager: {
+        registerActionHandler: vi.fn(),
+        registerPreActionHandler: vi.fn(),
+        use: vi.fn(),
+      },
+      on,
+      off,
+      log: { warn },
+      db: {
+        hasCollection: () => {
+          throw new Error('Simulated startup db error');
+        },
+      },
+    };
+    const plugin = new Plugin(app as unknown as Application, { name: 'router-configuration' });
+
+    await plugin.load();
+    expect(off).toHaveBeenCalledTimes(1);
+    expect(on).toHaveBeenCalledWith('afterStart', expect.any(Function));
+
+    await expect(plugin.upgrade()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledOnce();
+
+    await plugin.afterDisable();
+    expect(off).toHaveBeenCalledTimes(2);
+  });
 });
