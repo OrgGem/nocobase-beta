@@ -1,0 +1,42 @@
+{
+  "name": "plugin-workflow-portainer",
+  "displayName": "Portainer Workflows",
+  "displayName.zh-CN": "Portainer 工作流",
+  "displayName.vi-VN": "Luồng công việc Portainer",
+  "description": "Workflow nodes and connection management for running, redeploying, and controlling Portainer stacks across environments.",
+  "description.zh-CN": "用于在多环境中运行、重新部署和控制 Portainer Stack 的工作流节点与连接管理插件。",
+  "description.vi-VN": "Cung cấp các node Workflow và quản lý kết nối để chạy, redeploy và kiểm soát Portainer Stack đa môi trường.",
+  "version": "0.1.1",
+  "license": "Apache-2.0",
+  "main": "dist/server/index.js",
+  "keywords": [
+    "NocoBase",
+    "Workflow",
+    "Portainer",
+    "Docker",
+    "CI/CD",
+    "GitOps"
+  ],
+  "files": [
+    "dist",
+    "src",
+    "client.js",
+    "client-v2.js",
+    "server.js"
+  ],
+  "nocobase": {
+    "supportedVersions": [
+      "2.x"
+    ],
+    "editionLevel": 0
+  },
+  "peerDependencies": {
+    "@nocobase/actions": "2.x",
+    "@nocobase/client": "2.x",
+    "@nocobase/client-v2": "2.x",
+    "@nocobase/database": "2.x",
+    "@nocobase/flow-engine": "2.x",
+    "@nocobase/server": "2.x",
+    "@nocobase/plugin-workflow": "2.x"
+  }
+}
