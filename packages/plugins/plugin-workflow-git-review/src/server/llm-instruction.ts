@@ -16,6 +16,7 @@ import {
 } from '@nocobase/plugin-workflow';
 import { isRecord, type ID } from './contracts';
 import { withOwnedRequest, type LockedRequest } from './ownership';
+import { reviewTestContext } from './manual-test';
 
 type AIPlugin = { aiManager: { llmProviders: Map<string, LLMProviderMeta> } };
 type BackgroundHandle = ReturnType<Processor['createBackgroundAbortHandle']>;
@@ -180,9 +181,9 @@ export function formatProviderError(error: unknown, provider?: LLMProvider): str
   return redactErrorText(prefixed);
 }
 
-export function parseTextMessages(value: unknown): BaseMessage[] {
+export function parseTextMessages(value: unknown, schema?: unknown): BaseMessage[] {
   if (!Array.isArray(value) || !value.length) throw new Error('Review LLM messages are required');
-  return value.map((message: unknown) => {
+  const messages = value.map((message: unknown) => {
     if (!isRecord(message)) throw new Error('Invalid review LLM message');
     if (message.role === 'system' || message.role === 'assistant') {
       if (typeof message.message !== 'string') throw new Error('Invalid review LLM message');
@@ -198,6 +199,16 @@ export function parseTextMessages(value: unknown): BaseMessage[] {
     const text = parts.filter((part) => part.length > 0).join('\n\n');
     return new HumanMessage(text);
   });
+  if (isRecord(schema)) {
+    // Some compatible providers return free-form JSON even when the request includes response_format.
+    const contract = `Return one JSON object matching this JSON Schema. Include all required fields and use the exact property names and enum values.\n${JSON.stringify(
+      unwrapSchema(schema),
+    )}`;
+    const first = messages[0];
+    if (first instanceof SystemMessage) messages[0] = new SystemMessage(`${first.content}\n\n${contract}`);
+    else messages.unshift(new SystemMessage(contract));
+  }
+  return messages;
 }
 
 function reviewRequestId(processor: Processor): ID {
@@ -216,9 +227,8 @@ function reviewRequestId(processor: Processor): ID {
 /** A review-only LLM node that persists its pending job before any provider call begins. */
 export class GitReviewLLMInstruction extends Instruction {
   async run(node: FlowNodeModel, input: JobModel | { result: unknown } | undefined, processor: Processor) {
-    const requestId = reviewRequestId(processor);
-    const claimed = await this.claimNode(requestId, processor.execution.id, node.id);
-    if (!claimed) {
+    const requestId = reviewTestContext(processor.execution) ? null : reviewRequestId(processor);
+    if (requestId !== null && !(await this.claimNode(requestId, processor.execution.id, node.id))) {
       await processor.exit();
       return;
     }
@@ -227,7 +237,7 @@ export class GitReviewLLMInstruction extends Instruction {
       throw new Error('Review LLM service and structured output are required');
     }
     const { llmService, messages, structuredOutput, ...modelOptions } = config;
-    const parsedMessages = parseTextMessages(messages);
+    const parsedMessages = parseTextMessages(messages, structuredOutput.schema);
     const service = await this.workflow.db.getRepository('llmServices').findOne({ filter: { name: llmService } });
     const ai = this.workflow.app.pm.get('ai') as unknown as AIPlugin | undefined;
     const providerMeta = service && ai?.aiManager?.llmProviders.get(service.provider);
@@ -261,45 +271,43 @@ export class GitReviewLLMInstruction extends Instruction {
       throw error;
     }
 
+    const invoke = async (): Promise<ProviderOutcome> => {
+      try {
+        const response = await provider.invoke(
+          {
+            messages: parsedMessages as unknown as Parameters<LLMProvider['invoke']>[0]['messages'],
+            structuredOutput: structuredOutput as Parameters<LLMProvider['invoke']>[0]['structuredOutput'],
+          },
+          { signal: abort.signal },
+        );
+        return { ok: true, response };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    };
     const finish = async () => {
       try {
         const lock = await this.workflow.app.lockManager.tryAcquire(
           getExecutionLockKey(processor.execution.id),
           60_000,
         );
-        const started = await lock.runExclusive(
-          () =>
-            this.withOwnedRequest(requestId, processor.execution.id, async (request, transaction) => {
-              abort.throwIfAborted();
-              const claims = request.get('llmClaims');
-              if (!isRecord(claims) || claims[String(node.id)] !== String(processor.execution.id)) return null;
-              const pending = await this.workflow.db.getCollection('jobs').model.findOne({
-                where: { id: job.id, executionId: processor.execution.id, nodeId: node.id, status: JOB_STATUS.PENDING },
-                transaction,
-                lock: transaction.LOCK.UPDATE,
-              });
-              if (!pending) return null;
-              abort.throwIfAborted();
-              try {
-                const outcome: Promise<ProviderOutcome> = provider
-                  .invoke(
-                    {
-                      messages: parsedMessages as unknown as Parameters<LLMProvider['invoke']>[0]['messages'],
-                      structuredOutput: structuredOutput as Parameters<LLMProvider['invoke']>[0]['structuredOutput'],
-                    },
-                    { signal: abort.signal },
-                  )
-                  .then(
-                    (response) => ({ ok: true, response }),
-                    (error: unknown) => ({ ok: false, error }),
-                  );
-                return { outcome };
-              } catch (error) {
-                return { outcome: Promise.resolve<ProviderOutcome>({ ok: false, error }) };
-              }
-            }),
-          60_000,
-        );
+        const started = await lock.runExclusive(async () => {
+          abort.throwIfAborted();
+          if (requestId === null) return (await processor.findPendingJob(job.id)) ? { outcome: invoke() } : null;
+          return this.withOwnedRequest(requestId, processor.execution.id, async (request, transaction) => {
+            abort.throwIfAborted();
+            const claims = request.get('llmClaims');
+            if (!isRecord(claims) || claims[String(node.id)] !== String(processor.execution.id)) return null;
+            const pending = await this.workflow.db.getCollection('jobs').model.findOne({
+              where: { id: job.id, executionId: processor.execution.id, nodeId: node.id, status: JOB_STATUS.PENDING },
+              transaction,
+              lock: transaction.LOCK.UPDATE,
+            });
+            if (!pending) return null;
+            abort.throwIfAborted();
+            return { outcome: invoke() };
+          });
+        }, 60_000);
         if (!started) return;
         let status: typeof JOB_STATUS.RESOLVED | typeof JOB_STATUS.ERROR;
         let result: unknown;
@@ -383,7 +391,7 @@ export class GitReviewLLMInstruction extends Instruction {
   }
 
   private async settle(
-    requestId: ID,
+    requestId: ID | null,
     executionId: ID,
     nodeId: ID,
     jobId: ID,
@@ -394,7 +402,11 @@ export class GitReviewLLMInstruction extends Instruction {
     const lock = await this.workflow.app.lockManager.tryAcquire(getExecutionLockKey(executionId), 60_000);
     await lock.runExclusive(async () => {
       abort.throwIfAborted();
-      if (!(await this.isCurrentPendingRequest(requestId, executionId, nodeId, jobId))) return;
+      if (requestId !== null && !(await this.isCurrentPendingRequest(requestId, executionId, nodeId, jobId))) return;
+      if (requestId === null) {
+        const execution = await this.workflow.db.getRepository('executions').findOne({ filterByTk: executionId });
+        if (!execution || execution.status !== EXECUTION_STATUS.STARTED || !reviewTestContext(execution)) return;
+      }
       abort.throwIfAborted();
       const [updated] = await this.workflow.db
         .getModel('jobs')
@@ -475,6 +487,7 @@ export class GitReviewLLMInstruction extends Instruction {
   }
 
   async resume(node: FlowNodeModel, job: IJob, processor: Processor): Promise<IJob | void> {
+    if (reviewTestContext(processor.execution)) return job;
     const id = job.id;
     if (
       (typeof id !== 'number' && typeof id !== 'string') ||

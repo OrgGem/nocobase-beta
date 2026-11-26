@@ -56,10 +56,19 @@ export async function guardReviewWorkflows(ctx: Context, next: Next) {
       if (action === 'update' && isRecord(values) && targetsReviewCollection(values.config)) reject(ctx);
       return next();
     }
-    if (managed.length !== 1 || workflows.length !== 1 || action === 'destroy' || action === 'execute') reject(ctx);
+    if (managed.length !== 1 || workflows.length !== 1 || action === 'destroy') reject(ctx);
     const workflow = managed[0];
+    if (action === 'execute') {
+      if (
+        String(ctx.action.params.filterByTk) !== String(workflow.id) ||
+        !isRecord(values) ||
+        typeof values.reviewTestDiff !== 'string'
+      )
+        reject(ctx);
+      return withGraphLock(ctx, workflow.id, next);
+    }
     if (action === 'revision') {
-      if (isRecord(values) && values.enabled) reject(ctx);
+      if (isRecord(values) && (values.enabled || values.current)) reject(ctx);
       return withGraphLock(ctx, workflow.id, async () => {
         await next();
         const created = ctx.body as { id?: ID; options?: unknown; enabled?: boolean } | undefined;
@@ -68,13 +77,14 @@ export async function guardReviewWorkflows(ctx: Context, next: Next) {
         const marker = isRecord(options.gitReview) ? options.gitReview : {};
         await ctx.db.getRepository('workflows').update({
           filterByTk: created.id,
-          values: { options: { ...options, gitReview: { ...marker, frozen: false, draft: false } } },
+          values: { options: { ...options, gitReview: { ...marker, frozen: false, draft: true } } },
         });
       });
     }
     return withGraphLock(ctx, workflow.id, async () => {
       await workflow.reload();
       if (!isRecord(values)) return next();
+      if (values.current && !workflow.current && values.enabled !== true) reject(ctx);
       const originalOptions: unknown = workflow.options;
       const oldOptions = isRecord(originalOptions) ? originalOptions : {};
       const marker = isRecord(oldOptions.gitReview) ? oldOptions.gitReview : {};

@@ -5,10 +5,12 @@ import { Plugin } from '@nocobase/client';
 import { registerInstructions, type ReviewWorkflowClient } from './instructions';
 import { reviewApprovalTaskType, type V1TaskTypeOptions } from './Approvals';
 import { reviewApprovalCollection, reviewRequestCollection } from '../common/review-request-collection';
+import { installReviewTestFieldset } from '../client-v2/ReviewTestFieldset';
 
 const Settings = React.lazy(() => import('../client-v2/Settings'));
 
 type V1WorkflowClient = ReviewWorkflowClient & {
+  triggers?: { get(key: string): Parameters<typeof installReviewTestFieldset>[0] };
   registerTaskType?: (key: string, option: V1TaskTypeOptions) => void;
 };
 
@@ -28,6 +30,7 @@ export default class PluginWorkflowGitReviewClient extends Plugin {
 
     const workflow = this.app.pm.get<V1WorkflowClient>('workflow');
     if (workflow) {
+      installReviewTestFieldset(workflow.triggers?.get('collection'));
       registerInstructions(workflow);
       workflow.registerTaskType?.('git-review-approval', reviewApprovalTaskType);
     }

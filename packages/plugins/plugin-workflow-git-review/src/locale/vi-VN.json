@@ -1,4 +1,10 @@
 {
+  "Test diff": "Diff thử nghiệm",
+  "Review test description": "Mô hình đã cấu hình sẽ review diff này. Kết quả được lưu trong lịch sử thực thi. Lần thử bỏ qua phê duyệt và đăng lên MR.",
+  "Invalid review test diff": "Nhập diff dài tối đa 100.000 ký tự.",
+  "Invalid review test": "Không thể chạy thử revision này.",
+  "Revision saved as draft": "Đã lưu revision nháp. Kiểm tra cảnh báo cấu hình trước khi kích hoạt.",
+  "Open draft revision": "Mở revision nháp",
   "Git Review Workflows": "Luồng đánh giá Git",
   "Git review requests": "Yêu cầu đánh giá Git",
   "Inbox ID": "ID hộp nhận",

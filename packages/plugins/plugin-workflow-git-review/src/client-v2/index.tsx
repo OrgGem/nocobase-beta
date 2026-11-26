@@ -5,17 +5,20 @@ import type { Instruction, TaskTypeOptions } from '@nocobase/plugin-workflow/cli
 import { NativeManualInstruction, registerInstructions, type ReviewWorkflowClient } from './instructions';
 import { reviewApprovalTaskType } from './Approvals';
 import { reviewRequestCollection } from '../common/review-request-collection';
+import { installReviewTestFieldset } from './ReviewTestFieldset';
 
 export default class PluginWorkflowGitReviewClientV2 extends Plugin {
   async load() {
     this.app.addProvider(ExtendCollectionsProvider, { collections: [reviewRequestCollection] });
     const workflow = this.app.pm.get<
       ReviewWorkflowClient & {
+        getTriggerOptions?(type: string): Parameters<typeof installReviewTestFieldset>[0];
         getInstruction(type: string): Instruction | undefined;
         registerTaskType(type: string, option: TaskTypeOptions): void;
       }
     >('workflow');
     if (workflow) {
+      installReviewTestFieldset(workflow.getTriggerOptions?.('collection'));
       registerInstructions(workflow);
       if (!workflow.getInstruction('manual')) workflow.registerInstruction('manual', NativeManualInstruction);
       workflow.registerTaskType('git-review-approval', reviewApprovalTaskType);

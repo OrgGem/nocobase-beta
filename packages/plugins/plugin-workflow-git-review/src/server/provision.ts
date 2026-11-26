@@ -17,6 +17,7 @@ type AIPlugin = {
 export type SetupStatus = {
   flowId: ID;
   workflowId: ID | null;
+  draftWorkflowId?: ID;
   workflowKey: string | null;
   enabled: boolean;
   blockers: string[];
@@ -171,22 +172,44 @@ function optionsFor(workflow: WorkflowModel | null): Record<string, unknown> {
   return isRecord(options) ? options : {};
 }
 
+// Older releases bound a blocked draft even when a frozen revision of the same flow was still current.
+export async function restoreActiveBinding(app: Application, flowId: ID) {
+  await app.db.sequelize.transaction(async (transaction) => {
+    const flow = await app.db
+      .getRepository('gitReviewFlows')
+      .findOne({ filterByTk: flowId, transaction, lock: transaction.LOCK.UPDATE });
+    if (!flow?.workflowId || !flow.workflowKey) return;
+    const workflows = app.db.getRepository('workflows');
+    const bound = await workflows.findOne({ filterByTk: flow.workflowId, transaction });
+    if (bound?.key !== flow.workflowKey || bound.enabled || bound.options?.gitReview?.draft !== true) return;
+    const current = await workflows.findOne({
+      filter: { key: flow.workflowKey, enabled: true, current: true },
+      transaction,
+    });
+    const marker = current?.options?.gitReview;
+    if (current && marker?.frozen === true && marker.draft === false && String(marker.flowId) === String(flow.id)) {
+      await assertSafeWorkflow(app, current.id, flow.postMode, true, transaction);
+      await flow.update({ workflowId: current.id }, { transaction });
+    }
+  });
+}
+
 export async function getStatus(app: Application, flowId: ID): Promise<SetupStatus> {
   const flow = await app.db.getRepository('gitReviewFlows').findOne({ filterByTk: flowId });
   if (!flow) throw new Error('Review flow not found');
   const bound = flow.workflowId
     ? ((await app.db.getRepository('workflows').findOne({ filterByTk: flow.workflowId })) as WorkflowModel | null)
     : null;
-  const boundMarker = optionsFor(bound).gitReview;
-  const workflow =
-    isRecord(boundMarker) && boundMarker.draft === true
-      ? bound
-      : flow.workflowKey
-        ? ((await app.db
-            .getRepository('workflows')
-            .findOne({ filter: { key: flow.workflowKey, current: true } })) as WorkflowModel | null)
-        : bound;
-  const marker = optionsFor(workflow).gitReview;
+  const revisions = flow.workflowKey
+    ? ((await app.db
+        .getRepository('workflows')
+        .find({ filter: { key: flow.workflowKey }, sort: ['-id'] })) as WorkflowModel[])
+    : [];
+  const active = revisions.find((item) => item.current && item.enabled);
+  const latest = revisions[0];
+  const workflow = active ?? latest ?? bound;
+  const draft = latest?.options?.gitReview?.draft === true ? latest : null;
+  const marker = optionsFor(draft ?? workflow).gitReview;
   const saved = isRecord(marker) ? marker : {};
   const input: SetupInput = {
     flowId,
@@ -205,6 +228,7 @@ export async function getStatus(app: Application, flowId: ID): Promise<SetupStat
   return {
     flowId,
     workflowId: workflow?.id ?? null,
+    ...(draft && draft.id !== workflow?.id ? { draftWorkflowId: draft.id } : {}),
     workflowKey: workflow?.key ?? null,
     enabled: Boolean(workflow?.enabled),
     blockers,
@@ -222,7 +246,10 @@ async function provisionLocked(
   const initial = await flows.findOne({ filterByTk: input.flowId });
   if (!initial) throw new Error('Review flow not found');
   authorize?.(initial.repositoryId);
-  if (initial.workflowId && !input.createRevision) return getStatus(app, input.flowId);
+  if (!input.createRevision && (initial.workflowId || initial.workflowKey)) {
+    const existing = await getStatus(app, input.flowId);
+    if (existing.workflowId) return existing;
+  }
   const { blockers, bindings } = await bindingsFor(app, initial.toJSON(), input);
   if (blockers.includes('unsupported_dependencies')) return getStatus(app, input.flowId);
 
@@ -270,7 +297,7 @@ async function provisionLocked(
       if (previous) await previous.update({ downstreamId: next.id }, { transaction });
       previous = next;
     }
-    await flow.update({ workflowId: workflow.id, workflowKey: workflow.key }, { transaction });
+    if (flow.workflowKey !== workflow.key) await flow.update({ workflowKey: workflow.key }, { transaction });
     return workflow;
   });
 
@@ -279,7 +306,7 @@ async function provisionLocked(
     const checked = currentFlow ? await bindingsFor(app, currentFlow.toJSON(), input) : null;
     if (
       currentFlow?.enabled !== false &&
-      String(currentFlow?.workflowId) === String(workflow.id) &&
+      currentFlow?.workflowKey === workflow.key &&
       checked &&
       !checked.blockers.length &&
       JSON.stringify(checked.bindings) === JSON.stringify(bindings)
@@ -287,7 +314,13 @@ async function provisionLocked(
       await assertSafeWorkflow(app, workflow.id, bindings.postMode, false);
       await app.db.sequelize.transaction(async (transaction) => {
         const current = await flows.findOne({ filterByTk: input.flowId, transaction, lock: transaction.LOCK.UPDATE });
-        if (!current || String(current.workflowId) !== String(workflow.id) || current.enabled === false) return;
+        if (
+          !current ||
+          current.workflowKey !== workflow.key ||
+          String(current.workflowId) !== String(initial.workflowId) ||
+          current.enabled === false
+        )
+          return;
         authorize?.(current.repositoryId);
         const options = optionsFor(workflow);
         const marker = isRecord(options.gitReview) ? options.gitReview : {};

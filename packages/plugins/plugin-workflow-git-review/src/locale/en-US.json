@@ -1,4 +1,10 @@
 {
+  "Test diff": "Test diff",
+  "Review test description": "The configured model reviews this diff. Results are saved in the execution history. Approval and MR publication are skipped.",
+  "Invalid review test diff": "Enter a diff of up to 100,000 characters.",
+  "Invalid review test": "This revision could not be tested.",
+  "Revision saved as draft": "Revision saved as a draft. Check the setup warnings before activation.",
+  "Open draft revision": "Open draft revision",
   "Git Review Workflows": "Git Review Workflows",
   "Git review requests": "Git review requests",
   "Inbox ID": "Inbox ID",

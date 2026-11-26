@@ -1,4 +1,10 @@
 {
+  "Test diff": "测试差异",
+  "Review test description": "已配置的模型将审查此差异。结果保存在执行历史中，并跳过审批和发布到合并请求。",
+  "Invalid review test diff": "请输入不超过 100,000 个字符的差异。",
+  "Invalid review test": "无法测试此版本。",
+  "Revision saved as draft": "版本已保存为草稿。启用前请检查配置警告。",
+  "Open draft revision": "打开草稿版本",
   "Git Review Workflows": "Git 审查工作流",
   "Git review requests": "Git 审查请求",
   "Inbox ID": "收件箱 ID",

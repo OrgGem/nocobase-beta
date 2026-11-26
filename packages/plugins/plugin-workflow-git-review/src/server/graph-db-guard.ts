@@ -12,7 +12,7 @@ export function graphDatabaseGuards(app: Application) {
     const options: unknown = model.get('options');
     if (!isRecord(options) || !isRecord(options.gitReview)) return;
     if (model.get('enabled')) throw new Error('A review revision must be created disabled');
-    model.set('options', { ...options, gitReview: { ...options.gitReview, frozen: false } });
+    model.set('options', { ...options, gitReview: { ...options.gitReview, draft: true, frozen: false } });
   };
 
   const beforeNodeMutation = async (model: Model, options: HookOptions) => {
@@ -53,10 +53,13 @@ export function graphDatabaseGuards(app: Application) {
     const flow = await app.db.getRepository('gitReviewFlows').findOne({
       filter: { workflowKey: model.get('key') },
       transaction: options.transaction,
+      lock: options.transaction.LOCK.UPDATE,
     });
-    if (!flow) throw new Error('Review flow is unavailable');
+    if (!flow || String(marker.flowId) !== String(flow.id)) throw new Error('Review flow is unavailable');
     const postMode: PostMode = flow.postMode === 'auto' || flow.postMode === 'disabled' ? flow.postMode : 'manual';
     await assertSafeWorkflow(app, model.get('id') as ID, postMode, false, options.transaction);
+    // Workflow also switches the current revision in this transaction. Both pointers must commit together.
+    await flow.update({ workflowId: model.get('id') }, { transaction: options.transaction });
     model.set('options', {
       ...(current as Record<string, unknown>),
       gitReview: { ...marker, draft: false, frozen: true },

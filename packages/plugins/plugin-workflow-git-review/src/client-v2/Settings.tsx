@@ -11,6 +11,7 @@ type FlowStatus = {
   flowId: ID;
   name: string;
   workflowId: ID | null;
+  draftWorkflowId?: ID;
   workflowKey: string | null;
   enabled: boolean;
   blockers: string[];
@@ -66,25 +67,32 @@ function FlowCard({ flow, refresh }: { flow: FlowStatus; refresh: () => Promise<
     }
     setSaving(true);
     try {
-      await app.apiClient.request({
+      const response = await app.apiClient.request({
         url: `workflowGitReview:${flow.workflowId ? 'repair' : 'setup'}`,
         method: 'post',
         data: { flowId: flow.flowId, template, approverIds: ids },
       });
       await refresh();
-      message.success(t('Workflow setup updated'));
+      const result = response.data?.data;
+      if (result?.draftWorkflowId || !result?.enabled) message.warning(t('Revision saved as draft'));
+      else message.success(t('Workflow setup updated'));
     } catch (_error) {
       message.error(t('Could not set up the review workflow'));
     } finally {
       setSaving(false);
     }
   };
-  const path =
-    flow.workflowId == null
+  const workflowPath = (id?: ID | null) =>
+    id == null
       ? null
       : getRouteRuntimeVersion() === 'modern'
-        ? getWorkflowCanvasPath(flow.workflowId)
-        : `/admin/settings/workflow/workflows/${flow.workflowId}`;
+        ? getWorkflowCanvasPath(id)
+        : `/admin/settings/workflow/workflows/${id}`;
+  const base = (
+    getRouteRuntimeVersion() === 'modern'
+      ? getV2EffectiveBasePath(app)
+      : stripModernClientPrefix(window.__nocobase_public_path__ || app.getPublicPath())
+  ).replace(/\/+$/, '');
 
   return (
     <Card
@@ -126,15 +134,9 @@ function FlowCard({ flow, refresh }: { flow: FlowStatus; refresh: () => Promise<
               <Button loading={saving}>{t(flow.workflowId ? 'Create revision' : 'Set up workflow')}</Button>
             </Popconfirm>
           )}
-          {path && (
-            <Button
-              href={`${(getRouteRuntimeVersion() === 'modern'
-                ? getV2EffectiveBasePath(app)
-                : stripModernClientPrefix(window.__nocobase_public_path__ || app.getPublicPath())
-              ).replace(/\/+$/, '')}${path}`}
-            >
-              {t('Open workflow')}
-            </Button>
+          {flow.workflowId != null && <Button href={base + workflowPath(flow.workflowId)}>{t('Open workflow')}</Button>}
+          {flow.draftWorkflowId != null && (
+            <Button href={base + workflowPath(flow.draftWorkflowId)}>{t('Open draft revision')}</Button>
           )}
         </Space>
       </Space>

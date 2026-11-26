@@ -5,7 +5,7 @@ import { Plugin } from '@nocobase/server';
 import WorkflowPlugin, { type ExecutionModel } from '@nocobase/plugin-workflow';
 import { isRecord, reviewService, type ID } from './contracts';
 import { ReviewContextInstruction, ReviewPublishInstruction, ReviewResultInstruction } from './instructions';
-import { getStatus, provision, type SetupInput } from './provision';
+import { getStatus, provision, restoreActiveBinding, type SetupInput } from './provision';
 import { reconcileRequests } from './reconcile';
 import { assertEligibleApprover, assignedReview, listApprovals } from './approvals';
 import { guardReviewWorkflows } from './guards';
@@ -15,6 +15,7 @@ import type { Transaction } from '@nocobase/database';
 import { graphDatabaseGuards } from './graph-db-guard';
 import { GitReviewLLMInstruction } from './llm-instruction';
 import { guardReviewReads } from './read-guard';
+import { executeReviewTest } from './manual-test';
 
 const NAMESPACE = 'plugin-workflow-git-review';
 const MUTATIONS = new Set(['setup', 'repair']);
@@ -126,7 +127,7 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
     await verifyManualDecision(this.app, workflowId, executionId, fingerprint, 'approve');
   }
 
-  private async provisionExisting() {
+  private async provisionExisting(restoreBindings = false) {
     if (!this.db.getCollection('gitReviewFlows') || !this.db.getCollection('workflows')) return;
     const gitManager = (this.app.pm.get('plugin-git-manager') || this.app.pm.get('git-manager')) as unknown as
       | { ensureReviewSchema?: () => Promise<void> }
@@ -134,9 +135,9 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
     if (gitManager?.ensureReviewSchema) await gitManager.ensureReviewSchema();
     const flows = await this.db.getRepository('gitReviewFlows').find({ sort: ['id'] });
     for (const flow of flows) {
-      if (flow.workflowId) continue;
       try {
-        await provision(this.app, { flowId: flow.id });
+        if (!flow.workflowId) await provision(this.app, { flowId: flow.id });
+        else if (restoreBindings) await restoreActiveBinding(this.app, flow.id);
       } catch (error) {
         this.log.warn('Unable to provision Git review workflow', { flowId: flow.id, error });
       }
@@ -272,13 +273,14 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
           const results = [];
           for (const flow of flows) {
             if (!this.canAccessFlow(ctx as unknown as Context, flow.repositoryId, 'status')) continue;
+            const status = await getStatus(this.app, flow.id);
             results.push({
               name: flow.name,
-              ...(await getStatus(this.app, flow.id)),
+              ...status,
               canWrite: this.canAccessFlow(
                 ctx as unknown as Context,
                 flow.repositoryId,
-                flow.workflowId ? 'repair' : 'setup',
+                status.workflowId ? 'repair' : 'setup',
               ),
             });
           }
@@ -314,6 +316,11 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
     });
     this.app.resourceManager.use((ctx, next) => guardReviewReads(ctx as unknown as Context, next));
     this.app.resourceManager.use((ctx, next) => guardReviewWorkflows(ctx as unknown as Context, next));
+    this.app.resourceManager.registerPreActionHandler('workflows:execute', (ctx, next) =>
+      executeReviewTest(ctx as unknown as Context, next, (repoId) =>
+        this.canAccessFlow(ctx as unknown as Context, repoId, 'repair'),
+      ),
+    );
     this.app.resourceManager.use(async (ctx, next) => {
       if (ctx.action?.resourceName === 'workflowGitReview') {
         const allowed = MUTATIONS.has(ctx.action.actionName) ? ['POST'] : ['GET', 'HEAD'];
@@ -369,7 +376,7 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
   }
 
   async upgrade() {
-    await this.provisionExisting();
+    await this.provisionExisting(true);
   }
 
   async afterEnable() {

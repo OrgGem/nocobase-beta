@@ -21,6 +21,19 @@ function createStubApp(): Application {
   } as unknown as Application;
 }
 
+it('includes the configured result schema in the model prompt for providers that return free-form JSON', () => {
+  const input = [{ role: 'user', content: [{ type: 'text', content: 'diff' }] }];
+  const contract = JSON.stringify(REVIEW_SCHEMA);
+  const messages = parseTextMessages(input, { name: 'review', parameters: REVIEW_SCHEMA });
+  expect(messages[0]).toBeInstanceOf(SystemMessage);
+  expect(messages[0].content).toContain(contract);
+  expect(messages[1].content).toBe('diff');
+  const withRole = parseTextMessages([{ role: 'system', message: 'Review code' }, ...input], REVIEW_SCHEMA);
+  expect(withRole).toHaveLength(2);
+  expect(withRole[0].content).toContain('Review code');
+  expect(withRole[0].content).toContain(contract);
+});
+
 class StubProvider extends LLMProvider {
   constructor(model: unknown, modelOptions: Record<string, unknown> = { model: 'test-model' }) {
     super({ app: createStubApp(), serviceOptions: {} });

@@ -2,6 +2,7 @@
 
 import type { Context, Next } from '@nocobase/actions';
 import { hasRepositoryAccess } from 'plugin-git-manager/server';
+import { reviewTestContext } from './manual-test';
 import { isRecord, type ID } from './contracts';
 import {
   findReviewFlowBinding,
@@ -97,6 +98,8 @@ export async function guardReviewReads(ctx: Context, next: Next) {
         bound === 'found',
     );
     if (!managed) return 'unmanaged';
+    const test = execution && reviewTestContext(execution);
+    if (!request && test && String(ctx.state?.currentUser?.id) === String(test.userId)) return 'allowed';
     let result: Policy = 'denied';
     if (
       ctx.state?.currentUser?.id != null &&

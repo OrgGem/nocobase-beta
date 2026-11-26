@@ -7,13 +7,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import type { LLMProviderMeta } from '@nocobase/plugin-ai';
 import { LLMProvider } from '@nocobase/plugin-ai';
-import { EXECUTION_STATUS, JOB_STATUS } from '@nocobase/plugin-workflow';
+import WorkflowPlugin, { EXECUTION_STATUS, JOB_STATUS } from '@nocobase/plugin-workflow';
 import { getApp } from '@nocobase/plugin-workflow-test';
 import LockManager from '@nocobase/lock-manager';
 import type { MockServer } from '@nocobase/test';
 import PluginGitManagerServer from '../../../../plugin-git-manager/src/server/plugin';
 import { resolveBackgroundReviewRoles } from '../../../../plugin-git-manager/src/server/actions/review';
-import { provision, supportsRuntime } from '../provision';
+import { provision, restoreActiveBinding, supportsRuntime } from '../provision';
 import PluginWorkflowGitReviewServer from '../plugin';
 import { reconcileRequests } from '../reconcile';
 import { buildTemplate } from '../templates';
@@ -1568,6 +1568,100 @@ describe('Git review native Workflow execution', () => {
     } finally {
       releaseLockWait?.();
       tryAcquireSpy.mockRestore();
+    }
+  }, 120_000);
+
+  it('keeps the active Full binding while testing and activating a new revision', async () => {
+    const setup = await provision(app, {
+      flowId: full.flowId,
+      template: 'full',
+      approverIds: [actorId],
+      createRevision: true,
+    });
+    const flows = app.db.getRepository('gitReviewFlows');
+    const workflows = app.db.getRepository('workflows');
+    const requests = app.db.getRepository('gitReviewRequests');
+    const tasks = app.db.getRepository('workflowManualTasks');
+    const employee = await app.db.getRepository('aiEmployees').findOne({ filter: { username: 'native-review-test' } });
+    const original = employee.about;
+    await employee.update({ about: 'Language {{$nLang}}' });
+    try {
+      const blocked = await provision(app, {
+        flowId: full.flowId,
+        template: 'quick',
+        approverIds: [actorId],
+        createRevision: true,
+      });
+      expect(blocked.blockers).toContain('employee_prompt_dynamic');
+      expect(blocked.workflowId).toEqual(setup.workflowId);
+      expect(blocked.draftWorkflowId).toBeTruthy();
+      const bound = async () => (await flows.findOne({ filterByTk: full.flowId })).workflowId;
+      expect(await bound()).toEqual(setup.workflowId);
+      const draft = await workflows.findOne({ filterByTk: blocked.draftWorkflowId });
+      expect(draft.enabled).toBe(false);
+      await flows.update({ filterByTk: full.flowId, values: { workflowId: draft.id } });
+      await restoreActiveBinding(app, full.flowId);
+      expect(await bound()).toEqual(setup.workflowId);
+      const actor = await app.db.getRepository('users').findOne({ filterByTk: actorId });
+      const agent = await app.agent().login(actor);
+      const execute = (values: Record<string, unknown>) =>
+        agent.resource('workflows').execute({ filterByTk: draft.id, autoRevision: 1, values });
+      expect((await execute({ data: { id: 1, workflowId: draft.id } })).status).toBe(403);
+      expect((await execute({ reviewTestDiff: ' ' })).status).toBe(400);
+      const before = await requests.count();
+      const diff = '--- a/test.txt\n+++ b/test.txt\n@@ -1 +1 @@\n-old\n+manual preview';
+      const role = 'preview-workflow-only';
+      const workflowRole = app.acl.define({ role });
+      workflowRole.grantAction('workflows:execute');
+      workflowRole.grantAction('executions:get');
+      const other = await app.db.getRepository('users').create({ values: { username: role, roles: [{ name: role }] } });
+      const reader = await app.agent().login(other, role);
+      expect(
+        (await reader.resource('workflows').execute({ filterByTk: draft.id, values: { reviewTestDiff: diff } })).status,
+      ).toBe(403);
+      const versions = await workflows.count({ filter: { key: draft.key } });
+      const trigger = vi.spyOn(app.pm.get(WorkflowPlugin), 'trigger').mockResolvedValueOnce(null);
+      try {
+        expect((await execute({ reviewTestDiff: diff })).status).toBe(400);
+        expect(await workflows.count({ filter: { key: draft.key } })).toBe(versions);
+        expect(await bound()).toEqual(setup.workflowId);
+      } finally {
+        trigger.mockRestore();
+      }
+      const response = await execute({ reviewTestDiff: diff });
+      expect(response.status).toBe(200);
+      const { execution, newVersionId } = response.body.data;
+      expect((await workflows.findOne({ filterByTk: newVersionId })).enabled).toBe(false);
+      const finished = await waitForValue(
+        () => app.db.getRepository('executions').findOne({ filterByTk: execution.id }),
+        (row) => row?.status !== EXECUTION_STATUS.STARTED,
+        'manual review test',
+      );
+      expect(finished.status).toBe(EXECUTION_STATUS.RESOLVED);
+      const jobs = await app.db.getRepository('jobs').find({ filter: { executionId: execution.id } });
+      expect(jobs.find((job) => job.nodeKey === 'gr_result')?.result.markdown).toContain('manual-test');
+      expect(jobs.find((job) => job.nodeKey === 'gr_publish')?.result.status).toBe('skipped');
+      expect(llmInvocations.filter((item) => item.sessionId?.startsWith(`workflow-${execution.id}-`))).toHaveLength(2);
+      expect(await tasks.count({ filter: { executionId: execution.id } })).toBe(0);
+      expect(await requests.count()).toBe(before);
+      expect((await agent.resource('executions').get({ filterByTk: execution.id })).status).toBe(200);
+      expect((await reader.resource('executions').get({ filterByTk: execution.id })).status).toBe(403);
+      expect(await bound()).toEqual(setup.workflowId);
+      await expect(
+        app.db.sequelize.transaction(async (transaction) => {
+          await draft.update({ enabled: true }, { transaction });
+          throw new Error('Roll back activation');
+        }),
+      ).rejects.toThrow('Roll back activation');
+      expect(await bound()).toEqual(setup.workflowId);
+      await draft.reload();
+      expect(draft.enabled).toBe(false);
+      await app.db.sequelize.transaction(async (transaction) => {
+        await draft.update({ enabled: true }, { transaction });
+      });
+      expect(await bound()).toEqual(draft.id);
+    } finally {
+      await employee.update({ about: original });
     }
   }, 120_000);
 });

@@ -6,6 +6,7 @@ import { isRecord, reviewService, type ID } from './contracts';
 import { parseReview, renderReview, validateFindingLocations } from './review-result';
 import { assertSafeWorkflow, assertSafeNodes, verifyManualDecision, type SafeNode } from './safe-graph';
 import { persistPublishCheckpoint, persistReviewCheckpoint } from './checkpoint';
+import { reviewTestContext } from './manual-test';
 
 function requestId(processor: Processor): ID {
   const context: unknown = processor.execution.context;
@@ -27,6 +28,11 @@ function errorJob(error: unknown) {
 export class ReviewContextInstruction extends Instruction {
   async run(_node: FlowNodeModel, _input: unknown, processor: Processor) {
     try {
+      const test = reviewTestContext(processor.execution);
+      if (test) {
+        assertSafeNodes(processor.nodes as unknown as SafeNode[], 'disabled');
+        return { status: JOB_STATUS.RESOLVED, result: test };
+      }
       const id = requestId(processor);
       const service = reviewService(this.workflow.app);
       if (!(await service.claim(id, processor.execution.id))) throw new Error('Review request is already owned');
@@ -70,10 +76,15 @@ export class ReviewContextInstruction extends Instruction {
 export class ReviewResultInstruction extends Instruction {
   async run(node: FlowNodeModel, input: unknown, processor: Processor) {
     try {
-      const id = requestId(processor);
+      const test = reviewTestContext(processor.execution);
       const service = reviewService(this.workflow.app);
-      const context = await service.prepareContext(id, processor.execution.id);
-      const nodes = await assertSafeWorkflow(this.workflow.app, processor.execution.workflowId, context.postMode);
+      const context = test ?? (await service.prepareContext(requestId(processor), processor.execution.id));
+      const nodes = await assertSafeWorkflow(
+        this.workflow.app,
+        processor.execution.workflowId,
+        context.postMode,
+        !test,
+      );
       assertSafeNodes(processor.nodes as unknown as SafeNode[], context.postMode);
       const value: unknown = processor.getParsedValue(node.config.value, node.id);
       const review = parseReview(value);
@@ -115,8 +126,11 @@ export class ReviewResultInstruction extends Instruction {
       if (!context.coverage.complete && !context.coverage.limitations.length)
         throw new Error('Source limitations are missing');
       const markdown = renderReview(review, context.headSha);
-      const fingerprint = await service.saveResult(id, processor.execution.id, markdown);
       const expected = createHash('sha256').update(markdown, 'utf8').digest('hex');
+      if (test) return { status: JOB_STATUS.RESOLVED, result: { markdown, fingerprint: expected } };
+      if (!('requestId' in context)) throw new Error('Review request context is missing');
+      const id = requestId(processor);
+      const fingerprint = await service.saveResult(id, processor.execution.id, markdown);
       if (fingerprint !== expected) throw new Error('Stored review fingerprint does not match the result');
       await service.markAISettled(id, processor.execution.id);
       const upstreamId =
@@ -156,6 +170,8 @@ export class ReviewResultInstruction extends Instruction {
 export class ReviewPublishInstruction extends Instruction {
   async run(node: FlowNodeModel, input: unknown, processor: Processor) {
     try {
+      if (reviewTestContext(processor.execution))
+        return { status: JOB_STATUS.RESOLVED, result: { status: 'skipped', reason: 'manual-test' } };
       const id = requestId(processor);
       const service = reviewService(this.workflow.app);
       const context = await service.prepareContext(id, processor.execution.id);
