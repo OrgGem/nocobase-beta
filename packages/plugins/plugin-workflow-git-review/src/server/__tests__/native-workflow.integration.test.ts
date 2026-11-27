@@ -13,7 +13,7 @@ import LockManager from '@nocobase/lock-manager';
 import type { MockServer } from '@nocobase/test';
 import PluginGitManagerServer from '../../../../plugin-git-manager/src/server/plugin';
 import { resolveBackgroundReviewRoles } from '../../../../plugin-git-manager/src/server/actions/review';
-import { provision, restoreActiveBinding, supportsRuntime } from '../provision';
+import { normalizeLegacyApprovalNodes, provision, restoreActiveBinding, supportsRuntime } from '../provision';
 import PluginWorkflowGitReviewServer from '../plugin';
 import { reconcileRequests } from '../reconcile';
 import { buildTemplate } from '../templates';
@@ -391,6 +391,18 @@ describe('Git review native Workflow execution', () => {
     expect(quickNodes.filter((node) => node.type === 'git-review-llm')).toHaveLength(2);
     expect(fullNodes.some((node) => node.type === 'ai-employee')).toBe(false);
     expect(fullNodes.filter((node) => node.type === 'git-review-llm')).toHaveLength(4);
+    const quickManualNode = quickNodes.find((node) => node.key === 'gr_approval');
+    expect(quickManualNode?.config?.assignees).toEqual(['{{$jobsMapByNodeKey.gr_context.approverIds}}']);
+    await app.db
+      .getCollection('flow_nodes')
+      .model.update(
+        { config: { ...quickManualNode.config, assignees: '{{$jobsMapByNodeKey.gr_context.approverIds}}' } },
+        { where: { id: quickManualNode.id }, hooks: false },
+      );
+    await expect(assertSafeWorkflow(app, quick.workflowId, 'manual')).resolves.toBeTruthy();
+    await normalizeLegacyApprovalNodes(app);
+    const migratedManualNode = await app.db.getRepository('flow_nodes').findOne({ filterByTk: quickManualNode.id });
+    expect(migratedManualNode?.config?.assignees).toEqual(['{{$jobsMapByNodeKey.gr_context.approverIds}}']);
     expect(
       buildTemplate({
         template: 'full',

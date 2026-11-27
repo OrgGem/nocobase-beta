@@ -63,6 +63,7 @@ export class ReviewLLMInstruction extends Instruction {
 }
 
 export class ContextInstruction extends Instruction {
+  declare workflow?: { app?: { i18n?: { t(key: string, options?: { ns?: string }): string } } };
   type = 'git-review-context';
   title = tExpr('Git review context');
   description = tExpr('Claim the request and load its pinned Git context.');
@@ -71,7 +72,17 @@ export class ContextInstruction extends Instruction {
   FieldsetLoader = async () => ({ default: ContextFields });
 
   useVariables({ key, title }: { key: string; title: string }) {
-    return { value: key, label: title };
+    const tr = (label: string) => this.workflow?.app?.i18n?.t(label, { ns: 'plugin-workflow-git-review' }) ?? label;
+    return {
+      value: key,
+      label: title,
+      children: [
+        { value: 'approverIds', label: tr('Approver IDs') },
+        { value: 'diff', label: tr('Pinned diff') },
+        { value: 'instructions', label: tr('Review instructions') },
+        { value: 'headSha', label: tr('Head SHA') },
+      ],
+    };
   }
 }
 

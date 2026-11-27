@@ -97,7 +97,7 @@ export function buildTemplate(bindings: TemplateBindings): TemplateNode[] {
       type: 'manual',
       config: {
         mode: 0,
-        assignees: ref('gr_context', 'approverIds'),
+        assignees: [ref('gr_context', 'approverIds')],
         forms: {
           review: {
             type: 'custom',

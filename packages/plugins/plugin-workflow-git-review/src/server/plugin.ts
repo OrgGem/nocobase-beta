@@ -5,7 +5,7 @@ import { Plugin } from '@nocobase/server';
 import WorkflowPlugin, { type ExecutionModel } from '@nocobase/plugin-workflow';
 import { isRecord, reviewService, type ID } from './contracts';
 import { ReviewContextInstruction, ReviewPublishInstruction, ReviewResultInstruction } from './instructions';
-import { getStatus, provision, restoreActiveBinding, type SetupInput } from './provision';
+import { getStatus, normalizeLegacyApprovalNodes, provision, restoreActiveBinding, type SetupInput } from './provision';
 import { reconcileRequests } from './reconcile';
 import { assertEligibleApprover, assignedReview, listApprovals } from './approvals';
 import { guardReviewWorkflows } from './guards';
@@ -133,6 +133,7 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
       | { ensureReviewSchema?: () => Promise<void> }
       | undefined;
     if (gitManager?.ensureReviewSchema) await gitManager.ensureReviewSchema();
+    await normalizeLegacyApprovalNodes(this.app);
     const flows = await this.db.getRepository('gitReviewFlows').find({ sort: ['id'] });
     for (const flow of flows) {
       try {
@@ -270,12 +271,41 @@ export default class PluginWorkflowGitReviewServer extends Plugin {
       actions: {
         status: async (ctx, next) => {
           const flows = await this.db.getRepository('gitReviewFlows').find({ sort: ['id'] });
+          const visibleFlows = flows.filter((flow) =>
+            this.canAccessFlow(ctx as unknown as Context, flow.repositoryId, 'status'),
+          );
+          const repoIds = Array.from(
+            new Set(
+              visibleFlows
+                .map((flow) => flow.repositoryId)
+                .filter((id): id is ID => typeof id === 'string' || typeof id === 'number'),
+            ),
+          );
+          const repositories =
+            repoIds.length && this.db.getCollection('gitRepositories')
+              ? await this.db.getRepository('gitRepositories').find({
+                  filter: { id: { $in: repoIds } },
+                  fields: ['id', 'name'],
+                })
+              : [];
+          const repoNames = new Map(repositories.map((repo) => [String(repo.id), String(repo.name || repo.id)]));
           const results = [];
-          for (const flow of flows) {
-            if (!this.canAccessFlow(ctx as unknown as Context, flow.repositoryId, 'status')) continue;
+          for (const flow of visibleFlows) {
             const status = await getStatus(this.app, flow.id);
+            const postMode: PostMode =
+              flow.postMode === 'auto' || flow.postMode === 'disabled' ? flow.postMode : 'manual';
+            const triggerMode =
+              flow.triggerMode === 'onMergeRequestCreated' || flow.triggerMode === 'both' ? flow.triggerMode : 'manual';
             results.push({
               name: flow.name,
+              repositoryId: flow.repositoryId ?? null,
+              repositoryName: flow.repositoryId != null ? repoNames.get(String(flow.repositoryId)) ?? null : null,
+              flowEnabled: flow.enabled !== false,
+              triggerMode,
+              postMode,
+              aiEmployeeUsername: typeof flow.aiEmployeeUsername === 'string' ? flow.aiEmployeeUsername : null,
+              llmService: typeof flow.llmService === 'string' ? flow.llmService : null,
+              model: typeof flow.model === 'string' ? flow.model : null,
               ...status,
               canWrite: this.canAccessFlow(
                 ctx as unknown as Context,

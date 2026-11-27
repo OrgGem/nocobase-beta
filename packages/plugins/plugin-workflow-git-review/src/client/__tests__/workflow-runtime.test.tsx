@@ -114,6 +114,17 @@ describe('Git Review workflow instruction runtime registration', () => {
       expect(workflow.entries.get(type)).toBeInstanceOf(runtimes.V1Instruction);
     }
     expect((workflow.entries.get('git-review-llm') as typeof nativeLLM).FieldsetLoader).toBe(nativeFieldset);
+    const v1ContextVars = (
+      workflow.entries.get('git-review-context') as {
+        useVariables: (node: { key: string; title: string }) => { children?: Array<{ value: string }> };
+      }
+    ).useVariables({ key: 'gr_context', title: 'Context' });
+    expect(v1ContextVars.children?.map((item) => item.value)).toEqual([
+      'approverIds',
+      'diff',
+      'instructions',
+      'headSha',
+    ]);
     expect(workflow.groups.get('git-review')).toEqual({
       key: 'git-review',
       label: expect.stringContaining('Git review'),
@@ -140,6 +151,17 @@ describe('Git Review workflow instruction runtime registration', () => {
       expect(workflow.entries.get(type)).toBeInstanceOf(runtimes.V2Instruction);
     }
     expect((workflow.entries.get('git-review-llm') as typeof nativeLLM).FieldsetLoader).toBe(nativeFieldset);
+    const v1ContextVars = (
+      workflow.entries.get('git-review-context') as {
+        useVariables: (node: { key: string; title: string }) => { children?: Array<{ value: string }> };
+      }
+    ).useVariables({ key: 'gr_context', title: 'Context' });
+    expect(v1ContextVars.children?.map((item) => item.value)).toEqual([
+      'approverIds',
+      'diff',
+      'instructions',
+      'headSha',
+    ]);
     expect(workflow.registerTaskType).toHaveBeenCalledWith('git-review-approval', expect.any(Object));
   });
 });

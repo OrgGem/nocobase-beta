@@ -172,6 +172,26 @@ function optionsFor(workflow: WorkflowModel | null): Record<string, unknown> {
   return isRecord(options) ? options : {};
 }
 
+// Legacy templates saved manual node assignees as a bare string, causing v1 AssigneesSelect to index character 0 ("{").
+export async function normalizeLegacyApprovalNodes(app: Application) {
+  const NodeModel = app.db.getCollection('flow_nodes')?.model;
+  const WorkflowModel = app.db.getCollection('workflows')?.model;
+  if (!NodeModel || !WorkflowModel) return;
+  const legacyRef = '{{$jobsMapByNodeKey.gr_context.approverIds}}';
+  const nodes = await NodeModel.findAll({ where: { key: 'gr_approval', type: 'manual' } });
+  for (const node of nodes) {
+    const config: unknown = node.get('config');
+    if (!isRecord(config) || config.assignees !== legacyRef) continue;
+    const workflow = await WorkflowModel.findByPk(node.get('workflowId') as ID);
+    const options: unknown = workflow?.get('options');
+    if (!isRecord(options) || !isRecord(options.gitReview)) continue;
+    await NodeModel.update(
+      { config: { ...config, assignees: [legacyRef] } },
+      { where: { id: node.get('id') }, hooks: false },
+    );
+  }
+}
+
 // Older releases bound a blocked draft even when a frozen revision of the same flow was still current.
 export async function restoreActiveBinding(app: Application, flowId: ID) {
   await app.db.sequelize.transaction(async (transaction) => {

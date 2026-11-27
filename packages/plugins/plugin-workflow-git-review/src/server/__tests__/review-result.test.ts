@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { parseReview, renderReview, validateFindingLocations } from '../review-result';
+import { buildTemplate } from '../templates';
+import { assertSafeNodes, type SafeNode } from '../safe-graph';
 
 const reviewedDiff = [
   'diff --git a/src/server/action.ts b/src/server/action.ts',
@@ -104,5 +106,37 @@ describe('Git review output validation', () => {
         findings: [{ ...validReview.findings[0], confidence: 1 }],
       }),
     ).toThrow();
+  });
+
+  it('emits manual approval assignees as a single-element variable array and accepts legacy string graphs', () => {
+    const template = buildTemplate({
+      template: 'quick',
+      username: 'atlas',
+      persona: 'Review carefully.',
+      llmService: 'svc',
+      model: 'gpt-6.1-sol',
+      userId: 1,
+      approverIds: [1],
+      postMode: 'manual',
+    });
+    const manualNode = template.find((node) => node.key === 'gr_approval');
+    expect(manualNode?.config.assignees).toEqual(['{{$jobsMapByNodeKey.gr_context.approverIds}}']);
+
+    const toSafeNodes = (assignees: unknown): SafeNode[] =>
+      template.map((node, index) => ({
+        id: index + 1,
+        key: node.key,
+        type: node.type,
+        upstreamId: index === 0 ? null : index,
+        downstreamId: index === template.length - 1 ? null : index + 2,
+        config: node.key === 'gr_approval' ? { ...node.config, assignees } : node.config,
+      }));
+
+    expect(() =>
+      assertSafeNodes(toSafeNodes(['{{$jobsMapByNodeKey.gr_context.approverIds}}']), 'manual'),
+    ).not.toThrow();
+    expect(() => assertSafeNodes(toSafeNodes('{{$jobsMapByNodeKey.gr_context.approverIds}}'), 'manual')).not.toThrow();
+    expect(() => assertSafeNodes(toSafeNodes([1]), 'manual')).toThrow('Manual approval configuration is invalid');
+    expect(() => assertSafeNodes(toSafeNodes([]), 'manual')).toThrow('Manual approval configuration is invalid');
   });
 });

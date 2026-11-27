@@ -17,8 +17,17 @@ export type SafeNode = {
 type EvidenceJob = { id: ID; status: number; result?: unknown };
 type EvidenceTask = { userId: ID; result?: unknown };
 
+const EXPECTED_APPROVERS_REF = '{{$jobsMapByNodeKey.gr_context.approverIds}}';
+
 function same(left: unknown, right: unknown) {
   return left != null && right != null && String(left) === String(right);
+}
+
+function validApprovalAssignees(value: unknown): boolean {
+  return (
+    value === EXPECTED_APPROVERS_REF ||
+    (Array.isArray(value) && value.length === 1 && value[0] === EXPECTED_APPROVERS_REF)
+  );
 }
 
 function textMessages(value: unknown): boolean {
@@ -94,7 +103,7 @@ export function assertSafeNodes(nodes: SafeNode[], postMode: PostMode): SafeNode
     const actions = isRecord(review) ? review.actions : null;
     if (
       config.mode !== 0 ||
-      config.assignees !== '{{$jobsMapByNodeKey.gr_context.approverIds}}' ||
+      !validApprovalAssignees(config.assignees) ||
       !isRecord(forms) ||
       Object.keys(forms).length !== 1 ||
       !isRecord(review) ||

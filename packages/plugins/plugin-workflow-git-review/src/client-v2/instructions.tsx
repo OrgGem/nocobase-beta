@@ -92,7 +92,16 @@ export class ContextInstruction extends Instruction {
   icon = (<SafetyCertificateOutlined />);
   FieldsetLoader = async () => ({ default: ContextFields });
   useVariables({ key, title }: { key: string; title: string }) {
-    return { value: key, label: title };
+    return {
+      value: key,
+      label: title,
+      children: [
+        { value: 'approverIds', label: tExpr('Approver IDs') },
+        { value: 'diff', label: tExpr('Pinned diff') },
+        { value: 'instructions', label: tExpr('Review instructions') },
+        { value: 'headSha', label: tExpr('Head SHA') },
+      ],
+    };
   }
 }
 
