@@ -25,7 +25,14 @@ import { PortainerStackRedeployInstruction } from './instructions/PortainerStack
 import { assertValidPortainerUrl, clampTimeoutMs } from './services/PortainerClient';
 
 const ENCRYPTED_FIELDS = ['apiKey', 'gitAccessToken'] as const;
-const METADATA_READ_ACTIONS = ['listInstances', 'listEndpoints', 'listStacks', 'getStackDetail'] as const;
+const METADATA_READ_ACTIONS = [
+  'listInstances',
+  'listEndpoints',
+  'listStacks',
+  'getStackDetail',
+  'getStackOverview',
+  'getContainerLogs',
+] as const;
 
 function maskSecretFields(payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') {

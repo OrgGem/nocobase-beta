@@ -9,13 +9,22 @@
 
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { Context } from '@nocobase/actions';
 import type Application from '@nocobase/server';
 import { SECRET_MASK } from '../../shared/constants';
 import { buildEffectiveStackEnv, normalizeGitReference, parseDotEnvText } from '../../shared/env';
+import { createPortainerResourceActions } from '../actions/portainer';
 import { executePortainerControl } from '../instructions/PortainerStackControlInstruction';
 import { executePortainerRedeploy } from '../instructions/PortainerStackRedeployInstruction';
 import { PluginWorkflowPortainerServer } from '../plugin';
-import { assertValidPortainerUrl, PortainerApiError, PortainerClient } from '../services/PortainerClient';
+import {
+  assertValidContainerId,
+  assertValidPortainerUrl,
+  computeDockerContainerStats,
+  demuxDockerLogBuffer,
+  PortainerApiError,
+  PortainerClient,
+} from '../services/PortainerClient';
 
 interface RecordedRequest {
   method: string;
@@ -451,5 +460,100 @@ describe('plugin-workflow-portainer shared env & server instructions', () => {
     const maskedRow = (ctx.body as { data: Array<Record<string, string>> }).data[0];
     expect(maskedRow.apiKey).toBe(SECRET_MASK);
     expect(maskedRow.gitAccessToken).toBe(SECRET_MASK);
+    expect(allowRules.has('getStackOverview')).toBe(true);
+    expect(allowRules.has('getContainerLogs')).toBe(true);
+    expect(allowRules.has('controlStack')).toBe(false);
+  });
+
+  it('computes live Docker container stats, demuxes binary log frames, and builds getStackOverview', async () => {
+    const stats = computeDockerContainerStats({
+      cpu_stats: {
+        cpu_usage: { total_usage: 250_000_000 },
+        system_cpu_usage: 2_000_000_000,
+        online_cpus: 2,
+      },
+      precpu_stats: {
+        cpu_usage: { total_usage: 150_000_000 },
+        system_cpu_usage: 1_000_000_000,
+      },
+      memory_stats: {
+        usage: 120 * 1024 * 1024,
+        limit: 1024 * 1024 * 1024,
+        stats: { inactive_file: 20 * 1024 * 1024 },
+      },
+      networks: {
+        eth0: { rx_bytes: 4096, tx_bytes: 2048 },
+        eth1: { rx_bytes: 1024, tx_bytes: 512 },
+      },
+      blkio_stats: {
+        io_service_bytes_recursive: [
+          { op: 'Read', value: 8192 },
+          { op: 'Write', value: 4096 },
+        ],
+      },
+      pids_stats: { current: 7 },
+    });
+
+    expect(stats.cpuPercent).toBe(20);
+    expect(stats.memUsageBytes).toBe(100 * 1024 * 1024);
+    expect(stats.memLimitBytes).toBe(1024 * 1024 * 1024);
+    expect(stats.memPercent).toBe(9.77);
+    expect(stats.netRxBytes).toBe(5120);
+    expect(stats.netTxBytes).toBe(2560);
+    expect(stats.blockReadBytes).toBe(8192);
+    expect(stats.blockWriteBytes).toBe(4096);
+    expect(stats.pids).toBe(7);
+
+    const line1 = Buffer.from('2026-11-26T16:25:00Z nginx ready\n', 'utf8');
+    const hdr1 = Buffer.alloc(8);
+    hdr1[0] = 1;
+    hdr1.writeUInt32BE(line1.length, 4);
+    const line2 = Buffer.from('2026-11-26T16:25:01Z worker started\n', 'utf8');
+    const hdr2 = Buffer.alloc(8);
+    hdr2[0] = 2;
+    hdr2.writeUInt32BE(line2.length, 4);
+    const muxBuf = Buffer.concat([hdr1, line1, hdr2, line2]);
+
+    expect(demuxDockerLogBuffer(muxBuf)).toBe(
+      '2026-11-26T16:25:00Z nginx ready\n2026-11-26T16:25:01Z worker started\n',
+    );
+    expect(demuxDockerLogBuffer(Buffer.from('plain tty log\n', 'utf8'))).toBe('plain tty log\n');
+    expect(() => assertValidContainerId('../bad-path')).toThrow(PortainerApiError);
+    expect(assertValidContainerId('afb6265776d5')).toBe('afb6265776d5');
+
+    const app = createFakeApp({
+      id: 1,
+      name: 'Primary Portainer',
+      baseUrl,
+      apiKey: 'enc:ptr_test_key_123',
+      enabled: true,
+      defaultTimeoutMs: 10_000,
+    });
+
+    vi.spyOn(PortainerClient.prototype, 'getContainerLiveStats').mockResolvedValueOnce(stats);
+
+    const actions = createPortainerResourceActions(app);
+    const ctx = {
+      action: { params: { instanceId: 1, stackId: 10 } },
+      t: (k: string) => k,
+      throw: (code: number, msg: string) => {
+        throw new Error(`${code}:${msg}`);
+      },
+      body: undefined as unknown,
+    } as unknown as Context;
+
+    await actions.getStackOverview(ctx, async () => {});
+    const overview = ctx.body as {
+      detail: { env: Array<{ name: string; value: string; sensitive: boolean }> };
+      summary: { totalCpuPercent: number; runningCount: number };
+    };
+    expect(overview.summary.totalCpuPercent).toBe(20);
+    expect(overview.summary.runningCount).toBe(1);
+    const dbSecret = overview.detail.env.find((item) => item.name === 'DB_PASSWORD');
+    const existingFlag = overview.detail.env.find((item) => item.name === 'EXISTING_FLAG');
+    expect(dbSecret?.sensitive).toBe(true);
+    expect(dbSecret?.value).toBe(SECRET_MASK);
+    expect(existingFlag?.sensitive).toBe(false);
+    expect(existingFlag?.value).toBe('keep-me');
   });
 });

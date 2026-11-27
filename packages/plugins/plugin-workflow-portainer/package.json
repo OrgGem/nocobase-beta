@@ -6,7 +6,7 @@
   "description": "Workflow nodes and connection management for running, redeploying, and controlling Portainer stacks across environments.",
   "description.zh-CN": "用于在多环境中运行、重新部署和控制 Portainer Stack 的工作流节点与连接管理插件。",
   "description.vi-VN": "Cung cấp các node Workflow và quản lý kết nối để chạy, redeploy và kiểm soát Portainer Stack đa môi trường.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "main": "dist/server/index.js",
   "keywords": [

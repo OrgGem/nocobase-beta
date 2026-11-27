@@ -11,6 +11,7 @@ import { WorkflowVariableInput, WorkflowVariableWrapper } from '@nocobase/plugin
 import { Checkbox, Form, InputNumber, Radio } from 'antd';
 import React, { useState } from 'react';
 import { DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS } from '../../shared/constants';
+import { toFiniteNumber } from '../../shared/env';
 import type { RedeployTargetMode } from '../../shared/types';
 import { useT } from '../locale';
 import { PortainerEnvEditor } from './PortainerEnvEditor';
@@ -105,7 +106,7 @@ export function RedeployFieldset() {
               max={MAX_TIMEOUT_MS}
               step={5000}
               addonAfter={t('ms')}
-              value={typeof value === 'number' ? value : value ? Number(value) : DEFAULT_TIMEOUT_MS}
+              value={toFiniteNumber(value) ?? DEFAULT_TIMEOUT_MS}
               onChange={(nextVal) => onChange?.(typeof nextVal === 'number' ? nextVal : null)}
               style={{ width: '100%' }}
             />

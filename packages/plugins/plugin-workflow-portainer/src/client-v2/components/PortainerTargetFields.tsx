@@ -9,10 +9,11 @@
 
 import { ReloadOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
-import { isWorkflowVariableValue, WorkflowVariableWrapper } from '@nocobase/plugin-workflow/client-v2';
+import { WorkflowVariableWrapper } from '@nocobase/plugin-workflow/client-v2';
 import { Button, Flex, Form, InputNumber, Select, Tag } from 'antd';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { PORTAINER_RESOURCE } from '../../shared/constants';
+import { isWorkflowVariableValue, toFiniteNumber } from '../../shared/env';
 import type { PortainerEndpointSummary, PortainerInstanceSummary, PortainerStackSummary } from '../../shared/types';
 import { useT } from '../locale';
 
@@ -66,7 +67,7 @@ export function PortainerInstanceField() {
           <Select
             allowClear
             loading={loading}
-            value={typeof value === 'number' ? value : value ? Number(value) : undefined}
+            value={toFiniteNumber(value)}
             onChange={(nextVal) => onChange?.(typeof nextVal === 'number' ? nextVal : null)}
             options={options}
             placeholder={t('Default Portainer instance')}
@@ -95,18 +96,9 @@ export function PortainerTargetFields({
   const endpointIsVar = isWorkflowVariableValue(watchedEndpointId);
   const stackIsVar = isWorkflowVariableValue(watchedStackId);
 
-  const numericInstanceId =
-    !instanceIsVar && watchedInstanceId !== null && typeof watchedInstanceId !== 'undefined' && watchedInstanceId !== ''
-      ? Number(watchedInstanceId)
-      : undefined;
-  const numericEndpointId =
-    !endpointIsVar && watchedEndpointId !== null && typeof watchedEndpointId !== 'undefined' && watchedEndpointId !== ''
-      ? Number(watchedEndpointId)
-      : undefined;
-  const numericStackId =
-    !stackIsVar && watchedStackId !== null && typeof watchedStackId !== 'undefined' && watchedStackId !== ''
-      ? Number(watchedStackId)
-      : undefined;
+  const numericInstanceId = toFiniteNumber(watchedInstanceId);
+  const numericEndpointId = toFiniteNumber(watchedEndpointId);
+  const numericStackId = toFiniteNumber(watchedStackId);
 
   const [endpoints, setEndpoints] = useState<PortainerEndpointSummary[]>([]);
   const [stacks, setStacks] = useState<PortainerStackSummary[]>([]);
@@ -231,7 +223,7 @@ export function PortainerTargetFields({
             instanceIsVar ? (
               <InputNumber
                 min={1}
-                value={typeof value === 'number' ? value : value ? Number(value) : undefined}
+                value={toFiniteNumber(value)}
                 onChange={(nextVal) => onChange?.(typeof nextVal === 'number' ? nextVal : null)}
                 placeholder={t('Endpoint ID (e.g. 1)')}
                 style={{ width: '100%' }}
@@ -243,7 +235,7 @@ export function PortainerTargetFields({
                   showSearch
                   optionFilterProp="searchLabel"
                   loading={loadingEndpoints}
-                  value={typeof value === 'number' ? value : value ? Number(value) : undefined}
+                  value={toFiniteNumber(value)}
                   onChange={(nextVal) => onChange?.(typeof nextVal === 'number' ? nextVal : null)}
                   options={endpointOptions}
                   placeholder={t('Auto-resolve from Stack or select environment')}
@@ -282,7 +274,7 @@ export function PortainerTargetFields({
             instanceIsVar || endpointIsVar ? (
               <InputNumber
                 min={1}
-                value={typeof value === 'number' ? value : value ? Number(value) : undefined}
+                value={toFiniteNumber(value)}
                 onChange={(nextVal) => onChange?.(typeof nextVal === 'number' ? nextVal : null)}
                 placeholder={t('Stack ID (e.g. 12)')}
                 style={{ width: '100%' }}
@@ -293,7 +285,7 @@ export function PortainerTargetFields({
                 showSearch
                 optionFilterProp="searchLabel"
                 loading={loadingStacks}
-                value={typeof value === 'number' ? value : value ? Number(value) : undefined}
+                value={toFiniteNumber(value)}
                 onChange={(nextVal) => {
                   const numVal = typeof nextVal === 'number' ? nextVal : null;
                   onChange?.(numVal);

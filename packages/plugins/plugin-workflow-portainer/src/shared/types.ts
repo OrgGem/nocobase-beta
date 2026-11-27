@@ -71,20 +71,79 @@ export interface PortainerStackSummary {
   envCount: number;
 }
 
+export interface PortainerDeploymentRecord {
+  status: number;
+  time?: number;
+  message?: string;
+}
+
 export interface PortainerStackDetail extends PortainerStackSummary {
   env: PortainerEnvPair[];
   hasSavedGitCredential: boolean;
   gitCredentialId: number;
   gitUsername?: string;
+  entryPoint?: string;
+  projectPath?: string;
+  createdAt?: number;
+  createdBy?: string;
+  updatedAt?: number;
+  updatedBy?: string;
+  gitConfigFilePath?: string;
+  gitCommitHash?: string;
+  deployments?: PortainerDeploymentRecord[];
+}
+
+export interface PortainerContainerStats {
+  cpuPercent: number;
+  memUsageBytes: number;
+  memLimitBytes: number;
+  memPercent: number;
+  netRxBytes: number;
+  netTxBytes: number;
+  blockReadBytes: number;
+  blockWriteBytes: number;
+  pids: number;
 }
 
 export interface PortainerContainerSummary {
   id: string;
   name: string;
+  service?: string;
   image: string;
   state: string;
   status: string;
   healthy: boolean;
+  created?: number;
+  ports?: string[];
+  ipAddresses?: string[];
+  stats?: PortainerContainerStats | null;
+}
+
+export interface PortainerStackOverviewSummary {
+  totalCount: number;
+  runningCount: number;
+  healthy: boolean;
+  totalCpuPercent: number;
+  totalMemUsageBytes: number;
+  memLimitBytes: number;
+  totalMemPercent: number;
+  totalNetRxBytes: number;
+  totalNetTxBytes: number;
+}
+
+export interface PortainerMaskedEnvItem {
+  name: string;
+  value: string;
+  hasExistingValue: boolean;
+  sensitive: boolean;
+}
+
+export interface PortainerStackOverview {
+  detail: Omit<PortainerStackDetail, 'env'> & { env: PortainerMaskedEnvItem[] };
+  stackFileContent: string;
+  containers: PortainerContainerSummary[];
+  summary: PortainerStackOverviewSummary;
+  sampledAt: string;
 }
 
 export interface PortainerInstanceSummary {

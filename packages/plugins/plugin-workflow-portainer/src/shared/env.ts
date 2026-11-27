@@ -21,6 +21,21 @@ export function isLikelySensitiveKey(key: string): boolean {
   return SENSITIVE_ENV_KEY_PATTERN.test(key);
 }
 
+export function isWorkflowVariableValue(value: unknown): value is string {
+  return typeof value === 'string' && /^\{\{\s*[\s\S]+?\s*\}\}$/.test(value.trim());
+}
+
+export function toFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === 'string' && value.trim() !== '' && !isWorkflowVariableValue(value)) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 function stripMatchingQuotes(raw: string): string {
   if (raw.length >= 2) {
     const first = raw[0];

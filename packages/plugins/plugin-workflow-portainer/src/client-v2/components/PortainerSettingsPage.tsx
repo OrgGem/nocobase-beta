@@ -13,6 +13,7 @@ import {
   CheckCircleOutlined,
   DeleteOutlined,
   EditOutlined,
+  EyeOutlined,
   PlusOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -50,6 +51,7 @@ import {
 } from '../../shared/constants';
 import type { PortainerEndpointSummary, PortainerInstanceSummary, PortainerStackSummary } from '../../shared/types';
 import { useT } from '../locale';
+import { StackDetailDrawer } from './StackDetailDrawer';
 
 interface InstanceFormValues {
   name: string;
@@ -82,6 +84,7 @@ export function PortainerSettingsPage() {
   const [selectedEndpointId, setSelectedEndpointId] = useState<number | undefined>(undefined);
   const [stacks, setStacks] = useState<PortainerStackSummary[]>([]);
   const [loadingStacks, setLoadingStacks] = useState(false);
+  const [selectedStack, setSelectedStack] = useState<PortainerStackSummary | null>(null);
 
   const loadInstances = useCallback(async () => {
     setLoading(true);
@@ -284,6 +287,7 @@ export function PortainerSettingsPage() {
 
   const openExplorer = (record: PortainerInstanceSummary) => {
     setExplorerInstance(record);
+    setSelectedStack(null);
     setSelectedEndpointId(undefined);
     loadExplorerData(record.id, undefined);
   };
@@ -441,6 +445,22 @@ export function PortainerSettingsPage() {
       dataIndex: 'envCount',
       key: 'envCount',
       width: 90,
+    },
+    {
+      title: t('Actions'),
+      key: 'actions',
+      width: 105,
+      render: (_, st) => (
+        <Button
+          size="small"
+          htmlType="button"
+          icon={<EyeOutlined />}
+          aria-label={`${t('Detail')} ${st.name}`}
+          onClick={() => setSelectedStack(st)}
+        >
+          {t('Detail')}
+        </Button>
+      ),
     },
   ];
 
@@ -621,8 +641,11 @@ export function PortainerSettingsPage() {
       <Drawer
         open={Boolean(explorerInstance)}
         title={explorerInstance ? `${t('Portainer Stacks')} — ${explorerInstance.name}` : t('Portainer Stacks')}
-        onClose={() => setExplorerInstance(null)}
-        width={780}
+        onClose={() => {
+          setSelectedStack(null);
+          setExplorerInstance(null);
+        }}
+        width={820}
       >
         <Flex gap="small" align="center" style={{ marginBottom: 16 }}>
           <Select
@@ -662,6 +685,19 @@ export function PortainerSettingsPage() {
           dataSource={stacks}
           columns={stackColumns}
           pagination={{ pageSize: 15 }}
+        />
+
+        <StackDetailDrawer
+          open={Boolean(selectedStack)}
+          instance={explorerInstance}
+          stack={selectedStack}
+          endpoints={endpoints}
+          onClose={() => setSelectedStack(null)}
+          onStackChanged={() => {
+            if (explorerInstance) {
+              loadExplorerData(explorerInstance.id, selectedEndpointId);
+            }
+          }}
         />
       </Drawer>
     </Card>

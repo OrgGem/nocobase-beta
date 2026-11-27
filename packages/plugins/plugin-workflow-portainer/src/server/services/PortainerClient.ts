@@ -13,7 +13,9 @@ import { URL } from 'node:url';
 import { DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, MIN_TIMEOUT_MS } from '../../shared/constants';
 import type {
   ID,
+  PortainerContainerStats,
   PortainerContainerSummary,
+  PortainerDeploymentRecord,
   PortainerEndpointSummary,
   PortainerEnvPair,
   PortainerStackDetail,
@@ -51,6 +53,7 @@ export interface RawPortainerGitConfig {
   URL?: string;
   ReferenceName?: string;
   ConfigFilePath?: string;
+  ConfigHash?: string;
   Authentication?: RawPortainerGitAuth | null;
 }
 
@@ -66,9 +69,22 @@ export interface RawPortainerStack {
   EndpointId: number;
   Type?: number;
   Status?: number;
+  EntryPoint?: string;
+  ProjectPath?: string;
+  CreationDate?: number;
+  CreatedBy?: string;
+  UpdateDate?: number;
+  UpdatedBy?: string;
   Env?: Array<{ name?: string; value?: string }> | null;
   GitConfig?: RawPortainerGitConfig | null;
   DeploymentStatus?: RawPortainerDeploymentStatus[] | null;
+}
+
+interface RawDockerPort {
+  IP?: string;
+  PrivatePort?: number;
+  PublicPort?: number;
+  Type?: string;
 }
 
 interface RawDockerContainer {
@@ -77,6 +93,44 @@ interface RawDockerContainer {
   Image?: string;
   State?: string;
   Status?: string;
+  Created?: number;
+  Labels?: Record<string, string>;
+  Ports?: RawDockerPort[];
+  NetworkSettings?: {
+    Networks?: Record<string, { IPAddress?: string }>;
+  };
+}
+
+export interface RawDockerStats {
+  cpu_stats?: {
+    cpu_usage?: {
+      total_usage?: number;
+      percpu_usage?: number[];
+    };
+    system_cpu_usage?: number;
+    online_cpus?: number;
+  };
+  precpu_stats?: {
+    cpu_usage?: {
+      total_usage?: number;
+    };
+    system_cpu_usage?: number;
+  };
+  memory_stats?: {
+    usage?: number;
+    limit?: number;
+    stats?: {
+      inactive_file?: number;
+      total_inactive_file?: number;
+    };
+  };
+  networks?: Record<string, { rx_bytes?: number; tx_bytes?: number }>;
+  blkio_stats?: {
+    io_service_bytes_recursive?: Array<{ op?: string; value?: number }>;
+  };
+  pids_stats?: {
+    current?: number;
+  };
 }
 
 export function assertValidPortainerUrl(rawUrl: string): URL {
@@ -115,6 +169,116 @@ export function assertValidWebhookId(rawWebhookId: string | null | undefined): s
     });
   }
   return trimmed;
+}
+
+export function assertValidContainerId(rawContainerId: string | null | undefined): string {
+  const trimmed = String(rawContainerId ?? '').trim();
+  if (!trimmed || !/^[a-fA-F0-9]{12,64}$/.test(trimmed)) {
+    throw new PortainerApiError('Container ID must be a 12-64 character hexadecimal identifier', {
+      code: 'INVALID_PARAM',
+    });
+  }
+  return trimmed;
+}
+
+export function computeDockerContainerStats(raw: RawDockerStats | null | undefined): PortainerContainerStats {
+  const cpuTotal = Number(raw?.cpu_stats?.cpu_usage?.total_usage ?? 0);
+  const preCpuTotal = Number(raw?.precpu_stats?.cpu_usage?.total_usage ?? 0);
+  const sysCpu = Number(raw?.cpu_stats?.system_cpu_usage ?? 0);
+  const preSysCpu = Number(raw?.precpu_stats?.system_cpu_usage ?? 0);
+  const cpuDelta = cpuTotal - preCpuTotal;
+  const sysDelta = sysCpu - preSysCpu;
+  const perCpu = raw?.cpu_stats?.cpu_usage?.percpu_usage;
+  const onlineCpus = Number(raw?.cpu_stats?.online_cpus ?? 0) || (Array.isArray(perCpu) ? perCpu.length : 0) || 1;
+  const cpuPercent =
+    cpuDelta > 0 && sysDelta > 0
+      ? Math.round(((cpuDelta / sysDelta) * onlineCpus * 100 + Number.EPSILON) * 100) / 100
+      : 0;
+
+  const rawMemUsage = Number(raw?.memory_stats?.usage ?? 0);
+  const inactiveFile = Number(
+    raw?.memory_stats?.stats?.inactive_file ?? raw?.memory_stats?.stats?.total_inactive_file ?? 0,
+  );
+  const memUsageBytes = Math.max(0, rawMemUsage - inactiveFile);
+  const memLimitBytes = Math.max(0, Number(raw?.memory_stats?.limit ?? 0));
+  const memPercent =
+    memLimitBytes > 0 ? Math.round(((memUsageBytes / memLimitBytes) * 100 + Number.EPSILON) * 100) / 100 : 0;
+
+  let netRxBytes = 0;
+  let netTxBytes = 0;
+  if (raw?.networks && typeof raw.networks === 'object') {
+    for (const iface of Object.values(raw.networks)) {
+      netRxBytes += Math.max(0, Number(iface?.rx_bytes ?? 0));
+      netTxBytes += Math.max(0, Number(iface?.tx_bytes ?? 0));
+    }
+  }
+
+  let blockReadBytes = 0;
+  let blockWriteBytes = 0;
+  const ioEntries = raw?.blkio_stats?.io_service_bytes_recursive;
+  if (Array.isArray(ioEntries)) {
+    for (const entry of ioEntries) {
+      const op = String(entry?.op ?? '').toLowerCase();
+      const val = Math.max(0, Number(entry?.value ?? 0));
+      if (op === 'read') {
+        blockReadBytes += val;
+      } else if (op === 'write') {
+        blockWriteBytes += val;
+      }
+    }
+  }
+
+  const pids = Math.max(0, Number(raw?.pids_stats?.current ?? 0));
+
+  return {
+    cpuPercent,
+    memUsageBytes,
+    memLimitBytes,
+    memPercent,
+    netRxBytes,
+    netTxBytes,
+    blockReadBytes,
+    blockWriteBytes,
+    pids,
+  };
+}
+
+/**
+ * Strip Docker Engine's 8-byte multiplexed stdout/stderr frame headers when present (`Tty: false`),
+ * falling back cleanly to plain UTF-8 text (`Tty: true`).
+ */
+export function demuxDockerLogBuffer(buf: Buffer): string {
+  if (!buf || buf.length === 0) {
+    return '';
+  }
+  const looksMultiplexed =
+    buf.length >= 8 && (buf[0] === 0 || buf[0] === 1 || buf[0] === 2) && buf[1] === 0 && buf[2] === 0 && buf[3] === 0;
+
+  if (!looksMultiplexed) {
+    return buf.toString('utf8');
+  }
+
+  const parts: Buffer[] = [];
+  let offset = 0;
+  while (offset + 8 <= buf.length) {
+    const streamType = buf[offset];
+    if (
+      (streamType !== 0 && streamType !== 1 && streamType !== 2) ||
+      buf[offset + 1] !== 0 ||
+      buf[offset + 2] !== 0 ||
+      buf[offset + 3] !== 0
+    ) {
+      parts.push(buf.subarray(offset));
+      break;
+    }
+    const frameLen = buf.readUInt32BE(offset + 4);
+    const payloadStart = offset + 8;
+    const payloadEnd = Math.min(buf.length, payloadStart + frameLen);
+    parts.push(buf.subarray(payloadStart, payloadEnd));
+    offset = payloadEnd;
+  }
+
+  return Buffer.concat(parts).toString('utf8');
 }
 
 export function clampTimeoutMs(timeoutMs?: number | null, fallback = DEFAULT_TIMEOUT_MS): number {
@@ -158,14 +322,32 @@ export function toStackSummary(stack: RawPortainerStack): PortainerStackSummary 
 
 export function toStackDetail(stack: RawPortainerStack): PortainerStackDetail {
   const summary = toStackSummary(stack);
-  const auth = stack.GitConfig?.Authentication;
+  const git = stack.GitConfig;
+  const auth = git?.Authentication;
   const credId = Number(auth?.GitCredentialID ?? 0);
+  const deployments: PortainerDeploymentRecord[] | undefined = Array.isArray(stack.DeploymentStatus)
+    ? stack.DeploymentStatus.map((item) => ({
+        status: Number(item?.Status ?? 0),
+        time: typeof item?.Time === 'number' && item.Time > 0 ? item.Time : undefined,
+        message: item?.Message ? String(item.Message) : undefined,
+      }))
+    : undefined;
+
   return {
     ...summary,
     env: normalizeEnvArray(stack.Env),
     hasSavedGitCredential: credId > 0,
     gitCredentialId: credId > 0 ? credId : 0,
     gitUsername: auth?.Username ? String(auth.Username) : undefined,
+    entryPoint: stack.EntryPoint ? String(stack.EntryPoint) : undefined,
+    projectPath: stack.ProjectPath ? String(stack.ProjectPath) : undefined,
+    createdAt: typeof stack.CreationDate === 'number' && stack.CreationDate > 0 ? stack.CreationDate : undefined,
+    createdBy: stack.CreatedBy ? String(stack.CreatedBy) : undefined,
+    updatedAt: typeof stack.UpdateDate === 'number' && stack.UpdateDate > 0 ? stack.UpdateDate : undefined,
+    updatedBy: stack.UpdatedBy ? String(stack.UpdatedBy) : undefined,
+    gitConfigFilePath: git?.ConfigFilePath ? String(git.ConfigFilePath) : undefined,
+    gitCommitHash: git?.ConfigHash ? String(git.ConfigHash) : undefined,
+    deployments,
   };
 }
 
@@ -205,6 +387,7 @@ export class PortainerClient {
     body?: unknown;
     timeoutMs?: number;
     skipAuth?: boolean;
+    rawBuffer?: boolean;
     signal?: AbortSignal;
   }): Promise<TResponse> {
     if (!options.skipAuth && !this.apiKey) {
@@ -255,8 +438,13 @@ export class PortainerClient {
           const chunks: Buffer[] = [];
           res.on('data', (chunk: Buffer) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
           res.on('end', () => {
-            const rawText = Buffer.concat(chunks).toString('utf8');
+            const fullBuffer = Buffer.concat(chunks);
             const status = res.statusCode ?? 500;
+            if (status >= 200 && status < 300 && options.rawBuffer) {
+              finish(() => resolve(fullBuffer as unknown as TResponse));
+              return;
+            }
+            const rawText = fullBuffer.toString('utf8');
             let parsedBody: unknown = rawText;
             if (rawText.trim()) {
               try {
@@ -569,15 +757,84 @@ export class PortainerClient {
       const status = String(container.Status ?? '');
       const unhealthy = /\(unhealthy\)/i.test(status) || state === 'restarting' || state === 'dead';
       const firstName = Array.isArray(container.Names) && container.Names[0] ? container.Names[0] : '';
+      const service = container.Labels?.['com.docker.compose.service'];
+
+      const portsSet = new Set<string>();
+      if (Array.isArray(container.Ports)) {
+        for (const p of container.Ports) {
+          const proto = p.Type || 'tcp';
+          if (p.PublicPort && p.PrivatePort) {
+            const hostPrefix = p.IP ? `${p.IP}:` : '';
+            portsSet.add(`${hostPrefix}${p.PublicPort}->${p.PrivatePort}/${proto}`);
+          } else if (p.PrivatePort) {
+            portsSet.add(`${p.PrivatePort}/${proto}`);
+          }
+        }
+      }
+
+      const ipAddresses: string[] = [];
+      if (container.NetworkSettings?.Networks && typeof container.NetworkSettings.Networks === 'object') {
+        for (const net of Object.values(container.NetworkSettings.Networks)) {
+          if (net?.IPAddress && !ipAddresses.includes(net.IPAddress)) {
+            ipAddresses.push(net.IPAddress);
+          }
+        }
+      }
+
       return {
         id: String(container.Id ?? '').slice(0, 12),
         name: firstName.replace(/^\/+/, ''),
+        service: service ? String(service) : undefined,
         image: String(container.Image ?? ''),
         state,
         status,
         healthy: state === 'running' && !unhealthy,
+        created: typeof container.Created === 'number' && container.Created > 0 ? container.Created : undefined,
+        ports: Array.from(portsSet),
+        ipAddresses,
       };
     });
+  }
+
+  async getContainerLiveStats(
+    endpointId: number,
+    containerId: string,
+    signal?: AbortSignal,
+  ): Promise<PortainerContainerStats> {
+    const validEndpointId = assertPositiveInt(endpointId, 'Environment (Endpoint) ID');
+    const validContainerId = assertValidContainerId(containerId);
+    const raw = await this.request<RawDockerStats>({
+      method: 'GET',
+      path: `/api/endpoints/${encodeURIComponent(String(validEndpointId))}/docker/containers/${encodeURIComponent(
+        validContainerId,
+      )}/stats`,
+      query: { stream: 'false' },
+      timeoutMs: 10_000,
+      signal,
+    });
+    return computeDockerContainerStats(raw);
+  }
+
+  async getContainerLogs(endpointId: number, containerId: string, tail = 100, signal?: AbortSignal): Promise<string> {
+    const validEndpointId = assertPositiveInt(endpointId, 'Environment (Endpoint) ID');
+    const validContainerId = assertValidContainerId(containerId);
+    const clampedTail = Math.min(1000, Math.max(10, Math.trunc(Number(tail) || 100)));
+    const buf = await this.request<Buffer>({
+      method: 'GET',
+      path: `/api/endpoints/${encodeURIComponent(String(validEndpointId))}/docker/containers/${encodeURIComponent(
+        validContainerId,
+      )}/logs`,
+      query: {
+        stdout: 1,
+        stderr: 1,
+        tail: clampedTail,
+        timestamps: 1,
+      },
+      rawBuffer: true,
+      timeoutMs: 15_000,
+      signal,
+    });
+    return demuxDockerLogBuffer(buf);
   }
 }
 
