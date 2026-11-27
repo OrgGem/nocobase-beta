@@ -7,6 +7,8 @@ import { PluginSettings } from '../PluginSettings';
 
 vi.mock('../../locale', () => ({ useT: () => (key: string) => key }));
 vi.mock('../ServiceConfigTab', () => ({ ServiceConfigTab: () => <div>Service configuration content</div> }));
+vi.mock('../OperationsTab', () => ({ OperationsTab: () => <div>Operations content</div> }));
+vi.mock('../ApiKeysTab', () => ({ ApiKeysTab: () => <div>API Keys content</div> }));
 vi.mock('../EndpointsTab', () => ({ EndpointsTab: () => <div>Endpoint content</div> }));
 vi.mock('../PipelinesTab', () => ({ PipelinesTab: () => <div>Pipeline content</div> }));
 vi.mock('../JobsTab', () => ({ JobsTab: () => <div>Job content</div> }));
@@ -21,6 +23,8 @@ describe('Document Understanding plugin settings layout', () => {
     expect(root.style.minHeight).toBe('');
     expect(content.style.padding).toBe('0px');
     expect(screen.getByRole('tab', { name: 'Service Config' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Operations' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'API Keys' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Endpoints' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Pipelines' })).toBeTruthy();
     expect(screen.getByRole('tab', { name: 'Jobs history' })).toBeTruthy();

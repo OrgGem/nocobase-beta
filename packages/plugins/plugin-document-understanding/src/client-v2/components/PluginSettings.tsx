@@ -4,6 +4,8 @@ import React from 'react';
 import { Tabs } from 'antd';
 import { useT } from '../locale';
 import { ServiceConfigTab } from './ServiceConfigTab';
+import { OperationsTab } from './OperationsTab';
+import { ApiKeysTab } from './ApiKeysTab';
 import { EndpointsTab } from './EndpointsTab';
 import { PipelinesTab } from './PipelinesTab';
 import { JobsTab } from './JobsTab';
@@ -28,6 +30,16 @@ export const PluginSettings = ({ embedded = false }: { embedded?: boolean }) => 
               key: 'config',
               label: t('Service Config'),
               children: <ServiceConfigTab />,
+            },
+            {
+              key: 'operations',
+              label: t('Operations'),
+              children: <OperationsTab />,
+            },
+            {
+              key: 'api-keys',
+              label: t('API Keys'),
+              children: <ApiKeysTab />,
             },
             {
               key: 'endpoints',

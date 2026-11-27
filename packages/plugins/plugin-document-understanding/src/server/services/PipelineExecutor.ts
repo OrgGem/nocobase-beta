@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { existsSync, realpathSync, readFileSync, statSync } from 'fs';
 import { basename, resolve, sep } from 'path';
-import { Database } from '@nocobase/database';
+import type { Database } from '@nocobase/database';
 import mime from 'mime-types';
 import { ExternalApiClient, FileInput } from './ExternalApiClient';
 import { AsyncJobManager, JOB_RUN_LEASE_MS, pollLeaseMs } from './AsyncJobManager';
+import type { OperationOrchestrator } from './OperationOrchestrator';
 import { PipelineDef, PipelineStepDef, JobState, EndpointDef } from '../types';
 
 interface LoggerLike {
@@ -22,20 +25,22 @@ const UPLOAD_ROOTS = [resolve(process.cwd(), 'storage', 'uploads')];
 const isInsidePath = (basePath: string, targetPath: string) =>
   targetPath === basePath || targetPath.startsWith(`${basePath}${sep}`);
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
- * Extract a task ID from a DUGate-style 202 Accepted response.
+ * Extract a task/operation ID from a 202 Accepted response.
  * Priority:
- * 1. `taskIdExtractPath` + optional `taskIdExtractRegex` (e.g. path="name", regex="operations/([^/]+)")
+ * 1. `taskIdExtractPath` + optional `taskIdExtractRegex` (e.g. path="operationId" or path="name", regex="operations/([^/]+)")
  * 2. `pollTaskIdField` (default "task_id")
- * 3. Raw response body as string fallback
+ * 3. `operationId` field fallback
+ * 4. Raw response body as string fallback
  */
-function extractTaskId(responseData: any, endpoint: EndpointDef): string | null {
-  // 1. taskIdExtractPath: navigate to a field, then optionally apply regex
+function extractTaskId(responseData: unknown, endpoint: EndpointDef): string | null {
   const extractPath = endpoint.taskIdExtractPath?.trim();
-  if (extractPath) {
-    const raw = extractPath
-      .split('.')
-      .reduce((acc: any, k: string) => (acc != null ? acc[k] : undefined), responseData);
+  if (extractPath && isRecord(responseData)) {
+    const raw = extractPath.split('.').reduce<unknown>((acc, k) => (isRecord(acc) ? acc[k] : undefined), responseData);
     if (raw != null) {
       const regex = endpoint.taskIdExtractRegex?.trim();
       if (regex) {
@@ -50,12 +55,13 @@ function extractTaskId(responseData: any, endpoint: EndpointDef): string | null 
     }
   }
 
-  // 2. pollTaskIdField (default "task_id")
   const idField = endpoint.pollTaskIdField || 'task_id';
-  const fieldVal = idField.split('.').reduce((acc: any, k: string) => (acc != null ? acc[k] : undefined), responseData);
-  if (fieldVal != null) return String(fieldVal);
+  if (isRecord(responseData)) {
+    const fieldVal = idField.split('.').reduce<unknown>((acc, k) => (isRecord(acc) ? acc[k] : undefined), responseData);
+    if (fieldVal != null) return String(fieldVal);
+    if (typeof responseData.operationId === 'string') return responseData.operationId;
+  }
 
-  // 3. Raw string fallback
   if (typeof responseData === 'string') return responseData;
   if (typeof responseData === 'number') return String(responseData);
 
@@ -103,10 +109,12 @@ export function resolveUploadFilePath(urlOrPath: string): string | null {
 }
 
 export interface ExecutionContext {
-  input: Record<string, any>;
+  input: Record<string, unknown>;
   files: FileInput[];
-  stepResults: Record<string, any>;
+  artifactIds?: string[];
+  stepResults: Record<string, unknown>;
   jobId: number;
+  userId?: number;
 }
 
 export class PipelineExecutor {
@@ -115,6 +123,7 @@ export class PipelineExecutor {
   private jobManager: AsyncJobManager;
   private logger: LoggerLike;
   private nodeId: string;
+  private orchestrator?: OperationOrchestrator;
 
   constructor(
     db: Database,
@@ -122,12 +131,14 @@ export class PipelineExecutor {
     jobManager: AsyncJobManager,
     logger: LoggerLike,
     nodeId = '',
+    orchestrator?: OperationOrchestrator,
   ) {
     this.db = db;
     this.apiClient = apiClient;
     this.jobManager = jobManager;
     this.logger = logger;
     this.nodeId = nodeId;
+    this.orchestrator = orchestrator;
   }
 
   private async resolveFile(urlOrPath: string, fieldName = 'file'): Promise<FileInput | null> {
@@ -143,7 +154,7 @@ export class PipelineExecutor {
           fieldName,
           buffer,
           filename: basename(localPath),
-          mimeType,
+          mimeType: String(mimeType),
         };
       }
 
@@ -162,12 +173,12 @@ export class PipelineExecutor {
 
   async execute(
     pipelineId: number,
-    input: Record<string, any>,
+    input: Record<string, unknown>,
     files: FileInput[] = [],
     userId?: number,
   ): Promise<JobState> {
-    const pipelineRepo = this.db.getRepository<any>('doc_understanding_pipelines');
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
+    const pipelineRepo = this.db.getRepository('doc_understanding_pipelines');
+    const jobsRepo = this.db.getRepository('doc_understanding_jobs');
 
     const pipeline = await pipelineRepo.findOne({
       filter: { id: pipelineId },
@@ -177,13 +188,12 @@ export class PipelineExecutor {
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found`);
     if (!pipeline.enabled) throw new Error(`Pipeline ${pipelineId} is disabled`);
 
-    // Create Job
-    const job = await jobsRepo.create({
+    const job = (await jobsRepo.create({
       values: {
         pipelineId,
         status: 'pending',
         input,
-        currentStep: 1, // 1-based ordering
+        currentStep: 1,
         stepResults: {},
         externalTaskIds: {},
         startedAt: new Date(),
@@ -191,7 +201,7 @@ export class PipelineExecutor {
         ownedBy: this.nodeId,
         leaseExpiresAt: new Date(Date.now() + JOB_RUN_LEASE_MS),
       },
-    });
+    })) as unknown as JobState;
 
     const resolvedFiles: FileInput[] = [];
 
@@ -202,7 +212,6 @@ export class PipelineExecutor {
       }
     };
 
-    // 1. Process files argument
     if (Array.isArray(files)) {
       for (const f of files) {
         if (f && typeof f === 'object') {
@@ -216,7 +225,6 @@ export class PipelineExecutor {
       }
     }
 
-    // 2. Scan input for common file URL keys
     const urlFields = ['file_url', 'file_urls', 'file', 'files'];
     for (const key of urlFields) {
       const val = input[key];
@@ -227,13 +235,20 @@ export class PipelineExecutor {
           val.startsWith('http://') ||
           val.startsWith('https://') ||
           val.startsWith('/') ||
-          val.startsWith('storage/')
+          val.startsWith('storage/') ||
+          val.startsWith('uploads/')
         ) {
           await tryAddFile(val, 'file');
         } else if (val.includes(',')) {
           const urls = val.split(',').map((s) => s.trim());
           for (const u of urls) {
-            if (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('/') || u.startsWith('storage/')) {
+            if (
+              u.startsWith('http://') ||
+              u.startsWith('https://') ||
+              u.startsWith('/') ||
+              u.startsWith('storage/') ||
+              u.startsWith('uploads/')
+            ) {
               await tryAddFile(u, 'file');
             }
           }
@@ -245,15 +260,16 @@ export class PipelineExecutor {
               item.startsWith('http://') ||
               item.startsWith('https://') ||
               item.startsWith('/') ||
-              item.startsWith('storage/')
+              item.startsWith('storage/') ||
+              item.startsWith('uploads/')
             ) {
               await tryAddFile(item, 'file');
             }
-          } else if (item && typeof item === 'object' && item.url) {
+          } else if (isRecord(item) && typeof item.url === 'string') {
             await tryAddFile(item.url, 'file');
           }
         }
-      } else if (val && typeof val === 'object' && val.url) {
+      } else if (isRecord(val) && typeof val.url === 'string') {
         await tryAddFile(val.url, 'file');
       }
     }
@@ -271,12 +287,12 @@ export class PipelineExecutor {
       files: resolvedFiles,
       stepResults: {},
       jobId: job.id,
+      userId,
     };
 
-    // Sorting steps by order
-    const steps = [...(pipeline.steps || [])].sort((a, b) => a.stepOrder - b.stepOrder);
+    const rawSteps = (pipeline as unknown as PipelineDef).steps || [];
+    const steps = [...rawSteps].sort((a, b) => a.stepOrder - b.stepOrder);
 
-    // Run steps (Synchronous part)
     this.runSteps(job, steps, context).catch((err) => {
       this.logger.error(`Background pipeline error for job ${job.id}`, err);
     });
@@ -284,8 +300,126 @@ export class PipelineExecutor {
     return job;
   }
 
+  private async ensureArtifactsForContext(context: ExecutionContext): Promise<string[]> {
+    if (context.artifactIds) return context.artifactIds;
+    const ids: string[] = [];
+    if (Array.isArray(context.input.artifactIds)) {
+      for (const id of context.input.artifactIds) {
+        if (typeof id === 'string' && id.trim()) ids.push(id.trim());
+      }
+    }
+    if (this.orchestrator && context.files.length > 0) {
+      for (const file of context.files) {
+        const created = await this.orchestrator.artifactStorage.createReadyArtifactFromBuffer({
+          tenantId: 'default',
+          fileName: file.filename,
+          mimeType: file.mimeType,
+          buffer: file.buffer,
+          userId: context.userId,
+        });
+        ids.push(created.artifactId);
+      }
+    }
+    context.artifactIds = ids;
+    return ids;
+  }
+
+  private isCanonicalEndpoint(endpoint: EndpointDef): boolean {
+    if (!this.orchestrator) return false;
+    return (
+      endpoint.protocolMode === 'builtin_du' ||
+      endpoint.protocolMode === 'du_rework_v1' ||
+      Boolean(endpoint.businessId && endpoint.actionName)
+    );
+  }
+
+  private async executeCanonicalStep(
+    job: JobState,
+    step: PipelineStepDef,
+    mappedBody: Record<string, unknown>,
+    context: ExecutionContext,
+  ): Promise<{ halted: boolean; responsePayload?: Record<string, unknown> }> {
+    if (!this.orchestrator) {
+      throw new Error('OperationOrchestrator is not attached');
+    }
+
+    const endpoint = step.endpoint;
+    const businessId = endpoint.businessId || 'document-core';
+    const action = endpoint.actionName || 'ingest';
+    const stepInput: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(mappedBody || {})) {
+      if (v !== undefined) stepInput[k] = v;
+    }
+    if (endpoint.discriminatorField && endpoint.discriminatorValue) {
+      stepInput[endpoint.discriminatorField] = endpoint.discriminatorValue;
+    }
+
+    const artifactIds = await this.ensureArtifactsForContext(context);
+    const submitted = await this.orchestrator.submitOperation({
+      principal: {
+        kind: 'nocobase_user',
+        tenantId: 'default',
+        userId: context.userId,
+        allowedBusinesses: ['*'],
+        allowedActions: ['*'],
+      },
+      businessId,
+      action,
+      submission: {
+        input: stepInput,
+        artifacts: artifactIds.map((artifactId) => ({ artifactId, role: 'input' })),
+        documentSelection: isRecord(context.input.documentSelection)
+          ? (context.input.documentSelection as never)
+          : undefined,
+      },
+      waitCompletionMs: endpoint.pollTimeout || 120_000,
+    });
+
+    const opRecord = await this.orchestrator.getOperationRecordOrThrow('default', submitted.operationId);
+    const jobsRepo = this.db.getRepository('doc_understanding_jobs');
+
+    if (opRecord.state === 'WAITING_INPUT') {
+      const externalTaskIds = { ...(job.externalTaskIds || {}), [String(step.stepOrder)]: opRecord.operationId };
+      await jobsRepo.update({
+        filterByTk: job.id,
+        values: {
+          status: 'waiting_input',
+          operationId: opRecord.operationId,
+          waitState: opRecord.waitState,
+          usage: opRecord.usage,
+          externalTaskIds,
+          leaseExpiresAt: null,
+        },
+      });
+      return { halted: true };
+    }
+
+    if (opRecord.state !== 'SUCCEEDED') {
+      throw new Error(
+        opRecord.errorProblem?.detail || opRecord.errorProblem?.title || `Operation ended in state ${opRecord.state}`,
+      );
+    }
+
+    await jobsRepo.update({
+      filterByTk: job.id,
+      values: {
+        operationId: opRecord.operationId,
+        usage: opRecord.usage ?? null,
+      },
+    });
+
+    return {
+      halted: false,
+      responsePayload: {
+        ...(opRecord.outputPayload || {}),
+        usage: opRecord.usage,
+        operationId: opRecord.operationId,
+      },
+    };
+  }
+
   private async runSteps(job: JobState, steps: PipelineStepDef[], context: ExecutionContext, startFromOrder = 1) {
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
+    const jobsRepo = this.db.getRepository('doc_understanding_jobs');
     let currentOrder = startFromOrder;
 
     try {
@@ -306,7 +440,7 @@ export class PipelineExecutor {
         });
 
         if (!this.evaluateCondition(step.condition, context)) {
-          continue; // Skip step
+          continue;
         }
 
         if (!step.endpoint?.enabled) {
@@ -319,10 +453,20 @@ export class PipelineExecutor {
             : context.input;
         let retries = step.onError === 'retry' ? step.retryCount || 0 : 0;
         let success = false;
-        let lastError = null;
+        let lastError: Error | null = null;
 
         while (retries >= 0 && !success) {
           try {
+            if (this.isCanonicalEndpoint(step.endpoint)) {
+              const canonicalOutcome = await this.executeCanonicalStep(job, step, mappedBody, context);
+              if (canonicalOutcome.halted) {
+                return;
+              }
+              context.stepResults[step.outputAlias || step.stepOrder.toString()] = canonicalOutcome.responsePayload;
+              success = true;
+              continue;
+            }
+
             const fileFieldName = step.endpoint.fileFieldName || 'file';
             const mappedFiles = context.files
               ? context.files.map((f) => ({
@@ -339,12 +483,7 @@ export class PipelineExecutor {
 
             if (step.endpoint.executionMode === 'sync') {
               const responseData = result.data;
-              // DUGate sync mode (?sync=true) can still return 202 Accepted with a
-              // task id (pipeline/workflow jobs that never run synchronously). In
-              // that case we treat the endpoint as an async poll to completion.
-              const isAsyncAccepted =
-                result.status === 202 ||
-                (responseData && typeof responseData === 'object' && responseData.done === false);
+              const isAsyncAccepted = result.status === 202 || (isRecord(responseData) && responseData.done === false);
               if (isAsyncAccepted) {
                 const taskId = extractTaskId(responseData, step.endpoint);
                 if (taskId) {
@@ -361,16 +500,13 @@ export class PipelineExecutor {
                   });
 
                   await this.jobManager.startPolling(job.id, step.endpoint, taskId);
-                  return; // Halt execution. Polling callback will resume from next step.
+                  return;
                 }
-                // No task id: fall through and store the raw 202 body as the step result.
               }
               context.stepResults[step.outputAlias || step.stepOrder.toString()] = responseData;
               success = true;
             } else if (step.endpoint.executionMode === 'polling') {
-              // Extract taskId from result based on pollTaskIdField / taskIdExtractPath
               const taskId = extractTaskId(result.data, step.endpoint);
-
               if (!taskId) throw new Error('Polling taskId not found in response');
 
               const externalTaskIds = job.externalTaskIds || {};
@@ -381,17 +517,13 @@ export class PipelineExecutor {
                 values: {
                   status: 'polling',
                   externalTaskIds,
-                  // This node keeps polling and refreshes the lease on every tick.
                   leaseExpiresAt: new Date(Date.now() + pollLeaseMs(step.endpoint.pollInterval)),
                 },
               });
 
               await this.jobManager.startPolling(job.id, step.endpoint, taskId);
-
-              // Halt execution. Polling callback will resume from next step.
               return;
             } else if (step.endpoint.executionMode === 'webhook') {
-              // Wait for webhook
               const taskId = extractTaskId(result.data, step.endpoint);
               if (!taskId) throw new Error('Webhook taskId not found in response');
               const externalTaskIds = job.externalTaskIds || {};
@@ -402,18 +534,14 @@ export class PipelineExecutor {
                 values: {
                   status: 'polling',
                   externalTaskIds,
-                  // No process actively owns a webhook wait: the callback may arrive
-                  // at any node, so there is no lease to renew.
                   leaseExpiresAt: null,
                 },
               });
-
-              // End execution. Webhook will resume.
               return;
             }
-          } catch (err: any) {
-            lastError = err;
-            retries--;
+          } catch (err: unknown) {
+            lastError = err instanceof Error ? err : new Error(String(err));
+            retries -= 1;
           }
         }
 
@@ -421,33 +549,43 @@ export class PipelineExecutor {
           if (step.onError === 'fail') {
             throw lastError || new Error(`Step ${step.name} failed`);
           }
-          // if 'skip', we continue the loop
         }
       }
 
-      // If loop completes without being halted for async
       await this.finishJob(job.id, context);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
       await jobsRepo.update({
         filterByTk: job.id,
-        values: { status: 'failed', error: err.message, completedAt: new Date() },
+        values: { status: 'failed', error: errorMessage, completedAt: new Date() },
       });
     }
   }
 
-  async resumeFromStep(jobId: number, asyncResult: any) {
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
-    const pipelineRepo = this.db.getRepository<any>('doc_understanding_pipelines');
+  async resumeFromStep(jobId: number, asyncResult: unknown) {
+    const jobsRepo = this.db.getRepository('doc_understanding_jobs');
+    const pipelineRepo = this.db.getRepository('doc_understanding_pipelines');
 
-    // Atomic claim: webhooks can be delivered more than once and a polling tick can
-    // race with a webhook, so only the first caller that still finds the job in
-    // 'polling' may resume it. The row lock plus status re-check makes the claim
-    // safe across nodes.
-    type ResumeClaim = { job: any; steps: PipelineStepDef[]; stepResults: Record<string, any>; currentStep: number };
+    interface LockedJobRow {
+      id: number;
+      get: (name: string) => unknown;
+    }
+
+    type ResumeClaim = {
+      job: LockedJobRow;
+      steps: PipelineStepDef[];
+      stepResults: Record<string, unknown>;
+      currentStep: number;
+    };
     const resume: ResumeClaim | undefined = await this.db.sequelize.transaction(
       async (transaction: { LOCK: { UPDATE: string } }): Promise<ResumeClaim | undefined> => {
-        const locked = await jobsRepo.findOne({ filterByTk: jobId, transaction, lock: transaction.LOCK.UPDATE });
-        if (!locked || String(locked.get('status')) !== 'polling') return undefined;
+        const locked = (await jobsRepo.findOne({
+          filterByTk: jobId,
+          transaction,
+          lock: transaction.LOCK.UPDATE,
+        })) as LockedJobRow | null;
+        const lockedStatus = locked ? String(locked.get('status')) : '';
+        if (!locked || (lockedStatus !== 'polling' && lockedStatus !== 'waiting_input')) return undefined;
 
         const pipeline = await pipelineRepo.findOne({
           filter: { id: locked.get('pipelineId') },
@@ -456,12 +594,11 @@ export class PipelineExecutor {
         });
         if (!pipeline) return undefined;
 
-        const steps = [...((pipeline as any).steps || [])].sort(
-          (a: PipelineStepDef, b: PipelineStepDef) => a.stepOrder - b.stepOrder,
-        );
+        const rawSteps = (pipeline as unknown as PipelineDef).steps || [];
+        const steps = [...rawSteps].sort((a, b) => a.stepOrder - b.stepOrder);
         const currentStep = Number(locked.get('currentStep'));
         const step = steps.find((s) => s.stepOrder === currentStep);
-        const stepResults = { ...((locked.get('stepResults') as Record<string, any>) || {}) };
+        const stepResults = { ...((locked.get('stepResults') as Record<string, unknown>) || {}) };
         if (step) {
           stepResults[step.outputAlias || step.stepOrder.toString()] = asyncResult;
         }
@@ -470,6 +607,7 @@ export class PipelineExecutor {
           filterByTk: jobId,
           values: {
             status: 'running',
+            waitState: null,
             ownedBy: this.nodeId,
             leaseExpiresAt: new Date(Date.now() + JOB_RUN_LEASE_MS),
             stepResults,
@@ -483,30 +621,32 @@ export class PipelineExecutor {
     if (!resume) return;
 
     const context: ExecutionContext = {
-      input: resume.job.get('input'),
-      files: [], // Files cannot easily persist across webhook unless stored in bucket. For now assume next steps use only json.
+      input: (resume.job.get('input') as Record<string, unknown>) || {},
+      files: [],
       stepResults: resume.stepResults,
       jobId: resume.job.id,
     };
 
-    // resume from next step
-    this.runSteps(resume.job, resume.steps, context, resume.currentStep + 1).catch((err) => {
+    this.runSteps(resume.job as unknown as JobState, resume.steps, context, resume.currentStep + 1).catch((err) => {
       this.logger.error(`Failed executing step ${resume.currentStep + 1} for job ${resume.job.id}`, err);
     });
   }
 
   private async finishJob(jobId: number, context: ExecutionContext) {
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
-    const pipelineRepo = this.db.getRepository<any>('doc_understanding_pipelines');
+    const jobsRepo = this.db.getRepository('doc_understanding_jobs');
+    const pipelineRepo = this.db.getRepository('doc_understanding_pipelines');
     const job = await jobsRepo.findOne({ filterByTk: jobId });
     if (!job) return;
 
-    const pipeline = await pipelineRepo.findOne({ filter: { id: job.pipelineId } });
+    const pipeline = (await pipelineRepo.findOne({ filter: { id: job.pipelineId } })) as unknown as PipelineDef | null;
     if (!pipeline) return;
 
-    const finalResult = pipeline.outputMapping
-      ? this.resolveMapping(pipeline.outputMapping, context)
-      : context.stepResults;
+    let finalResult: unknown = context.stepResults;
+    if (pipeline.outputMapping && Object.keys(pipeline.outputMapping).length > 0) {
+      const mapped = this.resolveMapping(pipeline.outputMapping, context);
+      const compact = Object.fromEntries(Object.entries(mapped).filter(([, v]) => v !== undefined));
+      finalResult = Object.keys(compact).length > 0 ? compact : context.stepResults;
+    }
 
     await jobsRepo.update({
       filterByTk: jobId,
@@ -519,44 +659,41 @@ export class PipelineExecutor {
     });
   }
 
-  private resolveMapping(mapping: Record<string, string>, context: ExecutionContext): Record<string, any> {
-    const result: Record<string, any> = {};
+  private resolveMapping(mapping: Record<string, unknown>, context: ExecutionContext): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(mapping)) {
       if (typeof value === 'string') {
         if (value.startsWith('$input.')) {
           result[key] = this.getNestedValue(context.input, value.replace('$input.', ''));
         } else if (value.startsWith('$step[')) {
-          const match = value.match(/\$step\[(.*?)\]\.response\.(.*)/);
+          const match = value.match(/^\$step\[(.*?)\]\.(?:response\.)?(.*)$/);
           if (match) {
             const stepKey = match[1];
             const path = match[2];
             const stepResult = context.stepResults[stepKey];
-            result[key] = this.getNestedValue(stepResult, path);
+            result[key] = path ? this.getNestedValue(stepResult, path) : stepResult;
           } else {
             result[key] = value;
           }
         } else if (value === '$files') {
-          // special case: mapping wants files. Not mapped here as form data handles files via input.files.
+          // Handled via context.files
         } else {
           result[key] = value;
         }
       } else {
-        result[key] = value; // copy raw if not string mapping
+        result[key] = value;
       }
     }
     return result;
   }
 
-  private evaluateCondition(condition: any, context: ExecutionContext): boolean {
-    if (!condition) return true;
+  private evaluateCondition(condition: unknown, context: ExecutionContext): boolean {
+    if (!condition || !isRecord(condition)) return true;
 
-    const resolveValue = (v: any) => {
-      if (typeof v === 'string' && v.startsWith('$')) {
-        // Resolve simple $ expressions
-        if (v.startsWith('$step[')) {
-          const match = v.match(/\$step\[(.*?)\]\.response\.(.*)/);
-          if (match) return this.getNestedValue(context.stepResults[match[1]], match[2]);
-        }
+    const resolveValue = (v: unknown): unknown => {
+      if (typeof v === 'string' && v.startsWith('$step[')) {
+        const match = v.match(/^\$step\[(.*?)\]\.(?:response\.)?(.*)$/);
+        if (match) return this.getNestedValue(context.stepResults[match[1]], match[2]);
       }
       return v;
     };
@@ -570,13 +707,13 @@ export class PipelineExecutor {
       case 'neq':
         return fieldVal !== val;
       case 'gt':
-        return fieldVal > val;
+        return Number(fieldVal) > Number(val);
       case 'gte':
-        return fieldVal >= val;
+        return Number(fieldVal) >= Number(val);
       case 'lt':
-        return fieldVal < val;
+        return Number(fieldVal) < Number(val);
       case 'lte':
-        return fieldVal <= val;
+        return Number(fieldVal) <= Number(val);
       case 'in':
         return Array.isArray(val) && val.includes(fieldVal);
       case 'contains':
@@ -586,8 +723,8 @@ export class PipelineExecutor {
     }
   }
 
-  private getNestedValue(obj: any, path: string): any {
-    if (!obj) return obj;
-    return path.split('.').reduce((acc, part) => acc && acc[part], obj);
+  private getNestedValue(obj: unknown, path: string): unknown {
+    if (!obj || !path) return obj;
+    return path.split('.').reduce<unknown>((acc, part) => (isRecord(acc) ? acc[part] : undefined), obj);
   }
 }

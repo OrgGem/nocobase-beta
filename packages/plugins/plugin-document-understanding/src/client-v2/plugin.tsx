@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Application, Plugin } from '@nocobase/client-v2';
+import type { Instruction } from '@nocobase/plugin-workflow/client-v2';
+import DocumentUnderstandingInstruction from './workflow/DocumentUnderstandingInstruction';
+
+type WorkflowClientV2Like = {
+  registerInstruction?: (type: string, instruction: Instruction | { new (): Instruction }) => void;
+};
 
 export class PluginDocumentUnderstandingClient extends Plugin<Record<string, never>, Application> {
   async load() {
@@ -18,6 +24,11 @@ export class PluginDocumentUnderstandingClient extends Plugin<Record<string, nev
       componentLoader: () => import('./components/PluginSettings'),
       aclSnippet: `pm.${this.options.name || 'document-understanding'}`,
     });
+
+    const workflow = (this.app.pm.get('workflow') || this.app.pm.get('@nocobase/plugin-workflow')) as
+      | WorkflowClientV2Like
+      | undefined;
+    workflow?.registerInstruction?.('document-understanding', DocumentUnderstandingInstruction);
   }
 }
 

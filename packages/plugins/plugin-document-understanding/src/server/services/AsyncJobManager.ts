@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Database } from '@nocobase/database';
 import { ExternalApiClient } from './ExternalApiClient';
 import { EndpointDef } from '../types';
@@ -95,7 +104,7 @@ export class AsyncJobManager {
               : response;
             this.stopPolling(jobId);
             await this.onJobComplete(jobId, resultValue);
-          } else if (statusValue === 'failed' || statusValue === 'error') {
+          } else if (['failed', 'error', 'cancelled', 'timed_out'].includes(String(statusValue).toLowerCase())) {
             this.stopPolling(jobId);
             await this.onJobError(jobId, `External task failed with status: ${statusValue}`);
           }

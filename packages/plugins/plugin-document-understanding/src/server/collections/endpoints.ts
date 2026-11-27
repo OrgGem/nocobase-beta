@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { CollectionOptions } from '@nocobase/database';
 
 export default {
@@ -14,6 +23,9 @@ export default {
     { type: 'string', name: 'fileFieldName', length: 100, defaultValue: 'file' },
     { type: 'integer', name: 'maxFiles', defaultValue: 1 },
     { type: 'string', name: 'executionMode', length: 20 },
+    { type: 'string', name: 'protocolMode', length: 30, defaultValue: 'legacy_rest' },
+    { type: 'string', name: 'businessId', length: 100 },
+    { type: 'string', name: 'actionName', length: 100 },
     { type: 'string', name: 'discriminatorField', length: 50 },
     { type: 'string', name: 'discriminatorValue', length: 100 },
     { type: 'string', name: 'syncQueryParam', length: 50 },

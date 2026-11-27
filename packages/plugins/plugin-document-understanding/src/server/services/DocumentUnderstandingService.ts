@@ -1,10 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import * as crypto from 'crypto';
-import { Application } from '@nocobase/server';
-import { Database, Repository } from '@nocobase/database';
+import type { Application } from '@nocobase/server';
+import type { Database } from '@nocobase/database';
 import { ExternalApiClient, FileInput } from './ExternalApiClient';
 import { AsyncJobManager } from './AsyncJobManager';
 import { PipelineExecutor } from './PipelineExecutor';
+import { ArtifactStorageService } from './ArtifactStorageService';
+import { BuiltinBusinessEngine } from './BuiltinBusinessEngine';
+import { ExternalDuReworkClient } from './ExternalDuReworkClient';
+import { OperationOrchestrator } from './OperationOrchestrator';
+import { seedDugateEndpoints } from '../dugate-seed';
 import { ClientServiceConfig, ServiceConfig, EndpointDef, PipelineDef, JobState } from '../types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 export class DocumentUnderstandingService {
   private app: Application;
@@ -12,12 +23,12 @@ export class DocumentUnderstandingService {
   private apiClient!: ExternalApiClient;
   private pipelineExecutor!: PipelineExecutor;
   private jobManager!: AsyncJobManager;
+  public orchestrator!: OperationOrchestrator;
   private initialized = false;
   private startupRecoveryCompleted = false;
   private initializationPromise?: Promise<void>;
   private maintenanceTimer?: NodeJS.Timeout;
-  // Unique per process; used as the job owner so other nodes can tell orphaned
-  // jobs apart from jobs that are still being processed.
+  private processedWebhookDeliveries = new Set<string>();
   private readonly nodeId: string;
   private static readonly HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
   private static readonly MAINTENANCE_INTERVAL_MS = 30_000;
@@ -50,6 +61,40 @@ export class DocumentUnderstandingService {
 
     this.jobManager?.destroy();
     this.stopMaintenance();
+
+    const artifactStorage = new ArtifactStorageService(this.db);
+    const builtinEngine = new BuiltinBusinessEngine(this.app, artifactStorage, async (pipelineRef, input, userId) => {
+      const pipelines = await this.listPipelines();
+      const target = pipelineRef.pipelineId
+        ? pipelines.find((p) => p.id === pipelineRef.pipelineId)
+        : pipelines.find((p) => p.name === pipelineRef.pipelineName);
+      if (!target) {
+        throw new Error(`Referenced pipeline ${pipelineRef.pipelineName || pipelineRef.pipelineId} not found`);
+      }
+      const { jobId } = await this.executePipeline(target.id, input, [], userId);
+      const deadline = Date.now() + (config.pollTimeout || 120_000);
+      while (Date.now() < deadline) {
+        const j = await this.getJobStatus(jobId);
+        if (j.status === 'completed') {
+          return isRecord(j.finalResult) ? j.finalResult : { result: j.finalResult };
+        }
+        if (['failed', 'cancelled', 'timeout'].includes(j.status)) {
+          throw new Error(j.error || `Pipeline job #${jobId} ended with ${j.status}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      throw new Error(`Schema workflow pipeline #${target.id} timed out`);
+    });
+
+    this.orchestrator = new OperationOrchestrator({
+      app: this.app,
+      db: this.db,
+      artifactStorage,
+      builtinEngine,
+      getConfig: () => this.getConfig(),
+      nodeId: this.nodeId,
+    });
+
     this.apiClient = new ExternalApiClient(config);
     this.jobManager = new AsyncJobManager(
       this.db,
@@ -59,7 +104,7 @@ export class DocumentUnderstandingService {
           await this.pipelineExecutor.resumeFromStep(jobId, result);
         },
         onJobError: async (jobId, error) => {
-          const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
+          const jobsRepo = this.db.getRepository('doc_understanding_jobs');
           await jobsRepo.update({
             filterByTk: jobId,
             values: { status: 'failed', error, completedAt: new Date() },
@@ -76,6 +121,7 @@ export class DocumentUnderstandingService {
       this.jobManager,
       this.app.logger,
       this.nodeId,
+      this.orchestrator,
     );
 
     if (recoverJobs && !this.startupRecoveryCompleted) {
@@ -87,11 +133,6 @@ export class DocumentUnderstandingService {
     this.initialized = true;
   }
 
-  /**
-   * Cluster maintenance sweep: fails active jobs whose owner is gone and
-   * re-adopts orphaned polling jobs. Safe to run on every node — all state
-   * transitions are guarded by ownership checks and row-level claims.
-   */
   async maintainJobs(): Promise<void> {
     if (!this.jobManager) return;
     try {
@@ -107,7 +148,6 @@ export class DocumentUnderstandingService {
     this.maintenanceTimer = setInterval(() => {
       this.maintainJobs();
     }, DocumentUnderstandingService.MAINTENANCE_INTERVAL_MS);
-    // The sweep must never keep the process alive on shutdown.
     this.maintenanceTimer.unref?.();
   }
 
@@ -119,7 +159,7 @@ export class DocumentUnderstandingService {
   }
 
   private async ensureConfig(): Promise<ServiceConfig> {
-    const configRepo = this.db.getRepository<any>('doc_understanding_config');
+    const configRepo = this.db.getRepository('doc_understanding_config');
     let config = await configRepo.findOne();
 
     if (!config) {
@@ -131,13 +171,15 @@ export class DocumentUnderstandingService {
           defaultRetries: 2,
           pollInterval: 5000,
           pollTimeout: 300000,
+          engineMode: 'builtin',
+          maxFileSizeBytes: 10485760,
+          maxFilesPerRequest: 20,
+          publicGatewayEnabled: true,
         },
       });
     }
 
-    // Attributes live on the Sequelize model prototype, so callers that spread the
-    // result would otherwise get an object with none of the config fields.
-    return config.toJSON();
+    return config.toJSON() as ServiceConfig;
   }
 
   isReady(): boolean {
@@ -158,7 +200,7 @@ export class DocumentUnderstandingService {
   }
 
   async updateConfig(data: Partial<ServiceConfig>): Promise<void> {
-    const configRepo = this.db.getRepository<any>('doc_understanding_config');
+    const configRepo = this.db.getRepository('doc_understanding_config');
     const conf = await configRepo.findOne();
     if (conf) {
       const values = { ...data };
@@ -166,8 +208,35 @@ export class DocumentUnderstandingService {
       if (!values.webhookSecret) delete values.webhookSecret;
       await configRepo.update({ filterByTk: conf.id, values });
     }
-    // Reinitialize to pick up new config
     await this.initialize();
+  }
+
+  async getGatewayHealth(): Promise<Record<string, unknown>> {
+    await this.ensureInitialized();
+    const config = await this.getConfig();
+    const llmServices = await this.orchestrator.builtinEngine.listAvailableLlmServices();
+    let externalStatus: Record<string, unknown> | undefined;
+    if (config.engineMode === 'du_rework' || config.engineMode === 'hybrid') {
+      const extClient = new ExternalDuReworkClient(config);
+      externalStatus = await extClient.checkHealth();
+    }
+    return {
+      status: 'ok',
+      engineMode: config.engineMode || 'builtin',
+      publicGatewayEnabled: config.publicGatewayEnabled !== false,
+      builtinAiAvailable: llmServices.length > 0 || Boolean(this.orchestrator.builtinEngine.resolveAiManager()),
+      llmServiceCount: llmServices.length,
+      ...(externalStatus ? { externalGateway: externalStatus } : {}),
+      businesses: [
+        { businessId: 'document-core', version: '2.0.0', state: 'ACTIVE' },
+        { businessId: 'lc-checker', version: '1.2.0', state: 'ACTIVE' },
+        { businessId: 'example-review', version: '1.0.0', state: 'ACTIVE' },
+      ],
+    };
+  }
+
+  async syncCatalog(): Promise<{ endpoints: number; pipelines: number }> {
+    return seedDugateEndpoints(this.db);
   }
 
   destroy(): void {
@@ -179,15 +248,19 @@ export class DocumentUnderstandingService {
 
   async listEndpoints(): Promise<EndpointDef[]> {
     await this.ensureInitialized();
-    return this.db.getRepository<any>('doc_understanding_endpoints').find({ sort: 'sortOrder' });
+    const rows = await this.db.getRepository('doc_understanding_endpoints').find({ sort: 'sortOrder' });
+    return rows as unknown as EndpointDef[];
   }
 
   async createEndpoint(data: Partial<EndpointDef>): Promise<EndpointDef> {
-    return this.db.getRepository<any>('doc_understanding_endpoints').create({ values: this.normalizeEndpoint(data) });
+    const created = await this.db
+      .getRepository('doc_understanding_endpoints')
+      .create({ values: this.normalizeEndpoint(data) });
+    return created as unknown as EndpointDef;
   }
 
   async updateEndpoint(id: number, data: Partial<EndpointDef>): Promise<void> {
-    await this.db.getRepository<any>('doc_understanding_endpoints').update({
+    await this.db.getRepository('doc_understanding_endpoints').update({
       filterByTk: id,
       values: this.normalizeEndpoint(data),
     });
@@ -203,7 +276,7 @@ export class DocumentUnderstandingService {
     };
   }
 
-  private normalizeHeaders(headers?: Record<string, any>): Record<string, string> {
+  private normalizeHeaders(headers?: Record<string, unknown>): Record<string, string> {
     const normalized: Record<string, string> = {};
     if (!headers || typeof headers !== 'object' || Array.isArray(headers)) {
       return normalized;
@@ -222,27 +295,29 @@ export class DocumentUnderstandingService {
   }
 
   async deleteEndpoint(id: number): Promise<void> {
-    await this.db.getRepository<any>('doc_understanding_endpoints').destroy({ filterByTk: id });
+    await this.db.getRepository('doc_understanding_endpoints').destroy({ filterByTk: id });
   }
 
   async listPipelines(): Promise<PipelineDef[]> {
     await this.ensureInitialized();
-    return this.db.getRepository<any>('doc_understanding_pipelines').find({
+    const rows = await this.db.getRepository('doc_understanding_pipelines').find({
       appends: ['steps', 'steps.endpoint'],
     });
+    return rows as unknown as PipelineDef[];
   }
 
   async createPipeline(data: Partial<PipelineDef>): Promise<PipelineDef> {
     this.validateStepAliases(data.steps);
-    return this.db.getRepository<any>('doc_understanding_pipelines').create({ values: data });
+    const created = await this.db.getRepository('doc_understanding_pipelines').create({ values: data });
+    return created as unknown as PipelineDef;
   }
 
   async updatePipeline(id: number, data: Partial<PipelineDef>): Promise<void> {
     this.validateStepAliases(data.steps);
-    await this.db.getRepository<any>('doc_understanding_pipelines').update({ filterByTk: id, values: data });
+    await this.db.getRepository('doc_understanding_pipelines').update({ filterByTk: id, values: data });
   }
 
-  private validateStepAliases(steps?: any[]) {
+  private validateStepAliases(steps?: Array<{ outputAlias?: string }>) {
     if (!steps) return;
     const aliases = steps.map((s) => s.outputAlias).filter(Boolean);
     const unique = new Set(aliases);
@@ -252,12 +327,12 @@ export class DocumentUnderstandingService {
   }
 
   async deletePipeline(id: number): Promise<void> {
-    await this.db.getRepository<any>('doc_understanding_pipelines').destroy({ filterByTk: id });
+    await this.db.getRepository('doc_understanding_pipelines').destroy({ filterByTk: id });
   }
 
   async executePipeline(
     pipelineId: number,
-    input: Record<string, any>,
+    input: Record<string, unknown>,
     files: FileInput[] = [],
     userId?: number,
   ): Promise<{ jobId: number }> {
@@ -268,46 +343,105 @@ export class DocumentUnderstandingService {
 
   async getJobStatus(jobId: number, userId?: number): Promise<JobState> {
     const filter = userId ? { id: jobId, createdById: userId } : { id: jobId };
-    const job = await this.db.getRepository<any>('doc_understanding_jobs').findOne({ filter });
+    const job = await this.db.getRepository('doc_understanding_jobs').findOne({ filter });
     if (!job) throw new Error('Job not found');
-    return job;
+    return job as unknown as JobState;
   }
 
   async listJobs(filters?: Record<string, unknown>, userId?: number): Promise<JobState[]> {
     const filter = userId ? { ...(filters || {}), createdById: userId } : filters;
-    return this.db.getRepository<any>('doc_understanding_jobs').find({
+    const rows = await this.db.getRepository('doc_understanding_jobs').find({
       filter,
       sort: ['-createdAt'],
     });
+    return rows as unknown as JobState[];
   }
 
-  async handleWebhook(payload: any, signature?: string): Promise<void> {
+  async cancelJob(jobId: number): Promise<JobState> {
+    await this.ensureInitialized();
+    const job = await this.getJobStatus(jobId);
+    this.jobManager.stopPolling(jobId);
+    if (job.operationId) {
+      await this.orchestrator.cancelOperation('*', job.operationId).catch(() => undefined);
+    }
+    await this.db.getRepository('doc_understanding_jobs').update({
+      filterByTk: jobId,
+      values: {
+        status: 'cancelled',
+        completedAt: new Date(),
+        leaseExpiresAt: null,
+      },
+    });
+    return this.getJobStatus(jobId);
+  }
+
+  async resumeJob(jobId: number, input: Record<string, unknown>, resumedBy?: string): Promise<JobState> {
+    await this.ensureInitialized();
+    const job = await this.getJobStatus(jobId);
+    if (job.status !== 'waiting_input' || !job.operationId) {
+      throw new Error(`Job #${jobId} is not waiting for human input`);
+    }
+    await this.orchestrator.resumeOperation({
+      tenantId: '*',
+      operationId: job.operationId,
+      input,
+      resumedBy,
+    });
+    const opView = await this.orchestrator.waitForOperation('*', job.operationId, 30);
+    if (opView.state === 'SUCCEEDED') {
+      const opRecord = await this.orchestrator.getOperationRecordOrThrow('*', job.operationId);
+      await this.pipelineExecutor.resumeFromStep(jobId, {
+        ...(opRecord.outputPayload || {}),
+        usage: opRecord.usage,
+        operationId: opRecord.operationId,
+      });
+    }
+    return this.getJobStatus(jobId);
+  }
+
+  async handleWebhook(
+    payload: Record<string, unknown>,
+    signature?: string,
+    duHeaders?: { signature?: string; timestamp?: string; deliveryId?: string },
+  ): Promise<void> {
     await this.ensureInitialized();
     const config = await this.getConfig();
+
+    if (duHeaders?.deliveryId && this.processedWebhookDeliveries.has(duHeaders.deliveryId)) {
+      return;
+    }
+
     if (config.webhookSecret) {
-      if (!signature) {
+      const effectiveSig = duHeaders?.signature || signature;
+      if (!effectiveSig) {
         throw new Error('Webhook signature missing');
       }
-      const expected = crypto.createHmac('sha256', config.webhookSecret).update(JSON.stringify(payload)).digest('hex');
-      const signatureHash = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-      if (!crypto.timingSafeEqual(Buffer.from(signatureHash, 'hex'), Buffer.from(expected, 'hex'))) {
+      const rawJson = JSON.stringify(payload);
+      const signedInput = duHeaders?.timestamp ? `${duHeaders.timestamp}.${rawJson}` : rawJson;
+      const expected = crypto.createHmac('sha256', config.webhookSecret).update(signedInput).digest('hex');
+      const signatureHash = effectiveSig.startsWith('sha256=') ? effectiveSig.slice(7) : effectiveSig;
+      const sigBuf = Buffer.from(signatureHash, 'hex');
+      const expBuf = Buffer.from(expected, 'hex');
+      if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
         throw new Error('Webhook signature verification failed');
       }
     }
 
-    const taskId = payload.task_id ?? payload.operation_id;
-    const result = payload.result;
-    if (!taskId) throw new Error('Webhook missing task_id');
+    const taskId = String(payload.operationId ?? payload.task_id ?? payload.operation_id ?? '');
+    if (!taskId) throw new Error('Webhook missing task_id / operationId');
 
-    // Paginated search to avoid loading all polling jobs into memory
-    const jobsRepo = this.db.getRepository<any>('doc_understanding_jobs');
+    if (duHeaders?.deliveryId) {
+      this.processedWebhookDeliveries.add(duHeaders.deliveryId);
+    }
+
+    const jobsRepo = this.db.getRepository('doc_understanding_jobs');
     const PAGE_SIZE = 100;
     let offset = 0;
     let hasMoreJobs = true;
 
     while (hasMoreJobs) {
       const jobs = await jobsRepo.find({
-        filter: { status: 'polling' },
+        filter: { status: { $in: ['polling', 'waiting_input'] } },
         limit: PAGE_SIZE,
         offset,
       });
@@ -315,8 +449,16 @@ export class DocumentUnderstandingService {
       if (jobs.length === 0) break;
 
       for (const job of jobs) {
-        if (Object.values(job.externalTaskIds || {}).includes(taskId)) {
-          await this.pipelineExecutor.resumeFromStep(job.id, result || payload);
+        const extIds = Object.values((job.externalTaskIds as Record<string, string>) || {});
+        if (extIds.includes(taskId) || job.operationId === taskId) {
+          if (payload.state === 'WAITING_INPUT' && isRecord(payload.wait)) {
+            await jobsRepo.update({
+              filterByTk: job.id,
+              values: { status: 'waiting_input', waitState: payload.wait, leaseExpiresAt: null },
+            });
+            return;
+          }
+          await this.pipelineExecutor.resumeFromStep(job.id, payload.result || payload);
           return;
         }
       }

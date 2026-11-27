@@ -1,9 +1,14 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { Plugin } from '@nocobase/server';
+import type WorkflowPlugin from '@nocobase/plugin-workflow';
 import { resolve } from 'path';
 import { DocumentUnderstandingService } from './services/DocumentUnderstandingService';
 import { defineActions } from './actions';
 import { createDynamicPipelineToolsProvider } from './tools/document-understanding-tool';
 import { seedDugateEndpoints } from './dugate-seed';
+import { createDuDisableBodyParserMiddleware, createDuGatewayRouter } from './routes/du-gateway-router';
+import { DocumentUnderstandingWorkflowInstruction } from './workflow/DocumentUnderstandingInstruction';
 
 type DynamicToolsProvider = ReturnType<typeof createDynamicPipelineToolsProvider>;
 
@@ -37,18 +42,35 @@ export class PluginDocumentUnderstandingServer extends Plugin {
   }
 
   async load() {
-    // Collections are imported in beforeLoad so database metadata exists before
-    // resources and runtime services are registered.
     this.service = new DocumentUnderstandingService(this.app, this.db);
+    const runtimeState = this.app as typeof this.app & DocumentToolRuntimeState;
+    runtimeState.documentUnderstandingService = this.service;
 
-    // Register REST actions
+    // 1. Mount `du-rework` compatible Public Gateway (/api/du/v1/* & /api/v1/*) before resourcer
+    this.app.use(createDuDisableBodyParserMiddleware(), {
+      tag: 'docUnderstandingDisableBodyParser',
+      before: 'bodyParser',
+    });
+    this.app.use(
+      createDuGatewayRouter(() => this.service),
+      {
+        tag: 'docUnderstandingPublicGateway',
+        before: 'dataSource',
+        after: 'dataWrapping',
+      },
+    );
+
+    // 2. Register NocoBase Admin/Operator REST actions
     this.registerActions();
 
-    // 4. Register AI tool (graceful)
+    // 3. Register NocoBase Workflow Instruction node (graceful when plugin-workflow is present)
+    this.registerWorkflowInstruction();
+
+    // 4. Register Dynamic AI tools (graceful when plugin-ai is present)
     this.registerAITools();
     this.app.on('afterStart', this.registerAIToolsAfterStart);
 
-    // 5. ACL
+    // 5. ACL snippet for admin settings & operations
     this.app.acl.registerSnippet({
       name: `pm.${this.name}`,
       actions: ['docUnderstanding:*'],
@@ -58,12 +80,24 @@ export class PluginDocumentUnderstandingServer extends Plugin {
   private registerActions() {
     const actions = defineActions(this);
 
-    const resourceName = 'docUnderstanding';
     this.app.resource({
-      name: resourceName,
+      name: 'docUnderstanding',
       actions: {
         getConfig: actions.getConfig,
         updateConfig: actions.updateConfig,
+        getHealth: actions.getHealth,
+        listLlmServices: actions.listLlmServices,
+        listCatalog: actions.listCatalog,
+        syncCatalog: actions.syncCatalog,
+        listApiKeys: actions.listApiKeys,
+        issueApiKey: actions.issueApiKey,
+        revokeApiKey: actions.revokeApiKey,
+        listOperations: actions.listOperations,
+        getOperation: actions.getOperation,
+        submitOperation: actions.submitOperation,
+        cancelOperation: actions.cancelOperation,
+        resumeOperation: actions.resumeOperation,
+        getUsageSummary: actions.getUsageSummary,
         listEndpoints: actions.listEndpoints,
         createEndpoint: actions.createEndpoint,
         updateEndpoint: actions.updateEndpoint,
@@ -75,17 +109,34 @@ export class PluginDocumentUnderstandingServer extends Plugin {
         executePipeline: actions.executePipeline,
         getJobStatus: actions.getJobStatus,
         listJobs: actions.listJobs,
+        cancelJob: actions.cancelJob,
+        resumeJob: actions.resumeJob,
         webhookCallback: actions.webhookCallback,
       },
     });
   }
 
+  private registerWorkflowInstruction() {
+    try {
+      const workflow = (this.app.pm?.get?.('workflow') || this.app.pm?.get?.('@nocobase/plugin-workflow')) as
+        | WorkflowPlugin
+        | undefined;
+      if (workflow?.registerInstruction) {
+        workflow.registerInstruction('document-understanding', new DocumentUnderstandingWorkflowInstruction(workflow));
+      }
+    } catch (err) {
+      this.app.logger.warn('Document Understanding: skipped workflow instruction registration.', err);
+    }
+  }
+
   private registerAITools() {
     if (this.aiToolsRegistered) return;
     try {
-      const aiManager = (this.app as typeof this.app & { aiManager?: unknown }).aiManager;
+      const aiManager =
+        (this.app as typeof this.app & { aiManager?: unknown }).aiManager ||
+        this.app.pm?.get?.('@nocobase/plugin-ai')?.aiManager ||
+        this.app.pm?.get?.('ai')?.aiManager;
       if (!isAiManagerLike(aiManager)) {
-        this.app.logger.warn('Document Understanding: plugin-ai not available, skip AI tool registration.');
         return;
       }
       const runtimeState = this.app as typeof this.app & DocumentToolRuntimeState;
@@ -99,7 +150,6 @@ export class PluginDocumentUnderstandingServer extends Plugin {
         runtimeState.documentUnderstandingToolProviderRegistered = true;
       }
       this.aiToolsRegistered = true;
-      this.app.logger.info('Document Understanding: Dynamic pipeline tools provider registered.');
     } catch (err) {
       this.app.logger.warn('Document Understanding: Failed to register AI tools, continue without it.', err);
     }
@@ -108,18 +158,18 @@ export class PluginDocumentUnderstandingServer extends Plugin {
   async afterStart() {
     try {
       await this.service.initialize({ recoverJobs: true });
+      // Automatically migrate/seed canonical `du-rework` v1 endpoints & pipelines on startup
+      await seedDugateEndpoints(this.db);
     } catch (err) {
-      this.app.logger.warn('Document Understanding plugin not configured yet, skip init.', err);
+      this.app.logger.warn('Document Understanding startup initialization / catalog sync warning:', err);
     }
   }
 
   async install() {
-    // Seed the DUGate-compatible endpoint/pipeline catalog on first install.
-    // Subpaths stay relative so they follow the base URL in Service Config.
     try {
       await seedDugateEndpoints(this.db);
     } catch (err) {
-      this.app.logger.warn('Document Understanding: DUGate seed data could not be installed.', err);
+      this.app.logger.warn('Document Understanding: catalog seed data could not be installed.', err);
     }
   }
 

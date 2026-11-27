@@ -1,17 +1,19 @@
+// SPDX-License-Identifier: Apache-2.0
+
 import { DocumentUnderstandingService } from '../services/DocumentUnderstandingService';
 import { PipelineDef, JobState } from '../types';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 function cloneJson<T>(value: T): T {
   if (value === undefined || value === null) {
     return value;
   }
-  return JSON.parse(JSON.stringify(value));
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
-/**
- * Build tool name from pipeline name.
- * Convention: doc_understanding.pipeline.<sanitized_name>
- */
 function buildToolName(pipelineName: string): string {
   const sanitized = pipelineName
     .toLowerCase()
@@ -21,8 +23,8 @@ function buildToolName(pipelineName: string): string {
   return `doc_understanding.${sanitized}`;
 }
 
-function buildSchema(pipeline: PipelineDef) {
-  const baseSchema =
+function buildSchema(pipeline: PipelineDef): Record<string, unknown> {
+  const baseSchema: Record<string, unknown> =
     pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0
       ? cloneJson(pipeline.inputSchema)
       : {
@@ -35,20 +37,25 @@ function buildSchema(pipeline: PipelineDef) {
           },
         };
 
-  // Add file_urls to allow AI to pass uploaded files
-  if (baseSchema.type === 'object' && baseSchema.properties) {
+  if (baseSchema.type === 'object' && isRecord(baseSchema.properties)) {
     baseSchema.properties.file_urls = {
       type: 'array',
       items: { type: 'string' },
-      description: 'Danh sách các URL của file/ảnh đính kèm trong chat',
+      description: 'Danh sách đường dẫn tệp/ảnh đính kèm trong NocoBase uploads',
     };
+    if (!baseSchema.properties.pages) {
+      baseSchema.properties.pages = {
+        type: 'string',
+        description: 'Dải trang chọn lọc cần xử lý (ví dụ: "1-3, 5")',
+      };
+    }
   }
 
   return baseSchema;
 }
 
-function applySchemaDefaults(value: any, schema: any): any {
-  if (!schema || typeof schema !== 'object') {
+function applySchemaDefaults(value: unknown, schema: unknown): unknown {
+  if (!isRecord(schema)) {
     return value;
   }
 
@@ -56,11 +63,12 @@ function applySchemaDefaults(value: any, schema: any): any {
     return cloneJson(schema.default);
   }
 
-  const isObjectSchema = schema.type === 'object' || schema.properties;
+  const isObjectSchema = schema.type === 'object' || isRecord(schema.properties);
   if (isObjectSchema) {
-    const source = value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+    const source: Record<string, unknown> = isRecord(value) ? { ...value } : {};
+    const props = isRecord(schema.properties) ? schema.properties : {};
 
-    for (const [key, propertySchema] of Object.entries(schema.properties || {})) {
+    for (const [key, propertySchema] of Object.entries(props)) {
       const currentValue = source[key];
       const nextValue = applySchemaDefaults(currentValue, propertySchema);
       if (nextValue !== undefined) {
@@ -77,9 +85,6 @@ function applySchemaDefaults(value: any, schema: any): any {
   return value;
 }
 
-/**
- * Create a single tool definition for one pipeline.
- */
 function createToolForPipeline(service: DocumentUnderstandingService, pipeline: PipelineDef) {
   const stepNames = (pipeline.steps || [])
     .sort((a, b) => a.stepOrder - b.stepOrder)
@@ -89,7 +94,7 @@ function createToolForPipeline(service: DocumentUnderstandingService, pipeline: 
   const description = [
     pipeline.description || `Thực thi pipeline "${pipeline.name}".`,
     stepNames ? `Steps: ${stepNames}` : '',
-    'Trả về kết quả phân tích JSON hoặc Job ID nếu chạy async.',
+    'Trả về kết quả phân tích JSON, trạng thái chờ phê duyệt (WAITING_INPUT), hoặc Job ID.',
   ]
     .filter(Boolean)
     .join(' ');
@@ -110,37 +115,54 @@ function createToolForPipeline(service: DocumentUnderstandingService, pipeline: 
       schema: buildSchema(pipeline),
     },
 
-    invoke: async (ctx: any, args: any) => {
+    invoke: async (_ctx: unknown, rawArgs: Record<string, unknown>) => {
       try {
+        const args = isRecord(rawArgs) ? rawArgs : {};
         const config = await service.getConfig();
-        const pollInterval = Math.max(config.pollInterval || 2000, 1000);
+        const pollInterval = Math.max(config.pollInterval || 2000, 500);
         const maxWait = Math.min(config.pollTimeout || 30000, 30000);
 
-        // Extract file URLs
-        let files: any[] = [];
-        if (args.file_urls && Array.isArray(args.file_urls)) {
-          files = args.file_urls.map((url: string) => ({ url }));
-        }
+        const files = Array.isArray(args.file_urls)
+          ? args.file_urls
+              .filter((u): u is string => typeof u === 'string' && Boolean(u.trim()))
+              .map((url) => ({
+                url,
+                fieldName: 'file',
+                buffer: undefined as unknown as Buffer,
+                filename: '',
+                mimeType: '',
+              }))
+          : [];
 
-        // Clean up args if using default schema
-        const hasInputSchema = pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0;
-        let input = hasInputSchema ? args : args.input || args;
-        if (input === args) {
-          input = { ...args };
-          delete input.file_urls;
+        const hasInputSchema = Boolean(pipeline.inputSchema && Object.keys(pipeline.inputSchema).length > 0);
+        let inputValue: unknown = hasInputSchema ? args : isRecord(args.input) ? args.input : args;
+        if (inputValue === args) {
+          const copy = { ...args };
+          delete copy.file_urls;
+          inputValue = copy;
         }
         if (hasInputSchema) {
-          input = applySchemaDefaults(input, pipeline.inputSchema);
+          inputValue = applySchemaDefaults(inputValue, pipeline.inputSchema);
         }
 
-        const { jobId } = await service.executePipeline(pipeline.id, input, files);
+        const { jobId } = await service.executePipeline(pipeline.id, isRecord(inputValue) ? inputValue : {}, files);
         const start = Date.now();
 
         while (Date.now() - start < maxWait) {
           const job: JobState = await service.getJobStatus(jobId);
           if (job.status === 'completed') {
-            return { status: 'completed', result: job.finalResult };
-          } else if (job.status === 'failed' || job.status === 'timeout') {
+            return { status: 'completed', result: job.finalResult, usage: job.usage ?? undefined };
+          }
+          if (job.status === 'waiting_input') {
+            return {
+              status: 'waiting_input',
+              jobId,
+              operationId: job.operationId,
+              wait: job.waitState,
+              message: `Tác vụ đang tạm dừng chờ người phê duyệt (WAITING_INPUT).`,
+            };
+          }
+          if (job.status === 'failed' || job.status === 'timeout' || job.status === 'cancelled') {
             return { status: job.status, error: job.error };
           }
           await new Promise((resolve) => setTimeout(resolve, pollInterval));
@@ -148,22 +170,18 @@ function createToolForPipeline(service: DocumentUnderstandingService, pipeline: 
 
         return {
           status: 'polling',
-          message: `Pipeline "${pipeline.name}" đang chạy, trả về job ID để theo dõi.`,
+          message: `Pipeline "${pipeline.name}" đang chạy bất đồng bộ, dùng jobId để theo dõi.`,
           jobId,
         };
-      } catch (err: any) {
-        return { error: err.message };
+      } catch (err: unknown) {
+        return { error: err instanceof Error ? err.message : String(err) };
       }
     },
   };
 }
 
-/**
- * Dynamic tools provider: queries all enabled pipelines and registers one tool per pipeline.
- * Called on-demand by the AI tools manager each time tools are listed.
- */
 export function createDynamicPipelineToolsProvider(service: DocumentUnderstandingService) {
-  return async (register: { registerTools: (options: any) => void }) => {
+  return async (register: { registerTools: (options: unknown) => void }) => {
     try {
       if (!service.isReady()) return;
 

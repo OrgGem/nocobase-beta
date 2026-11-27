@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table,
@@ -260,8 +269,18 @@ export const EndpointsTab = () => {
   };
 
   const columns: ColumnsType<EndpointDef> = [
-    { title: t('Name'), dataIndex: 'name', width: 150 },
-    { title: t('Subpath'), dataIndex: 'subpath', width: 200 },
+    { title: t('Name'), dataIndex: 'name', width: 170 },
+    {
+      title: t('Protocol'),
+      dataIndex: 'protocolMode',
+      width: 130,
+      render: (v: string) => {
+        if (v === 'builtin_du') return <Tag color="geekblue">du-rework (Built-in)</Tag>;
+        if (v === 'du_rework_v1') return <Tag color="blue">du-rework (Remote)</Tag>;
+        return <Tag>{t('Custom REST')}</Tag>;
+      },
+    },
+    { title: t('Subpath'), dataIndex: 'subpath', width: 220 },
     {
       title: t('Method'),
       dataIndex: 'method',
@@ -411,6 +430,24 @@ export const EndpointsTab = () => {
                 label: t('Gateway / Discriminator'),
                 children: (
                   <>
+                    <Form.Item name="protocolMode" label={t('Protocol Mode')} initialValue="legacy_rest">
+                      <Select
+                        style={{ width: 280 }}
+                        options={[
+                          { value: 'builtin_du', label: t('Canonical du-rework (Built-in / Hybrid)') },
+                          { value: 'du_rework_v1', label: t('Canonical du-rework (External Gateway)') },
+                          { value: 'legacy_rest', label: t('Legacy / Generic HTTP REST') },
+                        ]}
+                      />
+                    </Form.Item>
+                    <Space size="middle">
+                      <Form.Item name="businessId" label={t('Business ID')}>
+                        <Input placeholder="document-core" style={{ width: 180 }} />
+                      </Form.Item>
+                      <Form.Item name="actionName" label={t('Action Name')}>
+                        <Input placeholder="extract" style={{ width: 180 }} />
+                      </Form.Item>
+                    </Space>
                     <Form.Item
                       name="discriminatorField"
                       label={t('Discriminator Field')}

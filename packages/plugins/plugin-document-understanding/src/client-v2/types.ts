@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 export type {
   ServiceConfig,
   ClientServiceConfig,
@@ -5,6 +7,17 @@ export type {
   PipelineStepDef,
   PipelineDef,
   JobState,
+  JobStatus,
+  EngineMode,
+  ProtocolMode,
+  DuApiKeySummary,
+  IssuedDuApiKey,
+  OperationView,
+  UsageSummaryView,
+  UsageMetrics,
+  WaitState,
+  DocumentInputCoverage,
+  DuOperationState,
 } from '../server/types';
 
 export interface ApiEnvelope<T> {
@@ -24,7 +37,6 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Job timestamps are declared as `Date` server-side but arrive as ISO strings over the wire. */
 export function formatDateTime(value: string | Date | null | undefined): string {
   if (!value) return '-';
   const date = value instanceof Date ? value : new Date(value);
