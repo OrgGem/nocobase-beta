@@ -1,7 +1,15 @@
-import React, { useEffect } from 'react';
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
+import React, { useEffect, useId } from 'react';
 import { Tabs, Select, Space, Typography, Tag, theme } from 'antd';
 import {
-  BranchesOutlined,
   FolderOutlined,
   HistoryOutlined,
   ToolOutlined,
@@ -19,6 +27,7 @@ import { GitOperations } from './GitOperations';
 import { ReviewFlows } from './ReviewFlows';
 import { ReviewHistory } from './ReviewHistory';
 import { PollingStatus } from './PollingStatus';
+import { GitRuntimeBanner } from './GitRuntimeBanner';
 import { useT } from '../locale';
 
 const { Text } = Typography;
@@ -27,14 +36,17 @@ const { useToken } = theme;
 const GitManagerContent: React.FC = () => {
   const t = useT();
   const { token } = useToken();
+  const repoLabelId = useId();
+  const repoSelectId = useId();
   const { repos, selectedRepo, setSelectedRepo, refreshRepos } = useGitManager();
 
   useEffect(() => {
     refreshRepos();
-  }, []);
+  }, [refreshRepos]);
 
   return (
     <div style={{ height: '100%' }}>
+      <GitRuntimeBanner />
       {/* Repository selector bar */}
       <div
         style={{
@@ -46,9 +58,13 @@ const GitManagerContent: React.FC = () => {
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <DatabaseOutlined style={{ fontSize: 16 }} />
-        <Text strong>Repository:</Text>
+        <DatabaseOutlined aria-hidden="true" style={{ fontSize: 16 }} />
+        <label id={repoLabelId} htmlFor={repoSelectId}>
+          <Text strong>{t('Repository')}:</Text>
+        </label>
         <Select
+          id={repoSelectId}
+          aria-labelledby={repoLabelId}
           style={{ minWidth: 250 }}
           placeholder={t('Select a repository')}
           value={selectedRepo?.id}

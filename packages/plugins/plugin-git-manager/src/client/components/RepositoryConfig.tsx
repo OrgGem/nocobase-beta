@@ -1,14 +1,27 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useCallback, useEffect, useState } from 'react';
 import { Table, Button, Modal, Form, Input, Space, Tag, Popconfirm, Switch, Tooltip, Select, message } from 'antd';
 import { PlusOutlined, DeleteOutlined, LinkOutlined, RobotOutlined } from '@ant-design/icons';
 import { useApp } from '@nocobase/client-v2';
 import { GitManagerProvider, useGitManager } from '../context/GitManagerContext';
+import { GitRuntimeBanner } from './GitRuntimeBanner';
+import { gitManagerManageHref } from '../workflowRoutes';
 import { useT } from '../locale';
 
 export const RepositoryConfig: React.FC = () => {
   const t = useT();
-  const api = useApp().apiClient;
-  const { repos, refreshRepos, selectedRepo, setSelectedRepo } = useGitManager();
+  const app = useApp();
+  const api = app.apiClient;
+  const { repos, refreshRepos, selectedRepo, setSelectedRepo, gitRuntime, refreshRuntimeStatus } = useGitManager();
+  const gitAvailable = gitRuntime?.gitAvailable !== false;
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRepo, setEditingRepo] = useState<any>(null);
   const [form] = Form.useForm();
@@ -98,7 +111,10 @@ export const RepositoryConfig: React.FC = () => {
       message.success(t('Clone successful'));
       await refreshRepos();
     } catch (err) {
-      message.error(err?.response?.data?.errors?.[0]?.message || t('Clone failed'));
+      const apiError = (err as { response?: { data?: { errors?: Array<{ message?: string }> } } })?.response?.data
+        ?.errors?.[0]?.message;
+      message.error(apiError || t('Clone failed'));
+      refreshRuntimeStatus?.();
     } finally {
       setActionLoading(null);
     }
@@ -109,7 +125,9 @@ export const RepositoryConfig: React.FC = () => {
       title: t('Repository Name'),
       dataIndex: 'name',
       key: 'name',
-      render: (text: string, record: any) => <a onClick={() => setSelectedRepo(record)}>{text}</a>,
+      render: (text: string, record: { id: number; name: string }) => (
+        <a href={gitManagerManageHref(app, record.id)}>{text}</a>
+      ),
     },
     { title: t('Repository URL'), dataIndex: 'repoUrl', key: 'repoUrl', ellipsis: true },
     {
@@ -214,12 +232,14 @@ export const RepositoryConfig: React.FC = () => {
       title: '',
       key: 'actions',
       width: 200,
-      render: (_: any, record: any) => (
+      render: (_: unknown, record: { id: number; name: string; status: string }) => (
         <Space size="small">
           {record.status !== 'connected' && (
             <Button
               size="small"
               icon={<LinkOutlined />}
+              disabled={!gitAvailable}
+              aria-label={`${t('Clone')} ${record.name}`}
               loading={actionLoading === `clone-${record.id}`}
               onClick={() => handleClone(record)}
             >
@@ -228,6 +248,7 @@ export const RepositoryConfig: React.FC = () => {
           )}
           <Button
             size="small"
+            aria-label={`${t('Edit')} ${record.name}`}
             onClick={() => {
               setEditingRepo(record);
               form.setFieldsValue(record);
@@ -237,7 +258,7 @@ export const RepositoryConfig: React.FC = () => {
             {t('Edit')}
           </Button>
           <Popconfirm title={t('Delete this repository?')} onConfirm={() => handleDelete(record.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />} />
+            <Button size="small" danger icon={<DeleteOutlined />} aria-label={`${t('Delete')} ${record.name}`} />
           </Popconfirm>
         </Space>
       ),
@@ -246,6 +267,7 @@ export const RepositoryConfig: React.FC = () => {
 
   return (
     <div>
+      <GitRuntimeBanner />
       <div style={{ marginBottom: 16 }}>
         <Button
           type="primary"

@@ -175,5 +175,16 @@
   "Additional changed files were omitted by the provider.": "提供商省略了其他更改的文件。",
   "The provider omitted patches for one or more files, including binary or large files.": "提供商省略了一个或多个文件的补丁，包括二进制文件或大文件。",
   "The provider omitted additional changed files or patches.": "提供商省略了其他更改的文件或补丁。",
-  "Additional changed files or diff content were omitted.": "已省略其他更改的文件或差异内容。"
+  "Additional changed files or diff content were omitted.": "已省略其他更改的文件或差异内容。",
+  "Repository": "仓库",
+  "Refresh": "刷新",
+  "Installing Git via Cluster Manager...": "正在通过集群管理器安装 Git...",
+  "Local Git operations will unlock automatically as soon as Cluster Manager finishes installing git on this node.": "集群管理器在此节点完成 git 安装后，本地 Git 操作将自动启用。",
+  "Git CLI is not installed on this node yet": "此节点尚未安装 Git CLI",
+  "Git is managed separately via Cluster Manager. Install git now to enable File Explorer, Commit History, Operations, and Clone.": "Git 通过集群管理器单独管理。立即安装 git 以启用文件浏览、提交历史、Git 操作与克隆功能。",
+  "Install git in the app/worker container or set GIT_BINARY_PATH to use local repository features.": "请在 app/worker 容器中安装 git 或设置 GIT_BINARY_PATH 以使用本地仓库功能。",
+  "Install Git via Cluster Manager": "通过集群管理器安装 Git",
+  "Open Cluster Package Installer": "打开集群包安装器",
+  "Git installation dispatched via Cluster Manager": "已通过集群管理器下发 Git 安装任务",
+  "Failed to start Git installation via Cluster Manager": "无法通过集群管理器启动 Git 安装"
 }

@@ -418,5 +418,16 @@
   "Additional changed files were omitted by the provider.": "Additional changed files were omitted by the provider.",
   "The provider omitted patches for one or more files, including binary or large files.": "The provider omitted patches for one or more files, including binary or large files.",
   "The provider omitted additional changed files or patches.": "The provider omitted additional changed files or patches.",
-  "Additional changed files or diff content were omitted.": "Additional changed files or diff content were omitted."
+  "Additional changed files or diff content were omitted.": "Additional changed files or diff content were omitted.",
+  "Repository": "Repository",
+  "Refresh": "Refresh",
+  "Installing Git via Cluster Manager...": "Installing Git via Cluster Manager...",
+  "Local Git operations will unlock automatically as soon as Cluster Manager finishes installing git on this node.": "Local Git operations will unlock automatically as soon as Cluster Manager finishes installing git on this node.",
+  "Git CLI is not installed on this node yet": "Git CLI is not installed on this node yet",
+  "Git is managed separately via Cluster Manager. Install git now to enable File Explorer, Commit History, Operations, and Clone.": "Git is managed separately via Cluster Manager. Install git now to enable File Explorer, Commit History, Operations, and Clone.",
+  "Install git in the app/worker container or set GIT_BINARY_PATH to use local repository features.": "Install git in the app/worker container or set GIT_BINARY_PATH to use local repository features.",
+  "Install Git via Cluster Manager": "Install Git via Cluster Manager",
+  "Open Cluster Package Installer": "Open Cluster Package Installer",
+  "Git installation dispatched via Cluster Manager": "Git installation dispatched via Cluster Manager",
+  "Failed to start Git installation via Cluster Manager": "Failed to start Git installation via Cluster Manager"
 }

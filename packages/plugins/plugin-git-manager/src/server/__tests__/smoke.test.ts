@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execFileSync } from 'child_process';
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync } from 'fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createMockServer, type MockServer } from '@nocobase/test';
@@ -328,5 +328,36 @@ describe('Git Manager HTTP integration', () => {
     expect(execFileSync('git', ['-C', repoPath, 'branch', '--show-current'], { encoding: 'utf8' }).trim()).toBe(
       'marker',
     );
+  });
+
+  it('serves runtimeStatus on GET, enforces POST on installGit, validates repository mutations, and cleans up deleted localPath', async () => {
+    const statusRes = await agent.get('/gitManager:runtimeStatus');
+    expect(statusRes.status).toBe(200);
+    expect(statusRes.body.data.data).toMatchObject({ gitAvailable: true });
+
+    const badMethod = await agent.get('/gitManager:installGit');
+    expect(badMethod.status).toBe(405);
+
+    const badUrl = await agent.resource('gitRepositories').create({
+      values: { name: 'bad-http', localPath: 'bad-http', repoUrl: 'http://gitlab.com/team/repo.git' },
+    });
+    expect(badUrl.status).toBe(400);
+
+    const badPath = await agent.resource('gitRepositories').create({
+      values: { name: 'bad-path', localPath: '../escape', repoUrl: 'https://gitlab.com/team/repo.git' },
+    });
+    expect(badPath.status).toBe(400);
+
+    const tempRepoDir = join(fixture, 'disposable-repo');
+    mkdirSync(tempRepoDir);
+    const created = await agent.resource('gitRepositories').create({
+      values: { name: 'disposable', localPath: 'disposable-repo', repoUrl: 'https://gitlab.com/team/disposable.git' },
+    });
+    expect(created.status).toBe(200);
+    expect(existsSync(tempRepoDir)).toBe(true);
+
+    const destroyed = await agent.resource('gitRepositories').destroy({ filterByTk: created.body.data.id });
+    expect(destroyed.status).toBe(200);
+    expect(existsSync(tempRepoDir)).toBe(false);
   });
 });

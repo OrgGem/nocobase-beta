@@ -3,6 +3,7 @@
 import { Plugin } from '@nocobase/server';
 import type { Context } from '@nocobase/actions';
 import type { Database } from '@nocobase/database';
+import * as fs from 'fs';
 import { resolve } from 'path';
 import { DataTypes } from 'sequelize';
 import * as gitActions from './actions/git-actions';
@@ -24,7 +25,13 @@ import { enforceReviewControlAccess } from './review-control-access';
 import { enforceRepositoryAccess, enforceRepositoryCollectionAccess } from './repository-access';
 import { enforceGitChatAdmission, registerGitChatContextStrategies } from './chat-context-admission';
 import { isGitManagerResourceResponse, redactCredentialFields } from './utils/redact';
-import { containsCredentialBearingUrlField, URL_USERINFO_NOT_ALLOWED } from './utils/url-security';
+import {
+  assertAccountRepositoryUrl,
+  assertUrlHasNoUserInfo,
+  containsCredentialBearingUrlField,
+  URL_USERINFO_NOT_ALLOWED,
+} from './utils/url-security';
+import { dispatchClusterGitInstall, readClusterGitStatus } from './utils/cluster-git';
 
 const GIT_CONFIGURATION_URL_FIELDS = new Set(['repoUrl', 'baseUrl']);
 
@@ -59,6 +66,14 @@ export class PluginGitManagerServer extends Plugin {
   skillHubContentService!: SkillHubGitContentService;
   reviewService!: GitReviewService;
   legacyPostService!: LegacyPostService;
+  private gitAutoRestoreTimer: NodeJS.Timeout | null = null;
+
+  private stopGitAutoRestore() {
+    if (this.gitAutoRestoreTimer) {
+      clearTimeout(this.gitAutoRestoreTimer);
+      this.gitAutoRestoreTimer = null;
+    }
+  }
 
   async afterAdd() {
     this.reviewService = new GitReviewService(this.app);
@@ -136,6 +151,8 @@ export class PluginGitManagerServer extends Plugin {
         subtreeOptions: subtreeActions.subtreeOptions,
         subtreeRun: subtreeActions.subtreeRunOnAppProcess,
         subtreeReplace: subtreeActions.subtreeRunOnAppProcess,
+        runtimeStatus: gitActions.runtimeStatus,
+        installGit: gitActions.installGit,
       },
     });
 
@@ -157,7 +174,7 @@ export class PluginGitManagerServer extends Plugin {
     // Existing repository permissions are stored on fileContent and triggerReview.
     // Aliases let the ACL apply those same grants and scopes to review controls.
     for (const [action, aliases] of [
-      ['fileContent', ['reviewCutoverStatus']],
+      ['fileContent', ['reviewCutoverStatus', 'runtimeStatus']],
       [
         'triggerReview',
         [
@@ -234,13 +251,29 @@ export class PluginGitManagerServer extends Plugin {
         .recoverStuckSubtreeRuns((this as any).app)
         .catch((err) => (this as any).app.log?.error?.('plugin-git-manager: recover subtree runs error', err));
       startPoller((this as any).app);
+
+      this.stopGitAutoRestore();
+      const restoreTimer = setTimeout(async () => {
+        this.gitAutoRestoreTimer = null;
+        if (gitActions.isGitAvailable()) return;
+        const clusterStatus = await readClusterGitStatus(this.app).catch(() => undefined);
+        if (clusterStatus?.available && clusterStatus.gitConfigured && clusterStatus.previouslyInitialized) {
+          await dispatchClusterGitInstall(this.app).catch(
+            (err) => this.app.log?.warn?.('plugin-git-manager: startup git restore via Cluster Manager failed', err),
+          );
+        }
+      }, 5_000);
+      restoreTimer.unref?.();
+      this.gitAutoRestoreTimer = restoreTimer;
     });
     (this as any).app.on('beforeStop', () => {
+      this.stopGitAutoRestore();
       unregisterReviewQueue((this as any).app);
       this.reviewService.stop();
       stopPoller(this.app);
     });
     (this as any).app.on('beforeDestroy', () => {
+      this.stopGitAutoRestore();
       unregisterReviewQueue((this as any).app);
       this.reviewService.stop();
       stopPoller(this.app);
@@ -276,6 +309,7 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:subtreePreview',
         'gitManager:subtreeOptions',
         'gitManager:reviewCutoverStatus',
+        'gitManager:runtimeStatus',
         'workflowGitReview:status',
       ],
     });
@@ -315,6 +349,7 @@ export class PluginGitManagerServer extends Plugin {
         'gitManager:reviewResetPostClaim',
         'gitManager:reviewCancelQueued',
         'gitManager:reviewLegacyReleaseHold',
+        'gitManager:installGit',
         'workflowGitReview:setup',
         'workflowGitReview:repair',
       ],
@@ -328,7 +363,7 @@ export class PluginGitManagerServer extends Plugin {
     // Repositories config — CRUD on gitRepositories and gitAccounts (no operations)
     (this as any).app.acl.registerSnippet({
       name: `pm.${(this as any).name}.repositories`,
-      actions: ['gitRepositories:*', 'gitAccounts:*'],
+      actions: ['gitRepositories:*', 'gitAccounts:*', 'gitManager:runtimeStatus', 'gitManager:installGit'],
     });
 
     // Full management — all git manager actions
@@ -412,7 +447,119 @@ export class PluginGitManagerServer extends Plugin {
         if (ctx.request.body?.pat === '••••••••') {
           delete ctx.request.body.pat;
         }
+
+        const mergedValues: Record<string, unknown> = {
+          ...(requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody) ? requestBody : {}),
+          ...(requestBody?.values && typeof requestBody.values === 'object' && !Array.isArray(requestBody.values)
+            ? requestBody.values
+            : {}),
+          ...(actionParams?.values && typeof actionParams.values === 'object' && !Array.isArray(actionParams.values)
+            ? actionParams.values
+            : {}),
+        };
+
+        try {
+          if (resource === 'gitAccounts') {
+            let existingAccount: { get(attribute: string): unknown } | null = null;
+            if (ctx.action?.actionName === 'update' && actionParams?.filterByTk != null) {
+              existingAccount = await ctx.db
+                .getRepository('gitAccounts')
+                .findOne({ filterByTk: actionParams.filterByTk });
+            }
+            const provider = String(mergedValues.provider ?? existingAccount?.get('provider') ?? 'gitlab').trim();
+            const rawBaseUrl =
+              mergedValues.baseUrl !== undefined ? mergedValues.baseUrl : existingAccount?.get('baseUrl');
+            const baseUrl = typeof rawBaseUrl === 'string' && rawBaseUrl.trim() ? rawBaseUrl.trim() : null;
+            if (baseUrl) {
+              assertUrlHasNoUserInfo(baseUrl);
+              let parsedBase: URL;
+              try {
+                parsedBase = new URL(baseUrl);
+              } catch {
+                throw new Error('Invalid repository or account URL');
+              }
+              if (parsedBase.protocol !== 'https:') {
+                throw new Error('Only HTTPS repository and account URLs are allowed');
+              }
+              if (provider === 'github' && parsedBase.origin !== 'https://github.com') {
+                throw new Error('GitHub accounts currently require github.com');
+              }
+            }
+          }
+
+          if (resource === 'gitRepositories') {
+            if (mergedValues.localPath !== undefined) {
+              gitActions.validateLocalPath(String(mergedValues.localPath));
+            }
+            if (mergedValues.repoUrl !== undefined) {
+              gitActions.validateRepoUrl(String(mergedValues.repoUrl).trim());
+            }
+            if (mergedValues.defaultBranch !== undefined && String(mergedValues.defaultBranch).trim()) {
+              gitActions.validateBranch(String(mergedValues.defaultBranch).trim());
+            }
+            if (mergedValues.repoUrl !== undefined || mergedValues.gitAccountId !== undefined) {
+              let existingRepo: { get(attribute: string): unknown } | null = null;
+              if (ctx.action?.actionName === 'update' && actionParams?.filterByTk != null) {
+                existingRepo = await ctx.db
+                  .getRepository('gitRepositories')
+                  .findOne({ filterByTk: actionParams.filterByTk });
+              }
+              const effectiveRepoUrl = String(
+                mergedValues.repoUrl !== undefined ? mergedValues.repoUrl : existingRepo?.get('repoUrl') || '',
+              ).trim();
+              const effectiveAccountId =
+                mergedValues.gitAccountId !== undefined ? mergedValues.gitAccountId : existingRepo?.get('gitAccountId');
+              if (
+                effectiveRepoUrl &&
+                (typeof effectiveAccountId === 'number' || typeof effectiveAccountId === 'string') &&
+                String(effectiveAccountId).trim()
+              ) {
+                const account = await ctx.db.getRepository('gitAccounts').findOne({ filterByTk: effectiveAccountId });
+                if (account) {
+                  const baseUrl = String(account.get('baseUrl') || '').trim() || null;
+                  const provider = String(account.get('provider') || 'gitlab').trim();
+                  assertAccountRepositoryUrl(effectiveRepoUrl, baseUrl, provider);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          ctx.throw(400, ctx.t(message, { ns: (this as any).name }));
+        }
       }
+
+      if (resource === 'gitRepositories' && ctx.action?.actionName === 'destroy') {
+        const targetRepos = (await ctx.db.getRepository('gitRepositories').find({
+          filterByTk: ctx.action.params?.filterByTk,
+          filter: ctx.action.params?.filter,
+          fields: ['id', 'localPath'],
+        })) as Array<{ get: (attribute: string) => unknown }>;
+        const localPaths = Array.from(
+          new Set(
+            targetRepos
+              .map((item) => item.get('localPath'))
+              .filter((value): value is string => typeof value === 'string' && Boolean(value.trim())),
+          ),
+        );
+        await next();
+        for (const rawLocalPath of localPaths) {
+          const remainingCount = await ctx.db.getRepository('gitRepositories').count({
+            filter: { localPath: rawLocalPath },
+          });
+          if (remainingCount > 0) continue;
+          try {
+            const resolvedPath = gitActions.validateLocalPath(rawLocalPath);
+            if (fs.existsSync(resolvedPath)) {
+              fs.rmSync(resolvedPath, { recursive: true, force: true });
+            }
+          } catch {
+            // Legacy invalid paths are ignored so record deletion still succeeds.
+          }
+        }
+        return;
+      }
+
       return next();
     });
 
@@ -459,12 +606,14 @@ export class PluginGitManagerServer extends Plugin {
   }
 
   async beforeDisable() {
+    this.stopGitAutoRestore();
     unregisterReviewQueue((this as any).app);
     this.reviewService.stop();
     stopPoller(this.app);
   }
 
   async beforeUnload() {
+    this.stopGitAutoRestore();
     unregisterReviewQueue((this as any).app);
     this.reviewService.stop();
     stopPoller(this.app);

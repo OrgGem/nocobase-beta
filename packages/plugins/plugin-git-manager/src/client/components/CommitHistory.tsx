@@ -31,7 +31,8 @@ export const CommitHistory: React.FC = () => {
   const t = useT();
   const { token } = useToken();
   const api = useApp().apiClient;
-  const { selectedRepo } = useGitManager();
+  const { selectedRepo, gitRuntime } = useGitManager();
+  const gitAvailable = gitRuntime?.gitAvailable !== false;
   const repositoryId = selectedRepo?.id;
   const [branchSnapshot, setBranchSnapshot] = useState<{
     repositoryId: number;
@@ -51,7 +52,7 @@ export const CommitHistory: React.FC = () => {
     let cancelled = false;
     const repositoryId = selectedRepo?.id;
     setBranchSnapshot(null);
-    if (!repositoryId || selectedRepo.status !== 'connected')
+    if (!repositoryId || selectedRepo.status !== 'connected' || !gitAvailable)
       return () => {
         cancelled = true;
       };
@@ -74,10 +75,10 @@ export const CommitHistory: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [api, selectedRepo?.id, selectedRepo?.status]);
+  }, [api, selectedRepo?.id, selectedRepo?.status, gitAvailable]);
 
   const loadHistory = useCallback(async () => {
-    if (!selectedRepo) return;
+    if (!selectedRepo || !gitAvailable) return;
     setLoading(true);
     try {
       const { data } = await api.request({
@@ -92,15 +93,15 @@ export const CommitHistory: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [api, selectedRepo]);
+  }, [api, selectedRepo, gitAvailable]);
 
   useEffect(() => {
-    if (selectedRepo?.status === 'connected') {
+    if (selectedRepo?.status === 'connected' && gitAvailable) {
       loadHistory();
     } else {
       setCommits([]);
     }
-  }, [selectedRepo, loadHistory]);
+  }, [selectedRepo, gitAvailable, loadHistory]);
 
   const filteredCommits = commits.filter((commit) => {
     const keyword = searchKeyword.trim().toLowerCase();
@@ -150,6 +151,17 @@ export const CommitHistory: React.FC = () => {
   }
   if (selectedRepo.status !== 'connected') {
     return <Empty description={t('Repository not cloned yet')} />;
+  }
+  if (!gitAvailable) {
+    return (
+      <Empty
+        description={t(
+          gitRuntime?.clusterManager.status === 'running'
+            ? 'Installing Git via Cluster Manager...'
+            : 'Git CLI is not installed on this node yet',
+        )}
+      />
+    );
   }
 
   const currentBranch = branchSnapshot?.repositoryId === selectedRepo.id ? branchSnapshot : null;

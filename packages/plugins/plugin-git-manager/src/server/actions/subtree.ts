@@ -1,9 +1,18 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import { Context } from '@nocobase/actions';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { SimpleGit } from 'simple-git';
-import { createGit, validateBranch, validateLocalPath, withAuth } from './git-actions';
+import { createGit, getGit, validateBranch, validateLocalPath, withAuth, type RepoLockManager } from './git-actions';
 import { getEffectiveActionParams } from '../repository-access';
 import { getRepoAccount } from '../utils/get-repo-account';
 import { redactError, redactPat } from '../utils/redact';
@@ -329,7 +338,8 @@ export async function subtreeOptions(ctx: Context, next: () => Promise<void>) {
   if (!account) ctx.throw(400, 'Repository has no Git account configured');
   const localPath = validateLocalPath(stringValue(repo.get('localPath')));
   const repoUrl = stringValue(repo.get('repoUrl'));
-  const git = createGit(localPath);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
 
   try {
     const data = await withAuth(
@@ -365,11 +375,13 @@ export async function subtreeOptions(ctx: Context, next: () => Promise<void>) {
       },
       account.username,
       remoteName,
+      lockManager,
     );
     ctx.body = { success: true, data };
   } catch (error) {
+    const status = (error as { status?: number })?.status === 503 ? 503 : 400;
     const safeError = redactError(error);
-    ctx.throw(400, ctx.t(safeError.message, { ns: 'plugin-git-manager' }));
+    ctx.throw(status, ctx.t(safeError.message, { ns: 'plugin-git-manager' }));
   }
   await next();
 }
@@ -381,7 +393,8 @@ export async function subtreePreview(ctx: Context, next: () => Promise<void>) {
   const { config, repo, account } = await loadConfigAndRepository(ctx, configId);
   const localPath = validateLocalPath(stringValue(repo.get('localPath')));
   const repoUrl = stringValue(repo.get('repoUrl'));
-  const git = createGit(localPath);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
 
   try {
     const preview = await withAuth(
@@ -392,11 +405,13 @@ export async function subtreePreview(ctx: Context, next: () => Promise<void>) {
       () => createPreview(git, config),
       account.username,
       config.remoteName,
+      lockManager,
     );
     ctx.body = { success: true, data: preview };
   } catch (error) {
+    const status = (error as { status?: number })?.status === 503 ? 503 : 400;
     const safeError = redactError(error);
-    ctx.throw(400, ctx.t(safeError.message, { ns: 'plugin-git-manager' }));
+    ctx.throw(status, ctx.t(safeError.message, { ns: 'plugin-git-manager' }));
   }
   await next();
 }
@@ -421,7 +436,8 @@ export async function subtreeRunOnAppProcess(ctx: Context, next: () => Promise<v
   const { config, repo, account } = await loadConfigAndRepository(ctx, runParams.configId);
   const localPath = validateLocalPath(stringValue(repo.get('localPath')));
   const repoUrl = stringValue(repo.get('repoUrl'));
-  const git = createGit(localPath);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
   const runsRepository = ctx.db.getRepository('gitSubtreeRuns');
   const startedAt = new Date();
   const run = await runsRepository.create({
@@ -462,6 +478,7 @@ export async function subtreeRunOnAppProcess(ctx: Context, next: () => Promise<v
       },
       account.username,
       config.remoteName,
+      lockManager,
     );
 
     const finishedAt = new Date();

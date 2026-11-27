@@ -406,5 +406,16 @@
   "Additional changed files were omitted by the provider.": "Nhà cung cấp đã lược bỏ một số tệp thay đổi khác.",
   "The provider omitted patches for one or more files, including binary or large files.": "Nhà cung cấp không trả patch cho một hoặc nhiều tệp, bao gồm tệp nhị phân hoặc tệp lớn.",
   "The provider omitted additional changed files or patches.": "Nhà cung cấp đã lược bỏ một số tệp thay đổi hoặc patch khác.",
-  "Additional changed files or diff content were omitted.": "Một số tệp thay đổi hoặc nội dung diff khác đã được lược bỏ."
+  "Additional changed files or diff content were omitted.": "Một số tệp thay đổi hoặc nội dung diff khác đã được lược bỏ.",
+  "Repository": "Kho mã nguồn",
+  "Refresh": "Làm mới",
+  "Installing Git via Cluster Manager...": "Đang cài đặt Git qua Cluster Manager...",
+  "Local Git operations will unlock automatically as soon as Cluster Manager finishes installing git on this node.": "Các thao tác Git cục bộ sẽ tự động mở khóa ngay khi Cluster Manager cài xong git trên node này.",
+  "Git CLI is not installed on this node yet": "Node hiện tại chưa được cài đặt Git CLI",
+  "Git is managed separately via Cluster Manager. Install git now to enable File Explorer, Commit History, Operations, and Clone.": "Git được quản lý cài đặt riêng qua Cluster Manager. Hãy bấm cài đặt git để dùng Duyệt tệp, Lịch sử commit, Thao tác Git và Clone.",
+  "Install git in the app/worker container or set GIT_BINARY_PATH to use local repository features.": "Hãy cài git trong container app/worker hoặc cấu hình GIT_BINARY_PATH để dùng các tính năng kho cục bộ.",
+  "Install Git via Cluster Manager": "Cài đặt Git qua Cluster Manager",
+  "Open Cluster Package Installer": "Mở trình cài gói Cluster Manager",
+  "Git installation dispatched via Cluster Manager": "Đã gửi lệnh cài đặt Git qua Cluster Manager",
+  "Failed to start Git installation via Cluster Manager": "Không thể khởi chạy cài đặt Git qua Cluster Manager"
 }

@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Button, Space, Card, Typography, Tag, Empty, message, Spin, Descriptions, List, Badge, theme } from 'antd';
 import {
@@ -31,13 +40,14 @@ export const GitOperations: React.FC = () => {
   const t = useT();
   const { token } = useToken();
   const api = useApp().apiClient;
-  const { selectedRepo, refreshRepos } = useGitManager();
+  const { selectedRepo, refreshRepos, gitRuntime } = useGitManager();
+  const gitAvailable = gitRuntime?.gitAvailable !== false;
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [statusData, setStatusData] = useState<any>(null);
   const [lastResult, setLastResult] = useState<{ action: string; success: boolean; message: string } | null>(null);
 
   const loadStatus = useCallback(async () => {
-    if (!selectedRepo || selectedRepo.status !== 'connected') {
+    if (!selectedRepo || selectedRepo.status !== 'connected' || !gitAvailable) {
       setStatusData(null);
       return;
     }
@@ -56,7 +66,7 @@ export const GitOperations: React.FC = () => {
     } finally {
       setActionLoading(null);
     }
-  }, [api, selectedRepo]);
+  }, [api, selectedRepo, gitAvailable]);
 
   useEffect(() => {
     loadStatus();
@@ -87,7 +97,7 @@ export const GitOperations: React.FC = () => {
         setActionLoading(null);
       }
     },
-    [api, selectedRepo, refreshRepos, loadStatus],
+    [api, selectedRepo, refreshRepos, loadStatus, t],
   );
 
   if (!selectedRepo) {
@@ -95,6 +105,17 @@ export const GitOperations: React.FC = () => {
   }
   if (selectedRepo.status !== 'connected') {
     return <Empty description={t('Repository not cloned yet')} />;
+  }
+  if (!gitAvailable) {
+    return (
+      <Empty
+        description={t(
+          gitRuntime?.clusterManager.status === 'running'
+            ? 'Installing Git via Cluster Manager...'
+            : 'Git CLI is not installed on this node yet',
+        )}
+      />
+    );
   }
 
   const allChangedFiles = statusData

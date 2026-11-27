@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-import { reviewApprovalHref, workflowHref } from '../workflowRoutes';
+import { clusterPackageInstallerHref, gitManagerManageHref, reviewApprovalHref, workflowHref } from '../workflowRoutes';
 
 type RouteWindow = Window & {
   __nocobase_modern_client_prefix__?: string;
@@ -42,6 +42,8 @@ describe('Git review workflow route resolution', () => {
     expect(workflowHref(app, 'workflow', 'flow/42')).toBe('/tenant/app/admin/settings/workflow/workflows/flow%2F42');
     expect(workflowHref(app, 'execution', 73)).toBe('/tenant/app/admin/settings/workflow/executions/73');
     expect(reviewApprovalHref(app)).toBe('/tenant/app/admin/workflow/tasks/git-review-approval/pending');
+    expect(gitManagerManageHref(app, 9)).toBe('/tenant/app/admin/settings/git-manager/manage?repositoryId=9');
+    expect(clusterPackageInstallerHref(app)).toBe('/tenant/app/admin/settings/plugin-cluster-manager');
   });
 
   it('uses the effective modern basename and custom modern prefix for v2 workflow links', () => {

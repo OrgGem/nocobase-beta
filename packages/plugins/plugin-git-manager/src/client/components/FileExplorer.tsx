@@ -1,3 +1,12 @@
+/**
+ * This file is part of the NocoBase (R) project.
+ * Copyright (c) 2020-2024 NocoBase Co., Ltd.
+ * Authors: NocoBase Team.
+ *
+ * This project is dual-licensed under AGPL-3.0 and NocoBase Commercial License.
+ * For more information, please refer to: https://www.nocobase.com/agreement.
+ */
+
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Tree, Empty, Spin, Typography, Select, Space, Breadcrumb, Input, theme } from 'antd';
 import {
@@ -78,24 +87,30 @@ export const FileExplorer: React.FC = () => {
   const t = useT();
   const { token } = useToken();
   const api = useApp().apiClient;
-  const { selectedRepo, branches: branchList, currentBranch, refreshBranches } = useGitManager();
+  const { selectedRepo, branches: branchList, refreshBranches, gitRuntime, refreshRuntimeStatus } = useGitManager();
+  const selectedRepoId = selectedRepo?.id;
+  const selectedRepoStatus = selectedRepo?.status;
+  const gitAvailable = gitRuntime?.gitAvailable !== false;
   const [treeData, setTreeData] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [fileContent, setFileContent] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [currentRef, setCurrentRef] = useState('HEAD');
+  const currentRefRef = useRef(currentRef);
+  currentRefRef.current = currentRef;
   const [searchText, setSearchText] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [contentLoading, setContentLoading] = useState(false);
 
   const loadTree = useCallback(
-    async (treePath = '', ref = currentRef) => {
-      if (!selectedRepo) return [];
+    async (treePath = '', ref?: string) => {
+      const effectiveRef = ref ?? currentRefRef.current;
+      if (!selectedRepoId || !gitAvailable) return [];
       try {
         const { data } = await api.request({
           url: 'gitManager:fileTree',
-          params: { repositoryId: selectedRepo.id, ref, treePath },
+          params: { repositoryId: selectedRepoId, ref: effectiveRef, treePath },
         });
         const responseData = data?.data || data || [];
         const list = Array.isArray(responseData)
@@ -104,7 +119,7 @@ export const FileExplorer: React.FC = () => {
             ? responseData.data
             : [];
 
-        return list.map((item: any) => ({
+        return list.map((item: { path: string; name: string; type: string; size: number }) => ({
           key: item.path,
           title: (
             <Text style={{ fontSize: 13 }}>
@@ -123,47 +138,65 @@ export const FileExplorer: React.FC = () => {
         }));
       } catch (error) {
         console.warn('Failed to load file tree:', error);
+        refreshRuntimeStatus?.();
         return [];
       }
     },
-    [api, selectedRepo, currentRef],
+    [api, selectedRepoId, gitAvailable, refreshRuntimeStatus],
   );
 
-  const loadRoot = useCallback(async () => {
-    setLoading(true);
-    try {
-      const nodes = await loadTree('', currentRef);
-      setTreeData(nodes);
-    } finally {
-      setLoading(false);
-    }
-  }, [loadTree, currentRef]);
+  const loadRoot = useCallback(
+    async (refToLoad: string) => {
+      setLoading(true);
+      try {
+        const nodes = await loadTree('', refToLoad);
+        setTreeData(nodes);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loadTree],
+  );
 
   useEffect(() => {
-    if (selectedRepo?.status === 'connected') {
-      refreshBranches();
-      setFileContent(null);
-      setSelectedFile(null);
-      setSelectedFolder(null);
-    } else {
+    let cancelled = false;
+    setFileContent(null);
+    setSelectedFile(null);
+    setSelectedFolder(null);
+    setCurrentRef('HEAD');
+
+    if (!selectedRepoId || selectedRepoStatus !== 'connected' || !gitAvailable) {
       setTreeData([]);
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [selectedRepo]);
 
-  // Sync currentRef when branch data arrives
-  useEffect(() => {
-    if (currentBranch && currentRef === 'HEAD') {
-      setCurrentRef(currentBranch);
-    }
-  }, [currentBranch]);
+    const initializeRepositoryView = async () => {
+      setLoading(true);
+      try {
+        const resolvedBranch = await refreshBranches();
+        if (cancelled) return;
+        const nextRef = resolvedBranch || 'HEAD';
+        setCurrentRef(nextRef);
+        const nodes = await loadTree('', nextRef);
+        if (!cancelled) {
+          setTreeData(nodes);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
 
-  useEffect(() => {
-    if (selectedRepo?.status === 'connected') {
-      loadRoot();
-    }
-  }, [currentRef, selectedRepo]);
+    initializeRepositoryView();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRepoId, selectedRepoStatus, gitAvailable, refreshBranches, loadTree]);
 
-  const onLoadData = async (node: any) => {
+  const onLoadData = async (node: TreeNode) => {
     if (node.children) return;
     const children = await loadTree(node.filePath, currentRef);
     setTreeData((prev) => updateTreeData(prev, node.key, children));
@@ -217,6 +250,18 @@ export const FileExplorer: React.FC = () => {
     return <Empty description={t('Repository not cloned yet')} />;
   }
 
+  if (!gitAvailable) {
+    return (
+      <Empty
+        description={t(
+          gitRuntime?.clusterManager.status === 'running'
+            ? 'Installing Git via Cluster Manager...'
+            : 'Git CLI is not installed on this node yet',
+        )}
+      />
+    );
+  }
+
   const filteredTree = debouncedSearch ? filterTree(treeData, debouncedSearch.toLowerCase()) : treeData;
 
   return (
@@ -243,6 +288,7 @@ export const FileExplorer: React.FC = () => {
                 setFileContent(null);
                 setSelectedFile(null);
                 setSelectedFolder(null);
+                loadRoot(val);
               }}
               options={branchList.map((b) => ({ label: b, value: b }))}
               placeholder="Branch"

@@ -18,6 +18,7 @@ const READ_ACTIONS = new Set([
   'pollerStatus',
   'rolePermissions',
   'reviewCutoverStatus',
+  'runtimeStatus',
 ]);
 
 export async function enforceGitRequestMethod(ctx: Context, next: () => Promise<void>) {

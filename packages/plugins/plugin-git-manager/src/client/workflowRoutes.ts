@@ -25,3 +25,14 @@ export function reviewApprovalHref(app: App) {
   const base = getRouteRuntimeVersion() === 'modern' ? getV2EffectiveBasePath(app) : legacyBase(app);
   return join(base, '/admin/workflow/tasks/git-review-approval/pending');
 }
+
+export function gitManagerManageHref(app: App, repositoryId?: string | number) {
+  const base = getRouteRuntimeVersion() === 'modern' ? getV2EffectiveBasePath(app) : legacyBase(app);
+  const path = join(base, '/admin/settings/git-manager/manage');
+  return repositoryId == null ? path : `${path}?repositoryId=${encodeURIComponent(String(repositoryId))}`;
+}
+
+export function clusterPackageInstallerHref(app: App) {
+  const base = getRouteRuntimeVersion() === 'modern' ? getV2EffectiveBasePath(app) : legacyBase(app);
+  return join(base, '/admin/settings/plugin-cluster-manager');
+}

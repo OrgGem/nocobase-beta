@@ -801,8 +801,8 @@ export async function enforceRepositoryAccess(ctx: RepositoryAccessContext, next
     const reviewId = asRepositoryId(params.reviewId);
     if (reviewId == null) return ctx.throw(400, 'reviewId is required');
     repositoryId = await repositoryIdFromReview(ctx, reviewId);
-  } else if (actionName === 'pollNow') {
-    repositoryId = asRepositoryId(params.repositoryId);
+  } else if (actionName === 'pollNow' || actionName === 'installGit') {
+    repositoryId = actionName === 'pollNow' ? asRepositoryId(params.repositoryId) : undefined;
     if (repositoryId == null) {
       const allowed = await hasUnrestrictedRepositoryAccess({
         acl: ctx.app.acl,

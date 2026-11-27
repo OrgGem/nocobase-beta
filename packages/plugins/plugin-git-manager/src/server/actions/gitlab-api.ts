@@ -232,14 +232,22 @@ export async function mergeRequests(ctx: Context, next: () => Promise<void>) {
   await next();
 }
 
+function parseMrIid(value: unknown, ctx: Context): number {
+  if (value === undefined || value === null || value === '') {
+    ctx.throw(400, 'mrIid is required');
+  }
+  const text = String(value).trim();
+  const parsed = typeof value === 'number' ? value : Number(text);
+  if (!/^\d+$/.test(text) || !Number.isSafeInteger(parsed) || parsed < 1) {
+    ctx.throw(400, 'Invalid merge request ID');
+  }
+  return parsed;
+}
+
 export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>) {
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx);
   const params = getEffectiveActionParams(ctx);
-  const { mrIid } = params;
-
-  if (!mrIid) {
-    ctx.throw(400, 'mrIid is required');
-  }
+  const mrIid = parseMrIid(params.mrIid, ctx);
 
   let data;
   if (isGitHub) {
@@ -364,11 +372,12 @@ export async function mergeRequestDetail(ctx: Context, next: () => Promise<void>
 
 /** Read enough provider data to detect omitted files without hiding provider errors. */
 export async function readChatMergeRequest(ctx: Context, mrIid: number, repositoryId?: number | string) {
+  const validMrIid = parseMrIid(mrIid, ctx);
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx, repositoryId);
   if (isGitHub) {
     const [request, fileResult] = await Promise.all([
-      githubFetch(`/repos/${projectPath}/pulls/${mrIid}`, pat),
-      githubFetch(`/repos/${projectPath}/pulls/${mrIid}/files`, pat, { page: 1, per_page: 51 }),
+      githubFetch(`/repos/${projectPath}/pulls/${validMrIid}`, pat),
+      githubFetch(`/repos/${projectPath}/pulls/${validMrIid}/files`, pat, { page: 1, per_page: 51 }),
     ]);
     const item = request.data;
     if (!Array.isArray(fileResult.data)) throw new Error('Unable to read merge request changes');
@@ -401,8 +410,8 @@ export async function readChatMergeRequest(ctx: Context, mrIid: number, reposito
 
   if (!pat) ctx.throw(400, 'Personal Access Token is required for GitLab API access');
   const [request, changeResult] = await Promise.all([
-    gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}`, pat),
-    gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${mrIid}/changes`, pat),
+    gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${validMrIid}`, pat),
+    gitlabFetch(apiBase, `/projects/${encodedProject}/merge_requests/${validMrIid}/changes`, pat),
   ]);
   const item = request.data;
   const changeData = changeResult.data || {};
@@ -446,11 +455,8 @@ export async function readChatMergeRequest(ctx: Context, mrIid: number, reposito
 export async function mergeRequestNotes(ctx: Context, next: () => Promise<void>) {
   const { pat, apiBase, encodedProject, projectPath, isGitHub } = await getRepoApiContext(ctx);
   const params = getEffectiveActionParams(ctx);
-  const { mrIid, page = 1, perPage = 50 } = params;
-
-  if (!mrIid) {
-    ctx.throw(400, 'mrIid is required');
-  }
+  const { page = 1, perPage = 50 } = params;
+  const mrIid = parseMrIid(params.mrIid, ctx);
 
   let notes = [];
   const pagination = {

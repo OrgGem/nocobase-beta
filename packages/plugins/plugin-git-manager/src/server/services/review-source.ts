@@ -2,7 +2,7 @@
 
 import { createHash } from 'crypto';
 import type { Database } from '@nocobase/database';
-import { createGit, validateBranch, validateLocalPath, validateRef } from '../actions/git-actions';
+import { assertLocalGitReady, createGit, validateBranch, validateLocalPath, validateRef } from '../actions/git-actions';
 import { getRepoAccount } from '../utils/get-repo-account';
 import { parseGitLabProject } from '../utils/gitlab-url';
 
@@ -87,7 +87,8 @@ export async function resolveReviewProjectKey(db: Database, repo: RecordGetter):
 }
 
 async function validateCheckoutProject(db: Database, repo: RecordGetter, expectedProjectKey: string): Promise<void> {
-  const git = createGit(validateLocalPath(String(repo.get('localPath') || '')));
+  const localPath = validateLocalPath(String(repo.get('localPath') || ''));
+  const git = await assertLocalGitReady(localPath);
   let origin: string;
   try {
     origin = (await git.raw(['remote', 'get-url', 'origin'])).trim();

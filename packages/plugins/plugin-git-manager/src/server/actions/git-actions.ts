@@ -2,6 +2,7 @@
 
 import simpleGit, { SimpleGit } from 'simple-git';
 import { Context } from '@nocobase/actions';
+import { createHash } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, spawnSync } from 'child_process';
@@ -9,15 +10,26 @@ import { getEffectiveActionParams } from '../repository-access';
 import { redactError } from '../utils/redact';
 import { getRepoAccount } from '../utils/get-repo-account';
 import { assertUrlHasNoUserInfo } from '../utils/url-security';
+import {
+  dispatchClusterGitInstall,
+  readClusterGitStatus,
+  type ClusterGitApp,
+  type ClusterGitStatus,
+} from '../utils/cluster-git';
 
 // Disallow leading `-` to prevent argument-injection (e.g. `--upload-pack=...`)
 // when refs are passed as positional args to git.
 const REF_PATTERN = /^(?!-)[a-zA-Z0-9._/-]+$/;
+const FALLBACK_GIT_PATHS = ['git', '/usr/bin/git', '/usr/local/bin/git', '/bin/git'];
+const REPO_LOCK_TTL_MS = 5 * 60 * 1000;
 
-// Per-repo mutex to prevent PAT race conditions in withAuth
+export interface RepoLockManager {
+  runExclusive<T>(key: string, fn: () => Promise<T>, ttl?: number): Promise<T>;
+}
+
+// Per-repo in-process mutex paired with app.lockManager (when available) for HA clusters
 const repoLocks = new Map<string, Promise<void>>();
-const GIT_BINARY = process.env.GIT_BINARY_PATH || process.env.GIT_EXECUTABLE || 'git';
-let gitAvailabilityChecked = false;
+let cachedGitBinary: { envValue: string; binary: string } | null = null;
 
 interface GitActionParams {
   repositoryId?: number | string;
@@ -92,6 +104,67 @@ export function validateRepoUrl(repoUrl: string): void {
   }
 }
 
+export async function withRepoLock<T>(
+  localPath: string,
+  fn: () => Promise<T>,
+  lockManager?: RepoLockManager,
+): Promise<T> {
+  const runLocal = async () => {
+    const lock = acquireLock(localPath);
+    await lock.promise;
+    try {
+      return await fn();
+    } finally {
+      lock.release();
+    }
+  };
+  if (lockManager?.runExclusive) {
+    const lockKey = `git-repo:${createHash('sha256').update(localPath).digest('hex')}`;
+    return lockManager.runExclusive(lockKey, runLocal, REPO_LOCK_TTL_MS);
+  }
+  return runLocal();
+}
+
+export function validateRepoRelativePath(rawPath: string, label = 'file path'): string {
+  if (rawPath.includes('\0')) {
+    throw new Error(`Invalid ${label}`);
+  }
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!normalized || /^[a-zA-Z]:\//.test(normalized)) {
+    throw new Error(`Invalid ${label}`);
+  }
+  if (normalized.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error(`Invalid ${label}`);
+  }
+  return normalized;
+}
+
+async function runAuthenticatedGitUnlocked<T>(
+  git: ReturnType<typeof simpleGit>,
+  repoUrl: string,
+  pat: string,
+  fn: () => Promise<T>,
+  username?: string,
+  remoteName = 'origin',
+): Promise<T> {
+  try {
+    git.env(credentialEnvironment(repoUrl, pat, username));
+    // Persist only the clean URL when it differs from .git/config to avoid unnecessary lock contention across HA nodes.
+    const currentUrl =
+      typeof git.raw === 'function'
+        ? (await git.raw(['config', '--get', `remote.${remoteName}.url`]).catch(() => '')).trim()
+        : '';
+    if (currentUrl !== repoUrl) {
+      await git.remote(['set-url', remoteName, repoUrl]);
+    }
+    return await fn();
+  } catch (error) {
+    throw redactGitCredentialError(error, pat, username);
+  } finally {
+    git.env(gitProcessEnvironment());
+  }
+}
+
 export async function withAuth<T>(
   git: ReturnType<typeof simpleGit>,
   localPath: string,
@@ -100,24 +173,14 @@ export async function withAuth<T>(
   fn: () => Promise<T>,
   username?: string,
   remoteName = 'origin',
+  lockManager?: RepoLockManager,
 ): Promise<T> {
   validateRepoUrl(repoUrl);
-  const lock = acquireLock(localPath);
-  await lock.promise;
-  try {
-    git.env(credentialEnvironment(repoUrl, pat, username));
-    // Persist only the clean URL. Authentication is scoped to this URL in the child process environment.
-    await git.remote(['set-url', remoteName, repoUrl]);
-    return await fn();
-  } catch (error) {
-    throw redactGitCredentialError(error, pat, username);
-  } finally {
-    try {
-      git.env(gitProcessEnvironment());
-    } finally {
-      lock.release();
-    }
-  }
+  return withRepoLock(
+    localPath,
+    () => runAuthenticatedGitUnlocked(git, repoUrl, pat, fn, username, remoteName),
+    lockManager,
+  );
 }
 
 function gitProcessEnvironment(): NodeJS.ProcessEnv {
@@ -165,18 +228,94 @@ function redactGitCredentialError(error: unknown, pat: string, username?: string
   return redactError(new Error(safeMessage));
 }
 
-function getGitMissingMessage() {
-  return `Git executable "${GIT_BINARY}" was not found on the server. Install git in the app/worker container, or set GIT_BINARY_PATH to the absolute git binary path.`;
+function configuredGitBinary(): string {
+  return (process.env.GIT_BINARY_PATH || process.env.GIT_EXECUTABLE || '').trim();
 }
 
-function assertGitAvailable(ctx: Context) {
-  if (gitAvailabilityChecked) return;
-
-  const check = spawnSync(GIT_BINARY, ['--version'], { stdio: 'ignore' });
-  if (check.error || check.status !== 0) {
-    ctx.throw(503, getGitMissingMessage());
+function canExecuteGit(binary: string): boolean {
+  if (path.isAbsolute(binary) && !fs.existsSync(binary)) {
+    return false;
   }
-  gitAvailabilityChecked = true;
+  const check = spawnSync(binary, ['--version'], { stdio: 'ignore' });
+  return !check.error && check.status === 0;
+}
+
+export function resolveGitBinary(): string | null {
+  const configured = configuredGitBinary();
+  if (
+    cachedGitBinary &&
+    cachedGitBinary.envValue === configured &&
+    (!path.isAbsolute(cachedGitBinary.binary) || fs.existsSync(cachedGitBinary.binary)) &&
+    canExecuteGit(cachedGitBinary.binary)
+  ) {
+    return cachedGitBinary.binary;
+  }
+  cachedGitBinary = null;
+
+  const candidates = configured ? [configured] : FALLBACK_GIT_PATHS;
+  for (const candidate of candidates) {
+    if (canExecuteGit(candidate)) {
+      cachedGitBinary = { envValue: configured, binary: candidate };
+      return candidate;
+    }
+  }
+  return null;
+}
+
+export function resetGitBinaryCacheForTests(): void {
+  cachedGitBinary = null;
+}
+
+export function isGitAvailable(): boolean {
+  return resolveGitBinary() !== null;
+}
+
+export function getGitMissingMessage(clusterStatus?: ClusterGitStatus): string {
+  const binary = configuredGitBinary() || 'git';
+  if (clusterStatus?.available && clusterStatus.status === 'running') {
+    return `Git executable "${binary}" is currently being installed via Cluster Manager. Please wait a moment and retry.`;
+  }
+  if (clusterStatus?.available) {
+    return `Git executable "${binary}" was not found on the server. Install git via Cluster Manager (Package Installer), or set GIT_BINARY_PATH to the absolute git binary path.`;
+  }
+  return `Git executable "${binary}" was not found on the server. Install git in the app/worker container, or set GIT_BINARY_PATH to the absolute git binary path.`;
+}
+
+export async function assertGitAvailable(ctx: Context): Promise<string> {
+  const binary = resolveGitBinary();
+  if (binary) return binary;
+
+  const app = (ctx as Context & { app?: ClusterGitApp }).app;
+  const clusterStatus = await readClusterGitStatus(app).catch(() => undefined);
+  if (clusterStatus?.available && clusterStatus.gitConfigured && clusterStatus.previouslyInitialized) {
+    dispatchClusterGitInstall(app).catch((err) => {
+      app?.log?.warn?.('plugin-git-manager: background git restore via Cluster Manager failed', err);
+    });
+    const refreshedStatus: ClusterGitStatus = { ...clusterStatus, status: 'running' };
+    return ctx.throw(503, getGitMissingMessage(refreshedStatus));
+  }
+  return ctx.throw(503, getGitMissingMessage(clusterStatus));
+}
+
+export async function assertLocalGitReady(localPath: string, app?: ClusterGitApp): Promise<SimpleGit> {
+  if (!fs.existsSync(localPath)) {
+    const missingDirError = Object.assign(
+      new Error('Repository directory does not exist. Please clone the repository first.'),
+      { status: 400 },
+    );
+    throw missingDirError;
+  }
+  const binary = resolveGitBinary();
+  if (!binary) {
+    const clusterStatus = await readClusterGitStatus(app).catch(() => undefined);
+    if (clusterStatus?.available && clusterStatus.gitConfigured && clusterStatus.previouslyInitialized) {
+      dispatchClusterGitInstall(app).catch((err) => {
+        app?.log?.warn?.('plugin-git-manager: background git restore via Cluster Manager failed', err);
+      });
+    }
+    throw Object.assign(new Error(getGitMissingMessage(clusterStatus)), { status: 503 });
+  }
+  return createGit(localPath);
 }
 
 function isMissingGitError(error: unknown) {
@@ -189,21 +328,63 @@ export function createGit(baseDir?: string): SimpleGit {
   // All config keys and values come from credentialEnvironment, never from request parameters.
   return simpleGit({
     baseDir,
-    binary: GIT_BINARY,
+    binary: getGitBinaryPath(),
     unsafe: { allowUnsafeConfigEnvCount: true, allowUnsafeCredentialHelper: true },
   }).env(gitProcessEnvironment());
 }
 
 export function getGitBinaryPath(): string {
-  return GIT_BINARY;
+  return resolveGitBinary() || configuredGitBinary() || 'git';
 }
 
-function getGit(ctx: Context, localPath: string): SimpleGit {
+export async function getGit(ctx: Context, localPath: string): Promise<SimpleGit> {
   if (!fs.existsSync(localPath)) {
     ctx.throw(400, 'Repository directory does not exist. Please clone the repository first.');
   }
-  assertGitAvailable(ctx);
+  await assertGitAvailable(ctx);
   return createGit(localPath);
+}
+
+export async function runtimeStatus(ctx: Context, next: () => Promise<void>) {
+  const binary = resolveGitBinary();
+  const app = (ctx as Context & { app?: ClusterGitApp }).app;
+  const clusterStatus = await readClusterGitStatus(app);
+  if (!binary && clusterStatus.available && clusterStatus.gitConfigured && clusterStatus.previouslyInitialized) {
+    const restore = await dispatchClusterGitInstall(app).catch(() => ({ dispatched: false }));
+    if (restore.dispatched) {
+      clusterStatus.status = 'running';
+    }
+  }
+  ctx.body = {
+    success: true,
+    data: {
+      gitAvailable: binary !== null,
+      gitBinary: binary || configuredGitBinary() || 'git',
+      clusterManager: {
+        available: clusterStatus.available,
+        gitConfigured: clusterStatus.gitConfigured,
+        status: clusterStatus.status,
+        progressPercent: clusterStatus.progressPercent,
+      },
+    },
+  };
+  await next();
+}
+
+export async function installGit(ctx: Context, next: () => Promise<void>) {
+  const binary = resolveGitBinary();
+  if (binary) {
+    ctx.body = { success: true, data: { alreadyInstalled: true, gitBinary: binary } };
+    await next();
+    return;
+  }
+  const app = (ctx as Context & { app?: ClusterGitApp }).app;
+  const result = await dispatchClusterGitInstall(app, { ensureGitInConfig: true });
+  if (!result.dispatched && result.reason !== 'Cluster package installation is already running') {
+    ctx.throw(400, result.reason || 'Unable to dispatch git installation via Cluster Manager');
+  }
+  ctx.body = { success: true, data: { dispatched: true } };
+  await next();
 }
 
 export async function getRepo(ctx: Context, requestedRepositoryId?: number | string) {
@@ -265,37 +446,60 @@ export async function clone(ctx: Context, next: () => Promise<void>) {
   validateRepoUrl(repoUrl);
   // Prevent argument-injection through `defaultBranch` (e.g. `--upload-pack=...`)
   validateBranch(defaultBranch);
+  await assertGitAvailable(ctx);
 
-  // Check if directory already exists
-  if (fs.existsSync(localPath)) {
-    ctx.throw(400, 'Directory already exists. Remove it before cloning again.');
-  }
+  const app = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app;
+  await withRepoLock(
+    localPath,
+    async () => {
+      if (fs.existsSync(localPath)) {
+        const entries = fs.readdirSync(localPath);
+        if (entries.length > 0) {
+          if (fs.existsSync(path.join(localPath, '.git'))) {
+            const existingGit = createGit(localPath);
+            const existingOrigin = (
+              await existingGit.raw(['config', '--get', 'remote.origin.url']).catch(() => '')
+            ).trim();
+            if (existingOrigin === repoUrl) {
+              await runAuthenticatedGitUnlocked(existingGit, repoUrl, pat, () => existingGit.fetch(), username);
+              await ctx.db.getRepository('gitRepositories').update({
+                filterByTk: repo.get('id'),
+                values: { status: 'connected' },
+              });
+              ctx.body = { success: true, message: 'Repository reconnected successfully' };
+              return;
+            }
+          }
+          ctx.throw(400, 'Directory already exists. Remove it before cloning again.');
+        }
+      } else if (!fs.existsSync(path.dirname(localPath))) {
+        fs.mkdirSync(path.dirname(localPath), { recursive: true });
+      }
 
-  if (!fs.existsSync(path.dirname(localPath))) {
-    fs.mkdirSync(path.dirname(localPath), { recursive: true });
-  }
-
-  assertGitAvailable(ctx);
-  try {
-    await createGit()
-      .env(credentialEnvironment(repoUrl, pat, username))
-      .clone(repoUrl, localPath, ['--branch', defaultBranch]);
-    await ctx.db.getRepository('gitRepositories').update({
-      filterByTk: repo.get('id'),
-      values: { status: 'connected' },
-    });
-    ctx.body = { success: true, message: 'Repository cloned successfully' };
-  } catch (err) {
-    await ctx.db.getRepository('gitRepositories').update({
-      filterByTk: repo.get('id'),
-      values: { status: 'error' },
-    });
-    // Redact embedded PAT before the error reaches the client / log
-    if (isMissingGitError(err)) {
-      ctx.throw(503, getGitMissingMessage());
-    }
-    throw redactGitCredentialError(err, pat, username);
-  }
+      try {
+        await createGit()
+          .env(credentialEnvironment(repoUrl, pat, username))
+          .clone(repoUrl, localPath, ['--branch', defaultBranch]);
+        await ctx.db.getRepository('gitRepositories').update({
+          filterByTk: repo.get('id'),
+          values: { status: 'connected' },
+        });
+        ctx.body = { success: true, message: 'Repository cloned successfully' };
+      } catch (err) {
+        await ctx.db.getRepository('gitRepositories').update({
+          filterByTk: repo.get('id'),
+          values: { status: 'error' },
+        });
+        // Redact embedded PAT before the error reaches the client / log
+        if (isMissingGitError(err) && !isGitAvailable()) {
+          const clusterStatus = await readClusterGitStatus(app as ClusterGitApp).catch(() => undefined);
+          ctx.throw(503, getGitMissingMessage(clusterStatus));
+        }
+        throw redactGitCredentialError(err, pat, username);
+      }
+    },
+    app?.lockManager,
+  );
   await next();
 }
 
@@ -308,8 +512,9 @@ export async function pull(ctx: Context, next: () => Promise<void>) {
   if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
   const { pat, username } = account;
 
-  const git = getGit(ctx, localPath);
-  const result = await withAuth(git, localPath, repoUrl, pat, () => git.pull(), username);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
+  const result = await withAuth(git, localPath, repoUrl, pat, () => git.pull(), username, 'origin', lockManager);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -324,8 +529,9 @@ export async function push(ctx: Context, next: () => Promise<void>) {
   if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
   const { pat, username } = account;
 
-  const git = getGit(ctx, localPath);
-  const result = await withAuth(git, localPath, repoUrl, pat, () => git.push(), username);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
+  const result = await withAuth(git, localPath, repoUrl, pat, () => git.push(), username, 'origin', lockManager);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -340,8 +546,9 @@ export async function fetch(ctx: Context, next: () => Promise<void>) {
   if (!account) return ctx.throw(400, 'Repository has no Git account configured. Please assign a Git account first.');
   const { pat, username } = account;
 
-  const git = getGit(ctx, localPath);
-  const result = await withAuth(git, localPath, repoUrl, pat, () => git.fetch(), username);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
+  const result = await withAuth(git, localPath, repoUrl, pat, () => git.fetch(), username, 'origin', lockManager);
 
   ctx.body = { success: true, data: result };
   await next();
@@ -352,7 +559,7 @@ export async function diff(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const { file, commitHash, compareHash } = getGitActionParams(ctx);
 
-  const git = getGit(ctx, localPath);
+  const git = await getGit(ctx, localPath);
   const args: string[] = [];
   if (commitHash && compareHash) {
     args.push(validateRef(commitHash), validateRef(compareHash));
@@ -360,8 +567,13 @@ export async function diff(ctx: Context, next: () => Promise<void>) {
     args.push(validateRef(commitHash) + '^', validateRef(commitHash));
   }
   if (file) {
-    if (file.includes('..')) ctx.throw(400, 'Invalid file path');
-    args.push('--', file);
+    let safeFile = '';
+    try {
+      safeFile = validateRepoRelativePath(file, 'file path');
+    } catch {
+      ctx.throw(400, 'Invalid file path');
+    }
+    args.push('--', safeFile);
   }
 
   const result = await git.diff(args);
@@ -372,7 +584,8 @@ export async function diff(ctx: Context, next: () => Promise<void>) {
 export async function status(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const result = await getGit(ctx, localPath).status();
+  const git = await getGit(ctx, localPath);
+  const result = await git.status();
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -383,10 +596,14 @@ export async function log(ctx: Context, next: () => Promise<void>) {
   const { maxCount = 50, file, branch, skip } = getGitActionParams(ctx);
 
   const parsed = Number.parseInt(String(maxCount), 10);
-  const options: { maxCount: number; file?: string } = { maxCount: Math.min(Math.max(parsed || 50, 1), 500) };
+  const boundedMaxCount = Math.min(Math.max(parsed || 50, 1), 500);
+  let safeFile: string | undefined;
   if (file) {
-    if (file.includes('..')) ctx.throw(400, 'Invalid file path');
-    options.file = file;
+    try {
+      safeFile = validateRepoRelativePath(file, 'file path');
+    } catch {
+      ctx.throw(400, 'Invalid file path');
+    }
   }
 
   const args: string[] = [];
@@ -398,13 +615,11 @@ export async function log(ctx: Context, next: () => Promise<void>) {
     }
     args.push(`--skip=${parsedSkip}`);
   }
-  const result = args.length
-    ? await getGit(ctx, localPath).log([
-        ...args,
-        `--max-count=${options.maxCount}`,
-        ...(file ? ['--follow', '--', file] : []),
-      ])
-    : await getGit(ctx, localPath).log(options);
+  const git = await getGit(ctx, localPath);
+  const result =
+    args.length || safeFile
+      ? await git.log([...args, `--max-count=${boundedMaxCount}`, ...(safeFile ? ['--follow', '--', safeFile] : [])])
+      : await git.log({ maxCount: boundedMaxCount });
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -412,7 +627,8 @@ export async function log(ctx: Context, next: () => Promise<void>) {
 export async function branches(ctx: Context, next: () => Promise<void>) {
   const repo = await getRepo(ctx);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const result = await getGit(ctx, localPath).branch();
+  const git = await getGit(ctx, localPath);
+  const result = await git.branch();
   ctx.body = { success: true, data: result };
   await next();
 }
@@ -423,7 +639,9 @@ export async function checkout(ctx: Context, next: () => Promise<void>) {
   const { branch } = getGitActionParams(ctx);
   if (!branch) ctx.throw(400, 'branch is required');
   validateBranch(branch);
-  await getGit(ctx, localPath).checkout(branch);
+  const git = await getGit(ctx, localPath);
+  const lockManager = (ctx as Context & { app?: { lockManager?: RepoLockManager } }).app?.lockManager;
+  await withRepoLock(localPath, () => git.checkout(branch), lockManager);
   ctx.body = { success: true, message: `Switched to branch ${branch}` };
   await next();
 }
@@ -433,16 +651,21 @@ export async function fileTree(ctx: Context, next: () => Promise<void>) {
   const localPath = validateLocalPath(repo.get('localPath'));
   const { ref = 'HEAD', treePath = '', recursive } = getGitActionParams(ctx);
 
-  const git = getGit(ctx, localPath);
+  const git = await getGit(ctx, localPath);
   validateRef(ref);
-  if (treePath && treePath.includes('..')) {
-    ctx.throw(400, 'Invalid tree path');
+  let safeTreePath = '';
+  if (treePath) {
+    try {
+      safeTreePath = validateRepoRelativePath(treePath, 'tree path');
+    } catch {
+      ctx.throw(400, 'Invalid tree path');
+    }
   }
 
-  const detailArgs = ['ls-tree', '-l'];
+  const detailArgs = ['-c', 'core.quotePath=false', 'ls-tree', '-l'];
   if (recursive === true || recursive === 'true') detailArgs.push('-r');
-  detailArgs.push(ref);
-  if (treePath) detailArgs.push(treePath + '/');
+  detailArgs.push(ref, '--');
+  if (safeTreePath) detailArgs.push(`${safeTreePath}/`);
   const detailedResult = await git.raw(detailArgs);
   const items = detailedResult
     .trim()
@@ -485,14 +708,17 @@ export async function fileContent(ctx: Context, next: () => Promise<void>) {
   if (!filePath) {
     ctx.throw(400, 'filePath is required');
   }
-  if (filePath.includes('..')) {
+  let safeFilePath = '';
+  try {
+    safeFilePath = validateRepoRelativePath(filePath, 'file path');
+  } catch {
     ctx.throw(400, 'Invalid file path');
   }
 
   validateRef(ref);
-  const git = getGit(ctx, localPath);
-  const content = await git.show([`${ref}:${filePath}`]);
-  ctx.body = { success: true, data: { content, filePath, ref } };
+  const git = await getGit(ctx, localPath);
+  const content = await git.raw(['-c', 'core.quotePath=false', 'show', `${ref}:${safeFilePath}`]);
+  ctx.body = { success: true, data: { content, filePath: safeFilePath, ref } };
   await next();
 }
 
@@ -505,7 +731,7 @@ export async function commitDetail(ctx: Context, next: () => Promise<void>) {
     ctx.throw(400, 'commitHash is required');
   }
 
-  const git = getGit(ctx, localPath);
+  const git = await getGit(ctx, localPath);
   validateRef(commitHash);
 
   // Use %x00 in format string to tell git to output null bytes, avoiding null bytes in args
@@ -550,7 +776,7 @@ export async function commitDetail(ctx: Context, next: () => Promise<void>) {
 
 async function readLimitedGitOutput(localPath: string, args: string[], maxBytes: number) {
   return new Promise<{ text: string; truncated: boolean }>((resolve, reject) => {
-    const process = spawn(GIT_BINARY, args, {
+    const child = spawn(getGitBinaryPath(), args, {
       cwd: localPath,
       env: gitProcessEnvironment(),
       windowsHide: true,
@@ -559,7 +785,7 @@ async function readLimitedGitOutput(localPath: string, args: string[], maxBytes:
     const chunks: Buffer[] = [];
     let size = 0;
     let truncated = false;
-    process.stdout.on('data', (chunk: Buffer) => {
+    child.stdout.on('data', (chunk: Buffer) => {
       const remaining = maxBytes - size;
       if (remaining > 0) {
         const data = chunk.subarray(0, remaining);
@@ -568,11 +794,11 @@ async function readLimitedGitOutput(localPath: string, args: string[], maxBytes:
       }
       if (chunk.length > remaining) {
         truncated = true;
-        process.kill();
+        child.kill();
       }
     });
-    process.on('error', reject);
-    process.on('close', (code) => {
+    child.on('error', reject);
+    child.on('close', (code) => {
       if (code !== 0 && !truncated) {
         reject(new Error('Unable to read commit diff'));
         return;
@@ -596,7 +822,7 @@ export async function readChatCommit(
   if (!/^[a-f\d]{4,64}$/i.test(commitHash)) ctx.throw(400, 'Invalid commit hash');
   const repo = await getRepo(ctx, repositoryId);
   const localPath = validateLocalPath(repo.get('localPath'));
-  const git = getGit(ctx, localPath);
+  const git = await getGit(ctx, localPath);
   const hash = (await git.raw(['rev-parse', '--verify', `${commitHash}^{commit}`])).trim();
   const [metadata, parentLine] = await Promise.all([
     git.raw(['show', '-s', '--format=%H%x00%an%x00%aI%x00%s%x00%b', hash]),
